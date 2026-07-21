@@ -49,19 +49,35 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     super(reliableSql, phase3, enqueue, ai, now);
   }
 
-  private async assertSetupWrite(actor: Phase3Actor, competitionId: string): Promise<void> {
-    const allowed = await this.reliableSql.unsafe<{ allowed: boolean }>(
-      `SELECT true allowed
-       FROM competitions competition
-       JOIN organisation_memberships membership
-         ON membership.organisation_id=competition.organisation_id
-       WHERE competition.id=$1
-         AND membership.account_id=$2
-         AND membership.status='active'
-         AND membership.role IN ('owner','organiser')`,
-      [competitionId, actor.accountId],
+  private async readAccess(
+    sql: PostgresJsSql,
+    actor: Phase3Actor,
+    competitionId: string,
+  ): Promise<ReadAccess> {
+    return first(
+      await sql.unsafe<ReadAccess>(
+        `SELECT competition.organisation_id,competition.status,membership.role membership_role
+         FROM competitions competition
+         JOIN organisation_memberships membership
+           ON membership.organisation_id=competition.organisation_id
+         WHERE competition.id=$1
+           AND membership.account_id=$2
+           AND membership.status='active'
+           AND membership.role IN ('owner','organiser','viewer')`,
+        [competitionId, actor.accountId],
+      ),
+      "COMPETITION_ACCESS_DENIED",
+      "Competition access denied",
     );
-    if (!allowed[0]) throw new ApiError(403, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+  }
+
+  private async assertSetupWrite(actor: Phase3Actor, competitionId: string): Promise<ReadAccess> {
+    const access = await this.readAccess(this.reliableSql, actor, competitionId);
+    if (access.membership_role === "viewer")
+      throw new ApiError(403, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+    if (access.status === "archived")
+      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+    return access;
   }
 
   override async autosaveSetupDraft(
@@ -85,29 +101,18 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     return super.patchSetupDraft(actor, competitionId, request, requestId);
   }
 
-  override async readSetupDraft(actor: Phase3Actor, competitionId: string): Promise<Phase4SetupDocument> {
+  async resumeSetupDraft(
+    actor: Phase3Actor,
+    competitionId: string,
+    idempotencyKey: string,
+    requestId: string,
+  ): Promise<Phase4SetupDocument> {
     if (!this.reliableSql.begin)
       throw new Error("Phase 4 setup resume requires a transaction-capable PostgreSQL client");
     return this.reliableSql.begin(async (tx) => {
-      const access = first(
-        await tx.unsafe<ReadAccess>(
-          `SELECT competition.organisation_id,competition.status,membership.role membership_role
-           FROM competitions competition
-           JOIN organisation_memberships membership
-             ON membership.organisation_id=competition.organisation_id
-           WHERE competition.id=$1
-             AND membership.account_id=$2
-             AND membership.status='active'
-             AND membership.role IN ('owner','organiser','viewer')`,
-          [competitionId, actor.accountId],
-        ),
-        "COMPETITION_ACCESS_DENIED",
-        "Competition access denied",
-      );
-
-      let row: Phase4SetupStorageRow;
-      if (access.status === "archived" || access.membership_role === "viewer") {
-        row = first(
+      const access = await this.readAccess(tx, actor, competitionId);
+      if (access.membership_role === "viewer") {
+        const row = first(
           await tx.unsafe<Phase4SetupStorageRow>(
             `SELECT draft.*,competition.status competition_status
              FROM setup_drafts draft
@@ -118,20 +123,38 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           "SETUP_DRAFT_NOT_FOUND",
           "Setup draft not found",
         );
-      } else {
-        const refreshed = first(
-          await tx.unsafe<{ value: Phase4SetupStorageRow | string }>(
-            `SELECT phase4_refresh_setup_draft_references($1,$2,$3,$4) value`,
-            [access.organisation_id, competitionId, actor.accountId, `setup-resume:${competitionId}:${actor.accountId}`],
-          ),
-          "SETUP_REFRESH_FAILED",
-          "Setup references could not be refreshed",
-        );
-        row = decodePhase4Json<Phase4SetupStorageRow>(refreshed.value);
-        row.competition_status = access.status;
+        return readOnlyDocument(phase4SetupDocumentFromStorage(row));
       }
-      const document = phase4SetupDocumentFromStorage(row);
-      return access.membership_role === "viewer" ? readOnlyDocument(document) : document;
+      if (access.status === "archived")
+        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      const resumed = first(
+        await tx.unsafe<{ value: Phase4SetupStorageRow | string }>(
+          `SELECT phase4_resume_setup_draft($1,$2,$3,$4,$5) value`,
+          [access.organisation_id, competitionId, actor.accountId, idempotencyKey, requestId],
+        ),
+        "SETUP_RESUME_FAILED",
+        "Setup draft could not be resumed",
+      );
+      const row = decodePhase4Json<Phase4SetupStorageRow>(resumed.value);
+      row.competition_status = access.status;
+      return phase4SetupDocumentFromStorage(row);
     });
+  }
+
+  override async readSetupDraft(actor: Phase3Actor, competitionId: string): Promise<Phase4SetupDocument> {
+    const access = await this.readAccess(this.reliableSql, actor, competitionId);
+    const row = first(
+      await this.reliableSql.unsafe<Phase4SetupStorageRow>(
+        `SELECT draft.*,competition.status competition_status
+         FROM setup_drafts draft
+         JOIN competitions competition ON competition.id=draft.competition_id
+         WHERE draft.competition_id=$1`,
+        [competitionId],
+      ),
+      "SETUP_DRAFT_NOT_FOUND",
+      "Setup draft not found",
+    );
+    const document = phase4SetupDocumentFromStorage(row);
+    return access.membership_role === "viewer" ? readOnlyDocument(document) : document;
   }
 }
