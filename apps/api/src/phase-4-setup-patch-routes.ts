@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
@@ -24,7 +24,7 @@ const Sport = Type.Union([
   Type.Literal("basketball"),
 ]);
 
-function strict<T extends Record<string, ReturnType<typeof Type.Any>>>(properties: T) {
+function strict<T extends Record<string, TSchema>>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
 }
 
