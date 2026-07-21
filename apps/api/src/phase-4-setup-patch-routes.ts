@@ -4,6 +4,7 @@ import { ApiError } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
+import type { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import type { ReliableGateBPhase4Runtime } from "./phase-4-reliable-runtime.js";
 
 const Id = Type.String({ format: "uuid" });
@@ -23,6 +24,10 @@ const Sport = Type.Union([
   Type.Literal("volleyball"),
   Type.Literal("basketball"),
 ]);
+
+type SetupPatchRuntime = GateBPhase4Runtime & {
+  resumeSetupDraft?: ReliableGateBPhase4Runtime["resumeSetupDraft"];
+};
 
 function strict<T extends Record<string, TSchema>>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
@@ -68,7 +73,7 @@ const ResumeBody = strict({ idempotency_key: IdempotencyKey });
 export async function registerPhase4SetupPatchRoutes(
   app: FastifyInstance,
   options: {
-    runtime: ReliableGateBPhase4Runtime;
+    runtime: SetupPatchRuntime;
     identityRuntime: IdentityApiRuntime;
     identityRequests: IdentityRequestContext;
     allowedOrigins: readonly string[];
@@ -142,12 +147,16 @@ export async function registerPhase4SetupPatchRoutes(
         tags: ["phase4-setup"],
       },
     },
-    async (request) =>
-      options.runtime.resumeSetupDraft(
-        await mutationActor(request),
-        request.params.competitionId,
-        request.body.idempotency_key,
-        request.id,
-      ),
+    async (request) => {
+      const actor = await mutationActor(request);
+      return options.runtime.resumeSetupDraft
+        ? options.runtime.resumeSetupDraft(
+            actor,
+            request.params.competitionId,
+            request.body.idempotency_key,
+            request.id,
+          )
+        : options.runtime.readSetupDraft(actor, request.params.competitionId);
+    },
   );
 }
