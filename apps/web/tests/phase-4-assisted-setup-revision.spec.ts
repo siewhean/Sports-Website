@@ -118,9 +118,19 @@ function setupDocument(input: {
   };
 }
 
-test("production Assisted Setup PATCHes in place then advances with the returned revision", async ({ page }) => {
+test("production Assisted Setup resumes, PATCHes in place, then advances with the returned revision", async ({ page }) => {
+  const resumeBodies: Array<Record<string, unknown>> = [];
   const patchBodies: Array<Record<string, unknown>> = [];
   const putBodies: Array<Record<string, unknown>> = [];
+
+  await page.route("**/api/phase4/competitions/*/setup-draft/resume", async (route) => {
+    resumeBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(setupDocument({ revision: 4, currentStep: "basics", name: "Singapore Open 2026" })),
+    });
+  });
   await page.route("**/api/phase4/competitions/*/setup-draft", async (route) => {
     const request = route.request();
     const body = request.postDataJSON() as Record<string, unknown>;
@@ -158,7 +168,10 @@ test("production Assisted Setup PATCHes in place then advances with the returned
     await route.abort();
   });
 
-  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics`);
+  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics&resume=1`);
+  await expect.poll(() => resumeBodies.length).toBe(1);
+  expect(resumeBodies[0]?.idempotency_key).toEqual(expect.any(String));
+
   await page.getByLabel("Competition name").fill("Updated Canoe Polo Cup");
   await expect.poll(() => patchBodies.length).toBe(1);
   expect(patchBodies[0]).toMatchObject({
@@ -181,8 +194,17 @@ test("production Assisted Setup PATCHes in place then advances with the returned
   });
 });
 
-test("rapid Continue interaction does not skip a setup step", async ({ page }) => {
+test("rapid Continue interaction after resume does not skip a setup step", async ({ page }) => {
+  const resumeBodies: Array<Record<string, unknown>> = [];
   const putBodies: Array<Record<string, unknown>> = [];
+  await page.route("**/api/phase4/competitions/*/setup-draft/resume", async (route) => {
+    resumeBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(setupDocument({ revision: 4, currentStep: "basics", name: "Singapore Open 2026" })),
+    });
+  });
   await page.route("**/api/phase4/competitions/*/setup-draft", async (route) => {
     if (route.request().method() !== "PUT") {
       await route.continue();
@@ -201,7 +223,8 @@ test("rapid Continue interaction does not skip a setup step", async ({ page }) =
     });
   });
 
-  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics`);
+  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics&resume=1`);
+  await expect.poll(() => resumeBodies.length).toBe(1);
   await page.getByRole("button", { name: /Continue to capacity/i }).dblclick();
   await expect(page.getByRole("heading", { name: "Set the event capacity" })).toBeVisible();
   await page.waitForTimeout(150);
