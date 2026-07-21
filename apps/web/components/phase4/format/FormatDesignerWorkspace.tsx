@@ -18,6 +18,18 @@ const stateCopy: Record<Exclude<FormatSurfaceState, "ready" | "loading" | "empty
   plan: { title: t("prototype.b21c9117015f"), body: t("prototype.366a21bb03b5") },
 };
 
+const hiddenHeadingStyle = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0, 0, 0, 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+} as const;
+
 export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocument }) {
   const [draft, setDraft] = useState(page.draft);
   const [viewState, setViewState] = useState(page.state);
@@ -74,22 +86,25 @@ export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocum
     );
   }
   return (
-    <FormatEditor
-      key={draft.draft_id}
-      page={page}
-      initial={initial}
-      draft={draft}
-      onDraft={setDraft}
-      viewState={viewState}
-      onViewState={setViewState}
-      busy={busy}
-      onBusy={setBusy}
-      announcement={announcement}
-      onAnnouncement={setAnnouncement}
-      showTemplates={showTemplates}
-      onShowTemplates={setShowTemplates}
-      templateName={templateName}
-      onTemplateName={setTemplateName}
-    />
+    <>
+      <h1 style={hiddenHeadingStyle}>Competition format</h1>
+      <FormatEditor
+        key={draft.draft_id}
+        page={page}
+        initial={initial}
+        draft={draft}
+        onDraft={setDraft}
+        viewState={viewState}
+        onViewState={setViewState}
+        busy={busy}
+        onBusy={setBusy}
+        announcement={announcement}
+        onAnnouncement={setAnnouncement}
+        showTemplates={showTemplates}
+        onShowTemplates={setShowTemplates}
+        templateName={templateName}
+        onTemplateName={setTemplateName}
+      />
+    </>
   );
 }
