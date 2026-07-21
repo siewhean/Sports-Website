@@ -45,7 +45,9 @@ DECLARE
   seeded jsonb;
   next_steps jsonb;
   next_completed_steps jsonb;
+  next_completed_at jsonb;
   next_validation jsonb;
+  next_current_step text;
   changed boolean;
 BEGIN
   IF NOT EXISTS (
@@ -53,8 +55,8 @@ BEGIN
     WHERE organisation_id=target_organisation
       AND account_id=actor
       AND status='active'
-      AND role IN ('owner','organiser','viewer')
-  ) THEN RAISE EXCEPTION 'setup refresh requires competition membership'; END IF;
+      AND role IN ('owner','organiser')
+  ) THEN RAISE EXCEPTION 'setup refresh requires organiser permission'; END IF;
 
   SELECT * INTO draft
   FROM setup_drafts
@@ -80,19 +82,45 @@ BEGIN
     'schedule_review',NULL,
     'review_publish',NULL
   );
+
   SELECT COALESCE(jsonb_agg(step_name ORDER BY ordinal),'[]'::jsonb)
   INTO next_completed_steps
   FROM jsonb_array_elements_text(draft.completed_steps) WITH ORDINALITY completed(step_name,ordinal)
-  WHERE step_name NOT IN ('format_recommendations','schedule_review','review_publish');
+  WHERE CASE step_name
+    WHEN 'basics' THEN seeded->'basics' IS NOT NULL
+    WHEN 'capacity' THEN seeded->'capacity' IS NOT NULL
+    WHEN 'settings' THEN seeded->'capacity' IS NOT NULL AND seeded->'settings' IS NOT NULL
+    WHEN 'entries' THEN seeded->'capacity' IS NOT NULL AND seeded->'settings' IS NOT NULL AND seeded->'entries' IS NOT NULL
+    WHEN 'format_preferences' THEN
+      seeded->'capacity' IS NOT NULL AND seeded->'settings' IS NOT NULL AND seeded->'entries' IS NOT NULL
+      AND draft.steps->'format_preferences' IS NOT NULL AND draft.steps->'format_preferences'<>'null'::jsonb
+    ELSE false
+  END;
+
+  SELECT COALESCE(jsonb_object_agg(completed.key,completed.value),'{}'::jsonb)
+  INTO next_completed_at
+  FROM jsonb_each(COALESCE(draft.validation->'completed_at_by_step','{}'::jsonb)) completed
+  WHERE next_completed_steps ? completed.key;
+
+  next_current_step:=CASE
+    WHEN draft.current_step='basics' THEN 'basics'
+    WHEN seeded->'capacity' IS NULL THEN 'capacity'
+    WHEN seeded->'settings' IS NULL THEN 'settings'
+    WHEN seeded->'entries' IS NULL THEN 'entries'
+    WHEN draft.current_step IN ('schedule_review','review_publish') THEN 'format_recommendations'
+    ELSE draft.current_step
+  END;
+
   next_validation:=jsonb_build_object(
     'valid',false,
     'pending',true,
     'issues','[]'::jsonb,
-    'completed_at_by_step',COALESCE(draft.validation->'completed_at_by_step','{}'::jsonb)
+    'completed_at_by_step',next_completed_at
   );
 
   UPDATE setup_drafts
   SET revision=revision+1,
+      current_step=next_current_step,
       completed_steps=next_completed_steps,
       steps=next_steps,
       validation=next_validation,
@@ -105,14 +133,54 @@ BEGIN
     request_id,actor_account_id,actor_type,organisation_id,action,target_type,target_id,metadata
   ) VALUES(
     request_id_value,actor,'account',target_organisation,'setup.references.refreshed','setup_draft',draft.id::text,
-    jsonb_build_object('revision',draft.revision,'competition_id',target_competition)
+    jsonb_build_object(
+      'revision',draft.revision,
+      'competition_id',target_competition,
+      'current_step',draft.current_step
+    )
   );
   INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload,idempotency_key)
   VALUES(
     'setup_draft',draft.id::text,'setup.references.refreshed',
-    jsonb_build_object('competition_id',target_competition,'revision',draft.revision),
+    jsonb_build_object('competition_id',target_competition,'revision',draft.revision,'current_step',draft.current_step),
     'phase4:setup-reference-refresh:'||draft.id::text||':'||draft.revision::text
   ) ON CONFLICT(idempotency_key) DO NOTHING;
   RETURN to_jsonb(draft);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION phase4_resume_setup_draft(
+  target_organisation uuid,
+  target_competition uuid,
+  actor uuid,
+  idempotency_value text,
+  request_id_value text
+) RETURNS jsonb AS $$
+DECLARE
+  receipt phase4_mutation_receipts%ROWTYPE;
+  request_hash_value text;
+  response_value jsonb;
+BEGIN
+  request_hash_value:=phase4_sha256_json(jsonb_build_object('competition_id',target_competition));
+  PERFORM pg_advisory_xact_lock(hashtextextended('phase4-receipt:'||idempotency_value,0));
+  SELECT * INTO receipt
+  FROM phase4_mutation_receipts
+  WHERE organisation_id=target_organisation AND idempotency_key=idempotency_value;
+  IF receipt.id IS NOT NULL THEN
+    IF receipt.operation<>'setup.resume' OR receipt.request_hash<>request_hash_value THEN
+      RAISE EXCEPTION 'idempotency key was reused with a different setup resume request';
+    END IF;
+    RETURN receipt.response;
+  END IF;
+
+  response_value:=phase4_refresh_setup_draft_references(
+    target_organisation,
+    target_competition,
+    actor,
+    request_id_value
+  );
+  INSERT INTO phase4_mutation_receipts(organisation_id,idempotency_key,operation,request_hash,response)
+  VALUES(target_organisation,idempotency_value,'setup.resume',request_hash_value,response_value);
+  RETURN response_value;
 END;
 $$ LANGUAGE plpgsql;
