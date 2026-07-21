@@ -1,4 +1,10 @@
-import type { Phase4SetupDocument } from "@matchday/contracts";
+import type {
+  Phase4SetupAutosaveRequest,
+  Phase4SetupAutosaveResponse,
+  Phase4SetupDocument,
+  Phase4SetupPatchRequest,
+  Phase4SetupPatchResponse,
+} from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
@@ -41,6 +47,42 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     now: () => Date = () => new Date(),
   ) {
     super(reliableSql, phase3, enqueue, ai, now);
+  }
+
+  private async assertSetupWrite(actor: Phase3Actor, competitionId: string): Promise<void> {
+    const allowed = await this.reliableSql.unsafe<{ allowed: boolean }>(
+      `SELECT true allowed
+       FROM competitions competition
+       JOIN organisation_memberships membership
+         ON membership.organisation_id=competition.organisation_id
+       WHERE competition.id=$1
+         AND membership.account_id=$2
+         AND membership.status='active'
+         AND membership.role IN ('owner','organiser')`,
+      [competitionId, actor.accountId],
+    );
+    if (!allowed[0]) throw new ApiError(403, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+  }
+
+  override async autosaveSetupDraft(
+    actor: Phase3Actor,
+    competitionId: string,
+    request: Phase4SetupAutosaveRequest,
+    requestId: string,
+  ): Promise<Phase4SetupAutosaveResponse> {
+    if (request.transition.kind === "save_step" && request.transition.step.step_id === "basics")
+      await this.assertSetupWrite(actor, competitionId);
+    return super.autosaveSetupDraft(actor, competitionId, request, requestId);
+  }
+
+  override async patchSetupDraft(
+    actor: Phase3Actor,
+    competitionId: string,
+    request: Phase4SetupPatchRequest,
+    requestId: string,
+  ): Promise<Phase4SetupPatchResponse> {
+    await this.assertSetupWrite(actor, competitionId);
+    return super.patchSetupDraft(actor, competitionId, request, requestId);
   }
 
   override async readSetupDraft(actor: Phase3Actor, competitionId: string): Promise<Phase4SetupDocument> {
