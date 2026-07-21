@@ -78,9 +78,9 @@ describeInfrastructure("Phase 4 format-template sport guard", () => {
       VALUES(${sourceRevision},${badmintonCompetition},${sourceDivision},1,${sql.json(graph)},${hash(graph)},${sql.json(layout)},${account},'phase3')`;
 
     const [template] = await sql<{ id: string }[]>`
-      SELECT (phase4_create_format_template(
+      SELECT id FROM phase4_create_format_template(
         ${organisation},${sourceRevision},${account},'Reusable badminton','Same-sport template','template-guard-create'
-      )).id`;
+      )`;
     expect(template?.id).toBeTruthy();
 
     const sameSportRevision = randomUUID();
