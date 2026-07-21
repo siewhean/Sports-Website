@@ -100,7 +100,12 @@ export async function readPhase3Json(request: NextRequest, path: string): Promis
 
 export async function forwardPhase3Mutation(
   request: NextRequest,
-  input: { method: "PUT" | "POST" | "DELETE"; path: string; body?: Record<string, unknown>; validate: Validator },
+  input: {
+    method: "PUT" | "POST" | "PATCH" | "DELETE";
+    path: string;
+    body?: Record<string, unknown>;
+    validate: Validator;
+  },
 ) {
   const requestOrigin = request.headers.get("origin");
   const requestHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || request.headers.get("host");
