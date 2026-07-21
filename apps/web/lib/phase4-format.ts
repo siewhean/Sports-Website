@@ -27,6 +27,7 @@ export type FormatBuilderPageDocument = Readonly<{
   divisionId: string;
   divisionName: string;
   organisationId: string;
+  sportCode: string | null;
   draft: Phase4FormatDraftView | null;
   templates: readonly Phase4OrganiserTemplateView[];
 }>;
@@ -341,6 +342,13 @@ export function parseOrganiserTemplateList(value: unknown, organisationId: strin
   return parsed.some((item) => !item) ? null : (parsed as Phase4OrganiserTemplateView[]);
 }
 
+export function upsertOrganiserTemplate(
+  templates: readonly Phase4OrganiserTemplateView[],
+  saved: Phase4OrganiserTemplateView,
+): readonly Phase4OrganiserTemplateView[] {
+  return [saved, ...templates.filter((template) => template.template_version_id !== saved.template_version_id)];
+}
+
 export function isSaveFormatRequest(value: unknown): value is Phase4SaveFormatRevisionRequest & { idempotency_key: string } {
   const item = record(value);
   if (
@@ -359,7 +367,9 @@ export function formatSaveBody(draft: Phase4FormatDraftView, document: Phase4For
   return {
     draft_id: draft.draft_id,
     expected_revision: draft.revision,
-    parent_revision_id: draft.parent_revision_id,
+    // Saving creates a new immutable revision whose direct parent is the
+    // currently loaded draft, not that draft's historical parent.
+    parent_revision_id: draft.draft_id,
     document,
     idempotency_key: crypto.randomUUID(),
   };
