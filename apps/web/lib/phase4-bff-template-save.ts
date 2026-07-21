@@ -2,28 +2,13 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { parseAssistedSetupDocument } from "@/lib/phase4-assisted-setup";
 import { isPhase4IdempotencyKey, parseOrganiserTemplate } from "@/lib/phase4-format";
+import { competitionIdFromFormatReferer } from "@/lib/phase4-template-context";
 import {
   forwardPhase3Mutation,
   hasExactKeys,
   jsonBody,
   readPhase3Json,
 } from "@/lib/phase3-settings-command.server";
-
-export function competitionIdFromFormatReferer(referer: string | null, expectedOrigin: string): string | null {
-  if (!referer) return null;
-  try {
-    const url = new URL(referer);
-    if (url.origin !== expectedOrigin) return null;
-    const match = /^\/organiser\/competitions\/([^/]+)\/format\/?$/.exec(url.pathname);
-    if (!match) return null;
-    const competitionId = decodeURIComponent(match[1]!);
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(competitionId)
-      ? competitionId
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ organisationId: string }> }) {
   const body = await jsonBody(request);
