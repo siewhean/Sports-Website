@@ -27,12 +27,19 @@ CREATE TRIGGER ab_setup_drafts_phase4_preferences
 BEFORE INSERT ON setup_drafts
 FOR EACH ROW EXECUTE FUNCTION phase4_seed_setup_preferences();
 
-UPDATE setup_drafts
-SET revision=revision+1,
-    steps=jsonb_set(steps,'{format_preferences}',phase4_default_format_preferences(),true),
+-- Active drafts belonging to archived competitions cannot be mutated by the
+-- setup-draft guard. Leave those historical drafts untouched during migration.
+UPDATE setup_drafts draft
+SET revision=draft.revision+1,
+    steps=jsonb_set(draft.steps,'{format_preferences}',phase4_default_format_preferences(),true),
     updated_at=clock_timestamp()
-WHERE status='active'
-  AND (steps->'format_preferences' IS NULL OR steps->'format_preferences'='null'::jsonb);
+WHERE draft.status='active'
+  AND (draft.steps->'format_preferences' IS NULL OR draft.steps->'format_preferences'='null'::jsonb)
+  AND EXISTS (
+    SELECT 1
+    FROM competitions competition
+    WHERE competition.id=draft.competition_id AND competition.status<>'archived'
+  );
 
 CREATE FUNCTION phase4_refresh_setup_draft_references(
   target_organisation uuid,
