@@ -54,6 +54,7 @@ function template(
     organisation_id: "organisation-a",
     template_id: templateId,
     template_version_id: versionId,
+    parent_version_id: revision === 1 ? null : `${templateId}-previous`,
     created_by_account_id: "account-a",
     name,
     description: null,
@@ -63,8 +64,11 @@ function template(
     definition_hash: `hash-${versionId}`,
     revision,
     document,
-    created_at: "2026-07-20T00:00:00.000Z",
-  } as Phase4OrganiserTemplateView;
+    template_created_at: "2026-07-20T00:00:00.000Z",
+    version_created_at: "2026-07-20T00:00:00.000Z",
+    archived_by_account_id: null,
+    archived_at: null,
+  };
 }
 
 describe("Phase 4 format web contract", () => {
