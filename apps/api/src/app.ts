@@ -26,8 +26,10 @@ import { registerPhase2Routes } from "./phase-2-routes.js";
 import type { Phase2Runtime } from "./phase-2-runtime.js";
 import { registerPhase3Routes } from "./phase-3-routes.js";
 import type { Phase3Runtime } from "./phase-3-runtime.js";
+import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import { registerPhase4Routes } from "./phase-4-routes.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
+import { registerPhase4SetupPatchRoutes } from "./phase-4-setup-patch-routes.js";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -472,6 +474,14 @@ export async function buildApp(options: BuildAppOptions) {
         allowedOrigins: options.config.api.allowedOrigins,
         ...(options.config.deepHealthToken ? { deepHealthToken: options.config.deepHealthToken } : {}),
       });
+      if (options.phase4Runtime instanceof GateBPhase4Runtime) {
+        await registerPhase4SetupPatchRoutes(app as unknown as FastifyInstance, {
+          runtime: options.phase4Runtime,
+          identityRuntime: options.identityRuntime,
+          identityRequests,
+          allowedOrigins: options.config.api.allowedOrigins,
+        });
+      }
     }
   }
 
