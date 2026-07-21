@@ -13,13 +13,13 @@ const awayId = "00000000-0000-4000-8000-000000000031";
 const matchId = "00000000-0000-4000-8000-000000000040";
 const secondMatchId = "00000000-0000-4000-8000-000000000041";
 
-function workspace(): OrganiserWorkspacePayload {
+function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
   return {
     competition: {
       id: competitionId,
       name: "National Cup",
       slug: "national-cup",
-      sport_code: "canoe_polo",
+      sport_code: sportCode,
       timezone: "Asia/Singapore",
       starts_on: "2026-08-01",
       ends_on: "2026-08-02",
@@ -116,6 +116,7 @@ describe("organiser competition workspace mapping", () => {
       id: competitionId,
       slug: "national-cup",
       name: "National Cup",
+      sport: "Canoe Polo",
       venue: "Court 1 · Court 2",
       publicationRevision: "sch_2 · res_1",
       publicationState: "published",
@@ -149,6 +150,18 @@ describe("organiser competition workspace mapping", () => {
       ["Matches", "2"],
       ["Knockout stages", "—"],
     ]);
+  });
+
+  it.each([
+    ["canoe_polo", "Canoe Polo"],
+    ["badminton", "Badminton"],
+    ["table_tennis", "Table Tennis"],
+    ["volleyball", "Volleyball"],
+    ["basketball", "Basketball"],
+  ])("accepts the launch sport %s and maps its public label", (sportCode, sportLabel) => {
+    const payload = workspace(sportCode);
+    expect(isOrganiserWorkspacePayload(payload)).toBe(true);
+    expect(toOrganiserCompetitionView(payload).sport).toBe(sportLabel);
   });
 
   it("keeps unpublished, unconfigured, and date-only data truthful", () => {
@@ -187,7 +200,8 @@ describe("organiser competition workspace mapping", () => {
     expect(cookieHostMatches("app.matchday.test.evil:3000", "app.matchday.test")).toBe(false);
   });
 
-  it("rejects payloads that do not match the organiser workspace contract", () => {
+  it("rejects payloads outside the supported organiser workspace contract", () => {
     expect(isOrganiserWorkspacePayload({ competition: { id: competitionId } })).toBe(false);
+    expect(isOrganiserWorkspacePayload(workspace("football"))).toBe(false);
   });
 });
