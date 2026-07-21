@@ -4,16 +4,15 @@ import { useEffect, useReducer, useState } from "react";
 import type { Phase4FormatDraftView } from "@matchday/contracts";
 import {
   formatEditorReducer,
-  formatSaveBody,
   parseFormatDraft,
   parseFormatMaterialisation,
   parseOrganiserTemplate,
   parseFormatValidation,
-  upsertOrganiserTemplate,
   type FormatBuilderPageDocument,
   type FormatEditorState,
   type FormatSurfaceState,
 } from "@/lib/phase4-format";
+import { formatSaveBody, upsertOrganiserTemplate } from "@/lib/phase4-format-persistence";
 import { opaqueId, translate as t } from "@matchday/ui";
 import { FormatDesignerSurface } from "./FormatDesignerSurface";
 import { focusIssue } from "./format-designer-helpers";
