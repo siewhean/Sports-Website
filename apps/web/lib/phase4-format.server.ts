@@ -78,75 +78,11 @@ function demoDocument(): Phase4FormatBuilderDocument {
     }
   }
   const stages = [
-    {
-      id: "stage-group-a",
-      label: "Group A",
-      kind: "group" as const,
-      order: 1,
-      groupIds: ["A"],
-      groupSize: 4,
-      outputRanks: 2,
-      matchIds: groupMatches.filter((match) => match.stageId === "stage-group-a").map((match) => match.id),
-      repetitions: 1,
-      qualificationPositions: [1, 2],
-      destinationStageIds: ["stage-semifinals"],
-      seeding: "snake" as const,
-      carriedResults: "none" as const,
-    },
-    {
-      id: "stage-group-b",
-      label: "Group B",
-      kind: "group" as const,
-      order: 2,
-      groupIds: ["B"],
-      groupSize: 4,
-      outputRanks: 2,
-      matchIds: groupMatches.filter((match) => match.stageId === "stage-group-b").map((match) => match.id),
-      repetitions: 1,
-      qualificationPositions: [1, 2],
-      destinationStageIds: ["stage-semifinals"],
-      seeding: "snake" as const,
-      carriedResults: "none" as const,
-    },
-    {
-      id: "stage-semifinals",
-      label: "Semifinals",
-      kind: "single_elimination" as const,
-      order: 3,
-      groupIds: [],
-      groupSize: null,
-      outputRanks: 2,
-      matchIds: ["match-sf1", "match-sf2"],
-      qualificationPositions: [1],
-      destinationStageIds: ["stage-final", "stage-bronze"],
-      seeding: "seeded" as const,
-    },
-    {
-      id: "stage-bronze",
-      label: "Third-place",
-      kind: "bronze" as const,
-      order: 4,
-      groupIds: [],
-      groupSize: null,
-      outputRanks: 1,
-      matchIds: ["match-bronze"],
-      qualificationPositions: [1],
-      destinationStageIds: [],
-      placementRule: { coverage: "podium" as const, positions: [3] },
-    },
-    {
-      id: "stage-final",
-      label: "Final",
-      kind: "single_elimination" as const,
-      order: 5,
-      groupIds: [],
-      groupSize: null,
-      outputRanks: 1,
-      matchIds: ["match-final"],
-      qualificationPositions: [1],
-      destinationStageIds: [],
-      placementRule: { coverage: "champion_only" as const, positions: [1, 2] },
-    },
+    { id: "stage-group-a", label: "Group A", kind: "group" as const, order: 1, groupIds: ["A"], groupSize: 4, outputRanks: 2, matchIds: groupMatches.filter((match) => match.stageId === "stage-group-a").map((match) => match.id), repetitions: 1, qualificationPositions: [1, 2], destinationStageIds: ["stage-semifinals"], seeding: "snake" as const, carriedResults: "none" as const },
+    { id: "stage-group-b", label: "Group B", kind: "group" as const, order: 2, groupIds: ["B"], groupSize: 4, outputRanks: 2, matchIds: groupMatches.filter((match) => match.stageId === "stage-group-b").map((match) => match.id), repetitions: 1, qualificationPositions: [1, 2], destinationStageIds: ["stage-semifinals"], seeding: "snake" as const, carriedResults: "none" as const },
+    { id: "stage-semifinals", label: "Semifinals", kind: "single_elimination" as const, order: 3, groupIds: [], groupSize: null, outputRanks: 2, matchIds: ["match-sf1", "match-sf2"], qualificationPositions: [1], destinationStageIds: ["stage-final", "stage-bronze"], seeding: "seeded" as const },
+    { id: "stage-bronze", label: "Third-place", kind: "bronze" as const, order: 4, groupIds: [], groupSize: null, outputRanks: 1, matchIds: ["match-bronze"], qualificationPositions: [1], destinationStageIds: [], placementRule: { coverage: "podium" as const, positions: [3] } },
+    { id: "stage-final", label: "Final", kind: "single_elimination" as const, order: 5, groupIds: [], groupSize: null, outputRanks: 1, matchIds: ["match-final"], qualificationPositions: [1], destinationStageIds: [], placementRule: { coverage: "champion_only" as const, positions: [1, 2] } },
   ];
   return {
     schema_version: 1,
@@ -157,42 +93,10 @@ function demoDocument(): Phase4FormatBuilderDocument {
       stages,
       matches: [
         ...groupMatches,
-        {
-          id: "match-sf1",
-          stageId: "stage-semifinals",
-          round: 1,
-          order: 1,
-          purpose: "progression",
-          home: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 1 },
-          away: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 2 },
-        },
-        {
-          id: "match-sf2",
-          stageId: "stage-semifinals",
-          round: 1,
-          order: 2,
-          purpose: "progression",
-          home: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 1 },
-          away: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 2 },
-        },
-        {
-          id: "match-bronze",
-          stageId: "stage-bronze",
-          round: 1,
-          order: 3,
-          purpose: "placement",
-          home: { type: "loser", matchId: "match-sf1" },
-          away: { type: "loser", matchId: "match-sf2" },
-        },
-        {
-          id: "match-final",
-          stageId: "stage-final",
-          round: 1,
-          order: 4,
-          purpose: "championship",
-          home: { type: "winner", matchId: "match-sf1" },
-          away: { type: "winner", matchId: "match-sf2" },
-        },
+        { id: "match-sf1", stageId: "stage-semifinals", round: 1, order: 1, purpose: "progression", home: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 1 }, away: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 2 } },
+        { id: "match-sf2", stageId: "stage-semifinals", round: 1, order: 2, purpose: "progression", home: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 1 }, away: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 2 } },
+        { id: "match-bronze", stageId: "stage-bronze", round: 1, order: 3, purpose: "placement", home: { type: "loser", matchId: "match-sf1" }, away: { type: "loser", matchId: "match-sf2" } },
+        { id: "match-final", stageId: "stage-final", round: 1, order: 4, purpose: "championship", home: { type: "winner", matchId: "match-sf1" }, away: { type: "winner", matchId: "match-sf2" } },
       ],
       terminalMatchIds: ["match-bronze", "match-final"],
     },
@@ -245,30 +149,9 @@ export async function getFormatBuilderDocument(input: {
   previewState?: string;
 }): Promise<FormatBuilderPageDocument> {
   if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
-    const allowed = new Set<FormatSurfaceState>([
-      "ready",
-      "loading",
-      "empty",
-      "error",
-      "offline",
-      "permission",
-      "read-only",
-      "conflict",
-      "quota",
-      "plan",
-    ]);
-    const state = allowed.has(input.previewState as FormatSurfaceState)
-      ? (input.previewState as FormatSurfaceState)
-      : "ready";
-    if (state !== "ready" && state !== "read-only")
-      return unavailable(
-        input.competitionId,
-        input.competitionName,
-        input.divisionId,
-        input.divisionName,
-        input.sportCode,
-        state,
-      );
+    const allowed = new Set<FormatSurfaceState>(["ready", "loading", "empty", "error", "offline", "permission", "read-only", "conflict", "quota", "plan"]);
+    const state = allowed.has(input.previewState as FormatSurfaceState) ? (input.previewState as FormatSurfaceState) : "ready";
+    if (state !== "ready" && state !== "read-only") return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, state);
     return {
       state,
       competitionId: input.competitionId,
@@ -282,32 +165,13 @@ export async function getFormatBuilderDocument(input: {
     };
   }
   const base = apiBaseUrl();
-  if (!base)
-    return unavailable(
-      input.competitionId,
-      input.competitionName,
-      input.divisionId,
-      input.divisionName,
-      input.sportCode,
-      "error",
-    );
+  if (!base) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, "error");
   const cookie = await sessionCookie(base);
-  if (!cookie)
-    return unavailable(
-      input.competitionId,
-      input.competitionName,
-      input.divisionId,
-      input.divisionName,
-      input.sportCode,
-      "permission",
-    );
+  if (!cookie) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, "permission");
   try {
     const [response, setupResponse] = await Promise.all([
       fetch(
-        new URL(
-          `/api/v1/competitions/${encodeURIComponent(input.competitionId)}/divisions/${encodeURIComponent(input.divisionId)}/format-builder`,
-          base,
-        ),
+        new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/divisions/${encodeURIComponent(input.divisionId)}/format-builder`, base),
         { cache: "no-store", headers: { accept: "application/json", cookie } },
       ),
       fetch(new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/setup-draft`, base), {
@@ -315,47 +179,11 @@ export async function getFormatBuilderDocument(input: {
         headers: { accept: "application/json", cookie },
       }),
     ]);
-    if (response.status === 404)
-      return unavailable(
-        input.competitionId,
-        input.competitionName,
-        input.divisionId,
-        input.divisionName,
-        input.sportCode,
-        "empty",
-      );
-    if (response.status === 401 || response.status === 403)
-      return unavailable(
-        input.competitionId,
-        input.competitionName,
-        input.divisionId,
-        input.divisionName,
-        input.sportCode,
-        "permission",
-      );
-    if (!response.ok)
-      return unavailable(
-        input.competitionId,
-        input.competitionName,
-        input.divisionId,
-        input.divisionName,
-        input.sportCode,
-        "error",
-      );
-    const parsed = parseFormatWorkspaceResponse(
-      await response.json().catch(() => null),
-      input.competitionId,
-      input.divisionId,
-    );
-    if (!parsed)
-      return unavailable(
-        input.competitionId,
-        input.competitionName,
-        input.divisionId,
-        input.divisionName,
-        input.sportCode,
-        "error",
-      );
+    if (response.status === 404) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, "empty");
+    if (response.status === 401 || response.status === 403) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, "permission");
+    if (!response.ok) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, "error");
+    const parsed = parseFormatWorkspaceResponse(await response.json().catch(() => null), input.competitionId, input.divisionId);
+    if (!parsed) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, "error");
     const setup = setupResponse.ok
       ? parseAssistedSetupDocument(await setupResponse.json().catch(() => null), input.competitionId)
       : null;
@@ -366,11 +194,10 @@ export async function getFormatBuilderDocument(input: {
         new URL(`/api/v1/organisations/${encodeURIComponent(setup.organisation_id)}/format-templates`, base),
         { cache: "no-store", headers: { accept: "application/json", cookie } },
       );
-      if (templateResponse.ok) {
-        const parsedTemplates =
-          parseOrganiserTemplateList(await templateResponse.json().catch(() => null), setup.organisation_id) ?? [];
-        templates = parsedTemplates.filter((template) => template.sport_code === authoritativeSportCode);
-      }
+      if (templateResponse.ok)
+        templates = (
+          parseOrganiserTemplateList(await templateResponse.json().catch(() => null), setup.organisation_id) ?? []
+        ).filter((template) => template.sport_code === authoritativeSportCode);
     }
     return {
       state: parsed.draft ? (parsed.draft.read_only ? "read-only" : "ready") : "empty",
@@ -384,13 +211,6 @@ export async function getFormatBuilderDocument(input: {
       templates,
     };
   } catch {
-    return unavailable(
-      input.competitionId,
-      input.competitionName,
-      input.divisionId,
-      input.divisionName,
-      input.sportCode,
-      "offline",
-    );
+    return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, input.sportCode, "offline");
   }
 }
