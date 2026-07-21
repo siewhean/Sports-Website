@@ -2,17 +2,13 @@ import type {
   Phase4PatchableSetupStep,
   Phase4SetupAutosaveRequest,
   Phase4SetupAutosaveResponse,
-  Phase4SetupBasics,
   Phase4SetupPatchRequest,
   Phase4SetupPatchResponse,
   Phase4SetupSettingsReference,
   Phase4SetupStepId,
   Phase4SetupValues,
 } from "@matchday/contracts";
-import {
-  deriveAssistedSetupProgress,
-  validateAssistedSetupStep,
-} from "@matchday/domain";
+import { deriveAssistedSetupProgress, validateAssistedSetupStep } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
@@ -27,6 +23,7 @@ import {
 } from "./phase-4-setup-domain.js";
 
 type JsonObject = Record<string, unknown>;
+type MutableSetupValues = { -readonly [Key in keyof Phase4SetupValues]: Phase4SetupValues[Key] };
 
 type CompetitionAccess = {
   id: string;
@@ -88,6 +85,13 @@ function savedCompletedAt(document: ReturnType<typeof phase4SetupDocumentFromSto
   return Object.fromEntries(
     document.steps.flatMap((step) => (step.completed_at ? [[step.id, step.completed_at] as const] : [])),
   );
+}
+
+function recommendedSlot(definition: JsonObject, sportCode: string): number {
+  const value = Number(definition.recommendedSlotMinutes);
+  if (!Number.isSafeInteger(value) || value <= 0)
+    throw new ApiError(422, "SPORT_PACK_INVALID", `The active ${sportCode} pack has no valid recommended slot`);
+  return value;
 }
 
 export class GateBPhase4Runtime extends Phase4Runtime {
@@ -212,7 +216,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     actor: Phase3Actor,
     access: CompetitionAccess,
     previous: Phase4SetupValues,
-    next: Phase4SetupValues,
+    next: MutableSetupValues,
     requestId: string,
   ): Promise<void> {
     const basics = next.basics;
@@ -227,42 +231,25 @@ export class GateBPhase4Runtime extends Phase4Runtime {
       access.timezone !== basics.time_zone ||
       access.starts_on !== basics.starts_on ||
       access.ends_on !== basics.ends_on;
-    const pack = sportChanged ? await this.activePack(tx, basics.sport_code) : null;
+    const newPack = sportChanged ? await this.activePack(tx, basics.sport_code) : null;
+    const oldPack = sportChanged ? await this.activePack(tx, access.sport_code) : null;
     let capacityDefaultsChanged = false;
 
-    if (sportChanged && pack) {
-      const newDefinition = decodePhase4Json<JsonObject>(pack.definition);
-      const newRecommendedSlot = Number(newDefinition.recommendedSlotMinutes);
-      const oldPack = await this.activePack(tx, access.sport_code);
+    if (sportChanged && newPack && oldPack) {
+      const newDefinition = decodePhase4Json<JsonObject>(newPack.definition);
       const oldDefinition = decodePhase4Json<JsonObject>(oldPack.definition);
-      const oldRecommendedSlot = Number(oldDefinition.recommendedSlotMinutes);
+      const newRecommendedSlot = recommendedSlot(newDefinition, basics.sport_code);
+      const oldRecommendedSlot = recommendedSlot(oldDefinition, access.sport_code);
       const changed = await tx.unsafe<{ id: string }>(
         `UPDATE playing_areas SET slot_minutes=$2,revision=revision+1,updated_at=$3
          WHERE competition_id=$1 AND (slot_minutes IS NULL OR slot_minutes=$4) RETURNING id`,
         [access.id, newRecommendedSlot, this.gateNow(), oldRecommendedSlot],
       );
       capacityDefaultsChanged = changed.length > 0;
-      await tx.unsafe(
-        `UPDATE competition_sport_settings SET sport_code=$2,pack_version=$3,pack_schema_version=$4,
-           recommended_snapshot=$5::jsonb,settings_override='{}'::jsonb,customised=false,
-           revision=revision+1,updated_by=$6,updated_at=$7 WHERE competition_id=$1`,
-        [
-          access.id,
-          basics.sport_code,
-          pack.version,
-          pack.schema_version,
-          decodePhase4Json<JsonObject>(pack.definition).recommendedSettings ?? {},
-          actor.accountId,
-          this.gateNow(),
-        ],
-      );
-      await tx.unsafe(
-        `UPDATE division_sport_settings SET sport_code=$2,pack_version=$3,settings_override='{}'::jsonb,
-           revision=revision+1,updated_by=$4,updated_at=$5 WHERE competition_id=$1`,
-        [access.id, basics.sport_code, pack.version, actor.accountId, this.gateNow()],
-      );
     }
 
+    -- Update the competition first: sport-setting scope triggers compare their
+    -- sport against the canonical competition row.
     await tx.unsafe(
       `UPDATE competitions SET name=$2,sport_code=$3,venue=$4,address=$5,locality=$6,country_code=$7,
          starts_on=$8::date,ends_on=$9::date,timezone=$10,locale=$11,
@@ -285,7 +272,30 @@ export class GateBPhase4Runtime extends Phase4Runtime {
       ],
     );
 
-    if (sportChanged) next.settings = await this.settingsReferences(tx, access.id);
+    if (sportChanged && newPack) {
+      const definition = decodePhase4Json<JsonObject>(newPack.definition);
+      await tx.unsafe(
+        `UPDATE competition_sport_settings SET sport_code=$2,pack_version=$3,pack_schema_version=$4,
+           recommended_snapshot=$5::jsonb,settings_override='{}'::jsonb,customised=false,
+           revision=revision+1,updated_by=$6,updated_at=$7 WHERE competition_id=$1`,
+        [
+          access.id,
+          basics.sport_code,
+          newPack.version,
+          newPack.schema_version,
+          definition.recommendedSettings ?? {},
+          actor.accountId,
+          this.gateNow(),
+        ],
+      );
+      await tx.unsafe(
+        `UPDATE division_sport_settings SET sport_code=$2,pack_version=$3,settings_override='{}'::jsonb,
+           revision=revision+1,updated_by=$4,updated_at=$5 WHERE competition_id=$1`,
+        [access.id, basics.sport_code, newPack.version, actor.accountId, this.gateNow()],
+      );
+      next.settings = await this.settingsReferences(tx, access.id);
+    }
+
     if (capacityInputsChanged || capacityDefaultsChanged) next.capacity = null;
     if (
       sportChanged ||
@@ -375,7 +385,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
         if (row.revision !== expectedRevision) return { outcome: "conflict", current };
 
         const previous = phase4SetupValuesFromStorage(row);
-        const next = structuredClone(previous);
+        const next = structuredClone(previous) as MutableSetupValues;
         (next as unknown as Record<string, unknown>)[step.step_id] = step.value;
         if (step.step_id === "basics")
           await this.applyCanonicalBasics(tx, actor, access, previous, next, requestId);
