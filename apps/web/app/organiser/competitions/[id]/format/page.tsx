@@ -26,6 +26,7 @@ export default async function FormatDesignerPage({
     competitionName: result.competition.name,
     divisionId: selectedDivision.id,
     divisionName: selectedDivision.name,
+    sportCode: result.competition.sportCode ?? "",
     ...(query.state ? { previewState: query.state } : {}),
   });
   return (
