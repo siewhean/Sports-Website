@@ -47,6 +47,7 @@ function unavailable(
     divisionId,
     divisionName,
     organisationId: "",
+    sportCode: null,
     draft: null,
     templates: [],
   };
@@ -156,6 +157,7 @@ export async function getFormatBuilderDocument(input: {
       divisionId: input.divisionId,
       divisionName: input.divisionName,
       organisationId: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
+      sportCode: "canoe_polo",
       draft: demoDraft(input.competitionId, input.divisionId, state === "read-only"),
       templates: [],
     };
@@ -200,6 +202,7 @@ export async function getFormatBuilderDocument(input: {
       divisionId: input.divisionId,
       divisionName: input.divisionName,
       organisationId: setup?.organisation_id ?? "",
+      sportCode: setup?.values.basics?.sport_code ?? null,
       draft: parsed.draft,
       templates,
     };
