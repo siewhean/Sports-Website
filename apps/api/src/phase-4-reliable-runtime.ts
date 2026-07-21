@@ -14,12 +14,22 @@ import {
 type ReadAccess = {
   organisation_id: string;
   status: string;
+  membership_role: "owner" | "organiser" | "viewer";
 };
 
 function first<T>(rows: readonly T[], code: string, message: string): T {
   const row = rows[0];
   if (!row) throw new ApiError(404, code, message);
   return row;
+}
+
+function readOnlyDocument(document: Phase4SetupDocument): Phase4SetupDocument {
+  return {
+    ...document,
+    permission: "read",
+    read_only: true,
+    autosave: { ...document.autosave, status: "read_only" },
+  };
 }
 
 export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
@@ -39,7 +49,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     return this.reliableSql.begin(async (tx) => {
       const access = first(
         await tx.unsafe<ReadAccess>(
-          `SELECT competition.organisation_id,competition.status
+          `SELECT competition.organisation_id,competition.status,membership.role membership_role
            FROM competitions competition
            JOIN organisation_memberships membership
              ON membership.organisation_id=competition.organisation_id
@@ -78,7 +88,8 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
         row = decodePhase4Json<Phase4SetupStorageRow>(refreshed.value);
         row.competition_status = access.status;
       }
-      return phase4SetupDocumentFromStorage(row);
+      const document = phase4SetupDocumentFromStorage(row);
+      return access.membership_role === "viewer" ? readOnlyDocument(document) : document;
     });
   }
 }
