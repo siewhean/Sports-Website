@@ -1,1 +1,1 @@
-export { POST, PUT } from "@/lib/phase4-bff-setup";
+export { PATCH, POST, PUT } from "@/lib/phase4-bff-setup";
