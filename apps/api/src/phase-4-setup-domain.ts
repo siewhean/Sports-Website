@@ -222,7 +222,7 @@ export function phase4SetupDocumentFromStorage(row: Phase4SetupStorageRow): Phas
       completed_at: completedAt[step.id] ?? null,
     })),
     values,
-    permission: "write",
+    permission: readOnly ? "read" : "write",
     read_only: readOnly,
     autosave: {
       status: readOnly ? (row.status === "expired" ? "expired" : "read_only") : "saved",
