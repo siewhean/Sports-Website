@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
-import { AssistedSetupWorkspace } from "@/components/phase4/setup/AssistedSetupWorkspace";
+import { AssistedSetupWorkspaceV2 } from "@/components/phase4/setup/AssistedSetupWorkspaceV2";
 import { phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase4SetupCopy } from "@/lib/phase4-assisted-setup";
@@ -51,7 +51,7 @@ export default async function AssistedSetupPage({
                 ? opaqueId("saved")
                 : opaqueId("unavailable")
       }
-      sectionContent={<AssistedSetupWorkspace document={setup} />}
+      sectionContent={<AssistedSetupWorkspaceV2 document={setup} />}
     />
   );
 }
