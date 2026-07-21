@@ -36,7 +36,7 @@ function unavailable(
   competitionName: string,
   state: AssistedSetupSurfaceState,
 ): AssistedSetupPageDocument {
-  return { state, competitionId, competitionName, setup: null };
+  return { state, competitionId, competitionName, setup: null, resumeRequired: false };
 }
 
 function demoSetup(competitionId: string): Phase4SetupDocument {
@@ -235,6 +235,7 @@ export async function getAssistedSetupDocument(
       competitionId,
       competitionName,
       setup: state === "read-only" ? { ...setup, permission: "read", read_only: true } : setup,
+      resumeRequired: false,
     };
   }
   const base = apiBaseUrl();
@@ -257,6 +258,7 @@ export async function getAssistedSetupDocument(
       competitionId,
       competitionName,
       setup,
+      resumeRequired: !setup.read_only,
     };
   } catch {
     return unavailable(competitionId, competitionName, "offline");
