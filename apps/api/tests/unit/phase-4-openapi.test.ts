@@ -15,6 +15,7 @@ describe("Phase 4 OpenAPI contract", () => {
     };
     const requiredPaths = [
       "/api/v1/competitions/{competitionId}/setup-draft",
+      "/api/v1/competitions/{competitionId}/setup-draft/resume",
       "/api/v1/competitions/{competitionId}/divisions/{divisionId}/format-builder",
       "/api/v1/competitions/{competitionId}/divisions/{divisionId}/format-builder/validate",
       "/api/v1/organisations/{organisationId}/format-templates",
@@ -28,14 +29,18 @@ describe("Phase 4 OpenAPI contract", () => {
     ];
     expect(requiredPaths.every((path) => document.paths[path])).toBe(true);
 
+    const setupPath = requiredPaths[0]!;
+    const resumePath = requiredPaths[1]!;
     const mutations = [
-      document.paths[requiredPaths[0] ?? ""]?.put,
-      document.paths[requiredPaths[1] ?? ""]?.put,
-      document.paths[requiredPaths[4] ?? ""]?.post,
-      document.paths[requiredPaths[6] ?? ""]?.post,
-      document.paths[requiredPaths[7] ?? ""]?.post,
-      document.paths[requiredPaths[9] ?? ""]?.post,
-      document.paths[requiredPaths[10] ?? ""]?.post,
+      document.paths[setupPath]?.put,
+      document.paths[setupPath]?.patch,
+      document.paths[resumePath]?.post,
+      document.paths[requiredPaths[2]!]?.put,
+      document.paths[requiredPaths[5]!]?.post,
+      document.paths[requiredPaths[7]!]?.post,
+      document.paths[requiredPaths[8]!]?.post,
+      document.paths[requiredPaths[10]!]?.post,
+      document.paths[requiredPaths[11]!]?.post,
     ];
     for (const mutation of mutations) {
       expect(mutation?.security).toEqual([{ sessionCookie: [] }]);
@@ -52,16 +57,25 @@ describe("Phase 4 OpenAPI contract", () => {
     const document = JSON.parse(await generateOpenApiDocument()) as {
       paths: Record<string, Record<string, Operation>>;
     };
-    const setup = document.paths["/api/v1/competitions/{competitionId}/setup-draft"]?.put?.requestBody?.content?.[
-      "application/json"
-    ]?.schema as { properties?: { transition?: { anyOf?: Array<Record<string, unknown>> } } } | undefined;
+    const setupPath = "/api/v1/competitions/{competitionId}/setup-draft";
+    const setup = document.paths[setupPath]?.put?.requestBody?.content?.["application/json"]?.schema as
+      | { properties?: { transition?: { anyOf?: Array<Record<string, unknown>> } } }
+      | undefined;
     const transitions = setup?.properties?.transition?.anyOf ?? [];
     expect(transitions).toHaveLength(3);
     expect(transitions.every((transition) => transition.additionalProperties === false)).toBe(true);
 
+    const patch = document.paths[setupPath]?.patch?.requestBody?.content?.["application/json"]?.schema as
+      | { additionalProperties?: boolean; properties?: Record<string, unknown> }
+      | undefined;
+    expect(patch?.additionalProperties).toBe(false);
+    expect(Object.keys(patch?.properties ?? {}).sort()).toEqual(["expected_revision", "idempotency_key", "step"]);
+
     const job = document.paths["/api/v1/competitions/{competitionId}/schedule-jobs"]?.post?.requestBody?.content?.[
       "application/json"
-    ]?.schema as { properties?: { constraints?: { additionalProperties?: boolean; properties?: Record<string, unknown> } } } | undefined;
+    ]?.schema as
+      | { properties?: { constraints?: { additionalProperties?: boolean; properties?: Record<string, unknown> } } }
+      | undefined;
     expect(job?.properties?.constraints?.additionalProperties).toBe(false);
     expect(Object.keys(job?.properties?.constraints?.properties ?? {})).toHaveLength(11);
   });
