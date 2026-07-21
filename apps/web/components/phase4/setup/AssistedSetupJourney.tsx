@@ -9,6 +9,7 @@ import type {
 import { opaqueId } from "@matchday/ui";
 import {
   parseAssistedSetupAutosaveResponse,
+  parseAssistedSetupDocument,
   phase4SetupCopy,
   setupAutosaveBody,
   stepValue,
@@ -59,6 +60,8 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   const headingRef = useRef<HTMLHeadingElement>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mutationQueueRef = useRef<Promise<Phase4SetupDocument | null>>(Promise.resolve(document.setup));
+  const resumeStartedRef = useRef(false);
+  const resumeKeyRef = useRef<string | null>(null);
 
   const setSetup = useCallback((value: Phase4SetupDocument | null) => {
     setupRef.current = value;
@@ -166,6 +169,45 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
     },
     [applyServerDocument, document.competitionId, setSetup, setViewState],
   );
+
+  const resumeSetupDraft = useCallback(async (): Promise<Phase4SetupDocument | null> => {
+    if (!document.resumeRequired || resumeStartedRef.current || readOnlyNow()) return setupRef.current;
+    resumeStartedRef.current = true;
+    resumeKeyRef.current ??= crypto.randomUUID();
+    commandLockRef.current = true;
+    setCommandBusy(true);
+    return enqueue(async () => {
+      try {
+        const response = await fetch(
+          `/api/phase4/competitions/${encodeURIComponent(document.competitionId)}/setup-draft/resume`,
+          {
+            method: opaqueId("POST"),
+            headers: { "content-type": opaqueId("application/json") },
+            body: JSON.stringify({ idempotency_key: resumeKeyRef.current }),
+          },
+        );
+        const next = parseAssistedSetupDocument(
+          await response.json().catch(() => null),
+          document.competitionId,
+        );
+        if (!response.ok || !next) {
+          if (response.status === 401 || response.status === 403) setViewState(opaqueId("permission"));
+          else if (response.status === 409) setViewState(opaqueId("conflict"));
+          else setViewState(opaqueId("error"));
+          return null;
+        }
+        applyServerDocument(next);
+        setAnnouncement(phase4SetupCopy.saved);
+        return next;
+      } catch {
+        setViewState(opaqueId("offline"));
+        return null;
+      } finally {
+        commandLockRef.current = false;
+        setCommandBusy(false);
+      }
+    });
+  }, [applyServerDocument, document.competitionId, document.resumeRequired, enqueue, readOnlyNow, setViewState]);
 
   const patchLatestEditableStep = useCallback(async (): Promise<Phase4SetupDocument | null> => {
     clearAutosaveTimer();
@@ -375,16 +417,21 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   }, [currentStep]);
 
   useEffect(() => {
+    if (!document.resumeRequired || resumeStartedRef.current) return;
+    void resumeSetupDraft();
+  }, [document.resumeRequired, resumeSetupDraft]);
+
+  useEffect(() => {
     clearAutosaveTimer();
     const current = setupRef.current;
-    if (!current || readOnly) return;
+    if (!current || readOnly || (document.resumeRequired && !resumeStartedRef.current)) return;
     const step = patchableSetupStep(current.current_step, basics, preferences);
     if (!step || setupValuesEqual(current.values[step.step_id], step.value)) return;
     autosaveTimerRef.current = setTimeout(() => {
       void patchLatestEditableStep();
     }, 750);
     return clearAutosaveTimer;
-  }, [basics, clearAutosaveTimer, currentStep, patchLatestEditableStep, preferences, readOnly]);
+  }, [basics, clearAutosaveTimer, currentStep, document.resumeRequired, patchLatestEditableStep, preferences, readOnly]);
 
   useEffect(() => clearAutosaveTimer, [clearAutosaveTimer]);
 
