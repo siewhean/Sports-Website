@@ -14,7 +14,7 @@ import { Phase2Runtime } from "./phase-2-runtime.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { Phase3Runtime } from "./phase-3-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
-import { Phase4Runtime } from "./phase-4-runtime.js";
+import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const config = loadConfig();
@@ -47,7 +47,7 @@ const scheduleQueue = new ScheduleJobQueue({
   queueName: schedulerQueueName(config.environment),
   redisUrl: config.redisUrl,
 });
-const phase4Runtime = new Phase4Runtime(
+const phase4Runtime = new GateBPhase4Runtime(
   identitySql,
   phase3Runtime,
   scheduleQueue,
