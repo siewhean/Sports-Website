@@ -248,8 +248,8 @@ export class GateBPhase4Runtime extends Phase4Runtime {
       capacityDefaultsChanged = changed.length > 0;
     }
 
-    -- Update the competition first: sport-setting scope triggers compare their
-    -- sport against the canonical competition row.
+    // Sport-setting scope triggers compare their sport against the canonical
+    // competition row, so the competition must be updated first.
     await tx.unsafe(
       `UPDATE competitions SET name=$2,sport_code=$3,venue=$4,address=$5,locality=$6,country_code=$7,
          starts_on=$8::date,ends_on=$9::date,timezone=$10,locale=$11,
