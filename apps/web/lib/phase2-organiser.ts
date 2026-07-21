@@ -13,6 +13,16 @@ export type OrganiserWorkspacePayload = {
   access_passes: WorkspaceRecord[];
 };
 
+const sportLabels = {
+  canoe_polo: "Canoe Polo",
+  badminton: "Badminton",
+  table_tennis: "Table Tennis",
+  volleyball: "Volleyball",
+  basketball: "Basketball",
+} as const;
+
+type SupportedSportCode = keyof typeof sportLabels;
+
 function record(value: unknown): WorkspaceRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as WorkspaceRecord) : null;
 }
@@ -29,22 +39,26 @@ function records(value: unknown): WorkspaceRecord[] {
   return Array.isArray(value) ? value.flatMap((item) => (record(item) ? [item as WorkspaceRecord] : [])) : [];
 }
 
+function supportedSportCode(value: unknown): value is SupportedSportCode {
+  return typeof value === "string" && Object.hasOwn(sportLabels, value);
+}
+
 export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserWorkspacePayload {
   const payload = record(value);
   const competition = record(payload?.competition);
   return Boolean(
     payload &&
-    competition &&
-    string(competition.id) &&
-    string(competition.name) &&
-    string(competition.slug) &&
-    competition.sport_code === "canoe_polo" &&
-    string(competition.timezone) &&
-    string(competition.starts_on) &&
-    string(competition.ends_on) &&
-    Array.isArray(payload.divisions) &&
-    Array.isArray(payload.capacity) &&
-    Array.isArray(payload.access_passes),
+      competition &&
+      string(competition.id) &&
+      string(competition.name) &&
+      string(competition.slug) &&
+      supportedSportCode(competition.sport_code) &&
+      string(competition.timezone) &&
+      string(competition.starts_on) &&
+      string(competition.ends_on) &&
+      Array.isArray(payload.divisions) &&
+      Array.isArray(payload.capacity) &&
+      Array.isArray(payload.access_passes),
   );
 }
 
@@ -192,6 +206,7 @@ function participantLabel(
 export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): CompetitionView {
   const competition = payload.competition;
   const timezone = string(competition.timezone) ?? "UTC";
+  const sportCode = supportedSportCode(competition.sport_code) ? competition.sport_code : "canoe_polo";
   const divisions = records(payload.divisions);
   const primaryDivision = divisions[0] ?? {};
   const entries = records(primaryDivision.entries);
@@ -265,7 +280,7 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     id: string(competition.id)!,
     slug: string(competition.slug)!,
     name: string(competition.name)!,
-    sport: "Canoe Polo",
+    sport: sportLabels[sportCode],
     venue: areas.join(" · ") || string(primaryDivision.name) || "—",
     timezone,
     dateLabel: dateRange(competition.starts_on, competition.ends_on),
