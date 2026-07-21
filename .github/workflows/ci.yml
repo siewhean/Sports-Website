@@ -56,7 +56,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: pnpm
       - name: Install the pinned pnpm version
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
