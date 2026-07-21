@@ -7,6 +7,12 @@ import { requestOriginMatchesHost } from "@/lib/phase3-origin";
 
 type Validator = (value: unknown) => boolean;
 
+export type Phase3ReadResult = Readonly<{
+  ok: boolean;
+  status: number;
+  payload: unknown;
+}>;
+
 function apiBaseUrl(): URL | null {
   const configured = process.env.MATCHDAY_API_BASE_URL?.trim();
   if (!configured) return null;
@@ -70,6 +76,26 @@ export async function jsonBody(request: NextRequest): Promise<Record<string, unk
 
 export function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+}
+
+export async function readPhase3Json(request: NextRequest, path: string): Promise<Phase3ReadResult> {
+  const base = apiBaseUrl();
+  if (!base) return { ok: false, status: 503, payload: null };
+  const cookie = sessionCookie(request, base);
+  if (!cookie) return { ok: false, status: 401, payload: null };
+  try {
+    const response = await fetch(new URL(path, base), {
+      cache: "no-store",
+      headers: { accept: "application/json", cookie },
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload: await response.json().catch(() => null),
+    };
+  } catch {
+    return { ok: false, status: 503, payload: null };
+  }
 }
 
 export async function forwardPhase3Mutation(
