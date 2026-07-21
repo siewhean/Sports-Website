@@ -56,10 +56,12 @@ function mapGateBError(error: unknown): never {
   const message = error instanceof Error ? error.message : "";
   if (/idempotency key/i.test(message))
     throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
-  if (/revision conflict|expected.*revision/i.test(message))
+  if (/revision conflict|immediately preceding|expected.*revision/i.test(message))
     throw new ApiError(409, "REVISION_CONFLICT", "The setup changed; refresh and retry");
   if (/archived/i.test(message))
     throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+  if (/locked after the first match|sport is locked/i.test(message))
+    throw new ApiError(409, "COMPETITION_SPORT_LOCKED", "The sport cannot change after the first match starts");
   if (/permission|access|member/i.test(message)) throw new ApiError(403, "ACCESS_DENIED", "Access denied");
   if (/invalid|requires|must|cannot|stale|unsupported/i.test(message))
     throw new ApiError(422, "DOMAIN_VALIDATION_FAILED", "Request violates the current competition state");
@@ -176,7 +178,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
   private async settingsReferences(
     tx: PostgresJsSql,
     competitionId: string,
-  ): Promise<Phase4SetupSettingsReference[]> {
+  ): Promise<readonly Phase4SetupSettingsReference[]> {
     return tx.unsafe<Phase4SetupSettingsReference>(
       `SELECT settings.competition_id,'competition' scope,NULL::uuid division_id,
               settings.revision settings_revision,
@@ -317,7 +319,11 @@ export class GateBPhase4Runtime extends Phase4Runtime {
       `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload,idempotency_key)
        VALUES('competition',$1,'competition.setup_basics.updated',$2::jsonb,$3)
        ON CONFLICT(idempotency_key) DO NOTHING`,
-      [access.id, { competition_id: access.id, sport_code: basics.sport_code }, `phase4:setup-basics:${requestId}:${access.id}`],
+      [
+        access.id,
+        { competition_id: access.id, sport_code: basics.sport_code },
+        `phase4:setup-basics:${requestId}:${access.id}`,
+      ],
     );
   }
 
@@ -364,6 +370,8 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     idempotencyKey: string,
     requestId: string,
   ): Promise<Phase4SetupPatchResponse | Phase4SetupAutosaveResponse> {
+    if (!this.gateSql.begin)
+      throw new Error("Phase 4 setup mutations require a transaction-capable PostgreSQL client");
     try {
       return await this.gateSql.begin(async (tx) => {
         const access = await this.access(tx, competitionId, actor);
