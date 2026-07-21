@@ -74,13 +74,18 @@ describeInfrastructure("Phase 4 setup reference refresh", () => {
 
     await sql`UPDATE competition_availability_windows
       SET ends_at='2027-04-01T06:00:00Z' WHERE competition_id=${competition}`;
-    await sql`UPDATE setup_drafts SET steps=jsonb_set(
-      jsonb_set(
-        jsonb_set(steps,'{format_recommendations}',${sql.json({ recommendations: [{ id: "stale" }] })},true),
-        '{schedule_review}',${sql.json({ schedule_job_id: "stale" })},true
+    const [stale] = await sql<{ revision: number }[]>`UPDATE setup_drafts SET
+      revision=revision+1,
+      steps=jsonb_set(
+        jsonb_set(
+          jsonb_set(steps,'{format_recommendations}',${sql.json({ recommendations: [{ id: "stale" }] })},true),
+          '{schedule_review}',${sql.json({ schedule_job_id: "stale" })},true
+        ),
+        '{review_publish}',${sql.json({ publication_status: "not_requested" })},true
       ),
-      '{review_publish}',${sql.json({ publication_status: "not_requested" })},true
-    ) WHERE competition_id=${competition}`;
+      updated_at=clock_timestamp()
+      WHERE competition_id=${competition}
+      RETURNING revision`;
 
     const [refreshed] = await sql<{
       value: { revision: number; steps: Record<string, unknown> };
@@ -88,7 +93,7 @@ describeInfrastructure("Phase 4 setup reference refresh", () => {
       ${organisation},${competition},${account},'reference-refresh-request-1'
     ) value`;
 
-    expect(refreshed?.value.revision).toBe((before?.revision ?? 0) + 1);
+    expect(refreshed?.value.revision).toBe((stale?.revision ?? 0) + 1);
     expect(refreshed?.value.steps.capacity).toMatchObject({ effective: { availableMatchSlots: 6, slotMinutes: 60 } });
     expect(refreshed?.value.steps.format_preferences).toEqual(before?.steps.format_preferences);
     expect(refreshed?.value.steps).toMatchObject({
