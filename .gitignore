@@ -6,6 +6,7 @@ dist/
 playwright-report/
 test-results/
 artifacts/
+apps/api/openapi.generated.json
 *.tsbuildinfo
 .DS_Store
 .env*
