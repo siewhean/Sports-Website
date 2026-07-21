@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0-draft.1",
+  "status": "provisional_product_baseline",
+  "authority": "product_recommendation_not_federation_profile",
+  "packs": [
+    {
+      "sportId": "canoe_polo",
+      "displayName": "Canoe Polo",
+      "entryTypes": ["team"],
+      "hierarchy": ["match", "goal"],
+      "requiredEvents": [
+        "goal",
+        "green_card",
+        "yellow_card",
+        "red_card",
+        "timeout",
+        "incident",
+        "period_change",
+        "reversal",
+        "finalisation"
+      ],
+      "standingsOrder": ["points", "goal_difference", "goals_for", "head_to_head", "discipline"],
+      "forfeit": [3, 0, 1],
+      "slotMinutes": 30
+    },
+    {
+      "sportId": "badminton",
+      "displayName": "Badminton",
+      "entryTypes": ["singles", "doubles"],
+      "hierarchy": ["match", "game", "point"],
+      "requiredEvents": [
+        "point",
+        "game_completion",
+        "server_change",
+        "retirement",
+        "walkover",
+        "reversal",
+        "finalisation"
+      ],
+      "standingsOrder": ["match_wins", "game_difference", "point_difference", "head_to_head"],
+      "forfeit": [21, 0, 2],
+      "slotMinutes": 20
+    },
+    {
+      "sportId": "table_tennis",
+      "displayName": "Table Tennis",
+      "entryTypes": ["singles", "doubles"],
+      "hierarchy": ["match", "game", "point"],
+      "requiredEvents": [
+        "point",
+        "game_completion",
+        "timeout",
+        "server_change",
+        "retirement",
+        "walkover",
+        "reversal",
+        "finalisation"
+      ],
+      "standingsOrder": ["match_wins", "game_difference", "point_difference", "head_to_head"],
+      "forfeit": [11, 0, 3],
+      "slotMinutes": 15
+    },
+    {
+      "sportId": "volleyball",
+      "displayName": "Volleyball",
+      "entryTypes": ["team"],
+      "hierarchy": ["match", "set", "point"],
+      "requiredEvents": ["point", "set_completion", "timeout", "deciding_set", "reversal", "finalisation"],
+      "standingsOrder": ["match_wins", "set_ratio", "point_ratio", "head_to_head"],
+      "forfeit": [25, 0, 2],
+      "slotMinutes": 45
+    },
+    {
+      "sportId": "basketball",
+      "displayName": "Basketball",
+      "entryTypes": ["team"],
+      "hierarchy": ["match", "period", "point"],
+      "requiredEvents": [
+        "one_point_score",
+        "two_point_score",
+        "three_point_score",
+        "team_foul",
+        "player_foul",
+        "timeout",
+        "period_change",
+        "overtime",
+        "reversal",
+        "finalisation"
+      ],
+      "standingsOrder": ["wins", "head_to_head", "point_difference", "points_for"],
+      "forfeit": [20, 0, 1],
+      "slotMinutes": 40
+    }
+  ]
+}

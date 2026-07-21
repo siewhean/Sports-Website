@@ -1,0 +1,145 @@
+{
+  "cases": [
+    {
+      "sport": "canoe_polo",
+      "results": [
+        {
+          "matchId": "cp-1",
+          "homeEntryId": "a",
+          "awayEntryId": "b",
+          "homeScore": 3,
+          "awayScore": 1,
+          "status": "final",
+          "version": 1
+        },
+        {
+          "matchId": "cp-2",
+          "homeEntryId": "b",
+          "awayEntryId": "c",
+          "homeScore": 2,
+          "awayScore": 0,
+          "status": "final",
+          "version": 1
+        },
+        {
+          "matchId": "cp-3",
+          "homeEntryId": "c",
+          "awayEntryId": "a",
+          "homeScore": 1,
+          "awayScore": 1,
+          "status": "final",
+          "version": 1
+        }
+      ],
+      "order": ["a", "b", "c"]
+    },
+    {
+      "sport": "badminton",
+      "results": [
+        {
+          "matchId": "bd-1",
+          "homeEntryId": "a",
+          "awayEntryId": "b",
+          "homeScore": 44,
+          "awayScore": 39,
+          "homeSegments": [22, 22],
+          "awaySegments": [20, 19],
+          "status": "final",
+          "version": 1
+        },
+        {
+          "matchId": "bd-2",
+          "homeEntryId": "b",
+          "awayEntryId": "c",
+          "homeScore": 42,
+          "awayScore": 30,
+          "homeSegments": [21, 21],
+          "awaySegments": [15, 15],
+          "status": "final",
+          "version": 1
+        }
+      ],
+      "order": ["a", "b", "c"]
+    },
+    {
+      "sport": "table_tennis",
+      "results": [
+        {
+          "matchId": "tt-1",
+          "homeEntryId": "a",
+          "awayEntryId": "b",
+          "homeScore": 35,
+          "awayScore": 25,
+          "homeSegments": [11, 13, 11],
+          "awaySegments": [8, 11, 6],
+          "status": "final",
+          "version": 1
+        },
+        {
+          "matchId": "tt-2",
+          "homeEntryId": "b",
+          "awayEntryId": "c",
+          "homeScore": 33,
+          "awayScore": 20,
+          "homeSegments": [11, 11, 11],
+          "awaySegments": [8, 7, 5],
+          "status": "final",
+          "version": 1
+        }
+      ],
+      "order": ["a", "b", "c"]
+    },
+    {
+      "sport": "volleyball",
+      "results": [
+        {
+          "matchId": "vb-1",
+          "homeEntryId": "a",
+          "awayEntryId": "b",
+          "homeScore": 50,
+          "awayScore": 44,
+          "homeSegments": [25, 25],
+          "awaySegments": [20, 24],
+          "status": "final",
+          "version": 1
+        },
+        {
+          "matchId": "vb-2",
+          "homeEntryId": "b",
+          "awayEntryId": "c",
+          "homeScore": 50,
+          "awayScore": 30,
+          "homeSegments": [25, 25],
+          "awaySegments": [15, 15],
+          "status": "final",
+          "version": 1
+        }
+      ],
+      "order": ["a", "b", "c"]
+    },
+    {
+      "sport": "basketball",
+      "results": [
+        {
+          "matchId": "bb-1",
+          "homeEntryId": "a",
+          "awayEntryId": "b",
+          "homeScore": 61,
+          "awayScore": 60,
+          "status": "final",
+          "version": 1
+        },
+        {
+          "matchId": "bb-2",
+          "homeEntryId": "b",
+          "awayEntryId": "c",
+          "homeScore": 80,
+          "awayScore": 60,
+          "status": "final",
+          "version": 1
+        }
+      ],
+      "order": ["a", "b", "c"]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 1,
+  "originAssertions": [
+    "content-addressed-static-manifest",
+    "running-build-id-matches-manifest",
+    "served-static-bytes-match-manifest",
+    "immutable-static-cache-control",
+    "gzip-content-negotiation",
+    "etag-conditional-request",
+    "private-html-no-store",
+    "service-worker-not-immutable",
+    "security-headers-preserved"
+  ],
+  "requiredEdgeEvidence": [
+    "brotli-content-negotiation",
+    "cache-miss-then-hit",
+    "authenticated-response-not-shared",
+    "published-projection-purge-receipt",
+    "old-projection-key-no-longer-served"
+  ],
+  "immutablePathPrefix": "/_next/static/",
+  "privateDocumentPaths": ["/organiser", "/official", "/score"],
+  "purgeJobName": "edge.public-projection.purge"
+}

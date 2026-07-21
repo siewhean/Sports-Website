@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: matchday
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.27.4
+        ports:
+          - 1025:1025
+          - 8025:8025
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      MAILPIT_API_URL: http://127.0.0.1:8025
+      RUN_INFRA_TESTS: "1"
+      LOG_LEVEL: silent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ci:assert-clean-outputs
+      - run: pnpm dependencies:audit
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:unit
+      - run: pnpm db:migrate:check
+      - run: pnpm backup:verify
+      - run: pnpm test:integration
+      - run: pnpm validate:fixtures
+      - run: pnpm openapi:check
+      - run: pnpm build
+      - run: pnpm deploy:manifest
+      - run: pnpm asset-delivery:verify:origin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-manifest
+          path: artifacts/deployment-manifest.json
+          if-no-files-found: error
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - run: pnpm test:a11y
+      - run: pnpm test:visual
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2

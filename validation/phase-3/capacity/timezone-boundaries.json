@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Elapsed-time oracles across DST changes and the international date line.",
+  "cases": [
+    {
+      "id": "new-york-spring-forward",
+      "time_zone": "America/New_York",
+      "date": "2026-03-08",
+      "start": "01:00",
+      "end": "04:00",
+      "slot_minutes": 30,
+      "expected_usable_minutes": 120,
+      "expected_slots": 4
+    },
+    {
+      "id": "new-york-autumn-fold",
+      "time_zone": "America/New_York",
+      "date": "2026-11-01",
+      "start": "00:30",
+      "end": "02:30",
+      "slot_minutes": 30,
+      "expected_usable_minutes": 180,
+      "expected_slots": 6
+    },
+    {
+      "id": "berlin-spring-forward",
+      "time_zone": "Europe/Berlin",
+      "date": "2026-03-29",
+      "start": "01:00",
+      "end": "04:00",
+      "slot_minutes": 30,
+      "expected_usable_minutes": 120,
+      "expected_slots": 4
+    },
+    {
+      "id": "kiritimati-cross-midnight",
+      "time_zone": "Pacific/Kiritimati",
+      "date": "2026-08-01",
+      "start": "23:00",
+      "end": "01:00",
+      "cross_midnight": true,
+      "slot_minutes": 30,
+      "expected_usable_minutes": 120,
+      "expected_slots": 4
+    }
+  ]
+}

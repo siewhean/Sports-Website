@@ -1,0 +1,97 @@
+import { expect, test } from "@playwright/test";
+import {
+  assertConsoleGuard,
+  dismissConsent,
+  installConsoleGuard,
+  openPhase2Scorekeeper,
+} from "./helpers/console-guard";
+
+test.beforeEach(async ({ page }) => installConsoleGuard(page));
+test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
+
+test("canonical routes expose the complete 14-step Canoe Polo slice", async ({ page }) => {
+  const routeEvidence = [
+    ["/organiser/competitions/singapore-open/setup", "Competition setup", "Singapore Open 2026"],
+    ["/organiser/competitions/singapore-open/settings", "Canoe Polo rules", "2"],
+    ["/organiser/competitions/singapore-open/entries", "Teams and division", "Open division"],
+    ["/organiser/competitions/singapore-open/entries", "Teams and division", "Pasir Ris Rapids"],
+    ["/organiser/competitions/singapore-open/capacity", "Capacity", "16 required match slots"],
+    ["/organiser/competitions/singapore-open/format", "Group to knockout", "Group A"],
+    ["/organiser/competitions/singapore-open/format", "Group to knockout", "Semi-finals"],
+    ["/organiser/competitions/singapore-open/schedule", "Schedule", "M16 · Final"],
+    ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
+    ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
+    ["/score/m12-access", "Marina Blue", "Validate access"],
+    ["/competitions/singapore-open", "Singapore Open 2026", "Results"],
+    ["/organiser/competitions/singapore-open/audit", "Audit log", "Finalised Match 12"],
+    ["/competitions/singapore-open", "Singapore Open 2026", "Bracket"],
+  ] as const;
+
+  for (const [route, heading, evidence] of routeEvidence) {
+    const response = await page.goto(route);
+    expect(response?.ok(), route).toBe(true);
+    await dismissConsent(page);
+    await expect(page.getByRole("heading", { name: heading }).first(), route).toBeVisible();
+    await expect(page.getByText(evidence, { exact: true }).first(), route).toBeVisible();
+  }
+});
+
+test("phone scoring validates access, confirms scorer attribution, appends a goal, and finalises", async ({ page }) => {
+  await page.goto("/score/m12-access");
+  await dismissConsent(page);
+
+  await page.getByLabel("Scoring code").fill("INVALID");
+  await page.getByRole("button", { name: "Validate access" }).click();
+  await expect(page.getByText("That scoring code is not valid for this match.")).toBeVisible();
+
+  await page.getByLabel("Scoring code").fill("POLO-12");
+  await page.getByRole("button", { name: "Validate access" }).click();
+  await page.getByRole("checkbox", { name: "I am at Match 12 and ready to score this fixture." }).check();
+  await page.getByRole("button", { name: "Start scoring" }).click();
+
+  await page.getByRole("button", { name: "Goal Marina Blue" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation.getByText("Marina Blue", { exact: true })).toBeVisible();
+  const scorer = confirmation.getByLabel("Scorer name");
+  await expect(scorer).toBeFocused();
+  await scorer.fill("Aisha Tan");
+  await confirmation.getByRole("button", { name: "Record goal for Marina Blue" }).click();
+
+  await expect(page.getByLabel("Marina Blue 1")).toBeVisible();
+  await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
+  await expect(page.getByText("1 event pending sync")).toBeVisible();
+
+  await page.getByRole("button", { name: "Review final score" }).click();
+  await expect(page.getByRole("heading", { name: "Marina Blue 1–0 Harbour Gold" })).toBeVisible();
+  await page.getByRole("button", { name: "Confirm final result" }).click();
+  await expect(page.getByRole("heading", { name: "Result publication acknowledged" })).toBeVisible();
+  await expect(page.getByText("R-2026-09-12-M12-04")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open public page" })).toHaveAttribute(
+    "href",
+    "/competitions/singapore-open",
+  );
+});
+
+test("public projection is complete in raw server-rendered HTML", async ({ request }) => {
+  const response = await request.get("/competitions/singapore-open");
+  expect(response.ok()).toBe(true);
+  expect(response.headers()["content-type"]).toContain("text/html");
+  const html = await response.text();
+  for (const evidence of [
+    "Singapore Open 2026",
+    "Final",
+    "Schedule",
+    "Table",
+    "Bracket",
+    "Updated 18 seconds ago",
+    "Published revision 4",
+  ]) {
+    expect(html, evidence).toContain(evidence);
+  }
+});
+
+test("scoring helper reaches the single-active-writer surface", async ({ page }) => {
+  await openPhase2Scorekeeper(page);
+  await expect(page.getByRole("status")).toContainText("Active scorer");
+});

@@ -1,0 +1,335 @@
+{
+  "schema_version": "1.0.0",
+  "fixture_id": "phase-2-canoe-polo-16",
+  "sport": "canoe_polo",
+  "timezone": "Asia/Singapore",
+  "clock": { "now": "2026-08-01T00:30:00.000Z", "competition_day_start": "2026-08-01T01:00:00.000Z" },
+  "entry_count": 16,
+  "slot_minutes": 30,
+  "minimum_rest_minutes": 30,
+  "entries": [
+    "team-01",
+    "team-02",
+    "team-03",
+    "team-04",
+    "team-05",
+    "team-06",
+    "team-07",
+    "team-08",
+    "team-09",
+    "team-10",
+    "team-11",
+    "team-12",
+    "team-13",
+    "team-14",
+    "team-15",
+    "team-16"
+  ],
+  "teams": [
+    { "id": "team-01", "name": "Marina Barracudas", "seed": 1 },
+    { "id": "team-02", "name": "Kallang Rapids", "seed": 2 },
+    { "id": "team-03", "name": "Sentosa Orcas", "seed": 3 },
+    { "id": "team-04", "name": "Punggol Paddlers", "seed": 4 },
+    { "id": "team-05", "name": "Bedok Breakers", "seed": 5 },
+    { "id": "team-06", "name": "Jurong Current", "seed": 6 },
+    { "id": "team-07", "name": "Pasir Ris Waves", "seed": 7 },
+    { "id": "team-08", "name": "Tampines Tides", "seed": 8 },
+    { "id": "team-09", "name": "Seletar Storm", "seed": 9 },
+    { "id": "team-10", "name": "Changi Chargers", "seed": 10 },
+    { "id": "team-11", "name": "Woodlands Wake", "seed": 11 },
+    { "id": "team-12", "name": "Clementi Current", "seed": 12 },
+    { "id": "team-13", "name": "Bishan Buoys", "seed": 13 },
+    { "id": "team-14", "name": "Queenstown Quays", "seed": 14 },
+    { "id": "team-15", "name": "Sengkang Surge", "seed": 15 },
+    { "id": "team-16", "name": "Tuas Tritons", "seed": 16 }
+  ],
+  "groups": {
+    "A": ["team-01", "team-08", "team-09", "team-16"],
+    "B": ["team-02", "team-07", "team-10", "team-15"],
+    "C": ["team-03", "team-06", "team-11", "team-14"],
+    "D": ["team-04", "team-05", "team-12", "team-13"]
+  },
+  "group_matches": [
+    ["group-A-r1-m1", "team-01", "team-16"],
+    ["group-A-r1-m2", "team-08", "team-09"],
+    ["group-A-r2-m1", "team-01", "team-09"],
+    ["group-A-r2-m2", "team-16", "team-08"],
+    ["group-A-r3-m1", "team-01", "team-08"],
+    ["group-A-r3-m2", "team-09", "team-16"],
+    ["group-B-r1-m1", "team-02", "team-15"],
+    ["group-B-r1-m2", "team-07", "team-10"],
+    ["group-B-r2-m1", "team-02", "team-10"],
+    ["group-B-r2-m2", "team-15", "team-07"],
+    ["group-B-r3-m1", "team-02", "team-07"],
+    ["group-B-r3-m2", "team-10", "team-15"],
+    ["group-C-r1-m1", "team-03", "team-14"],
+    ["group-C-r1-m2", "team-06", "team-11"],
+    ["group-C-r2-m1", "team-03", "team-11"],
+    ["group-C-r2-m2", "team-14", "team-06"],
+    ["group-C-r3-m1", "team-03", "team-06"],
+    ["group-C-r3-m2", "team-11", "team-14"],
+    ["group-D-r1-m1", "team-04", "team-13"],
+    ["group-D-r1-m2", "team-05", "team-12"],
+    ["group-D-r2-m1", "team-04", "team-12"],
+    ["group-D-r2-m2", "team-13", "team-05"],
+    ["group-D-r3-m1", "team-04", "team-05"],
+    ["group-D-r3-m2", "team-12", "team-13"]
+  ],
+  "knockout_matches": [
+    ["quarterfinal-1", "A:1", "B:2", "group:A", "group:B"],
+    ["quarterfinal-2", "C:1", "D:2", "group:C", "group:D"],
+    ["quarterfinal-3", "B:1", "A:2", "group:A", "group:B"],
+    ["quarterfinal-4", "D:1", "C:2", "group:C", "group:D"],
+    ["semifinal-1", "winner:quarterfinal-1", "winner:quarterfinal-2", "quarterfinal-1", "quarterfinal-2"],
+    ["semifinal-2", "winner:quarterfinal-3", "winner:quarterfinal-4", "quarterfinal-3", "quarterfinal-4"],
+    ["bronze-final", "loser:semifinal-1", "loser:semifinal-2", "semifinal-1", "semifinal-2"],
+    ["championship-final", "winner:semifinal-1", "winner:semifinal-2", "semifinal-1", "semifinal-2"]
+  ],
+  "availability": [
+    ["d1-a1-am", "area-1", 540, 720],
+    ["d1-a1-pm", "area-1", 780, 1020],
+    ["d1-a2-am", "area-2", 540, 720],
+    ["d1-a2-pm", "area-2", 780, 1020],
+    ["d1-a3-am", "area-3", 540, 720],
+    ["d1-a3-pm", "area-3", 780, 1020],
+    ["d1-a4-am", "area-4", 540, 720],
+    ["d1-a4-pm", "area-4", 780, 1020],
+    ["d2-a1-am", "area-1", 1980, 2160],
+    ["d2-a1-pm", "area-1", 2220, 2460],
+    ["d2-a2-am", "area-2", 1980, 2160],
+    ["d2-a2-pm", "area-2", 2220, 2460],
+    ["d2-a3-am", "area-3", 1980, 2160],
+    ["d2-a3-pm", "area-3", 2220, 2460],
+    ["d2-a4-am", "area-4", 1980, 2160],
+    ["d2-a4-pm", "area-4", 2220, 2460]
+  ],
+  "expected_capacity_slots": 112,
+  "schedule": [
+    ["group-A-r1-m1", "area-1", "d1-a1-am", 540, 570],
+    ["group-A-r1-m2", "area-2", "d1-a2-am", 540, 570],
+    ["group-B-r1-m1", "area-3", "d1-a3-am", 540, 570],
+    ["group-B-r1-m2", "area-4", "d1-a4-am", 540, 570],
+    ["group-C-r1-m1", "area-1", "d1-a1-am", 570, 600],
+    ["group-C-r1-m2", "area-2", "d1-a2-am", 570, 600],
+    ["group-D-r1-m1", "area-3", "d1-a3-am", 570, 600],
+    ["group-D-r1-m2", "area-4", "d1-a4-am", 570, 600],
+    ["group-A-r2-m1", "area-1", "d1-a1-am", 600, 630],
+    ["group-A-r2-m2", "area-2", "d1-a2-am", 600, 630],
+    ["group-B-r2-m1", "area-3", "d1-a3-am", 600, 630],
+    ["group-B-r2-m2", "area-4", "d1-a4-am", 600, 630],
+    ["group-C-r2-m1", "area-1", "d1-a1-am", 630, 660],
+    ["group-C-r2-m2", "area-2", "d1-a2-am", 630, 660],
+    ["group-D-r2-m1", "area-3", "d1-a3-am", 630, 660],
+    ["group-D-r2-m2", "area-4", "d1-a4-am", 630, 660],
+    ["group-A-r3-m1", "area-1", "d1-a1-am", 660, 690],
+    ["group-A-r3-m2", "area-2", "d1-a2-am", 660, 690],
+    ["group-B-r3-m1", "area-3", "d1-a3-am", 660, 690],
+    ["group-B-r3-m2", "area-4", "d1-a4-am", 660, 690],
+    ["group-C-r3-m1", "area-1", "d1-a1-am", 690, 720],
+    ["group-C-r3-m2", "area-2", "d1-a2-am", 690, 720],
+    ["group-D-r3-m1", "area-3", "d1-a3-am", 690, 720],
+    ["group-D-r3-m2", "area-4", "d1-a4-am", 690, 720],
+    ["quarterfinal-1", "area-1", "d1-a1-pm", 780, 810],
+    ["quarterfinal-2", "area-2", "d1-a2-pm", 780, 810],
+    ["quarterfinal-3", "area-3", "d1-a3-pm", 780, 810],
+    ["quarterfinal-4", "area-4", "d1-a4-pm", 780, 810],
+    ["semifinal-1", "area-1", "d1-a1-pm", 840, 870],
+    ["semifinal-2", "area-2", "d1-a2-pm", 840, 870],
+    ["bronze-final", "area-1", "d1-a1-pm", 900, 930],
+    ["championship-final", "area-2", "d1-a2-pm", 900, 930]
+  ],
+  "standings_oracle": {
+    "entries": ["team-01", "team-08", "team-09", "team-16"],
+    "results": [
+      ["team-01", "team-08", 1, 0, 0, 0],
+      ["team-01", "team-09", 0, 1, 0, 0],
+      ["team-08", "team-09", 1, 0, 0, 0],
+      ["team-01", "team-16", 2, 0, 0, 0],
+      ["team-08", "team-16", 2, 0, 0, 0],
+      ["team-09", "team-16", 2, 0, 2, 0]
+    ],
+    "expected": [
+      ["team-01", 1, 3, 2, 2, 6, 0],
+      ["team-08", 2, 3, 2, 2, 6, 0],
+      ["team-09", 3, 3, 2, 2, 6, 2],
+      ["team-16", 4, 3, 0, -6, 0, 0]
+    ]
+  },
+  "scoring_oracle": {
+    "events": [
+      {
+        "client_event_id": "ce-001",
+        "sequence": 1,
+        "type": "match_started",
+        "period": 1,
+        "manual_time_seconds": 0,
+        "actor_id": "official-01"
+      },
+      {
+        "client_event_id": "ce-002",
+        "sequence": 2,
+        "type": "goal",
+        "team_id": "team-01",
+        "scorer_id": "player-01",
+        "period": 1,
+        "manual_time_seconds": 118,
+        "actor_id": "official-01"
+      },
+      {
+        "client_event_id": "ce-003",
+        "sequence": 3,
+        "type": "goal",
+        "team_id": "team-08",
+        "scorer_id": null,
+        "period": 2,
+        "manual_time_seconds": 246,
+        "actor_id": "official-01"
+      },
+      {
+        "client_event_id": "ce-004",
+        "sequence": 4,
+        "type": "goal_reversed",
+        "target_sequence": 3,
+        "reason": "Wrong team",
+        "period": 2,
+        "manual_time_seconds": 252,
+        "actor_id": "official-01"
+      },
+      {
+        "client_event_id": "ce-005",
+        "sequence": 5,
+        "type": "yellow_card",
+        "team_id": "team-08",
+        "person_id": "player-18",
+        "period": 2,
+        "manual_time_seconds": 260,
+        "actor_id": "official-01"
+      },
+      {
+        "client_event_id": "ce-006",
+        "sequence": 6,
+        "type": "timeout",
+        "team_id": "team-01",
+        "period": 2,
+        "manual_time_seconds": 275,
+        "actor_id": "official-01"
+      },
+      {
+        "client_event_id": "ce-007",
+        "sequence": 7,
+        "type": "incident",
+        "note": "Floating goal checked",
+        "period": 2,
+        "manual_time_seconds": 280,
+        "actor_id": "official-01"
+      },
+      {
+        "client_event_id": "ce-008",
+        "sequence": 8,
+        "type": "match_finalised",
+        "period": 2,
+        "manual_time_seconds": 600,
+        "actor_id": "official-01"
+      }
+    ],
+    "expected_score": { "team-01": 1, "team-08": 0 },
+    "finalisation_valid": true
+  },
+  "correction_oracle": {
+    "unstarted_downstream": {
+      "corrected_match_id": "semifinal-1",
+      "downstream_states": { "championship-final": "unstarted" },
+      "expected_conflicts": []
+    },
+    "started_downstream": {
+      "corrected_match_id": "semifinal-1",
+      "downstream_states": { "championship-final": "started" },
+      "expected_conflicts": ["championship-final"]
+    }
+  },
+  "publication_oracle": {
+    "result_publication_version": 3,
+    "schedule_publication_version": 2,
+    "private_schedule_revision_version": 3,
+    "public_result": {
+      "match_id": "championship-final",
+      "home": "team-01",
+      "away": "team-08",
+      "home_goals": 1,
+      "away_goals": 0
+    },
+    "public_schedule": { "match_id": "championship-final", "area_id": "area-2", "start_minute": 900 },
+    "private_schedule_draft": { "match_id": "championship-final", "area_id": "area-1", "start_minute": 960 }
+  },
+  "audit_oracle": [
+    "score_event_appended",
+    "match_finalised",
+    "results_published",
+    "result_corrected",
+    "correction_conflict_detected",
+    "results_republished"
+  ],
+  "qr_oracle": {
+    "match_id": "championship-final",
+    "role": "scorer",
+    "expires_at": "2026-08-01T12:00:00.000Z",
+    "retry_limit": 5,
+    "cases": [
+      {
+        "case": "valid",
+        "now": "2026-08-01T10:00:00.000Z",
+        "revoked": false,
+        "requested_match_id": "championship-final",
+        "device_id": "device-a",
+        "attempts": 1,
+        "expected": "accepted"
+      },
+      {
+        "case": "expired",
+        "now": "2026-08-01T12:00:01.000Z",
+        "revoked": false,
+        "requested_match_id": "championship-final",
+        "device_id": "device-a",
+        "attempts": 1,
+        "expected": "expired"
+      },
+      {
+        "case": "revoked",
+        "now": "2026-08-01T10:00:00.000Z",
+        "revoked": true,
+        "requested_match_id": "championship-final",
+        "device_id": "device-a",
+        "attempts": 1,
+        "expected": "revoked"
+      },
+      {
+        "case": "wrong-match",
+        "now": "2026-08-01T10:00:00.000Z",
+        "revoked": false,
+        "requested_match_id": "semifinal-1",
+        "device_id": "device-a",
+        "attempts": 1,
+        "expected": "wrong_match"
+      },
+      {
+        "case": "transfer",
+        "now": "2026-08-01T10:00:00.000Z",
+        "revoked": false,
+        "requested_match_id": "championship-final",
+        "device_id": "device-b",
+        "bound_device_id": "device-a",
+        "attempts": 1,
+        "expected": "transfer_required"
+      },
+      {
+        "case": "retry",
+        "now": "2026-08-01T10:00:00.000Z",
+        "revoked": false,
+        "requested_match_id": "championship-final",
+        "device_id": "device-a",
+        "attempts": 6,
+        "expected": "rate_limited"
+      }
+    ]
+  }
+}

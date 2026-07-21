@@ -1,0 +1,241 @@
+.shell {
+  min-height: 100vh;
+  background: var(--canvas);
+}
+
+.header {
+  position: relative;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) auto minmax(170px, 1fr);
+  align-items: center;
+  min-height: 64px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--hairline);
+  background: rgb(247 246 240 / 96%);
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  font-size: 0.84rem;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+}
+
+.wordmarkMark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+
+.wordmarkMark svg {
+  width: 15px;
+}
+
+.header nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.header nav a {
+  position: relative;
+  padding: 10px 13px;
+  color: var(--ink-muted);
+  font-size: 0.86rem;
+  font-weight: 560;
+}
+
+.header nav a::after {
+  position: absolute;
+  right: 13px;
+  bottom: 3px;
+  left: 13px;
+  height: 2px;
+  background: var(--signal-strong);
+  content: "";
+  transform: scaleX(0);
+  transition: transform 180ms var(--ease-out);
+}
+
+.header nav a[aria-current="page"] {
+  color: var(--ink);
+}
+
+.header nav a[aria-current="page"]::after {
+  transform: scaleX(1);
+}
+
+.headerMeta {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.competitionContext {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+}
+
+.competitionContext > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgb(109 148 20 / 12%);
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .header nav a:hover {
+    color: var(--ink);
+  }
+}
+
+@media (max-width: 1120px) {
+  .header {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .header nav {
+    justify-content: center;
+  }
+
+  .competitionContext {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .header {
+    grid-template-columns: auto 1fr;
+  }
+
+  .headerMeta {
+    display: none;
+  }
+
+  .header nav {
+    justify-content: end;
+  }
+}
+
+@media (max-width: 767px) {
+  .header {
+    display: flex;
+    min-height: 58px;
+    padding: 0 14px;
+    overflow-x: auto;
+  }
+
+  .wordmark {
+    margin-right: 18px;
+  }
+
+  .wordmarkMark {
+    width: 26px;
+    height: 26px;
+  }
+
+  .header nav {
+    margin-left: auto;
+  }
+
+  .header nav a {
+    padding: 10px 8px;
+    font-size: 0.74rem;
+    white-space: nowrap;
+  }
+}
+
+/* Phase 0 scoring shell state */
+.shell.scoring {
+  min-height: 100vh;
+  background: var(--event-canvas);
+  color: #f7f8f2;
+}
+
+.shell.scoring .header {
+  border-color: #333735;
+  background: #101312;
+}
+
+.shell.scoring .header nav a,
+.shell.scoring .competitionContext {
+  color: #989e9a;
+}
+
+.shell.scoring .header nav a[aria-current="page"] {
+  color: white;
+}
+
+.shell.scoring .avatar {
+  border-color: #424744;
+  background: var(--event-surface);
+}
+
+@media (max-width: 600px) {
+  .shell.scoring .header {
+    display: none;
+  }
+}
+
+/* Phase 0 dark format shell state */
+.shell.dark {
+  background: var(--event-canvas);
+  color: #f5f6f0;
+}
+
+.shell.dark .header {
+  border-color: #333735;
+  background: rgb(13 16 16 / 96%);
+}
+
+.shell.dark .header nav a,
+.shell.dark .competitionContext {
+  color: #9da29f;
+}
+
+.shell.dark .header nav a[aria-current="page"] {
+  color: white;
+}
+
+.shell.dark .avatar {
+  border-color: #424744;
+  background: var(--event-surface);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .shell.dark .header nav a:hover {
+    color: white;
+  }
+}
+
+@media (max-width: 767px) {
+  .shell.dark .header {
+    min-height: 58px;
+  }
+}

@@ -1,0 +1,266 @@
+import { describe, expect, it } from "vitest";
+import { parseConfig, safeConfigSummary } from "../src/index.js";
+
+const flowSealKey = Buffer.alloc(32, 7).toString("base64url");
+const oidcConfig = {
+  API_ALLOWED_ORIGINS: "https://app.matchday.example",
+  IDENTITY_PROVIDER: "oidc",
+  IDENTITY_OIDC_ISSUER: "https://identity.matchday.example",
+  IDENTITY_OIDC_CLIENT_ID: "matchday-web",
+  IDENTITY_OIDC_CLIENT_SECRET: "provider-secret-at-least-16",
+  IDENTITY_OIDC_CALLBACK_URI: "https://api.matchday.example/api/v1/identity/callback",
+  IDENTITY_FLOW_SEAL_KEY: flowSealKey,
+  IDENTITY_PROVIDER_EVENT_HMAC_SECRET: "provider-event-secret-at-least-32-bytes",
+  IDENTITY_COOKIE_SITE: "https://matchday.example",
+  IDENTITY_POST_AUTH_REDIRECT_URIS: "https://app.matchday.example/organiser",
+  IDENTITY_HOSTED_RECOVERY_URL: "https://identity.matchday.example/recover",
+};
+const edgeCacheConfig = {
+  EDGE_CACHE_PURGE_ENDPOINT: "https://edge-bridge.matchday.example/purge",
+  EDGE_CACHE_PURGE_BEARER_TOKEN: "e".repeat(32),
+};
+
+describe("configuration", () => {
+  it("provides safe local defaults", () => {
+    const config = parseConfig({});
+    expect(config.environment).toBe("local");
+    expect(config.api.allowedOrigins).toEqual(["http://127.0.0.1:3000", "http://localhost:3000"]);
+    expect(config.api.trustedProxies).toEqual([]);
+    expect(config.telemetry).toEqual({ enabled: false, metricExportIntervalMs: 10_000 });
+    expect(config.identity).toMatchObject({ sessionCookieName: "matchday_session", secureCookies: false });
+  });
+
+  it("requires explicit production dependencies and health protection", () => {
+    expect(() => parseConfig({ APP_ENV: "production" })).toThrow("DATABASE_URL");
+  });
+
+  it("rejects wildcard and insecure production origins", () => {
+    const base = {
+      APP_ENV: "production",
+      DATABASE_URL: "postgres://user:secret@db.internal/matchday",
+      REDIS_URL: "redis://cache.internal:6379",
+      DEEP_HEALTH_TOKEN: "a".repeat(32),
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      OTEL_ENABLED: "true",
+      OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
+      ...edgeCacheConfig,
+      ...oidcConfig,
+    };
+    expect(() => parseConfig({ ...base, API_ALLOWED_ORIGINS: "*" })).toThrow("Wildcard");
+    expect(() => parseConfig({ ...base, API_ALLOWED_ORIGINS: "http://matchday.example" })).toThrow("HTTPS");
+    expect(() => parseConfig({ API_ALLOWED_ORIGINS: "ftp://localhost" })).toThrow("HTTP or HTTPS");
+  });
+
+  it("rejects non-origin CORS values without reflecting embedded credentials", () => {
+    const invalidOrigins = [
+      "https://user:origin-password@app.example.test",
+      "https://app.example.test/path",
+      "https://app.example.test?tenant=other",
+      "https://app.example.test/#fragment",
+    ];
+
+    for (const origin of invalidOrigins) {
+      let thrown: unknown;
+      try {
+        parseConfig({ API_ALLOWED_ORIGINS: origin });
+      } catch (error: unknown) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect(String(thrown)).toContain("canonical origins");
+      expect(String(thrown)).not.toContain("origin-password");
+    }
+  });
+
+  it("redacts credentials from diagnostic summaries", () => {
+    const summary = safeConfigSummary(parseConfig({ DATABASE_URL: "postgres://owner:secret@localhost/matchday" }));
+    expect(summary.databaseUrl).not.toContain("owner");
+    expect(summary.databaseUrl).not.toContain("secret");
+  });
+
+  it("rejects database and cache URLs for incompatible protocols", () => {
+    expect(() => parseConfig({ DATABASE_URL: "https://db.example.test/matchday" })).toThrow(
+      "DATABASE_URL must use the postgres or postgresql protocol",
+    );
+    expect(() => parseConfig({ REDIS_URL: "https://cache.example.test" })).toThrow(
+      "REDIS_URL must use the redis or rediss protocol",
+    );
+  });
+
+  it("trusts only explicitly bounded proxy addresses", () => {
+    expect(parseConfig({ API_TRUSTED_PROXIES: "10.0.0.10,192.168.0.0/24" }).api.trustedProxies).toEqual([
+      "10.0.0.10",
+      "192.168.0.0/24",
+    ]);
+    expect(() => parseConfig({ API_TRUSTED_PROXIES: "0.0.0.0/0" })).toThrow("Unrestricted");
+    expect(() => parseConfig({ API_TRUSTED_PROXIES: "::/0" })).toThrow("Unrestricted");
+    expect(() => parseConfig({ API_TRUSTED_PROXIES: "10.23.4.5/0" })).toThrow("Unrestricted");
+    expect(() => parseConfig({ API_TRUSTED_PROXIES: "2001:db8::/0" })).toThrow("Unrestricted");
+    expect(() => parseConfig({ API_TRUSTED_PROXIES: "loopback" })).toThrow("explicit IP");
+    expect(() => parseConfig({ API_TRUSTED_PROXIES: "not-an-ip" })).toThrow("explicit IP");
+  });
+
+  it("requires a safe explicit endpoint whenever telemetry is enabled", () => {
+    expect(() => parseConfig({ OTEL_ENABLED: "true" })).toThrow("OTEL_EXPORTER_OTLP_ENDPOINT");
+    expect(() =>
+      parseConfig({
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://user:secret@collector.internal:4318?token=private",
+      }),
+    ).toThrow("must not include credentials");
+    expect(
+      parseConfig({
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318/",
+        OTEL_METRIC_EXPORT_INTERVAL_MS: "2500",
+      }).telemetry,
+    ).toEqual({
+      enabled: true,
+      endpoint: "http://127.0.0.1:4318",
+      metricExportIntervalMs: 2_500,
+    });
+  });
+
+  it("requires enabled OTLP telemetry in production", () => {
+    const production = {
+      APP_ENV: "production",
+      DATABASE_URL: "postgres://user:secret@db.internal/matchday",
+      REDIS_URL: "redis://cache.internal:6379",
+      DEEP_HEALTH_TOKEN: "a".repeat(32),
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
+      ...edgeCacheConfig,
+      ...oidcConfig,
+    };
+    expect(() => parseConfig(production)).toThrow("OTEL_ENABLED must be true");
+    expect(parseConfig({ ...production, OTEL_ENABLED: "true" }).telemetry.enabled).toBe(true);
+    expect(() =>
+      parseConfig({
+        ...production,
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector.internal:4318",
+      }),
+    ).toThrow("Production OTLP endpoints must use HTTPS");
+  });
+
+  it("requires a private CSRF secret and __Host cookie outside local/test", () => {
+    expect(() => parseConfig({ APP_ENV: "staging" })).toThrow("IDENTITY_CSRF_HMAC_SECRET");
+    const config = parseConfig({
+      APP_ENV: "staging",
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...oidcConfig,
+    });
+    expect(config.identity).toMatchObject({
+      sessionCookieName: "__Host-matchday_session",
+      flowCookieName: "__Secure-matchday_oidc",
+      secureCookies: true,
+    });
+    expect(config.identity.oidc?.issuer).toBe("https://identity.matchday.example");
+    expect(safeConfigSummary(config)).not.toHaveProperty("identity.csrfHmacSecret");
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-secret-at-least-16");
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(flowSealKey);
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-event-secret-at-least-32-bytes");
+  });
+
+  it("requires a complete OIDC provider outside local/test", () => {
+    expect(() => parseConfig({ APP_ENV: "staging", IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32) })).toThrow(
+      "IDENTITY_PROVIDER must be oidc",
+    );
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        IDENTITY_PROVIDER: "oidc",
+        IDENTITY_POST_AUTH_REDIRECT_URIS: "https://app.matchday.example/organiser",
+      }),
+    ).toThrow("IDENTITY_OIDC_ISSUER");
+  });
+
+  it("rejects unsafe OIDC endpoints, callbacks, flow keys, and redirect lists", () => {
+    expect(() => parseConfig({ APP_ENV: "test", ...oidcConfig, IDENTITY_OIDC_ISSUER: "http://identity.test" })).toThrow(
+      "HTTP is allowed only for loopback",
+    );
+    expect(() =>
+      parseConfig({ APP_ENV: "test", ...oidcConfig, IDENTITY_OIDC_CALLBACK_URI: "https://api.matchday.example/other" }),
+    ).toThrow("exact /api/v1/identity/callback path");
+    expect(() => parseConfig({ APP_ENV: "test", ...oidcConfig, IDENTITY_FLOW_SEAL_KEY: "a".repeat(43) })).toThrow(
+      "exactly 32 random bytes",
+    );
+    expect(() =>
+      parseConfig({
+        APP_ENV: "test",
+        ...oidcConfig,
+        IDENTITY_POST_AUTH_REDIRECT_URIS:
+          "https://app.matchday.example/organiser,https://app.matchday.example/organiser",
+      }),
+    ).toThrow("unique exact redirect URIs");
+  });
+
+  it("requires every credentialed application origin and callback to share the configured cookie site", () => {
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        ...oidcConfig,
+        API_ALLOWED_ORIGINS: "https://unrelated.example",
+      }),
+    ).toThrow("schemeful IDENTITY_COOKIE_SITE");
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        ...oidcConfig,
+        IDENTITY_OIDC_CALLBACK_URI: "https://api.other.example/api/v1/identity/callback",
+      }),
+    ).toThrow("schemeful IDENTITY_COOKIE_SITE");
+  });
+
+  it("rejects public suffixes and subdomains as cookie-site boundaries", () => {
+    const staging = {
+      APP_ENV: "staging",
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...oidcConfig,
+    };
+    expect(() =>
+      parseConfig({
+        ...staging,
+        IDENTITY_COOKIE_SITE: "https://co.uk",
+        API_ALLOWED_ORIGINS: "https://app.foo.co.uk",
+        IDENTITY_OIDC_CALLBACK_URI: "https://api.bar.co.uk/api/v1/identity/callback",
+        IDENTITY_POST_AUTH_REDIRECT_URIS: "https://app.foo.co.uk/organiser",
+      }),
+    ).toThrow("must not be a public suffix or subdomain");
+    expect(() =>
+      parseConfig({
+        ...staging,
+        IDENTITY_COOKIE_SITE: "https://api.matchday.example",
+        API_ALLOWED_ORIGINS: "https://app.api.matchday.example",
+        IDENTITY_OIDC_CALLBACK_URI: "https://api.matchday.example/api/v1/identity/callback",
+        IDENTITY_POST_AUTH_REDIRECT_URIS: "https://app.api.matchday.example/organiser",
+      }),
+    ).toThrow("must not be a public suffix or subdomain");
+  });
+
+  it("requires complete safe edge purge configuration when enabled", () => {
+    expect(() => parseConfig({ EDGE_CACHE_PURGE_ENDPOINT: "https://edge.example.test/purge" })).toThrow(
+      "must be configured together",
+    );
+    expect(() =>
+      parseConfig({
+        APP_ENV: "test",
+        EDGE_CACHE_PURGE_ENDPOINT: "http://edge.example.test/purge",
+        EDGE_CACHE_PURGE_BEARER_TOKEN: "e".repeat(32),
+      }),
+    ).toThrow("must use HTTPS");
+    expect(() =>
+      parseConfig({
+        APP_ENV: "test",
+        EDGE_CACHE_PURGE_ENDPOINT: "https://edge.example.test/purge?tenant=other",
+        EDGE_CACHE_PURGE_BEARER_TOKEN: "e".repeat(32),
+      }),
+    ).toThrow("query");
+    const config = parseConfig(edgeCacheConfig);
+    expect(config.edgeCache?.purgeEndpoint).toBe("https://edge-bridge.matchday.example/purge");
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(edgeCacheConfig.EDGE_CACHE_PURGE_BEARER_TOKEN);
+  });
+});

@@ -1,0 +1,8 @@
+{
+  "sportId": "canoe_polo",
+  "legacyVersion": "0.0.1-draft.1",
+  "currentVersion": "0.1.0-draft.1",
+  "legacySlotMinutes": 25,
+  "currentSlotMinutes": 30,
+  "invariant": "Existing competition snapshots retain their selected version and recommended settings."
+}

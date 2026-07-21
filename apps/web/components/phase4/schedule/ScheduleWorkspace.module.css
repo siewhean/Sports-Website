@@ -1,0 +1,955 @@
+.workspace {
+  --schedule-ink: #171918;
+  --schedule-muted: #646863;
+  --schedule-line: #d3d4ce;
+  --schedule-paper: #f7f6f0;
+  --schedule-signal: #b7dc22;
+  --schedule-signal-dark: #789700;
+  display: grid;
+  gap: 1.75rem;
+  color: var(--schedule-ink);
+}
+
+.live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.statusRail,
+.commandError {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.85rem 0;
+  border-block: 1px solid var(--schedule-line);
+  color: #484b46;
+}
+
+.statusRail > svg,
+.commandError > svg {
+  flex: 0 0 1.2rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-top: 0.1rem;
+}
+
+.statusRail strong {
+  color: var(--schedule-ink);
+  font-size: 0.85rem;
+}
+
+.statusRail p {
+  margin: 0.2rem 0 0;
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+.statusRail[data-tone="warning"] {
+  border-color: #e0aa70;
+  color: #9a4c0a;
+}
+
+.statusRail[data-tone="danger"],
+.commandError {
+  border-color: #c98d83;
+  color: #8a3026;
+}
+
+.commandError {
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.commandBar {
+  display: grid;
+  grid-template-columns: minmax(17rem, 0.85fr) minmax(26rem, 1.35fr) auto;
+  align-items: end;
+  gap: clamp(1.2rem, 2.5vw, 2.8rem);
+  padding: 0 0 1.5rem;
+  border-bottom: 1px solid var(--schedule-line);
+}
+
+.strategy > p,
+.options header p,
+.timeline header p,
+.inspector header p {
+  margin: 0 0 0.55rem;
+  color: var(--schedule-muted);
+  font:
+    650 0.67rem/1.2 var(--font-geist-mono),
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.strategy > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid #a9aaa4;
+  border-radius: 0.45rem;
+  overflow: hidden;
+}
+
+.strategy button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 0;
+  border-right: 1px solid #a9aaa4;
+  background: #fff;
+  padding: 0.55rem 0.7rem;
+  color: #383a37;
+  font:
+    600 0.74rem/1.1 var(--font-geist-sans),
+    sans-serif;
+  transition:
+    background 160ms ease,
+    transform 140ms ease;
+}
+
+.strategy button:last-child {
+  border-right: 0;
+}
+
+.strategy button[aria-checked="true"] {
+  background: var(--schedule-signal);
+  color: #171918;
+}
+
+.strategy svg,
+.jobRail svg,
+.headerActions svg,
+.legend svg,
+.lockButton svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.quality {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.quality div {
+  min-width: 0;
+  padding: 0 1rem;
+  border-left: 1px solid var(--schedule-line);
+}
+
+.quality dt,
+.optionRows dt,
+.inspector dt {
+  color: var(--schedule-muted);
+  font-size: 0.67rem;
+  line-height: 1.25;
+}
+
+.quality dd {
+  margin: 0.35rem 0 0;
+  font:
+    650 1rem/1.2 var(--font-geist-mono),
+    monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.headerActions {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.headerActions a,
+.headerActions button,
+.timeline header a,
+.optionRows button,
+.empty button,
+.lockButton,
+.moveLink,
+.jobRail button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  box-sizing: border-box;
+  border: 1px solid var(--schedule-ink);
+  border-radius: 0.45rem;
+  background: transparent;
+  padding: 0.62rem 0.9rem;
+  color: var(--schedule-ink);
+  font:
+    650 0.76rem/1.1 var(--font-geist-sans),
+    sans-serif;
+  text-decoration: none;
+  transition:
+    transform 140ms ease,
+    background 160ms ease;
+}
+
+.headerActions button,
+.empty button,
+.useButton,
+.moveLink {
+  background: var(--schedule-signal);
+  border-color: var(--schedule-signal-dark);
+}
+
+.options {
+  border-block: 1px solid var(--schedule-ink);
+}
+
+.options > header,
+.timeline > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  align-items: end;
+  padding: 1.15rem 0;
+}
+
+.options h2,
+.timeline h2,
+.inspector h2 {
+  margin: 0;
+  font-size: clamp(1.1rem, 2vw, 1.45rem);
+  letter-spacing: -0.035em;
+}
+
+.options header > span {
+  color: var(--schedule-muted);
+  font:
+    550 0.7rem/1.2 var(--font-geist-mono),
+    monospace;
+}
+
+.optionRows article {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.2fr) minmax(24rem, 2fr) auto;
+  gap: 1.4rem;
+  align-items: center;
+  min-height: 74px;
+  border-top: 1px solid var(--schedule-line);
+  padding: 0.75rem 0;
+}
+
+.optionRows h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.optionRows p {
+  margin: 0.25rem 0 0;
+  color: var(--schedule-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.optionRows dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.optionRows dl > div {
+  border-left: 1px solid var(--schedule-line);
+  padding-left: 0.8rem;
+}
+
+.optionRows dd {
+  margin: 0.2rem 0 0;
+  font:
+    620 0.72rem/1.2 var(--font-geist-mono),
+    monospace;
+}
+
+.planner {
+  display: grid;
+  grid-template-columns: minmax(11.5rem, 0.65fr) minmax(35rem, 2.3fr) minmax(14rem, 0.85fr);
+  min-height: 34rem;
+  border-block: 1px solid var(--schedule-line);
+}
+
+.tray,
+.inspector {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.tray {
+  border-right: 1px solid var(--schedule-line);
+}
+
+.tray > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 44px;
+}
+
+.tray h2 {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.tray header span {
+  display: inline-grid;
+  min-width: 1.55rem;
+  min-height: 1.55rem;
+  place-items: center;
+  border-radius: 50%;
+  background: #dedfd8;
+  font:
+    650 0.68rem/1 var(--font-geist-mono),
+    monospace;
+}
+
+.tray ul,
+.semanticTimeline ol,
+.inspector ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tray li {
+  border-top: 1px solid var(--schedule-line);
+}
+
+.tray li button {
+  width: 100%;
+  min-height: 72px;
+  border: 0;
+  background: transparent;
+  padding: 0.65rem 0;
+  color: var(--schedule-ink);
+  text-align: left;
+}
+
+.tray li button[aria-pressed="true"] {
+  box-shadow: inset 3px 0 var(--schedule-signal-dark);
+  padding-left: 0.65rem;
+}
+
+.tray li span,
+.tray li strong,
+.tray li small {
+  display: block;
+}
+
+.tray li span,
+.tray li small,
+.tray > p {
+  color: var(--schedule-muted);
+  font-size: 0.69rem;
+  line-height: 1.35;
+}
+
+.tray li strong {
+  margin: 0.18rem 0;
+  font-size: 0.78rem;
+}
+
+.timeline {
+  min-width: 0;
+  padding: 0 0.8rem;
+  overflow: hidden;
+}
+
+.desktopTimeline {
+  min-width: 48rem;
+  padding-bottom: 1rem;
+  overflow-x: auto;
+}
+
+.axis,
+.areaRow {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(41rem, 1fr);
+}
+
+.axis {
+  grid-template-columns: 6.5rem repeat(10, minmax(4.1rem, 1fr));
+  min-height: 34px;
+  border-block: 1px solid var(--schedule-line);
+}
+
+.axis time {
+  padding: 0.6rem 0.35rem;
+  border-left: 1px solid #e1e2dc;
+  font:
+    530 0.63rem/1 var(--font-geist-mono),
+    monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.areaRow {
+  min-height: 112px;
+  border-bottom: 1px solid var(--schedule-line);
+}
+
+.areaLabel {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+  padding-right: 0.7rem;
+}
+
+.areaLabel strong {
+  font-size: 0.76rem;
+}
+
+.areaLabel span {
+  color: var(--schedule-muted);
+  font-size: 0.64rem;
+}
+
+.areaTrack {
+  position: relative;
+  background: repeating-linear-gradient(to right, #e3e3dd 0 1px, transparent 1px 10%);
+}
+
+.matchBlock {
+  position: absolute;
+  top: 14px;
+  min-width: 5.4rem;
+  min-height: 84px;
+  overflow: hidden;
+  border: 1px solid #aeb0a7;
+  border-radius: 0.35rem;
+  background: #fff;
+  padding: 0.55rem;
+  color: var(--schedule-ink);
+  text-align: left;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease;
+}
+
+.matchBlock[aria-pressed="true"] {
+  border: 2px solid var(--schedule-signal-dark);
+}
+
+.matchBlock[data-conflict="true"] {
+  border-color: #c9473a;
+}
+
+.matchBlock span,
+.matchBlock strong,
+.matchBlock small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matchBlock span,
+.matchBlock small {
+  font:
+    540 0.58rem/1.25 var(--font-geist-mono),
+    monospace;
+}
+
+.matchBlock strong {
+  margin: 0.25rem 0 0.85rem;
+  font-size: 0.72rem;
+}
+
+.matchBlock svg {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.35rem;
+  width: 0.82rem;
+  height: 0.82rem;
+}
+
+.semanticTimeline {
+  display: none;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  min-height: 44px;
+  align-items: center;
+  color: var(--schedule-muted);
+  font-size: 0.66rem;
+}
+
+.legend span {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.inspector {
+  border-left: 1px solid var(--schedule-line);
+}
+
+.inspector > header {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--schedule-line);
+}
+
+.inspector > p,
+.inspector section p {
+  color: var(--schedule-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.inspector dl {
+  margin: 0;
+}
+
+.inspector dl > div {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.8fr) minmax(0, 1.2fr);
+  gap: 0.6rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--schedule-line);
+}
+
+.inspector dd {
+  margin: 0;
+  font:
+    550 0.72rem/1.4 var(--font-geist-mono),
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.inspector section {
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--schedule-line);
+}
+
+.inspector section h3 {
+  margin: 0 0 0.45rem;
+  font-size: 0.75rem;
+}
+
+.inspector li {
+  padding: 0.25rem 0;
+  color: var(--schedule-muted);
+  font-size: 0.69rem;
+}
+
+.lockButton,
+.moveLink {
+  width: 100%;
+  margin-top: 0.8rem;
+}
+
+.empty,
+.state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1.2rem;
+  align-items: center;
+  min-height: 12rem;
+  padding: 2rem;
+  border-block: 1px solid var(--schedule-line);
+}
+
+.empty > svg,
+.state > svg {
+  width: 2.5rem;
+  height: 2.5rem;
+  color: var(--schedule-signal-dark);
+}
+
+.empty h2,
+.state h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.empty p,
+.state p {
+  max-width: 55ch;
+  margin: 0.4rem 0 0;
+  color: var(--schedule-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.jobRail {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  min-height: 76px;
+  margin-inline: -2rem;
+  padding: 0.75rem 2rem max(0.75rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--schedule-line);
+  background: rgb(247 246 240 / 96%);
+  backdrop-filter: blur(10px);
+}
+
+.jobRail > div,
+.jobActions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.jobRail > div:first-child > svg {
+  width: 1.45rem;
+  height: 1.45rem;
+  color: var(--schedule-signal-dark);
+}
+
+.jobRail strong,
+.jobRail small {
+  display: block;
+}
+
+.jobRail strong {
+  font-size: 0.78rem;
+}
+
+.jobRail small {
+  margin-top: 0.2rem;
+  color: var(--schedule-muted);
+  font-size: 0.66rem;
+}
+
+.skeleton {
+  display: grid;
+  gap: 1rem;
+}
+
+.skeleton span {
+  min-height: 4rem;
+  background: linear-gradient(90deg, #e8e7e1 30%, #f4f3ed 50%, #e8e7e1 70%);
+  background-size: 240% 100%;
+  animation: schedule-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton span:nth-child(3) {
+  min-height: 24rem;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workspace button:active:not(:disabled),
+.workspace a:active {
+  transform: translateY(1px);
+}
+
+.workspace button:focus-visible,
+.workspace a:focus-visible,
+.desktopTimeline:focus-visible {
+  outline: 3px solid var(--schedule-signal);
+  outline-offset: 3px;
+}
+
+@keyframes schedule-shimmer {
+  to { background-position: -240% 0; }
+}
+
+@media (max-width: 1200px) {
+  .commandBar {
+    grid-template-columns: minmax(17rem, 0.8fr) minmax(25rem, 1.2fr);
+  }
+
+  .headerActions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .planner {
+    grid-template-columns: minmax(10.5rem, 0.55fr) minmax(34rem, 2fr);
+  }
+
+  .inspector {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(10rem, 0.7fr) minmax(18rem, 2fr) minmax(12rem, 0.7fr);
+    gap: 1.2rem;
+    border-top: 1px solid var(--schedule-line);
+    border-left: 0;
+  }
+
+  .inspector > header {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .commandBar {
+    grid-template-columns: 1fr;
+  }
+
+  .quality {
+    border-block: 1px solid var(--schedule-line);
+    padding-block: 0.8rem;
+  }
+
+  .headerActions {
+    grid-column: auto;
+    justify-content: stretch;
+  }
+
+  .headerActions > * {
+    flex: 1;
+  }
+
+  .optionRows article {
+    grid-template-columns: minmax(10rem, 0.6fr) minmax(22rem, 1.4fr);
+  }
+
+  .optionRows article > button {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .planner {
+    display: block;
+  }
+
+  .tray {
+    border-right: 0;
+    border-bottom: 1px solid var(--schedule-line);
+  }
+
+  .tray ul {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 1rem;
+  }
+
+  .inspector {
+    display: grid;
+  }
+}
+
+@media (max-width: 767px) {
+  .workspace {
+    gap: 1.2rem;
+  }
+
+  .strategy > div,
+  .quality,
+  .optionRows dl {
+    grid-template-columns: 1fr;
+  }
+
+  .strategy button {
+    justify-content: flex-start;
+    border-right: 0;
+    border-bottom: 1px solid #a9aaa4;
+    padding-inline: 1rem;
+  }
+
+  .strategy button:last-child {
+    border-bottom: 0;
+  }
+
+  .quality div,
+  .optionRows dl > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 44px;
+    align-items: center;
+    border-left: 0;
+    border-bottom: 1px solid var(--schedule-line);
+    padding: 0;
+  }
+
+  .quality dd,
+  .optionRows dd {
+    margin: 0;
+  }
+
+  .headerActions {
+    display: grid;
+  }
+
+  .options > header,
+  .timeline > header {
+    display: block;
+  }
+
+  .options header > span,
+  .timeline header a {
+    display: inline-flex;
+    margin-top: 0.8rem;
+  }
+
+  .optionRows article {
+    grid-template-columns: 1fr;
+    gap: 0.8rem;
+    padding: 1rem 0;
+  }
+
+  .optionRows article > button {
+    grid-column: auto;
+    justify-self: stretch;
+  }
+
+  .tray ul {
+    grid-template-columns: 1fr;
+  }
+
+  .desktopTimeline,
+  .legend {
+    display: none;
+  }
+
+  .semanticTimeline {
+    display: block;
+  }
+
+  .semanticTimeline > p {
+    margin: 0 0 1rem;
+    color: var(--schedule-muted);
+    font-size: 0.76rem;
+    line-height: 1.45;
+  }
+
+  .semanticTimeline section {
+    border-top: 1px solid var(--schedule-ink);
+  }
+
+  .semanticTimeline h3 {
+    margin: 0;
+    padding: 0.8rem 0;
+    font-size: 0.86rem;
+  }
+
+  .semanticTimeline li {
+    border-top: 1px solid var(--schedule-line);
+  }
+
+  .semanticTimeline button {
+    display: grid;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    gap: 0.8rem;
+    width: 100%;
+    min-height: 64px;
+    align-items: center;
+    border: 0;
+    background: transparent;
+    padding: 0.55rem 0;
+    color: var(--schedule-ink);
+    text-align: left;
+  }
+
+  .semanticTimeline button[aria-pressed="true"] {
+    box-shadow: inset 3px 0 var(--schedule-signal-dark);
+    padding-left: 0.7rem;
+  }
+
+  .semanticTimeline time {
+    font:
+      620 0.76rem/1.2 var(--font-geist-mono),
+      monospace;
+  }
+
+  .semanticTimeline strong,
+  .semanticTimeline small {
+    display: block;
+  }
+
+  .semanticTimeline strong {
+    font-size: 0.78rem;
+  }
+
+  .semanticTimeline small {
+    margin-top: 0.2rem;
+    color: var(--schedule-muted);
+    font-size: 0.68rem;
+  }
+
+  .inspector {
+    display: block;
+    padding-inline: 0;
+  }
+
+  .empty,
+  .state {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-inline: 0;
+  }
+
+  .empty button {
+    grid-column: 1 / -1;
+    min-height: 56px;
+  }
+
+  .jobRail {
+    position: relative;
+    display: grid;
+    margin-inline: 0;
+    padding-inline: 0;
+    background: transparent;
+    backdrop-filter: none;
+  }
+
+  .jobActions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .jobRail button {
+    width: 100%;
+    min-height: 56px;
+  }
+}
+
+@media (max-width: 360px) {
+  .headerActions,
+  .jobActions {
+    grid-template-columns: 1fr;
+  }
+
+  .quality dt,
+  .quality dd {
+    font-size: 0.68rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace *,
+  .workspace *::before,
+  .workspace *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .strategy button[aria-checked="true"],
+  .matchBlock[aria-pressed="true"],
+  .semanticTimeline button[aria-pressed="true"],
+  .headerActions button,
+  .moveLink,
+  .useButton {
+    border: 2px solid Highlight;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .statusRail,
+  .commandError,
+  .planner,
+  .optionRows article {
+    border-color: CanvasText;
+  }
+}

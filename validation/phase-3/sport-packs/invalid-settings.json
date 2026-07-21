@@ -1,0 +1,28 @@
+[
+  { "sportId": "canoe_polo", "settings": { "slotMinutes": 4 }, "code": "range" },
+  { "sportId": "canoe_polo", "settings": { "shotClock": true }, "code": "unknown_key" },
+  { "sportId": "badminton", "settings": { "bestOf": 2.5 }, "code": "type" },
+  { "sportId": "badminton", "settings": { "pointCap": 0 }, "code": "range" },
+  { "sportId": "table_tennis", "settings": { "pointCap": null }, "valid": true },
+  { "sportId": "volleyball", "settings": { "standingsOrder": ["match_wins", "match_wins"] }, "code": "ordered_enum" },
+  { "sportId": "volleyball", "settings": { "standingsOrder": ["match_wins", "sets_for"] }, "code": "ordered_enum" },
+  { "sportId": "basketball", "settings": { "successiveOvertime": "yes" }, "code": "type" },
+  { "sportId": "basketball", "settings": { "overtimeDurationMinutes": 31 }, "code": "range" },
+  { "sportId": "badminton", "settings": { "bestOf": 4 }, "code": "invariant.best_of_is_odd" },
+  {
+    "sportId": "table_tennis",
+    "settings": { "pointCap": 8, "regularTargetPoints": 11 },
+    "code": "invariant.cap_reaches_target"
+  },
+  {
+    "sportId": "volleyball",
+    "settings": { "regularTargetPoints": 15, "decidingTargetPoints": 25 },
+    "code": "invariant.deciding_target_not_higher"
+  },
+  {
+    "sportId": "canoe_polo",
+    "settings": { "forfeitWinnerScore": 0, "forfeitLoserScore": 3 },
+    "code": "invariant.forfeit_score_orientation"
+  },
+  { "sportId": "basketball", "settings": { "successiveOvertime": false }, "code": "invariant.no_draw" }
+]

@@ -1,0 +1,22 @@
+{
+  "name": "@matchday/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run tests",
+    "test:evaluation": "vitest run tests/evaluation.test.ts"
+  },
+  "dependencies": {
+    "@matchday/contracts": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "description": "Two teams tie on total points. The mini-table includes only their direct match and excludes results against the higher-ranked outsider.",
+  "entries": ["a", "b", "c", "x", "y"],
+  "tiedScope": ["a", "b"],
+  "expectedOrder": ["x", "a", "b", "c", "y"],
+  "results": [
+    ["ab", "a", "b", 1, 0],
+    ["bx", "b", "x", 1, 0],
+    ["xa", "x", "a", 1, 0],
+    ["xy", "x", "y", 1, 0]
+  ]
+}

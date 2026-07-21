@@ -1,0 +1,14 @@
+.git
+.next
+.turbo
+dist
+**/dist
+node_modules
+playwright-report
+test-results
+apps/api/openapi.generated.json
+pnpm-lock.yaml
+*.tsbuildinfo
+docs/design/concepts
+docs/qa/screenshots
+sports_competition_platform_implementation_plan.md

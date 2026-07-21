@@ -1,0 +1,17 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated and third-party artifacts"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)\.next/''',
+  '''(^|/)\.turbo/''',
+  '''(^|/)dist/''',
+  '''(^|/)playwright-report/''',
+  '''(^|/)test-results/''',
+  '''sports_competition_platform_implementation_plan\.md$'''
+]
+regexes = [
+  '''^\.p2-organiser$'''
+]

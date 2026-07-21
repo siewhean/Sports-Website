@@ -1,0 +1,29 @@
+{
+  "withdrawalPolicy": "completed_results_stand",
+  "withdrawnEntryId": "b",
+  "completedMatchIds": ["m1"],
+  "futureForfeitMatchIds": ["m2"],
+  "replacementEntryId": "replacement-b",
+  "knownEntries": ["a", "b", "c", "replacement-b", "host"],
+  "replacementLineage": ["b", "replacement-b"],
+  "controlledSlots": ["semifinal-home", "semifinal-away"],
+  "manualSlot": "host-seed",
+  "fixtures": [
+    ["m1", "a", "b", "completed"],
+    ["m2", "b", "c", "future"]
+  ],
+  "groupSnapshotOrder": ["a", "b", "c"],
+  "slots": [
+    ["semifinal-home", "automatic", "advance-first", null],
+    ["semifinal-away", "automatic", "advance-second", null],
+    ["host-seed", "manual", null, "host"]
+  ],
+  "rules": [
+    ["advance-first", "A", 1, "semifinal-home"],
+    ["advance-second", "A", 2, "semifinal-away"]
+  ],
+  "expectedControlledEntries": [
+    ["semifinal-home", "a"],
+    ["semifinal-away", "b"]
+  ]
+}

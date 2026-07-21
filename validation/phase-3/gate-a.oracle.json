@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0.0",
+  "required_sports": ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"],
+  "required_entry_counts": [8, 12, 16, 24, 48],
+  "sport_pack_contract": {
+    "schema_version": 1,
+    "version": "0.1.0-draft.1",
+    "status": "provisional_product_baseline",
+    "authority": "product_recommendation_not_federation_profile"
+  },
+  "format_strategies": ["full_placement", "championship_focus", "compact_knockout"],
+  "maximum_advantage_characters": 100,
+  "strategy_advantages": {
+    "full_placement": "Every entry gets a classification path after group play.",
+    "championship_focus": "Group play stays complete while the finals programme is shorter.",
+    "compact_knockout": "Uses the fewest match slots and reaches a winner quickly."
+  },
+  "recommendation_cases": [
+    {
+      "id": "08-championship-only",
+      "entry_count": 8,
+      "available_match_slots": 16,
+      "minimum_guaranteed_matches": 3,
+      "expected_feasible_strategies": ["championship_focus"]
+    },
+    {
+      "id": "12-championship-only",
+      "entry_count": 12,
+      "available_match_slots": 24,
+      "minimum_guaranteed_matches": 3,
+      "expected_feasible_strategies": ["championship_focus"]
+    },
+    {
+      "id": "16-championship-only",
+      "entry_count": 16,
+      "available_match_slots": 32,
+      "minimum_guaranteed_matches": 3,
+      "expected_feasible_strategies": ["championship_focus"]
+    },
+    {
+      "id": "24-championship-only",
+      "entry_count": 24,
+      "available_match_slots": 48,
+      "minimum_guaranteed_matches": 3,
+      "expected_feasible_strategies": ["championship_focus"]
+    },
+    {
+      "id": "48-championship-only",
+      "entry_count": 48,
+      "available_match_slots": 96,
+      "minimum_guaranteed_matches": 3,
+      "expected_feasible_strategies": ["championship_focus"]
+    }
+  ],
+  "invalid_graph_cases": [
+    {
+      "id": "duplicate-stage-id",
+      "expected_issue": "duplicate_stage_id",
+      "graph": {
+        "entryCount": 2,
+        "stages": [
+          { "id": "final", "order": 1, "matchIds": ["m1"] },
+          { "id": "final", "order": 2, "matchIds": [] }
+        ],
+        "matches": [
+          {
+            "id": "m1",
+            "stageId": "final",
+            "order": 1,
+            "home": { "type": "entry_seed", "seed": 1 },
+            "away": { "type": "entry_seed", "seed": 2 }
+          }
+        ],
+        "terminalMatchIds": ["m1"]
+      }
+    },
+    {
+      "id": "unknown-match-source",
+      "expected_issue": "unknown_match",
+      "graph": {
+        "entryCount": 2,
+        "stages": [{ "id": "final", "order": 1, "matchIds": ["m1"] }],
+        "matches": [
+          {
+            "id": "m1",
+            "stageId": "final",
+            "order": 1,
+            "home": { "type": "winner", "matchId": "missing" },
+            "away": { "type": "entry_seed", "seed": 2 }
+          }
+        ],
+        "terminalMatchIds": ["m1"]
+      }
+    },
+    {
+      "id": "dependency-cycle",
+      "expected_issue": "cycle",
+      "graph": {
+        "entryCount": 2,
+        "stages": [{ "id": "finals", "order": 1, "matchIds": ["m1", "m2"] }],
+        "matches": [
+          {
+            "id": "m1",
+            "stageId": "finals",
+            "order": 1,
+            "home": { "type": "winner", "matchId": "m2" },
+            "away": { "type": "entry_seed", "seed": 1 }
+          },
+          {
+            "id": "m2",
+            "stageId": "finals",
+            "order": 2,
+            "home": { "type": "winner", "matchId": "m1" },
+            "away": { "type": "entry_seed", "seed": 2 }
+          }
+        ],
+        "terminalMatchIds": []
+      }
+    }
+  ]
+}

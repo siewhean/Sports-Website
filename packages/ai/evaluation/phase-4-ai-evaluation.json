@@ -1,0 +1,275 @@
+{
+  "schema_version": "1.0",
+  "canonical_source": "validation/canonical-competitions.json",
+  "cases": [
+    {
+      "id": "canonical-canoe-polo-08",
+      "organiser_text": "Run a simple eight-team Canoe Polo competition at Marina Basin on 1 August 2026. Two pitches from 09:00 to 17:00, 30-minute slots, at least three games, a knockout and full placements.",
+      "available_match_slots": 28,
+      "expected_brief": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "canoe_polo",
+        "entry_count": 8,
+        "division_count": 1,
+        "divisions": [{ "name": "Open", "entry_count": 8 }],
+        "location": { "venue": "Marina Basin", "address": null, "locality": "Singapore", "country_code": "SG" },
+        "dates": { "start": "2026-08-01", "end": "2026-08-01" },
+        "playing_areas": 2,
+        "daily_availability": [{ "date": "2026-08-01", "start_time": "09:00", "end_time": "17:00" }],
+        "time_slot_minutes": 30,
+        "minimum_matches_per_entry": 3,
+        "knockout_required": true,
+        "rank_all_entries": true,
+        "placement_required": true,
+        "cross_group_qualification_allowed": false,
+        "organiser_priority": "simplicity",
+        "missing_fields": []
+      }
+    },
+    {
+      "id": "canonical-canoe-polo-12",
+      "organiser_text": "Twelve Canoe Polo teams, one open division, 1–2 August 2026 in Singapore. Two pitches each day 09:00–17:00, 30-minute games, three guaranteed games and knockout placements. Fastest finish preferred.",
+      "available_match_slots": 56,
+      "expected_brief": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "canoe_polo",
+        "entry_count": 12,
+        "division_count": 1,
+        "divisions": [{ "name": "Open", "entry_count": 12 }],
+        "location": { "venue": null, "address": "Singapore", "locality": "Singapore", "country_code": "SG" },
+        "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+        "playing_areas": 2,
+        "daily_availability": [
+          { "date": "2026-08-01", "start_time": "09:00", "end_time": "17:00" },
+          { "date": "2026-08-02", "start_time": "09:00", "end_time": "17:00" }
+        ],
+        "time_slot_minutes": 30,
+        "minimum_matches_per_entry": 3,
+        "knockout_required": true,
+        "rank_all_entries": true,
+        "placement_required": true,
+        "cross_group_qualification_allowed": true,
+        "organiser_priority": "speed",
+        "missing_fields": []
+      }
+    },
+    {
+      "id": "canonical-canoe-polo-16",
+      "organiser_text": "A simple 16-team Canoe Polo event at Kallang on 1 and 2 August 2026. Four pitches, 09:00–17:00 daily, 30-minute slots, at least three games, knockout, all teams ranked and cross-group qualification allowed.",
+      "available_match_slots": 112,
+      "expected_brief": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "canoe_polo",
+        "entry_count": 16,
+        "division_count": 1,
+        "divisions": [{ "name": "Open", "entry_count": 16 }],
+        "location": { "venue": "Kallang Basin", "address": null, "locality": "Singapore", "country_code": "SG" },
+        "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+        "playing_areas": 4,
+        "daily_availability": [
+          { "date": "2026-08-01", "start_time": "09:00", "end_time": "17:00" },
+          { "date": "2026-08-02", "start_time": "09:00", "end_time": "17:00" }
+        ],
+        "time_slot_minutes": 30,
+        "minimum_matches_per_entry": 3,
+        "knockout_required": true,
+        "rank_all_entries": true,
+        "placement_required": true,
+        "cross_group_qualification_allowed": true,
+        "organiser_priority": "simplicity",
+        "missing_fields": []
+      }
+    },
+    {
+      "id": "canonical-canoe-polo-24",
+      "organiser_text": "Twenty-four Canoe Polo teams in one division, 1–2 August 2026 at Marina Reservoir. Four pitches 09:00–17:00, 30-minute slots, at least three games. Include knockout and placements, rank everyone, allow cross-group qualification, maximise participation.",
+      "available_match_slots": 112,
+      "expected_brief": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "canoe_polo",
+        "entry_count": 24,
+        "division_count": 1,
+        "divisions": [{ "name": "Open", "entry_count": 24 }],
+        "location": { "venue": "Marina Reservoir", "address": null, "locality": "Singapore", "country_code": "SG" },
+        "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+        "playing_areas": 4,
+        "daily_availability": [
+          { "date": "2026-08-01", "start_time": "09:00", "end_time": "17:00" },
+          { "date": "2026-08-02", "start_time": "09:00", "end_time": "17:00" }
+        ],
+        "time_slot_minutes": 30,
+        "minimum_matches_per_entry": 3,
+        "knockout_required": true,
+        "rank_all_entries": true,
+        "placement_required": true,
+        "cross_group_qualification_allowed": true,
+        "organiser_priority": "participation",
+        "missing_fields": []
+      }
+    },
+    {
+      "id": "canonical-canoe-polo-48",
+      "organiser_text": "A 48-team Canoe Polo championship in Singapore on 1–2 August 2026. Eight pitches open 09:00–17:00, half-hour games, minimum three each, knockout and full placement ranking, cross-group qualifiers allowed, prioritise simplicity.",
+      "available_match_slots": 224,
+      "expected_brief": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "canoe_polo",
+        "entry_count": 48,
+        "division_count": 1,
+        "divisions": [{ "name": "Open", "entry_count": 48 }],
+        "location": { "venue": null, "address": "Singapore", "locality": "Singapore", "country_code": "SG" },
+        "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+        "playing_areas": 8,
+        "daily_availability": [
+          { "date": "2026-08-01", "start_time": "09:00", "end_time": "17:00" },
+          { "date": "2026-08-02", "start_time": "09:00", "end_time": "17:00" }
+        ],
+        "time_slot_minutes": 30,
+        "minimum_matches_per_entry": 3,
+        "knockout_required": true,
+        "rank_all_entries": true,
+        "placement_required": true,
+        "cross_group_qualification_allowed": true,
+        "organiser_priority": "simplicity",
+        "missing_fields": []
+      }
+    },
+    {
+      "id": "missing-information",
+      "organiser_text": "We want a 12-team badminton event next summer.",
+      "available_match_slots": null,
+      "expected_brief": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "badminton",
+        "entry_count": 12,
+        "division_count": null,
+        "divisions": null,
+        "location": null,
+        "dates": { "start": null, "end": null },
+        "playing_areas": null,
+        "daily_availability": null,
+        "time_slot_minutes": null,
+        "minimum_matches_per_entry": null,
+        "knockout_required": null,
+        "rank_all_entries": null,
+        "placement_required": null,
+        "cross_group_qualification_allowed": null,
+        "organiser_priority": null,
+        "missing_fields": [
+          "division_count",
+          "location",
+          "dates.start",
+          "dates.end",
+          "playing_areas",
+          "daily_availability",
+          "time_slot_minutes",
+          "minimum_matches_per_entry",
+          "knockout_required",
+          "rank_all_entries",
+          "placement_required",
+          "cross_group_qualification_allowed",
+          "organiser_priority"
+        ]
+      }
+    },
+    {
+      "id": "ambiguous-information",
+      "organiser_text": "Maybe volleyball or basketball, around a dozen teams, one or two days, and make it fair.",
+      "available_match_slots": null,
+      "expected_brief": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": null,
+        "entry_count": null,
+        "division_count": null,
+        "divisions": null,
+        "location": null,
+        "dates": { "start": null, "end": null },
+        "playing_areas": null,
+        "daily_availability": null,
+        "time_slot_minutes": null,
+        "minimum_matches_per_entry": null,
+        "knockout_required": null,
+        "rank_all_entries": null,
+        "placement_required": null,
+        "cross_group_qualification_allowed": null,
+        "organiser_priority": null,
+        "missing_fields": [
+          "sport",
+          "entry_count",
+          "division_count",
+          "location",
+          "dates.start",
+          "dates.end",
+          "playing_areas",
+          "daily_availability",
+          "time_slot_minutes",
+          "minimum_matches_per_entry",
+          "knockout_required",
+          "rank_all_entries",
+          "placement_required",
+          "cross_group_qualification_allowed",
+          "organiser_priority"
+        ]
+      }
+    }
+  ],
+  "adversarial_outputs": [
+    {
+      "id": "prompt-injection-extra-command",
+      "value": { "schema_version": "1.0", "command": "publish_schedule" }
+    },
+    {
+      "id": "unsupported-sport-and-oversized-event",
+      "value": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "quidditch",
+        "entry_count": 500,
+        "division_count": 1,
+        "divisions": null,
+        "location": null,
+        "dates": { "start": null, "end": null },
+        "playing_areas": null,
+        "daily_availability": null,
+        "time_slot_minutes": null,
+        "minimum_matches_per_entry": null,
+        "knockout_required": null,
+        "rank_all_entries": null,
+        "placement_required": null,
+        "cross_group_qualification_allowed": null,
+        "organiser_priority": null,
+        "missing_fields": []
+      }
+    },
+    {
+      "id": "business-rule-conflict",
+      "value": {
+        "schema_version": "1.0",
+        "name": null,
+        "sport": "canoe_polo",
+        "entry_count": 8,
+        "division_count": 1,
+        "divisions": [{ "name": "Open", "entry_count": 8 }],
+        "location": { "venue": "Basin", "address": null, "locality": null, "country_code": "SG" },
+        "dates": { "start": "2026-08-02", "end": "2026-08-01" },
+        "playing_areas": 2,
+        "daily_availability": [{ "date": "2026-08-03", "start_time": "17:00", "end_time": "09:00" }],
+        "time_slot_minutes": 30,
+        "minimum_matches_per_entry": 8,
+        "knockout_required": true,
+        "rank_all_entries": true,
+        "placement_required": false,
+        "cross_group_qualification_allowed": true,
+        "organiser_priority": "simplicity",
+        "missing_fields": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,308 @@
+{
+  "schema_version": "1.1.0",
+  "sport": "canoe_polo",
+  "assumptions": {
+    "slot_minutes": 30,
+    "group_size": 4,
+    "entry_factory": "Generate stable IDs and seeds from the declared prefix and count.",
+    "scope": "Phase 0 format and capacity oracle; Phase 6 will add golden scheduled-match outputs."
+  },
+  "competitions": [
+    {
+      "fixture_id": "canoe-polo-08",
+      "entry_count": 8,
+      "entry_prefix": "cp08-team-",
+      "division_count": 1,
+      "divisions": [{ "id": "open", "entry_count": 8 }],
+      "timezone": "Asia/Singapore",
+      "dates": { "start": "2026-08-01", "end": "2026-08-01" },
+      "capacity": {
+        "area_count": 2,
+        "days": 1,
+        "open": "09:00",
+        "close": "17:00",
+        "unavailable": [{ "start": "12:00", "end": "13:00" }],
+        "expected_slots": 28
+      },
+      "formats": [
+        {
+          "mode": "compact",
+          "groups": null,
+          "qualification": { "source": "seeded_entries", "count": 8 },
+          "qualifiers": 8,
+          "knockout": { "entrants": 8, "byes": 0, "third_place": true },
+          "expected_matches": 8,
+          "guaranteed_matches": 1,
+          "expected_remaining_slots": 20
+        },
+        {
+          "mode": "balanced",
+          "groups": { "count": 2, "size": 4 },
+          "qualification": { "source": "group_rank", "per_group": 2, "best_remaining": 0 },
+          "qualifiers": 4,
+          "knockout": { "entrants": 4, "third_place": true },
+          "expected_matches": 16,
+          "guaranteed_matches": 3,
+          "expected_remaining_slots": 12
+        },
+        {
+          "mode": "participation",
+          "groups": { "count": 1, "size": 8 },
+          "qualification": { "source": "group_rank", "per_group": 0, "best_remaining": 0 },
+          "qualifiers": 0,
+          "knockout": null,
+          "expected_matches": 28,
+          "guaranteed_matches": 7,
+          "expected_remaining_slots": 0
+        }
+      ]
+    },
+    {
+      "fixture_id": "canoe-polo-12",
+      "entry_count": 12,
+      "entry_prefix": "cp12-team-",
+      "division_count": 1,
+      "divisions": [{ "id": "open", "entry_count": 12 }],
+      "timezone": "Asia/Singapore",
+      "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+      "capacity": {
+        "area_count": 2,
+        "days": 2,
+        "open": "09:00",
+        "close": "17:00",
+        "unavailable": [{ "start": "12:00", "end": "13:00" }],
+        "expected_slots": 56
+      },
+      "formats": [
+        {
+          "mode": "compact",
+          "groups": null,
+          "qualification": { "source": "seeded_entries", "count": 12 },
+          "qualifiers": 12,
+          "knockout": { "entrants": 12, "byes": 4, "third_place": true },
+          "expected_matches": 12,
+          "guaranteed_matches": 1,
+          "expected_remaining_slots": 44
+        },
+        {
+          "mode": "balanced",
+          "groups": { "count": 3, "size": 4 },
+          "qualification": { "source": "group_rank", "per_group": 2, "best_remaining": 2, "best_remaining_rank": 3 },
+          "qualifiers": 8,
+          "knockout": { "entrants": 8, "third_place": true },
+          "expected_matches": 26,
+          "guaranteed_matches": 3,
+          "expected_remaining_slots": 30
+        },
+        {
+          "mode": "participation",
+          "groups": { "count": 2, "size": 6 },
+          "qualification": { "source": "group_rank", "per_group": 2, "best_remaining": 0 },
+          "qualifiers": 4,
+          "knockout": { "entrants": 4, "third_place": true },
+          "expected_matches": 34,
+          "guaranteed_matches": 5,
+          "expected_remaining_slots": 22
+        }
+      ]
+    },
+    {
+      "fixture_id": "canoe-polo-16",
+      "entry_count": 16,
+      "entry_prefix": "cp16-team-",
+      "division_count": 1,
+      "divisions": [{ "id": "open", "entry_count": 16 }],
+      "timezone": "Asia/Singapore",
+      "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+      "capacity": {
+        "area_count": 4,
+        "days": 2,
+        "open": "09:00",
+        "close": "17:00",
+        "unavailable": [{ "start": "12:00", "end": "13:00" }],
+        "expected_slots": 112
+      },
+      "formats": [
+        {
+          "mode": "compact",
+          "groups": null,
+          "qualification": { "source": "seeded_entries", "count": 16 },
+          "qualifiers": 16,
+          "knockout": { "entrants": 16, "byes": 0, "third_place": true },
+          "expected_matches": 16,
+          "guaranteed_matches": 1,
+          "expected_remaining_slots": 96
+        },
+        {
+          "mode": "balanced",
+          "groups": { "count": 4, "size": 4 },
+          "qualification": { "source": "group_rank", "per_group": 2, "best_remaining": 0 },
+          "qualifiers": 8,
+          "knockout": { "entrants": 8, "third_place": true },
+          "expected_matches": 32,
+          "guaranteed_matches": 3,
+          "expected_remaining_slots": 80
+        },
+        {
+          "mode": "participation",
+          "groups": { "count": 2, "size": 8 },
+          "qualification": { "source": "group_rank", "per_group": 2, "best_remaining": 0 },
+          "qualifiers": 4,
+          "knockout": { "entrants": 4, "third_place": true },
+          "expected_matches": 60,
+          "guaranteed_matches": 7,
+          "expected_remaining_slots": 52
+        }
+      ]
+    },
+    {
+      "fixture_id": "canoe-polo-24",
+      "entry_count": 24,
+      "entry_prefix": "cp24-team-",
+      "division_count": 1,
+      "divisions": [{ "id": "open", "entry_count": 24 }],
+      "timezone": "Asia/Singapore",
+      "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+      "capacity": {
+        "area_count": 4,
+        "days": 2,
+        "open": "09:00",
+        "close": "17:00",
+        "unavailable": [{ "start": "12:00", "end": "13:00" }],
+        "expected_slots": 112
+      },
+      "formats": [
+        {
+          "mode": "compact",
+          "groups": null,
+          "qualification": { "source": "seeded_entries", "count": 24 },
+          "qualifiers": 24,
+          "knockout": { "entrants": 24, "byes": 8, "third_place": true },
+          "expected_matches": 24,
+          "guaranteed_matches": 1,
+          "expected_remaining_slots": 88
+        },
+        {
+          "mode": "balanced",
+          "groups": { "count": 6, "size": 4 },
+          "qualification": { "source": "group_rank", "per_group": 2, "best_remaining": 4, "best_remaining_rank": 3 },
+          "qualifiers": 16,
+          "knockout": { "entrants": 16, "third_place": true },
+          "expected_matches": 52,
+          "guaranteed_matches": 3,
+          "expected_remaining_slots": 60
+        },
+        {
+          "mode": "participation",
+          "groups": { "count": 4, "size": 6 },
+          "qualification": { "source": "group_rank", "per_group": 1, "best_remaining": 0 },
+          "qualifiers": 4,
+          "knockout": { "entrants": 4, "third_place": true },
+          "expected_matches": 64,
+          "guaranteed_matches": 5,
+          "expected_remaining_slots": 48
+        }
+      ]
+    },
+    {
+      "fixture_id": "canoe-polo-48",
+      "entry_count": 48,
+      "entry_prefix": "cp48-team-",
+      "division_count": 1,
+      "divisions": [{ "id": "open", "entry_count": 48 }],
+      "timezone": "Asia/Singapore",
+      "dates": { "start": "2026-08-01", "end": "2026-08-02" },
+      "capacity": {
+        "area_count": 8,
+        "days": 2,
+        "open": "09:00",
+        "close": "17:00",
+        "unavailable": [{ "start": "12:00", "end": "13:00" }],
+        "expected_slots": 224
+      },
+      "formats": [
+        {
+          "mode": "compact",
+          "groups": null,
+          "qualification": { "source": "seeded_entries", "count": 48 },
+          "qualifiers": 48,
+          "knockout": { "entrants": 48, "byes": 16, "third_place": true },
+          "expected_matches": 48,
+          "guaranteed_matches": 1,
+          "expected_remaining_slots": 176
+        },
+        {
+          "mode": "balanced",
+          "groups": { "count": 12, "size": 4 },
+          "qualification": { "source": "group_rank", "per_group": 2, "best_remaining": 8, "best_remaining_rank": 3 },
+          "qualifiers": 32,
+          "knockout": { "entrants": 32, "third_place": true },
+          "expected_matches": 104,
+          "guaranteed_matches": 3,
+          "expected_remaining_slots": 120
+        },
+        {
+          "mode": "participation",
+          "groups": { "count": 8, "size": 6 },
+          "qualification": { "source": "group_rank", "per_group": 1, "best_remaining": 0 },
+          "qualifiers": 8,
+          "knockout": { "entrants": 8, "third_place": true },
+          "expected_matches": 128,
+          "guaranteed_matches": 5,
+          "expected_remaining_slots": 96
+        }
+      ]
+    }
+  ],
+  "extended_scenarios": [
+    {
+      "fixture_id": "canoe-polo-multi-division-12-availability",
+      "entry_count": 12,
+      "division_count": 2,
+      "divisions": [
+        { "id": "open", "entry_count": 6, "entry_prefix": "cp-md-open-" },
+        { "id": "women", "entry_count": 6, "entry_prefix": "cp-md-women-" }
+      ],
+      "timezone": "Asia/Singapore",
+      "dates": { "start": "2026-08-08", "end": "2026-08-08" },
+      "capacity": {
+        "area_count": 2,
+        "days": 1,
+        "open": "09:00",
+        "close": "18:00",
+        "unavailable": [{ "start": "13:00", "end": "14:00" }],
+        "expected_slots": 32
+      },
+      "entry_availability_constraints": [
+        {
+          "entry_id": "cp-md-open-01",
+          "unavailable": [{ "date": "2026-08-08", "start": "09:00", "end": "10:30" }]
+        },
+        {
+          "entry_id": "cp-md-women-03",
+          "unavailable": [{ "date": "2026-08-08", "start": "15:00", "end": "17:00" }]
+        }
+      ],
+      "division_formats": [
+        {
+          "division_id": "open",
+          "mode": "round_robin_only",
+          "groups": { "count": 1, "size": 6 },
+          "knockout": null,
+          "expected_matches": 15,
+          "guaranteed_matches": 5
+        },
+        {
+          "division_id": "women",
+          "mode": "round_robin_only",
+          "groups": { "count": 1, "size": 6 },
+          "knockout": null,
+          "expected_matches": 15,
+          "guaranteed_matches": 5
+        }
+      ],
+      "expected_matches": 30,
+      "expected_remaining_slots": 2
+    }
+  ]
+}

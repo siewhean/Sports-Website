@@ -1,0 +1,701 @@
+.scorekeeper {
+  width: min(100%, 760px);
+  min-height: calc(100vh - 64px);
+  margin: 0 auto;
+  padding: 28px 20px calc(30px + env(safe-area-inset-bottom));
+  color: #f5f6f0;
+}
+.scorekeeper h1,
+.scorekeeper h2,
+.scorekeeper p {
+  margin-top: 0;
+}
+.scorekeeper h1 {
+  margin-bottom: 8px;
+  font-size: clamp(2rem, 7vw, 3.4rem);
+  line-height: 0.95;
+  letter-spacing: -0.055em;
+}
+.scorekeeper h2 {
+  margin-bottom: 5px;
+  font-size: 1.05rem;
+  line-height: 1.2;
+}
+.scorekeeper p {
+  color: #a8aeaa;
+  font-size: 0.82rem;
+}
+.scorekeeper-kicker {
+  margin-bottom: 6px;
+  color: #a4aaa6 !important;
+  font-family: var(--font-mono);
+  font-size: 0.67rem !important;
+  font-weight: 620;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.scorekeeper--access,
+.scorekeeper--confirm {
+  display: grid;
+  place-items: center;
+}
+.scorekeeper-access,
+.scorekeeper-confirm {
+  width: min(100%, 480px);
+  padding: 30px;
+  border: 1px solid #3a3f3c;
+  border-radius: 16px;
+  background: var(--event-surface);
+  box-shadow: 0 30px 80px rgb(0 0 0 / 32%);
+}
+.scorekeeper-supporting-copy {
+  max-width: 38ch;
+  margin-bottom: 24px;
+}
+.scorekeeper-access-form {
+  display: grid;
+  gap: 9px;
+}
+.scorekeeper-access-form label,
+.scorekeeper-reconciliation label,
+.scorekeeper-correction label {
+  display: grid;
+  gap: 7px;
+  color: #cbd0cd;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.scorekeeper-access-form input,
+.scorekeeper-time-control input,
+.scorekeeper-reconciliation textarea,
+.scorekeeper-correction textarea {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid #555c58;
+  border-radius: 8px;
+  outline: 0;
+  background: #0e1110;
+  color: white;
+  font-family: var(--font-mono);
+}
+.scorekeeper-access-form input {
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.scorekeeper-access-form input:focus,
+.scorekeeper-time-control input:focus,
+.scorekeeper-reconciliation textarea:focus,
+.scorekeeper-correction textarea:focus {
+  border-color: #8297e0;
+  box-shadow: 0 0 0 3px rgb(88 118 216 / 24%);
+}
+.scorekeeper-access-form input[aria-invalid="true"] {
+  border-color: #e46b64;
+}
+.scorekeeper-field-error {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin-bottom: 0;
+  color: #f09b95 !important;
+}
+.scorekeeper-form-hint {
+  margin: 12px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.68rem !important;
+}
+.scorekeeper-primary-button,
+.scorekeeper-secondary-button,
+.scorekeeper-warning-button,
+.scorekeeper-danger-button,
+.scorekeeper-finalise-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-weight: 650;
+  transition:
+    transform 140ms var(--ease-out),
+    background-color 160ms var(--ease-out),
+    border-color 160ms var(--ease-out);
+}
+.scorekeeper-primary-button {
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+.scorekeeper-secondary-button {
+  border-color: #4c524f;
+  background: transparent;
+  color: #eff1ed;
+}
+.scorekeeper-warning-button {
+  background: var(--warning);
+  color: #1c1404;
+}
+.scorekeeper-danger-button {
+  background: #d55a53;
+  color: white;
+}
+.scorekeeper-finalise-button {
+  background: #f3f4ee;
+  color: #151817;
+}
+.scorekeeper-link-button {
+  min-height: 40px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--signal);
+  font-weight: 620;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.scorekeeper-confirm-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 20px;
+  border-radius: 50%;
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+.scorekeeper-match-summary {
+  display: grid;
+  margin: 22px 0;
+  border-top: 1px solid #373c39;
+}
+.scorekeeper-match-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 11px 0;
+  border-bottom: 1px solid #373c39;
+  font-size: 0.78rem;
+}
+.scorekeeper-match-summary dt {
+  color: #89908c;
+}
+.scorekeeper-match-summary dd {
+  margin: 0;
+  text-align: right;
+}
+.scorekeeper-confirm-check {
+  display: grid;
+  grid-template-columns: 21px 1fr;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 22px;
+  color: #d5d9d6;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.scorekeeper-confirm-check input {
+  width: 19px;
+  height: 19px;
+  margin: 1px 0 0;
+  accent-color: var(--signal-strong);
+}
+.scorekeeper-confirm-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scorekeeper-live-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+.scorekeeper-live-header h1 {
+  margin: 0;
+  font-size: 2.2rem;
+}
+.scorekeeper-sync-badge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid #755b1d;
+  border-radius: 99px;
+  background: #292416;
+  color: #f0ca6c;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+.scorekeeper-sync-badge--synced {
+  border-color: #527225;
+  background: #1b2613;
+  color: #bede88;
+}
+.scorekeeper-sync-badge--replaying {
+  border-color: #596ba7;
+  background: #1c2235;
+  color: #b7c2eb;
+}
+.scorekeeper-writer-alert,
+.scorekeeper-takeover-review,
+.scorekeeper-final-review,
+.scorekeeper-reconciliation,
+.scorekeeper-downstream-conflict {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: start;
+  margin-bottom: 14px;
+  padding: 16px;
+  border: 1px solid #8a6920;
+  background: #292416;
+}
+.scorekeeper-writer-alert > svg,
+.scorekeeper-reconciliation > svg,
+.scorekeeper-downstream-conflict > svg {
+  color: #f0b52c;
+}
+.scorekeeper-writer-alert h2,
+.scorekeeper-takeover-review h2,
+.scorekeeper-final-review h2,
+.scorekeeper-reconciliation h2,
+.scorekeeper-downstream-conflict h2 {
+  margin: 0 0 4px;
+}
+.scorekeeper-writer-alert p,
+.scorekeeper-takeover-review p,
+.scorekeeper-final-review p,
+.scorekeeper-reconciliation p,
+.scorekeeper-downstream-conflict p {
+  margin-bottom: 0;
+}
+.scorekeeper-writer-actions,
+.scorekeeper-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.scorekeeper-takeover-review,
+.scorekeeper-final-review {
+  grid-template-columns: 1fr auto;
+  border-color: #6d3733;
+  background: #2b1817;
+}
+
+.scorekeeper-board {
+  display: grid;
+  grid-template-columns: 1fr 72px 1fr;
+  overflow: hidden;
+  border: 1px solid #3c413e;
+  border-radius: 16px;
+  background: #141716;
+  box-shadow: 0 22px 60px rgb(0 0 0 / 22%);
+}
+.scorekeeper-team {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 20px 12px 16px;
+}
+.scorekeeper-team-mark {
+  width: 36px;
+  height: 5px;
+  margin-bottom: 10px;
+  border-radius: 99px;
+  background: var(--team-blue);
+}
+.scorekeeper-team--gold .scorekeeper-team-mark {
+  background: var(--team-gold);
+}
+.scorekeeper-team p {
+  min-height: 40px;
+  margin-bottom: 0;
+  color: #e7e9e5;
+  font-size: 0.78rem;
+  font-weight: 620;
+  text-align: center;
+}
+.scorekeeper-team > strong {
+  margin: 4px 0 14px;
+  font-family: var(--font-mono);
+  font-size: clamp(4rem, 17vw, 7.4rem);
+  font-weight: 580;
+  line-height: 0.9;
+  letter-spacing: -0.08em;
+}
+.scorekeeper-team button {
+  display: grid;
+  place-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 72px;
+  padding: 10px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--team-blue);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 680;
+}
+.scorekeeper-team--gold button {
+  background: var(--team-gold);
+  color: #1b1606;
+}
+.scorekeeper-board-centre {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  border-right: 1px solid #333735;
+  border-left: 1px solid #333735;
+  color: #929995;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+}
+.scorekeeper-board-centre span:last-child {
+  margin-top: 10px;
+  color: #d5d9d6;
+  font-size: 0.76rem;
+}
+
+.scorekeeper-event-controls,
+.scorekeeper-history,
+.scorekeeper-pending-panel,
+.scorekeeper-sync-acknowledgement,
+.scorekeeper-authority,
+.scorekeeper-finalisation,
+.scorekeeper-correction {
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid #343936;
+  background: var(--event-surface);
+}
+.scorekeeper-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 15px;
+}
+.scorekeeper-section-heading h2 {
+  margin: 2px 0 0;
+}
+.scorekeeper-time-control {
+  display: grid;
+  gap: 4px;
+  color: #929995;
+  font-size: 0.67rem;
+}
+.scorekeeper-time-control input {
+  min-height: 40px;
+  padding: 6px 8px;
+}
+.scorekeeper-neutral-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.scorekeeper-neutral-actions button {
+  display: grid;
+  place-items: center;
+  gap: 7px;
+  min-height: 74px;
+  padding: 9px;
+  border: 1px solid #454b47;
+  border-radius: 9px;
+  background: #111413;
+  color: #e8ebe7;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.scorekeeper-neutral-actions button:disabled {
+  color: #707672;
+}
+.scorekeeper-neutral-actions svg {
+  color: var(--signal);
+}
+.scorekeeper-generation {
+  padding: 5px 8px;
+  border: 1px solid #424744;
+  border-radius: 5px;
+  color: #969d99;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+.scorekeeper-empty-state {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 64px;
+  padding: 12px;
+  border: 1px dashed #404541;
+  color: #858c88;
+}
+.scorekeeper-empty-state p {
+  margin: 0;
+}
+.scorekeeper-event-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.scorekeeper-event {
+  padding: 11px 0;
+  border-bottom: 1px solid #333735;
+}
+.scorekeeper-event-main {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 9px;
+  align-items: start;
+}
+.scorekeeper-event-main > svg {
+  margin-top: 2px;
+  color: var(--signal);
+}
+.scorekeeper-event-main > div {
+  display: grid;
+}
+.scorekeeper-event-main strong {
+  font-size: 0.76rem;
+}
+.scorekeeper-event-main span {
+  color: #a0a6a2;
+  font-size: 0.68rem;
+}
+.scorekeeper-event-main time {
+  color: #c1c6c2;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+.scorekeeper-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 0 31px;
+  color: #a4aaa6;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+}
+.scorekeeper-event-meta code {
+  color: #a4aaa6;
+}
+.scorekeeper-event--reversal .scorekeeper-event-main > svg {
+  color: #edb344;
+}
+.scorekeeper-event[data-event-sync="conflict"] {
+  padding: 11px;
+  border: 1px solid #7c413b;
+  background: #2a1816;
+}
+
+.scorekeeper-pending-panel {
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  border-color: #70571c;
+  background: #282315;
+}
+.scorekeeper-pending-panel > svg {
+  color: #f0bd47;
+}
+.scorekeeper-pending-panel h2 {
+  margin: 0 0 3px;
+}
+.scorekeeper-pending-panel p {
+  margin: 0;
+}
+.scorekeeper-sync-acknowledgement {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-color: #435d25;
+  background: #182113;
+}
+.scorekeeper-sync-acknowledgement > svg {
+  color: var(--signal);
+}
+.scorekeeper-sync-acknowledgement p {
+  flex: 1;
+  margin: 0;
+  color: #bed0aa;
+}
+.scorekeeper-authority,
+.scorekeeper-finalisation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.scorekeeper-authority p,
+.scorekeeper-finalisation p {
+  margin-bottom: 0;
+}
+.scorekeeper-authority h2,
+.scorekeeper-finalisation h2 {
+  margin: 2px 0 3px;
+}
+.scorekeeper-reconciliation {
+  grid-template-columns: auto 1fr;
+  border-color: #78403a;
+  background: #281817;
+}
+.scorekeeper-reconciliation label {
+  margin: 14px 0;
+}
+.scorekeeper-correction {
+  display: grid;
+  gap: 14px;
+}
+.scorekeeper-correction p {
+  margin-bottom: 0;
+}
+.scorekeeper-correction-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.scorekeeper-correction-actions button {
+  min-height: 48px;
+  border: 1px solid #4b514e;
+  border-radius: 8px;
+  background: #111413;
+  color: #f1f2ee;
+  font-weight: 620;
+}
+.scorekeeper-downstream-conflict {
+  grid-template-columns: auto 1fr auto;
+  margin-top: 14px;
+  margin-bottom: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .scorekeeper-primary-button:not(:disabled):hover,
+  .scorekeeper-secondary-button:not(:disabled):hover,
+  .scorekeeper-warning-button:not(:disabled):hover,
+  .scorekeeper-danger-button:not(:disabled):hover,
+  .scorekeeper-finalise-button:not(:disabled):hover {
+    transform: translateY(-1px);
+  }
+  .scorekeeper-team button:not(:disabled):hover {
+    filter: brightness(1.08);
+  }
+}
+
+@media (max-width: 600px) {
+  .scorekeeper {
+    min-height: 100vh;
+    padding: calc(18px + env(safe-area-inset-top)) 12px calc(22px + env(safe-area-inset-bottom));
+  }
+  .scorekeeper-access,
+  .scorekeeper-confirm {
+    padding: 24px 18px;
+  }
+  .scorekeeper-live-header {
+    align-items: center;
+  }
+  .scorekeeper-live-header h1 {
+    font-size: 1.85rem;
+  }
+  .scorekeeper-sync-badge {
+    max-width: 160px;
+    padding: 5px 9px;
+    text-align: center;
+  }
+  .scorekeeper-board {
+    grid-template-columns: 1fr 42px 1fr;
+  }
+  .scorekeeper-team {
+    padding: 16px 8px 10px;
+  }
+  .scorekeeper-team p {
+    min-height: 35px;
+    font-size: 0.7rem;
+  }
+  .scorekeeper-team > strong {
+    font-size: clamp(4rem, 25vw, 6.4rem);
+  }
+  .scorekeeper-team button {
+    min-height: 68px;
+    padding: 8px 4px;
+    font-size: 0.64rem;
+  }
+  .scorekeeper-board-centre {
+    font-size: 0.58rem;
+  }
+  .scorekeeper-event-controls,
+  .scorekeeper-history,
+  .scorekeeper-pending-panel,
+  .scorekeeper-sync-acknowledgement,
+  .scorekeeper-authority,
+  .scorekeeper-finalisation,
+  .scorekeeper-correction {
+    padding: 14px;
+  }
+  .scorekeeper-neutral-actions {
+    gap: 6px;
+  }
+  .scorekeeper-neutral-actions button {
+    min-height: 70px;
+    padding: 7px 3px;
+    font-size: 0.65rem;
+  }
+  .scorekeeper-section-heading {
+    align-items: start;
+  }
+  .scorekeeper-pending-panel,
+  .scorekeeper-authority,
+  .scorekeeper-finalisation,
+  .scorekeeper-writer-alert,
+  .scorekeeper-takeover-review,
+  .scorekeeper-final-review,
+  .scorekeeper-downstream-conflict {
+    grid-template-columns: 1fr;
+  }
+  .scorekeeper-pending-panel > svg,
+  .scorekeeper-writer-alert > svg,
+  .scorekeeper-downstream-conflict > svg {
+    margin-bottom: -4px;
+  }
+  .scorekeeper-authority,
+  .scorekeeper-finalisation {
+    align-items: stretch;
+  }
+  .scorekeeper-primary-button,
+  .scorekeeper-secondary-button,
+  .scorekeeper-warning-button,
+  .scorekeeper-danger-button,
+  .scorekeeper-finalise-button {
+    min-height: 52px;
+  }
+  .scorekeeper-writer-actions,
+  .scorekeeper-review-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .scorekeeper-correction-actions {
+    grid-template-columns: 1fr;
+  }
+}

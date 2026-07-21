@@ -1,0 +1,366 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem);
+  gap: clamp(2rem, 4vw, 4rem);
+  align-items: start;
+}
+.live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+.editor {
+  min-width: 0;
+}
+.editorHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid #d7d3c8;
+}
+.editorHeader h2 {
+  margin: 0.3rem 0 0.5rem;
+  font-size: clamp(1.6rem, 3vw, 2.4rem);
+  letter-spacing: -0.04em;
+}
+.editorHeader p:last-child {
+  max-width: 62ch;
+  margin: 0;
+  color: #5c5b55;
+}
+.kicker {
+  margin: 0;
+  font:
+    650 0.73rem/1.2 var(--font-geist-mono),
+    monospace;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #5c5b55;
+}
+.sourceNote {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin: 1.5rem 0 0;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid #d7d3c8;
+  color: #5c5b55;
+  font-size: 0.88rem;
+}
+
+.sourceMeta {
+  display: flex;
+  gap: 2rem;
+  margin: 1.5rem 0 0;
+  padding: 0 0 1rem;
+  border-bottom: 1px solid #d7d3c8;
+}
+
+.sourceMeta div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.sourceMeta dt {
+  color: #5c5b55;
+  font-size: 0.72rem;
+}
+
+.sourceMeta dd {
+  margin: 0;
+  font:
+    650 0.8rem/1.2 var(--font-geist-mono),
+    monospace;
+}
+.sourceNote svg {
+  flex: 0 0 1.15rem;
+  margin-top: 0.08rem;
+}
+.areaList {
+  display: grid;
+  gap: 2.5rem;
+  padding-top: 2rem;
+}
+.area {
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 2.5rem;
+  border: 0;
+  border-bottom: 1px solid #b9b5aa;
+}
+.area legend {
+  padding: 0 0 1.35rem;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.areaFields {
+  display: grid;
+  grid-template-columns: minmax(12rem, 2fr) repeat(2, minmax(8rem, 1fr));
+  gap: 1rem;
+}
+.field {
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #44443f;
+}
+.field input,
+.windowGroup input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid #aaa79d;
+  border-radius: 0.45rem;
+  background: #fffef9;
+  padding: 0.65rem 0.75rem;
+  color: #20211f;
+  font:
+    500 0.95rem/1.2 var(--font-geist-sans),
+    sans-serif;
+}
+.field input:focus-visible,
+.windowGroup input:focus-visible,
+button:focus-visible {
+  outline: 3px solid #b7d338;
+  outline-offset: 2px;
+}
+.field small,
+.formError {
+  margin: 0;
+  color: #8d2c20;
+  font-size: 0.78rem;
+  font-weight: 550;
+}
+.windowGroup {
+  margin-top: 1.75rem;
+}
+.windowGroup > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.windowGroup h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.window {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1.4fr) repeat(2, minmax(7rem, 1fr)) minmax(10rem, 1.2fr) 44px;
+  gap: 0.75rem;
+  align-items: end;
+  padding: 0.9rem 0;
+  border-top: 1px solid #e2ded4;
+}
+.windowRow {
+  border-top: 1px solid #e2ded4;
+}
+.windowRow .window {
+  border-top: 0;
+}
+.windowRow > .formError {
+  padding-bottom: 0.75rem;
+}
+.checkbox {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.checkbox input {
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  accent-color: #8daa14;
+}
+.primaryButton,
+.secondaryButton,
+.textButton,
+.iconButton,
+.removeArea {
+  min-height: 44px;
+  border-radius: 0.45rem;
+  font:
+    650 0.84rem/1 var(--font-geist-sans),
+    sans-serif;
+  transition:
+    transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 140ms ease;
+}
+.primaryButton:active:not(:disabled),
+.secondaryButton:active:not(:disabled),
+.textButton:active:not(:disabled),
+.iconButton:active:not(:disabled),
+.removeArea:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.primaryButton {
+  border: 1px solid #20211f;
+  background: #20211f;
+  color: #fffef9;
+  padding: 0 1.15rem;
+}
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #20211f;
+  background: transparent;
+  color: #20211f;
+  padding: 0 1rem;
+}
+.textButton,
+.removeArea {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 0;
+  background: transparent;
+  color: #343530;
+  padding: 0 0.35rem;
+}
+.removeArea {
+  margin-top: 1rem;
+  color: #752c24;
+}
+.iconButton {
+  width: 44px;
+  border: 1px solid #c4c0b6;
+  background: transparent;
+  color: #752c24;
+}
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.textButton:disabled,
+.iconButton:disabled,
+.removeArea:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding: 1rem 0;
+  border-top: 1px solid #b9b5aa;
+}
+.actions span {
+  color: #5c5b55;
+  font-size: 0.82rem;
+}
+.rail {
+  position: sticky;
+  top: 1.25rem;
+  padding: 1.5rem 0 0;
+  border-top: 4px solid #20211f;
+}
+.rail > svg {
+  width: 2rem;
+  height: 2rem;
+  margin-bottom: 1.5rem;
+}
+.rail h2 {
+  margin: 0.35rem 0 1.5rem;
+  font-size: clamp(1.5rem, 3vw, 2.2rem);
+  letter-spacing: -0.04em;
+}
+.rail dl {
+  margin: 0;
+}
+.rail dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.95rem 0;
+  border-top: 1px solid #d7d3c8;
+}
+.rail dt {
+  color: #5c5b55;
+  font-size: 0.82rem;
+}
+.rail dd {
+  margin: 0;
+  font:
+    650 1rem/1 var(--font-geist-mono),
+    monospace;
+}
+.state {
+  min-height: 18rem;
+  display: grid;
+  place-content: center;
+  justify-items: start;
+  max-width: 44rem;
+}
+.state svg {
+  width: 2rem;
+  height: 2rem;
+}
+.state h2 {
+  margin: 1rem 0 0.5rem;
+  font-size: clamp(1.6rem, 3vw, 2.4rem);
+}
+.state p {
+  max-width: 55ch;
+  margin: 0;
+  color: #5c5b55;
+}
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .rail {
+    position: static;
+    order: -1;
+  }
+  .window {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .iconButton {
+    align-self: end;
+  }
+}
+@media (max-width: 767px) {
+  .editorHeader {
+    display: grid;
+    gap: 1.25rem;
+  }
+  .areaFields,
+  .window {
+    grid-template-columns: 1fr;
+  }
+  .secondaryButton {
+    width: 100%;
+    justify-content: center;
+  }
+  .iconButton {
+    width: 100%;
+  }
+  .actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .primaryButton {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .primaryButton,
+  .secondaryButton,
+  .textButton,
+  .iconButton,
+  .removeArea {
+    transition: none;
+  }
+}

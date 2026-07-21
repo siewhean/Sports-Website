@@ -1,0 +1,43 @@
+{
+  "name": "@matchday/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "predev": "pnpm --filter @matchday/ui --filter @matchday/feature-flags build",
+    "dev": "next dev",
+    "prebuild": "pnpm --filter @matchday/ui --filter @matchday/feature-flags build",
+    "build": "next build",
+    "start": "next start",
+    "check:i18n": "node scripts/check-hardcoded-user-strings.mjs --self-test",
+    "lint": "pnpm check:i18n && eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run lib/*.test.ts tests/unit",
+    "test:e2e": "env -u NO_COLOR playwright test",
+    "test:a11y": "env -u NO_COLOR playwright test --grep 'accessibility violations'",
+    "test:visual": "env -u NO_COLOR playwright test --grep 'visual baselines'"
+  },
+  "dependencies": {
+    "@gsap/react": "2.1.2",
+    "@matchday/contracts": "workspace:*",
+    "@matchday/domain": "workspace:*",
+    "@matchday/feature-flags": "workspace:*",
+    "@matchday/ui": "workspace:*",
+    "@phosphor-icons/react": "2.1.10",
+    "geist": "1.7.2",
+    "gsap": "3.15.0",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.10",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

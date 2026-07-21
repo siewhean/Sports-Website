@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Independent capacity oracles for every Gate A default size context.",
+  "contexts": [
+    {
+      "id": "canoe-polo-08-capacity",
+      "entry_count": 8,
+      "time_zone": "Asia/Singapore",
+      "dates": ["2026-08-01"],
+      "area_count": 2,
+      "open": "09:00",
+      "close": "17:00",
+      "breaks": [{ "start": "12:00", "end": "13:00" }],
+      "slot_minutes": 30,
+      "expected_raw_slots": 28
+    },
+    {
+      "id": "canoe-polo-12-capacity",
+      "entry_count": 12,
+      "time_zone": "Asia/Singapore",
+      "dates": ["2026-08-01", "2026-08-02"],
+      "area_count": 2,
+      "open": "09:00",
+      "close": "17:00",
+      "breaks": [{ "start": "12:00", "end": "13:00" }],
+      "slot_minutes": 30,
+      "expected_raw_slots": 56
+    },
+    {
+      "id": "canoe-polo-16-capacity",
+      "entry_count": 16,
+      "time_zone": "Asia/Singapore",
+      "dates": ["2026-08-01", "2026-08-02"],
+      "area_count": 4,
+      "open": "09:00",
+      "close": "17:00",
+      "breaks": [{ "start": "12:00", "end": "13:00" }],
+      "slot_minutes": 30,
+      "expected_raw_slots": 112
+    },
+    {
+      "id": "canoe-polo-24-capacity",
+      "entry_count": 24,
+      "time_zone": "Asia/Singapore",
+      "dates": ["2026-08-01", "2026-08-02"],
+      "area_count": 4,
+      "open": "09:00",
+      "close": "17:00",
+      "breaks": [{ "start": "12:00", "end": "13:00" }],
+      "slot_minutes": 30,
+      "expected_raw_slots": 112
+    },
+    {
+      "id": "canoe-polo-48-capacity",
+      "entry_count": 48,
+      "time_zone": "Asia/Singapore",
+      "dates": ["2026-08-01", "2026-08-02"],
+      "area_count": 8,
+      "open": "09:00",
+      "close": "17:00",
+      "breaks": [{ "start": "12:00", "end": "13:00" }],
+      "slot_minutes": 30,
+      "expected_raw_slots": 224
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "state_transitions": {
+    "draft": ["ready", "archived"],
+    "ready": ["draft", "published", "archived"],
+    "published": ["live", "archived"],
+    "live": ["completed", "archived"],
+    "completed": ["archived"],
+    "archived": []
+  },
+  "csv": {
+    "source": "Display name,Kind,Seed,Club,Country\n\"Sharks, East\",team,1,Harbour Club,SG\nAda Lovelace,individual,2,,GB",
+    "expected": [
+      {
+        "name": "Sharks, East",
+        "type": "team",
+        "seed": 1,
+        "club": "Harbour Club",
+        "countryCode": "SG"
+      },
+      {
+        "name": "Ada Lovelace",
+        "type": "individual",
+        "seed": 2,
+        "club": null,
+        "countryCode": "GB"
+      }
+    ]
+  },
+  "free_entry_limit": 16
+}
