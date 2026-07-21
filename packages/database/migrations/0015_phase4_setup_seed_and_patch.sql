@@ -92,7 +92,7 @@ BEGIN
     JOIN sport_pack_versions pack
       ON pack.sport_code=settings.sport_code AND pack.version=settings.pack_version
     WHERE settings.competition_id=target_competition
-  ) references;
+  ) setting_references;
 
   SELECT CASE WHEN division_count_value=0 THEN NULL ELSE jsonb_build_object(
     'competition_id',target_competition,
@@ -181,7 +181,7 @@ $$ LANGUAGE plpgsql STABLE;
 CREATE FUNCTION phase4_seed_setup_draft() RETURNS trigger AS $$
 BEGIN
   IF NEW.steps='{}'::jsonb OR NEW.steps->'basics' IS NULL THEN
-    NEW.steps:=phase4_setup_seed_values(NEW.competition_id)||COALESCE(NEW.steps,'{}'::jsonb);
+    NEW.steps:=phase4_setup_seed_values(NEW.competition_id)||jsonb_strip_nulls(COALESCE(NEW.steps,'{}'::jsonb));
   END IF;
   RETURN NEW;
 END;
@@ -194,9 +194,14 @@ FOR EACH ROW EXECUTE FUNCTION phase4_seed_setup_draft();
 -- Repair already-created empty drafts without rewriting valid organiser input.
 UPDATE setup_drafts draft
 SET revision=draft.revision+1,
-    steps=phase4_setup_seed_values(draft.competition_id)||draft.steps,
+    steps=phase4_setup_seed_values(draft.competition_id)||jsonb_strip_nulls(draft.steps),
     updated_at=clock_timestamp()
-WHERE draft.steps='{}'::jsonb OR draft.steps->'basics' IS NULL;
+WHERE (draft.steps='{}'::jsonb OR draft.steps->'basics' IS NULL)
+  AND draft.status='active'
+  AND EXISTS (
+    SELECT 1 FROM competitions competition
+    WHERE competition.id=draft.competition_id AND competition.status<>'archived'
+  );
 
 CREATE FUNCTION phase4_patch_setup_draft(target_organisation uuid,target_competition uuid,actor uuid,
   expected_revision integer,step_id_value text,next_steps jsonb,next_completed_steps jsonb,next_validation jsonb,
