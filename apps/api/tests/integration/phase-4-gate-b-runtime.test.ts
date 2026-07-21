@@ -217,6 +217,6 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 404 });
+    ).rejects.toMatchObject({ statusCode: 403 });
   });
 });
