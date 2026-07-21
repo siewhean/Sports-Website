@@ -12,7 +12,7 @@ export default async function AssistedSetupPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ state?: string; step?: string }>;
+  searchParams: Promise<{ state?: string; step?: string; resume?: string }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -20,7 +20,13 @@ export default async function AssistedSetupPage({
   if (result.state === "notFound") notFound();
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase2Copy.errorBody);
-  const setup = await getAssistedSetupDocument(result.competition.id, result.competition.name, query.state, query.step);
+  const source = await getAssistedSetupDocument(result.competition.id, result.competition.name, query.state, query.step);
+  // The demo build normally stays side-effect free. This explicit test switch
+  // lets the production Playwright suite exercise the real resume mutation.
+  const setup =
+    process.env.MATCHDAY_PHASE2_DATA_MODE === "demo" && query.resume === "1"
+      ? { ...source, resumeRequired: source.setup?.read_only ? false : true }
+      : source;
   return (
     <OrganiserWorkspace
       competition={result.competition}
