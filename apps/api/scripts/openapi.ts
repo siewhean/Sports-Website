@@ -5,7 +5,7 @@ import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
-import { Phase4Runtime } from "../src/phase-4-runtime.js";
+import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
 
 export async function generateOpenApiDocument() {
   const config = parseConfig({
@@ -57,7 +57,7 @@ export async function generateOpenApiDocument() {
       phase2DomainAdapter,
     ),
     phase3Runtime,
-    phase4Runtime: new Phase4Runtime(
+    phase4Runtime: new ReliableGateBPhase4Runtime(
       sql,
       phase3Runtime,
       {
