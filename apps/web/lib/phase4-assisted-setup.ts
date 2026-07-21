@@ -23,6 +23,8 @@ export type AssistedSetupPageDocument = Readonly<{
   competitionId: string;
   competitionName: string;
   setup: Phase4SetupDocument | null;
+  /** Live server-backed setup documents refresh canonical references on mount. */
+  resumeRequired?: boolean;
 }>;
 
 export const assistedSetupSteps: ReadonlyArray<{ id: Phase4SetupStepId; label: string; short: string }> = [
@@ -201,9 +203,7 @@ export function parseAssistedSetupAutosaveResponse(
 ): Phase4SetupAutosaveResponse | null {
   const item = record(payload);
   if (!item || typeof item.outcome !== "string") return null;
-  if (
-    !exactKeys(item, item.outcome === "conflict" ? ["outcome", "current"] : ["outcome", "document"])
-  )
+  if (!exactKeys(item, item.outcome === "conflict" ? ["outcome", "current"] : ["outcome", "document"]))
     return null;
   const documentValue = item.outcome === "conflict" ? item.current : item.document;
   const document = parseAssistedSetupDocument(documentValue, competitionId);
