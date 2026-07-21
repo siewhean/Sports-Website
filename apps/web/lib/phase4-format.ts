@@ -27,6 +27,7 @@ export type FormatBuilderPageDocument = Readonly<{
   divisionId: string;
   divisionName: string;
   organisationId: string;
+  sportCode: string;
   draft: Phase4FormatDraftView | null;
   templates: readonly Phase4OrganiserTemplateView[];
 }>;
@@ -95,6 +96,8 @@ export const formatStageLibrary: ReadonlyArray<{
   { kind: "round_robin", label: "Round robin", detail: "Every entry meets every other entry." },
   { kind: "single_elimination", label: "Single elimination", detail: "Winner advances through a bracket." },
   { kind: "placement", label: "Placement", detail: "Rank entries beyond the podium." },
+  { kind: "consolation", label: "Consolation", detail: "Give eliminated entries an additional path." },
+  { kind: "classification", label: "Classification", detail: "Resolve specific final positions." },
   { kind: "bronze", label: "Third-place", detail: "A controlled bronze-medal match." },
 ];
 
@@ -339,6 +342,15 @@ export function parseOrganiserTemplateList(value: unknown, organisationId: strin
   if (!values) return null;
   const parsed = values.map((item) => parseOrganiserTemplate(item, organisationId));
   return parsed.some((item) => !item) ? null : (parsed as Phase4OrganiserTemplateView[]);
+}
+
+export function mergeOrganiserTemplate(
+  current: readonly Phase4OrganiserTemplateView[],
+  saved: Phase4OrganiserTemplateView,
+): readonly Phase4OrganiserTemplateView[] {
+  return [...current.filter((item) => item.template_id !== saved.template_id), saved].sort(
+    (left, right) => left.name.localeCompare(right.name) || right.revision - left.revision,
+  );
 }
 
 export function isSaveFormatRequest(value: unknown): value is Phase4SaveFormatRevisionRequest & { idempotency_key: string } {
