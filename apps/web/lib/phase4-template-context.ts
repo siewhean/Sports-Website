@@ -1,3 +1,11 @@
+const supportedSports = new Set(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"]);
+
+export type FormatTemplateCompetitionContext = Readonly<{
+  competitionId: string;
+  organisationId: string;
+  sportCode: string;
+}>;
+
 export function competitionIdFromFormatReferer(referer: string | null, expectedOrigin: string): string | null {
   if (!referer) return null;
   try {
@@ -12,4 +20,24 @@ export function competitionIdFromFormatReferer(referer: string | null, expectedO
   } catch {
     return null;
   }
+}
+
+export function parseFormatTemplateCompetitionContext(
+  value: unknown,
+  expectedCompetitionId: string,
+): FormatTemplateCompetitionContext | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    record.id !== expectedCompetitionId ||
+    typeof record.organisation_id !== "string" ||
+    typeof record.sport_code !== "string" ||
+    !supportedSports.has(record.sport_code)
+  )
+    return null;
+  return {
+    competitionId: expectedCompetitionId,
+    organisationId: record.organisation_id,
+    sportCode: record.sport_code,
+  };
 }
