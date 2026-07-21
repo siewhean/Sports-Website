@@ -15,7 +15,6 @@ import {
   Warning,
 } from "@phosphor-icons/react/dist/ssr";
 import {
-  canoePoloSettings,
   organiserSections,
   phase2Competition,
   phase2Copy,
@@ -26,19 +25,43 @@ import {
 } from "@/lib/phase2";
 import { SurfaceStatePanel } from "./SurfaceState";
 
-const sectionMeta: Record<OrganiserSection, { title: string; intro: string }> = {
-  "control-room": { title: phase2Copy.controlTitle, intro: phase2Copy.controlIntro },
-  setup: { title: phase2Copy.setupTitle, intro: phase2Copy.setupIntro },
-  settings: { title: phase2Copy.settingsTitle, intro: phase2Copy.settingsIntro },
-  entries: { title: phase2Copy.entriesTitle, intro: phase2Copy.entriesIntro },
-  capacity: { title: phase2Copy.capacityTitle, intro: phase2Copy.capacityIntro },
-  format: { title: phase2Copy.formatTitle, intro: phase2Copy.formatIntro },
-  schedule: { title: phase2Copy.scheduleTitle, intro: phase2Copy.scheduleIntro },
-  results: { title: phase2Copy.resultsTitle, intro: phase2Copy.resultsIntro },
-  publish: { title: phase2Copy.publishTitle, intro: phase2Copy.publishIntro },
-  access: { title: phase2Copy.accessTitle, intro: phase2Copy.accessIntro },
-  audit: { title: phase2Copy.auditTitle, intro: phase2Copy.auditIntro },
-};
+function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
+  const shared: Record<OrganiserSection, { title: string; intro: string }> = {
+    "control-room": { title: phase2Copy.controlTitle, intro: phase2Copy.controlIntro },
+    setup: { title: phase2Copy.setupTitle, intro: phase2Copy.setupIntro },
+    settings: {
+      title: `${competition.sport} settings`,
+      intro: `Review the pinned ${competition.sport} pack and customise the settings used by this competition.`,
+    },
+    entries: {
+      title: "Entries and divisions",
+      intro: "Manage teams, players, pairs, placeholders, seeding and division assignments.",
+    },
+    capacity: { title: phase2Copy.capacityTitle, intro: phase2Copy.capacityIntro },
+    format: {
+      title: "Competition format",
+      intro: "Build and validate the stage graph that generates matches for this division.",
+    },
+    schedule: {
+      title: phase2Copy.scheduleTitle,
+      intro: "Schedule full match slots across available playing areas while respecting dependencies and rest.",
+    },
+    results: { title: phase2Copy.resultsTitle, intro: phase2Copy.resultsIntro },
+    publish: { title: phase2Copy.publishTitle, intro: phase2Copy.publishIntro },
+    access: { title: phase2Copy.accessTitle, intro: phase2Copy.accessIntro },
+    audit: { title: phase2Copy.auditTitle, intro: phase2Copy.auditIntro },
+  };
+  return shared[section];
+}
+
+function navigation(competition: CompetitionView) {
+  return organiserSections.map((item) => {
+    if (item.id === "settings") return { ...item, short: "Settings", label: `${competition.sport} settings` };
+    if (item.id === "entries") return { ...item, short: "Entries", label: "Entries and divisions" };
+    if (item.id === "format") return { ...item, short: "Format", label: "Competition format" };
+    return item;
+  });
+}
 
 export function OrganiserWorkspace({
   competition = phase2Competition,
@@ -65,9 +88,10 @@ export function OrganiserWorkspace({
   syncState?: "saved" | "local" | "unavailable" | "offline" | "conflict" | "read-only";
   layoutMode?: "default" | "setup" | "format";
 }) {
+  const fallbackMeta = sectionMeta(competition, section);
   const meta = {
-    title: pageTitle ?? sectionMeta[section].title,
-    intro: pageIntro ?? sectionMeta[section].intro,
+    title: pageTitle ?? fallbackMeta.title,
+    intro: pageIntro ?? fallbackMeta.intro,
   };
   const organiserBase = `/organiser/competitions/${competition.id}`;
   const content =
@@ -82,23 +106,25 @@ export function OrganiserWorkspace({
       <a className="skip-link" href="#p2-workspace">
         {phase2Copy.skip}
       </a>
-      {layoutMode !== "format" ? <header className="p2-organiser__topbar">
-        <Link className="p2-wordmark" href="/">
-          <span aria-hidden="true">{phase2Copy.logoMark}</span>
-          {phase2Copy.brand}
-        </Link>
-        <div className="p2-context">
-          <span>{competition.name}</span>
-          <small>{competition.publicationRevision}</small>
-        </div>
-        <p className="p2-sync" data-sync-state={syncState}>
-          <span aria-hidden="true" />
-          {syncLabel ?? phase2Copy.draftSynced}
-        </p>
-      </header> : null}
+      {layoutMode !== "format" ? (
+        <header className="p2-organiser__topbar">
+          <Link className="p2-wordmark" href="/">
+            <span aria-hidden="true">{phase2Copy.logoMark}</span>
+            {phase2Copy.brand}
+          </Link>
+          <div className="p2-context">
+            <span>{competition.name}</span>
+            <small>{competition.publicationRevision}</small>
+          </div>
+          <p className="p2-sync" data-sync-state={syncState}>
+            <span aria-hidden="true" />
+            {syncLabel ?? phase2Copy.draftSynced}
+          </p>
+        </header>
+      ) : null}
       <div className="p2-organiser__layout">
         <nav className="p2-organiser__nav" aria-label={phase2Copy.organiserNav}>
-          {organiserSections.map((item) => (
+          {navigation(competition).map((item) => (
             <Link
               key={item.id}
               href={item.id === "control-room" ? organiserBase : `${organiserBase}/${item.id}`}
@@ -111,27 +137,29 @@ export function OrganiserWorkspace({
           <Link href="/">{phase2Copy.backHome}</Link>
         </nav>
         <main className="p2-organiser__main" id="p2-workspace" tabIndex={-1}>
-          {layoutMode === "default" ? <header className="p2-page-heading">
-            <div>
-              <p className="p2-eyebrow">{pageEyebrow ?? competition.division.name}</p>
-              <h1>{meta.title}</h1>
-              <p>{meta.intro}</p>
-            </div>
-            {sectionAction !== undefined ? (
-              sectionAction
-            ) : section === "control-room" ? (
-              <Link className="p2-button p2-button--signal" href={`${organiserBase}/publish`}>
-                {phase2Copy.openPublic}
-                <span aria-hidden="true">
-                  <ArrowRight />
-                </span>
-              </Link>
-            ) : (
-              <button className="p2-button p2-button--dark" type="button">
-                {phase2Copy.save}
-              </button>
-            )}
-          </header> : null}
+          {layoutMode === "default" ? (
+            <header className="p2-page-heading">
+              <div>
+                <p className="p2-eyebrow">{pageEyebrow ?? competition.division.name}</p>
+                <h1>{meta.title}</h1>
+                <p>{meta.intro}</p>
+              </div>
+              {sectionAction !== undefined ? (
+                sectionAction
+              ) : section === "control-room" ? (
+                <Link className="p2-button p2-button--signal" href={`${organiserBase}/publish`}>
+                  {phase2Copy.openPublic}
+                  <span aria-hidden="true">
+                    <ArrowRight />
+                  </span>
+                </Link>
+              ) : (
+                <button className="p2-button p2-button--dark" type="button">
+                  {phase2Copy.save}
+                </button>
+              )}
+            </header>
+          ) : null}
           {content}
         </main>
       </div>
@@ -269,17 +297,17 @@ function Setup({ competition }: { competition: CompetitionView }) {
 }
 
 function Settings({ competition }: { competition: CompetitionView }) {
-  if (competition.settings?.length === 0) return <SurfaceStatePanel state={phase2Machine.empty} />;
+  if (!competition.settings?.length) return <SurfaceStatePanel state={phase2Machine.empty} />;
   return (
-    <div className="p2-definition-list">
-      {(competition.settings ?? canoePoloSettings).map(([term, value]) => (
+    <dl className="p2-definition-list">
+      {competition.settings.map(([term, value]) => (
         <div key={term}>
           <dt>{term}</dt>
           <dd>{value}</dd>
           <button type="button">{phase2Copy.edit}</button>
         </div>
       ))}
-    </div>
+    </dl>
   );
 }
 
@@ -354,7 +382,7 @@ function Format({ competition }: { competition: CompetitionView }) {
     );
   }
   return (
-    <section className="p2-format" aria-label={phase2Copy.formatTitle}>
+    <section className="p2-format" aria-label="Competition format">
       <div className="p2-groups">
         <Stage title={phase2Copy.groupA} meta={phase2Copy.fourTeamsSixMatches} />
         <Stage title={phase2Copy.groupB} meta={phase2Copy.fourTeamsSixMatches} />
