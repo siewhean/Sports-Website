@@ -1,9 +1,28 @@
 # Phase 4 — Gate B traceability
 
-**Date:** 20 July 2026  
+**Date:** 21 July 2026  
 **Status:** In progress
 
 This file tracks the exact Phase 4 scope in `docs/EXECUTION_ROADMAP.md`. A row becomes verified only when production implementation and objective automated/runtime evidence both exist. Prototype-only or mocked browser state cannot close a row.
+
+## Current implementation slice
+
+The `agent/phase4-organiser-alpha` branch contains the first Gate B remediation slice. It deliberately does not close any row below until the repository suites and production-like browser journey pass.
+
+Implemented source evidence:
+
+- The authenticated organiser workspace accepts and labels all five launch sports instead of rejecting every sport except Canoe Polo.
+- The manual and visual format surfaces now expose every stage kind already supported by the canonical graph contract, including consolation and classification.
+- The format workspace carries the competition sport into server-rendered state and filters saved organiser templates to that sport.
+- Template-save commands derive the sport from authenticated competition setup rather than trusting the browser-provided value, and reject organisation mismatches.
+- PostgreSQL now rejects template application across organisations, across sports, from archived templates, or with inconsistent source metadata.
+- Unit and integration regression suites were added for the five-sport workspace, stage-library parity, shared graph identity, template version replacement, same-origin competition context, and database template application.
+
+Evidence still required before status changes:
+
+- Frozen install, format, lint, typecheck, unit, migrated PostgreSQL integration, build, and browser E2E results from an executable runner.
+- A true non-navigating setup-draft patch transition for debounced autosave. The existing `save_step` transition advances the wizard and must not be reused as an autosave shortcut.
+- Complete manual/visual builder persistence, Assisted Setup resume, scheduler, publication, accessibility, and visual evidence listed below.
 
 ## Format builder
 
