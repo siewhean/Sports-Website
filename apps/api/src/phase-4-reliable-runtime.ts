@@ -106,7 +106,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
       );
 
       let row: Phase4SetupStorageRow;
-      if (access.status === "archived") {
+      if (access.status === "archived" || access.membership_role === "viewer") {
         row = first(
           await tx.unsafe<Phase4SetupStorageRow>(
             `SELECT draft.*,competition.status competition_status
