@@ -280,6 +280,7 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     id: string(competition.id)!,
     slug: string(competition.slug)!,
     name: string(competition.name)!,
+    sportCode,
     sport: sportLabels[sportCode],
     venue: areas.join(" · ") || string(primaryDivision.name) || "—",
     timezone,
