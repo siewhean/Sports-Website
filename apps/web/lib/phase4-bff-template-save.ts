@@ -1,8 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { parseAssistedSetupDocument } from "@/lib/phase4-assisted-setup";
 import { isPhase4IdempotencyKey, parseOrganiserTemplate } from "@/lib/phase4-format";
-import { competitionIdFromFormatReferer } from "@/lib/phase4-template-context";
+import {
+  competitionIdFromFormatReferer,
+  parseFormatTemplateCompetitionContext,
+} from "@/lib/phase4-template-context";
 import {
   forwardPhase3Mutation,
   hasExactKeys,
@@ -48,34 +50,33 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       { status: 400 },
     );
 
-  const setupResult = await readPhase3Json(
+  const competitionResult = await readPhase3Json(
     request,
-    `/api/v1/competitions/${encodeURIComponent(competitionId)}/setup-draft`,
+    `/api/v1/competitions/${encodeURIComponent(competitionId)}`,
   );
-  if (!setupResult.ok)
+  if (!competitionResult.ok)
     return NextResponse.json(
       {
         error: {
-          code: setupResult.status === 401 || setupResult.status === 403 ? "AUTH_REQUIRED" : "SETUP_UNAVAILABLE",
+          code: competitionResult.status === 401 || competitionResult.status === 403 ? "AUTH_REQUIRED" : "COMPETITION_UNAVAILABLE",
           message:
-            setupResult.status === 401 || setupResult.status === 403
+            competitionResult.status === 401 || competitionResult.status === 403
               ? "An authenticated session is required"
-              : "The competition setup could not be verified",
+              : "The competition could not be verified",
         },
       },
-      { status: setupResult.status === 401 || setupResult.status === 403 ? setupResult.status : 503 },
+      { status: competitionResult.status === 401 || competitionResult.status === 403 ? competitionResult.status : 503 },
     );
 
-  const setup = parseAssistedSetupDocument(setupResult.payload, competitionId);
-  const sportCode = setup?.values.basics?.sport_code;
-  if (!setup || !sportCode)
+  const context = parseFormatTemplateCompetitionContext(competitionResult.payload, competitionId);
+  if (!context)
     return NextResponse.json(
-      { error: { code: "SPORT_NOT_PINNED", message: "Complete the competition basics before saving a format template" } },
-      { status: 409 },
+      { error: { code: "COMPETITION_RESPONSE_INVALID", message: "The competition service returned an invalid response" } },
+      { status: 502 },
     );
 
   const { organisationId } = await params;
-  if (setup.organisation_id !== organisationId)
+  if (context.organisationId !== organisationId)
     return NextResponse.json(
       { error: { code: "ORGANISATION_MISMATCH", message: "The competition does not belong to this organisation" } },
       { status: 403 },
@@ -84,7 +85,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   return forwardPhase3Mutation(request, {
     method: "POST",
     path: `/api/v1/organisations/${encodeURIComponent(organisationId)}/format-templates`,
-    body: { ...body, sport_code: sportCode },
+    // The browser sport is only a display hint. The competition is authoritative,
+    // and the API independently verifies the source revision's sport.
+    body: { ...body, sport_code: context.sportCode },
     validate: (value) => parseOrganiserTemplate(value, organisationId) !== null,
   });
 }
