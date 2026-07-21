@@ -4,7 +4,7 @@ import { ApiError } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
-import type { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
+import type { ReliableGateBPhase4Runtime } from "./phase-4-reliable-runtime.js";
 
 const Id = Type.String({ format: "uuid" });
 const IdempotencyKey = Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" });
@@ -63,11 +63,12 @@ const PatchBody = strict({
     strict({ step_id: Type.Literal("format_preferences"), value: Preferences }),
   ]),
 });
+const ResumeBody = strict({ idempotency_key: IdempotencyKey });
 
 export async function registerPhase4SetupPatchRoutes(
   app: FastifyInstance,
   options: {
-    runtime: GateBPhase4Runtime;
+    runtime: ReliableGateBPhase4Runtime;
     identityRuntime: IdentityApiRuntime;
     identityRequests: IdentityRequestContext;
     allowedOrigins: readonly string[];
@@ -113,6 +114,39 @@ export async function registerPhase4SetupPatchRoutes(
         await mutationActor(request),
         request.params.competitionId,
         request.body,
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Params: { competitionId: string };
+    Body: Static<typeof ResumeBody>;
+  }>(
+    "/api/v1/competitions/:competitionId/setup-draft/resume",
+    {
+      schema: {
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: strict({ competitionId: Id }),
+        body: ResumeBody,
+        response: {
+          200: Type.Unknown(),
+          400: ErrorResponse,
+          401: ErrorResponse,
+          403: ErrorResponse,
+          404: ErrorResponse,
+          409: ErrorResponse,
+          422: ErrorResponse,
+          503: ErrorResponse,
+        },
+        tags: ["phase4-setup"],
+      },
+    },
+    async (request) =>
+      options.runtime.resumeSetupDraft(
+        await mutationActor(request),
+        request.params.competitionId,
+        request.body.idempotency_key,
         request.id,
       ),
   );
