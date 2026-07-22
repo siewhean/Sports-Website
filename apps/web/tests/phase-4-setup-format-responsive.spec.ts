@@ -37,6 +37,28 @@ test("recommendation evidence stays accessible without phone overflow", async ({
   ).toBeLessThanOrEqual(1);
 });
 
+test("assisted setup and manual format editing reflow at 320 CSS pixels", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  for (const url of [
+    "/organiser/competitions/singapore-open/setup?step=format_recommendations",
+    "/organiser/competitions/singapore-open/format",
+  ]) {
+    await page.goto(url);
+    await dismissConsent(page);
+    if (url.endsWith("/format")) {
+      await expect(page.getByRole("button", { name: /Manual/ })).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("heading", { name: "Stages and advancement" })).toBeVisible();
+    } else {
+      await expect(page.getByTestId("setup-mobile-progress")).toBeVisible();
+      await expect(page.locator("article").filter({ hasText: "Balanced groups" })).toBeVisible();
+    }
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+      url,
+    ).toBeLessThanOrEqual(1);
+  }
+});
+
 test("format designer defaults to structured manual mode on phones", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("phone"), "Phone-only default");
   await page.goto("/organiser/competitions/singapore-open/format");
