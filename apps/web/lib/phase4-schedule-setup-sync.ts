@@ -8,7 +8,7 @@ import {
   parseAssistedSetupDocument,
   setupAutosaveBody,
   stepValue,
-} from "./phase4-assisted-setup";
+} from "./phase4-assisted-setup-current";
 import { parseScheduleRevisionView, type ScheduleOption } from "./phase4-schedule";
 
 type Fetcher = typeof fetch;
