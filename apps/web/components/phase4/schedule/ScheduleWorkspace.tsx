@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { interpolate } from "@matchday/ui";
 import {
@@ -63,6 +64,8 @@ function withRetainedAlternative(current: readonly ScheduleOption[], option: Sch
 }
 
 export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) {
+  const router = useRouter();
+  const liveRef = useRef<HTMLParagraphElement>(null);
   const [job, setJob] = useState(document.activeJob);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
@@ -86,6 +89,12 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   const disabled = !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
   const polledJobStatus = job?.status;
+
+  function refreshWorkspace(announcement: string) {
+    setMessage(announcement);
+    router.refresh();
+    window.requestAnimationFrame(() => liveRef.current?.focus({ preventScroll: true }));
+  }
 
   useEffect(() => {
     if (!polledJobId || !polledJobStatus || !activeStatuses.has(polledJobStatus)) return;
@@ -223,8 +232,9 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         expected_job_revision: option.jobRevision,
       },
       () => {
-        setMessage(phase4ScheduleCopy.optionSaved);
-        window.location.reload();
+        setJob(null);
+        setRetainedAlternatives([]);
+        refreshWorkspace(phase4ScheduleCopy.optionSaved);
       },
     );
   }
@@ -238,10 +248,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         idempotency_key: createIdempotencyKey(phase4ScheduleMachine.publishKey),
         expected_revision: document.currentRevision.revision,
       },
-      () => {
-        setMessage(phase4ScheduleCopy.publishSuccess);
-        window.location.reload();
-      },
+      () => refreshWorkspace(phase4ScheduleCopy.publishSuccess),
     );
   }
 
@@ -262,7 +269,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
             start_epoch_ms: Date.parse(assignment.startsAt),
             end_epoch_ms: Date.parse(assignment.endsAt),
           },
-      () => window.location.reload(),
+      () => refreshWorkspace(phase4ScheduleCopy.saved),
       selectedLock ? phase4ScheduleMachine.delete : phase4ScheduleMachine.post,
     );
   }
@@ -274,7 +281,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
 
   return (
     <div className={styles.workspace} data-testid="phase4-schedule">
-      <p className={styles.live} aria-live="polite">
+      <p ref={liveRef} className={styles.live} aria-live="polite" aria-atomic="true" tabIndex={-1}>
         {message || commandError}
       </p>
 
