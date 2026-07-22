@@ -19,6 +19,7 @@ const continueAfterFailure = process.argv.includes("--continue-after-failure");
 const checks = [
   { id: "runner-self-test", command: "node", args: ["scripts/test-gate-b-evidence.mjs"] },
   { id: "external-evidence-self-test", command: "node", args: ["scripts/test-gate-b-external-evidence.mjs"] },
+  { id: "external-evidence", command: "pnpm", args: ["qa:gate-b:external"] },
   { id: "frozen-install", command: "pnpm", args: ["install", "--frozen-lockfile"] },
   { id: "clean-outputs", command: "pnpm", args: ["ci:assert-clean-outputs"] },
   { id: "format", command: "pnpm", args: ["format:check"] },
@@ -54,7 +55,6 @@ const checks = [
   { id: "browser-e2e", command: "pnpm", args: ["test:e2e"] },
   { id: "accessibility", command: "pnpm", args: ["test:a11y"] },
   { id: "visual", command: "pnpm", args: ["test:visual"] },
-  { id: "external-evidence", command: "pnpm", args: ["qa:gate-b:external"] },
   { id: "whitespace", command: "git", args: ["diff", "--check"] },
 ];
 
