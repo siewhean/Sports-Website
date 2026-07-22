@@ -74,9 +74,10 @@ test("completed setup is parsed and rendered as a truthful read-only review", as
   await page.goto(`/organiser/competitions/${encodeURIComponent(state.completedCompetitionId)}/setup`);
   await dismissConsent(page);
 
-  await expect(page.getByTestId("phase4-assisted-setup")).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: /read.?only/i })).toBeVisible();
-  const footerButtons = page.getByTestId("phase4-assisted-setup").locator("footer button");
+  const workspace = page.getByTestId("phase4-assisted-setup");
+  await expect(workspace).toBeVisible();
+  await expect(workspace.getByRole("status").filter({ hasText: /read.?only/i })).toBeVisible();
+  const footerButtons = workspace.locator("footer button");
   const footerButtonCount = await footerButtons.count();
   expect(footerButtonCount).toBeGreaterThan(0);
   for (let index = 0; index < footerButtonCount; index += 1) await expect(footerButtons.nth(index)).toBeDisabled();
@@ -95,7 +96,8 @@ test("completed setup is parsed and rendered as a truthful read-only review", as
   expect(sessionCookies[0]).toMatchObject({ httpOnly: true, sameSite: "Strict" });
 
   await page.reload();
-  await expect(page.getByTestId("phase4-assisted-setup")).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: /read.?only/i })).toBeVisible();
+  const reloadedWorkspace = page.getByTestId("phase4-assisted-setup");
+  await expect(reloadedWorkspace).toBeVisible();
+  await expect(reloadedWorkspace.getByRole("status").filter({ hasText: /read.?only/i })).toBeVisible();
   expect(failures).toEqual([]);
 });
