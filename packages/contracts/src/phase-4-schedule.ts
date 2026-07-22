@@ -257,6 +257,35 @@ export type ScheduleRevisionView = {
   updated_at: string;
 };
 
+/** Server-authored facts used to compare two immutable schedule revisions. */
+export type ScheduleRevisionComparison = {
+  competition_id: string;
+  left: ScheduleRevisionView & {
+    assignment_hash: string | null;
+    quality: ScheduleQuality | null;
+    assignments: readonly ScheduleAssignment[];
+  };
+  right: ScheduleRevisionView & {
+    assignment_hash: string | null;
+    quality: ScheduleQuality | null;
+    assignments: readonly ScheduleAssignment[];
+  };
+  changes: readonly {
+    match_id: string;
+    before: ScheduleAssignment | null;
+    after: ScheduleAssignment | null;
+  }[];
+  changed_match_count: number;
+  comparison: {
+    moved_match_ids: readonly string[];
+    moved_match_count: number;
+    scheduled_match_delta: number;
+    minimum_rest_minutes: { before: number | null; after: number | null; delta: number | null };
+    completion: { before_epoch_ms: number | null; after_epoch_ms: number | null; delta_minutes: number | null };
+    conflicts: { before: number; after: number; delta: number };
+  };
+};
+
 export type ScheduleValidation = {
   valid: boolean;
   violations: readonly ScheduleViolation[];

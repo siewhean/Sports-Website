@@ -3,9 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
-import { createDefaultFormatTemplates } from "@matchday/domain";
-import type { Phase4FormatBuilderDocument, ScheduleConstraints } from "@matchday/contracts";
+import { createDefaultFormatTemplates, generateConstraintAwareSchedule, type ScheduleProblem } from "@matchday/domain";
+import type { Phase4FormatBuilderDocument, ScheduleConstraints, ScheduleJobInput } from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
+import { DomainScheduleOptimizer } from "@matchday/scheduler";
 import postgres, { type Sql } from "postgres";
 import { DeterministicPhase4AiStub } from "../../src/phase-4-ai-provider.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
@@ -545,6 +546,171 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       explored_candidates: 1,
       progress_updated_at: expect.any(String),
     });
+    const persisted = required(
+      await client<{ input_hash: string; input_snapshot: ScheduleJobInput; revision: number; fence_token: string }[]>`
+        SELECT input_hash,input_snapshot,revision,fence_token
+        FROM schedule_generation_jobs WHERE id=${generated.job.id}`,
+    );
+    const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 1 });
+    let candidate: Awaited<ReturnType<typeof optimizer.verifyCandidate>> = null;
+    for await (const generatedCandidate of optimizer.optimize({
+      input: persisted.input_snapshot,
+      seed: null,
+      startIteration: 0,
+      signal: new AbortController().signal,
+      maxYieldIntervalMs: 5_000,
+    })) {
+      candidate = generatedCandidate.result;
+      break;
+    }
+    if (!candidate) throw new Error("Expected a valid deterministic schedule candidate");
+    await client`SELECT phase4_checkpoint_schedule_option(
+      ${generated.job.id},'api-progress-worker',${persisted.fence_token},${persisted.revision},${persisted.input_hash},0,
+      ${client.json(candidate.quality)},${client.json(candidate.assignments)},${client.json(candidate.violations)})`;
+    const checkpointed = await runtime.readScheduleJob({ accountId }, generated.job.id);
+    if (!checkpointed.current_best_option_id) throw new Error("Expected a current-best option");
+    const accepted = await runtime.acceptScheduleOption(
+      { accountId },
+      generated.job.id,
+      checkpointed.current_best_option_id,
+      { idempotency_key: randomUUID(), expected_job_revision: checkpointed.revision },
+      randomUUID(),
+    );
+    expect(accepted.status).toBe("ready_for_review");
+    const lockedAssignment = accepted.assignments[0]!;
+    await runtime.lockScheduleAssignment(
+      { accountId },
+      accepted.id,
+      {
+        idempotency_key: randomUUID(),
+        match_id: lockedAssignment.match_id,
+        playing_area_id: lockedAssignment.area_id,
+        start_epoch_ms: lockedAssignment.start_epoch_ms,
+        end_epoch_ms: lockedAssignment.end_epoch_ms,
+      },
+      randomUUID(),
+    );
+    const buildScheduleProblem = runtime as unknown as {
+      buildScheduleProblem(
+        tx: PostgresJsSql,
+        access: {
+          id: string;
+          organisation_id: string;
+          sport_code: string;
+          status: string;
+          timezone: string;
+          capacity_revision: number;
+          revision: number;
+        },
+        objective: "balanced",
+        constraints: ScheduleConstraints,
+      ): Promise<{ problem: ScheduleProblem }>;
+    };
+    const accessRow = required(
+      await client<
+        {
+          id: string;
+          organisation_id: string;
+          sport_code: string;
+          status: string;
+          timezone: string;
+          capacity_revision: number;
+          revision: number;
+        }[]
+      >`SELECT id,organisation_id,sport_code,status,timezone,capacity_revision,revision FROM competitions WHERE id=${competitionId}`,
+    );
+    const access = { ...accessRow, capacity_revision: Number(accessRow.capacity_revision) };
+    const lockedProblem = await buildScheduleProblem.buildScheduleProblem(
+      client as unknown as PostgresJsSql,
+      access,
+      "balanced",
+      constraints,
+    );
+    expect(
+      lockedProblem.problem.matches.find((match) => match.id === lockedAssignment.match_id)?.fixedAssignment,
+    ).toEqual(expect.objectContaining({ reason: "locked", areaId: lockedAssignment.area_id }));
+    expect(
+      generateConstraintAwareSchedule(lockedProblem.problem).find(
+        (assignment) => assignment.matchId === lockedAssignment.match_id,
+      ),
+    ).toMatchObject({
+      areaId: lockedAssignment.area_id,
+      startEpochMs: lockedAssignment.start_epoch_ms,
+      endEpochMs: lockedAssignment.end_epoch_ms,
+    });
+
+    const occupiedSlots = new Set(accepted.assignments.map((assignment) => assignment.slot_id));
+    const movable = accepted.assignments.at(-1)!;
+    let validTarget: ScheduleJobInput["slots"][number] | null = null;
+    for (const slot of persisted.input_snapshot.slots) {
+      if (occupiedSlots.has(slot.slot_id)) continue;
+      const preview = await runtime.validateScheduleMove({ accountId }, accepted.id, {
+        match_id: movable.match_id,
+        playing_area_id: slot.area_id,
+        slot_id: slot.slot_id,
+        start_epoch_ms: slot.start_epoch_ms,
+        end_epoch_ms: slot.end_epoch_ms,
+      });
+      if (preview.validation.valid) {
+        validTarget = slot;
+        break;
+      }
+    }
+    if (!validTarget) throw new Error("Expected a valid local repair target");
+    const repaired = await runtime.moveScheduleMatch(
+      { accountId },
+      accepted.id,
+      {
+        idempotency_key: randomUUID(),
+        expected_revision: accepted.revision,
+        match_id: movable.match_id,
+        playing_area_id: validTarget.area_id,
+        slot_id: validTarget.slot_id,
+        start_epoch_ms: validTarget.start_epoch_ms,
+        end_epoch_ms: validTarget.end_epoch_ms,
+      },
+      randomUUID(),
+    );
+    expect(repaired.parent_revision_id).toBe(accepted.id);
+    const acceptedByMatch = new Map(accepted.assignments.map((assignment) => [assignment.match_id, assignment]));
+    for (const assignment of repaired.assignments) {
+      if (assignment.match_id === movable.match_id) continue;
+      expect(assignment).toEqual(acceptedByMatch.get(assignment.match_id));
+    }
+    const comparison = await runtime.compareScheduleRevisions({ accountId }, accepted.id, repaired.id);
+    expect(comparison.comparison).toMatchObject({
+      moved_match_ids: [movable.match_id],
+      moved_match_count: 1,
+      scheduled_match_delta: 0,
+      conflicts: { before: 0, after: 0, delta: 0 },
+    });
+    await expect(
+      client`UPDATE scheduled_matches SET starts_at=starts_at+interval '5 minutes'
+        WHERE schedule_revision_id=${accepted.id} AND match_id=${movable.match_id}`,
+    ).rejects.toThrow(/immutable/);
+    await expect(
+      client`DELETE FROM schedule_revision_formats WHERE schedule_revision_id=${accepted.id}`,
+    ).rejects.toThrow(/format provenance is immutable/);
+    await expect(
+      client`UPDATE schedule_revision_formats SET competition_id=competition_id
+        WHERE schedule_revision_id=${accepted.id}`,
+    ).rejects.toThrow(/format provenance is immutable/);
+    await runtime.unlockScheduleAssignment(
+      { accountId },
+      accepted.id,
+      lockedAssignment.match_id,
+      randomUUID(),
+      randomUUID(),
+    );
+    const unlockedProblem = await buildScheduleProblem.buildScheduleProblem(
+      client as unknown as PostgresJsSql,
+      access,
+      "balanced",
+      constraints,
+    );
+    expect(
+      unlockedProblem.problem.matches.find((match) => match.id === lockedAssignment.match_id)?.fixedAssignment,
+    ).toBeUndefined();
     const assertCurrent = runtime as unknown as {
       assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string): Promise<void>;
     };

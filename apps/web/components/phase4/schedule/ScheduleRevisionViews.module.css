@@ -264,6 +264,51 @@
   grid-column: 2;
 }
 
+.changeMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 1rem 0;
+}
+
+.changeMetrics > div {
+  border-left: 1px solid var(--line);
+  padding: 0 0.85rem;
+}
+
+.changeMetrics > div:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.changeMetrics dt {
+  color: var(--muted);
+  font-size: 0.67rem;
+}
+
+.changeMetrics dd {
+  display: grid;
+  grid-template-columns: auto 0.8rem auto;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0.35rem 0 0;
+  font:
+    620 0.74rem/1.3 var(--font-geist-mono),
+    monospace;
+}
+
+.changeMetrics dd svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.changeMetrics dd strong {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
 .comparison li {
   display: grid;
   grid-template-columns: minmax(7rem, 0.5fr) repeat(2, minmax(12rem, 1fr));
@@ -419,6 +464,16 @@
 
   .compareQuality > div:nth-child(3) strong {
     grid-column: auto;
+  }
+
+  .changeMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem 0;
+  }
+
+  .changeMetrics > div:nth-child(3) {
+    border-left: 0;
+    padding-left: 0;
   }
 
   .comparison li {

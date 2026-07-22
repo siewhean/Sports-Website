@@ -14,6 +14,7 @@ import {
   phase4ScheduleCopy,
   type ScheduleDocument,
   type ScheduleRevision,
+  type ScheduleRevisionComparison as RevisionComparison,
 } from "@/lib/phase4-schedule";
 import styles from "./ScheduleRevisionViews.module.css";
 
@@ -162,14 +163,12 @@ export function ScheduleRevisionDetail({
 
 export function ScheduleRevisionComparison({
   document,
-  left,
-  right,
+  comparison,
 }: {
   document: ScheduleDocument;
-  left: ScheduleRevision | null;
-  right: ScheduleRevision | null;
+  comparison: RevisionComparison | null;
 }) {
-  if (!left || !right)
+  if (!comparison)
     return (
       <section className={styles.empty}>
         <ArrowsLeftRight />
@@ -180,12 +179,9 @@ export function ScheduleRevisionComparison({
         </Link>
       </section>
     );
+  const { left, right } = comparison;
   const leftByMatch = new Map(left.assignments.map((assignment) => [assignment.matchId, assignment]));
   const rightByMatch = new Map(right.assignments.map((assignment) => [assignment.matchId, assignment]));
-  const ids = [...new Set([...leftByMatch.keys(), ...rightByMatch.keys()])];
-  const changed = ids.filter(
-    (id) => JSON.stringify(leftByMatch.get(id) ?? null) !== JSON.stringify(rightByMatch.get(id) ?? null),
-  );
   return (
     <section className={styles.comparison} data-testid="phase4-schedule-comparison">
       <header>
@@ -193,15 +189,41 @@ export function ScheduleRevisionComparison({
           <p>{phase4ScheduleCopy.immutableDiff}</p>
           <h2>{interpolate(phase4ScheduleCopy.revisionDiffTitle, { left: left.revision, right: right.revision })}</h2>
         </div>
-        <strong>{interpolate(phase4ScheduleCopy.changedMatches, { count: changed.length })}</strong>
+        <strong>{interpolate(phase4ScheduleCopy.changedMatches, { count: comparison.changedMatchIds.length })}</strong>
       </header>
       <div className={styles.compareQuality}>
         <Quality revision={left} />
         <ArrowsLeftRight />
         <Quality revision={right} />
       </div>
+      <dl className={styles.changeMetrics} aria-label={phase4ScheduleCopy.immutableDiff}>
+        <ComparisonMetric
+          label={phase4ScheduleCopy.movedMatchCount}
+          before={String(0)}
+          after={String(comparison.movedMatchIds.length)}
+          delta={signed(comparison.movedMatchIds.length)}
+        />
+        <ComparisonMetric
+          label={phase4ScheduleCopy.restChange}
+          before={minutes(comparison.minimumRestMinutes.before)}
+          after={minutes(comparison.minimumRestMinutes.after)}
+          delta={minuteDelta(comparison.minimumRestMinutes.delta)}
+        />
+        <ComparisonMetric
+          label={phase4ScheduleCopy.completionChange}
+          before={instantLabel(comparison.completion.beforeEpochMs, document.timeZone)}
+          after={instantLabel(comparison.completion.afterEpochMs, document.timeZone)}
+          delta={minuteDelta(comparison.completion.deltaMinutes)}
+        />
+        <ComparisonMetric
+          label={phase4ScheduleCopy.conflictChange}
+          before={String(comparison.conflicts.before)}
+          after={String(comparison.conflicts.after)}
+          delta={signed(comparison.conflicts.delta)}
+        />
+      </dl>
       <ol>
-        {changed.map((id) => {
+        {comparison.changedMatchIds.map((id) => {
           const match = document.matches.find((item) => item.id === id);
           return (
             <li key={id}>
@@ -215,7 +237,7 @@ export function ScheduleRevisionComparison({
           );
         })}
       </ol>
-      {!changed.length ? (
+      {!comparison.changedMatchIds.length ? (
         <div className={styles.noChange}>
           <CalendarBlank />
           {phase4ScheduleCopy.identical}
@@ -223,6 +245,52 @@ export function ScheduleRevisionComparison({
       ) : null}
     </section>
   );
+}
+
+function ComparisonMetric({
+  label,
+  before,
+  after,
+  delta,
+}: {
+  label: string;
+  before: string;
+  after: string;
+  delta: string;
+}) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>
+        <span>{before}</span>
+        <ArrowsLeftRight aria-hidden="true" />
+        <span>{after}</span>
+        <strong>{delta}</strong>
+      </dd>
+    </div>
+  );
+}
+
+function signed(value: number): string {
+  return value === 0 ? phase4ScheduleCopy.noMetricChange : `${value > 0 ? "+" : ""}${value}`;
+}
+
+function minutes(value: number | null): string {
+  return value === null ? "—" : `${value} min`;
+}
+
+function minuteDelta(value: number | null): string {
+  return value === null
+    ? "—"
+    : value === 0
+      ? phase4ScheduleCopy.noMetricChange
+      : interpolate(phase4ScheduleCopy.minutesDelta, { delta: `${value > 0 ? "+" : ""}${value}` });
+}
+
+function instantLabel(value: number | null, timeZone: string): string {
+  if (value === null) return "—";
+  const instant = new Date(value).toISOString();
+  return `${formatScheduleDay(instant, timeZone)} · ${formatScheduleTime(instant, timeZone)}`;
 }
 
 function Quality({ revision }: { revision: ScheduleRevision }) {

@@ -3,7 +3,7 @@ import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { ScheduleRevisionComparison } from "@/components/phase4/schedule/ScheduleRevisionViews";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
-import { getScheduleDocument, getScheduleRevisionDetail } from "@/lib/phase4-schedule.server";
+import { getScheduleDocument, getScheduleRevisionComparison } from "@/lib/phase4-schedule.server";
 
 export default async function ScheduleComparePage({
   params,
@@ -26,10 +26,7 @@ export default async function ScheduleComparePage({
   });
   const leftId = query.left ?? document.revisions[1]?.id;
   const rightId = query.right ?? document.revisions[0]?.id;
-  const [left, right] = await Promise.all([
-    leftId ? getScheduleRevisionDetail(document, leftId) : null,
-    rightId ? getScheduleRevisionDetail(document, rightId) : null,
-  ]);
+  const comparison = leftId && rightId ? await getScheduleRevisionComparison(document, leftId, rightId) : null;
   return (
     <OrganiserWorkspace
       competition={result.competition}
@@ -40,7 +37,7 @@ export default async function ScheduleComparePage({
       pageEyebrow={phase4ScheduleCopy.immutableDiff}
       syncLabel={phase4ScheduleCopy.saved}
       syncState={phase4ScheduleMachine.saved}
-      sectionContent={<ScheduleRevisionComparison document={document} left={left} right={right} />}
+      sectionContent={<ScheduleRevisionComparison document={document} comparison={comparison} />}
     />
   );
 }

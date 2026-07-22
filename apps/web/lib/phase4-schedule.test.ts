@@ -7,6 +7,7 @@ import {
   parseScheduleJobEnvelope,
   parseScheduleJobView,
   parseScheduleOptionView,
+  parseScheduleRevisionComparison,
   parseScheduleRevisionView,
   selectComparableScheduleOptions,
   scheduleConflictForMatch,
@@ -101,6 +102,58 @@ describe("phase 4 schedule boundary parsers", () => {
         true,
       )?.assignments,
     ).toHaveLength(1);
+  });
+
+  it("accepts only exact server-authored revision comparison metrics", () => {
+    const left = { ...revision, assignment_hash: "c".repeat(64), quality, assignments: [assignment] };
+    const moved = {
+      ...assignment,
+      area_id: "area-2",
+      slot_id: "slot-2",
+      start_epoch_ms: assignment.start_epoch_ms + 1_800_000,
+      end_epoch_ms: assignment.end_epoch_ms + 1_800_000,
+    };
+    const right = {
+      ...left,
+      id: "revision-2",
+      revision: 5,
+      parent_revision_id: "revision-1",
+      quality: { ...quality, minimum_rest_minutes: 45, makespan_minutes: 630, required_violation_count: 1 },
+      assignments: [moved],
+    };
+    const payload = {
+      competition_id: "competition-1",
+      left,
+      right,
+      changes: [{ match_id: "match-1", before: assignment, after: moved }],
+      changed_match_count: 1,
+      comparison: {
+        moved_match_ids: ["match-1"],
+        moved_match_count: 1,
+        scheduled_match_delta: 0,
+        minimum_rest_minutes: { before: 60, after: 45, delta: -15 },
+        completion: {
+          before_epoch_ms: assignment.end_epoch_ms,
+          after_epoch_ms: moved.end_epoch_ms,
+          delta_minutes: 30,
+        },
+        conflicts: { before: 0, after: 1, delta: 1 },
+      },
+    };
+    expect(parseScheduleRevisionComparison(payload)).toMatchObject({
+      changedMatchIds: ["match-1"],
+      movedMatchIds: ["match-1"],
+      minimumRestMinutes: { delta: -15 },
+      completion: { deltaMinutes: 30 },
+      conflicts: { delta: 1 },
+    });
+    expect(
+      parseScheduleRevisionComparison({
+        ...payload,
+        comparison: { ...payload.comparison, conflicts: { before: 0, after: 1, delta: 0 } },
+      }),
+    ).toBeNull();
+    expect(parseScheduleRevisionComparison({ ...payload, invented: true })).toBeNull();
   });
 
   it("rejects unknown fields and malformed nested data instead of trusting the response", () => {

@@ -213,6 +213,17 @@ export type ScheduleRevision = Readonly<{
   violations: readonly ScheduleViolation[];
 }>;
 
+export type ScheduleRevisionComparison = Readonly<{
+  left: ScheduleRevision;
+  right: ScheduleRevision;
+  changedMatchIds: readonly string[];
+  movedMatchIds: readonly string[];
+  scheduledMatchDelta: number;
+  minimumRestMinutes: Readonly<{ before: number | null; after: number | null; delta: number | null }>;
+  completion: Readonly<{ beforeEpochMs: number | null; afterEpochMs: number | null; deltaMinutes: number | null }>;
+  conflicts: Readonly<{ before: number; after: number; delta: number }>;
+}>;
+
 export type ScheduleDocument = Readonly<{
   state: ScheduleSurfaceState;
   competitionId: string;
@@ -782,6 +793,95 @@ export function parseScheduleRevisionView(
     quality,
     assignments,
     violations: [],
+  };
+}
+
+export function parseScheduleRevisionComparison(value: unknown): ScheduleRevisionComparison | null {
+  const item = record(value);
+  if (
+    !item ||
+    !exact(item, ["competition_id", "left", "right", "changes", "changed_match_count", "comparison"]) ||
+    !nonEmpty(item.competition_id) ||
+    !Array.isArray(item.changes) ||
+    !integer(item.changed_match_count) ||
+    item.changed_match_count !== item.changes.length
+  )
+    return null;
+  const leftWire = record(item.left);
+  const rightWire = record(item.right);
+  if (
+    !leftWire ||
+    !rightWire ||
+    leftWire.competition_id !== item.competition_id ||
+    rightWire.competition_id !== item.competition_id
+  )
+    return null;
+  const left = parseScheduleRevisionView(item.left, true);
+  const right = parseScheduleRevisionView(item.right, true);
+  if (!left || !right) return null;
+  const changedMatchIds: string[] = [];
+  for (const value of item.changes) {
+    const change = record(value);
+    if (!change || !exact(change, ["match_id", "before", "after"]) || !nonEmpty(change.match_id)) return null;
+    changedMatchIds.push(change.match_id);
+  }
+  const comparison = record(item.comparison);
+  const rest = comparison ? record(comparison.minimum_rest_minutes) : null;
+  const completion = comparison ? record(comparison.completion) : null;
+  const conflicts = comparison ? record(comparison.conflicts) : null;
+  if (
+    !comparison ||
+    !exact(comparison, [
+      "moved_match_ids",
+      "moved_match_count",
+      "scheduled_match_delta",
+      "minimum_rest_minutes",
+      "completion",
+      "conflicts",
+    ]) ||
+    !Array.isArray(comparison.moved_match_ids) ||
+    !comparison.moved_match_ids.every(nonEmpty) ||
+    !integer(comparison.moved_match_count) ||
+    comparison.moved_match_count !== comparison.moved_match_ids.length ||
+    !Number.isSafeInteger(comparison.scheduled_match_delta) ||
+    !rest ||
+    !exact(rest, ["before", "after", "delta"]) ||
+    ![rest.before, rest.after, rest.delta].every((metric) => metric === null || Number.isFinite(metric)) ||
+    !completion ||
+    !exact(completion, ["before_epoch_ms", "after_epoch_ms", "delta_minutes"]) ||
+    ![completion.before_epoch_ms, completion.after_epoch_ms, completion.delta_minutes].every(
+      (metric) => metric === null || Number.isFinite(metric),
+    ) ||
+    !conflicts ||
+    !exact(conflicts, ["before", "after", "delta"]) ||
+    !integer(conflicts.before) ||
+    !integer(conflicts.after) ||
+    !Number.isSafeInteger(conflicts.delta)
+  )
+    return null;
+  if (
+    conflicts.delta !== (conflicts.after as number) - (conflicts.before as number) ||
+    (rest.before !== null && rest.after !== null && rest.delta !== (rest.after as number) - (rest.before as number)) ||
+    (completion.before_epoch_ms !== null &&
+      completion.after_epoch_ms !== null &&
+      completion.delta_minutes !==
+        ((completion.after_epoch_ms as number) - (completion.before_epoch_ms as number)) / 60_000) ||
+    (comparison.moved_match_ids as string[]).some((id) => !changedMatchIds.includes(id))
+  )
+    return null;
+  return {
+    left,
+    right,
+    changedMatchIds,
+    movedMatchIds: comparison.moved_match_ids as string[],
+    scheduledMatchDelta: comparison.scheduled_match_delta as number,
+    minimumRestMinutes: rest as ScheduleRevisionComparison["minimumRestMinutes"],
+    completion: {
+      beforeEpochMs: completion.before_epoch_ms as number | null,
+      afterEpochMs: completion.after_epoch_ms as number | null,
+      deltaMinutes: completion.delta_minutes as number | null,
+    },
+    conflicts: conflicts as ScheduleRevisionComparison["conflicts"],
   };
 }
 

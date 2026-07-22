@@ -34,6 +34,24 @@ test("schedule swaps the compressed timeline for a semantic phone list", async (
   ).toBeLessThanOrEqual(1);
 });
 
+test("immutable revision comparison names movement, rest, completion and conflict deltas", async ({ page }) => {
+  await page.goto(
+    "/organiser/competitions/singapore-open/schedule/compare?left=70000000-0000-4000-8000-000000000003&right=70000000-0000-4000-8000-000000000004",
+  );
+  await dismissConsent(page);
+  const comparison = page.getByTestId("phase4-schedule-comparison");
+  await expect(comparison).toBeVisible();
+  await expect(comparison.getByText("Moved matches", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("Minimum rest change", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("Completion change", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("Required conflicts", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("+15 min", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("+30 min", { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
+});
+
 test("phone organiser selects a match, day, available area and valid time before confirming", async ({
   page,
 }, testInfo) => {

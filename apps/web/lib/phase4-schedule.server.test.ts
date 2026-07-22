@@ -7,7 +7,11 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-import { getScheduleDocument } from "./phase4-schedule.server";
+import {
+  getScheduleDocument,
+  getScheduleRevisionComparison,
+  scheduleUnavailableDocument,
+} from "./phase4-schedule.server";
 
 const originalApiBase = process.env.MATCHDAY_API_BASE_URL;
 const originalDataMode = process.env.MATCHDAY_PHASE2_DATA_MODE;
@@ -174,5 +178,82 @@ describe("production schedule alternative loading", () => {
       ["balanced", "balanced-valid", 7],
       ["rest_focused", "rest-valid", 7],
     ]);
+  });
+
+  it("loads strict server-authored schedule comparison facts through the authenticated BFF", async () => {
+    const assignment = {
+      match_id: "match-1",
+      division_id: "division-1",
+      area_id: "area-1",
+      interval_id: "interval-1",
+      slot_id: "slot-1",
+      start_epoch_ms: 1_787_010_000_000,
+      end_epoch_ms: 1_787_011_800_000,
+      fixed: false,
+    };
+    const revision = (id: string, number: number, value: typeof assignment) => ({
+      id,
+      competition_id: "competition-1",
+      revision: number,
+      parent_revision_id: number === 1 ? null : "revision-1",
+      source_job_id: "job-1",
+      source_option_id: "option-1",
+      status: "ready_for_review",
+      assignment_hash: "c".repeat(64),
+      quality: quality("balanced"),
+      assignments: [value],
+      editable_until: "2026-08-19T04:22:00.000Z",
+      published_at: null,
+      expired_at: null,
+      created_at: "2026-07-20T04:22:00.000Z",
+      updated_at: "2026-07-20T04:24:00.000Z",
+    });
+    const moved = {
+      ...assignment,
+      slot_id: "slot-2",
+      start_epoch_ms: assignment.start_epoch_ms + 1_800_000,
+      end_epoch_ms: assignment.end_epoch_ms + 1_800_000,
+    };
+    const payload = {
+      competition_id: "competition-1",
+      left: revision("revision-1", 1, assignment),
+      right: revision("revision-2", 2, moved),
+      changes: [{ match_id: "match-1", before: assignment, after: moved }],
+      changed_match_count: 1,
+      comparison: {
+        moved_match_ids: ["match-1"],
+        moved_match_count: 1,
+        scheduled_match_delta: 0,
+        minimum_rest_minutes: { before: 60, after: 60, delta: 0 },
+        completion: {
+          before_epoch_ms: assignment.end_epoch_ms,
+          after_epoch_ms: moved.end_epoch_ms,
+          delta_minutes: 30,
+        },
+        conflicts: { before: 0, after: 0, delta: 0 },
+      },
+    };
+    const fetchMock = vi.fn(async (request: URL | RequestInfo) => {
+      expect(String(request)).toContain("/api/v1/schedule-revisions/revision-1/compare/revision-2");
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const document = scheduleUnavailableDocument(
+      {
+        competitionId: "competition-1",
+        competitionName: "Open",
+        timeZone: "Asia/Singapore",
+        publicationRevision: "0",
+      },
+      "error",
+    );
+    await expect(getScheduleRevisionComparison(document, "revision-1", "revision-2")).resolves.toMatchObject({
+      movedMatchIds: ["match-1"],
+      completion: { deltaMinutes: 30 },
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

@@ -24,6 +24,7 @@ import type {
   ScheduleJobView,
   ScheduleObjective,
   ScheduleOptionView,
+  ScheduleQuality,
   ScheduleRevisionView,
 } from "@matchday/contracts";
 import {
@@ -415,7 +416,7 @@ export class Phase4Runtime {
     await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended('phase4-schedule:'||$1,0))`, [competitionId]);
   }
 
-  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string): Promise<void> {
+  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string, includeLockSnapshot = true): Promise<void> {
     const current = (
       await tx.unsafe<{ current: boolean }>(
         `SELECT (
@@ -447,7 +448,7 @@ export class Phase4Runtime {
                 ) possible_ids
               ),'[]'::jsonb)
           )
-          AND COALESCE((
+          AND (NOT $2::boolean OR COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
               'match_id',l.match_id::text,
               'area_id',l.playing_area_id::text,
@@ -464,10 +465,10 @@ export class Phase4Runtime {
             ) ORDER BY item->>'match_id')
             FROM jsonb_array_elements(j.input_snapshot->'matches') item
             WHERE item ? 'fixed_assignment'
-          ),'[]'::jsonb)
+          ),'[]'::jsonb))
         ) current
         FROM schedule_generation_jobs j JOIN competitions c ON c.id=j.competition_id WHERE j.id=$1`,
-        [jobId],
+        [jobId, includeLockSnapshot],
       )
     )[0]?.current;
     if (!current)
@@ -2404,7 +2405,7 @@ export class Phase4Runtime {
       result_revision: row.result_revision,
       solver_iteration: row.solver_iteration,
       result_status: row.result_status,
-      quality: decoded(row.quality),
+      quality: decoded<ScheduleQuality>(row.quality),
       assignments: decoded(row.assignments),
       violations: decoded(row.violations),
       assignment_hash: row.assignment_hash,
@@ -2881,7 +2882,7 @@ export class Phase4Runtime {
     return {
       ...this.revisionView(row),
       assignment_hash: row.assignment_hash,
-      quality: decoded(row.quality),
+      quality: decoded<ScheduleQuality | null>(row.quality),
       assignments: assignments.map((assignment) => ({
         match_id: assignment.match_id,
         division_id: assignment.division_id,
@@ -2995,7 +2996,53 @@ export class Phase4Runtime {
       const after = rightByMatch.get(matchId) ?? null;
       return JSON.stringify(before) === JSON.stringify(after) ? [] : [{ match_id: matchId, before, after }];
     });
-    return { competition_id: left.competition_id, left, right, changes, changed_match_count: changes.length };
+    const movedMatchIds = changes
+      .filter(({ before, after }) =>
+        Boolean(
+          before &&
+          after &&
+          (before.area_id !== after.area_id ||
+            before.start_epoch_ms !== after.start_epoch_ms ||
+            before.end_epoch_ms !== after.end_epoch_ms),
+        ),
+      )
+      .map(({ match_id }) => match_id);
+    const completion = (assignments: typeof left.assignments) =>
+      assignments.length ? Math.max(...assignments.map((assignment) => assignment.end_epoch_ms)) : null;
+    const leftCompletion = completion(left.assignments);
+    const rightCompletion = completion(right.assignments);
+    const leftRest = left.quality?.minimum_rest_minutes ?? null;
+    const rightRest = right.quality?.minimum_rest_minutes ?? null;
+    const leftConflicts = left.quality?.required_violation_count ?? 0;
+    const rightConflicts = right.quality?.required_violation_count ?? 0;
+    return {
+      competition_id: left.competition_id,
+      left,
+      right,
+      changes,
+      changed_match_count: changes.length,
+      comparison: {
+        moved_match_ids: movedMatchIds,
+        moved_match_count: movedMatchIds.length,
+        scheduled_match_delta: right.assignments.length - left.assignments.length,
+        minimum_rest_minutes: {
+          before: leftRest,
+          after: rightRest,
+          delta: leftRest === null || rightRest === null ? null : rightRest - leftRest,
+        },
+        completion: {
+          before_epoch_ms: leftCompletion,
+          after_epoch_ms: rightCompletion,
+          delta_minutes:
+            leftCompletion === null || rightCompletion === null ? null : (rightCompletion - leftCompletion) / 60_000,
+        },
+        conflicts: {
+          before: leftConflicts,
+          after: rightConflicts,
+          delta: rightConflicts - leftConflicts,
+        },
+      },
+    };
   }
 
   private problemFromSnapshot(snapshotValue: JsonObject | string): ScheduleProblem {
@@ -3116,7 +3163,10 @@ export class Phase4Runtime {
       "SCHEDULE_JOB_NOT_FOUND",
       "Schedule source job not found",
     );
-    await this.assertScheduleJobCurrent(tx, revision.source_job_id);
+    // Locks are a deliberate overlay added after an accepted source job. A
+    // local append-only move must still fence capacity, entries and formats,
+    // but should not become stale merely because another match was locked.
+    await this.assertScheduleJobCurrent(tx, revision.source_job_id, false);
     const problem = this.problemFromSnapshot(job.input_snapshot);
     const slot = problem.slots.find(
       (candidate) =>

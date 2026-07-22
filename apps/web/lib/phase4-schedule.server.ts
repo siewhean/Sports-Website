@@ -7,6 +7,7 @@ import {
   phase4ScheduleCopy,
   parseScheduleJobView,
   parseScheduleRevisionView,
+  parseScheduleRevisionComparison,
   selectComparableScheduleOptions,
   surfaceStateFromStatus,
   type QualityComponent,
@@ -14,6 +15,7 @@ import {
   type ScheduleObjective,
   type ScheduleOption,
   type ScheduleRevision,
+  type ScheduleRevisionComparison,
   type ScheduleSurfaceState,
 } from "@/lib/phase4-schedule";
 
@@ -389,6 +391,67 @@ export async function getScheduleRevisionDetail(
   }
 }
 
+export async function getScheduleRevisionComparison(
+  document: ScheduleDocument,
+  leftId: string,
+  rightId: string,
+): Promise<ScheduleRevisionComparison | null> {
+  const local = () => {
+    const left = document.revisions.find((revision) => revision.id === leftId) ?? null;
+    const right = document.revisions.find((revision) => revision.id === rightId) ?? null;
+    if (!left || !right) return null;
+    const leftByMatch = new Map(left.assignments.map((assignment) => [assignment.matchId, assignment]));
+    const rightByMatch = new Map(right.assignments.map((assignment) => [assignment.matchId, assignment]));
+    const changedMatchIds = [...new Set([...leftByMatch.keys(), ...rightByMatch.keys()])].filter(
+      (id) => JSON.stringify(leftByMatch.get(id) ?? null) !== JSON.stringify(rightByMatch.get(id) ?? null),
+    );
+    const movedMatchIds = changedMatchIds.filter((id) => leftByMatch.has(id) && rightByMatch.has(id));
+    const finish = (revision: ScheduleRevision) =>
+      revision.assignments.length
+        ? Math.max(...revision.assignments.map((assignment) => Date.parse(assignment.endsAt)))
+        : null;
+    const beforeFinish = finish(left);
+    const afterFinish = finish(right);
+    const beforeRest = left.quality?.minimumRestMinutes ?? null;
+    const afterRest = right.quality?.minimumRestMinutes ?? null;
+    const beforeConflicts = left.quality?.requiredViolationCount ?? 0;
+    const afterConflicts = right.quality?.requiredViolationCount ?? 0;
+    return {
+      left,
+      right,
+      changedMatchIds,
+      movedMatchIds,
+      scheduledMatchDelta: right.assignments.length - left.assignments.length,
+      minimumRestMinutes: {
+        before: beforeRest,
+        after: afterRest,
+        delta: beforeRest === null || afterRest === null ? null : afterRest - beforeRest,
+      },
+      completion: {
+        beforeEpochMs: beforeFinish,
+        afterEpochMs: afterFinish,
+        deltaMinutes: beforeFinish === null || afterFinish === null ? null : (afterFinish - beforeFinish) / 60_000,
+      },
+      conflicts: { before: beforeConflicts, after: afterConflicts, delta: afterConflicts - beforeConflicts },
+    } satisfies ScheduleRevisionComparison;
+  };
+  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") return local();
+  const base = apiBaseUrl();
+  if (!base) return null;
+  const cookie = await sessionCookieHeader(base);
+  if (!cookie) return null;
+  try {
+    const response = await fetch(
+      new URL(`/api/v1/schedule-revisions/${encodeURIComponent(leftId)}/compare/${encodeURIComponent(rightId)}`, base),
+      { cache: "no-store", headers: { accept: "application/json", cookie } },
+    );
+    if (!response.ok) return null;
+    return parseScheduleRevisionComparison(await response.json());
+  } catch {
+    return null;
+  }
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -742,6 +805,15 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     assignments,
     violations: [],
   };
+  const priorAssignments = assignments.map((assignment, index) =>
+    index === assignments.length - 1
+      ? {
+          ...assignment,
+          startsAt: new Date(Date.parse(assignment.startsAt) - 30 * 60_000).toISOString(),
+          endsAt: new Date(Date.parse(assignment.endsAt) - 30 * 60_000).toISOString(),
+        }
+      : assignment,
+  );
   return {
     state,
     competitionId: input.competitionId,
@@ -782,6 +854,8 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
         editableUntil: null,
         publishedAt: "2026-07-18T06:00:00.000Z",
         parentRevisionId: null,
+        quality: quality("balanced", 570, 45, 86),
+        assignments: priorAssignments,
       },
     ],
     alternatives,

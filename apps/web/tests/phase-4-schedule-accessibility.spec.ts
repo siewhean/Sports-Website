@@ -76,3 +76,15 @@ test("move flow has no serious or critical accessibility violations", async ({ p
     });
   expect(contrastRatio(stepNumberColors.foreground, stepNumberColors.background)).toBeGreaterThanOrEqual(4.5);
 });
+
+test("revision comparison has no serious or critical accessibility violations", async ({ page }) => {
+  await page.goto(
+    "/organiser/competitions/singapore-open/schedule/compare?left=70000000-0000-4000-8000-000000000003&right=70000000-0000-4000-8000-000000000004",
+  );
+  await dismissConsent(page);
+  await expect(page.getByTestId("phase4-schedule-comparison")).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
+  ).toEqual([]);
+});
