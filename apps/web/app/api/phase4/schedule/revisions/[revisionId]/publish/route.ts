@@ -3,6 +3,12 @@ import { NextResponse } from "next/server";
 import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "@/lib/phase3-settings-command.server";
 import { parseScheduleRevisionView, phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
 
+function validPublication(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const { schedule_version: scheduleVersion, ...revision } = value as Record<string, unknown>;
+  return Number.isSafeInteger(scheduleVersion) && Number(scheduleVersion) >= 1 && parseScheduleRevisionView(revision, true, true) !== null;
+}
+
 export async function POST(request: NextRequest, { params }: { params: Promise<{ revisionId: string }> }) {
   const { revisionId } = await params;
   const body = await jsonBody(request);
@@ -20,6 +26,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     method: phase4ScheduleMachine.post,
     path: `/api/v1/schedule-revisions/${encodeURIComponent(revisionId)}/publish`,
     body,
-    validate: (value) => parseScheduleRevisionView(value, true, true) !== null,
+    validate: validPublication,
   });
 }
