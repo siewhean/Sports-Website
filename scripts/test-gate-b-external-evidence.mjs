@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -11,6 +11,11 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const root = process.cwd();
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+const migrations = (await readdir(path.join(root, "packages/database/migrations")))
+  .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+  .sort();
+const latestMigration = migrations.at(-1);
+if (!latestMigration) throw new Error("Expected at least one migration for the external evidence self-test");
 const collectedAt = new Date().toISOString();
 const reviewerA = "a".repeat(64);
 const reviewerB = "b".repeat(64);
@@ -68,7 +73,7 @@ function bundle() {
       restored_row_count: 42,
       source_fingerprint: fingerprint,
       restored_fingerprint: fingerprint,
-      migration_head: "0030_phase4_idempotent_format_publication.sql",
+      migration_head: latestMigration,
       rpo_minutes: 5,
       rto_minutes: 12,
       receipt_id: "restore-receipt",
@@ -150,6 +155,7 @@ try {
   assert.match(valid.stdout, /verdict: PASS/i);
   const summary = JSON.parse(await readFile(path.join(validSummary, "summary.json"), "utf8"));
   assert.equal(summary.verdict, "PASS");
+  assert.equal(summary.migration_head, latestMigration);
   assert.equal(summary.evidence.length, 5);
 
   const wrongCommitDirectory = path.join(temporary, "wrong-commit");
@@ -167,6 +173,14 @@ try {
   const rejectedSecret = await run(secretDirectory, path.join(temporary, "secret-summary"));
   assert.notEqual(rejectedSecret.exitCode, 0);
   assert.match(rejectedSecret.stderr, /secret-bearing fields are forbidden|unexpected or missing fields/i);
+
+  const futureDirectory = path.join(temporary, "future");
+  const future = bundle();
+  future["cdn.json"].purge.purged_at = new Date(Date.now() + 60 * 60_000).toISOString();
+  await writeBundle(futureDirectory, future);
+  const rejectedFuture = await run(futureDirectory, path.join(temporary, "future-summary"));
+  assert.notEqual(rejectedFuture.exitCode, 0);
+  assert.match(rejectedFuture.stderr, /unexpectedly in the future|cannot be later than evidence collection/i);
 
   process.stdout.write("Gate B external evidence self-test passed.\n");
 } finally {
