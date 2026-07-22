@@ -6,6 +6,8 @@
 
 **Validated source commit:** `b2306e6dfc9d44c8d53bf756c00b1530202188e0`
 
+**Merged pull request:** `#3` — `aa841806192fdaa5418b22fac44ab6e9eb268a38`
+
 **Runtime:** Node `24.18.0`, pnpm `10.33.0`
 
 ## Real aggregate journey
