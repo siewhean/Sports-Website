@@ -1,6 +1,6 @@
 -- A caller must not publish an older review-ready schedule while a newer
--- editable revision exists. The organiser UI normally targets the latest
--- revision, but publication truth must also be enforced in PostgreSQL.
+-- active or published revision exists. The organiser UI normally targets the
+-- latest revision, but publication truth must also be enforced in PostgreSQL.
 
 CREATE FUNCTION phase4_require_latest_schedule_publication() RETURNS trigger AS $$
 BEGIN
@@ -9,9 +9,9 @@ BEGIN
     FROM schedule_revisions newer
     WHERE newer.competition_id=OLD.competition_id
       AND newer.revision>OLD.revision
-      AND newer.status IN ('draft','ready_for_review')
+      AND newer.status IN ('draft','ready_for_review','published')
   ) THEN
-    RAISE EXCEPTION 'schedule revision conflict: only the latest editable revision may be published';
+    RAISE EXCEPTION 'schedule revision conflict: only the latest active revision may be published';
   END IF;
   RETURN NEW;
 END;
