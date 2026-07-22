@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { Phase4FormatDraftView, Phase4SetupDocument } from "@matchday/contracts";
+import type {
+  Phase4FormatDraftView,
+  Phase4SetupDocument,
+  Phase4SetupRecommendation,
+  Phase4SetupRecommendationSelection,
+} from "@matchday/contracts";
 import { createDefaultFormatTemplates } from "@matchday/domain";
 import {
+  canonicalRecommendationSelection,
   correctFormatDraftMetrics,
   normalizeSetupAutosaveResponse,
   readOnlySetupDocument,
@@ -53,6 +59,49 @@ function completedSetup(status: "completed" | "expired" = "completed"): Phase4Se
     created_at: now,
     updated_at: now,
     completed_at: now,
+  };
+}
+
+function recommendation(
+  id: string,
+  capacityStatus: Phase4SetupRecommendation["capacity_status"] = "fits",
+): Phase4SetupRecommendation {
+  return {
+    id,
+    format_revision_id: null,
+    format_definition_hash: "a".repeat(64),
+    name: id,
+    structure: "One division",
+    advantage: "Canonical advantage",
+    match_count: 16,
+    minimum_matches_per_entry: 3,
+    guaranteed_matches: 3,
+    ranking_coverage: "podium",
+    available_match_slots: 20,
+    division_formats: [
+      {
+        division_id: "00000000-0000-4000-8000-000000000004",
+        candidate_division_id: "00000000-0000-4000-8000-000000000005",
+        format_revision_id: null,
+        format_definition_hash: "a".repeat(64),
+        match_count: 16,
+        guaranteed_matches: 3,
+        ranking_coverage: "podium",
+      },
+    ],
+    capacity_status: capacityStatus,
+    scheduling_status: "feasible",
+    warning_codes: capacityStatus === "requires_changes" ? ["capacity_shortfall"] : [],
+  };
+}
+
+function selection(): Phase4SetupRecommendationSelection {
+  return {
+    recommendations: [recommendation("balanced")],
+    requires_changes: recommendation("extended", "requires_changes"),
+    selected_recommendation_id: null,
+    acknowledged_capacity_shortfall: false,
+    recommendation_set_hash: "b".repeat(64),
   };
 }
 
@@ -117,5 +166,44 @@ describe("Reliable Gate B response contracts", () => {
       guaranteed_matches: 3,
       maximum_matches: 5,
     });
+  });
+
+  it("rebuilds selection from canonical evidence instead of trusting client fields", () => {
+    const current = selection();
+    const tampered: Phase4SetupRecommendationSelection = {
+      ...current,
+      recommendations: [
+        {
+          ...current.recommendations[0]!,
+          name: "Forged name",
+          guaranteed_matches: 99,
+          warning_codes: [],
+        },
+      ],
+      selected_recommendation_id: "balanced",
+    };
+    expect(canonicalRecommendationSelection(current, tampered)).toEqual({
+      ...current,
+      selected_recommendation_id: "balanced",
+      acknowledged_capacity_shortfall: false,
+    });
+  });
+
+  it("requires an explicit acknowledgement for a capacity-shortfall option", () => {
+    const current = selection();
+    expect(() =>
+      canonicalRecommendationSelection(current, {
+        ...current,
+        selected_recommendation_id: "extended",
+        acknowledged_capacity_shortfall: false,
+      }),
+    ).toThrow(/Acknowledge the capacity shortfall/i);
+    expect(
+      canonicalRecommendationSelection(current, {
+        ...current,
+        selected_recommendation_id: "extended",
+        acknowledged_capacity_shortfall: true,
+      }),
+    ).toMatchObject({ selected_recommendation_id: "extended", acknowledged_capacity_shortfall: true });
   });
 });
