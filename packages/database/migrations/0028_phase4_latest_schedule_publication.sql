@@ -1,6 +1,6 @@
--- A caller must not publish an older review-ready schedule while a newer
--- active or published revision exists. The organiser UI normally targets the
--- latest revision, but publication truth must also be enforced in PostgreSQL.
+-- Organisers may deliberately publish a stable review-ready revision while a
+-- newer repair remains private, then publish that repair later. Prevent only a
+-- true rollback over a newer revision that is already public.
 
 CREATE FUNCTION phase4_require_latest_schedule_publication() RETURNS trigger AS $$
 BEGIN
@@ -9,9 +9,9 @@ BEGIN
     FROM schedule_revisions newer
     WHERE newer.competition_id=OLD.competition_id
       AND newer.revision>OLD.revision
-      AND newer.status IN ('draft','ready_for_review','published')
+      AND newer.status='published'
   ) THEN
-    RAISE EXCEPTION 'schedule revision conflict: only the latest active revision may be published';
+    RAISE EXCEPTION 'schedule revision conflict: cannot replace a newer published revision with an older revision';
   END IF;
   RETURN NEW;
 END;
