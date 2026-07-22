@@ -13,9 +13,11 @@ import { parseScheduleRevisionView, type ScheduleOption } from "./phase4-schedul
 
 type Fetcher = typeof fetch;
 
-type AcceptedScheduleWire = Readonly<{
+type ScheduleRevisionWire = Readonly<{
   id: string;
   assignmentHash: string;
+  sourceJobId: string;
+  sourceOptionId: string;
 }>;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -24,27 +26,37 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function acceptedSchedule(value: unknown): AcceptedScheduleWire | null {
+function scheduleWire(value: unknown, expectedStatus: "ready_for_review" | "published"): ScheduleRevisionWire | null {
   const parsed = parseScheduleRevisionView(value, true, true);
   const wire = record(value);
   if (
     !parsed ||
-    parsed.status !== "ready_for_review" ||
+    parsed.status !== expectedStatus ||
     !wire ||
     typeof wire.assignment_hash !== "string" ||
-    !/^[0-9a-f]{64}$/u.test(wire.assignment_hash)
+    !/^[0-9a-f]{64}$/u.test(wire.assignment_hash) ||
+    typeof wire.source_job_id !== "string" ||
+    typeof wire.source_option_id !== "string"
   )
     return null;
-  return { id: parsed.id, assignmentHash: wire.assignment_hash };
+  return {
+    id: parsed.id,
+    assignmentHash: wire.assignment_hash,
+    sourceJobId: wire.source_job_id,
+    sourceOptionId: wire.source_option_id,
+  };
 }
 
-function publishedScheduleId(value: unknown): string | null {
+function acceptedSchedule(value: unknown): ScheduleRevisionWire | null {
+  return scheduleWire(value, "ready_for_review");
+}
+
+function publishedSchedule(value: unknown): ScheduleRevisionWire | null {
   const wire = record(value);
   if (!wire) return null;
   const { schedule_version: scheduleVersion, ...revision } = wire;
   if (!Number.isSafeInteger(scheduleVersion) || Number(scheduleVersion) < 1) return null;
-  const parsed = parseScheduleRevisionView(revision, true, true);
-  return parsed?.status === "published" ? parsed.id : null;
+  return scheduleWire(revision, "published");
 }
 
 async function responseJson(response: Response): Promise<unknown> {
@@ -129,6 +141,13 @@ export async function syncAcceptedScheduleWithSetup(
 ): Promise<Phase4SetupDocument> {
   const accepted = acceptedSchedule(input.response);
   if (!accepted) throw new Error("The accepted schedule response is invalid");
+  if (
+    accepted.sourceJobId !== input.option.jobId ||
+    accepted.sourceOptionId !== input.option.id ||
+    accepted.assignmentHash !== input.option.assignmentHash
+  ) {
+    throw new Error("The accepted schedule does not match the selected solver option");
+  }
   const document = await resumeSetup(input.competitionId, fetcher);
   const selected = selectedRecommendation(document);
   const current = document.values.schedule_review;
@@ -156,15 +175,20 @@ export async function syncPublishedScheduleWithSetup(
   input: Readonly<{ competitionId: string; response: unknown }>,
   fetcher: Fetcher = fetch,
 ): Promise<Phase4SetupDocument> {
-  const revisionId = publishedScheduleId(input.response);
-  if (!revisionId) throw new Error("The published schedule response is invalid");
+  const published = publishedSchedule(input.response);
+  if (!published) throw new Error("The published schedule response is invalid");
   const document = await resumeSetup(input.competitionId, fetcher);
   const schedule = document.values.schedule_review;
-  if (!schedule || schedule.schedule_revision_id !== revisionId) {
+  if (
+    !schedule ||
+    schedule.schedule_revision_id !== published.id ||
+    schedule.schedule_job_id !== published.sourceJobId ||
+    schedule.selected_result_hash !== published.assignmentHash
+  ) {
     throw new Error("The published revision does not match Assisted Setup schedule evidence");
   }
   const current = document.values.review_publish;
-  if (current?.publication_status === "published" && current.published_schedule_revision_id === revisionId) {
+  if (current?.publication_status === "published" && current.published_schedule_revision_id === published.id) {
     return document;
   }
   const review: Phase4SetupReviewSelection = {
@@ -174,7 +198,7 @@ export async function syncPublishedScheduleWithSetup(
     settings_references: schedule.settings_references,
     acknowledged_warning_codes: [],
     publication_status: "published",
-    published_schedule_revision_id: revisionId,
+    published_schedule_revision_id: published.id,
   };
   return saveStep(input.competitionId, document, "review_publish", review, fetcher);
 }
