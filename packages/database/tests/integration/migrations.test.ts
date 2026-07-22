@@ -59,7 +59,7 @@ describe("foundation migrations", () => {
             FROM pg_depend dependency
             WHERE dependency.classid = 'pg_proc'::regclass
               AND dependency.refclassid = 'pg_proc'::regclass
-              AND dependency.objid = to_regprocedure(${`${schema}.phase4_sha256_json(jsonb)`})
+              AND dependency.objid = to_regprocedure(${`${schema}.phase4_sha256_jsonb(jsonb)`})
               AND dependency.refobjid = to_regprocedure(${`${schema}.phase3_canonical_jsonb(jsonb)`})
           ) AS "shaDependsOnCanonical"
       `;
@@ -111,7 +111,7 @@ describe("foundation migrations", () => {
         "0026_phase4_schedule_resume_hash_domains.sql",
         "0027_phase4_publish_selected_formats.sql",
         "0028_phase4_latest_schedule_publication.sql",
-        "0029_phase4_repaired_schedule_provenance.sql",
+        "0030_phase4_idempotent_format_publication.sql",
       ] as const;
       const deferredMigrations = await Promise.all(
         deferredMigrationNames.map(async (name) => ({
