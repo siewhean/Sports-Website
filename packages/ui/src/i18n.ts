@@ -181,6 +181,7 @@ export const messages = {
     draftRemainsSelected: "Draft {revision} remains selected",
     validSchedule: "Valid schedule",
     earlyLateBalance: "Early/late balance",
+    movement: "Moved matches",
     unassigned: "Unassigned",
     allScheduled: "All matches have a valid slot.",
     teams: "Teams",

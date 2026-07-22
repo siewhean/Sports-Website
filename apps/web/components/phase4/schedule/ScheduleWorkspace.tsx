@@ -57,8 +57,13 @@ const activeStatuses = new Set<ScheduleJobStatus>([
   phase4ScheduleMachine.cancelling,
 ]);
 
+function withRetainedAlternative(current: readonly ScheduleOption[], option: ScheduleOption): ScheduleOption[] {
+  return [...current.filter((candidate) => candidate.objective !== option.objective), option];
+}
+
 export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) {
   const [job, setJob] = useState(document.activeJob);
+  const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
   const [selectedMatchId, setSelectedMatchId] = useState(
     document.currentRevision?.assignments[0]?.matchId ?? document.matches[0]?.id ?? null,
@@ -72,10 +77,10 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   const currentOption = job?.currentBest ?? null;
   const options = useMemo(() => {
     const byObjective = new Map<ScheduleObjective, ScheduleOption>();
-    for (const option of document.alternatives) byObjective.set(option.objective, option);
+    for (const option of retainedAlternatives) byObjective.set(option.objective, option);
     if (currentOption) byObjective.set(currentOption.objective, currentOption);
     return [...byObjective.values()];
-  }, [currentOption, document.alternatives]);
+  }, [currentOption, retainedAlternatives]);
   const expired = document.currentRevision?.status === "expired";
   const disabled = !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
@@ -100,6 +105,8 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
           setCommandError(phase4ScheduleCopy.malformed);
           return;
         }
+        if (parsed.currentBest)
+          setRetainedAlternatives((current) => withRetainedAlternative(current, parsed.currentBest!));
         setJob(parsed);
         if (!activeStatuses.has(parsed.status)) setMessage(jobStatusMessage(parsed));
       } catch {
@@ -145,6 +152,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   }
 
   async function generate() {
+    if (job?.currentBest) setRetainedAlternatives((current) => withRetainedAlternative(current, job.currentBest!));
     await command(
       phase4ScheduleMachine.generateAction,
       `/api/phase4/competitions/${encodeURIComponent(document.competitionId)}/schedule/jobs`,
@@ -202,12 +210,16 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   }
 
   async function acceptOption(option: ScheduleOption) {
+    if (option.jobRevision === null) {
+      setCommandError(phase4ScheduleCopy.malformed);
+      return;
+    }
     await command(
       phase4ScheduleMachine.acceptAction,
       `/api/phase4/schedule/jobs/${encodeURIComponent(option.jobId)}/options/${encodeURIComponent(option.id)}/accept`,
       {
         idempotency_key: createIdempotencyKey(phase4ScheduleMachine.acceptKey),
-        expected_job_revision: job?.revision ?? option.resultRevision,
+        expected_job_revision: option.jobRevision,
       },
       () => {
         setMessage(phase4ScheduleCopy.optionSaved);
@@ -361,6 +373,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         onContinue={continueOptimising}
         onCancel={cancelJob}
         onAccept={acceptOption}
+        objective={objective}
       />
     </div>
   );
@@ -416,10 +429,7 @@ function OptionComparison({
           <article key={option.id}>
             <div>
               <h3>{objectiveLabel(option.objective)}</h3>
-              <p>
-                {option.quality.components.find((component) => component.weight > 0)?.explanation ??
-                  phase4ScheduleCopy.validSchedule}
-              </p>
+              <p>{objectiveExplanation(option)}</p>
             </div>
             <dl>
               <div>
@@ -433,8 +443,11 @@ function OptionComparison({
                 </dd>
               </div>
               <div>
-                <dt>{phase4ScheduleCopy.earlyLateBalance}</dt>
-                <dd>{qualityMetric(option, phase4ScheduleMachine.timeBalance)}</dd>
+                <dt>{phase4ScheduleCopy.movement}</dt>
+                <dd>
+                  {qualityMetric(option, phase4ScheduleMachine.schedulePreservation)}
+                  <small>{qualityExplanation(option, phase4ScheduleMachine.schedulePreservation)}</small>
+                </dd>
               </div>
               <div>
                 <dt>{phase4ScheduleCopy.unassigned}</dt>
@@ -451,9 +464,26 @@ function OptionComparison({
   );
 }
 
+function objectiveExplanation(option: ScheduleOption): string {
+  const key =
+    option.objective === phase4ScheduleMachine.fastest
+      ? phase4ScheduleMachine.completionQuality
+      : option.objective === phase4ScheduleMachine.restFocused
+        ? phase4ScheduleMachine.restQuality
+        : phase4ScheduleMachine.dailyBalanceQuality;
+  return (
+    option.quality.components.find((component) => component.key === key)?.explanation ??
+    phase4ScheduleCopy.validSchedule
+  );
+}
+
 function qualityMetric(option: ScheduleOption, key: string): string {
   const component = option.quality.components.find((item) => item.key === key);
   return component ? `${component.measured}${component.unit === "percent" ? "%" : ` ${component.unit}`}` : "—";
+}
+
+function qualityExplanation(option: ScheduleOption, key: string): string {
+  return option.quality.components.find((item) => item.key === key)?.explanation ?? phase4ScheduleCopy.validSchedule;
 }
 
 function UnscheduledTray({
@@ -708,6 +738,7 @@ function JobRail({
   onContinue,
   onCancel,
   onAccept,
+  objective,
 }: {
   job: ScheduleJob | null;
   disabled: boolean;
@@ -716,6 +747,7 @@ function JobRail({
   onContinue: () => Promise<void>;
   onCancel: () => Promise<void>;
   onAccept: (option: ScheduleOption) => Promise<void>;
+  objective: ScheduleObjective;
 }) {
   if (!job)
     return (
@@ -763,6 +795,12 @@ function JobRail({
           <button type="button" disabled={disabled || busy !== null} onClick={() => void onContinue()}>
             <ArrowsClockwise />
             {phase4ScheduleCopy.continue}
+          </button>
+        ) : null}
+        {!active ? (
+          <button type="button" disabled={disabled || busy !== null} onClick={() => void onGenerate()}>
+            <Play />
+            {interpolate(phase4ScheduleCopy.generateObjective, { objective: objectiveLabel(objective) })}
           </button>
         ) : null}
         {active ? (

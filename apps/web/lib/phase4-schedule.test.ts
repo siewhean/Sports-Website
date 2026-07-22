@@ -7,6 +7,7 @@ import {
   parseScheduleJobView,
   parseScheduleOptionView,
   parseScheduleRevisionView,
+  selectComparableScheduleOptions,
 } from "./phase4-schedule";
 
 const quality = {
@@ -103,6 +104,12 @@ describe("phase 4 schedule boundary parsers", () => {
     expect(parseScheduleOptionView({ ...option, invented: true })).toBeNull();
     expect(parseScheduleJobView({ ...job, revision: 0 })).toBeNull();
     expect(
+      parseScheduleJobView({
+        ...job,
+        current_best: { ...option, job_id: "different-job" },
+      }),
+    ).toBeNull();
+    expect(
       parseScheduleRevisionView(
         {
           ...revision,
@@ -116,6 +123,47 @@ describe("phase 4 schedule boundary parsers", () => {
     expect(
       parseScheduleJobEnvelope({ job, enqueued: true, recoverable: true, idempotent_replay: false, extra: true }),
     ).toBeNull();
+  });
+
+  it("retains one latest valid comparable option per objective after jobs complete", () => {
+    const parsed = parseScheduleJobView(job)!;
+    const scheduleJob = (
+      objective: "fastest" | "balanced" | "rest_focused",
+      id: string,
+      updatedAt: string,
+      sourceRevision = 4,
+      capacityRevision = 2,
+    ) => ({
+      ...parsed,
+      id,
+      objective,
+      sourceRevision,
+      capacityRevision,
+      updatedAt,
+      currentBest: {
+        ...parsed.currentBest!,
+        id: `option-${id}`,
+        jobId: id,
+        objective,
+        quality: { ...parsed.currentBest!.quality, objective },
+      },
+    });
+    const selected = selectComparableScheduleOptions(
+      [
+        scheduleJob("balanced", "balanced-old", "2026-07-20T04:20:00.000Z"),
+        scheduleJob("rest_focused", "rest-current", "2026-07-20T04:24:00.000Z"),
+        scheduleJob("fastest", "fast-stale", "2026-07-20T04:25:00.000Z", 3),
+        scheduleJob("balanced", "balanced-new", "2026-07-20T04:23:00.000Z"),
+        scheduleJob("fastest", "fast-current", "2026-07-20T04:22:00.000Z"),
+      ],
+      4,
+      2,
+    );
+    expect(selected.map((candidate) => [candidate.objective, candidate.jobId])).toEqual([
+      ["fastest", "fast-current"],
+      ["balanced", "balanced-new"],
+      ["rest_focused", "rest-current"],
+    ]);
   });
 
   it("validates move consequences and lock mutation responses exactly", () => {

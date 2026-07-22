@@ -6,8 +6,8 @@ import { cookieHostMatches } from "@/lib/phase2-organiser";
 import {
   phase4ScheduleCopy,
   parseScheduleJobView,
-  parseScheduleOptionView,
   parseScheduleRevisionView,
+  selectComparableScheduleOptions,
   surfaceStateFromStatus,
   type QualityComponent,
   type ScheduleDocument,
@@ -103,18 +103,18 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
     const payload: unknown = await response.json();
     const parsed = parseScheduleWorkspace(payload, input);
     if (!parsed) return scheduleUnavailableDocument(input, "error");
-    if (!parsed.activeJob) return parsed;
-    const optionsResponse = await fetch(
-      new URL(`/api/v1/schedule-jobs/${encodeURIComponent(parsed.activeJob.id)}/options`, base),
+    const jobsResponse = await fetch(
+      new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/schedule-jobs`, base),
       { cache: "no-store", headers: { accept: "application/json", cookie } },
     );
-    if (!optionsResponse.ok) return parsed;
-    const optionsPayload: unknown = await optionsResponse.json();
-    if (!Array.isArray(optionsPayload)) return parsed;
-    const alternatives = optionsPayload.map(parseScheduleOptionView);
-    return alternatives.some((option) => !option)
-      ? parsed
-      : { ...parsed, alternatives: alternatives as ScheduleOption[] };
+    if (!jobsResponse.ok) return parsed;
+    const jobsPayload: unknown = await jobsResponse.json();
+    if (!Array.isArray(jobsPayload)) return parsed;
+    const jobs = jobsPayload
+      .map((job) => parseScheduleJobView(job))
+      .filter((job): job is NonNullable<typeof job> => job !== null);
+    const comparable = selectComparableScheduleOptions(jobs, parsed.sourceRevision, parsed.capacityRevision);
+    return { ...parsed, alternatives: comparable };
   } catch {
     return scheduleUnavailableDocument(input, "offline");
   }
@@ -627,9 +627,9 @@ function quality(
       key: "schedule_preservation",
       score: 100,
       weight: 0,
-      measured: 100,
-      unit: "percent",
-      explanation: "No published assignment is changed.",
+      measured: 0,
+      unit: "matches",
+      explanation: "0 of 8 existing assignments move; total start-time shift is 0 minutes with 0 playing-area changes.",
     },
     {
       key: "entry_availability",
@@ -708,6 +708,7 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
   ): ScheduleOption => ({
     id: `50000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
     jobId: "60000000-0000-4000-8000-000000000001",
+    jobRevision: 5,
     resultRevision: index + 1,
     objective,
     quality: quality(objective, duration, rest, score),
@@ -749,6 +750,8 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     activeJob: {
       id: alternatives[1]!.jobId,
       revision: 5,
+      sourceRevision: 4,
+      capacityRevision: 2,
       status: "completed",
       objective: "balanced",
       currentBest: alternatives[1]!,

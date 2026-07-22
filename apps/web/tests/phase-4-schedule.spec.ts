@@ -10,6 +10,13 @@ test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo))
 
 test("schedule exposes measurable alternatives, timeline, inspector and explicit publication", async ({ page }) => {
   let published = false;
+  let acceptedFastest = false;
+  await page.route("**/api/phase4/schedule/jobs/*/options/*/accept", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    expect(body.expected_job_revision).toBe(5);
+    acceptedFastest = true;
+    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
   await page.route(`**/api/phase4/schedule/revisions/${revisionId}/publish`, async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
     expect(body.expected_revision).toBe(4);
@@ -24,6 +31,13 @@ test("schedule exposes measurable alternatives, timeline, inspector and explicit
   await expect(page.getByRole("heading", { name: "Fastest" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Balanced" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Rest-focused" })).toBeVisible();
+  await expect(page.getByText("Moved matches").first()).toBeVisible();
+  await expect(page.getByText(/existing assignments move/).first()).toBeVisible();
+  const acceptedReload = page.waitForEvent("framenavigated", (frame) => frame === page.mainFrame());
+  await page.getByRole("button", { name: "Use Fastest" }).click();
+  await expect.poll(() => acceptedFastest).toBe(true);
+  await acceptedReload;
+  await expect(page.getByTestId("phase4-schedule")).toBeVisible();
   await expect(page.getByText(/13 candidates explored\./)).toBeVisible();
   await expect(page.getByRole("region", { name: "Schedule by playing area and time" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "M1" })).toBeVisible();

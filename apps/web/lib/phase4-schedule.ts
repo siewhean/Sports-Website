@@ -38,6 +38,10 @@ export const phase4ScheduleMachine = {
   balanced: "balanced",
   restFocused: "rest_focused",
   timeBalance: "time_balance",
+  schedulePreservation: "schedule_preservation",
+  completionQuality: "completion",
+  restQuality: "rest",
+  dailyBalanceQuality: "daily_balance",
   neutral: "neutral",
   locale: "en-CA",
   numeric: "numeric",
@@ -123,6 +127,7 @@ export type ScheduleViolation = Readonly<{
 export type ScheduleOption = Readonly<{
   id: string;
   jobId: string;
+  jobRevision: number | null;
   resultRevision: number;
   objective: ScheduleObjective;
   quality: ScheduleQuality;
@@ -135,6 +140,8 @@ export type ScheduleOption = Readonly<{
 export type ScheduleJob = Readonly<{
   id: string;
   revision: number;
+  sourceRevision: number;
+  capacityRevision: number;
   status: ScheduleJobStatus;
   objective: ScheduleObjective;
   currentBest: ScheduleOption | null;
@@ -258,6 +265,35 @@ export function objectiveLabel(objective: ScheduleObjective): string {
     : objective === "fastest"
       ? phase4ScheduleCopy.fastest
       : phase4ScheduleCopy.balanced;
+}
+
+/** Keep one latest, valid, comparable current-best option per objective. */
+export function selectComparableScheduleOptions(
+  jobs: readonly ScheduleJob[],
+  sourceRevision: number,
+  capacityRevision: number,
+): ScheduleOption[] {
+  const latest = [...jobs].sort(
+    (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id),
+  );
+  const byObjective = new Map<ScheduleObjective, ScheduleOption>();
+  for (const job of latest) {
+    const option = job.currentBest;
+    if (
+      byObjective.has(job.objective) ||
+      job.sourceRevision !== sourceRevision ||
+      job.capacityRevision !== capacityRevision ||
+      !option ||
+      !option.quality.valid ||
+      option.objective !== job.objective ||
+      option.violations.some((violation) => violation.severity !== "preferred")
+    )
+      continue;
+    byObjective.set(job.objective, { ...option, jobRevision: job.revision });
+  }
+  return ([phase4ScheduleMachine.fastest, phase4ScheduleMachine.balanced, phase4ScheduleMachine.restFocused] as const)
+    .map((objective) => byObjective.get(objective))
+    .filter((option): option is ScheduleOption => option !== undefined);
 }
 
 export function formatDuration(minutes: number): string {
@@ -537,6 +573,7 @@ export function parseScheduleOptionView(value: unknown): ScheduleOption | null {
   return {
     id: item.id,
     jobId: item.job_id,
+    jobRevision: null,
     resultRevision: item.result_revision,
     objective: quality.objective,
     quality,
@@ -600,13 +637,22 @@ export function parseScheduleJobView(value: unknown, allowReplay = false): Sched
   )
     return null;
   const currentBest = item.current_best === null ? null : parseScheduleOptionView(item.current_best);
-  if (item.current_best !== null && !currentBest) return null;
+  if (
+    item.current_best !== null &&
+    (!currentBest ||
+      currentBest.jobId !== item.id ||
+      currentBest.objective !== item.objective ||
+      currentBest.id !== item.current_best_option_id)
+  )
+    return null;
   return {
     id: item.id,
     revision: item.revision,
+    sourceRevision: item.source_revision,
+    capacityRevision: item.capacity_revision,
     status: item.status as ScheduleJobStatus,
     objective: item.objective as ScheduleObjective,
-    currentBest,
+    currentBest: currentBest ? { ...currentBest, jobRevision: item.revision } : null,
     progressIteration: item.progress_iteration,
     exploredCandidates: item.explored_candidates,
     progressUpdatedAt: item.progress_updated_at,

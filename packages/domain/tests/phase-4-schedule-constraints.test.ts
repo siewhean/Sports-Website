@@ -464,6 +464,53 @@ describe("Phase 4 objectives, quality, and worker boundary", () => {
     expect(fastQuality.score).toBeGreaterThan(slowQuality.score);
   });
 
+  it("reports actual movement facts instead of the configured baseline size", () => {
+    const matches = [simpleMatch("one", ["a", "b"]), simpleMatch("two", ["c", "d"])] as const;
+    const available = slots(4, 2);
+    const scheduled = [assignment(matches[0], available[0]!), assignment(matches[1], available[3]!)];
+    const input = problem(
+      matches,
+      available,
+      constraints({
+        preserveExistingSchedule: setting("preferred", {
+          maximumShiftMinutes: 0,
+          byMatchId: {
+            one: { areaId: scheduled[0]!.areaId, startEpochMs: scheduled[0]!.startEpochMs },
+            two: { areaId: "area-1", startEpochMs: scheduled[1]!.startEpochMs - 30 * MINUTE_MS },
+          },
+        }),
+      }),
+    );
+    const movement = evaluateScheduleQuality(input, scheduled).components.find(
+      (component) => component.key === "schedule_preservation",
+    )!;
+    expect(movement.measured).toBe(1);
+    expect(movement.unit).toBe("matches");
+    expect(movement.explanation).toBe(
+      "1 of 2 existing assignments move; total start-time shift is 30 minutes with 1 playing-area change.",
+    );
+  });
+
+  it.each(["fastest", "balanced", "rest_focused"] as const)(
+    "%s candidates never cross a hard or required constraint boundary",
+    (objective) => {
+      const matches = [simpleMatch("one", ["a", "b"]), simpleMatch("two", ["a", "c"])] as const;
+      const input = problem(
+        matches,
+        slots(8, 1, 60),
+        constraints({ minimumRest: setting("required", { minutes: 30 }) }),
+        objective,
+      );
+      const candidates = generateScheduleCandidates(input, { maxIterations: 64 });
+      expect(candidates.length).toBeGreaterThan(0);
+      for (const candidate of candidates) {
+        const validation = validateSchedule(input, candidate.assignments);
+        expect(validation.valid).toBe(true);
+        expect(validation.violations.some((violation) => violation.severity !== "preferred")).toBe(false);
+      }
+    },
+  );
+
   it("offers bounded resumable candidate iterations and validates a seed checkpoint", () => {
     const input = problem([simpleMatch("one", ["a", "b"]), simpleMatch("two", ["a", "c"])], slots(8, 1, 60));
     const first = generateScheduleCandidates(input, { startIteration: 0, maxIterations: 4 });
