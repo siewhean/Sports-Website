@@ -12,6 +12,7 @@ export function redactGateBEvidence(value, secrets = []) {
   for (const secret of [...secrets].sort((left, right) => right.length - left.length)) {
     if (secret.length >= 6) redacted = redacted.split(secret).join("[REDACTED]");
   }
+  redacted = redacted.replace(/(\bBearer\s+)([^\s,;]+)/gi, "$1[REDACTED]");
   return redacted.replace(
     /((?:secret|token|password|credential|cookie|private[_-]?key|api[_-]?key|bearer)[A-Za-z0-9_.-]*\s*[=:]\s*)([^\s,;]+)/gi,
     "$1[REDACTED]",
