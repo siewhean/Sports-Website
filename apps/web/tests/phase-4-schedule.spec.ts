@@ -5,12 +5,12 @@ const scheduleUrl = "/organiser/competitions/singapore-open/schedule";
 const competitionId = "singapore-open";
 const revisionId = "70000000-0000-4000-8000-000000000004";
 const matchId = "30000000-0000-4000-8000-000000000001";
-const jobId = "80000000-0000-4000-8000-000000000001";
-const optionId = "80000000-0000-4000-8000-000000000002";
+const jobId = "60000000-0000-4000-8000-000000000001";
+const optionId = "50000000-0000-4000-8000-000000000001";
 const formatId = "43e3501f-df87-466c-b2a7-ded47ae92ee5";
 const candidateId = "balanced-groups";
 const divisionId = "4a1cae2b-1ef7-4fb0-b323-7046077f7a80";
-const hash = "a".repeat(64);
+const hash = "1".repeat(64);
 const now = "2026-07-20T06:18:00.000Z";
 
 function setupDocument(
