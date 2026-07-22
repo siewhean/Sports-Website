@@ -127,7 +127,8 @@ test("unselected canonical recommendations survive authenticated resume and relo
   expect(failures).toEqual([]);
 });
 
-test("accepted schedule survives resume, lock overlay, and organiser publication", async ({ page }) => {
+test("accepted schedule survives resume, lock overlay, and organiser publication", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Mutating fixture is isolated to one browser project");
   const state = await readState();
   const failures = trackFailedApplicationResponses(page);
   await page.goto(`/organiser/competitions/${encodeURIComponent(state.acceptedCompetitionId)}/setup`);
