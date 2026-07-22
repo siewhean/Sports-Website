@@ -1,10 +1,12 @@
 import type {
+  Phase4FormatDraftView,
   Phase4SetupAutosaveRequest,
   Phase4SetupAutosaveResponse,
   Phase4SetupDocument,
   Phase4SetupPatchRequest,
   Phase4SetupPatchResponse,
 } from "@matchday/contracts";
+import { calculateFormatMetrics, type FormatGraph } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
@@ -29,12 +31,34 @@ function first<T>(rows: readonly T[], code: string, message: string): T {
   return row;
 }
 
-function readOnlyDocument(document: Phase4SetupDocument): Phase4SetupDocument {
+export function readOnlySetupDocument(document: Phase4SetupDocument): Phase4SetupDocument {
   return {
     ...document,
     permission: "read",
     read_only: true,
-    autosave: { ...document.autosave, status: "read_only" },
+    autosave: {
+      ...document.autosave,
+      status: document.status === "expired" ? "expired" : "read_only",
+    },
+  };
+}
+
+export function normalizeSetupAutosaveResponse(response: Phase4SetupAutosaveResponse): Phase4SetupAutosaveResponse {
+  if (response.outcome === "conflict") {
+    return response.current.read_only ? { ...response, current: readOnlySetupDocument(response.current) } : response;
+  }
+  return response.document.read_only ? { ...response, document: readOnlySetupDocument(response.document) } : response;
+}
+
+export function correctFormatDraftMetrics(draft: Phase4FormatDraftView): Phase4FormatDraftView {
+  const metrics = calculateFormatMetrics(draft.document.graph as FormatGraph);
+  return {
+    ...draft,
+    metrics: {
+      match_count: metrics.matchCount,
+      guaranteed_matches: metrics.guaranteedMatches,
+      maximum_matches: metrics.maximumMatches,
+    },
   };
 }
 
@@ -85,7 +109,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   ): Promise<Phase4SetupAutosaveResponse> {
     if (request.transition.kind === "save_step" && request.transition.step.step_id === "basics")
       await this.assertSetupWrite(actor, competitionId);
-    return super.autosaveSetupDraft(actor, competitionId, request, requestId);
+    return normalizeSetupAutosaveResponse(await super.autosaveSetupDraft(actor, competitionId, request, requestId));
   }
 
   override async patchSetupDraft(
@@ -96,6 +120,22 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   ): Promise<Phase4SetupPatchResponse> {
     await this.assertSetupWrite(actor, competitionId);
     return super.patchSetupDraft(actor, competitionId, request, requestId);
+  }
+
+  override async readFormatBuilder(...args: Parameters<GateBPhase4Runtime["readFormatBuilder"]>) {
+    const workspace = await super.readFormatBuilder(...args);
+    return {
+      ...workspace,
+      draft: workspace.draft ? correctFormatDraftMetrics(workspace.draft) : null,
+    };
+  }
+
+  override async saveFormatRevision(...args: Parameters<GateBPhase4Runtime["saveFormatRevision"]>) {
+    return correctFormatDraftMetrics(await super.saveFormatRevision(...args));
+  }
+
+  override async applyFormatTemplate(...args: Parameters<GateBPhase4Runtime["applyFormatTemplate"]>) {
+    return correctFormatDraftMetrics(await super.applyFormatTemplate(...args));
   }
 
   async resumeSetupDraft(
@@ -120,7 +160,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           "SETUP_DRAFT_NOT_FOUND",
           "Setup draft not found",
         );
-        return readOnlyDocument(phase4SetupDocumentFromStorage(row));
+        return readOnlySetupDocument(phase4SetupDocumentFromStorage(row));
       }
       if (access.status === "archived")
         throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
@@ -152,6 +192,6 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
       "Setup draft not found",
     );
     const document = phase4SetupDocumentFromStorage(row);
-    return access.membership_role === "viewer" ? readOnlyDocument(document) : document;
+    return access.membership_role === "viewer" ? readOnlySetupDocument(document) : document;
   }
 }
