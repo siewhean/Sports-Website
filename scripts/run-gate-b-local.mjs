@@ -18,6 +18,7 @@ const continueAfterFailure = process.argv.includes("--continue-after-failure");
 
 const checks = [
   { id: "runner-self-test", command: "node", args: ["scripts/test-gate-b-evidence.mjs"] },
+  { id: "external-evidence-self-test", command: "node", args: ["scripts/test-gate-b-external-evidence.mjs"] },
   { id: "frozen-install", command: "pnpm", args: ["install", "--frozen-lockfile"] },
   { id: "clean-outputs", command: "pnpm", args: ["ci:assert-clean-outputs"] },
   { id: "format", command: "pnpm", args: ["format:check"] },
