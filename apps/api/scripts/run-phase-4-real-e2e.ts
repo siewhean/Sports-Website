@@ -555,15 +555,25 @@ async function main(): Promise<void> {
       }
     };
     await cleanup("Web process shutdown failed", () => stopProcess(web));
-    await cleanup("API shutdown failed", async () => app?.close());
-    await cleanup("Schedule queue shutdown failed", async () => queue?.close());
-    await cleanup("Isolated connection shutdown failed", async () => sql?.end({ timeout: 2 }));
+    await cleanup("API shutdown failed", async () => {
+      if (app) await app.close();
+    });
+    await cleanup("Schedule queue shutdown failed", async () => {
+      if (queue) await queue.close();
+    });
+    await cleanup("Isolated connection shutdown failed", async () => {
+      if (sql) await sql.end({ timeout: 2 });
+    });
     await cleanup("Isolation cleanup failed", () => cleanupIsolation(admin, isolation));
-    await cleanup("Administrative connection shutdown failed", async () => admin.end({ timeout: 2 }));
+    await cleanup("Administrative connection shutdown failed", async () => {
+      await admin.end({ timeout: 2 });
+    });
     await cleanup("Temporary artifact cleanup failed", () => rm(temp, { recursive: true, force: true }));
     process.off("SIGINT", markInterrupted);
     process.off("SIGTERM", markInterrupted);
-    if (cleanupErrors.length) cleanupError = new AggregateError(cleanupErrors, cleanupErrors.map((item) => item.message).join("; "));
+    if (cleanupErrors.length) {
+      cleanupError = new AggregateError(cleanupErrors, cleanupErrors.map((item) => item.message).join("; "));
+    }
   }
 
   if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "E2E and cleanup failed");
