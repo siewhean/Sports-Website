@@ -19,6 +19,7 @@
       }
     ],
     "paths": {
+      "@/lib/phase4-assisted-setup": ["./lib/phase4-assisted-setup-current.ts"],
       "@/*": ["./*"]
     }
   },

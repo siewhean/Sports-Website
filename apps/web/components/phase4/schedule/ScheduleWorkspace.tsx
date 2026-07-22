@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { interpolate } from "@matchday/ui";
 import {
@@ -41,6 +42,10 @@ import {
   type ScheduleObjective,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
+import {
+  syncAcceptedScheduleWithSetup,
+  syncPublishedScheduleWithSetup,
+} from "@/lib/phase4-schedule-setup-sync";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -63,6 +68,10 @@ function withRetainedAlternative(current: readonly ScheduleOption[], option: Sch
 }
 
 export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) {
+  const router = useRouter();
+  const liveRef = useRef<HTMLParagraphElement>(null);
+  const acceptKeysRef = useRef(new Map<string, string>());
+  const publishKeyRef = useRef<string | null>(null);
   const [job, setJob] = useState(document.activeJob);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
@@ -86,6 +95,12 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   const disabled = !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
   const polledJobStatus = job?.status;
+
+  function refreshWorkspace(announcement: string) {
+    setMessage(announcement);
+    router.refresh();
+    window.requestAnimationFrame(() => liveRef.current?.focus({ preventScroll: true }));
+  }
 
   useEffect(() => {
     if (!polledJobId || !polledJobStatus || !activeStatuses.has(polledJobStatus)) return;
@@ -126,27 +141,34 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     name: string,
     url: string,
     body: Record<string, unknown>,
-    onSuccess?: (payload: unknown) => void,
+    onSuccess?: (payload: unknown) => void | Promise<void>,
     method: "POST" | "DELETE" = phase4ScheduleMachine.post,
   ) {
     if (busy) return;
     setBusy(name);
     setCommandError("");
     setMessage("");
+    let response: Response;
     try {
-      const response = await fetch(url, {
+      response = await fetch(url, {
         method,
         headers: { "content-type": phase4ScheduleMachine.json },
         body: JSON.stringify(body),
       });
+    } catch {
+      setCommandError(phase4ScheduleCopy.offlineBody);
+      setBusy(null);
+      return;
+    }
+    try {
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         setCommandError(commandErrorMessage(response.status, errorCode(payload)));
         return;
       }
-      onSuccess?.(payload);
+      await onSuccess?.(payload);
     } catch {
-      setCommandError(phase4ScheduleCopy.offlineBody);
+      setCommandError(phase4ScheduleCopy.errorBody);
     } finally {
       setBusy(null);
     }
@@ -215,32 +237,46 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
       setCommandError(phase4ScheduleCopy.malformed);
       return;
     }
+    const idempotencyKey =
+      acceptKeysRef.current.get(option.id) ?? createIdempotencyKey(phase4ScheduleMachine.acceptKey);
+    acceptKeysRef.current.set(option.id, idempotencyKey);
     await command(
       phase4ScheduleMachine.acceptAction,
       `/api/phase4/schedule/jobs/${encodeURIComponent(option.jobId)}/options/${encodeURIComponent(option.id)}/accept`,
       {
-        idempotency_key: createIdempotencyKey(phase4ScheduleMachine.acceptKey),
+        idempotency_key: idempotencyKey,
         expected_job_revision: option.jobRevision,
       },
-      () => {
-        setMessage(phase4ScheduleCopy.optionSaved);
-        window.location.reload();
+      async (payload) => {
+        await syncAcceptedScheduleWithSetup({
+          competitionId: document.competitionId,
+          sourceRevision: document.sourceRevision,
+          capacityRevision: document.capacityRevision,
+          option,
+          response: payload,
+        });
+        acceptKeysRef.current.delete(option.id);
+        setJob(null);
+        setRetainedAlternatives([]);
+        refreshWorkspace(phase4ScheduleCopy.optionSaved);
       },
     );
   }
 
   async function publish() {
     if (!document.currentRevision) return;
+    publishKeyRef.current ??= createIdempotencyKey(phase4ScheduleMachine.publishKey);
     await command(
       phase4ScheduleMachine.publishAction,
       `/api/phase4/schedule/revisions/${encodeURIComponent(document.currentRevision.id)}/publish`,
       {
-        idempotency_key: createIdempotencyKey(phase4ScheduleMachine.publishKey),
+        idempotency_key: publishKeyRef.current,
         expected_revision: document.currentRevision.revision,
       },
-      () => {
-        setMessage(phase4ScheduleCopy.publishSuccess);
-        window.location.reload();
+      async (payload) => {
+        await syncPublishedScheduleWithSetup({ competitionId: document.competitionId, response: payload });
+        publishKeyRef.current = null;
+        refreshWorkspace(phase4ScheduleCopy.publishSuccess);
       },
     );
   }
@@ -262,7 +298,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
             start_epoch_ms: Date.parse(assignment.startsAt),
             end_epoch_ms: Date.parse(assignment.endsAt),
           },
-      () => window.location.reload(),
+      () => refreshWorkspace(phase4ScheduleCopy.saved),
       selectedLock ? phase4ScheduleMachine.delete : phase4ScheduleMachine.post,
     );
   }
@@ -274,7 +310,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
 
   return (
     <div className={styles.workspace} data-testid="phase4-schedule">
-      <p className={styles.live} aria-live="polite">
+      <p ref={liveRef} className={styles.live} aria-live="polite" aria-atomic="true" tabIndex={-1}>
         {message || commandError}
       </p>
 

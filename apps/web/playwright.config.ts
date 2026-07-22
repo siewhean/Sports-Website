@@ -6,11 +6,24 @@ const buildStep = isCI ? "" : `${webServerEnvironment} pnpm build && `;
 
 export default defineConfig({
   testDir: "./tests",
-  testIgnore: ["**/unit/**", "**/phase-2-real-api.spec.ts"],
+  testIgnore: ["**/unit/**", "**/phase-2-real-api.spec.ts", "**/phase-4-real-gate-b.spec.ts"],
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
+  // The reviewed golden set was created on Darwin. Treat it as the canonical
+  // visual reference while allowing only bounded host-font rasterisation drift.
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
+  expect: {
+    toHaveScreenshot: {
+      threshold: 0.25,
+      maxDiffPixelRatio: 0.03,
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    },
+  },
+  updateSnapshots: "none",
   use: {
     baseURL: "http://127.0.0.1:3101",
     serviceWorkers: "allow",

@@ -1,0 +1,61 @@
+name: matchday-gate-b-qa
+
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: matchday
+      POSTGRES_USER: matchday
+      POSTGRES_PASSWORD: matchday
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matchday -d matchday"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql
+
+  redis:
+    image: redis:8.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /data
+
+  mailpit:
+    image: axllent/mailpit:v1.27.4
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_DATABASE: /tmp/mailpit.db
+    tmpfs:
+      - /tmp
+
+  gate-b:
+    build:
+      context: ../../..
+      dockerfile: infra/qa/gate-b/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@postgres:5432/matchday
+      REDIS_URL: redis://redis:6379/14
+      API_ALLOWED_ORIGINS: http://localhost:3104,http://127.0.0.1:3104
+      IDENTITY_CSRF_HMAC_SECRET: gate-b-compose-csrf-secret-at-least-32-bytes
+      PHASE4_AI_PROVIDER: disabled
+      MATCHDAY_PHASE2_DATA_MODE: api
+      GATE_B_MANAGE_INFRA: "0"
+      GATE_B_QA_OUTPUT_DIR: /workspace/artifacts/qa/gate-b/container
+      LOG_LEVEL: silent
+    volumes:
+      - ../../../.git:/workspace/.git:ro
+      - ../../../artifacts:/workspace/artifacts

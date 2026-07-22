@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --max-warnings=0",
     "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration --passWithNoTests"
+    "test:integration": "vitest run tests/integration --passWithNoTests",
+    "test:performance": "vitest run tests/performance"
   },
   "dependencies": {
     "@matchday/config": "workspace:*",
