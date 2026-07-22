@@ -16,13 +16,21 @@ beforeAll(async () => dropTestSchema(config.databaseUrl, schema));
 afterAll(async () => dropTestSchema(config.databaseUrl, schema));
 
 describe("Phase 4 selected-format migration upgrade", () => {
-  it("adds the publication trigger without rewriting existing setup drafts", async () => {
+  it("adds publication guards without rewriting existing setup drafts", async () => {
     const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-selected-format-upgrade-"));
     await cp(migrationsDirectory, copiedDirectory, { recursive: true });
-    const migrationName = "0027_phase4_publish_selected_formats.sql";
-    const migrationPath = path.join(copiedDirectory, migrationName);
-    const migrationSource = await readFile(migrationPath, "utf8");
-    await rm(migrationPath);
+    const migrationNames = [
+      "0027_phase4_publish_selected_formats.sql",
+      "0028_phase4_latest_schedule_publication.sql",
+    ] as const;
+    const heldBack = await Promise.all(
+      migrationNames.map(async (name) => {
+        const migrationPath = path.join(copiedDirectory, name);
+        const source = await readFile(migrationPath, "utf8");
+        await rm(migrationPath);
+        return { name, migrationPath, source };
+      }),
+    );
     await migrateDatabase({ databaseUrl: config.databaseUrl, migrationsDirectory: copiedDirectory, schema });
 
     const sql = postgres(config.databaseUrl, { max: 1, connection: { search_path: schema } });
@@ -63,13 +71,13 @@ describe("Phase 4 selected-format migration upgrade", () => {
         SELECT id,revision,steps,updated_at FROM setup_drafts WHERE competition_id=${competition}`;
       if (!before) throw new Error("Expected setup draft before migration");
 
-      await writeFile(migrationPath, migrationSource);
+      for (const migration of heldBack) await writeFile(migration.migrationPath, migration.source);
       const upgraded = await migrateDatabase({
         databaseUrl: config.databaseUrl,
         migrationsDirectory: copiedDirectory,
         schema,
       });
-      expect(upgraded.applied).toEqual([migrationName]);
+      expect(upgraded.applied).toEqual([...migrationNames]);
 
       const [after] = await sql<{ id: string; revision: number; steps: unknown; updated_at: Date }[]>`
         SELECT id,revision,steps,updated_at FROM setup_drafts WHERE competition_id=${competition}`;
@@ -77,10 +85,15 @@ describe("Phase 4 selected-format migration upgrade", () => {
       expect(
         await sql<{ trigger_name: string }[]>`
           SELECT tgname trigger_name FROM pg_trigger
-          WHERE tgrelid='setup_drafts'::regclass
-            AND tgname='zz_setup_drafts_publish_selected_formats'
-            AND NOT tgisinternal`,
-      ).toEqual([{ trigger_name: "zz_setup_drafts_publish_selected_formats" }]);
+          WHERE NOT tgisinternal AND (
+            (tgrelid='setup_drafts'::regclass AND tgname='zz_setup_drafts_publish_selected_formats')
+            OR
+            (tgrelid='schedule_revisions'::regclass AND tgname='ab_schedule_revisions_latest_publication_guard')
+          ) ORDER BY tgname`,
+      ).toEqual([
+        { trigger_name: "ab_schedule_revisions_latest_publication_guard" },
+        { trigger_name: "zz_setup_drafts_publish_selected_formats" },
+      ]);
     } finally {
       await sql.end({ timeout: 2 });
       await rm(copiedDirectory, { recursive: true, force: true });
