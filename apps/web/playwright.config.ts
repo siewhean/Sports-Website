@@ -11,11 +11,11 @@ export default defineConfig({
   forbidOnly: true,
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
+  // The reviewed golden set was created on Darwin. Treat it as the canonical
+  // visual reference while allowing only bounded host-font rasterisation drift.
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
   expect: {
     toHaveScreenshot: {
-      // The reviewed golden set was created on Darwin. Treat it as the canonical
-      // visual reference while allowing only bounded host-font rasterisation drift.
-      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
       threshold: 0.25,
       maxDiffPixelRatio: 0.03,
       animations: "disabled",
