@@ -109,6 +109,8 @@ describe("foundation migrations", () => {
         "0024_phase4_ai_quota_reason.sql",
         "0025_phase4_unselected_recommendation_resume.sql",
         "0026_phase4_schedule_resume_hash_domains.sql",
+        "0027_phase4_publish_selected_formats.sql",
+        "0028_phase4_latest_schedule_publication.sql",
       ] as const;
       const deferredMigrations = await Promise.all(
         deferredMigrationNames.map(async (name) => ({
