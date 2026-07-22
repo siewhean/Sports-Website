@@ -12,6 +12,32 @@ const schema = `test_phase4_recommendation_resume_${randomUUID().replaceAll("-",
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 let sql!: Sql;
 
+type SeededDivision = {
+  division_id: string;
+  division_revision: number;
+  entry_ids: string[];
+  confirmed_count: number;
+  placeholder_count: number;
+};
+
+type SeededSteps = {
+  capacity: {
+    revision: number;
+    source_hash: string;
+    effective: { availableMatchSlots: number };
+  };
+  entries: { divisions: SeededDivision[] };
+  format_preferences: unknown;
+};
+
+type ResumedSteps = {
+  format_recommendations: {
+    selected_recommendation_id: string | null;
+    recommendation_set_hash: string;
+    recommendations: Array<{ id: string; format_revision_id: string | null }>;
+  };
+};
+
 beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
@@ -30,7 +56,6 @@ describeInfrastructure("Phase 4 unselected recommendation resume", () => {
     const competition = randomUUID();
     const division = randomUUID();
     const area = randomUUID();
-    const setupDraft = randomUUID();
 
     await sql`INSERT INTO accounts(id,primary_email,display_name)
       VALUES(${account},${`${account}@example.test`},'Recommendation organiser')`;
@@ -83,7 +108,7 @@ describeInfrastructure("Phase 4 unselected recommendation resume", () => {
     const [seeded] = await sql<{
       id: string;
       revision: number;
-      steps: Record<string, any>;
+      steps: SeededSteps;
     }[]>`SELECT id,revision,steps FROM setup_drafts WHERE competition_id=${competition}`;
     if (!seeded) throw new Error("Expected setup draft");
     expect(seeded.id).toBeTruthy();
@@ -100,7 +125,7 @@ describeInfrastructure("Phase 4 unselected recommendation resume", () => {
         source_hash: seeded.steps.capacity.source_hash,
         available_match_slots: seeded.steps.capacity.effective.availableMatchSlots,
       },
-      entries: seeded.steps.entries.divisions.map((item: Record<string, any>) => ({
+      entries: seeded.steps.entries.divisions.map((item) => ({
         division_id: item.division_id,
         division_revision: item.division_revision,
         entry_ids: [...item.entry_ids].sort(),
@@ -201,7 +226,7 @@ describeInfrastructure("Phase 4 unselected recommendation resume", () => {
     const [beforeResume] = await sql<{ revision: number }[]>`
       SELECT revision FROM setup_drafts WHERE competition_id=${competition}`;
 
-    const [resumed] = await sql<{ value: { revision: number; current_step: string; steps: Record<string, any> } }[]>`
+    const [resumed] = await sql<{ value: { revision: number; current_step: string; steps: ResumedSteps } }[]>`
       SELECT phase4_resume_setup_draft(
         ${organisation},${competition},${account},${`resume-unselected-${randomUUID()}`},${`resume-unselected-request-${randomUUID()}`}
       ) value`;
