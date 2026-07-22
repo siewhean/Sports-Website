@@ -32,6 +32,7 @@ const checks = [
     args: ["test:integration"],
     env: { RUN_INFRA_TESTS: "1" },
   },
+  { id: "performance", command: "pnpm", args: ["test:performance"] },
   { id: "canonical-fixtures", command: "pnpm", args: ["validate:fixtures"] },
   { id: "phase-2-fixtures", command: "pnpm", args: ["validate:phase2"] },
   { id: "phase-3-fixtures", command: "pnpm", args: ["validate:phase3"] },
