@@ -1,12 +1,12 @@
 # Phase 4 — reproducible local Gate B run
 
-**Executed:** 22 July 2026, 19:48–20:53 SGT (`+08`)
+**Executed:** 22 July 2026, 19:48–21:07 SGT (`+08`)
 
 **Repository:** complete local checkout on `agent/gate-b-organiser-journey`
 
-**Reviewed commit:** `4b62a48a90d648cd3f2c9deb360c2bd34ca74e10`
+**Validated source commit:** `b2306e6dfc9d44c8d53bf756c00b1530202188e0`
 
-**Validation state:** the reviewed commit plus the uncommitted merge-readiness corrections listed by `git status`; no Gate C work is included.
+**Validation state:** clean source tree at the commit above; no Gate C work is included. The evidence-only verdict update follows this source commit and does not alter production or test code.
 
 Local Gate B validation: PASS
 
@@ -36,29 +36,29 @@ Durable raw logs are under the ignored local path `artifacts/qa/gate-b/`. The ta
 | --------------------------------------------------------------------------------- | ---: | --------------------------------------------------------------------------------------------------------------------- |
 | `pnpm install --frozen-lockfile`                                                  |    0 | `50-install-final-network-rerun.log`                                                                                  |
 | `pnpm ci:assert-clean-outputs`                                                    |    0 | `51-clean-outputs-final.log`                                                                                          |
-| `pnpm format:check`                                                               |    0 | `52-format-check-final-rerun.log`; repeated by `74-pnpm-check-rerun.log`                                              |
-| `pnpm lint`                                                                       |    0 | `53-lint-final.log`; repeated by `74-pnpm-check-rerun.log`                                                            |
-| `pnpm typecheck`                                                                  |    0 | `54-typecheck-final.log`; repeated by `74-pnpm-check-rerun.log`                                                       |
-| `pnpm test:unit`                                                                  |    0 | `55-test-unit-final-rerun.log`: 28/28 tasks; domain 291, scheduler 30, web 152, API 16, AI 32                         |
-| `pnpm db:migrate:check`                                                           |    0 | `56-db-migrate-check-final.log`: clean schema, 25 forward migrations                                                  |
-| `pnpm backup:verify`                                                              |    0 | `57-backup-verify-final.log`: restored account and fingerprint verified                                               |
-| `RUN_INFRA_TESTS=1 pnpm test:integration`                                         |    0 | `58-test-integration-final.log`: 20/20 tasks; API 84, database 53, scheduler 3, plus supporting packages              |
+| `pnpm format:check`                                                               |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`                                                                    |
+| `pnpm lint`                                                                       |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`                                                                    |
+| `pnpm typecheck`                                                                  |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`                                                                    |
+| `pnpm test:unit`                                                                  |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`: 28/28 tasks; domain 291, scheduler 30, web 155, API 16, AI 32     |
+| `pnpm db:migrate:check`                                                           |    0 | `91-b2306e6-infrastructure-gates.log`: clean schema, 25 forward migrations                                            |
+| `pnpm backup:verify`                                                              |    0 | `91-b2306e6-infrastructure-gates.log`: restored account and fingerprint verified                                      |
+| `RUN_INFRA_TESTS=1 pnpm test:integration`                                         |    0 | `91-b2306e6-infrastructure-gates.log`: 20/20 tasks; API 84, database 53, scheduler 3, plus supporting packages        |
 | `pnpm validate:fixtures`                                                          |    0 | `59-validate-fixtures-final.log`: five canonical competitions, one extended scenario, 17 format oracles               |
 | `pnpm validate:phase2`                                                            |    0 | `60-validate-phase2-final.log`: independent 8- and 16-entry fixtures                                                  |
 | `pnpm validate:phase3`                                                            |    0 | `61-validate-phase3-final.log`: five sports, five sizes, 15 graph oracles, four time-zone cases, three invalid graphs |
 | `pnpm validate:phase4`                                                            |    0 | `62-validate-phase4-final.log`: five sizes and shared-area multi-division fixture                                     |
-| `pnpm openapi:check`                                                              |    0 | `63-openapi-check-final-rerun.log`                                                                                    |
-| `pnpm dependencies:audit`                                                         |    0 | `64-dependencies-audit-final-rerun.log`: no known vulnerabilities                                                     |
-| `pnpm secrets:scan`                                                               |    0 | `65-secrets-scan-final-rerun.log`: no leaks                                                                           |
-| `pnpm build`                                                                      |    0 | `66-build-final.log`: 16/16 packages, Next production build                                                           |
-| `pnpm deploy:manifest`                                                            |    0 | `67-deploy-manifest-final.log`: 54 assets                                                                             |
-| `pnpm asset-delivery:verify:origin`                                               |    0 | `68-asset-delivery-origin-final-rerun2.log`: all 54 assets                                                            |
+| `pnpm openapi:check`                                                              |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`                                                                    |
+| `pnpm dependencies:audit`                                                         |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`: no known vulnerabilities                                          |
+| `pnpm secrets:scan`                                                               |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`: no leaks                                                          |
+| `pnpm build`                                                                      |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`: 16/16 packages, Next production build                             |
+| `pnpm deploy:manifest`                                                            |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`: 54 assets                                                         |
+| `pnpm asset-delivery:verify:origin`                                               |    0 | exact-SHA umbrella log `90-b2306e6-pnpm-check.log`: all 54 assets                                                     |
 | `pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit` |    0 | `69-playwright-install-final.log`                                                                                     |
-| `pnpm test:e2e`                                                                   |    0 | `70-test-e2e-final-rerun4.log`: 255 passed, 7 intentional project skips; real matrix 3/3 passed                       |
-| `pnpm test:a11y`                                                                  |    0 | `71-test-a11y.log`: 47/47 passed                                                                                      |
-| `pnpm test:visual`                                                                |    0 | `72-test-visual.log`: 13/13 matched approved baselines                                                                |
-| `git diff --check`                                                                |    0 | `73-git-diff-check.log`; repeated after final formatting                                                              |
-| `pnpm check`                                                                      |    0 | `74-pnpm-check-rerun.log`: the complete repository umbrella finished through origin delivery verification             |
+| `pnpm test:e2e`                                                                   |    0 | `92-b2306e6-test-e2e.log`: 255 passed, 7 intentional project skips; real matrix 3/3 passed                            |
+| `pnpm test:a11y`                                                                  |    0 | `93-b2306e6-a11y-visual-diff.log`: 47/47 passed                                                                       |
+| `pnpm test:visual`                                                                |    0 | `93-b2306e6-a11y-visual-diff.log`: 13/13 matched approved baselines                                                   |
+| `git diff --check`                                                                |    0 | `93-b2306e6-a11y-visual-diff.log`                                                                                     |
+| `pnpm check`                                                                      |    0 | `90-b2306e6-pnpm-check.log`: complete umbrella through origin delivery verification                                   |
 
 No acceptance test was deleted, relaxed, skipped outside its existing project applicability, or allowlisted to create a green result.
 
@@ -88,6 +88,7 @@ The affected setup/format baselines were inspected at original resolution before
 - The secret scan found a fixed CSRF test literal and stale ignored Playwright traces containing session-like values. The test generates a random token and the stale traces were removed from the repository tree; the scanner was not weakened.
 - Origin delivery verification required HSTS from an HTTP-only local origin after proxy hardening. The verifier now requires HSTS on HTTPS and rejects it on HTTP; the proxy regression, production build, and 54-asset origin check passed.
 - The first `pnpm check` rerun found one unformatted hydration edit. That exact file was formatted; the complete command then exited 0.
+- The first committed-source browser rerun exposed WebKit reporting a completed move-validation request as cancelled during navigation cleanup. The component now aborts only genuinely unsettled validation. Five repeated phone WebKit flows and the complete exact-SHA browser matrix passed with clean runtime guards.
 
 Sandbox-only failures (`EPERM` on loopback/process operations and registry DNS denial) were rerun unchanged with local execution permission. Their failed and successful logs are retained; they are not product failures.
 
@@ -100,7 +101,7 @@ Sandbox-only failures (`EPERM` on loopback/process operations and registry DNS d
 - P2: sticky decision/action rails can obscure content in some phone/tablet move and schedule views. Current reachability, safe-area, accessibility and overflow tests pass and no data is lost. Owner Frontend UX; fix or explicitly re-accept before the Gate C browser verdict.
 - P3: some Phase 3 snapshot filenames imply broader responsive coverage than the forced viewports actually provide. Owner QA automation; rename or split before the Gate C visual verdict.
 - P3: the local proof does not replace deployed identity, CDN, telemetry, managed backup or authenticated production-device evidence. Owner Platform/Operations; address at the relevant production release gate.
-- The working tree must be committed and independently reviewed before merge. Remote merge remains subject to repository-owner policy; no branch-protection bypass is authorised.
+- The validated source is committed and independently reviewed. This evidence-only update must be committed before merge. Remote merge remains subject to repository-owner policy; no branch-protection bypass is authorised.
 
 ## Verdict boundary
 

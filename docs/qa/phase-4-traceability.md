@@ -3,7 +3,8 @@
 **Date:** 22 July 2026
 
 **Branch:** `agent/gate-b-organiser-journey`
-**Status:** Local validation PASS; merge-readiness remains subject to the fresh independent verdict and repository-owner merge policy
+**Validated source commit:** `b2306e6dfc9d44c8d53bf756c00b1530202188e0`
+**Status:** Local validation PASS; independent `Verdict: PASS`; remote merge remains subject to repository-owner policy
 
 This file tracks the Phase 4 scope in `docs/EXECUTION_ROADMAP.md`. A row is verified only where production implementation and executable evidence both exist. The exact commands, counts, browser limitation, dependency advisories, and external boundary are in `docs/qa/phase-4-acceptance.md`; concept comparison is in `docs/qa/phase-4-fidelity-ledger.md`.
 

@@ -4,7 +4,7 @@
 
 **Branch:** `agent/gate-b-organiser-journey`
 
-**Reviewed commit before the uncommitted merge-readiness closeout:** `4b62a48a90d648cd3f2c9deb360c2bd34ca74e10`
+**Validated source commit:** `b2306e6dfc9d44c8d53bf756c00b1530202188e0`
 
 **Runtime:** Node `24.18.0`, pnpm `10.33.0`
 
@@ -33,7 +33,7 @@ Every command below used `PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"`.
 | Formatting           | `pnpm format:check`                                                               | PASS                                                                                                                                                                                                                                    |
 | Lint and i18n        | `pnpm lint`                                                                       | PASS: 3/3 tasks; i18n 28/28 fixtures, 116 files, 608 registered messages, 0 findings                                                                                                                                                    |
 | TypeScript           | `pnpm typecheck`                                                                  | PASS: 16/16 workspace packages                                                                                                                                                                                                          |
-| Unit aggregate       | `pnpm test:unit`                                                                  | PASS: 28/28 Turbo tasks; representative counts include domain 291, scheduler 30, web 152, API 16 and AI 32                                                                                                                              |
+| Unit aggregate       | `pnpm test:unit`                                                                  | PASS: 28/28 Turbo tasks; representative counts include domain 291, scheduler 30, web 155, API 16 and AI 32                                                                                                                              |
 | Migrated integration | `RUN_INFRA_TESTS=1 pnpm test:integration`                                         | PASS: 20/20 tasks; API 84, database 53, scheduler 3, plus identity/jobs/worker/feature-flag/notification coverage                                                                                                                       |
 | Production build     | `pnpm build`                                                                      | PASS: 16/16 packages; Next production build compiled, typechecked and generated 32 pages                                                                                                                                                |
 | Fixture validators   | `pnpm validate:fixtures`, `validate:phase2`, `validate:phase3`, `validate:phase4` | PASS: 5 canonical competitions, 1 extended scenario, 17 format oracles; Phase 2 sizes 8/16; Phase 3 five sports/five sizes/15 graphs/four time-zone boundaries/three invalid graphs; Phase 4 five sizes plus shared-area multi-division |
