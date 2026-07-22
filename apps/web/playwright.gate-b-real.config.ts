@@ -24,5 +24,11 @@ export default defineConfig({
       dependencies: ["gate-b-real-phone-chromium"],
       use: { ...devices["Desktop Chrome"] },
     },
+    {
+      name: "gate-b-real-desktop-webkit",
+      dependencies: ["gate-b-real-desktop-chromium"],
+      grepInvert: /accepted schedule survives resume and lock overlay/,
+      use: { ...devices["Desktop Safari"] },
+    },
   ],
 });
