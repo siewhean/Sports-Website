@@ -8,6 +8,7 @@ import {
   defaultFormatEntryCounts,
   getDefaultFormatTemplate,
   recommendFormats,
+  recommendCompetitionFormats,
   validateFormatGraph,
   type DefaultFormatEntryCount,
   type FormatGraph,
@@ -371,6 +372,78 @@ describe("Phase 3 structural validation and revisions", () => {
 });
 
 describe("Phase 3 capacity-first recommendations", () => {
+  const sports = ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const;
+
+  it.each(sports)("generates deterministic capacity-filtered matrices for %s", (sportCode) => {
+    for (const entryCount of defaultFormatEntryCounts) {
+      const request = {
+        sportCode,
+        divisions: [{ id: `${sportCode}-${entryCount}`, entryCount }],
+        availableMatchSlots: 1_000,
+        minimumGuaranteedMatches: 1,
+        priority: "participation" as const,
+      };
+      const first = recommendCompetitionFormats(request);
+      expect(first).toEqual(recommendCompetitionFormats(request));
+      expect(first.recommendations).toHaveLength(3);
+      expect(first.requiresChanges).toBeNull();
+      expect(first.recommendations.every((item) => item.matchCount <= item.availableMatchSlots)).toBe(true);
+      expect(first.recommendations.every((item) => item.scheduleFeasibility === "not_checked")).toBe(true);
+      expect(new Set(first.recommendations.map((item) => item.strategy)).size).toBe(first.recommendations.length);
+    }
+  });
+
+  it("aggregates multi-division capacity and isolates one requires-changes option", () => {
+    const result = recommendCompetitionFormats({
+      sportCode: "basketball",
+      divisions: [
+        { id: "open", entryCount: 8 },
+        { id: "women", entryCount: 12 },
+      ],
+      availableMatchSlots: 30,
+      priority: "speed",
+    });
+    expect(result.recommendations.every((item) => item.divisions.length === 2)).toBe(true);
+    expect(result.recommendations.every((item) => item.matchCount <= 30)).toBe(true);
+    expect(result.requiresChanges?.matchCount).toBeGreaterThan(30);
+    expect(result.requiresChanges?.capacityStatus).toBe("requires_changes");
+    expect(result.requiresChanges?.scheduleFeasibility).toBe("infeasible");
+  });
+
+  it("applies every declared preference and rejects incomplete or unsupported inputs", () => {
+    const compactOnly = recommendCompetitionFormats({
+      sportCode: "canoe_polo",
+      divisions: [{ id: "open", entryCount: 8 }],
+      availableMatchSlots: 100,
+      crossGroupAllowed: false,
+    });
+    expect(compactOnly.recommendations.map((item) => item.strategy)).toEqual(["compact_knockout"]);
+    const ranked = recommendCompetitionFormats({
+      sportCode: "volleyball",
+      divisions: [{ id: "open", entryCount: 16 }],
+      availableMatchSlots: 100,
+      rankAllEntries: true,
+      placementRequired: true,
+    });
+    expect(ranked.recommendations.map((item) => item.rankingCoverage)).toEqual(["all_entries"]);
+    expect(() =>
+      recommendCompetitionFormats({
+        sportCode: "unknown",
+        divisions: [{ id: "x", entryCount: 8 }],
+        availableMatchSlots: 10,
+      }),
+    ).toThrow(/not supported/);
+    expect(() =>
+      recommendCompetitionFormats({ sportCode: "basketball", divisions: [], availableMatchSlots: 10 }),
+    ).toThrow(/At least one/);
+    expect(() =>
+      recommendCompetitionFormats({
+        sportCode: "basketball",
+        divisions: [{ id: "x", entryCount: 10 }],
+        availableMatchSlots: 10,
+      }),
+    ).toThrow(/unsupported/);
+  });
   it("returns only capacity-feasible choices by default", () => {
     const recommendations = recommendFormats({ entryCount: 8, availableMatchSlots: 15 });
     expect(recommendations.map((item) => item.templateId)).toEqual(["8-compact_knockout"]);

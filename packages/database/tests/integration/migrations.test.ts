@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, cp, mkdtemp, readdir, rm } from "node:fs/promises";
+import { appendFile, cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,13 +11,18 @@ import { dropTestSchema, migrateDatabase } from "../../src/migrations.js";
 const config = parseConfig(process.env);
 const schema = `test_migrations_${randomUUID().replaceAll("-", "")}`;
 const concurrentSchema = `test_migrations_concurrent_${randomUUID().replaceAll("-", "")}`;
+const populatedSchema = `test_migrations_populated_${randomUUID().replaceAll("-", "")}`;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 // Full-suite integration runs intentionally contend for the same local PostgreSQL instance.
 // Keep the larger ceiling scoped to the two tests that apply the complete migration chain.
 const fullMigrationChainTimeoutMs = 15_000;
 
-beforeAll(async () => Promise.all([schema, concurrentSchema].map((name) => dropTestSchema(config.databaseUrl, name))));
-afterAll(async () => Promise.all([schema, concurrentSchema].map((name) => dropTestSchema(config.databaseUrl, name))));
+beforeAll(async () =>
+  Promise.all([schema, concurrentSchema, populatedSchema].map((name) => dropTestSchema(config.databaseUrl, name))),
+);
+afterAll(async () =>
+  Promise.all([schema, concurrentSchema, populatedSchema].map((name) => dropTestSchema(config.databaseUrl, name))),
+);
 
 describe("foundation migrations", () => {
   it(
@@ -87,6 +92,82 @@ describe("foundation migrations", () => {
         expectedMigrations.length,
       ]);
       expect(results.every((result) => result.current.join() === expectedMigrations.join())).toBe(true);
+    },
+    fullMigrationChainTimeoutMs,
+  );
+
+  it(
+    "upgrades populated Phase 4 setup data through recommendation evidence migration",
+    async () => {
+      const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-populated-migrations-"));
+      await cp(migrationsDirectory, copiedDirectory, { recursive: true });
+      const migration0020 = path.join(copiedDirectory, "0020_phase4_format_recommendation_evidence.sql");
+      const migration0020Source = await readFile(migration0020, "utf8");
+      await rm(migration0020);
+      await migrateDatabase({
+        databaseUrl: config.databaseUrl,
+        migrationsDirectory: copiedDirectory,
+        schema: populatedSchema,
+      });
+      const sql = postgres(config.databaseUrl, { max: 1, connection: { search_path: populatedSchema } });
+      try {
+        const account = randomUUID();
+        const organisation = randomUUID();
+        const competition = randomUUID();
+        await sql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${account},${`${account}@example.test`},'Upgrade owner')`;
+        await sql.begin(async (tx) => {
+          await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisation},'Upgrade org',${`upgrade-${organisation}`})`;
+          await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+            VALUES(${organisation},${account},'owner','active')`;
+        });
+        const pack = { recommendedSlotMinutes: 30, recommendedSettings: { slotMinutes: 30 } };
+        const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) hash`;
+        await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
+          VALUES('canoe_polo','upgrade-1',1,${sql.json(pack)},${packHash!.hash},'active',now())`;
+        await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,
+          venue,address,country_code,locale,plan_tier)
+          VALUES(${competition},${organisation},${account},'Upgrade Cup',${`upgrade-cup-${competition}`},'canoe_polo',
+          'Asia/Singapore','2027-01-01','2027-01-01','Arena','1 Road','SG','en-SG','organiser_pro')`;
+        await sql`INSERT INTO competition_sport_settings(competition_id,updated_by,sport_code,pack_version,
+          pack_schema_version,recommended_snapshot,settings_override)
+          VALUES(${competition},${account},'canoe_polo','upgrade-1',1,'{}'::jsonb,'{}'::jsonb)`;
+        const division = randomUUID();
+        const placeholder = randomUUID();
+        await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
+          VALUES(${division},${competition},'Open',16)`;
+        await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
+          VALUES(${placeholder},${division},'Placeholder 1',1,'placeholder','confirmed')`;
+        await sql`SELECT phase4_create_setup_draft(${organisation},${competition},${account},'upgrade-create','upgrade-request')`;
+        const [beforeUpgrade] = await sql<
+          { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
+        >`SELECT
+            (steps#>>'{entries,divisions,0,confirmed_count}')::int confirmed_count,
+            (steps#>>'{entries,divisions,0,placeholder_count}')::int placeholder_count,
+            steps#>'{entries,divisions,0,entry_ids}' entry_ids
+          FROM setup_drafts WHERE competition_id=${competition}`;
+        expect(beforeUpgrade).toMatchObject({ confirmed_count: 1, placeholder_count: 1 });
+        expect(beforeUpgrade?.entry_ids).toEqual([placeholder]);
+        await writeFile(migration0020, migration0020Source);
+        const upgraded = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgraded.applied).toEqual(["0020_phase4_format_recommendation_evidence.sql"]);
+        const [afterUpgrade] = await sql<
+          { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
+        >`SELECT
+            (steps#>>'{entries,divisions,0,confirmed_count}')::int confirmed_count,
+            (steps#>>'{entries,divisions,0,placeholder_count}')::int placeholder_count,
+            steps#>'{entries,divisions,0,entry_ids}' entry_ids
+          FROM setup_drafts WHERE competition_id=${competition}`;
+        expect(afterUpgrade).toMatchObject({ confirmed_count: 0, placeholder_count: 1 });
+        expect(afterUpgrade?.entry_ids).toEqual([placeholder]);
+        expect(await sql`SELECT 1 FROM phase4_format_recommendation_sets`).toEqual([]);
+      } finally {
+        await sql.end({ timeout: 2 });
+        await rm(copiedDirectory, { recursive: true, force: true });
+      }
     },
     fullMigrationChainTimeoutMs,
   );

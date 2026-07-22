@@ -79,26 +79,50 @@ export type AssistedSetupStepValues = Readonly<{
   format_recommendations: Readonly<{
     recommendations: readonly Readonly<{
       id: string;
-      formatRevisionId: string;
+      formatRevisionId: string | null;
       definitionHash: string;
       name: string;
       structure: string;
       advantage: string;
       matchCount: number;
       minimumMatchesPerEntry: number;
+      guaranteedMatches: number;
+      rankingCoverage: "all_entries" | "podium" | "champion";
+      availableMatchSlots: number;
+      divisionFormats: readonly Readonly<{
+        divisionId: string;
+        candidateDivisionId: string;
+        formatRevisionId: string | null;
+        definitionHash: string;
+        matchCount: number;
+        guaranteedMatches: number;
+        rankingCoverage: "all_entries" | "podium" | "champion";
+      }>[];
       capacityStatus: "fits" | "tight" | "requires_changes";
       schedulingStatus: "feasible" | "infeasible" | "not_checked";
       warningCodes: readonly string[];
     }>[];
     requiresChanges: Readonly<{
       id: string;
-      formatRevisionId: string;
+      formatRevisionId: string | null;
       definitionHash: string;
       name: string;
       structure: string;
       advantage: string;
       matchCount: number;
       minimumMatchesPerEntry: number;
+      guaranteedMatches: number;
+      rankingCoverage: "all_entries" | "podium" | "champion";
+      availableMatchSlots: number;
+      divisionFormats: readonly Readonly<{
+        divisionId: string;
+        candidateDivisionId: string;
+        formatRevisionId: string | null;
+        definitionHash: string;
+        matchCount: number;
+        guaranteedMatches: number;
+        rankingCoverage: "all_entries" | "podium" | "champion";
+      }>[];
       capacityStatus: "fits" | "tight" | "requires_changes";
       schedulingStatus: "feasible" | "infeasible" | "not_checked";
       warningCodes: readonly string[];
@@ -382,14 +406,16 @@ export function validateAssistedSetupStep(
   } else if (stepId === "format_recommendations") {
     const value = values.format_recommendations;
     if (!value) return [issue("required", "format_recommendations", "Format recommendations are required")];
-    if (value.recommendations.length === 0 || value.recommendations.length > 3)
+    if (value.recommendations.length > 3 || (value.recommendations.length === 0 && !value.requiresChanges))
       result.push(
         issue("invalid_count", "format_recommendations.recommendations", "Provide one to three recommendations"),
       );
     const candidates = [...value.recommendations, ...(value.requiresChanges ? [value.requiresChanges] : [])];
     const hashes = candidates.map((recommendation) => recommendation.definitionHash);
     const ids = candidates.map((recommendation) => recommendation.id);
-    const revisionIds = candidates.map((recommendation) => recommendation.formatRevisionId);
+    const revisionIds = candidates
+      .map((recommendation) => recommendation.formatRevisionId)
+      .filter((value): value is string => value !== null);
     if (
       duplicateValues(hashes).length > 0 ||
       duplicateValues(ids).length > 0 ||
@@ -416,13 +442,28 @@ export function validateAssistedSetupStep(
       candidates.some(
         (recommendation) =>
           !nonEmpty(recommendation.id) ||
-          !nonEmpty(recommendation.formatRevisionId) ||
           !nonEmpty(recommendation.definitionHash) ||
           !nonEmpty(recommendation.name) ||
           !nonEmpty(recommendation.structure) ||
           !nonEmpty(recommendation.advantage) ||
           !positiveInteger(recommendation.matchCount) ||
           !positiveInteger(recommendation.minimumMatchesPerEntry) ||
+          !positiveInteger(recommendation.guaranteedMatches) ||
+          !nonNegativeInteger(recommendation.availableMatchSlots) ||
+          !(["all_entries", "podium", "champion"] as readonly unknown[]).includes(recommendation.rankingCoverage) ||
+          recommendation.divisionFormats.length === 0 ||
+          recommendation.divisionFormats.some(
+            (format) =>
+              !nonEmpty(format.divisionId) ||
+              !nonEmpty(format.candidateDivisionId) ||
+              (format.formatRevisionId !== null && !nonEmpty(format.formatRevisionId)) ||
+              !nonEmpty(format.definitionHash) ||
+              !positiveInteger(format.matchCount) ||
+              !positiveInteger(format.guaranteedMatches) ||
+              !(["all_entries", "podium", "champion"] as readonly unknown[]).includes(format.rankingCoverage),
+          ) ||
+          recommendation.divisionFormats.reduce((total, format) => total + format.matchCount, 0) !==
+            recommendation.matchCount ||
           !(["fits", "tight", "requires_changes"] as readonly unknown[]).includes(recommendation.capacityStatus) ||
           !(["feasible", "infeasible", "not_checked"] as readonly unknown[]).includes(
             recommendation.schedulingStatus,
@@ -457,11 +498,17 @@ export function validateAssistedSetupStep(
     const selected = candidates.find((recommendation) => recommendation.id === value.selectedRecommendationId);
     if (!selected)
       result.push(issue("selection_required", "format_recommendations.selected", "Select a recommendation"));
+    if (
+      selected &&
+      (selected.formatRevisionId === null ||
+        selected.divisionFormats.some((format) => format.formatRevisionId === null))
+    )
+      result.push(issue("invalid_reference", "format_recommendations.selected", "Selected formats must be applied"));
     if (selected?.capacityStatus === "requires_changes" && !value.acknowledgedCapacityShortfall)
       result.push(
         issue("capacity_acknowledgement", "format_recommendations.selected", "Acknowledge the capacity shortfall"),
       );
-    if (selected?.schedulingStatus !== "feasible")
+    if (selected?.schedulingStatus === "infeasible")
       result.push(
         issue("schedule_infeasible", "format_recommendations.selected", "Select a schedulable recommendation"),
       );

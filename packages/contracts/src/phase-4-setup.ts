@@ -115,13 +115,25 @@ export type Phase4SetupFormatPreferences = {
 
 export type Phase4SetupRecommendation = {
   readonly id: string;
-  readonly format_revision_id: string;
+  readonly format_revision_id: string | null;
   readonly format_definition_hash: string;
   readonly name: string;
   readonly structure: string;
   readonly advantage: string;
   readonly match_count: number;
   readonly minimum_matches_per_entry: number;
+  readonly guaranteed_matches: number;
+  readonly ranking_coverage: "all_entries" | "podium" | "champion";
+  readonly available_match_slots: number;
+  readonly division_formats: readonly {
+    readonly division_id: string;
+    readonly candidate_division_id: string;
+    readonly format_revision_id: string | null;
+    readonly format_definition_hash: string;
+    readonly match_count: number;
+    readonly guaranteed_matches: number;
+    readonly ranking_coverage: "all_entries" | "podium" | "champion";
+  }[];
   readonly capacity_status: "fits" | "tight" | "requires_changes";
   readonly scheduling_status: "feasible" | "infeasible" | "not_checked";
   readonly warning_codes: readonly string[];

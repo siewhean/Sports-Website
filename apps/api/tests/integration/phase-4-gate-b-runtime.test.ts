@@ -181,6 +181,337 @@ afterAll(async () => {
 });
 
 describeInfrastructure("Gate B dynamic sport setup runtime", () => {
+  it("generates immutable multi-metric evidence without changing formats and applies a selection once", async () => {
+    const fixture = await createCompetitionFixture("basketball", "Recommendations");
+    await client`UPDATE competitions SET plan_tier='organiser_pro' WHERE id=${fixture.competitionId}`;
+    const secondDivisionId = randomUUID();
+    await client`INSERT INTO divisions(id,competition_id,name,team_limit)
+      VALUES(${secondDivisionId},${fixture.competitionId},'Women',16)`;
+    for (let seed = 1; seed <= 12; seed += 1) {
+      await client`INSERT INTO division_entries(id,division_id,name,seed,status)
+        VALUES(${randomUUID()},${secondDivisionId},${`Women entry ${seed}`},${seed},'confirmed')`;
+    }
+    await client`INSERT INTO division_sport_settings(
+      division_id,competition_id,sport_code,pack_version,settings_override,updated_by
+    ) VALUES(${secondDivisionId},${fixture.competitionId},'basketball',${fixture.packVersion},'{}'::jsonb,${accountId})`;
+    await phase3.replaceCapacity(
+      { accountId },
+      fixture.competitionId,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Main court",
+            slotMinutes: SPORT_PACKS.basketball.recommendedSlotMinutes,
+            availability: [
+              { date: "2027-09-01", startTime: "00:00", endTime: "23:30" },
+              { date: "2027-09-02", startTime: "00:00", endTime: "23:30" },
+            ],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    await runtime.createSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      `recommend-create-${randomUUID()}`,
+      randomUUID(),
+    );
+    const created = await runtime.resumeSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      `recommend-resume-${randomUUID()}`,
+      randomUUID(),
+    );
+    const canonicalCapacity = required(
+      await client<{ revision: number; source_hash: string }[]>`
+        SELECT capacity_revision revision,phase4_capacity_hash(id) source_hash
+        FROM competitions WHERE id=${fixture.competitionId}`,
+    );
+    expect(created.values.capacity).toMatchObject({
+      ...canonicalCapacity,
+      revision: Number(canonicalCapacity.revision),
+    });
+    const before = required(
+      await client<
+        { count: number }[]
+      >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+    ).count;
+    const preferences = created.values.format_preferences!;
+    const generated = await runtime.autosaveSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: created.revision,
+        idempotency_key: `recommend-generate-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: {
+            step_id: "format_preferences",
+            value: {
+              ...preferences,
+              minimum_matches: { per_entry: 1 },
+              ranking: { rank_all_entries: false },
+              placement: { required: false },
+              qualification: { cross_group_allowed: true },
+            },
+          },
+        },
+      },
+      randomUUID(),
+    );
+    expect(generated.outcome).toBe("saved");
+    if (generated.outcome !== "saved") throw new Error("Expected generated recommendation set");
+    let selection = generated.document.values.format_recommendations!;
+    expect(selection.recommendations.length).toBeGreaterThan(0);
+    expect(selection.recommendations.length).toBeGreaterThanOrEqual(1);
+    expect(selection.recommendations.length).toBeLessThanOrEqual(3);
+    expect(new Set(selection.recommendations.map((item) => item.id)).size).toBe(selection.recommendations.length);
+    expect(new Set(selection.recommendations.map((item) => item.format_definition_hash)).size).toBe(
+      selection.recommendations.length,
+    );
+    expect(selection.recommendations.every((item) => item.available_match_slots >= item.match_count)).toBe(true);
+    expect(selection.recommendations.every((item) => item.division_formats.length === 2)).toBe(true);
+    expect(
+      selection.recommendations.every(
+        (item) => item.match_count === item.division_formats.reduce((sum, format) => sum + format.match_count, 0),
+      ),
+    ).toBe(true);
+    expect(selection.recommendations.every((item) => item.format_revision_id === null)).toBe(true);
+    const evidence = required(
+      await client<
+        {
+          set_id: string;
+          candidate_id: string;
+          candidate_division_id: string;
+          definition: unknown;
+          layout: unknown;
+          metrics: unknown;
+        }[]
+      >`SELECT s.id set_id,c.id candidate_id,d.id candidate_division_id,d.definition,d.layout,d.metrics
+        FROM phase4_format_recommendation_sets s
+        JOIN phase4_format_recommendation_candidates c ON c.recommendation_set_id=s.id
+        JOIN phase4_format_recommendation_candidate_divisions d ON d.candidate_id=c.id
+        WHERE s.competition_id=${fixture.competitionId} LIMIT 1`,
+    );
+    await expect(
+      client`UPDATE phase4_format_recommendation_sets SET source_evidence='{}'::jsonb WHERE id=${evidence.set_id}`,
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      client`INSERT INTO phase4_format_recommendation_candidate_divisions(
+        id,candidate_id,division_id,definition,definition_hash,layout,metrics
+      ) VALUES(
+        ${randomUUID()},${evidence.candidate_id},${fixture.divisionId},${client.json(evidence.definition as never)},
+        ${"0".repeat(64)},${client.json(evidence.layout as never)},${client.json(evidence.metrics as never)}
+      )`,
+    ).rejects.toThrow(/evidence is invalid/);
+
+    const alternate = await runtime.autosaveSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: generated.document.revision,
+        idempotency_key: `recommend-alternate-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: {
+            step_id: "format_preferences",
+            value: { ...generated.document.values.format_preferences!, priority: { value: "speed" } },
+          },
+        },
+      },
+      randomUUID(),
+    );
+    expect(alternate.outcome).toBe("saved");
+    if (alternate.outcome !== "saved") throw new Error("Expected alternate recommendation set");
+    const reused = await runtime.autosaveSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: alternate.document.revision,
+        idempotency_key: `recommend-reuse-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: { step_id: "format_preferences", value: generated.document.values.format_preferences! },
+        },
+      },
+      randomUUID(),
+    );
+    expect(reused.outcome).toBe("saved");
+    if (reused.outcome !== "saved") throw new Error("Expected reused recommendation set");
+    expect(reused.document.values.format_recommendations?.recommendation_set_hash).toBe(
+      selection.recommendation_set_hash,
+    );
+    expect(reused.document.values.format_recommendations?.recommendations.map((item) => item.id)).toEqual(
+      selection.recommendations.map((item) => item.id),
+    );
+    selection = reused.document.values.format_recommendations!;
+    const canonicalRecommendations = structuredClone(selection.recommendations);
+    expect(
+      required(
+        await client<
+          { count: number }[]
+        >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+      ).count,
+    ).toBe(before);
+
+    const selectedId = selection.recommendations[0]!.id;
+    const selectedCandidate = selection.recommendations[0]!;
+    const partialAndForgedSelection = {
+      ...selection,
+      recommendations: selection.recommendations.slice(0, 2).map((candidate) => {
+        if (candidate.id === selectedId)
+          return {
+            ...candidate,
+            division_formats: [
+              ...candidate.division_formats.slice(1).reverse(),
+              candidate.division_formats[1]!,
+              {
+                ...candidate.division_formats[0]!,
+                candidate_division_id: randomUUID(),
+                division_id: randomUUID(),
+              },
+            ],
+            match_count: selectedCandidate.division_formats[1]!.match_count,
+          };
+        return {
+          ...candidate,
+          name: "Forged unselected option",
+          advantage: "Forged advantage",
+          guaranteed_matches: 99,
+          ranking_coverage: "champion" as const,
+          capacity_status: "requires_changes" as const,
+          scheduling_status: "infeasible" as const,
+          warning_codes: ["forged_warning"],
+        };
+      }),
+      selected_recommendation_id: selectedId,
+    };
+    const applied = await runtime.autosaveSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: reused.document.revision,
+        idempotency_key: `recommend-select-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: {
+            step_id: "format_recommendations",
+            value: partialAndForgedSelection,
+          },
+        },
+      },
+      randomUUID(),
+    );
+    expect(applied.outcome).toBe("saved");
+    if (applied.outcome !== "saved") throw new Error("Expected applied recommendation");
+    const selected = applied.document.values.format_recommendations!.recommendations.find(
+      (item) => item.id === selectedId,
+    )!;
+    const appliedRecommendations = applied.document.values.format_recommendations!.recommendations;
+    expect(appliedRecommendations.map((item) => item.id)).toEqual(canonicalRecommendations.map((item) => item.id));
+    expect(appliedRecommendations.filter((item) => item.id !== selectedId)).toEqual(
+      canonicalRecommendations.filter((item) => item.id !== selectedId),
+    );
+    expect(selected.division_formats.every((item) => item.format_revision_id !== null)).toBe(true);
+    const after = required(
+      await client<
+        { count: number }[]
+      >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+    ).count;
+    expect(after).toBe(before + 2);
+
+    const replay = await runtime.autosaveSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: applied.document.revision,
+        idempotency_key: `recommend-reselect-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: { step_id: "format_recommendations", value: applied.document.values.format_recommendations! },
+        },
+      },
+      randomUUID(),
+    );
+    expect(replay.outcome).toBe("saved");
+    expect(
+      required(
+        await client<
+          { count: number }[]
+        >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+      ).count,
+    ).toBe(after);
+  });
+
+  it("counts a confirmed placeholder once from setup seed through recommendation evidence", async () => {
+    const fixture = await createCompetitionFixture("basketball", "Placeholder recommendations");
+    await client`UPDATE competitions SET plan_tier='organiser_pro' WHERE id=${fixture.competitionId}`;
+    const placeholderId = required(
+      await client<{ id: string }[]>`UPDATE division_entries SET entry_type='placeholder',name='Placeholder entry'
+        WHERE id=(SELECT id FROM division_entries WHERE division_id=${fixture.divisionId} ORDER BY seed DESC LIMIT 1)
+        RETURNING id`,
+    ).id;
+    await phase3.replaceCapacity(
+      { accountId },
+      fixture.competitionId,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Main court",
+            slotMinutes: SPORT_PACKS.basketball.recommendedSlotMinutes,
+            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    const created = await runtime.createSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      `placeholder-create-${randomUUID()}`,
+      randomUUID(),
+    );
+    const entries = created.document.values.entries!.divisions[0]!;
+    expect(entries.entry_ids).toHaveLength(8);
+    expect(entries.entry_ids).toContain(placeholderId);
+    expect(entries).toMatchObject({ confirmed_count: 7, placeholder_count: 1 });
+
+    const generated = await runtime.autosaveSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: created.document.revision,
+        idempotency_key: `placeholder-generate-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: {
+            step_id: "format_preferences",
+            value: created.document.values.format_preferences!,
+          },
+        },
+      },
+      randomUUID(),
+    );
+    expect(generated.outcome).toBe("saved");
+    const evidence = required(
+      await client<{ source_entry_count: number; definition_entry_count: number }[]>`
+        SELECT
+          (recommendation_set.source_evidence->'entries'->0->>'entry_count')::int source_entry_count,
+          (candidate_division.definition->>'entryCount')::int definition_entry_count
+        FROM phase4_format_recommendation_sets recommendation_set
+        JOIN phase4_format_recommendation_candidates candidate
+          ON candidate.recommendation_set_id=recommendation_set.id
+        JOIN phase4_format_recommendation_candidate_divisions candidate_division
+          ON candidate_division.candidate_id=candidate.id
+        WHERE recommendation_set.competition_id=${fixture.competitionId}
+        LIMIT 1`,
+    );
+    expect(evidence).toEqual({ source_entry_count: 8, definition_entry_count: 8 });
+  });
+
   it("patches Basics in place and atomically switches every pinned rule scope", async () => {
     await client`UPDATE playing_areas SET slot_minutes=37 WHERE competition_id=${competitionId}`;
     const created = await runtime.createSetupDraft(

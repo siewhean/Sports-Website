@@ -531,6 +531,8 @@ export const prototypeMessages = {
   "prototype.1a4c6ec15d6d": "Return to preferences",
   "prototype.98abff28a940": "Matches",
   "prototype.a538b0ade6cc": "Minimum play",
+  "prototype.5f3f7d570615": "Ranking coverage",
+  "prototype.21aa74fece2a": "Available slots",
   "prototype.57fd7a0cf33f": "Selected",
   "prototype.c810c402a124": "Select format",
   "prototype.746de9bc4116": "Open format designer",

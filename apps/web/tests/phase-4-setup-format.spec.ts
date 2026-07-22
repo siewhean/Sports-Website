@@ -36,6 +36,20 @@ test("assisted setup renders authoritative capacity and preserves text on AI fal
   await expect(page.getByText("Your text is preserved. Continue with the guided fields below.")).toBeVisible();
 });
 
+test("recommendations disclose capacity, guaranteed play, ranking and feasibility", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/setup?step=format_recommendations");
+  await dismissConsent(page);
+  await expect(page.getByRole("heading", { name: "Select a feasible format", exact: true })).toBeVisible();
+  const card = page.locator("article").filter({ hasText: "Balanced groups" });
+  await expect(card.getByText("Matches", { exact: true })).toBeVisible();
+  await expect(card.getByText("Minimum play", { exact: true })).toBeVisible();
+  await expect(card.getByText("Ranking coverage", { exact: true })).toBeVisible();
+  await expect(card.getByText("Available slots", { exact: true })).toBeVisible();
+  await expect(card.getByText("Schedule", { exact: true })).toBeVisible();
+  await expect(card.getByText("all entries", { exact: true })).toBeVisible();
+  await expect(card.getByText("36", { exact: true })).toBeVisible();
+});
+
 test("assisted setup sends an optimistic server transition and surfaces conflict", async ({ page }) => {
   await page.route("**/api/phase4/competitions/*/setup-draft", async (route) => {
     if (route.request().method() !== "PUT") return route.continue();

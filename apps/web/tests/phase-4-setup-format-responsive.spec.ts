@@ -17,6 +17,22 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test("recommendation evidence stays accessible without phone overflow", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/setup?step=format_recommendations");
+  await dismissConsent(page);
+  const card = page.locator("article").filter({ hasText: "Balanced groups" });
+  await expect(card.getByText("Matches", { exact: true })).toBeVisible();
+  await expect(card.getByText("Minimum play", { exact: true })).toBeVisible();
+  await expect(card.getByText("Ranking coverage", { exact: true })).toBeVisible();
+  await expect(card.getByText("Available slots", { exact: true })).toBeVisible();
+  await expect(card.getByText("Schedule", { exact: true })).toBeVisible();
+  await card.getByRole("button").focus();
+  await expect(card.getByRole("button")).toBeFocused();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
+});
+
 test("format designer defaults to structured manual mode on phones", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("phone"), "Phone-only default");
   await page.goto("/organiser/competitions/singapore-open/format");

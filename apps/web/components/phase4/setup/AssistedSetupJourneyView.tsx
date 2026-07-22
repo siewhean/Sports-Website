@@ -729,7 +729,15 @@ function RecommendationStep({
               </div>
               <div>
                 <dt>{t("prototype.a538b0ade6cc")}</dt>
-                <dd>{item.minimum_matches_per_entry}</dd>
+                <dd>{item.guaranteed_matches}</dd>
+              </div>
+              <div>
+                <dt>{t("prototype.5f3f7d570615")}</dt>
+                <dd>{item.ranking_coverage.replaceAll("_", " ")}</dd>
+              </div>
+              <div>
+                <dt>{t("prototype.21aa74fece2a")}</dt>
+                <dd>{item.available_match_slots}</dd>
               </div>
               <div>
                 <dt>{t("prototype.f4830a1dae29")}</dt>
