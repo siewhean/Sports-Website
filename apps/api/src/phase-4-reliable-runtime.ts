@@ -44,11 +44,15 @@ export function readOnlySetupDocument(document: Phase4SetupDocument): Phase4Setu
   };
 }
 
+function truthfulSetupDocument(document: Phase4SetupDocument): Phase4SetupDocument {
+  return document.read_only ? readOnlySetupDocument(document) : document;
+}
+
 export function normalizeSetupAutosaveResponse(response: Phase4SetupAutosaveResponse): Phase4SetupAutosaveResponse {
   if (response.outcome === "conflict") {
-    return response.current.read_only ? { ...response, current: readOnlySetupDocument(response.current) } : response;
+    return { ...response, current: truthfulSetupDocument(response.current) };
   }
-  return response.document.read_only ? { ...response, document: readOnlySetupDocument(response.document) } : response;
+  return { ...response, document: truthfulSetupDocument(response.document) };
 }
 
 export function correctFormatDraftMetrics(draft: Phase4FormatDraftView): Phase4FormatDraftView {
@@ -230,7 +234,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
       );
       const row = decodePhase4Json<Phase4SetupStorageRow>(resumed.value);
       row.competition_status = access.status;
-      return phase4SetupDocumentFromStorage(row);
+      return truthfulSetupDocument(phase4SetupDocumentFromStorage(row));
     });
   }
 
@@ -247,7 +251,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
       "SETUP_DRAFT_NOT_FOUND",
       "Setup draft not found",
     );
-    const document = phase4SetupDocumentFromStorage(row);
+    const document = truthfulSetupDocument(phase4SetupDocumentFromStorage(row));
     return access.membership_role === "viewer" ? readOnlySetupDocument(document) : document;
   }
 }
