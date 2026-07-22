@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
-import { dismissConsent } from "./helpers/console-guard";
+import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 test.use({ serviceWorkers: "block" });
+test.beforeEach(async ({ page }) => installConsoleGuard(page));
+test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
 test("phase 4 schedule visual baselines", async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop-chromium") await page.setViewportSize({ width: 1568, height: 1003 });
@@ -9,6 +11,7 @@ test("phase 4 schedule visual baselines", async ({ page }, testInfo) => {
   await dismissConsent(page);
   await hidePrivacyControl(page);
   await expect(page.getByTestId("phase4-schedule")).toBeVisible();
+  await expectNoPageOverflow(page);
   await expect(page).toHaveScreenshot("phase-4-schedule.png", { animations: "disabled", fullPage: true });
 });
 
@@ -41,8 +44,15 @@ test("phase 4 move flow visual baselines", async ({ page }, testInfo) => {
   await hidePrivacyControl(page);
   await expect(page.getByTestId("phase4-move-flow")).toBeVisible();
   await expect(page.getByText("Only the selected slot changes.")).toBeVisible();
+  await expectNoPageOverflow(page);
   await expect(page).toHaveScreenshot("phase-4-schedule-move.png", { animations: "disabled", fullPage: true });
 });
+
+async function expectNoPageOverflow(page: import("@playwright/test").Page) {
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
+}
 
 async function hidePrivacyControl(page: import("@playwright/test").Page) {
   const control = page.getByRole("button", { name: "Privacy choices" });

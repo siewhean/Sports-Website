@@ -105,14 +105,17 @@ describe("foundation migrations", () => {
       const migration0021 = path.join(copiedDirectory, "0021_phase4_schedule_job_progress.sql");
       const migration0022 = path.join(copiedDirectory, "0022_phase4_schedule_revision_provenance.sql");
       const migration0023 = path.join(copiedDirectory, "0023_phase4_schedule_publication_expiry.sql");
+      const migration0024 = path.join(copiedDirectory, "0024_phase4_ai_quota_reason.sql");
       const migration0020Source = await readFile(migration0020, "utf8");
       const migration0021Source = await readFile(migration0021, "utf8");
       const migration0022Source = await readFile(migration0022, "utf8");
       const migration0023Source = await readFile(migration0023, "utf8");
+      const migration0024Source = await readFile(migration0024, "utf8");
       await rm(migration0020);
       await rm(migration0021);
       await rm(migration0022);
       await rm(migration0023);
+      await rm(migration0024);
       await migrateDatabase({
         databaseUrl: config.databaseUrl,
         migrationsDirectory: copiedDirectory,
@@ -147,6 +150,13 @@ describe("foundation migrations", () => {
         await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
           VALUES(${placeholder},${division},'Placeholder 1',1,'placeholder','confirmed')`;
         await sql`SELECT phase4_create_setup_draft(${organisation},${competition},${account},'upgrade-create','upgrade-request')`;
+        const existingLedger = randomUUID();
+        await sql`INSERT INTO ai_action_ledger(id,organisation_id,actor_account_id,competition_id,action,request_id,
+          correlation_id,idempotency_key,request_fingerprint,schema_version,input_character_count,outcome,cache_status,
+          charged_units,attempts,duration_ms,failure_code,metadata,completed_at)
+          VALUES(${existingLedger},${organisation},${account},${competition},'text_to_brief','upgrade-ai-request',
+          'upgrade-ai-request','upgrade-ai-request',${"a".repeat(64)},'1.0',12,'manual_fallback','not_checked',
+          0,1,5,'unknown','{"provider_mode":"stub"}'::jsonb,now())`;
         const [beforeUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
@@ -160,6 +170,7 @@ describe("foundation migrations", () => {
         await writeFile(migration0021, migration0021Source);
         await writeFile(migration0022, migration0022Source);
         await writeFile(migration0023, migration0023Source);
+        await writeFile(migration0024, migration0024Source);
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
@@ -170,6 +181,7 @@ describe("foundation migrations", () => {
           "0021_phase4_schedule_job_progress.sql",
           "0022_phase4_schedule_revision_provenance.sql",
           "0023_phase4_schedule_publication_expiry.sql",
+          "0024_phase4_ai_quota_reason.sql",
         ]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
@@ -181,6 +193,18 @@ describe("foundation migrations", () => {
         expect(afterUpgrade).toMatchObject({ confirmed_count: 0, placeholder_count: 1 });
         expect(afterUpgrade?.entry_ids).toEqual([placeholder]);
         expect(await sql`SELECT 1 FROM phase4_format_recommendation_sets`).toEqual([]);
+        expect(
+          await sql`SELECT id,outcome,charged_units,failure_code FROM ai_action_ledger WHERE id=${existingLedger}`,
+        ).toEqual([{ id: existingLedger, outcome: "manual_fallback", charged_units: 0, failure_code: "unknown" }]);
+        await sql`INSERT INTO ai_action_ledger(organisation_id,actor_account_id,competition_id,action,request_id,
+          correlation_id,idempotency_key,request_fingerprint,schema_version,input_character_count,outcome,cache_status,
+          charged_units,attempts,duration_ms,failure_code,metadata,completed_at)
+          VALUES(${organisation},${account},${competition},'text_to_brief','upgrade-ai-quota','upgrade-ai-quota',
+          'upgrade-ai-quota',${"b".repeat(64)},'1.0',12,'manual_fallback','not_checked',0,0,0,'quota_exhausted',
+          '{"provider_mode":"stub"}'::jsonb,now())`;
+        expect(await sql`SELECT failure_code FROM ai_action_ledger WHERE idempotency_key='upgrade-ai-quota'`).toEqual([
+          { failure_code: "quota_exhausted" },
+        ]);
         expect(
           (
             await sql<

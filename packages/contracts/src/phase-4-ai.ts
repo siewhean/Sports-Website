@@ -90,6 +90,7 @@ export type Phase4AiFailureCode =
   | "provider_authentication"
   | "provider_rate_limited"
   | "provider_unavailable"
+  | "quota_exhausted"
   | "timeout"
   | "unknown";
 

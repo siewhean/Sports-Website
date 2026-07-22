@@ -57,6 +57,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   const [slotId, setSlotId] = useState(
     eligibleSlots.find((slot) => slot.id !== current?.slotId && slot.available)?.id ?? "",
   );
+  const [showAllSlots, setShowAllSlots] = useState(false);
   const selectedSlot = moveSlots.find((slot) => slot.id === slotId) ?? null;
   const [validation, setValidation] = useState<Readonly<{ slotId: string; result: MoveValidation }> | null>(null);
   const [validatingSlotId, setValidatingSlotId] = useState<string | null>(null);
@@ -120,6 +121,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   }, [canEdit, currentRevisionId, match.id, selectedSlot]);
 
   function chooseDay(value: string) {
+    setShowAllSlots(false);
     setDay(value);
     const first = moveSlots.find(
       (slot) => slot.areaId === areaId && formatDayKey(slot.startsAt, document.timeZone) === value && slot.available,
@@ -138,6 +140,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   }
 
   function chooseArea(value: string) {
+    setShowAllSlots(false);
     setAreaId(value);
     const first = moveSlots.find(
       (slot) => slot.areaId === value && formatDayKey(slot.startsAt, document.timeZone) === day && slot.available,
@@ -308,7 +311,12 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
           <StepNumber value="3" />
           <fieldset disabled={!canEdit}>
             <legend>{phase4ScheduleCopy.selectTime}</legend>
-            <div className={styles.choices}>
+            <div
+              id="move-slot-options"
+              className={styles.choices}
+              data-expanded={showAllSlots || undefined}
+              data-testid="move-slot-choices"
+            >
               {eligibleSlots.map((slot) => (
                 <label key={slot.id} data-disabled={!slot.available || undefined}>
                   <input
@@ -334,6 +342,19 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
                 </label>
               ))}
             </div>
+            {eligibleSlots.length > 6 ? (
+              <button
+                className={styles.slotDisclosure}
+                type="button"
+                aria-expanded={showAllSlots}
+                aria-controls="move-slot-options"
+                onClick={() => setShowAllSlots((value) => !value)}
+              >
+                {showAllSlots
+                  ? phase4ScheduleCopy.showFewerTimes
+                  : interpolate(phase4ScheduleCopy.showAllTimes, { count: eligibleSlots.length })}
+              </button>
+            ) : null}
           </fieldset>
           {displayedValidation && !displayedValidation.valid ? (
             <div className={styles.validation} role="alert">

@@ -8,8 +8,10 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
   await page.goto("/organiser/competitions/singapore-open/setup?step=capacity");
   await dismissConsent(page);
   const mobileProgress = page.getByTestId("setup-mobile-progress");
-  if (testInfo.project.name.includes("phone")) await expect(mobileProgress).toBeVisible();
-  else await expect(mobileProgress).toBeHidden();
+  if (testInfo.project.name.includes("phone")) {
+    await expect(mobileProgress).toBeVisible();
+    await expect(mobileProgress.getByText("Step 2 of 8", { exact: true })).toBeVisible();
+  } else await expect(mobileProgress).toBeHidden();
   await expect(page.getByRole("button", { name: /Continue to settings/ })).toBeVisible();
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -51,4 +53,27 @@ test("format designer defaults to structured manual mode on phones", async ({ pa
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("format designer tablet keeps the complete graph and inspector reachable", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("tablet"), "Tablet reachability only");
+  await page.goto("/organiser/competitions/singapore-open/format");
+  await dismissConsent(page);
+  const canvas = page.getByTestId("format-canvas");
+  const finalStage = canvas.locator('[data-stage-id="stage-final"]');
+  const inspector = page.getByRole("complementary", { name: "Stage inspector" });
+  await expect(canvas).toBeVisible();
+  await expect(inspector).toBeVisible();
+  expect(await canvas.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  await finalStage.scrollIntoViewIfNeeded();
+  await finalStage.click();
+  await expect(inspector.locator("input").first()).toHaveValue("Final");
+  const [canvasBox, finalBox] = await Promise.all([canvas.boundingBox(), finalStage.boundingBox()]);
+  expect(canvasBox).not.toBeNull();
+  expect(finalBox).not.toBeNull();
+  expect(finalBox!.x).toBeGreaterThanOrEqual(canvasBox!.x);
+  expect(finalBox!.x + finalBox!.width).toBeLessThanOrEqual(canvasBox!.x + canvasBox!.width + 1);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
 });

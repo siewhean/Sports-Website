@@ -11,6 +11,7 @@ import type {
   Phase4FormatDraftView,
   Phase4FormatRevisionView,
   Phase4FormatValidationResponse,
+  Phase4AiFailureCode,
   Phase4OrganiserTemplateView,
   Phase4SaveFormatRevisionRequest,
   Phase4SaveOrganiserTemplateRequest,
@@ -994,11 +995,11 @@ export class Phase4Runtime {
         }>(
           reference.scope === "competition"
             ? `SELECT s.revision,v.definition_hash,v.version,v.schema_version FROM competition_sport_settings s
-               JOIN competitions c ON c.id=s.competition_id JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.sport_pack_version
+               JOIN competitions c ON c.id=s.competition_id JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.pack_version
                WHERE s.competition_id=$1`
             : `SELECT s.revision,v.definition_hash,v.version,v.schema_version FROM division_sport_settings s
                JOIN divisions d ON d.id=s.division_id JOIN competitions c ON c.id=d.competition_id
-               JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.sport_pack_version
+               JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.pack_version
                WHERE d.competition_id=$1 AND s.division_id=$2`,
           reference.scope === "competition" ? [access.id] : [access.id, reference.division_id],
         );
@@ -1111,17 +1112,27 @@ export class Phase4Runtime {
           result_revision: number;
           assignment_hash: string;
           option_id: string;
+          revision_status: string;
         }>(
-          `SELECT j.source_revision,o.result_revision,o.assignment_hash,o.id option_id
-           FROM schedule_generation_jobs j JOIN schedule_generation_options o ON o.job_id=j.id
-           WHERE j.id=$1 AND j.competition_id=$2 AND o.result_revision=$3`,
-          [values.schedule_review.schedule_job_id, access.id, values.schedule_review.selected_result_revision],
+          `SELECT (j.input_snapshot->>'source_revision')::int source_revision,
+             o.result_revision,r.assignment_hash,o.id option_id,r.status revision_status
+           FROM schedule_generation_jobs j
+           JOIN schedule_generation_options o ON o.job_id=j.id
+           JOIN schedule_revisions r ON r.source_job_id=j.id AND r.source_option_id=o.id
+           WHERE j.id=$1 AND j.competition_id=$2 AND o.result_revision=$3 AND r.id=$4`,
+          [
+            values.schedule_review.schedule_job_id,
+            access.id,
+            values.schedule_review.selected_result_revision,
+            values.schedule_review.schedule_revision_id,
+          ],
         ),
         "SCHEDULE_OPTION_NOT_FOUND",
         "Selected schedule option not found",
       );
       if (
         row.source_revision !== values.schedule_review.source_revision ||
+        !["ready_for_review", "published"].includes(row.revision_status) ||
         row.assignment_hash !== values.schedule_review.selected_result_hash
       )
         throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Schedule selection is stale");
@@ -1976,7 +1987,12 @@ export class Phase4Runtime {
       ledgerId: string;
       cached: Phase4CompetitionBrief | null;
       replay: boolean;
-      finalized: null | { outcome: string; cache_status: string; charged_units: 0 | 1; failure_code: string | null };
+      finalized: null | {
+        outcome: string;
+        cache_status: string;
+        charged_units: 0 | 1;
+        failure_code: Phase4AiFailureCode | null;
+      };
       quotaAvailable: boolean;
     };
     const begin = await this.transaction<Begin>(async (tx) => {
@@ -2025,7 +2041,7 @@ export class Phase4Runtime {
           outcome: string;
           cache_status: string;
           charged_units: 0 | 1;
-          failure_code: string | null;
+          failure_code: Phase4AiFailureCode | null;
         };
         cache_result: Phase4CompetitionBrief | null;
       }>(began.value);
@@ -2053,7 +2069,7 @@ export class Phase4Runtime {
       return {
         status:
           begin.finalized.outcome === "manual_fallback"
-            ? begin.finalized.failure_code === "unknown"
+            ? begin.finalized.failure_code === "quota_exhausted"
               ? ("quota_exhausted" as const)
               : ("manual_fallback" as const)
             : ("manual_fallback" as const),
@@ -2070,12 +2086,12 @@ export class Phase4Runtime {
     let result: Phase4CompetitionBrief | JsonObject = begin.cached ?? {};
     let attempts = 0;
     let durationMs = 0;
-    let failureCode: string | null = null;
+    let failureCode: Phase4AiFailureCode | null = null;
     let providerRequestId: string | undefined;
     if (begin.cached) {
       outcome = "success";
     } else if (!begin.quotaAvailable) {
-      failureCode = "unknown";
+      failureCode = "quota_exhausted";
     } else if (this.ai.provider === null) {
       failureCode = "provider_unavailable";
     } else {
@@ -2139,7 +2155,7 @@ export class Phase4Runtime {
       if (outcome === "success" && /quota exhausted/i.test(error instanceof Error ? error.message : "")) {
         outcome = "manual_fallback";
         cacheStatus = "not_checked";
-        failureCode = "unknown";
+        failureCode = "quota_exhausted";
         result = {};
         ledger = await finalize(outcome, cacheStatus);
       } else {
@@ -2160,11 +2176,8 @@ export class Phase4Runtime {
       };
     }
     return {
-      status:
-        !begin.quotaAvailable || failureCode === "unknown"
-          ? ("quota_exhausted" as const)
-          : ("manual_fallback" as const),
-      ...(failureCode && failureCode !== "unknown" ? { reason: failureCode } : {}),
+      status: failureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(failureCode ? { reason: failureCode } : {}),
       preserved_text: normalizedText,
       charged_units: 0 as const,
       usage: await usage(),

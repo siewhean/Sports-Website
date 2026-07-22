@@ -193,8 +193,7 @@ export function AssistedSetupJourneyView({
       <section className={styles.main}>
         <div className={styles.mobileProgress} data-testid="setup-mobile-progress">
           <span>
-            {t("prototype.8e6a6cca7aae")}
-            {currentIndex + 1} {t("prototype.988a89fbb78c")}
+            {t("prototype.8e6a6cca7aae")} {currentIndex + 1} {t("prototype.988a89fbb78c")}
           </span>
           <strong>{currentStep.label}</strong>
           <progress

@@ -28,6 +28,20 @@ test("schedule swaps the compressed timeline for a semantic phone list", async (
     await expect(
       region.getByRole("button", { name: /SF1, .*Marina Barracudas vs Seletar Paddlers.*Conflict/ }),
     ).toBeVisible();
+    const finalMatch = region.getByRole("button", { name: /SF2, .*Telok Ayer Tide vs Bedok Undertow/ });
+    const canScroll = await region.evaluate((element) => element.scrollWidth > element.clientWidth);
+    if (canScroll) {
+      await region.evaluate((element) => element.scrollTo({ left: element.scrollWidth }));
+      await expect.poll(() => region.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    }
+    await finalMatch.scrollIntoViewIfNeeded();
+    const [regionBox, finalMatchBox] = await Promise.all([region.boundingBox(), finalMatch.boundingBox()]);
+    expect(regionBox).not.toBeNull();
+    expect(finalMatchBox).not.toBeNull();
+    expect(finalMatchBox!.x + finalMatchBox!.width).toBeLessThanOrEqual(regionBox!.x + regionBox!.width + 1);
+    if (testInfo.project.name === "desktop-chromium") {
+      expect(regionBox!.y).toBeLessThan(page.viewportSize()!.height);
+    }
   }
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
@@ -96,12 +110,20 @@ test("phone organiser selects a match, day, available area and valid time before
   await expect(page.getByRole("heading", { name: "SF1" })).toBeVisible();
   await page.getByRole("link", { name: "Move match" }).click();
   await expect(page.getByTestId("phase4-move-flow")).toBeVisible();
+  const slotChoices = page.getByTestId("move-slot-choices");
+  const disclosure = page.getByRole("button", { name: "Show all 18 times" });
+  await expect(disclosure).toBeVisible();
+  await expect(slotChoices.locator("label:visible")).toHaveCount(6);
+  await disclosure.click();
+  await expect(slotChoices.locator("label:visible")).toHaveCount(18);
+  await expect(page.getByRole("button", { name: "Show fewer times" })).toBeVisible();
 
   await page.getByRole("radio", { name: "Sun, 16 Aug" }).check();
   await expect(page.getByRole("radio", { name: /Pool A/ })).toBeDisabled();
   await expect(page.getByRole("radio", { name: /Pool B/ })).toBeChecked();
   await page.getByRole("radio", { name: "Sat, 15 Aug" }).check();
   await page.getByRole("radio", { name: /Pool A/ }).check();
+  await page.getByRole("button", { name: "Show all 18 times" }).click();
   const validTimes = page
     .getByRole("group", { name: "Select valid time" })
     .locator('input[type="radio"]:not(:disabled)');

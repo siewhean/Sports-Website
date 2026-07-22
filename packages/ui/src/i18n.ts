@@ -224,6 +224,8 @@ export const messages = {
     selectDay: "Select day",
     selectArea: "Select available playing area",
     selectTime: "Select valid time",
+    showAllTimes: "Show all {count} times",
+    showFewerTimes: "Show fewer times",
     noValidSlots: "No valid slots on this day",
     playingAreaOccupied: "Another match already uses this playing area.",
     currentMatchSlot: "This match is already in this slot.",
