@@ -237,11 +237,20 @@ describe("current Assisted Setup recommendation contract", () => {
     const selected = setupDocument();
     expect(parseAssistedSetupDocument(selected, competitionId)).toEqual(selected);
 
-    const unselected = structuredClone(selected);
-    const selection = unselected.values.format_recommendations!;
-    selection.selected_recommendation_id = null;
-    selection.recommendations[0]!.format_revision_id = null;
-    selection.recommendations[0]!.division_formats[0]!.format_revision_id = null;
+    const selectedEvidence = selected.values.format_recommendations!;
+    const unselectedEvidence = {
+      ...selectedEvidence,
+      selected_recommendation_id: null,
+      recommendations: selectedEvidence.recommendations.map((recommendation) => ({
+        ...recommendation,
+        format_revision_id: null,
+        division_formats: recommendation.division_formats.map((division) => ({
+          ...division,
+          format_revision_id: null,
+        })),
+      })),
+    };
+    const unselected = setupDocument({}, { format_recommendations: unselectedEvidence });
     expect(parseAssistedSetupDocument(unselected, competitionId)).toEqual(unselected);
     expect(
       isAssistedSetupAutosaveRequest({
@@ -249,7 +258,7 @@ describe("current Assisted Setup recommendation contract", () => {
         idempotency_key: "setup-current-parser-1",
         transition: {
           kind: "save_step",
-          step: { step_id: "format_recommendations", value: selection },
+          step: { step_id: "format_recommendations", value: unselectedEvidence },
         },
       }),
     ).toBe(true);
