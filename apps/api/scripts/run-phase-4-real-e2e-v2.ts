@@ -339,7 +339,10 @@ async function createSetupFixture(
   for (const stepId of ["basics", "capacity", "settings", "entries"] as const) {
     const value = document.values[stepId];
     if (!value) throw new Error(`Seeded setup has no ${stepId}`);
-    document = await saveStep(phase4, accountId, competition.id, document, { step_id: stepId, value } as Phase4SetupStepValue);
+    document = await saveStep(phase4, accountId, competition.id, document, {
+      step_id: stepId,
+      value,
+    } as Phase4SetupStepValue);
   }
   if (!document.values.format_preferences) throw new Error("Seeded setup has no format preferences");
   document = await saveStep(phase4, accountId, competition.id, document, {
@@ -466,7 +469,7 @@ async function createScheduledFixture(
     settings_references: settingsReferences,
     selected_result_revision: option.result_revision,
     selected_result_hash: accepted.assignment_hash,
-    objective: option.objective,
+    objective: completedJob.objective,
     schedule_revision_id: accepted.id,
     feasibility: "valid" as const,
   };
@@ -525,11 +528,7 @@ async function createScheduledFixture(
   };
 }
 
-async function seed(
-  sql: Sql,
-  isolation: Isolation,
-  queue: ScheduleJobQueue,
-): Promise<GateBRealState> {
+async function seed(sql: Sql, isolation: Isolation, queue: ScheduleJobQueue): Promise<GateBRealState> {
   const accountId = randomUUID();
   const outsiderId = randomUUID();
   const organisationId = randomUUID();
@@ -558,14 +557,7 @@ async function seed(
     phase2,
   );
 
-  const recommendation = await createSetupFixture(
-    sql,
-    phase3,
-    phase4,
-    accountId,
-    organisationId,
-    "recommendations",
-  );
+  const recommendation = await createSetupFixture(sql, phase3, phase4, accountId, organisationId, "recommendations");
   const acceptedBase = await createSetupFixture(sql, phase3, phase4, accountId, organisationId, "accepted");
   const completedBase = await createSetupFixture(sql, phase3, phase4, accountId, organisationId, "completed");
   const accepted = await createScheduledFixture(
