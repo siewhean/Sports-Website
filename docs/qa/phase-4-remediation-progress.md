@@ -1,194 +1,247 @@
 # Phase 4 Gate B remediation progress
 
-**Updated:** 22 July 2026  
+**Updated:** 23 July 2026  
 **Branch:** `agent/gate-b-production-readiness-audit`  
-**Plan:** `docs/qa/GATE_B_BLOCKER_REMEDIATION_PLAN.md`
+**Plan:** `docs/qa/GATE_B_BLOCKER_REMEDIATION_PLAN.md`  
+**Validation PR:** #7
 
 ## Current overall verdict
 
 **Verdict: BLOCKED**
 
-The source remediation has advanced, but the repository has not been executed in a complete checkout with Node `24.18.0`, pnpm `10.33.0`, PostgreSQL, Redis, Chromium, and WebKit. Gate B cannot receive PASS and Gate C must not begin.
+The known Gate B source gaps have been substantially remediated and the acceptance process is now fail-closed. Gate B still cannot receive PASS because the current environment cannot execute the pinned Node/PostgreSQL/Redis/Playwright suite, GitHub-hosted jobs fail before creating a step, and no real staging-provider or organiser receipts have been supplied.
+
+Gate C must not begin.
 
 ## Phase status
 
-| Phase | Status | Verdict | Notes |
-|---|---|---|---|
-| Phase 0 — Baseline | In progress | BLOCKED | Strict local runner and evidence self-test implemented; exact pinned environment unavailable here |
-| Phase 1 — Correctness | Source remediation expanded | BLOCKED | Migrations 0025–0027 and regressions require full execution |
-| Phase 2 — Real full-stack E2E | Worker-backed harness implemented in source | BLOCKED | Real worker, accepted/published fixtures, browser reads, and negative transport tests added; complete browser-driven mutation journey remains |
-| Phase 3 — Dependencies | Not started | BLOCKED | Production audit remains red; lockfile must be regenerated with the pinned package manager |
-| Phase 4 — UX/accessibility | Partial | BLOCKED | 320px and WCAG gate changes exist; reload behavior and visual-platform policy remain |
-| Phase 5 — Reliability/performance | Not started | BLOCKED | No thresholds or load evidence |
-| Phase 6 — Production AI | Not started | BLOCKED | Provider-or-disable decision unresolved |
-| Phase 7 — External evidence | Not started | BLOCKED | Phase 0/1 identity, CDN, telemetry, restore, privacy, and domain approvals remain open |
-| Phase 8 — Independent verdict | Not started | BLOCKED | Depends on prior phases |
+| Phase | Source status | Executed evidence | Verdict | Blocking evidence |
+|---|---|---|---|---|
+| 0 — Baseline and evidence | Complete | Small helper checks only | BLOCKED | Full checkout and pinned runner unavailable |
+| 1 — Correctness | Remediated through migration 0030 | Not executed against PostgreSQL | BLOCKED | Frozen install, typecheck, migration and integration results |
+| 2 — Authenticated full-stack E2E | Implemented, including browser-owned critical decisions | Not executed | BLOCKED | Two clean Chromium/WebKit runs and database oracles |
+| 3 — Dependencies | Known vulnerable versions absent; audit remains mandatory | Not executed | BLOCKED | `pnpm audit --prod` result from current lockfile |
+| 4 — UX/accessibility | Reload removal, focus restoration, 320px/WCAG and visual policy implemented | Not executed | BLOCKED | Chromium/WebKit accessibility and visual artifacts |
+| 5 — Reliability/performance | Deterministic multi-match performance qualification implemented | Not executed | BLOCKED | Pinned-runner latency results |
+| 6 — Production AI | Complete decision: disabled/manual-first | Unit source added, not executed | BLOCKED | Full suite must confirm fail-closed production configuration |
+| 7 — External evidence | Machine-verifiable gate and collection runbook implemented | Synthetic validator logic checked; real receipts absent | BLOCKED | OIDC, CDN/purge, hosted telemetry, managed restore and organiser receipts |
+| 8 — Independent verdict | Not issued | None | BLOCKED | Depends on every prior required check passing |
 
-## Implementation completed
+## Source remediation completed
 
-### Phased QA/QC plan
+### Strict no-skip runner
 
-- Added `docs/qa/GATE_B_BLOCKER_REMEDIATION_PLAN.md`.
-- Defined eight ordered remediation phases.
-- Defined automated, adversarial, manual, and independent checks after every phase.
-- Limited verdicts to `PASS`, `FAIL`, and `BLOCKED`.
+The strict runner and pinned container now require:
 
-### Strict local evidence runner
+- Node `24.18.x` and pnpm `10.33.0`;
+- frozen lockfile installation;
+- clean-output, formatting, lint and full monorepo typechecking;
+- unit, migration, backup/restore and infrastructure integration tests;
+- deterministic scheduler performance qualification;
+- canonical Phase 2, Phase 3 and Phase 4 fixtures;
+- OpenAPI, dependency audit and secret scanning;
+- production build, deployment manifest and origin asset verification;
+- Chromium and WebKit browser engines;
+- the authenticated Gate B journey twice from clean isolation;
+- the normal browser, accessibility and visual suites;
+- commit-bound staging-provider and organiser evidence;
+- whitespace validation.
 
-Added:
+Any failed or skipped required command makes the verdict FAIL.
 
-- `scripts/gate-b-evidence.mjs`
-- `scripts/test-gate-b-evidence.mjs`
-- `scripts/run-gate-b-local.mjs`
-- `pnpm qa:gate-b:runner-self-test`
-- `pnpm qa:gate-b:local`
+The QA container includes PostgreSQL 18 client tools, Chromium, WebKit and a checksum-verified Gitleaks binary. PostgreSQL, Redis and Mailpit are supplied by the outer Compose project. Git metadata is mounted read-only at runtime so commit attribution, history secret scanning and whitespace checks remain available without baking repository history into the image.
 
-The runner:
+### Correctness and database lineage
 
-- requires Node `24.18.x` and pnpm `10.33.0`;
-- performs a frozen install;
-- runs unit, migration, backup, infrastructure, fixture, OpenAPI, dependency, secret, build, browser, accessibility, visual, and whitespace checks;
-- runs the real Gate B E2E twice from clean isolation;
-- stops after a blocking failure by default;
-- marks every unrun check as skipped;
-- returns FAIL when any required check fails or is skipped;
-- writes mode-0600 logs and a SHA-256-bound summary outside tracked source paths by default;
-- redacts known secret environment values, key/value credentials, cookies, and Bearer authorization values.
+Implemented source remediation includes:
 
-### Executed runner self-test
-
-The evidence helper self-test was executed in the available Node `22.16.0` environment. The first run exposed a missing `Bearer value` redaction case. That defect was fixed and the repeated self-test passed.
-
-This is evidence for the small evidence-helper module only. It is not evidence for the Gate B application and does not replace the pinned Node `24.18.0` run.
-
-### Correctness remediation
-
-Existing source remediation includes:
-
-- unselected recommendation resume preservation;
-- accepted schedule and publication hash-domain corrections;
-- truthful completed/expired read-only setup documents;
+- preservation of valid unselected recommendation evidence;
+- correct accepted-assignment versus solver-result hash domains;
+- truthful completed and expired read-only setup documents;
 - server-owned recommendation selection canonicalisation;
-- deterministic per-entry format participation metrics;
-- staging/production demo-data fail-closed checks at build and request time;
-- stricter WCAG A/AA and 320 CSS-pixel tests.
+- deterministic minimum guarantee and maximum participation metrics;
+- atomic materialisation and publication of every selected division format;
+- read-only visibility of a selected published format when no editable draft exists;
+- idempotent republication of the same exact format without duplicate audit or outbox evidence;
+- serialized prevention of schedule rollback over a newer public revision;
+- preservation of legitimate private schedule repairs while a stable revision is public;
+- populated migration upgrades through migration `0030_phase4_idempotent_format_publication.sql`;
+- production demo-data fail-closed configuration;
+- production AI disabled outside the complete deterministic/manual path.
 
-Newly discovered and remediated blocker:
+### Assisted Setup contract repair
 
-- Assisted Setup recommendation selection created only draft format revisions, while schedule generation accepts only published, materialised revisions.
-- Migration `0027_phase4_publish_selected_formats.sql` now materialises and publishes every selected division format atomically inside the setup mutation.
-- The trigger binds every selected revision to the immutable recommendation set, candidate, candidate-division record, competition, division, and definition hash.
-- Missing, duplicate, malformed, stale, superseded, cross-competition, or incomplete format evidence causes the entire setup save to roll back.
-- Added clean-schema, populated-upgrade, and API integration regressions.
+Static review found that the existing web parser still expected an obsolete reduced recommendation shape. It rejected current canonical responses containing:
 
-### Worker-backed real E2E harness
+- `format_revision_id: null` before selection;
+- guaranteed-match evidence;
+- ranking coverage;
+- available-slot evidence;
+- per-division candidate and applied-format lineage.
 
-The authoritative harness is now:
+`apps/web/lib/phase4-assisted-setup-current.ts` now validates the complete current contract and supports both selected and unselected evidence. It also validates the full recommendation selection request posted by the organiser UI. The exact app alias and BFF write boundary use this current parser.
 
-- `apps/api/scripts/run-phase-4-real-e2e-v2.ts`
-- `apps/web/playwright.gate-b-real.config.ts`
-- `apps/web/tests/phase-4-real-gate-b.spec.ts`
+### Schedule-to-setup evidence bridge
 
-The superseded v1 harness and duplicate browser spec were removed.
+The schedule UI now persists canonical Assisted Setup evidence after actual organiser actions:
 
-The v2 harness is designed to:
+- accepting a solver option stores exact `schedule_review` evidence;
+- publishing stores exact `review_publish` evidence;
+- settings references are reduced to immutable pointers;
+- assignment hashes, result revisions, job IDs, selected format IDs and publication revision IDs are preserved;
+- accept and publish idempotency keys survive partial failure and are cleared only after setup evidence is stored;
+- versioned publication responses validate the required `schedule_version` separately from the immutable revision response.
 
-- start PostgreSQL and Redis;
-- create a disposable database or isolated schema;
-- apply every migration;
-- start the actual `SchedulerRuntime` with `PostgresScheduleJobStore` and `DomainScheduleOptimizer`;
-- verify scheduler readiness;
-- create real organizer and cross-tenant sessions;
-- create unselected, accepted, and published/completed setup states;
-- enqueue schedule generation through Redis;
-- consume it with the real worker;
-- accept the current-best option;
-- publish the schedule;
-- complete setup;
-- build and start the production Next.js application in API mode;
-- run desktop and phone Chromium projects;
-- assert recommendation, accepted schedule, completed setup, publication, and duplicate-audit database oracles;
-- clean up processes, Redis clients, PostgreSQL isolation, and temporary credentials on success, failure, or interruption.
+This closes the product integration gap where a schedule could be accepted and published but Assisted Setup could not be completed without fixture-only runtime calls.
 
-The real browser spec currently verifies:
+### Schedule workspace UX
 
-1. unselected recommendations survive resume and reload without a revision increment;
-2. accepted schedule evidence survives resume and retains the exact schedule revision;
-3. published completed setup reloads as read-only;
-4. the public projection exposes the published schedule version;
-5. organizer session credentials remain HttpOnly and absent from browser storage and URLs;
-6. cross-tenant reads, missing CSRF, and malicious origins fail closed;
-7. positive flows emit no unexpected application 4xx/5xx responses or console errors.
+Successful option acceptance, publication, lock and unlock no longer call `window.location.reload()`.
 
-## Static QA/QC performed
+The workspace now:
 
-- Confirmed UUID organizer routes and loopback cookie forwarding.
-- Confirmed the reliable runtime constructor and public-projection argument match production startup.
-- Confirmed the Redis queue payload and worker runtime contracts.
-- Confirmed schedule options inherit the objective from the job, not a non-existent option field.
-- Confirmed the selected-format transition previously left formats unschedulable.
-- Confirmed migration `0027` executes inside the setup transaction and rolls back atomically on any selected-division failure.
-- Confirmed the state file is mode `0600` and removed during cleanup.
-- Confirmed database/schema cleanup and child-process cleanup paths exist.
-- Confirmed the public browser test asserts the supported schedule-version contract while PostgreSQL checks the exact internal revision ID.
+- uses `router.refresh()`;
+- preserves selected objective, selected match, scroll and component state;
+- announces success through an atomic polite live region;
+- restores focus without scrolling;
+- distinguishes transport failure from canonical setup-sync failure;
+- has a static regression forbidding hard reloads on this surface.
 
-## QA/QC not yet performed
+### Real authenticated browser journey
 
-The following remain unexecuted and unknown:
+The real E2E harness uses:
 
-- frozen pnpm install;
-- formatting;
-- ESLint;
-- TypeScript compilation;
-- full unit tests;
-- PostgreSQL migration execution;
-- populated upgrade execution;
-- infrastructure integration tests;
-- backup and restore;
-- production web build;
-- scheduler-worker execution;
-- Playwright desktop and phone execution;
-- browser screenshots and traces;
-- WebKit smoke testing;
-- dependency audit;
-- OpenAPI and asset verification;
-- process interruption cleanup under real child processes.
+```text
+Playwright
+→ production Next.js
+→ same-origin BFF
+→ Fastify API
+→ real identity session and CSRF
+→ isolated PostgreSQL database/schema
+→ Redis queue
+→ actual scheduler worker
+→ public projection
+```
 
-## Remaining Phase 1 work
+The browser suite now creates a dedicated competition through authenticated HTTP prerequisites, then drives these critical decisions through the rendered organiser UI:
 
-1. Execute migrations `0025`, `0026`, and `0027` from clean and populated schemas.
-2. Execute forged recommendation and selected-format evidence tests.
-3. Run concurrent resume and idempotent replay tests.
-4. Verify no previous migration checksum changed.
-5. Run backup/restore through the new trigger and selected format projections.
-6. Issue an independent Phase 1 remediation verdict.
+1. select the server-owned recommendation;
+2. generate a Balanced schedule through Redis;
+3. wait for and accept the real current-best option;
+4. persist schedule review evidence through the UI integration;
+5. lock a scheduled match;
+6. publish the schedule;
+7. persist publication evidence;
+8. complete Assisted Setup;
+9. verify read-only completion and the exact published assignment hash.
 
-## Remaining Phase 2 work
+The dedicated journey is isolated from the fixed unselected, accepted and completed oracle fixtures. The real matrix contains phone Chromium, desktop Chromium and desktop WebKit. The complete journey runs on both desktop engines.
 
-1. Execute and repair the v2 harness.
-2. Drive recommendation selection, schedule generation, acceptance, lock, move, comparison, publication, and completion from the browser rather than using fixture runtime calls for those mutations.
-3. Add viewer, official, and archived-competition browser/API tests.
-4. Add mobile semantic move-flow coverage.
-5. Add lock and child-revision database oracles.
-6. Add format lineage, audit, outbox, and idempotent replay oracles for every critical mutation.
-7. Add WebKit smoke coverage after Chromium passes.
-8. Execute desktop and phone journeys twice from clean isolation.
+### Accessibility and visual portability
 
-## Required command
+Source changes include:
 
-From a complete checkout with the pinned toolchain:
+- WCAG A/AA-tagged Axe failures as blockers;
+- 320 CSS-pixel reflow coverage;
+- structured non-drag schedule movement path coverage in the existing suite;
+- Chromium and WebKit installation aligned with configured projects;
+- standard browser tests isolated from the special real Gate B state file;
+- explicit canonical snapshot paths and bounded cross-platform pixel drift;
+- no snapshot regeneration during normal validation.
+
+### Dependency and supply-chain controls
+
+The current lockfile resolves the previously named dependency paths above their published fixes:
+
+- `fast-uri` at patched versions;
+- `sharp` 0.34.5;
+- Sharp libvips optional packages at 1.2.4.
+
+A deterministic known-advisory assertion runs before, but does not replace, `pnpm audit --prod --audit-level moderate`.
+
+The secret scan uses Git history when Git metadata is present and a directory scan in the image-only fallback. The QA image installs a pinned Gitleaks release with verified upstream checksums.
+
+### External evidence gate
+
+Gate B now refuses PASS unless these five ignored files exist under `artifacts/qa/gate-b/external`:
+
+- `oidc.json`;
+- `cdn.json`;
+- `telemetry.json`;
+- `restore.json`;
+- `organisers.json`.
+
+The validator requires:
+
+- exact tested-commit binding;
+- staging environment evidence no older than the configured limit;
+- no secrets, cookies, credentials, tokens or private keys;
+- OIDC PKCE/recovery/revocation/signature/replay receipts;
+- CDN TLS, Brotli, MISS→HIT, private bypass, AVIF/WebP and purge receipts;
+- hosted trace, error, alert and request-correlation receipts;
+- encrypted retained cross-region restore with equal row counts and SHA-256 fingerprints;
+- restore evidence at the actual latest repository migration;
+- chronologically consistent collection, purge, backup, restore and review timestamps;
+- one local and one national-level organiser, each passing the five critical organiser tasks with no blocking findings.
+
+Collection templates and privacy rules are documented in `docs/qa/GATE_B_EXTERNAL_EVIDENCE.md`.
+
+## Limited checks executed in the audit environment
+
+The available environment is Node `22.16.0` without pnpm, Docker, PostgreSQL, Redis or a complete MATCHDAY checkout. The following limited checks have been performed:
+
+- the original Gate B evidence helper self-test exposed and then verified a Bearer-redaction fix;
+- the external evidence validator logic accepted a complete synthetic bundle and rejected commit mismatch and secret-bearing evidence before the latest chronology tightening;
+- standalone strict TypeScript checks with stubbed contract modules passed for the current Assisted Setup adapter and schedule-to-setup synchronisation module;
+- source-level API registration, BFF, scheduler, identity, publication and parser contracts were reviewed after each change.
+
+These are narrow checks only. They are not Gate B application evidence and do not replace the pinned runner.
+
+## Evidence still unavailable
+
+The following required outcomes remain unexecuted or absent:
+
+- Node `24.18.x` container run;
+- pnpm `10.33.0` frozen installation;
+- formatting, ESLint and full monorepo typechecking;
+- clean and populated PostgreSQL migrations through migration 0030;
+- infrastructure integration tests and local backup/restore;
+- current-lockfile production dependency audit;
+- production web/API build and origin asset verification;
+- real scheduler and authenticated browser journey twice from clean isolation;
+- Chromium and WebKit screenshots, traces, accessibility and visual results;
+- real OIDC tenant receipts;
+- real CDN/purge receipts;
+- hosted telemetry/error/alert receipts;
+- managed retained cross-region restore receipt;
+- two independent organiser attestations.
+
+GitHub Actions currently creates `quality` and `secrets` jobs but fails before creating any step or log. This is an external runner/account failure and provides no application PASS or FAIL evidence.
+
+The connected Vercel account has no linked MATCHDAY project or checkout, and the available connector cannot create a new project from this repository. It cannot substitute for the pinned validation environment.
+
+## Required completion sequence
+
+1. Freeze the final Gate B commit.
+2. Deploy that exact commit to staging with the chosen identity, CDN, telemetry and managed database providers.
+3. Collect all five external evidence files against that commit.
+4. Run:
 
 ```bash
 pnpm qa:gate-b:runner-self-test
-pnpm qa:gate-b:local
+pnpm qa:gate-b:external-self-test
+pnpm qa:gate-b:external
+bash scripts/run-gate-b-container.sh
 ```
 
-The strict runner expands this into every required command and refuses PASS when anything fails or is skipped.
-
-## Advancement rule
-
-Gate B remains `BLOCKED` until Phases 0–8 satisfy their exit criteria. Gate C must not begin before the independent Gate B verdict is exactly:
+5. Repair the first executable failure and rerun from clean isolation.
+6. Repeat until every required check executes with zero failures and zero skips.
+7. Issue `docs/qa/phase-4-final-verdict.md` only when the generated summary says exactly:
 
 ```text
 Verdict: PASS
 ```
+
+## Advancement rule
+
+Gate B remains `BLOCKED`. No merge recommendation and no Gate C work are permitted until the exact no-skip PASS evidence exists.
