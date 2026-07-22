@@ -18,7 +18,11 @@ export default defineConfig({
     serviceWorkers: "block",
   },
   projects: [
-    { name: "gate-b-real-desktop-chromium", use: { ...devices["Desktop Chrome"] } },
     { name: "gate-b-real-phone-chromium", use: { ...devices["Pixel 7"] } },
+    {
+      name: "gate-b-real-desktop-chromium",
+      dependencies: ["gate-b-real-phone-chromium"],
+      use: { ...devices["Desktop Chrome"] },
+    },
   ],
 });
