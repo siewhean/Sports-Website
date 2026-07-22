@@ -42,6 +42,10 @@ import {
   type ScheduleObjective,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
+import {
+  syncAcceptedScheduleWithSetup,
+  syncPublishedScheduleWithSetup,
+} from "@/lib/phase4-schedule-setup-sync";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -66,6 +70,8 @@ function withRetainedAlternative(current: readonly ScheduleOption[], option: Sch
 export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) {
   const router = useRouter();
   const liveRef = useRef<HTMLParagraphElement>(null);
+  const acceptKeysRef = useRef(new Map<string, string>());
+  const publishKeyRef = useRef<string | null>(null);
   const [job, setJob] = useState(document.activeJob);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
@@ -135,27 +141,34 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     name: string,
     url: string,
     body: Record<string, unknown>,
-    onSuccess?: (payload: unknown) => void,
+    onSuccess?: (payload: unknown) => void | Promise<void>,
     method: "POST" | "DELETE" = phase4ScheduleMachine.post,
   ) {
     if (busy) return;
     setBusy(name);
     setCommandError("");
     setMessage("");
+    let response: Response;
     try {
-      const response = await fetch(url, {
+      response = await fetch(url, {
         method,
         headers: { "content-type": phase4ScheduleMachine.json },
         body: JSON.stringify(body),
       });
+    } catch {
+      setCommandError(phase4ScheduleCopy.offlineBody);
+      setBusy(null);
+      return;
+    }
+    try {
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         setCommandError(commandErrorMessage(response.status, errorCode(payload)));
         return;
       }
-      onSuccess?.(payload);
+      await onSuccess?.(payload);
     } catch {
-      setCommandError(phase4ScheduleCopy.offlineBody);
+      setCommandError(phase4ScheduleCopy.errorBody);
     } finally {
       setBusy(null);
     }
@@ -224,14 +237,25 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
       setCommandError(phase4ScheduleCopy.malformed);
       return;
     }
+    const idempotencyKey =
+      acceptKeysRef.current.get(option.id) ?? createIdempotencyKey(phase4ScheduleMachine.acceptKey);
+    acceptKeysRef.current.set(option.id, idempotencyKey);
     await command(
       phase4ScheduleMachine.acceptAction,
       `/api/phase4/schedule/jobs/${encodeURIComponent(option.jobId)}/options/${encodeURIComponent(option.id)}/accept`,
       {
-        idempotency_key: createIdempotencyKey(phase4ScheduleMachine.acceptKey),
+        idempotency_key: idempotencyKey,
         expected_job_revision: option.jobRevision,
       },
-      () => {
+      async (payload) => {
+        await syncAcceptedScheduleWithSetup({
+          competitionId: document.competitionId,
+          sourceRevision: document.sourceRevision,
+          capacityRevision: document.capacityRevision,
+          option,
+          response: payload,
+        });
+        acceptKeysRef.current.delete(option.id);
         setJob(null);
         setRetainedAlternatives([]);
         refreshWorkspace(phase4ScheduleCopy.optionSaved);
@@ -241,14 +265,19 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
 
   async function publish() {
     if (!document.currentRevision) return;
+    publishKeyRef.current ??= createIdempotencyKey(phase4ScheduleMachine.publishKey);
     await command(
       phase4ScheduleMachine.publishAction,
       `/api/phase4/schedule/revisions/${encodeURIComponent(document.currentRevision.id)}/publish`,
       {
-        idempotency_key: createIdempotencyKey(phase4ScheduleMachine.publishKey),
+        idempotency_key: publishKeyRef.current,
         expected_revision: document.currentRevision.revision,
       },
-      () => refreshWorkspace(phase4ScheduleCopy.publishSuccess),
+      async (payload) => {
+        await syncPublishedScheduleWithSetup({ competitionId: document.competitionId, response: payload });
+        publishKeyRef.current = null;
+        refreshWorkspace(phase4ScheduleCopy.publishSuccess);
+      },
     );
   }
 
