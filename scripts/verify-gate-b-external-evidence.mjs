@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -15,9 +15,12 @@ const outputDirectory = path.resolve(
   root,
   process.env.GATE_B_EXTERNAL_SUMMARY_DIR || "artifacts/qa/gate-b/external-validation",
 );
+const migrationsDirectory = path.resolve(root, "packages/database/migrations");
 const maximumAgeDays = Number(process.env.GATE_B_EXTERNAL_MAX_AGE_DAYS || 30);
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const now = Date.now();
+const futureToleranceMs = 5 * 60_000;
+let latestMigration = "";
 
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -43,15 +46,22 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function assertNotFuture(name, value, reference = now) {
+  assert(iso(value), `${name}: must be ISO-8601`);
+  assert(Date.parse(value) <= reference + futureToleranceMs, `${name}: is unexpectedly in the future`);
+}
+
+function assertFresh(name, value) {
+  assertNotFuture(name, value);
+  assert(now - Date.parse(value) <= maximumAgeDays * 86_400_000, `${name}: is older than ${maximumAgeDays} days`);
+}
+
 function assertCommon(name, evidence) {
   assert(evidence.schema_version === 1, `${name}: schema_version must be 1`);
   assert(evidence.commit === commit, `${name}: evidence commit must equal ${commit}`);
   assert(evidence.environment === "staging", `${name}: environment must be staging`);
   assert(nonEmpty(evidence.provider), `${name}: provider is required`);
-  assert(iso(evidence.collected_at), `${name}: collected_at must be ISO-8601`);
-  const ageMs = now - Date.parse(evidence.collected_at);
-  assert(ageMs >= -5 * 60_000, `${name}: collected_at is unexpectedly in the future`);
-  assert(ageMs <= maximumAgeDays * 86_400_000, `${name}: evidence is older than ${maximumAgeDays} days`);
+  assertFresh(`${name}.collected_at`, evidence.collected_at);
 }
 
 function assertNoSecrets(value, location = "evidence") {
@@ -160,7 +170,11 @@ function validateCdn(evidence) {
   );
   assert(purge.passed === true && nonEmpty(purge.receipt_id), "cdn.purge: successful receipt required");
   assert(Number.isSafeInteger(purge.published_version) && purge.published_version >= 1, "cdn.purge: published_version must be positive");
-  assert(iso(purge.purged_at), "cdn.purge: purged_at must be ISO-8601");
+  assertFresh("cdn.purge.purged_at", purge.purged_at);
+  assert(
+    Date.parse(purge.purged_at) <= Date.parse(evidence.collected_at) + futureToleranceMs,
+    "cdn.purge.purged_at: cannot be later than evidence collection",
+  );
 }
 
 function validateTelemetry(evidence) {
@@ -219,7 +233,16 @@ function validateRestore(evidence) {
     "restore: unexpected or missing fields",
   );
   assert(nonEmpty(evidence.backup_id) && nonEmpty(evidence.receipt_id), "restore: backup_id and receipt_id are required");
-  assert(iso(evidence.backup_created_at) && iso(evidence.restore_completed_at), "restore: timestamps must be ISO-8601");
+  assertFresh("restore.backup_created_at", evidence.backup_created_at);
+  assertFresh("restore.restore_completed_at", evidence.restore_completed_at);
+  assert(
+    Date.parse(evidence.backup_created_at) <= Date.parse(evidence.restore_completed_at),
+    "restore: backup_created_at must not follow restore_completed_at",
+  );
+  assert(
+    Date.parse(evidence.restore_completed_at) <= Date.parse(evidence.collected_at) + futureToleranceMs,
+    "restore: restore_completed_at cannot be later than evidence collection",
+  );
   assert(evidence.encrypted === true, "restore: encrypted must be true");
   assert(Number.isSafeInteger(evidence.retention_days) && evidence.retention_days >= 7, "restore: retention_days must be at least 7");
   assert(nonEmpty(evidence.source_region) && nonEmpty(evidence.restore_region), "restore: regions are required");
@@ -228,7 +251,7 @@ function validateRestore(evidence) {
   assert(evidence.restored_row_count === evidence.source_row_count, "restore: row counts differ");
   assert(/^[0-9a-f]{64}$/u.test(String(evidence.source_fingerprint)), "restore: source_fingerprint must be SHA-256");
   assert(evidence.restored_fingerprint === evidence.source_fingerprint, "restore: fingerprints differ");
-  assert(/^\d{4}_[a-z0-9_]+\.sql$/u.test(String(evidence.migration_head)), "restore: migration_head is invalid");
+  assert(evidence.migration_head === latestMigration, `restore: migration_head must equal ${latestMigration}`);
   assert(Number.isFinite(evidence.rpo_minutes) && evidence.rpo_minutes >= 0, "restore: rpo_minutes must be non-negative");
   assert(Number.isFinite(evidence.rto_minutes) && evidence.rto_minutes > 0, "restore: rto_minutes must be positive");
 }
@@ -272,7 +295,11 @@ function validateOrganisers(evidence) {
     assert(review.scope === "local" || review.scope === "national", `${name}: scope must be local or national`);
     scopes.add(review.scope);
     assert(nonEmpty(review.organisation_type) && nonEmpty(review.attestation_id), `${name}: organisation_type and attestation_id required`);
-    assert(iso(review.reviewed_at), `${name}: reviewed_at must be ISO-8601`);
+    assertFresh(`${name}.reviewed_at`, review.reviewed_at);
+    assert(
+      Date.parse(review.reviewed_at) <= Date.parse(evidence.collected_at) + futureToleranceMs,
+      `${name}: reviewed_at cannot be later than evidence collection`,
+    );
     const tasks = record(review.tasks);
     assert(
       tasks && exactKeys(tasks, ["assisted_setup", "format_selection", "schedule_generation", "lock_or_move", "publication"]),
@@ -295,6 +322,12 @@ const specifications = [
 
 async function main() {
   assert(Number.isFinite(maximumAgeDays) && maximumAgeDays >= 1, "GATE_B_EXTERNAL_MAX_AGE_DAYS must be at least 1");
+  const migrations = (await readdir(migrationsDirectory))
+    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+    .sort();
+  latestMigration = migrations.at(-1) || "";
+  assert(nonEmpty(latestMigration), `No migrations found in ${migrationsDirectory}`);
+
   const results = [];
   for (const [fileName, validate] of specifications) {
     const filePath = path.join(evidenceDirectory, fileName);
@@ -310,6 +343,7 @@ async function main() {
   const summary = {
     schema_version: 1,
     commit,
+    migration_head: latestMigration,
     validated_at: new Date().toISOString(),
     maximum_age_days: maximumAgeDays,
     verdict: "PASS",
@@ -319,7 +353,7 @@ async function main() {
   await writeFile(path.join(outputDirectory, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
   await writeFile(
     path.join(outputDirectory, "summary.md"),
-    `# Gate B external evidence\n\n- Commit: \`${commit}\`\n- Verdict: **PASS**\n- Validated: ${summary.validated_at}\n- Evidence files: ${results.length}\n\n${results.map((result) => `- \`${result.file}\`: ${result.provider}; ${result.collected_at}; SHA-256 \`${result.sha256}\``).join("\n")}\n`,
+    `# Gate B external evidence\n\n- Commit: \`${commit}\`\n- Migration head: \`${latestMigration}\`\n- Verdict: **PASS**\n- Validated: ${summary.validated_at}\n- Evidence files: ${results.length}\n\n${results.map((result) => `- \`${result.file}\`: ${result.provider}; ${result.collected_at}; SHA-256 \`${result.sha256}\``).join("\n")}\n`,
     { mode: 0o600 },
   );
   process.stdout.write(`Gate B external evidence verdict: PASS\nEvidence: ${outputDirectory}\n`);
