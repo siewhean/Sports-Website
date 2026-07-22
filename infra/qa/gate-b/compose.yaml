@@ -57,4 +57,5 @@ services:
       GATE_B_QA_OUTPUT_DIR: /workspace/artifacts/qa/gate-b/container
       LOG_LEVEL: silent
     volumes:
+      - ../../../.git:/workspace/.git:ro
       - ../../../artifacts:/workspace/artifacts
