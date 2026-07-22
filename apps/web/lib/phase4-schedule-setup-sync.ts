@@ -39,7 +39,11 @@ function acceptedSchedule(value: unknown): AcceptedScheduleWire | null {
 }
 
 function publishedScheduleId(value: unknown): string | null {
-  const parsed = parseScheduleRevisionView(value, true, true);
+  const wire = record(value);
+  if (!wire) return null;
+  const { schedule_version: scheduleVersion, ...revision } = wire;
+  if (!Number.isSafeInteger(scheduleVersion) || Number(scheduleVersion) < 1) return null;
+  const parsed = parseScheduleRevisionView(revision, true, true);
   return parsed?.status === "published" ? parsed.id : null;
 }
 
