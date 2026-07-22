@@ -4,10 +4,10 @@ import {
   isAssistedSetupAutosaveRequest,
   isPhase4SetupIdempotencyKey,
   parseAssistedSetupAutosaveResponse,
-  parseAssistedSetupDocument,
-} from "@/lib/phase4-assisted-setup";
-import { isAssistedSetupPatchRequest } from "@/lib/phase4-assisted-setup-patch";
-import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "@/lib/phase3-settings-command.server";
+  parseAssistedSetupCreateResponse,
+} from "./phase4-assisted-setup";
+import { isAssistedSetupPatchRequest } from "./phase4-assisted-setup-patch";
+import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "./phase3-settings-command.server";
 
 function invalid() {
   return NextResponse.json(
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     method: "POST",
     path: `/api/v1/competitions/${encodeURIComponent(competitionId)}/setup-draft`,
     body,
-    validate: (value) => parseAssistedSetupDocument(value, competitionId) !== null,
+    validate: (value) => parseAssistedSetupCreateResponse(value, competitionId) !== null,
   });
 }
 

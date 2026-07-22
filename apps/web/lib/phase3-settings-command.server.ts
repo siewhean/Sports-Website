@@ -2,8 +2,8 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
-import { requestOriginMatchesHost } from "@/lib/phase3-origin";
+import { cookieHostMatches } from "./phase2-organiser";
+import { requestOriginMatchesHost } from "./phase3-origin";
 
 type Validator = (value: unknown) => boolean;
 

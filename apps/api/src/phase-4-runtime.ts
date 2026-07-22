@@ -340,6 +340,9 @@ export class Phase4Runtime {
       [competitionId, actor.accountId],
     );
     const access = first(rows, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+    access.capacity_revision = Number(access.capacity_revision);
+    if (!Number.isSafeInteger(access.capacity_revision) || access.capacity_revision < 1)
+      throw new ApiError(500, "INVALID_CAPACITY_REVISION", "Competition capacity revision is invalid");
     if (mutable && access.status === "archived")
       throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
     return access;
@@ -502,14 +505,16 @@ export class Phase4Runtime {
   async createSetupDraft(actor: Phase3Actor, competitionId: string, idempotencyKey: string, requestId: string) {
     return this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, competitionId, actor);
-      const replay = Boolean(
-        (
-          await tx.unsafe<{ found: boolean }>(
-            `SELECT true found FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
-            [access.organisation_id, idempotencyKey],
-          )
-        )[0],
-      );
+      const receipt = (
+        await tx.unsafe<{ operation: string; aggregate_matches: boolean }>(
+          `SELECT operation,(response->>'competition_id')::uuid=$3::uuid aggregate_matches
+           FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
+          [access.organisation_id, idempotencyKey, competitionId],
+        )
+      )[0];
+      if (receipt && (receipt.operation !== "setup.create" || !receipt.aggregate_matches))
+        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+      const replay = Boolean(receipt);
       await tx.unsafe(`SELECT phase4_create_setup_draft($1,$2,$3,$4,$5)`, [
         access.organisation_id,
         competitionId,
@@ -683,6 +688,12 @@ export class Phase4Runtime {
       )[0];
       if (existingReceipt) {
         const saved = decoded<SetupRow>(existingReceipt.response);
+        if (saved.competition_id !== competitionId) {
+          return {
+            outcome: "idempotency_mismatch",
+            document: this.setupDocument(await this.rawSetup(tx, competitionId)),
+          };
+        }
         const savedValues = setupValues(saved);
         const jsonEqual = async (left: unknown, right: unknown) =>
           Boolean((await tx.unsafe<{ equal: boolean }>(`SELECT $1::jsonb=$2::jsonb equal`, [left, right]))[0]?.equal);

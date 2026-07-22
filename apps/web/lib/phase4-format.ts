@@ -9,16 +9,7 @@ import type {
 } from "@matchday/contracts";
 
 export type FormatSurfaceState =
-  | "ready"
-  | "loading"
-  | "empty"
-  | "error"
-  | "offline"
-  | "permission"
-  | "read-only"
-  | "conflict"
-  | "quota"
-  | "plan";
+  "ready" | "loading" | "empty" | "error" | "offline" | "permission" | "read-only" | "conflict" | "quota" | "plan";
 
 export type FormatBuilderPageDocument = Readonly<{
   state: FormatSurfaceState;
@@ -133,8 +124,7 @@ function parseParticipant(value: unknown): boolean {
       integer(item.rank, 1) &&
       (item.groupId === undefined || typeof item.groupId === "string")
     );
-  if (item.type === "manual_qualifier")
-    return typeof item.qualifierId === "string" && typeof item.stageId === "string";
+  if (item.type === "manual_qualifier") return typeof item.qualifierId === "string" && typeof item.stageId === "string";
   if (item.type === "winner" || item.type === "loser") return typeof item.matchId === "string";
   return false;
 }
@@ -278,21 +268,12 @@ export function parseFormatValidation(value: unknown): Phase4FormatValidationRes
     : null;
 }
 
-export function parseFormatMaterialisation(
-  value: unknown,
-  formatId: string,
-): FormatMaterialisationResponse | null {
+export function parseFormatMaterialisation(value: unknown, formatId: string): FormatMaterialisationResponse | null {
   const item = record(value);
   const revision = record(item?.revision);
   if (
     !item ||
-    !exactKeys(item, [
-      "revision",
-      "materialised",
-      "match_count",
-      "materialisation_hash",
-      "idempotent_replay",
-    ]) ||
+    !exactKeys(item, ["revision", "materialised", "match_count", "materialisation_hash", "idempotent_replay"]) ||
     !revision ||
     !exactKeys(revision, [
       "revision_id",
@@ -331,10 +312,7 @@ export function parseFormatMaterialisation(
   return item as unknown as FormatMaterialisationResponse;
 }
 
-export function parseOrganiserTemplate(
-  value: unknown,
-  organisationId: string,
-): Phase4OrganiserTemplateView | null {
+export function parseOrganiserTemplate(value: unknown, organisationId: string): Phase4OrganiserTemplateView | null {
   const item = record(value);
   if (
     !item ||
@@ -486,14 +464,21 @@ export function formatEditorReducer(state: FormatEditorState, action: FormatEdit
       },
       layout: {
         ...state.document.layout,
-        stage_positions: state.document.layout.stage_positions.filter((position) => position.stage_id !== action.stageId),
+        stage_positions: state.document.layout.stage_positions.filter(
+          (position) => position.stage_id !== action.stageId,
+        ),
       },
     },
   };
 }
 
 export function nextStageId(graph: Phase4FormatGraph, label: string): string {
-  const base = `stage-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "new"}`;
+  const base = `stage-${
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "new"
+  }`;
   const ids = new Set(graph.stages.map((stage) => stage.id));
   if (!ids.has(base)) return base;
   let sequence = 2;

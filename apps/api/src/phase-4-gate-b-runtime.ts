@@ -58,8 +58,7 @@ function mapGateBError(error: unknown): never {
     throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
   if (/revision conflict|immediately preceding|expected.*revision/i.test(message))
     throw new ApiError(409, "REVISION_CONFLICT", "The setup changed; refresh and retry");
-  if (/archived/i.test(message))
-    throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+  if (/archived/i.test(message)) throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
   if (/locked after the first match|sport is locked/i.test(message))
     throw new ApiError(409, "COMPETITION_SPORT_LOCKED", "The sport cannot change after the first match starts");
   if (/permission|access|member/i.test(message)) throw new ApiError(403, "ACCESS_DENIED", "Access denied");
@@ -213,6 +212,22 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     );
   }
 
+  private async pinnedCompetitionPack(tx: PostgresJsSql, competitionId: string): Promise<ActivePack> {
+    return first(
+      await tx.unsafe<ActivePack>(
+        `SELECT pack.sport_code,pack.version,pack.schema_version,pack.definition,pack.definition_hash
+         FROM competition_sport_settings settings
+         JOIN sport_pack_versions pack
+           ON pack.sport_code=settings.sport_code AND pack.version=settings.pack_version
+         WHERE settings.competition_id=$1
+         FOR SHARE OF pack`,
+        [competitionId],
+      ),
+      "SPORT_PACK_NOT_FOUND",
+      "The competition's pinned settings pack was not found",
+    );
+  }
+
   private async applyCanonicalBasics(
     tx: PostgresJsSql,
     actor: Phase3Actor,
@@ -234,7 +249,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
       access.starts_on !== basics.starts_on ||
       access.ends_on !== basics.ends_on;
     const newPack = sportChanged ? await this.activePack(tx, basics.sport_code) : null;
-    const oldPack = sportChanged ? await this.activePack(tx, access.sport_code) : null;
+    const oldPack = sportChanged ? await this.pinnedCompetitionPack(tx, access.id) : null;
     let capacityDefaultsChanged = false;
 
     if (sportChanged && newPack && oldPack) {
@@ -344,21 +359,23 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     )[0];
     if (!receipt) return null;
     const saved = decodePhase4Json<Phase4SetupStorageRow>(receipt.response);
+    if (saved.competition_id !== access.id) {
+      const current = await this.setupRow(tx, access.id);
+      return {
+        outcome: "idempotency_mismatch",
+        document: phase4SetupDocumentFromStorage(current),
+      };
+    }
     saved.competition_status = access.status;
     const savedValues = phase4SetupValuesFromStorage(saved);
     const equal = Boolean(
       (
-        await tx.unsafe<{ equal: boolean }>(`SELECT $1::jsonb=$2::jsonb equal`, [
-          savedValues[step.step_id],
-          step.value,
-        ])
+        await tx.unsafe<{ equal: boolean }>(`SELECT $1::jsonb=$2::jsonb equal`, [savedValues[step.step_id], step.value])
       )[0]?.equal,
     );
     const same = receipt.operation === operation && saved.revision === expectedRevision + 1 && equal;
     const document = phase4SetupDocumentFromStorage(saved);
-    return same
-      ? { outcome: "idempotent_replay", document }
-      : { outcome: "idempotency_mismatch", document };
+    return same ? { outcome: "idempotent_replay", document } : { outcome: "idempotency_mismatch", document };
   }
 
   private async persistEditableStep(
@@ -370,8 +387,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     idempotencyKey: string,
     requestId: string,
   ): Promise<Phase4SetupPatchResponse | Phase4SetupAutosaveResponse> {
-    if (!this.gateSql.begin)
-      throw new Error("Phase 4 setup mutations require a transaction-capable PostgreSQL client");
+    if (!this.gateSql.begin) throw new Error("Phase 4 setup mutations require a transaction-capable PostgreSQL client");
     try {
       return await this.gateSql.begin(async (tx) => {
         const access = await this.access(tx, competitionId, actor);
@@ -395,8 +411,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
         const previous = phase4SetupValuesFromStorage(row);
         const next = structuredClone(previous) as MutableSetupValues;
         (next as unknown as Record<string, unknown>)[step.step_id] = step.value;
-        if (step.step_id === "basics")
-          await this.applyCanonicalBasics(tx, actor, access, previous, next, requestId);
+        if (step.step_id === "basics") await this.applyCanonicalBasics(tx, actor, access, previous, next, requestId);
         else {
           const issues = validateAssistedSetupStep(step.step_id, phase4SetupDomainValues(next));
           if (issues.length > 0) throw new ApiError(422, "SETUP_STEP_INVALID", issues[0]!.message);

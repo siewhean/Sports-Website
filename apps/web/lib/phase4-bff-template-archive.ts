@@ -21,7 +21,10 @@ export async function POST(
     );
   const { organisationId, templateId } = await params;
   if (body.template_id !== templateId)
-    return NextResponse.json({ error: { code: "VALIDATION_ERROR", message: "Template identity mismatch" } }, { status: 400 });
+    return NextResponse.json(
+      { error: { code: "VALIDATION_ERROR", message: "Template identity mismatch" } },
+      { status: 400 },
+    );
   return forwardPhase3Mutation(request, {
     method: "POST",
     path: `/api/v1/organisations/${encodeURIComponent(organisationId)}/format-templates/${encodeURIComponent(templateId)}/archive`,

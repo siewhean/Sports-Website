@@ -44,12 +44,7 @@ const document: Phase4FormatBuilderDocument = {
   layout: { schema_version: 1, stage_positions: [{ stage_id: "stage-final", x: 64, y: 72 }] },
 };
 
-function template(
-  templateId: string,
-  versionId: string,
-  name: string,
-  revision: number,
-): Phase4OrganiserTemplateView {
+function template(templateId: string, versionId: string, name: string, revision: number): Phase4OrganiserTemplateView {
   return {
     organisation_id: "organisation-a",
     template_id: templateId,
@@ -126,7 +121,9 @@ describe("Phase 4 format web contract", () => {
         materialisation: { match_count: 1 },
       })?.valid,
     ).toBe(true);
-    expect(parseFormatValidation({ valid: true, issues: [], graph_hash: "graph-hash", materialisation: null })).toBeNull();
+    expect(
+      parseFormatValidation({ valid: true, issues: [], graph_hash: "graph-hash", materialisation: null }),
+    ).toBeNull();
   });
 
   it("strictly accepts materialisation for the requested revision", () => {

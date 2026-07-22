@@ -1,9 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import {
-  isPhase4SetupIdempotencyKey,
-  parseAssistedSetupDocument,
-} from "@/lib/phase4-assisted-setup";
+import { isPhase4SetupIdempotencyKey, parseAssistedSetupDocument } from "@/lib/phase4-assisted-setup";
 import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "@/lib/phase3-settings-command.server";
 
 function invalid() {

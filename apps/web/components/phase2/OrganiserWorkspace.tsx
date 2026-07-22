@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { opaqueId } from "@matchday/ui";
+import { opaqueId, translate as t } from "@matchday/ui";
 import {
   ArrowRight,
   CalendarDots,
@@ -34,17 +34,17 @@ function sectionMeta(competition: CompetitionView, section: OrganiserSection): {
       intro: `Review the pinned ${competition.sport} pack and customise the settings used by this competition.`,
     },
     entries: {
-      title: "Entries and divisions",
-      intro: "Manage teams, players, pairs, placeholders, seeding and division assignments.",
+      title: t("prototype.10beee7f51f8"),
+      intro: t("prototype.2a3b50533f9f"),
     },
     capacity: { title: phase2Copy.capacityTitle, intro: phase2Copy.capacityIntro },
     format: {
-      title: "Competition format",
-      intro: "Build and validate the stage graph that generates matches for this division.",
+      title: t("prototype.675eeee2578b"),
+      intro: t("prototype.db67c10aa708"),
     },
     schedule: {
       title: phase2Copy.scheduleTitle,
-      intro: "Schedule full match slots across available playing areas while respecting dependencies and rest.",
+      intro: t("prototype.e94338d24608"),
     },
     results: { title: phase2Copy.resultsTitle, intro: phase2Copy.resultsIntro },
     publish: { title: phase2Copy.publishTitle, intro: phase2Copy.publishIntro },
@@ -56,9 +56,12 @@ function sectionMeta(competition: CompetitionView, section: OrganiserSection): {
 
 function navigation(competition: CompetitionView) {
   return organiserSections.map((item) => {
-    if (item.id === "settings") return { ...item, short: "Settings", label: `${competition.sport} settings` };
-    if (item.id === "entries") return { ...item, short: "Entries", label: "Entries and divisions" };
-    if (item.id === "format") return { ...item, short: "Format", label: "Competition format" };
+    if (item.id === "settings")
+      return { ...item, short: t("prototype.74a883a037bc"), label: `${competition.sport} settings` };
+    if (item.id === "entries")
+      return { ...item, short: t("prototype.7cb76b4af12a"), label: t("prototype.10beee7f51f8") };
+    if (item.id === "format")
+      return { ...item, short: t("prototype.2f343666aaa8"), label: t("prototype.675eeee2578b") };
     return item;
   });
 }
@@ -382,7 +385,7 @@ function Format({ competition }: { competition: CompetitionView }) {
     );
   }
   return (
-    <section className="p2-format" aria-label="Competition format">
+    <section className="p2-format" aria-label={t("prototype.675eeee2578b")}>
       <div className="p2-groups">
         <Stage title={phase2Copy.groupA} meta={phase2Copy.fourTeamsSixMatches} />
         <Stage title={phase2Copy.groupB} meta={phase2Copy.fourTeamsSixMatches} />

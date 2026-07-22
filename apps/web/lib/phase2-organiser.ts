@@ -48,17 +48,17 @@ export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserW
   const competition = record(payload?.competition);
   return Boolean(
     payload &&
-      competition &&
-      string(competition.id) &&
-      string(competition.name) &&
-      string(competition.slug) &&
-      supportedSportCode(competition.sport_code) &&
-      string(competition.timezone) &&
-      string(competition.starts_on) &&
-      string(competition.ends_on) &&
-      Array.isArray(payload.divisions) &&
-      Array.isArray(payload.capacity) &&
-      Array.isArray(payload.access_passes),
+    competition &&
+    string(competition.id) &&
+    string(competition.name) &&
+    string(competition.slug) &&
+    supportedSportCode(competition.sport_code) &&
+    string(competition.timezone) &&
+    string(competition.starts_on) &&
+    string(competition.ends_on) &&
+    Array.isArray(payload.divisions) &&
+    Array.isArray(payload.capacity) &&
+    Array.isArray(payload.access_passes),
   );
 }
 

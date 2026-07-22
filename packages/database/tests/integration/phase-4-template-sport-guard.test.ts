@@ -51,10 +51,12 @@ describeInfrastructure("Phase 4 format-template sport guard", () => {
 
     await sql`INSERT INTO accounts(id,primary_email,display_name)
       VALUES(${account},${`${account}@example.test`},'Template guard')`;
-    await sql`INSERT INTO organisations(id,name,slug)
-      VALUES(${organisation},'Template guard',${`template-guard-${organisation}`})`;
-    await sql`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
-      VALUES(${organisation},${account},'owner','active')`;
+    await sql.begin(async (transaction) => {
+      await transaction`INSERT INTO organisations(id,name,slug)
+        VALUES(${organisation},'Template guard',${`template-guard-${organisation}`})`;
+      await transaction`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+        VALUES(${organisation},${account},'owner','active')`;
+    });
     await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,plan_tier)
       VALUES
       (${badmintonCompetition},${organisation},${account},'Badminton Cup',${`badminton-${badmintonCompetition}`},'badminton','Asia/Singapore','2027-01-01','2027-01-02','organiser_pro'),

@@ -1,16 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { isPhase4IdempotencyKey, parseOrganiserTemplate } from "@/lib/phase4-format";
-import {
-  competitionIdFromFormatReferer,
-  parseFormatTemplateCompetitionContext,
-} from "@/lib/phase4-template-context";
-import {
-  forwardPhase3Mutation,
-  hasExactKeys,
-  jsonBody,
-  readPhase3Json,
-} from "@/lib/phase3-settings-command.server";
+import { competitionIdFromFormatReferer, parseFormatTemplateCompetitionContext } from "@/lib/phase4-template-context";
+import { forwardPhase3Mutation, hasExactKeys, jsonBody, readPhase3Json } from "@/lib/phase3-settings-command.server";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ organisationId: string }> }) {
   const body = await jsonBody(request);
@@ -29,7 +21,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     !hasExactKeys(body, keys) ||
     !(body.template_id === null || typeof body.template_id === "string") ||
     !(body.parent_version_id === null || typeof body.parent_version_id === "string") ||
-    !(body.expected_version === null || (Number.isSafeInteger(body.expected_version) && (body.expected_version as number) >= 1)) ||
+    !(
+      body.expected_version === null ||
+      (Number.isSafeInteger(body.expected_version) && (body.expected_version as number) >= 1)
+    ) ||
     typeof body.name !== "string" ||
     !body.name.trim() ||
     body.name.length > 120 ||
@@ -46,19 +41,24 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const competitionId = competitionIdFromFormatReferer(request.headers.get("referer"), request.nextUrl.origin);
   if (!competitionId)
     return NextResponse.json(
-      { error: { code: "COMPETITION_CONTEXT_REQUIRED", message: "The template command requires its competition context" } },
+      {
+        error: {
+          code: "COMPETITION_CONTEXT_REQUIRED",
+          message: "The template command requires its competition context",
+        },
+      },
       { status: 400 },
     );
 
-  const competitionResult = await readPhase3Json(
-    request,
-    `/api/v1/competitions/${encodeURIComponent(competitionId)}`,
-  );
+  const competitionResult = await readPhase3Json(request, `/api/v1/competitions/${encodeURIComponent(competitionId)}`);
   if (!competitionResult.ok)
     return NextResponse.json(
       {
         error: {
-          code: competitionResult.status === 401 || competitionResult.status === 403 ? "AUTH_REQUIRED" : "COMPETITION_UNAVAILABLE",
+          code:
+            competitionResult.status === 401 || competitionResult.status === 403
+              ? "AUTH_REQUIRED"
+              : "COMPETITION_UNAVAILABLE",
           message:
             competitionResult.status === 401 || competitionResult.status === 403
               ? "An authenticated session is required"
@@ -71,7 +71,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const context = parseFormatTemplateCompetitionContext(competitionResult.payload, competitionId);
   if (!context)
     return NextResponse.json(
-      { error: { code: "COMPETITION_RESPONSE_INVALID", message: "The competition service returned an invalid response" } },
+      {
+        error: {
+          code: "COMPETITION_RESPONSE_INVALID",
+          message: "The competition service returned an invalid response",
+        },
+      },
       { status: 502 },
     );
 

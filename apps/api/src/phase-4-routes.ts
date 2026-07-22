@@ -18,7 +18,15 @@ const MutationHeaders = Type.Object(
   { origin: Type.String({ minLength: 1 }), "x-csrf-token": Type.String({ minLength: 1 }) },
   { additionalProperties: true },
 );
-const MutationResponses = { 400: ErrorResponse, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse, 503: ErrorResponse };
+const MutationResponses = {
+  400: ErrorResponse,
+  401: ErrorResponse,
+  403: ErrorResponse,
+  404: ErrorResponse,
+  409: ErrorResponse,
+  422: ErrorResponse,
+  503: ErrorResponse,
+};
 const ReadResponses = { 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse };
 
 const Sport = Type.Union([
@@ -51,18 +59,21 @@ const Constraints = strict({
   ),
   entry_unavailable: setting(strict({ by_entry_id: Type.Record(Id, Type.Array(Interval, { maxItems: 512 })) })),
   official_availability: setting(strict({ by_official_id: Type.Record(Id, Type.Array(Interval, { maxItems: 512 })) })),
-  featured_playing_area: setting(strict({ area_id: Id, match_ids: Type.Array(Id, { maxItems: 1_128, uniqueItems: true }) })),
+  featured_playing_area: setting(
+    strict({ area_id: Id, match_ids: Type.Array(Id, { maxItems: 1_128, uniqueItems: true }) }),
+  ),
   avoid_consecutive_matches: setting(strict({ minutes: Type.Integer({ minimum: 0, maximum: 1440 }) })),
-  balance_early_matches: setting(strict({ before_local_time: Type.String({ pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" }) })),
-  balance_late_matches: setting(strict({ at_or_after_local_time: Type.String({ pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" }) })),
+  balance_early_matches: setting(
+    strict({ before_local_time: Type.String({ pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" }) }),
+  ),
+  balance_late_matches: setting(
+    strict({ at_or_after_local_time: Type.String({ pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" }) }),
+  ),
   keep_division_together: setting(strict({ maximum_area_count: Type.Integer({ minimum: 1, maximum: 64 }) })),
   preserve_existing_schedule: setting(
     strict({
       maximum_shift_minutes: Type.Integer({ minimum: 0, maximum: 100_800 }),
-      by_match_id: Type.Record(
-        Id,
-        strict({ area_id: Id, start_epoch_ms: Type.Integer({ minimum: 0 }) }),
-      ),
+      by_match_id: Type.Record(Id, strict({ area_id: Id, start_epoch_ms: Type.Integer({ minimum: 0 }) })),
     }),
   ),
 });
@@ -75,7 +86,11 @@ const ParticipantSource = Type.Union([
     groupId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
     rank: Type.Integer({ minimum: 1, maximum: 48 }),
   }),
-  strict({ type: Type.Literal("manual_qualifier"), qualifierId: Type.String({ minLength: 1, maxLength: 128 }), stageId: Type.String({ minLength: 1, maxLength: 128 }) }),
+  strict({
+    type: Type.Literal("manual_qualifier"),
+    qualifierId: Type.String({ minLength: 1, maxLength: 128 }),
+    stageId: Type.String({ minLength: 1, maxLength: 128 }),
+  }),
   strict({ type: Type.Literal("winner"), matchId: Type.String({ minLength: 1, maxLength: 128 }) }),
   strict({ type: Type.Literal("loser"), matchId: Type.String({ minLength: 1, maxLength: 128 }) }),
 ]);
@@ -95,13 +110,21 @@ const Stage = strict({
   groupIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 48, uniqueItems: true }),
   groupSize: Type.Union([Type.Null(), Type.Integer({ minimum: 2, maximum: 48 })]),
   outputRanks: Type.Integer({ minimum: 1, maximum: 48 }),
-  matchIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { minItems: 1, maxItems: 1_128, uniqueItems: true }),
+  matchIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+    minItems: 1,
+    maxItems: 1_128,
+    uniqueItems: true,
+  }),
   repetitions: Type.Optional(Type.Integer({ minimum: 1, maximum: 48 })),
   qualificationPositions: Type.Optional(Type.Array(Type.Integer({ minimum: 1, maximum: 48 }), { uniqueItems: true })),
   additionalQualifiers: Type.Optional(
     Type.Array(
       strict({
-        method: Type.Union([Type.Literal("best_across_groups"), Type.Literal("bottom_from_each_group"), Type.Literal("manual")]),
+        method: Type.Union([
+          Type.Literal("best_across_groups"),
+          Type.Literal("bottom_from_each_group"),
+          Type.Literal("manual"),
+        ]),
         count: Type.Integer({ minimum: 1, maximum: 48 }),
         destinationStageId: Type.String({ minLength: 1, maxLength: 128 }),
       }),
@@ -109,10 +132,17 @@ const Stage = strict({
     ),
   ),
   destinationStageIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { uniqueItems: true })),
-  seeding: Type.Optional(Type.Union([Type.Literal("seeded"), Type.Literal("snake"), Type.Literal("random"), Type.Literal("manual")])),
+  seeding: Type.Optional(
+    Type.Union([Type.Literal("seeded"), Type.Literal("snake"), Type.Literal("random"), Type.Literal("manual")]),
+  ),
   placementRule: Type.Optional(
     strict({
-      coverage: Type.Union([Type.Literal("champion_only"), Type.Literal("podium"), Type.Literal("full"), Type.Literal("custom")]),
+      coverage: Type.Union([
+        Type.Literal("champion_only"),
+        Type.Literal("podium"),
+        Type.Literal("full"),
+        Type.Literal("custom"),
+      ]),
       positions: Type.Array(Type.Integer({ minimum: 1, maximum: 48 }), { uniqueItems: true }),
     }),
   ),
@@ -155,16 +185,18 @@ const FormatDocument = strict({
   }),
 });
 
-const SetupStep = Type.Union([
-  "basics",
-  "capacity",
-  "settings",
-  "entries",
-  "format_preferences",
-  "format_recommendations",
-  "schedule_review",
-  "review_publish",
-].map((value) => Type.Literal(value)));
+const SetupStep = Type.Union(
+  [
+    "basics",
+    "capacity",
+    "settings",
+    "entries",
+    "format_preferences",
+    "format_recommendations",
+    "schedule_review",
+    "review_publish",
+  ].map((value) => Type.Literal(value)),
+);
 const SettingsReference = strict({
   competition_id: Id,
   scope: Type.Union([Type.Literal("competition"), Type.Literal("division")]),
@@ -199,37 +231,127 @@ const ReviewBase = {
   selected_schedule_result_hash: Hash,
   capacity_revision: Type.Integer({ minimum: 1 }),
   settings_references: Type.Array(SettingsPointer, { maxItems: 100 }),
-  acknowledged_warning_codes: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { uniqueItems: true, maxItems: 100 }),
+  acknowledged_warning_codes: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), {
+    uniqueItems: true,
+    maxItems: 100,
+  }),
 };
 const ReviewSelection = Type.Union([
-  strict({ ...ReviewBase, publication_status: Type.Union([Type.Literal("not_requested"), Type.Literal("publishing"), Type.Literal("failed")]), published_schedule_revision_id: Type.Null() }),
+  strict({
+    ...ReviewBase,
+    publication_status: Type.Union([Type.Literal("not_requested"), Type.Literal("publishing"), Type.Literal("failed")]),
+    published_schedule_revision_id: Type.Null(),
+  }),
   strict({ ...ReviewBase, publication_status: Type.Literal("published"), published_schedule_revision_id: Id }),
 ]);
 const SetupStepValue = Type.Union([
   strict({
     step_id: Type.Literal("basics"),
     value: strict({
-      name: Type.String({ minLength: 1, maxLength: 160 }), sport_code: Sport,
-      location: strict({ venue: Type.String({ minLength: 1, maxLength: 240 }), address: Type.String({ minLength: 1, maxLength: 500 }), locality: Type.Union([Type.Null(), Type.String({ maxLength: 160 })]), country_code: Type.String({ pattern: "^[A-Z]{2}$" }) }),
-      starts_on: Type.String({ format: "date" }), ends_on: Type.String({ format: "date" }), time_zone: Type.String({ minLength: 1, maxLength: 100 }), locale: Type.String({ minLength: 2, maxLength: 35 }),
-      entry_count: Type.Integer({ minimum: 1, maximum: 10_000 }), division_count: Type.Integer({ minimum: 1, maximum: 1_000 }), entry_count_status: Type.Union([Type.Literal("confirmed"), Type.Literal("estimated")]),
+      name: Type.String({ minLength: 1, maxLength: 160 }),
+      sport_code: Sport,
+      location: strict({
+        venue: Type.String({ minLength: 1, maxLength: 240 }),
+        address: Type.String({ minLength: 1, maxLength: 500 }),
+        locality: Type.Union([Type.Null(), Type.String({ maxLength: 160 })]),
+        country_code: Type.String({ pattern: "^[A-Z]{2}$" }),
+      }),
+      starts_on: Type.String({ format: "date" }),
+      ends_on: Type.String({ format: "date" }),
+      time_zone: Type.String({ minLength: 1, maxLength: 100 }),
+      locale: Type.String({ minLength: 2, maxLength: 35 }),
+      entry_count: Type.Integer({ minimum: 1, maximum: 10_000 }),
+      division_count: Type.Integer({ minimum: 1, maximum: 1_000 }),
+      entry_count_status: Type.Union([Type.Literal("confirmed"), Type.Literal("estimated")]),
     }),
   }),
   strict({
     step_id: Type.Literal("capacity"),
     value: strict({
-      kind: Type.Literal("phase3_capacity_revision"), competition_id: Id, revision: Type.Integer({ minimum: 1 }), time_zone: Type.String({ minLength: 1, maxLength: 100 }), area_ids: Type.Array(Id, { uniqueItems: true, maxItems: 100 }), source_hash: Hash,
-      effective: strict({ slotMinutes: Type.Integer({ minimum: 1 }), rawTotalSlots: Type.Integer({ minimum: 0 }), fixedReserveSlots: Type.Integer({ minimum: 0 }), availableMatchSlots: Type.Integer({ minimum: 0 }), requiredMatchSlots: Type.Integer({ minimum: 0 }), remainingMatchSlots: Type.Integer(), status: Type.String({ minLength: 1, maxLength: 50 }) }),
+      kind: Type.Literal("phase3_capacity_revision"),
+      competition_id: Id,
+      revision: Type.Integer({ minimum: 1 }),
+      time_zone: Type.String({ minLength: 1, maxLength: 100 }),
+      area_ids: Type.Array(Id, { uniqueItems: true, maxItems: 100 }),
+      source_hash: Hash,
+      effective: strict({
+        slotMinutes: Type.Integer({ minimum: 1 }),
+        rawTotalSlots: Type.Integer({ minimum: 0 }),
+        fixedReserveSlots: Type.Integer({ minimum: 0 }),
+        availableMatchSlots: Type.Integer({ minimum: 0 }),
+        requiredMatchSlots: Type.Integer({ minimum: 0 }),
+        remainingMatchSlots: Type.Integer(),
+        status: Type.String({ minLength: 1, maxLength: 50 }),
+      }),
     }),
   }),
   strict({ step_id: Type.Literal("settings"), value: Type.Array(SettingsReference, { maxItems: 100 }) }),
   strict({
     step_id: Type.Literal("entries"),
-    value: strict({ competition_id: Id, divisions: Type.Array(strict({ division_id: Id, division_revision: Type.Integer({ minimum: 1 }), entry_ids: Type.Array(Id, { uniqueItems: true, maxItems: 10_000 }), confirmed_count: Type.Integer({ minimum: 0 }), placeholder_count: Type.Integer({ minimum: 0 }) }), { maxItems: 1_000 }), imports: Type.Array(strict({ import_id: Id, status: Type.Union([Type.Literal("validated"), Type.Literal("applied"), Type.Literal("rolled_back")]), accepted_row_count: Type.Integer({ minimum: 0 }), rejected_row_count: Type.Integer({ minimum: 0 }) }), { maxItems: 1_000 }), total_entry_count: Type.Integer({ minimum: 0 }) }),
+    value: strict({
+      competition_id: Id,
+      divisions: Type.Array(
+        strict({
+          division_id: Id,
+          division_revision: Type.Integer({ minimum: 1 }),
+          entry_ids: Type.Array(Id, { uniqueItems: true, maxItems: 10_000 }),
+          confirmed_count: Type.Integer({ minimum: 0 }),
+          placeholder_count: Type.Integer({ minimum: 0 }),
+        }),
+        { maxItems: 1_000 },
+      ),
+      imports: Type.Array(
+        strict({
+          import_id: Id,
+          status: Type.Union([Type.Literal("validated"), Type.Literal("applied"), Type.Literal("rolled_back")]),
+          accepted_row_count: Type.Integer({ minimum: 0 }),
+          rejected_row_count: Type.Integer({ minimum: 0 }),
+        }),
+        { maxItems: 1_000 },
+      ),
+      total_entry_count: Type.Integer({ minimum: 0 }),
+    }),
   }),
-  strict({ step_id: Type.Literal("format_preferences"), value: strict({ minimum_matches: strict({ per_entry: Type.Integer({ minimum: 1, maximum: 100 }) }), ranking: strict({ rank_all_entries: Type.Boolean() }), knockout: strict({ required: Type.Boolean() }), placement: strict({ required: Type.Boolean() }), qualification: strict({ cross_group_allowed: Type.Boolean() }), priority: strict({ value: Type.Union([Type.Literal("speed"), Type.Literal("simplicity"), Type.Literal("participation")]) }) }) }),
-  strict({ step_id: Type.Literal("format_recommendations"), value: strict({ recommendations: Type.Array(Recommendation, { maxItems: 3 }), requires_changes: Type.Union([Type.Null(), Recommendation]), selected_recommendation_id: Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 128 })]), acknowledged_capacity_shortfall: Type.Boolean(), recommendation_set_hash: Hash }) }),
-  strict({ step_id: Type.Literal("schedule_review"), value: strict({ schedule_job_id: Id, source_revision: Type.Integer({ minimum: 1 }), selected_recommendation_id: Type.String({ minLength: 1, maxLength: 128 }), format_revision_id: Id, format_definition_hash: Hash, capacity_revision: Type.Integer({ minimum: 1 }), settings_references: Type.Array(SettingsPointer, { maxItems: 100 }), selected_result_revision: Type.Integer({ minimum: 1 }), selected_result_hash: Hash, objective: Objective, schedule_revision_id: Id, feasibility: Type.Union([Type.Literal("valid"), Type.Literal("infeasible")]) }) }),
+  strict({
+    step_id: Type.Literal("format_preferences"),
+    value: strict({
+      minimum_matches: strict({ per_entry: Type.Integer({ minimum: 1, maximum: 100 }) }),
+      ranking: strict({ rank_all_entries: Type.Boolean() }),
+      knockout: strict({ required: Type.Boolean() }),
+      placement: strict({ required: Type.Boolean() }),
+      qualification: strict({ cross_group_allowed: Type.Boolean() }),
+      priority: strict({
+        value: Type.Union([Type.Literal("speed"), Type.Literal("simplicity"), Type.Literal("participation")]),
+      }),
+    }),
+  }),
+  strict({
+    step_id: Type.Literal("format_recommendations"),
+    value: strict({
+      recommendations: Type.Array(Recommendation, { maxItems: 3 }),
+      requires_changes: Type.Union([Type.Null(), Recommendation]),
+      selected_recommendation_id: Type.Union([Type.Null(), Type.String({ minLength: 1, maxLength: 128 })]),
+      acknowledged_capacity_shortfall: Type.Boolean(),
+      recommendation_set_hash: Hash,
+    }),
+  }),
+  strict({
+    step_id: Type.Literal("schedule_review"),
+    value: strict({
+      schedule_job_id: Id,
+      source_revision: Type.Integer({ minimum: 1 }),
+      selected_recommendation_id: Type.String({ minLength: 1, maxLength: 128 }),
+      format_revision_id: Id,
+      format_definition_hash: Hash,
+      capacity_revision: Type.Integer({ minimum: 1 }),
+      settings_references: Type.Array(SettingsPointer, { maxItems: 100 }),
+      selected_result_revision: Type.Integer({ minimum: 1 }),
+      selected_result_hash: Hash,
+      objective: Objective,
+      schedule_revision_id: Id,
+      feasibility: Type.Union([Type.Literal("valid"), Type.Literal("infeasible")]),
+    }),
+  }),
   strict({ step_id: Type.Literal("review_publish"), value: ReviewSelection }),
 ]);
 const SetupAutosaveBody = strict({
@@ -470,14 +592,16 @@ export async function registerPhase4Routes(
       },
     },
     async (request, reply) =>
-      reply.code(201).send(
-        await options.runtime.saveFormatTemplate(
-          await mutationActor(request),
-          request.params.organisationId,
-          request.body as Parameters<Phase4Runtime["saveFormatTemplate"]>[2],
-          request.id,
+      reply
+        .code(201)
+        .send(
+          await options.runtime.saveFormatTemplate(
+            await mutationActor(request),
+            request.params.organisationId,
+            request.body as Parameters<Phase4Runtime["saveFormatTemplate"]>[2],
+            request.id,
+          ),
         ),
-      ),
   );
   app.post<{
     Params: { organisationId: string; templateId: string };
@@ -521,14 +645,16 @@ export async function registerPhase4Routes(
       },
     },
     async (request, reply) =>
-      reply.code(201).send(
-        await options.runtime.applyFormatTemplate(
-          await mutationActor(request),
-          request.params.organisationId,
-          request.body,
-          request.id,
+      reply
+        .code(201)
+        .send(
+          await options.runtime.applyFormatTemplate(
+            await mutationActor(request),
+            request.params.organisationId,
+            request.body,
+            request.id,
+          ),
         ),
-      ),
   );
 
   app.get<{ Params: { organisationId: string } }>(
@@ -660,12 +786,7 @@ export async function registerPhase4Routes(
       },
     },
     async (request) =>
-      options.runtime.cancelScheduleJob(
-        await mutationActor(request),
-        request.params.jobId,
-        request.body,
-        request.id,
-      ),
+      options.runtime.cancelScheduleJob(await mutationActor(request), request.params.jobId, request.body, request.id),
   );
   const AcceptBody = strict({ idempotency_key: IdempotencyKey, expected_job_revision: Type.Integer({ minimum: 1 }) });
   app.post<{ Params: { jobId: string; optionId: string }; Body: Static<typeof AcceptBody> }>(
@@ -680,15 +801,17 @@ export async function registerPhase4Routes(
       },
     },
     async (request, reply) =>
-      reply.code(201).send(
-        await options.runtime.acceptScheduleOption(
-          await mutationActor(request),
-          request.params.jobId,
-          request.params.optionId,
-          request.body,
-          request.id,
+      reply
+        .code(201)
+        .send(
+          await options.runtime.acceptScheduleOption(
+            await mutationActor(request),
+            request.params.jobId,
+            request.params.optionId,
+            request.body,
+            request.id,
+          ),
         ),
-      ),
   );
   app.get<{ Params: { competitionId: string } }>(
     "/api/v1/competitions/:competitionId/schedule-revisions",
@@ -704,11 +827,7 @@ export async function registerPhase4Routes(
     "/api/v1/schedule-revisions/:leftId/compare/:rightId",
     { schema: { ...read, params: strict({ leftId: Id, rightId: Id }), tags: ["phase4-schedules"] } },
     async (request) =>
-      options.runtime.compareScheduleRevisions(
-        await readActor(request),
-        request.params.leftId,
-        request.params.rightId,
-      ),
+      options.runtime.compareScheduleRevisions(await readActor(request), request.params.leftId, request.params.rightId),
   );
   app.post<{ Params: { revisionId: string }; Body: Static<typeof MoveTarget> }>(
     "/api/v1/schedule-revisions/:revisionId/moves/validate",
@@ -745,14 +864,16 @@ export async function registerPhase4Routes(
       },
     },
     async (request, reply) =>
-      reply.code(201).send(
-        await options.runtime.moveScheduleMatch(
-          await mutationActor(request),
-          request.params.revisionId,
-          request.body,
-          request.id,
+      reply
+        .code(201)
+        .send(
+          await options.runtime.moveScheduleMatch(
+            await mutationActor(request),
+            request.params.revisionId,
+            request.body,
+            request.id,
+          ),
         ),
-      ),
   );
   const LockBody = strict({
     idempotency_key: IdempotencyKey,

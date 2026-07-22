@@ -268,6 +268,10 @@ beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
   sql = postgres(databaseUrl, { max: 8, onnotice: () => undefined, connection: { search_path: schema } });
+  const definition = { recommendedSlotMinutes: 20, recommendedSettings: { slotMinutes: 20 } };
+  await sql`INSERT INTO sport_pack_versions(
+    sport_code,version,schema_version,definition,definition_hash,status,activated_at
+  ) VALUES('badminton','phase4-test-1',1,${sql.json(definition)},${hash(definition)},'active',now())`;
 });
 
 afterAll(async () => {

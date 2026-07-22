@@ -86,10 +86,9 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     let live = true;
     const poll = async () => {
       try {
-        const response = await fetch(
-          `/api/phase4/schedule/jobs/${encodeURIComponent(polledJobId)}`,
-          { cache: phase4ScheduleMachine.noStore },
-        );
+        const response = await fetch(`/api/phase4/schedule/jobs/${encodeURIComponent(polledJobId)}`, {
+          cache: phase4ScheduleMachine.noStore,
+        });
         const payload: unknown = await response.json().catch(() => null);
         if (!live) return;
         if (!response.ok) {
@@ -270,7 +269,12 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         <StatusRail icon={<LockKey />} title={phase4ScheduleCopy.readOnly} body={phase4ScheduleCopy.readOnlyBody} />
       ) : null}
       {expired ? (
-        <StatusRail icon={<Clock />} title={phase4ScheduleCopy.expired} body={phase4ScheduleCopy.expiredBody} tone="danger" />
+        <StatusRail
+          icon={<Clock />}
+          title={phase4ScheduleCopy.expired}
+          body={phase4ScheduleCopy.expiredBody}
+          tone="danger"
+        />
       ) : null}
       {document.warnings.map((warning) => (
         <StatusRail
@@ -292,11 +296,13 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         <div className={styles.strategy}>
           <p id="strategy-title">{phase4ScheduleCopy.strategy}</p>
           <div role="radiogroup" aria-labelledby="strategy-title">
-            {([
-              phase4ScheduleMachine.fastest,
-              phase4ScheduleMachine.balanced,
-              phase4ScheduleMachine.restFocused,
-            ] as const).map((value) => (
+            {(
+              [
+                phase4ScheduleMachine.fastest,
+                phase4ScheduleMachine.balanced,
+                phase4ScheduleMachine.restFocused,
+              ] as const
+            ).map((value) => (
               <button
                 key={value}
                 type="button"
@@ -322,7 +328,14 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         </div>
       </section>
 
-      {options.length ? <OptionComparison options={options} currentRevision={document.currentRevision?.revision ?? null} onAccept={acceptOption} disabled={disabled} /> : null}
+      {options.length ? (
+        <OptionComparison
+          options={options}
+          currentRevision={document.currentRevision?.revision ?? null}
+          onAccept={acceptOption}
+          disabled={disabled}
+        />
+      ) : null}
 
       {document.currentRevision ? (
         <div className={styles.planner}>
@@ -394,20 +407,39 @@ function OptionComparison({
           <p>{phase4ScheduleCopy.measurableAlternatives}</p>
           <h2 id="option-comparison-title">{phase4ScheduleCopy.compareQuality}</h2>
         </div>
-        {currentRevision ? <span>{interpolate(phase4ScheduleCopy.draftRemainsSelected, { revision: currentRevision })}</span> : null}
+        {currentRevision ? (
+          <span>{interpolate(phase4ScheduleCopy.draftRemainsSelected, { revision: currentRevision })}</span>
+        ) : null}
       </header>
       <div className={styles.optionRows}>
         {options.map((option) => (
           <article key={option.id}>
             <div>
               <h3>{objectiveLabel(option.objective)}</h3>
-              <p>{option.quality.components.find((component) => component.weight > 0)?.explanation ?? phase4ScheduleCopy.validSchedule}</p>
+              <p>
+                {option.quality.components.find((component) => component.weight > 0)?.explanation ??
+                  phase4ScheduleCopy.validSchedule}
+              </p>
             </div>
             <dl>
-              <div><dt>{phase4ScheduleCopy.duration}</dt><dd>{formatDuration(option.quality.makespanMinutes)}</dd></div>
-              <div><dt>{phase4ScheduleCopy.minimumRest}</dt><dd>{option.quality.minimumRestMinutes == null ? "—" : formatDuration(option.quality.minimumRestMinutes)}</dd></div>
-              <div><dt>{phase4ScheduleCopy.earlyLateBalance}</dt><dd>{qualityMetric(option, phase4ScheduleMachine.timeBalance)}</dd></div>
-              <div><dt>{phase4ScheduleCopy.unassigned}</dt><dd>{option.assignments.length ? 0 : "—"}</dd></div>
+              <div>
+                <dt>{phase4ScheduleCopy.duration}</dt>
+                <dd>{formatDuration(option.quality.makespanMinutes)}</dd>
+              </div>
+              <div>
+                <dt>{phase4ScheduleCopy.minimumRest}</dt>
+                <dd>
+                  {option.quality.minimumRestMinutes == null ? "—" : formatDuration(option.quality.minimumRestMinutes)}
+                </dd>
+              </div>
+              <div>
+                <dt>{phase4ScheduleCopy.earlyLateBalance}</dt>
+                <dd>{qualityMetric(option, phase4ScheduleMachine.timeBalance)}</dd>
+              </div>
+              <div>
+                <dt>{phase4ScheduleCopy.unassigned}</dt>
+                <dd>{option.assignments.length ? 0 : "—"}</dd>
+              </div>
             </dl>
             <button type="button" disabled={disabled || !option.quality.valid} onClick={() => void onAccept(option)}>
               {interpolate(phase4ScheduleCopy.useObjective, { objective: objectiveLabel(option.objective) })}
@@ -424,46 +456,91 @@ function qualityMetric(option: ScheduleOption, key: string): string {
   return component ? `${component.measured}${component.unit === "percent" ? "%" : ` ${component.unit}`}` : "—";
 }
 
-function UnscheduledTray({ document, onSelect, selectedMatchId }: { document: ScheduleDocument; onSelect: (id: string) => void; selectedMatchId: string | null }) {
+function UnscheduledTray({
+  document,
+  onSelect,
+  selectedMatchId,
+}: {
+  document: ScheduleDocument;
+  onSelect: (id: string) => void;
+  selectedMatchId: string | null;
+}) {
   const assignedIds = new Set(document.currentRevision?.assignments.map((assignment) => assignment.matchId) ?? []);
   const unscheduled = document.matches.filter((match) => !assignedIds.has(match.id));
   return (
     <aside className={styles.tray} aria-labelledby="unscheduled-title">
-      <header><h2 id="unscheduled-title">{phase4ScheduleCopy.unscheduled}</h2><span>{unscheduled.length}</span></header>
+      <header>
+        <h2 id="unscheduled-title">{phase4ScheduleCopy.unscheduled}</h2>
+        <span>{unscheduled.length}</span>
+      </header>
       {unscheduled.length ? (
         <ul>
           {unscheduled.map((match) => (
             <li key={match.id}>
               <button type="button" aria-pressed={selectedMatchId === match.id} onClick={() => onSelect(match.id)}>
-                <span>{match.roundLabel}</span><strong>{match.code}</strong><small>{match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}</small>
+                <span>{match.roundLabel}</span>
+                <strong>{match.code}</strong>
+                <small>
+                  {match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}
+                </small>
               </button>
             </li>
           ))}
         </ul>
-      ) : <p>{phase4ScheduleCopy.allScheduled}</p>}
+      ) : (
+        <p>{phase4ScheduleCopy.allScheduled}</p>
+      )}
     </aside>
   );
 }
 
-function Timeline({ document, selectedMatchId, onSelect }: { document: ScheduleDocument; selectedMatchId: string | null; onSelect: (id: string) => void }) {
+function Timeline({
+  document,
+  selectedMatchId,
+  onSelect,
+}: {
+  document: ScheduleDocument;
+  selectedMatchId: string | null;
+  onSelect: (id: string) => void;
+}) {
   const allAssignments = document.currentRevision?.assignments ?? [];
-  const start = allAssignments.length ? Math.min(...allAssignments.map((assignment) => Date.parse(assignment.startsAt))) : 0;
-  const end = allAssignments.length ? Math.max(...allAssignments.map((assignment) => Date.parse(assignment.endsAt))) : 0;
+  const start = allAssignments.length
+    ? Math.min(...allAssignments.map((assignment) => Date.parse(assignment.startsAt)))
+    : 0;
+  const end = allAssignments.length
+    ? Math.max(...allAssignments.map((assignment) => Date.parse(assignment.endsAt)))
+    : 0;
   const span = Math.max(end - start, 30 * 60_000);
-  const ticks = start ? Array.from({ length: Math.min(10, Math.max(2, Math.ceil(span / 3_600_000) + 1)) }, (_, index) => start + index * 3_600_000) : [];
+  const ticks = start
+    ? Array.from(
+        { length: Math.min(10, Math.max(2, Math.ceil(span / 3_600_000) + 1)) },
+        (_, index) => start + index * 3_600_000,
+      )
+    : [];
   return (
     <section className={styles.timeline} aria-labelledby="timeline-title">
       <header>
-        <div><p>{interpolate(phase4ScheduleCopy.privateDraft, { revision: document.currentRevision?.revision ?? "—" })}</p><h2 id="timeline-title">{phase4ScheduleCopy.timeline}</h2></div>
-        <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions`}>{phase4ScheduleCopy.revisions}</Link>
+        <div>
+          <p>{interpolate(phase4ScheduleCopy.privateDraft, { revision: document.currentRevision?.revision ?? "—" })}</p>
+          <h2 id="timeline-title">{phase4ScheduleCopy.timeline}</h2>
+        </div>
+        <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions`}>
+          {phase4ScheduleCopy.revisions}
+        </Link>
       </header>
       <div className={styles.desktopTimeline} role="region" aria-label={phase4ScheduleCopy.timelineRegion} tabIndex={0}>
         <div className={styles.axis} aria-hidden="true">
-          <span />{ticks.map((tick) => <time key={tick}>{formatScheduleTime(new Date(tick).toISOString(), document.timeZone)}</time>)}
+          <span />
+          {ticks.map((tick) => (
+            <time key={tick}>{formatScheduleTime(new Date(tick).toISOString(), document.timeZone)}</time>
+          ))}
         </div>
         {document.areas.map((area) => (
           <div className={styles.areaRow} key={area.id}>
-            <div className={styles.areaLabel}><strong>{area.name}</strong><span>{area.kind}</span></div>
+            <div className={styles.areaLabel}>
+              <strong>{area.name}</strong>
+              <span>{area.kind}</span>
+            </div>
             <div className={styles.areaTrack}>
               {matchesForArea(document, area.id).map(({ match, assignment }) => {
                 const left = ((Date.parse(assignment.startsAt) - start) / span) * 100;
@@ -479,7 +556,12 @@ function Timeline({ document, selectedMatchId, onSelect }: { document: ScheduleD
                     aria-pressed={selectedMatchId === match.id}
                     onClick={() => onSelect(match.id)}
                   >
-                    <span>{match.roundLabel}</span><strong>{match.code}</strong><small>{formatScheduleTime(assignment.startsAt, document.timeZone)}–{formatScheduleTime(assignment.endsAt, document.timeZone)}</small>
+                    <span>{match.roundLabel}</span>
+                    <strong>{match.code}</strong>
+                    <small>
+                      {formatScheduleTime(assignment.startsAt, document.timeZone)}–
+                      {formatScheduleTime(assignment.endsAt, document.timeZone)}
+                    </small>
                     {locked ? <LockKey aria-label={phase4ScheduleCopy.locked} /> : null}
                   </button>
                 );
@@ -498,7 +580,14 @@ function Timeline({ document, selectedMatchId, onSelect }: { document: ScheduleD
                 <li key={match.id}>
                   <button type="button" onClick={() => onSelect(match.id)} aria-pressed={selectedMatchId === match.id}>
                     <time>{formatScheduleTime(assignment.startsAt, document.timeZone)}</time>
-                    <span><strong>{match.code} · {match.roundLabel}</strong><small>{match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}</small></span>
+                    <span>
+                      <strong>
+                        {match.code} · {match.roundLabel}
+                      </strong>
+                      <small>
+                        {match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}
+                      </small>
+                    </span>
                   </button>
                 </li>
               ))}
@@ -506,47 +595,189 @@ function Timeline({ document, selectedMatchId, onSelect }: { document: ScheduleD
           </section>
         ))}
       </div>
-      <footer className={styles.legend}><span><LockKey /> {phase4ScheduleCopy.locked}</span><span><ArrowsLeftRight /> {phase4ScheduleCopy.dependency}</span><span><Warning /> {phase4ScheduleCopy.conflictLegend}</span></footer>
+      <footer className={styles.legend}>
+        <span>
+          <LockKey /> {phase4ScheduleCopy.locked}
+        </span>
+        <span>
+          <ArrowsLeftRight /> {phase4ScheduleCopy.dependency}
+        </span>
+        <span>
+          <Warning /> {phase4ScheduleCopy.conflictLegend}
+        </span>
+      </footer>
     </section>
   );
 }
 
-function MatchInspector({ document, match, locked, onToggleLock, disabled }: { document: ScheduleDocument; match: ScheduleMatch | null; locked: boolean; onToggleLock: () => Promise<void>; disabled: boolean }) {
+function MatchInspector({
+  document,
+  match,
+  locked,
+  onToggleLock,
+  disabled,
+}: {
+  document: ScheduleDocument;
+  match: ScheduleMatch | null;
+  locked: boolean;
+  onToggleLock: () => Promise<void>;
+  disabled: boolean;
+}) {
   const assignment = match ? assignmentForMatch(document.currentRevision, match.id) : null;
   return (
     <aside className={styles.inspector} aria-labelledby="selected-match-title">
-      <header><p>{phase4ScheduleCopy.selectedMatch}</p><h2 id="selected-match-title">{match?.code ?? phase4ScheduleCopy.noMatchSelected}</h2></header>
-      {!match ? <p>{phase4ScheduleCopy.noSelection}</p> : (
+      <header>
+        <p>{phase4ScheduleCopy.selectedMatch}</p>
+        <h2 id="selected-match-title">{match?.code ?? phase4ScheduleCopy.noMatchSelected}</h2>
+      </header>
+      {!match ? (
+        <p>{phase4ScheduleCopy.noSelection}</p>
+      ) : (
         <>
           <dl>
-            <div><dt>{phase4ScheduleCopy.division}</dt><dd>{match.divisionName}</dd></div>
-            <div><dt>{phase4ScheduleCopy.round}</dt><dd>{match.roundLabel}</dd></div>
-            <div><dt>{phase4ScheduleCopy.teams}</dt><dd>{match.homeLabel}<br />{match.awayLabel}</dd></div>
-            <div><dt>{phase4ScheduleCopy.playingArea}</dt><dd>{document.areas.find((area) => area.id === assignment?.areaId)?.name ?? phase4ScheduleCopy.unscheduled}</dd></div>
-            <div><dt>{phase4ScheduleCopy.date}</dt><dd>{assignment ? formatScheduleDay(assignment.startsAt, document.timeZone) : "—"}</dd></div>
-            <div><dt>{phase4ScheduleCopy.time}</dt><dd>{assignment ? `${formatScheduleTime(assignment.startsAt, document.timeZone)}–${formatScheduleTime(assignment.endsAt, document.timeZone)}` : "—"}</dd></div>
+            <div>
+              <dt>{phase4ScheduleCopy.division}</dt>
+              <dd>{match.divisionName}</dd>
+            </div>
+            <div>
+              <dt>{phase4ScheduleCopy.round}</dt>
+              <dd>{match.roundLabel}</dd>
+            </div>
+            <div>
+              <dt>{phase4ScheduleCopy.teams}</dt>
+              <dd>
+                {match.homeLabel}
+                <br />
+                {match.awayLabel}
+              </dd>
+            </div>
+            <div>
+              <dt>{phase4ScheduleCopy.playingArea}</dt>
+              <dd>
+                {document.areas.find((area) => area.id === assignment?.areaId)?.name ?? phase4ScheduleCopy.unscheduled}
+              </dd>
+            </div>
+            <div>
+              <dt>{phase4ScheduleCopy.date}</dt>
+              <dd>{assignment ? formatScheduleDay(assignment.startsAt, document.timeZone) : "—"}</dd>
+            </div>
+            <div>
+              <dt>{phase4ScheduleCopy.time}</dt>
+              <dd>
+                {assignment
+                  ? `${formatScheduleTime(assignment.startsAt, document.timeZone)}–${formatScheduleTime(assignment.endsAt, document.timeZone)}`
+                  : "—"}
+              </dd>
+            </div>
           </dl>
-          <section><h3>{phase4ScheduleCopy.dependencies}</h3>{match.dependencyMatchIds.length ? <ul>{match.dependencyMatchIds.map((id) => <li key={id}>{document.matches.find((candidate) => candidate.id === id)?.code ?? id}</li>)}</ul> : <p>{phase4ScheduleCopy.noDependencies}</p>}</section>
-          <button className={styles.lockButton} type="button" disabled={disabled} onClick={() => void onToggleLock()}>{locked ? <LockKeyOpen /> : <LockKey />}{locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}</button>
-          {assignment ? <Link className={styles.moveLink} href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}>{phase4ScheduleCopy.move}</Link> : null}
+          <section>
+            <h3>{phase4ScheduleCopy.dependencies}</h3>
+            {match.dependencyMatchIds.length ? (
+              <ul>
+                {match.dependencyMatchIds.map((id) => (
+                  <li key={id}>{document.matches.find((candidate) => candidate.id === id)?.code ?? id}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>{phase4ScheduleCopy.noDependencies}</p>
+            )}
+          </section>
+          <button className={styles.lockButton} type="button" disabled={disabled} onClick={() => void onToggleLock()}>
+            {locked ? <LockKeyOpen /> : <LockKey />}
+            {locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}
+          </button>
+          {assignment ? (
+            <Link
+              className={styles.moveLink}
+              href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
+            >
+              {phase4ScheduleCopy.move}
+            </Link>
+          ) : null}
         </>
       )}
     </aside>
   );
 }
 
-function JobRail({ job, disabled, busy, onGenerate, onContinue, onCancel, onAccept }: { job: ScheduleJob | null; disabled: boolean; busy: string | null; onGenerate: () => Promise<void>; onContinue: () => Promise<void>; onCancel: () => Promise<void>; onAccept: (option: ScheduleOption) => Promise<void> }) {
-  if (!job) return (
-    <footer className={styles.jobRail}><div><CalendarBlank /><span><strong>{phase4ScheduleCopy.noOptimisation}</strong><small>{phase4ScheduleCopy.generateLatest}</small></span></div><button type="button" disabled={disabled} onClick={() => void onGenerate()}><Play />{phase4ScheduleCopy.generate}</button></footer>
-  );
+function JobRail({
+  job,
+  disabled,
+  busy,
+  onGenerate,
+  onContinue,
+  onCancel,
+  onAccept,
+}: {
+  job: ScheduleJob | null;
+  disabled: boolean;
+  busy: string | null;
+  onGenerate: () => Promise<void>;
+  onContinue: () => Promise<void>;
+  onCancel: () => Promise<void>;
+  onAccept: (option: ScheduleOption) => Promise<void>;
+}) {
+  if (!job)
+    return (
+      <footer className={styles.jobRail}>
+        <div>
+          <CalendarBlank />
+          <span>
+            <strong>{phase4ScheduleCopy.noOptimisation}</strong>
+            <small>{phase4ScheduleCopy.generateLatest}</small>
+          </span>
+        </div>
+        <button type="button" disabled={disabled} onClick={() => void onGenerate()}>
+          <Play />
+          {phase4ScheduleCopy.generate}
+        </button>
+      </footer>
+    );
   const active = activeStatuses.has(job.status);
   return (
     <footer className={styles.jobRail} data-job-status={job.status}>
-      <div>{job.currentBest ? <CheckCircle /> : <ArrowsClockwise />}<span><strong>{jobStatusTitle(job)}</strong><small>{job.currentBest ? interpolate(phase4ScheduleCopy.objectiveQuality, { objective: objectiveLabel(job.objective), quality: job.currentBest.quality.score }) : phase4ScheduleCopy.selectedUnchanged}</small></span></div>
+      <div>
+        {job.currentBest ? <CheckCircle /> : <ArrowsClockwise />}
+        <span>
+          <strong>{jobStatusTitle(job)}</strong>
+          <small>
+            {job.currentBest
+              ? interpolate(phase4ScheduleCopy.objectiveQuality, {
+                  objective: objectiveLabel(job.objective),
+                  quality: job.currentBest.quality.score,
+                })
+              : phase4ScheduleCopy.selectedUnchanged}
+          </small>
+        </span>
+      </div>
       <div className={styles.jobActions}>
-        {!active && job.currentBest ? <button type="button" disabled={disabled || busy !== null} onClick={() => void onContinue()}><ArrowsClockwise />{phase4ScheduleCopy.continue}</button> : null}
-        {active ? <button type="button" disabled={disabled || busy !== null || job.status === phase4ScheduleMachine.cancelling} onClick={() => void onCancel()}><Stop />{job.status === phase4ScheduleMachine.cancelling ? phase4ScheduleCopy.cancelling : phase4ScheduleCopy.stop}</button> : null}
-        {job.currentBest ? <button className={styles.useButton} type="button" disabled={disabled || busy !== null} onClick={() => void onAccept(job.currentBest!)}><CheckCircle />{phase4ScheduleCopy.use}</button> : null}
+        {!active && job.currentBest ? (
+          <button type="button" disabled={disabled || busy !== null} onClick={() => void onContinue()}>
+            <ArrowsClockwise />
+            {phase4ScheduleCopy.continue}
+          </button>
+        ) : null}
+        {active ? (
+          <button
+            type="button"
+            disabled={disabled || busy !== null || job.status === phase4ScheduleMachine.cancelling}
+            onClick={() => void onCancel()}
+          >
+            <Stop />
+            {job.status === phase4ScheduleMachine.cancelling ? phase4ScheduleCopy.cancelling : phase4ScheduleCopy.stop}
+          </button>
+        ) : null}
+        {job.currentBest ? (
+          <button
+            className={styles.useButton}
+            type="button"
+            disabled={disabled || busy !== null}
+            onClick={() => void onAccept(job.currentBest!)}
+          >
+            <CheckCircle />
+            {phase4ScheduleCopy.use}
+          </button>
+        ) : null}
       </div>
     </footer>
   );
@@ -554,15 +785,24 @@ function JobRail({ job, disabled, busy, onGenerate, onContinue, onCancel, onAcce
 
 function jobStatusTitle(job: ScheduleJob): string {
   switch (job.status) {
-    case "queued": return phase4ScheduleCopy.optimisationQueued;
-    case "running": return phase4ScheduleCopy.searching;
-    case "valid_best_found": return phase4ScheduleCopy.currentBest;
-    case "cancelling": return phase4ScheduleCopy.stopping;
-    case "cancelled": return job.currentBest ? phase4ScheduleCopy.cancelledRetained : phase4ScheduleCopy.cancelled;
-    case "completed": return job.currentBest ? phase4ScheduleCopy.complete : phase4ScheduleCopy.ended;
-    case "failed": return job.currentBest ? phase4ScheduleCopy.failedRetained : phase4ScheduleCopy.failed;
-    case "no_solution": return phase4ScheduleCopy.noSolution;
-    case "stale": return phase4ScheduleCopy.inputsChanged;
+    case "queued":
+      return phase4ScheduleCopy.optimisationQueued;
+    case "running":
+      return phase4ScheduleCopy.searching;
+    case "valid_best_found":
+      return phase4ScheduleCopy.currentBest;
+    case "cancelling":
+      return phase4ScheduleCopy.stopping;
+    case "cancelled":
+      return job.currentBest ? phase4ScheduleCopy.cancelledRetained : phase4ScheduleCopy.cancelled;
+    case "completed":
+      return job.currentBest ? phase4ScheduleCopy.complete : phase4ScheduleCopy.ended;
+    case "failed":
+      return job.currentBest ? phase4ScheduleCopy.failedRetained : phase4ScheduleCopy.failed;
+    case "no_solution":
+      return phase4ScheduleCopy.noSolution;
+    case "stale":
+      return phase4ScheduleCopy.inputsChanged;
   }
 }
 
@@ -570,19 +810,82 @@ function jobStatusMessage(job: ScheduleJob): string {
   return `${jobStatusTitle(job)}. ${job.currentBest ? phase4ScheduleCopy.bestAvailable : phase4ScheduleCopy.selectedUnchanged}`;
 }
 
-function ScheduleEmpty({ objective, disabled, busy, onGenerate }: { objective: ScheduleObjective; disabled: boolean; busy: boolean; onGenerate: () => Promise<void> }) {
-  return <section className={styles.empty}><CalendarBlank /><div><h2>{phase4ScheduleCopy.noSchedule}</h2><p>{phase4ScheduleCopy.noScheduleBody}</p></div><button type="button" disabled={disabled} onClick={() => void onGenerate()}>{busy ? phase4ScheduleCopy.generating : interpolate(phase4ScheduleCopy.generateObjective, { objective: objectiveLabel(objective) })}</button></section>;
+function ScheduleEmpty({
+  objective,
+  disabled,
+  busy,
+  onGenerate,
+}: {
+  objective: ScheduleObjective;
+  disabled: boolean;
+  busy: boolean;
+  onGenerate: () => Promise<void>;
+}) {
+  return (
+    <section className={styles.empty}>
+      <CalendarBlank />
+      <div>
+        <h2>{phase4ScheduleCopy.noSchedule}</h2>
+        <p>{phase4ScheduleCopy.noScheduleBody}</p>
+      </div>
+      <button type="button" disabled={disabled} onClick={() => void onGenerate()}>
+        {busy
+          ? phase4ScheduleCopy.generating
+          : interpolate(phase4ScheduleCopy.generateObjective, { objective: objectiveLabel(objective) })}
+      </button>
+    </section>
+  );
 }
 
-function StatusRail({ icon, title, body, tone = phase4ScheduleMachine.neutral }: { icon: ReactNode; title: string; body: string; tone?: "neutral" | "warning" | "danger" }) {
-  return <div className={styles.statusRail} data-tone={tone} role={tone === "danger" ? "alert" : "note"}>{icon}<div><strong>{title}</strong><p>{body}</p></div></div>;
+function StatusRail({
+  icon,
+  title,
+  body,
+  tone = phase4ScheduleMachine.neutral,
+}: {
+  icon: ReactNode;
+  title: string;
+  body: string;
+  tone?: "neutral" | "warning" | "danger";
+}) {
+  return (
+    <div className={styles.statusRail} data-tone={tone} role={tone === "danger" ? "alert" : "note"}>
+      {icon}
+      <div>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </div>
+    </div>
+  );
 }
 
 function ScheduleState({ state }: { state: ScheduleDocument["state"] }) {
-  const content = state === "permission" ? [phase4ScheduleCopy.permission, phase4ScheduleCopy.permissionBody] : state === "offline" ? [phase4ScheduleCopy.offline, phase4ScheduleCopy.offlineBody] : state === "empty" ? [phase4ScheduleCopy.noSchedule, phase4ScheduleCopy.noScheduleBody] : [phase4ScheduleCopy.error, phase4ScheduleCopy.errorBody];
-  return <section className={styles.state} role={state === "error" || state === "offline" ? "alert" : "status"}><ShieldWarning /><div><h2>{content[0]}</h2><p>{content[1]}</p></div></section>;
+  const content =
+    state === "permission"
+      ? [phase4ScheduleCopy.permission, phase4ScheduleCopy.permissionBody]
+      : state === "offline"
+        ? [phase4ScheduleCopy.offline, phase4ScheduleCopy.offlineBody]
+        : state === "empty"
+          ? [phase4ScheduleCopy.noSchedule, phase4ScheduleCopy.noScheduleBody]
+          : [phase4ScheduleCopy.error, phase4ScheduleCopy.errorBody];
+  return (
+    <section className={styles.state} role={state === "error" || state === "offline" ? "alert" : "status"}>
+      <ShieldWarning />
+      <div>
+        <h2>{content[0]}</h2>
+        <p>{content[1]}</p>
+      </div>
+    </section>
+  );
 }
 
 function ScheduleSkeleton() {
-  return <div className={styles.skeleton} aria-label={phase4ScheduleCopy.loading} aria-busy="true"><span /><span /><span /><span /></div>;
+  return (
+    <div className={styles.skeleton} role="status" aria-label={phase4ScheduleCopy.loading} aria-busy="true">
+      <span />
+      <span />
+      <span />
+      <span />
+    </div>
+  );
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isExpectedTeardownFontCancellation,
   isExpectedTeardownServiceWorkerCancellation,
+  isExpectedTeardownStaticAssetCancellation,
 } from "../helpers/console-guard";
 
 const localFont = {
@@ -45,5 +46,30 @@ describe("service-worker teardown cancellation", () => {
     { ...cancellation, pageUrl: "about:blank" },
   ])("keeps real or unrelated service-worker failures observable", (input) => {
     expect(isExpectedTeardownServiceWorkerCancellation(input)).toBe(false);
+  });
+});
+
+describe("static-asset teardown cancellation", () => {
+  const cancellation = {
+    failure: "cancelled",
+    pageUrl: "https://127.0.0.1:3100/organiser",
+    requestUrl: "https://127.0.0.1:3100/_next/static/chunks/app.js",
+    resourceType: "script",
+  };
+
+  it("ignores only same-origin Next scripts or styles cancelled during navigation teardown", () => {
+    expect(isExpectedTeardownStaticAssetCancellation(cancellation)).toBe(true);
+    expect(isExpectedTeardownStaticAssetCancellation({ ...cancellation, resourceType: "stylesheet" })).toBe(true);
+    expect(isExpectedTeardownStaticAssetCancellation({ ...cancellation, failure: "net::ERR_ABORTED" })).toBe(true);
+  });
+
+  it.each([
+    { ...cancellation, failure: "net::ERR_FAILED" },
+    { ...cancellation, requestUrl: "https://cdn.example.com/_next/static/chunks/app.js" },
+    { ...cancellation, requestUrl: "https://127.0.0.1:3100/api/competitions" },
+    { ...cancellation, resourceType: "fetch" },
+    { ...cancellation, pageUrl: "about:blank" },
+  ])("keeps genuine or unrelated asset failures observable", (input) => {
+    expect(isExpectedTeardownStaticAssetCancellation(input)).toBe(false);
   });
 });

@@ -26,9 +26,7 @@ describe("Phase 4 Assisted Setup patch web contract", () => {
   });
 
   it("rejects unknown keys, missing revisions, and non-editable steps", () => {
-    expect(
-      isAssistedSetupPatchRequest({ expected_revision: 6, idempotency_key: "patch-key", step }),
-    ).toBe(true);
+    expect(isAssistedSetupPatchRequest({ expected_revision: 6, idempotency_key: "patch-key", step })).toBe(true);
     expect(
       isAssistedSetupPatchRequest({ expected_revision: 6, idempotency_key: "patch-key", step, browser_only: true }),
     ).toBe(false);
@@ -38,6 +36,13 @@ describe("Phase 4 Assisted Setup patch web contract", () => {
         expected_revision: 6,
         idempotency_key: "patch-key",
         step: { step_id: "capacity", value: {} },
+      }),
+    ).toBe(false);
+    expect(
+      isAssistedSetupPatchRequest({
+        expected_revision: 6,
+        idempotency_key: "patch-key",
+        step: { step_id: "basics", value: {} },
       }),
     ).toBe(false);
   });

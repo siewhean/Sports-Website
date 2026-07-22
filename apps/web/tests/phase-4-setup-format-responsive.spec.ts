@@ -11,7 +11,9 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
   if (testInfo.project.name.includes("phone")) await expect(mobileProgress).toBeVisible();
   else await expect(mobileProgress).toBeHidden();
   await expect(page.getByRole("button", { name: /Continue to settings/ })).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
@@ -29,6 +31,8 @@ test("format designer defaults to structured manual mode on phones", async ({ pa
   expect(finalBox).not.toBeNull();
   expect(barBox).not.toBeNull();
   expect((finalBox?.y ?? 0) + (finalBox?.height ?? 0)).toBeLessThanOrEqual((barBox?.y ?? 0) - 8);
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
   expect(overflow).toBeLessThanOrEqual(1);
 });

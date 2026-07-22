@@ -657,7 +657,9 @@ button:disabled {
 }
 
 @keyframes schedule-shimmer {
-  to { background-position: -240% 0; }
+  to {
+    background-position: -240% 0;
+  }
 }
 
 @media (max-width: 1200px) {

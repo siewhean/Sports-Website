@@ -207,6 +207,7 @@ export async function getAssistedSetupDocument(
       "permission",
       "read-only",
       "conflict",
+      "expired",
       "quota",
       "plan",
     ]);
@@ -243,10 +244,13 @@ export async function getAssistedSetupDocument(
   const cookie = await sessionCookie(base);
   if (!cookie) return unavailable(competitionId, competitionName, "permission");
   try {
-    const response = await fetch(new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/setup-draft`, base), {
-      cache: "no-store",
-      headers: { accept: "application/json", cookie },
-    });
+    const response = await fetch(
+      new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/setup-draft`, base),
+      {
+        cache: "no-store",
+        headers: { accept: "application/json", cookie },
+      },
+    );
     if (response.status === 404) return unavailable(competitionId, competitionName, "empty");
     if (response.status === 401 || response.status === 403)
       return unavailable(competitionId, competitionName, "permission");
@@ -254,7 +258,7 @@ export async function getAssistedSetupDocument(
     const setup = parseAssistedSetupDocument(await response.json().catch(() => null), competitionId);
     if (!setup) return unavailable(competitionId, competitionName, "error");
     return {
-      state: setup.read_only ? "read-only" : "ready",
+      state: setup.status === "expired" ? "expired" : setup.read_only ? "read-only" : "ready",
       competitionId,
       competitionName,
       setup,

@@ -33,7 +33,11 @@ export default async function SchedulePage({
       pageTitle={phase4ScheduleCopy.title}
       pageIntro={phase4ScheduleCopy.intro}
       pageEyebrow={phase4ScheduleCopy.eyebrow}
-      syncLabel={document.currentRevision ? `${phase4ScheduleCopy.draft} ${document.currentRevision.revision}` : phase4ScheduleCopy.saved}
+      syncLabel={
+        document.currentRevision
+          ? `${phase4ScheduleCopy.draft} ${document.currentRevision.revision}`
+          : phase4ScheduleCopy.saved
+      }
       syncState={
         document.state === phase4ScheduleMachine.offline
           ? phase4ScheduleMachine.offline

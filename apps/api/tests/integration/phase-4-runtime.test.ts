@@ -194,7 +194,9 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     await client`INSERT INTO competition_availability_windows(id,competition_id,playing_area_id,starts_at,ends_at)
       VALUES(${intervalId},${competitionId},${areaId},'2027-08-01T00:00:00Z','2027-08-02T00:00:00Z')`;
     const formatId = randomUUID();
-    const graph = structuredClone(createDefaultFormatTemplates(8)[0]!.graph);
+    const graph = structuredClone(
+      createDefaultFormatTemplates(8).find((template) => template.strategy === "compact_knockout")!.graph,
+    );
     await client`INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,layout,created_by,validation_contract)
       VALUES(${formatId},${competitionId},${divisionId},1,${client.json(graph)},phase4_sha256_json(${client.json(graph)}::jsonb),
         ${client.json({ schema_version: 1, stage_positions: graph.stages.map((stage, index) => ({ stage_id: stage.id, x: index * 240, y: 80 })) })},${accountId},'phase3')`;
@@ -227,7 +229,7 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     const request = {
       idempotency_key: randomUUID(),
       expected_source_revision: competition.revision,
-      expected_capacity_revision: competition.capacity_revision,
+      expected_capacity_revision: Number(competition.capacity_revision),
       objective: "balanced" as const,
       constraints,
     };
@@ -246,7 +248,8 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     await expect(
       assertCurrent.assertScheduleJobCurrent(client as unknown as PostgresJsSql, generated.job.id),
     ).resolves.toBeUndefined();
-    await client`UPDATE division_entries SET status='withdrawn' WHERE division_id=${divisionId} AND seed=8`;
+    await client`UPDATE division_entries SET status='withdrawn',withdrawal_reason='Test schedule fence'
+      WHERE division_id=${divisionId} AND seed=8`;
     await expect(
       assertCurrent.assertScheduleJobCurrent(client as unknown as PostgresJsSql, generated.job.id),
     ).rejects.toMatchObject({

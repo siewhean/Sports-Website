@@ -37,18 +37,18 @@ export function setupValuesEqual(left: unknown, right: unknown): boolean {
 export function basicsReadyToPersist(value: Phase4SetupBasics): boolean {
   return Boolean(
     value.name.trim() &&
-      value.location.venue.trim() &&
-      value.location.address.trim() &&
-      /^[A-Z]{2}$/.test(value.location.country_code) &&
-      value.starts_on &&
-      value.ends_on &&
-      value.ends_on >= value.starts_on &&
-      value.time_zone.trim() &&
-      value.locale.trim() &&
-      Number.isSafeInteger(value.entry_count) &&
-      value.entry_count >= 1 &&
-      Number.isSafeInteger(value.division_count) &&
-      value.division_count >= 1,
+    value.location.venue.trim() &&
+    value.location.address.trim() &&
+    /^[A-Z]{2}$/.test(value.location.country_code) &&
+    value.starts_on &&
+    value.ends_on &&
+    value.ends_on >= value.starts_on &&
+    value.time_zone.trim() &&
+    value.locale.trim() &&
+    Number.isSafeInteger(value.entry_count) &&
+    value.entry_count >= 1 &&
+    Number.isSafeInteger(value.division_count) &&
+    value.division_count >= 1,
   );
 }
 

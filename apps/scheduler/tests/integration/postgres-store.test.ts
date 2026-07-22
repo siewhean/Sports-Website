@@ -53,7 +53,7 @@ describeInfra("PostgresScheduleJobStore", () => {
           division_id: authoritative.divisionId,
           duration_minutes: 30,
           dependency_match_ids: [],
-          possible_entry_ids: authoritative.entryIds,
+          possible_entry_ids: authoritative.possibleEntryIds,
           official_ids: [],
           is_championship_final: true,
         },
@@ -66,7 +66,21 @@ describeInfra("PostgresScheduleJobStore", () => {
           start_epoch_ms: Date.UTC(2027, 0, 1, 1),
           end_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
         },
+        {
+          slot_id: "store-slot-2",
+          interval_id: authoritative.intervalId,
+          area_id: authoritative.areaId,
+          start_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
+          end_epoch_ms: Date.UTC(2027, 0, 1, 2),
+        },
       ],
+      constraints: {
+        ...baseInput.constraints,
+        featured_playing_area: {
+          ...baseInput.constraints.featured_playing_area,
+          value: { area_id: authoritative.areaId, match_ids: [] },
+        },
+      },
     };
     const inputHash = deterministicJsonHash(input);
     await sql`
@@ -114,7 +128,23 @@ describeInfra("PostgresScheduleJobStore", () => {
       await secondStore.claimJob({ jobId, workerId: "scheduler-two", expectedInputHash: inputHash, leaseMs: 5_000 }),
     ).toEqual({ outcome: "busy" });
 
-    const result = { ...candidate(81), job_id: jobId, source_revision: input.source_revision };
+    const result = {
+      ...candidate(81),
+      job_id: jobId,
+      source_revision: input.source_revision,
+      assignments: [
+        {
+          match_id: authoritative.matchId,
+          division_id: authoritative.divisionId,
+          area_id: authoritative.areaId,
+          interval_id: authoritative.intervalId,
+          slot_id: "store-slot-1",
+          start_epoch_ms: Date.UTC(2027, 0, 1, 1),
+          end_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
+          fixed: false,
+        },
+      ],
+    };
     const checkpoint = await firstStore.checkpointBest({
       jobId,
       workerId: "scheduler-one",
@@ -131,18 +161,18 @@ describeInfra("PostgresScheduleJobStore", () => {
       ...result,
       assignments: [
         {
-          match_id: randomUUID(),
-          division_id: randomUUID(),
-          area_id: randomUUID(),
-          interval_id: randomUUID(),
-          slot_id: "tie-break-slot",
-          start_epoch_ms: 1_800_000,
-          end_epoch_ms: 3_600_000,
-          fixed: false,
+          ...result.assignments[0]!,
+          slot_id: "store-slot-2",
+          start_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
+          end_epoch_ms: Date.UTC(2027, 0, 1, 2),
         },
       ],
       quality: { ...result.quality, preferred_penalty: result.quality.preferred_penalty - 1 },
     };
+    expect(
+      await sql<{ valid: boolean }[]>`
+        SELECT phase4_schedule_assignments_valid(${sql.json(input)},${sql.json(preferredTieBreak.assignments)}) AS valid`,
+    ).toEqual([{ valid: true }]);
     expect(
       await firstStore.checkpointBest({
         jobId,
@@ -263,7 +293,12 @@ describeInfra("PostgresScheduleJobStore", () => {
       workerId: "scheduler-dead-letter",
       fenceToken: deadClaim.job.fenceToken,
       expectedInputHash: deadLetterInputHash,
-      candidate: { ...candidate(50), job_id: deadLetterJobId, source_revision: deadLetterInput.source_revision },
+      candidate: {
+        ...candidate(50),
+        job_id: deadLetterJobId,
+        source_revision: deadLetterInput.source_revision,
+        assignments: result.assignments,
+      },
       iteration: 2,
     });
     await firstStore.releaseAfterFailure({
@@ -330,18 +365,20 @@ async function seedWorld(ids: { accountId: string; organisationId: string; compe
       ${formatRevisionId},${deterministicJsonHash(definition)},false,false,false,false,0,0,0,false,${ids.accountId}
     )`;
   await sql`SELECT phase4_publish_format_revision(${formatRevisionId},${ids.accountId},'publish-scheduler-store')`;
-  const [match] = await sql<{ id: string }[]>`
-    SELECT id FROM matches WHERE format_revision_id=${formatRevisionId} ORDER BY ordinal LIMIT 1`;
+  const [match] = await sql<{ id: string; possible_entry_ids: string[] }[]>`
+    SELECT match.id,
+      ARRAY(SELECT entry_id FROM phase4_match_possible_entries(match.id) ORDER BY entry_id) AS possible_entry_ids
+    FROM matches match WHERE match.format_revision_id=${formatRevisionId} ORDER BY match.ordinal LIMIT 1`;
   const [capacity] = await sql<{ capacity_revision: number; capacity_hash: string }[]>`
     SELECT capacity_revision,phase4_capacity_hash(${ids.competitionId}) AS capacity_hash
     FROM competitions WHERE id=${ids.competitionId}`;
   if (match === undefined || capacity === undefined) throw new Error("Failed to seed authoritative schedule input");
   return {
     divisionId,
-    entryIds,
     areaId,
     intervalId,
     matchId: match.id,
+    possibleEntryIds: match.possible_entry_ids,
     capacityRevision: Number(capacity.capacity_revision),
     capacityHash: capacity.capacity_hash,
   };

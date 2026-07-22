@@ -1,12 +1,5 @@
-import type {
-  Phase4SetupDocument,
-  Phase4SetupStepId,
-  Phase4SetupValues,
-} from "@matchday/contracts";
-import {
-  deriveAssistedSetupProgress,
-  type AssistedSetupStepValues,
-} from "@matchday/domain";
+import type { Phase4SetupDocument, Phase4SetupStepId, Phase4SetupValues } from "@matchday/contracts";
+import { deriveAssistedSetupProgress, type AssistedSetupStepValues } from "@matchday/domain";
 
 type JsonObject = Record<string, unknown>;
 
@@ -209,7 +202,9 @@ export function phase4SetupDocumentFromStorage(row: Phase4SetupStorageRow): Phas
     id: row.id,
     organisation_id: row.organisation_id,
     competition_id: row.competition_id,
-    competition_status: (row.competition_status === "active" ? "live" : row.competition_status) as Phase4SetupDocument["competition_status"],
+    competition_status: (row.competition_status === "active"
+      ? "live"
+      : row.competition_status) as Phase4SetupDocument["competition_status"],
     revision: row.revision,
     status: row.status,
     current_step: row.current_step,

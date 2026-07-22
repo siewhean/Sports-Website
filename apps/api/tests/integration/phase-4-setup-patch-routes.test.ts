@@ -121,7 +121,9 @@ function runtime() {
   const gate = new ReliableGateBPhase4Runtime(
     sql,
     phase3,
-    { enqueueSchedule: vi.fn(async () => ({ id: "ignored", name: "schedule.optimize", duplicate: false })) },
+    {
+      enqueueSchedule: vi.fn(async () => ({ id: "ignored", name: "schedule.optimize" as const, duplicate: false })),
+    },
     { mode: "disabled", provider: null, timeoutMs: 1_000, maximumAttempts: 1, cacheTtlSeconds: 60 },
   );
   vi.spyOn(gate, "patchSetupDraft").mockResolvedValue({ outcome: "saved", document: document(3) });
@@ -194,6 +196,19 @@ describe("Gate B setup route boundary", () => {
       payload: { idempotency_key: randomUUID() },
     });
     expect(noCsrf.statusCode).toBe(400);
+
+    const unknownPatch = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/competitions/${competitionId}/setup-draft`,
+      headers: mutationHeaders(),
+      payload: {
+        expected_revision: 2,
+        idempotency_key: randomUUID(),
+        step: { step_id: "format_preferences", value: document().values.format_preferences },
+        browser_only: true,
+      },
+    });
+    expect(unknownPatch.statusCode).toBe(400);
 
     const unknown = await app.inject({
       method: "POST",

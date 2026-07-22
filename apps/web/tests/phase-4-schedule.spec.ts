@@ -35,7 +35,11 @@ test("unlock uses DELETE and keeps a single idempotent command body", async ({ p
   await page.route(`**/api/phase4/schedule/revisions/${revisionId}/locks/${matchId}`, async (route) => {
     method = route.request().method();
     expect(Object.keys(route.request().postDataJSON() as object)).toEqual(["idempotency_key"]);
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ match_id: matchId, unlocked: true, idempotent_replay: false }) });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ match_id: matchId, unlocked: true, idempotent_replay: false }),
+    });
   });
   await page.goto(scheduleUrl);
   await dismissConsent(page);
@@ -47,10 +51,24 @@ test("move flow validates consequences before sending the optimistic revision", 
   let confirmed = false;
   await page.route(`**/api/phase4/schedule/revisions/${revisionId}/moves/validate`, async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-      validation: { valid: true, violations: [] }, assignments: [],
-      consequences: { moved_match_id: matchId, from: null, to: body, affected_match_ids: [matchId], dependency_match_ids: [], locked_match_ids: [], messages: ["Only the selected match changes."], quality: null },
-    }) });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        validation: { valid: true, violations: [] },
+        assignments: [],
+        consequences: {
+          moved_match_id: matchId,
+          from: null,
+          to: body,
+          affected_match_ids: [matchId],
+          dependency_match_ids: [],
+          locked_match_ids: [],
+          messages: ["Only the selected match changes."],
+          quality: null,
+        },
+      }),
+    });
   });
   await page.route(`**/api/phase4/schedule/revisions/${revisionId}/moves`, async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
@@ -68,7 +86,12 @@ test("move flow validates consequences before sending the optimistic revision", 
 });
 
 test("schedule state routes remain truthful and non-mutating", async ({ page }) => {
-  for (const [state, heading] of [["empty", "No schedule draft yet"], ["offline", "Schedule service offline"], ["permission", "Schedule access required"], ["error", "Schedule could not load"]] as const) {
+  for (const [state, heading] of [
+    ["empty", "No schedule draft yet"],
+    ["offline", "Schedule service offline"],
+    ["permission", "Schedule access required"],
+    ["error", "Schedule could not load"],
+  ] as const) {
     await page.goto(`${scheduleUrl}?state=${state}`);
     await expect(page.getByRole("heading", { name: heading })).toBeVisible();
   }

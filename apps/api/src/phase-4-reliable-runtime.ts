@@ -49,11 +49,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     super(reliableSql, phase3, enqueue, ai, now);
   }
 
-  private async readAccess(
-    sql: PostgresJsSql,
-    actor: Phase3Actor,
-    competitionId: string,
-  ): Promise<ReadAccess> {
+  private async readAccess(sql: PostgresJsSql, actor: Phase3Actor, competitionId: string): Promise<ReadAccess> {
     return first(
       await sql.unsafe<ReadAccess>(
         `SELECT competition.organisation_id,competition.status,membership.role membership_role

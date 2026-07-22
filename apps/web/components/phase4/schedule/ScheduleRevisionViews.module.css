@@ -440,7 +440,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .history *, .detail *, .comparison * { transition-duration: 0.01ms !important; }
+  .history *,
+  .detail *,
+  .comparison * {
+    transition-duration: 0.01ms !important;
+  }
 }
 
 @media (forced-colors: active) {

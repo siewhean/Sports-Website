@@ -21,7 +21,7 @@ async function expectNoBlockingAxeViolations(page: Page) {
 test("organiser workflow has no serious or critical accessibility violations", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/schedule");
   await dismissConsent(page);
-  await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Schedule", exact: true })).toBeVisible();
   await expectNoBlockingAxeViolations(page);
 });
 

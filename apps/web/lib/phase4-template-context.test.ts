@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  competitionIdFromFormatReferer,
-  parseFormatTemplateCompetitionContext,
-} from "./phase4-template-context";
+import { competitionIdFromFormatReferer, parseFormatTemplateCompetitionContext } from "./phase4-template-context";
 
 const competitionId = "4dc85811-e715-40f4-8609-2523f7516e5a";
 

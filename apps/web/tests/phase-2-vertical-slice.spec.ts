@@ -11,14 +11,14 @@ test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo))
 
 test("canonical routes expose the complete 14-step competition slice", async ({ page }) => {
   const routeEvidence = [
-    ["/organiser/competitions/singapore-open/setup", "Competition setup", "Singapore Open 2026"],
+    ["/organiser/competitions/singapore-open/setup", "Set the event capacity", "Singapore Open 2026"],
     ["/organiser/competitions/singapore-open/settings", "Competition settings", "2"],
     ["/organiser/competitions/singapore-open/entries", "Entries and divisions", "Open division"],
     ["/organiser/competitions/singapore-open/entries", "Entries and divisions", "Pasir Ris Rapids"],
-    ["/organiser/competitions/singapore-open/capacity", "Capacity", "16 required match slots"],
+    ["/organiser/competitions/singapore-open/capacity", "Capacity", "Required match slots"],
     ["/organiser/competitions/singapore-open/format", "Competition format", "Group A"],
     ["/organiser/competitions/singapore-open/format", "Competition format", "Semifinals"],
-    ["/organiser/competitions/singapore-open/schedule", "Schedule", "M16 · Final"],
+    ["/organiser/competitions/singapore-open/schedule", "Schedule", "Playing-area timeline"],
     ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
     ["/score/m12-access", "Marina Blue", "Validate access"],

@@ -1,10 +1,5 @@
 import { expect, test } from "@playwright/test";
-import {
-  allowConsoleFailure,
-  assertConsoleGuard,
-  dismissConsent,
-  installConsoleGuard,
-} from "./helpers/console-guard";
+import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
@@ -14,10 +9,7 @@ test("assisted setup renders authoritative capacity and preserves text on AI fal
   await dismissConsent(page);
   await expect(page.getByTestId("phase4-assisted-setup")).toBeVisible();
   await expect(page.getByText("52").first()).toBeVisible();
-  await expect(page.getByRole("link", { name: /Edit lossless capacity/ })).toHaveAttribute(
-    "href",
-    /\/capacity$/,
-  );
+  await expect(page.getByRole("link", { name: /Edit lossless capacity/ })).toHaveAttribute("href", /\/capacity$/);
 
   await page.route("**/api/phase4/organisations/*/ai/competition-brief", async (route) => {
     const request = route.request();
@@ -142,11 +134,31 @@ test("server validation controls preview and materialisation state", async ({ pa
 });
 
 test("all production state routes preserve truthful geometry", async ({ page }) => {
-  for (const state of ["loading", "empty", "error", "offline", "permission", "read-only", "conflict", "quota", "plan"]) {
+  for (const state of [
+    "loading",
+    "empty",
+    "error",
+    "offline",
+    "permission",
+    "read-only",
+    "conflict",
+    "quota",
+    "plan",
+  ]) {
     await page.goto(`/organiser/competitions/singapore-open/setup?state=${state}`);
     await expect(page.locator("body")).not.toBeEmpty();
   }
-  for (const state of ["loading", "empty", "error", "offline", "permission", "read-only", "conflict", "quota", "plan"]) {
+  for (const state of [
+    "loading",
+    "empty",
+    "error",
+    "offline",
+    "permission",
+    "read-only",
+    "conflict",
+    "quota",
+    "plan",
+  ]) {
     await page.goto(`/organiser/competitions/singapore-open/format?state=${state}`);
     await expect(page.locator("body")).not.toBeEmpty();
   }

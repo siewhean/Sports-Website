@@ -1,8 +1,5 @@
-import type {
-  Phase4PatchableSetupStep,
-  Phase4SetupPatchRequest,
-} from "@matchday/contracts";
-import { isPhase4SetupIdempotencyKey } from "./phase4-assisted-setup";
+import type { Phase4PatchableSetupStep, Phase4SetupPatchRequest } from "@matchday/contracts";
+import { isAssistedSetupStepValue, isPhase4SetupIdempotencyKey } from "./phase4-assisted-setup";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -24,9 +21,10 @@ export function isAssistedSetupPatchRequest(value: unknown): value is Phase4Setu
     !isPhase4SetupIdempotencyKey(item.idempotency_key)
   )
     return false;
-  const step = record(item.step);
-  if (!step || !exact(step, ["step_id", "value"]) || !record(step.value)) return false;
-  return step.step_id === "basics" || step.step_id === "format_preferences";
+  return Boolean(
+    isAssistedSetupStepValue(item.step) &&
+    (item.step.step_id === "basics" || item.step.step_id === "format_preferences"),
+  );
 }
 
 export function setupPatchBody(

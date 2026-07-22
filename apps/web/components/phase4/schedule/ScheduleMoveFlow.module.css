@@ -435,7 +435,9 @@
 }
 
 @keyframes move-check {
-  to { background-position: -200% 0; }
+  to {
+    background-position: -200% 0;
+  }
 }
 
 @media (max-width: 600px) {

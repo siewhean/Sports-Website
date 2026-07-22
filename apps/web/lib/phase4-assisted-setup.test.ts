@@ -3,6 +3,7 @@ import type { Phase4SetupDocument } from "@matchday/contracts";
 import {
   isAssistedSetupAutosaveRequest,
   parseAssistedSetupAutosaveResponse,
+  parseAssistedSetupCreateResponse,
   parseAssistedSetupDocument,
 } from "./phase4-assisted-setup";
 
@@ -61,6 +62,45 @@ describe("Phase 4 assisted-setup web contract", () => {
   it("accepts the exact server document and rejects unknown keys", () => {
     expect(parseAssistedSetupDocument(document, competitionId)).toEqual(document);
     expect(parseAssistedSetupDocument({ ...document, local_revision: 2 }, competitionId)).toBeNull();
+    expect(
+      parseAssistedSetupDocument(
+        { ...document, values: { ...document.values, basics: { name: "Incomplete nested value" } } },
+        competitionId,
+      ),
+    ).toBeNull();
+    expect(
+      parseAssistedSetupDocument(
+        {
+          ...document,
+          steps: document.steps.map((step, index) =>
+            index === 0 ? { ...step, prerequisite_step_ids: ["not_a_setup_step"] } : step,
+          ),
+        },
+        competitionId,
+      ),
+    ).toBeNull();
+    expect(
+      parseAssistedSetupDocument(
+        {
+          ...document,
+          steps: document.steps.map((step, index) =>
+            index === 0 ? { ...step, errors: [{ code: "INVALID", path: 42, message: "Broken" }] } : step,
+          ),
+        },
+        competitionId,
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts only the exact create-draft response wrapper", () => {
+    expect(parseAssistedSetupCreateResponse({ document, idempotent_replay: false }, competitionId)).toEqual({
+      document,
+      idempotent_replay: false,
+    });
+    expect(parseAssistedSetupCreateResponse(document, competitionId)).toBeNull();
+    expect(
+      parseAssistedSetupCreateResponse({ document, idempotent_replay: false, browser_seed: true }, competitionId),
+    ).toBeNull();
   });
 
   it("requires server revision and idempotency for every transition", () => {
@@ -83,6 +123,20 @@ describe("Phase 4 assisted-setup web contract", () => {
         idempotency_key: "command-a",
         transition: { kind: "go_to_step", step_id: "capacity" },
         browser_only: true,
+      }),
+    ).toBe(false);
+    expect(
+      isAssistedSetupAutosaveRequest({
+        expected_revision: 2,
+        idempotency_key: "command-a",
+        transition: { kind: "save_step", step: { step_id: "basics", value: null } },
+      }),
+    ).toBe(false);
+    expect(
+      isAssistedSetupAutosaveRequest({
+        expected_revision: 2,
+        idempotency_key: "command-a",
+        transition: { kind: "complete", review: {} },
       }),
     ).toBe(false);
   });

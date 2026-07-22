@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  Phase4SetupBasics,
-  Phase4SetupDocument,
-  Phase4SetupFormatPreferences,
-} from "@matchday/contracts";
+import type { Phase4SetupBasics, Phase4SetupDocument, Phase4SetupFormatPreferences } from "@matchday/contracts";
 import {
   basicsReadyToPersist,
   patchableSetupStep,

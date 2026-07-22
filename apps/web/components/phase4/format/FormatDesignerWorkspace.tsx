@@ -87,7 +87,7 @@ export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocum
   }
   return (
     <>
-      <h1 style={hiddenHeadingStyle}>Competition format</h1>
+      <h1 style={hiddenHeadingStyle}>{t("prototype.675eeee2578b")}</h1>
       <FormatEditor
         key={draft.draft_id}
         page={page}

@@ -59,15 +59,13 @@ describe("Phase 4 OpenAPI contract", () => {
     };
     const setupPath = "/api/v1/competitions/{competitionId}/setup-draft";
     const setup = document.paths[setupPath]?.put?.requestBody?.content?.["application/json"]?.schema as
-      | { properties?: { transition?: { anyOf?: Array<Record<string, unknown>> } } }
-      | undefined;
+      { properties?: { transition?: { anyOf?: Array<Record<string, unknown>> } } } | undefined;
     const transitions = setup?.properties?.transition?.anyOf ?? [];
     expect(transitions).toHaveLength(3);
     expect(transitions.every((transition) => transition.additionalProperties === false)).toBe(true);
 
     const patch = document.paths[setupPath]?.patch?.requestBody?.content?.["application/json"]?.schema as
-      | { additionalProperties?: boolean; properties?: Record<string, unknown> }
-      | undefined;
+      { additionalProperties?: boolean; properties?: Record<string, unknown> } | undefined;
     expect(patch?.additionalProperties).toBe(false);
     expect(Object.keys(patch?.properties ?? {}).sort()).toEqual(["expected_revision", "idempotency_key", "step"]);
 

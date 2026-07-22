@@ -16,10 +16,7 @@ import {
   UsersThree,
   Warning,
 } from "@phosphor-icons/react";
-import type {
-  Phase4SetupDocument,
-  Phase4SetupStepId,
-} from "@matchday/contracts";
+import type { Phase4SetupDocument, Phase4SetupStepId } from "@matchday/contracts";
 import { opaqueId, translate as t } from "@matchday/ui";
 import {
   assistedSetupSteps,
@@ -42,6 +39,7 @@ const stateCopy: Record<
   permission: { title: phase4SetupCopy.permission, body: t("prototype.72b2c902df68") },
   "read-only": { title: phase4SetupCopy.readOnly, body: t("prototype.4f2da4d7aaa9") },
   conflict: { title: phase4SetupCopy.conflict, body: t("prototype.ab445f863ccd") },
+  expired: { title: t("prototype.ccc6652a3553"), body: t("prototype.f4d72f1cb57d") },
   quota: { title: phase4SetupCopy.quota, body: t("prototype.3f9a74ef1f28") },
   plan: { title: phase4SetupCopy.plan, body: t("prototype.4e1fab500c6e") },
 };
@@ -144,7 +142,12 @@ export function AssistedSetupJourneyView({
         title={surface.title}
         body={surface.body}
         action={
-          viewState === "conflict" ? (
+          viewState === "expired" ? (
+            <div className={styles.stateActions}>
+              <button onClick={() => window.location.reload()}>{t("prototype.b2430ebbca75")}</button>
+              <Link href={`/organiser/competitions/${document.competitionId}`}>{t("prototype.ab6b40c62c47")}</Link>
+            </div>
+          ) : viewState === "conflict" ? (
             <button onClick={() => window.location.reload()}>{t("prototype.4b46950ea4dd")}</button>
           ) : null
         }
@@ -170,11 +173,7 @@ export function AssistedSetupJourneyView({
             const reachable = index <= currentIndex || complete;
             return (
               <li key={step.id} data-current={step.id === setup.current_step} data-complete={complete}>
-                <button
-                  type="button"
-                  onClick={() => onGoTo(step.id)}
-                  disabled={commandBusy || !reachable}
-                >
+                <button type="button" onClick={() => onGoTo(step.id)} disabled={readOnly || commandBusy || !reachable}>
                   <span>{complete ? <Check aria-hidden="true" /> : index + 1}</span>
                   <span>
                     <strong>{step.label}</strong>
@@ -278,7 +277,7 @@ export function AssistedSetupJourneyView({
           <button
             className={styles.back}
             type="button"
-            disabled={commandBusy || currentIndex === 0}
+            disabled={readOnly || commandBusy || currentIndex === 0}
             onClick={() => onGoTo(assistedSetupSteps[currentIndex - 1]!.id)}
           >
             <ArrowLeft aria-hidden="true" /> {t("prototype.76900f1bfd16")}
@@ -473,9 +472,7 @@ function BasicsStep({
         <Field id="setup-entry-status" label={copy.entryStatus}>
           <select
             value={value.entry_count_status}
-            onChange={(event) =>
-              patch({ entry_count_status: event.target.value as BasicsDraft["entry_count_status"] })
-            }
+            onChange={(event) => patch({ entry_count_status: event.target.value as BasicsDraft["entry_count_status"] })}
             disabled={disabled}
           >
             <option value="confirmed">{copy.confirmed}</option>
@@ -820,7 +817,9 @@ function ReviewStep({ setup }: { setup: Phase4SetupDocument }) {
             <span>{complete && !issues.length ? <Check /> : <Warning />}</span>
             <div>
               <strong>{step.label}</strong>
-              <small>{issues[0]?.message ?? (complete ? t("prototype.6aa852ff8317") : t("prototype.07297fa94a99"))}</small>
+              <small>
+                {issues[0]?.message ?? (complete ? t("prototype.6aa852ff8317") : t("prototype.07297fa94a99"))}
+              </small>
             </div>
           </li>
         ))}
@@ -836,7 +835,17 @@ function ReviewStep({ setup }: { setup: Phase4SetupDocument }) {
   );
 }
 
-function ReferenceRow({ icon, title, value, detail }: { icon: ReactNode; title: string; value: string; detail: string }) {
+function ReferenceRow({
+  icon,
+  title,
+  value,
+  detail,
+}: {
+  icon: ReactNode;
+  title: string;
+  value: string;
+  detail: string;
+}) {
   return (
     <div className={styles.referenceRow}>
       <span aria-hidden="true">{icon}</span>
@@ -873,17 +882,7 @@ function CheckField({
   );
 }
 
-function Field({
-  id,
-  label,
-  helper,
-  children,
-}: {
-  id?: string;
-  label: string;
-  helper?: string;
-  children: ReactNode;
-}) {
+function Field({ id, label, helper, children }: { id?: string; label: string; helper?: string; children: ReactNode }) {
   return (
     <label id={id} className={styles.field}>
       <span>{label}</span>

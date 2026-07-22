@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
@@ -10,6 +10,20 @@ const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@12
 const schema = `test_phase4_setup_seed_${randomUUID().replaceAll("-", "")}`;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 let sql!: Sql;
+
+function hashDefinition(value: unknown): string {
+  const canonical = (item: unknown): string => {
+    if (Array.isArray(item)) return `[${item.map(canonical).join(",")}]`;
+    if (item && typeof item === "object") {
+      return `{${Object.entries(item)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`)
+        .join(",")}}`;
+    }
+    return JSON.stringify(item);
+  };
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
 
 beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
@@ -38,12 +52,15 @@ describeInfrastructure("Phase 4 Assisted Setup seed and patch guardrails", () =>
       await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
         VALUES(${organisation},${account},'owner','active')`;
     });
+    const packDefinition = {
+      recommendedSlotMinutes: 40,
+      recommendedSettings: { bestOf: 3, slotMinutes: 40, targetPoints: 21 },
+    };
     await sql`INSERT INTO sport_pack_versions(
       sport_code,version,schema_version,definition,definition_hash,status,activated_at
     ) VALUES(
       'badminton','test-1',1,
-      ${sql.json({ recommendedSlotMinutes: 40, recommendedSettings: { bestOf: 3, targetPoints: 21 } })},
-      ${"a".repeat(64)},'active',now()
+      ${sql.json(packDefinition)},${hashDefinition(packDefinition)},'active',now()
     )`;
     await sql`INSERT INTO competitions(
       id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,
@@ -76,16 +93,18 @@ describeInfrastructure("Phase 4 Assisted Setup seed and patch guardrails", () =>
     await sql`SELECT phase4_create_setup_draft(
       ${organisation},${competition},${account},'seed-create-1','seed-request-1'
     )`;
-    const [draft] = await sql<{
-      revision: number;
-      current_step: string;
-      steps: {
-        basics: { sport_code: string; name: string; entry_count: number; division_count: number };
-        settings: Array<{ pack_version: string; scope: string }>;
-        capacity: { effective: { slotMinutes: number; availableMatchSlots: number } };
-        entries: { total_entry_count: number; divisions: Array<{ confirmed_count: number }> };
-      };
-    }[]>`SELECT revision,current_step,steps FROM setup_drafts WHERE competition_id=${competition}`;
+    const [draft] = await sql<
+      {
+        revision: number;
+        current_step: string;
+        steps: {
+          basics: { sport_code: string; name: string; entry_count: number; division_count: number };
+          settings: Array<{ pack_version: string; scope: string }>;
+          capacity: { effective: { slotMinutes: number; availableMatchSlots: number } };
+          entries: { total_entry_count: number; divisions: Array<{ confirmed_count: number }> };
+        };
+      }[]
+    >`SELECT revision,current_step,steps FROM setup_drafts WHERE competition_id=${competition}`;
 
     expect(draft).toMatchObject({
       revision: 1,
@@ -105,17 +124,19 @@ describeInfrastructure("Phase 4 Assisted Setup seed and patch guardrails", () =>
   });
 
   it("patches one step without navigating and replays the exact idempotent response", async () => {
-    const [row] = await sql<{
-      organisation_id: string;
-      competition_id: string;
-      created_by: string;
-      revision: number;
-      current_step: string;
-      steps: Record<string, unknown>;
-    }[]>`SELECT organisation_id,competition_id,created_by,revision,current_step,steps
+    const [row] = await sql<
+      {
+        organisation_id: string;
+        competition_id: string;
+        created_by: string;
+        revision: number;
+        current_step: string;
+        steps: Record<string, unknown>;
+      }[]
+    >`SELECT organisation_id,competition_id,created_by,revision,current_step,steps
       FROM setup_drafts ORDER BY created_at DESC LIMIT 1`;
     if (!row) throw new Error("Expected seeded setup draft");
-    const nextSteps = structuredClone(row.steps) as Record<string, unknown>;
+    const nextSteps = JSON.parse(JSON.stringify(row.steps));
     nextSteps.basics = { ...(nextSteps.basics as Record<string, unknown>), name: "Badminton Open Updated" };
     const validation = { valid: false, pending: false, issues: [], completed_at_by_step: {} };
 
@@ -139,5 +160,51 @@ describeInfrastructure("Phase 4 Assisted Setup seed and patch guardrails", () =>
         ${sql.json({ ...nextSteps, basics: { name: "Different" } })},${sql.json([])},${sql.json(validation)},
         'seed-patch-1','seed-patch-request-mismatch'
       )`).rejects.toThrow(/idempotency key was reused/i);
+  });
+
+  it("replays resume exactly, rejects mismatched reuse, and authorises before replay", async () => {
+    const [row] = await sql<
+      {
+        organisation_id: string;
+        competition_id: string;
+        created_by: string;
+      }[]
+    >`SELECT organisation_id,competition_id,created_by
+      FROM setup_drafts ORDER BY created_at DESC LIMIT 1`;
+    if (!row) throw new Error("Expected seeded setup draft");
+
+    const first = await sql<{ value: Record<string, unknown> }[]>`
+      SELECT phase4_resume_setup_draft(
+        ${row.organisation_id},${row.competition_id},${row.created_by},'resume-exact-1','resume-request-1'
+      ) value`;
+    const replay = await sql<{ value: Record<string, unknown> }[]>`
+      SELECT phase4_resume_setup_draft(
+        ${row.organisation_id},${row.competition_id},${row.created_by},'resume-exact-1','resume-request-2'
+      ) value`;
+    expect(replay[0]?.value).toEqual(first[0]?.value);
+
+    const otherCompetition = randomUUID();
+    await sql`INSERT INTO competitions(
+      id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,plan_tier
+    ) VALUES(
+      ${otherCompetition},${row.organisation_id},${row.created_by},'Other badminton',${`other-${otherCompetition}`},
+      'badminton','Asia/Singapore','2027-03-03','2027-03-04','organiser_pro'
+    )`;
+    await expect(
+      sql`SELECT phase4_resume_setup_draft(
+        ${row.organisation_id},${otherCompetition},${row.created_by},'resume-exact-1','resume-mismatch'
+      )`,
+    ).rejects.toThrow(/idempotency key was reused/i);
+
+    const viewer = randomUUID();
+    await sql`INSERT INTO accounts(id,primary_email,display_name)
+      VALUES(${viewer},${`${viewer}@example.test`},'Setup viewer')`;
+    await sql`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+      VALUES(${row.organisation_id},${viewer},'viewer','active')`;
+    await expect(
+      sql`SELECT phase4_resume_setup_draft(
+        ${row.organisation_id},${row.competition_id},${viewer},'resume-exact-1','viewer-replay'
+      )`,
+    ).rejects.toThrow(/organiser permission/i);
   });
 });

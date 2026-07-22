@@ -59,12 +59,7 @@ export function ManualBuilder({
       </header>
       <ol>
         {state.document.graph.stages.map((stage, index) => (
-          <li
-            key={stage.id}
-            data-stage-index={index}
-            data-selected={stage.id === state.selectedStageId}
-            tabIndex={-1}
-          >
+          <li key={stage.id} data-stage-index={index} data-selected={stage.id === state.selectedStageId} tabIndex={-1}>
             <button
               type="button"
               className={styles.manualSelect}
@@ -295,7 +290,7 @@ export function TemplateDialog({
     if (event.key !== "Tab") return;
     const controls = Array.from(
       dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]',
+        "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]",
       ) ?? [],
     );
     const first = controls[0];

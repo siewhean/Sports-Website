@@ -33,6 +33,20 @@ function strict<T extends Record<string, TSchema>>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
 }
 
+function rejectUnknownBodyFields(allowed: readonly string[]) {
+  const expected = new Set(allowed);
+  return async (request: FastifyRequest) => {
+    const body = request.body;
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      !Array.isArray(body) &&
+      Object.keys(body).some((field) => !expected.has(field))
+    )
+      throw new ApiError(400, "REQUEST_INVALID", "Request body contains an unknown field");
+  };
+}
+
 const Basics = strict({
   name: Type.String({ minLength: 1, maxLength: 160 }),
   sport_code: Sport,
@@ -96,6 +110,7 @@ export async function registerPhase4SetupPatchRoutes(
   }>(
     "/api/v1/competitions/:competitionId/setup-draft",
     {
+      preValidation: rejectUnknownBodyFields(["expected_revision", "idempotency_key", "step"]),
       schema: {
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
@@ -129,6 +144,7 @@ export async function registerPhase4SetupPatchRoutes(
   }>(
     "/api/v1/competitions/:competitionId/setup-draft/resume",
     {
+      preValidation: rejectUnknownBodyFields(["idempotency_key"]),
       schema: {
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,

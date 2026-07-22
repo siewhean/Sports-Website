@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
+import { createDefaultFormatTemplates, SPORT_PACKS } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { DeterministicPhase4AiStub } from "../../src/phase-4-ai-provider.js";
@@ -17,6 +18,7 @@ const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../packages/database/migrations",
 );
+vi.setConfig({ hookTimeout: 60_000, testTimeout: 60_000 });
 let client!: Sql;
 let phase3!: Phase3Runtime;
 let runtime!: ReliableGateBPhase4Runtime;
@@ -25,11 +27,66 @@ let viewerId = "";
 let organisationId = "";
 let competitionId = "";
 let divisionId = "";
+const sports = ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const;
+type SportCode = (typeof sports)[number];
 
 function required<T>(rows: readonly T[]): T {
   const value = rows[0];
   if (!value) throw new Error("Expected database row");
   return value;
+}
+
+async function createCompetitionFixture(sportCode: SportCode, label: string) {
+  const competition = await phase3.createCompetition(
+    { accountId },
+    {
+      organisationId,
+      name: `${label} ${sportCode}`,
+      slug: `${label.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}-${sportCode.replaceAll("_", "-")}-${randomUUID()}`,
+      sportCode,
+      venue: "Fixture venue",
+      address: "10 Fixture Road",
+      countryCode: "SG",
+      startsOn: "2027-09-01",
+      endsOn: "2027-09-02",
+      timezone: "Asia/Singapore",
+      locale: "en-SG",
+    },
+    randomUUID(),
+  );
+  const fixtureDivisionId = randomUUID();
+  await client`INSERT INTO divisions(id,competition_id,name,team_limit)
+    VALUES(${fixtureDivisionId},${competition.id},'Open',16)`;
+  for (let seed = 1; seed <= 8; seed += 1) {
+    await client`INSERT INTO division_entries(id,division_id,name,seed,status)
+      VALUES(${randomUUID()},${fixtureDivisionId},${`Fixture entry ${seed}`},${seed},'confirmed')`;
+  }
+  const settings = required(
+    await client<{ pack_version: string }[]>`
+      SELECT pack_version FROM competition_sport_settings WHERE competition_id=${competition.id}`,
+  );
+  await client`INSERT INTO division_sport_settings(
+      division_id,competition_id,sport_code,pack_version,settings_override,updated_by
+    ) VALUES(${fixtureDivisionId},${competition.id},${sportCode},${settings.pack_version},'{}'::jsonb,${accountId})`;
+  await client`INSERT INTO playing_areas(competition_id,name,slot_minutes)
+    VALUES(${competition.id},'Default area',${SPORT_PACKS[sportCode].recommendedSlotMinutes})`;
+  return { competitionId: competition.id, divisionId: fixtureDivisionId, packVersion: settings.pack_version };
+}
+
+function basicsFor(document: Awaited<ReturnType<ReliableGateBPhase4Runtime["readSetupDraft"]>>, sportCode: SportCode) {
+  const basics = document.values.basics;
+  if (!basics) throw new Error("Expected seeded basics");
+  return { ...basics, sport_code: sportCode };
+}
+
+async function evidenceCounts() {
+  return required(
+    await client<{ receipts: number; audits: number; outbox: number }[]>`
+      SELECT
+        (SELECT count(*)::int FROM phase4_mutation_receipts) receipts,
+        (SELECT count(*)::int FROM audit_events) audits,
+        (SELECT count(*)::int FROM outbox_events) outbox`,
+  );
 }
 
 beforeAll(async () => {
@@ -55,25 +112,27 @@ beforeAll(async () => {
   });
   phase3 = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
 
-  // Create one event for each sport used by this test so Phase 3 installs and
-  // validates the active immutable product pack before the Gate B switch.
-  await phase3.createCompetition(
-    { accountId },
-    {
-      organisationId,
-      name: "Badminton Pack Seed",
-      slug: "badminton-pack-seed",
-      sportCode: "badminton",
-      venue: "Seed Hall",
-      address: "1 Seed Street",
-      countryCode: "SG",
-      startsOn: "2027-01-01",
-      endsOn: "2027-01-01",
-      timezone: "Asia/Singapore",
-      locale: "en-SG",
-    },
-    randomUUID(),
-  );
+  // Install and validate all five immutable launch-sport packs before the
+  // complete switch matrix runs.
+  for (const sportCode of sports) {
+    await phase3.createCompetition(
+      { accountId },
+      {
+        organisationId,
+        name: `${sportCode.replaceAll("_", " ")} Pack Seed`,
+        slug: `${sportCode.replaceAll("_", "-")}-pack-seed`,
+        sportCode,
+        venue: "Seed Hall",
+        address: "1 Seed Street",
+        countryCode: "SG",
+        startsOn: "2027-01-01",
+        endsOn: "2027-01-01",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+  }
   competitionId = (
     await phase3.createCompetition(
       { accountId },
@@ -123,6 +182,7 @@ afterAll(async () => {
 
 describeInfrastructure("Gate B dynamic sport setup runtime", () => {
   it("patches Basics in place and atomically switches every pinned rule scope", async () => {
+    await client`UPDATE playing_areas SET slot_minutes=37 WHERE competition_id=${competitionId}`;
     const created = await runtime.createSetupDraft(
       { accountId },
       competitionId,
@@ -172,13 +232,15 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         review_publish: null,
       },
     });
-    const [state] = await client<{
-      competition_sport: string;
-      competition_settings_sport: string;
-      division_settings_sport: string;
-      slot_minutes: number;
-      pack_version: string;
-    }[]>`SELECT competition.sport_code competition_sport,
+    const [state] = await client<
+      {
+        competition_sport: string;
+        competition_settings_sport: string;
+        division_settings_sport: string;
+        slot_minutes: number;
+        pack_version: string;
+      }[]
+    >`SELECT competition.sport_code competition_sport,
       competition_settings.sport_code competition_settings_sport,
       division_settings.sport_code division_settings_sport,
       area.slot_minutes,competition_settings.pack_version
@@ -186,12 +248,12 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       JOIN competition_sport_settings competition_settings ON competition_settings.competition_id=competition.id
       JOIN division_sport_settings division_settings ON division_settings.competition_id=competition.id
       JOIN playing_areas area ON area.competition_id=competition.id
-      WHERE competition.id=${competitionId}`;
+      WHERE competition.id=${competitionId} AND area.name='Primary area'`;
     expect(state).toMatchObject({
       competition_sport: "badminton",
       competition_settings_sport: "badminton",
       division_settings_sport: "badminton",
-      slot_minutes: 20,
+      slot_minutes: 37,
     });
     expect(outcome.document.values.settings).toEqual(
       expect.arrayContaining([
@@ -200,7 +262,458 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       ]),
     );
     expect(await client`SELECT 1 FROM audit_events WHERE action='competition.setup_basics.updated'`).toHaveLength(1);
-    expect(await client`SELECT 1 FROM outbox_events WHERE event_type='competition.setup_basics.updated'`).toHaveLength(1);
+    expect(await client`SELECT 1 FROM outbox_events WHERE event_type='competition.setup_basics.updated'`).toHaveLength(
+      1,
+    );
+  });
+
+  it("binds create, PATCH, Gate-B PUT, and base PUT receipts to one competition aggregate", async () => {
+    const first = await createCompetitionFixture("canoe_polo", "Receipt first");
+    const second = await createCompetitionFixture("canoe_polo", "Receipt second");
+    const createKey = `aggregate-create-${randomUUID()}`;
+    const firstDraft = await runtime.createSetupDraft({ accountId }, first.competitionId, createKey, randomUUID());
+    await expect(
+      runtime.createSetupDraft({ accountId }, second.competitionId, createKey, randomUUID()),
+    ).rejects.toMatchObject({ statusCode: 409, code: "IDEMPOTENCY_MISMATCH" });
+    const secondDraft = await runtime.createSetupDraft(
+      { accountId },
+      second.competitionId,
+      `aggregate-create-${randomUUID()}`,
+      randomUUID(),
+    );
+
+    const patchKey = `aggregate-patch-${randomUUID()}`;
+    const firstPatch = await runtime.patchSetupDraft(
+      { accountId },
+      first.competitionId,
+      {
+        expected_revision: firstDraft.document.revision,
+        idempotency_key: patchKey,
+        step: { step_id: "basics", value: basicsFor(firstDraft.document, "badminton") },
+      },
+      randomUUID(),
+    );
+    expect(firstPatch.outcome).toBe("saved");
+    const crossPatch = await runtime.patchSetupDraft(
+      { accountId },
+      second.competitionId,
+      {
+        expected_revision: secondDraft.document.revision,
+        idempotency_key: patchKey,
+        step: { step_id: "basics", value: basicsFor(secondDraft.document, "badminton") },
+      },
+      randomUUID(),
+    );
+    expect(crossPatch).toMatchObject({
+      outcome: "idempotency_mismatch",
+      document: { competition_id: second.competitionId, revision: secondDraft.document.revision },
+    });
+
+    const putKey = `aggregate-put-${randomUUID()}`;
+    const firstAfterPatch = firstPatch.outcome === "saved" ? firstPatch.document : firstDraft.document;
+    const firstPut = await runtime.autosaveSetupDraft(
+      { accountId },
+      first.competitionId,
+      {
+        expected_revision: firstAfterPatch.revision,
+        idempotency_key: putKey,
+        transition: { kind: "save_step", step: { step_id: "basics", value: firstAfterPatch.values.basics! } },
+      },
+      randomUUID(),
+    );
+    expect(firstPut.outcome).toBe("saved");
+    const crossPut = await runtime.autosaveSetupDraft(
+      { accountId },
+      second.competitionId,
+      {
+        expected_revision: secondDraft.document.revision,
+        idempotency_key: putKey,
+        transition: {
+          kind: "save_step",
+          step: { step_id: "basics", value: secondDraft.document.values.basics! },
+        },
+      },
+      randomUUID(),
+    );
+    expect(crossPut).toMatchObject({
+      outcome: "idempotency_mismatch",
+      document: { competition_id: second.competitionId, revision: secondDraft.document.revision },
+    });
+
+    const baseKey = `aggregate-base-put-${randomUUID()}`;
+    const preferences = firstPut.outcome === "saved" ? firstPut.document.values.format_preferences! : null;
+    if (!preferences) throw new Error("Expected seeded format preferences");
+    const baseSave = await runtime.autosaveSetupDraft(
+      { accountId },
+      first.competitionId,
+      {
+        expected_revision: firstPut.outcome === "saved" ? firstPut.document.revision : 0,
+        idempotency_key: baseKey,
+        transition: { kind: "save_step", step: { step_id: "format_preferences", value: preferences } },
+      },
+      randomUUID(),
+    );
+    expect(baseSave.outcome).toBe("saved");
+    const crossBaseSave = await runtime.autosaveSetupDraft(
+      { accountId },
+      second.competitionId,
+      {
+        expected_revision: secondDraft.document.revision,
+        idempotency_key: baseKey,
+        transition: {
+          kind: "save_step",
+          step: { step_id: "format_preferences", value: secondDraft.document.values.format_preferences! },
+        },
+      },
+      randomUUID(),
+    );
+    expect(crossBaseSave).toMatchObject({
+      outcome: "idempotency_mismatch",
+      document: { competition_id: second.competitionId, revision: secondDraft.document.revision },
+    });
+  });
+
+  it("executes the all-five sport default and switch matrix", async () => {
+    for (const sourceSport of sports) {
+      for (const targetSport of sports) {
+        if (targetSport === sourceSport) continue;
+        const fixture = await createCompetitionFixture(sourceSport, `Matrix ${sourceSport} to ${targetSport}`);
+        const created = await runtime.createSetupDraft(
+          { accountId },
+          fixture.competitionId,
+          `matrix-create-${randomUUID()}`,
+          randomUUID(),
+        );
+        const result = await runtime.patchSetupDraft(
+          { accountId },
+          fixture.competitionId,
+          {
+            expected_revision: created.document.revision,
+            idempotency_key: `matrix-patch-${randomUUID()}`,
+            step: { step_id: "basics", value: basicsFor(created.document, targetSport) },
+          },
+          randomUUID(),
+        );
+        expect(result.outcome, `${sourceSport} -> ${targetSport}`).toBe("saved");
+        const state = required(
+          await client<
+            {
+              sport_code: string;
+              competition_settings_sport: string;
+              division_settings_sport: string;
+              slot_minutes: number;
+              recommended_slot: number;
+            }[]
+          >`SELECT competition.sport_code,
+              competition_settings.sport_code competition_settings_sport,
+              division_settings.sport_code division_settings_sport,
+              area.slot_minutes,
+              (pack.definition->>'recommendedSlotMinutes')::int recommended_slot
+            FROM competitions competition
+            JOIN competition_sport_settings competition_settings ON competition_settings.competition_id=competition.id
+            JOIN division_sport_settings division_settings ON division_settings.competition_id=competition.id
+            JOIN sport_pack_versions pack ON pack.sport_code=competition_settings.sport_code
+              AND pack.version=competition_settings.pack_version
+            JOIN playing_areas area ON area.competition_id=competition.id
+            WHERE competition.id=${fixture.competitionId}`,
+        );
+        expect(state, `${sourceSport} -> ${targetSport}`).toEqual({
+          sport_code: targetSport,
+          competition_settings_sport: targetSport,
+          division_settings_sport: targetSport,
+          slot_minutes: SPORT_PACKS[targetSport].recommendedSlotMinutes,
+          recommended_slot: SPORT_PACKS[targetSport].recommendedSlotMinutes,
+        });
+      }
+    }
+  });
+
+  it("keeps the real PATCH r4-to-r5 then PUT r5-to-r6 chain ordered, replay-safe, and stale-safe", async () => {
+    const fixture = await createCompetitionFixture("badminton", "Revision chain");
+    let document = (
+      await runtime.createSetupDraft({ accountId }, fixture.competitionId, `chain-create-${randomUUID()}`, randomUUID())
+    ).document;
+    const preferences = document.values.format_preferences;
+    if (!preferences) throw new Error("Expected seeded format preferences");
+    for (let revision = 1; revision < 4; revision += 1) {
+      const saved = await runtime.patchSetupDraft(
+        { accountId },
+        fixture.competitionId,
+        {
+          expected_revision: document.revision,
+          idempotency_key: `chain-prime-${randomUUID()}`,
+          step: { step_id: "format_preferences", value: preferences },
+        },
+        randomUUID(),
+      );
+      expect(saved.outcome).toBe("saved");
+      if (saved.outcome !== "saved") throw new Error("Expected priming patch to save");
+      document = saved.document;
+    }
+    expect(document.revision).toBe(4);
+
+    const patchKey = `chain-r4-r5-${randomUUID()}`;
+    const patchRequest = {
+      expected_revision: 4,
+      idempotency_key: patchKey,
+      step: { step_id: "basics" as const, value: basicsFor(document, "badminton") },
+    };
+    const patched = await runtime.patchSetupDraft({ accountId }, fixture.competitionId, patchRequest, randomUUID());
+    expect(patched).toMatchObject({ outcome: "saved", document: { revision: 5, current_step: "basics" } });
+    const patchReplay = await runtime.patchSetupDraft({ accountId }, fixture.competitionId, patchRequest, randomUUID());
+    expect(patchReplay).toMatchObject({ outcome: "idempotent_replay", document: { revision: 5 } });
+    const patchMismatch = await runtime.patchSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        ...patchRequest,
+        step: { ...patchRequest.step, value: { ...patchRequest.step.value, name: "Different payload" } },
+      },
+      randomUUID(),
+    );
+    expect(patchMismatch.outcome).toBe("idempotency_mismatch");
+
+    const putKey = `chain-r5-r6-${randomUUID()}`;
+    const putRequest = {
+      expected_revision: 5,
+      idempotency_key: putKey,
+      transition: { kind: "save_step" as const, step: patchRequest.step },
+    };
+    const advanced = await runtime.autosaveSetupDraft({ accountId }, fixture.competitionId, putRequest, randomUUID());
+    expect(advanced).toMatchObject({ outcome: "saved", document: { revision: 6, current_step: "capacity" } });
+    expect(
+      await runtime.autosaveSetupDraft({ accountId }, fixture.competitionId, putRequest, randomUUID()),
+    ).toMatchObject({ outcome: "idempotent_replay", document: { revision: 6, current_step: "capacity" } });
+    expect(
+      await runtime.autosaveSetupDraft(
+        { accountId },
+        fixture.competitionId,
+        {
+          ...putRequest,
+          transition: {
+            kind: "save_step",
+            step: {
+              ...putRequest.transition.step,
+              value: { ...putRequest.transition.step.value, name: "Different PUT payload" },
+            },
+          },
+        },
+        randomUUID(),
+      ),
+    ).toMatchObject({ outcome: "idempotency_mismatch", document: { revision: 6 } });
+    expect(
+      await runtime.autosaveSetupDraft(
+        { accountId },
+        fixture.competitionId,
+        { ...putRequest, idempotency_key: `chain-stale-${randomUUID()}`, expected_revision: 5 },
+        randomUUID(),
+      ),
+    ).toMatchObject({ outcome: "conflict", current: { revision: 6 } });
+  });
+
+  it("locks sport changes for started, in-progress, final, and corrected competitions", async () => {
+    for (const state of ["started", "in_progress", "final", "corrected"] as const) {
+      const fixture = await createCompetitionFixture("badminton", `Sport lock ${state}`);
+      const created = await runtime.createSetupDraft(
+        { accountId },
+        fixture.competitionId,
+        `lock-create-${randomUUID()}`,
+        randomUUID(),
+      );
+      if (state === "started") {
+        await client`UPDATE competitions SET first_match_started_at=now() WHERE id=${fixture.competitionId}`;
+      } else {
+        const graph = structuredClone(createDefaultFormatTemplates(8)[0]!.graph);
+        const formatId = randomUUID();
+        await client`INSERT INTO format_revisions(
+            id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract
+          ) VALUES(${formatId},${fixture.competitionId},${fixture.divisionId},1,${client.json(graph)},
+            phase4_sha256_json(${client.json(graph)}::jsonb),${accountId},'phase3')`;
+        await client`SELECT phase4_materialize_format_revision(${formatId})`;
+        await client`UPDATE matches SET state=${state}
+          WHERE id=(SELECT id FROM matches WHERE format_revision_id=${formatId} ORDER BY ordinal LIMIT 1)`;
+      }
+      await expect(
+        runtime.patchSetupDraft(
+          { accountId },
+          fixture.competitionId,
+          {
+            expected_revision: created.document.revision,
+            idempotency_key: `lock-patch-${randomUUID()}`,
+            step: { step_id: "basics", value: basicsFor(created.document, "table_tennis") },
+          },
+          randomUUID(),
+        ),
+        state,
+      ).rejects.toMatchObject({ statusCode: 409, code: "COMPETITION_SPORT_LOCKED" });
+    }
+  });
+
+  it("preserves the pinned old-pack default after that pack is superseded", async () => {
+    const fixture = await createCompetitionFixture("canoe_polo", "Pinned pack");
+    const created = await runtime.createSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      `pinned-create-${randomUUID()}`,
+      randomUUID(),
+    );
+    await client`INSERT INTO account_platform_roles(account_id,role,reason,granted_by)
+      VALUES(${accountId},'platform_admin','Gate B pinned-pack test',${accountId})`;
+    const replacement = {
+      ...structuredClone(SPORT_PACKS.canoe_polo),
+      version: `0.1.0-gate-b-${randomUUID()}`,
+      recommendedSlotMinutes: 35,
+      recommendedSettings: { ...structuredClone(SPORT_PACKS.canoe_polo.recommendedSettings), slotMinutes: 35 },
+    };
+    await phase3.createSportPackDraft({ accountId }, replacement, randomUUID());
+    await phase3.activateSportPack(
+      { accountId },
+      "canoe_polo",
+      replacement.version,
+      1,
+      fixture.packVersion,
+      randomUUID(),
+    );
+    expect(
+      required(
+        await client<{ pack_version: string }[]>`
+          SELECT pack_version FROM competition_sport_settings WHERE competition_id=${fixture.competitionId}`,
+      ).pack_version,
+    ).toBe(fixture.packVersion);
+
+    const result = await runtime.patchSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: created.document.revision,
+        idempotency_key: `pinned-patch-${randomUUID()}`,
+        step: { step_id: "basics", value: basicsFor(created.document, "badminton") },
+      },
+      randomUUID(),
+    );
+    expect(result.outcome).toBe("saved");
+    expect(
+      required(
+        await client<{ slot_minutes: number }[]>`
+          SELECT slot_minutes FROM playing_areas WHERE competition_id=${fixture.competitionId}`,
+      ).slot_minutes,
+    ).toBe(SPORT_PACKS.badminton.recommendedSlotMinutes);
+  });
+
+  it("keeps organiser and viewer setup reads/resume/create/PUT/PATCH permissions and side effects exact", async () => {
+    const fixture = await createCompetitionFixture("badminton", "Permission counts");
+    const beforeCreate = await evidenceCounts();
+    await expect(
+      runtime.createSetupDraft(
+        { accountId: viewerId },
+        fixture.competitionId,
+        `viewer-create-${randomUUID()}`,
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    expect(await evidenceCounts()).toEqual(beforeCreate);
+
+    await runtime.createSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      `permission-create-${randomUUID()}`,
+      randomUUID(),
+    );
+    expect(await evidenceCounts()).toEqual({
+      receipts: beforeCreate.receipts + 1,
+      audits: beforeCreate.audits + 1,
+      outbox: beforeCreate.outbox + 1,
+    });
+
+    const beforeReads = await evidenceCounts();
+    expect(await runtime.readSetupDraft({ accountId }, fixture.competitionId)).toMatchObject({ permission: "write" });
+    expect(await runtime.readSetupDraft({ accountId: viewerId }, fixture.competitionId)).toMatchObject({
+      permission: "read",
+      read_only: true,
+    });
+    expect(
+      await runtime.resumeSetupDraft(
+        { accountId: viewerId },
+        fixture.competitionId,
+        `viewer-resume-${randomUUID()}`,
+        randomUUID(),
+      ),
+    ).toMatchObject({ permission: "read", read_only: true });
+    expect(await evidenceCounts()).toEqual(beforeReads);
+
+    const resumed = await runtime.resumeSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      `owner-resume-${randomUUID()}`,
+      randomUUID(),
+    );
+    expect(resumed.competition_id).toBe(fixture.competitionId);
+    expect(await evidenceCounts()).toEqual({
+      receipts: beforeReads.receipts + 1,
+      audits: beforeReads.audits,
+      outbox: beforeReads.outbox,
+    });
+
+    for (const operation of ["PATCH", "PUT"] as const) {
+      const beforeDenied = await evidenceCounts();
+      const request = {
+        expected_revision: resumed.revision,
+        idempotency_key: `viewer-${operation.toLowerCase()}-${randomUUID()}`,
+        step: { step_id: "basics" as const, value: basicsFor(resumed, "badminton") },
+      };
+      const denied =
+        operation === "PATCH"
+          ? runtime.patchSetupDraft({ accountId: viewerId }, fixture.competitionId, request, randomUUID())
+          : runtime.autosaveSetupDraft(
+              { accountId: viewerId },
+              fixture.competitionId,
+              { ...request, transition: { kind: "save_step" as const, step: request.step } },
+              randomUUID(),
+            );
+      await expect(denied).rejects.toMatchObject({ statusCode: 403 });
+      expect(await evidenceCounts()).toEqual(beforeDenied);
+    }
+
+    const beforePatch = await evidenceCounts();
+    const patched = await runtime.patchSetupDraft(
+      { accountId },
+      fixture.competitionId,
+      {
+        expected_revision: resumed.revision,
+        idempotency_key: `owner-patch-${randomUUID()}`,
+        step: { step_id: "basics", value: basicsFor(resumed, "badminton") },
+      },
+      randomUUID(),
+    );
+    expect(patched.outcome).toBe("saved");
+    expect(await evidenceCounts()).toEqual({
+      receipts: beforePatch.receipts + 1,
+      audits: beforePatch.audits + 2,
+      outbox: beforePatch.outbox + 2,
+    });
+    if (patched.outcome !== "saved") throw new Error("Expected owner patch to save");
+
+    const beforePut = await evidenceCounts();
+    expect(
+      await runtime.autosaveSetupDraft(
+        { accountId },
+        fixture.competitionId,
+        {
+          expected_revision: patched.document.revision,
+          idempotency_key: `owner-put-${randomUUID()}`,
+          transition: {
+            kind: "save_step",
+            step: { step_id: "basics", value: patched.document.values.basics! },
+          },
+        },
+        randomUUID(),
+      ),
+    ).toMatchObject({ outcome: "saved" });
+    expect(await evidenceCounts()).toEqual({
+      receipts: beforePut.receipts + 1,
+      audits: beforePut.audits + 2,
+      outbox: beforePut.outbox + 2,
+    });
   });
 
   it("returns a truthful read-only setup document to viewers", async () => {

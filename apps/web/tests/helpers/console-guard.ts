@@ -44,6 +44,26 @@ export function isExpectedTeardownServiceWorkerCancellation(input: {
   }
 }
 
+export function isExpectedTeardownStaticAssetCancellation(input: {
+  failure: string;
+  pageUrl: string;
+  requestUrl: string;
+  resourceType: string;
+}): boolean {
+  if (
+    !["cancelled", "net::ERR_ABORTED"].includes(input.failure) ||
+    !["script", "stylesheet"].includes(input.resourceType)
+  )
+    return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return pageUrl.origin === requestUrl.origin && requestUrl.pathname.startsWith("/_next/static/");
+  } catch {
+    return false;
+  }
+}
+
 export function installConsoleGuard(page: Page) {
   const state: GuardState = { failures: [], allowed: [] };
   guards.set(page, state);
@@ -77,6 +97,15 @@ export function installConsoleGuard(page: Page) {
     )
       return;
     if (isExpectedTeardownServiceWorkerCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
+    if (
+      isExpectedTeardownStaticAssetCancellation({
+        failure,
+        pageUrl: page.url(),
+        requestUrl: url,
+        resourceType: request.resourceType(),
+      })
+    )
+      return;
     state.failures.push(`requestfailed: ${request.method()} ${url} (${failure})`);
   });
 

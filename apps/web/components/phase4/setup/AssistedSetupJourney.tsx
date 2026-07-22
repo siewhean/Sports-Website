@@ -1,14 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  Phase4SetupDocument,
-  Phase4SetupStepId,
-  Phase4SetupStepValue,
-} from "@matchday/contracts";
+import { useRouter } from "next/navigation";
+import type { Phase4SetupDocument, Phase4SetupStepId, Phase4SetupStepValue } from "@matchday/contracts";
 import { opaqueId } from "@matchday/ui";
 import {
+  assistedSetupSteps,
   parseAssistedSetupAutosaveResponse,
+  parseAssistedSetupCreateResponse,
   parseAssistedSetupDocument,
   phase4SetupCopy,
   setupAutosaveBody,
@@ -40,6 +39,7 @@ const copy = {
 } as const;
 
 export function AssistedSetupJourney({ document }: { document: AssistedSetupPageDocument }) {
+  const router = useRouter();
   const [setup, setSetupState] = useState(document.setup);
   const setupRef = useRef(document.setup);
   const [viewState, setViewStateState] = useState(document.state);
@@ -102,12 +102,16 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   const applyServerDocument = useCallback(
     (next: Phase4SetupDocument, sentStep?: Phase4SetupStepValue) => {
       setSetup(next);
-      setViewState(next.read_only ? opaqueId("read-only") : opaqueId("ready"));
-      if (
-        sentStep?.step_id === "basics" &&
-        basicsRef.current &&
-        setupValuesEqual(basicsRef.current, sentStep.value)
-      ) {
+      setViewState(
+        next.status === "expired" ? opaqueId("expired") : next.read_only ? opaqueId("read-only") : opaqueId("ready"),
+      );
+      if (!sentStep) {
+        basicsRef.current = next.values.basics;
+        setBasicsState(next.values.basics);
+        preferencesRef.current = next.values.format_preferences;
+        setPreferencesState(next.values.format_preferences);
+      }
+      if (sentStep?.step_id === "basics" && basicsRef.current && setupValuesEqual(basicsRef.current, sentStep.value)) {
         basicsRef.current = next.values.basics;
         setBasicsState(next.values.basics);
       }
@@ -153,7 +157,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
           setSetup(next);
           if (parsed.outcome === "read_only") setViewState(opaqueId("read-only"));
           else if (parsed.outcome === "expired") {
-            setViewState(opaqueId("error"));
+            setViewState(opaqueId("expired"));
             setAnnouncement(copy.expired);
           } else setViewState(opaqueId("conflict"));
           return null;
@@ -186,10 +190,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
             body: JSON.stringify({ idempotency_key: resumeKeyRef.current }),
           },
         );
-        const next = parseAssistedSetupDocument(
-          await response.json().catch(() => null),
-          document.competitionId,
-        );
+        const next = parseAssistedSetupDocument(await response.json().catch(() => null), document.competitionId);
         if (!response.ok || !next) {
           if (response.status === 401 || response.status === 403) setViewState(opaqueId("permission"));
           else if (response.status === 409) setViewState(opaqueId("conflict"));
@@ -339,13 +340,26 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
               body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
             },
           );
-          if (response.ok) window.location.reload();
-          else setViewState(response.status === 401 || response.status === 403 ? opaqueId("permission") : opaqueId("error"));
+          const created = parseAssistedSetupCreateResponse(
+            await response.json().catch(() => null),
+            document.competitionId,
+          );
+          if (response.ok && created) {
+            applyServerDocument(created.document);
+            const canonicalUrl = new URL(window.location.href);
+            canonicalUrl.searchParams.delete(opaqueId("state"));
+            canonicalUrl.searchParams.delete(opaqueId("resume"));
+            router.replace(`${canonicalUrl.pathname}${canonicalUrl.search}`);
+            router.refresh();
+          } else
+            setViewState(
+              response.status === 401 || response.status === 403 ? opaqueId("permission") : opaqueId("error"),
+            );
         } catch {
           setViewState(opaqueId("offline"));
         }
       }),
-    [document.competitionId, setViewState, withCommandLock],
+    [applyServerDocument, document.competitionId, router, setViewState, withCommandLock],
   );
 
   const convertBrief = useCallback(
@@ -369,7 +383,13 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
             },
           );
           const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-          if (!response.ok || !payload || payload.status !== "success" || !payload.brief || typeof payload.brief !== "object") {
+          if (
+            !response.ok ||
+            !payload ||
+            payload.status !== "success" ||
+            !payload.brief ||
+            typeof payload.brief !== "object"
+          ) {
             setBriefMessage(copy.briefFallback);
             return;
           }
@@ -385,7 +405,8 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
                 typeof generated.sport === "string"
                   ? (generated.sport as BasicsDraft["sport_code"])
                   : currentBasics.sport_code,
-              entry_count: typeof generated.entry_count === "number" ? generated.entry_count : currentBasics.entry_count,
+              entry_count:
+                typeof generated.entry_count === "number" ? generated.entry_count : currentBasics.entry_count,
               division_count:
                 typeof generated.division_count === "number" ? generated.division_count : currentBasics.division_count,
               starts_on: typeof dates?.start === "string" ? dates.start : currentBasics.starts_on,
@@ -396,7 +417,9 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
                 address: typeof location?.address === "string" ? location.address : currentBasics.location.address,
                 locality: typeof location?.locality === "string" ? location.locality : currentBasics.location.locality,
                 country_code:
-                  typeof location?.country_code === "string" ? location.country_code : currentBasics.location.country_code,
+                  typeof location?.country_code === "string"
+                    ? location.country_code
+                    : currentBasics.location.country_code,
               },
             });
           }
@@ -431,7 +454,15 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
       void patchLatestEditableStep();
     }, 750);
     return clearAutosaveTimer;
-  }, [basics, clearAutosaveTimer, currentStep, document.resumeRequired, patchLatestEditableStep, preferences, readOnly]);
+  }, [
+    basics,
+    clearAutosaveTimer,
+    currentStep,
+    document.resumeRequired,
+    patchLatestEditableStep,
+    preferences,
+    readOnly,
+  ]);
 
   useEffect(() => clearAutosaveTimer, [clearAutosaveTimer]);
 

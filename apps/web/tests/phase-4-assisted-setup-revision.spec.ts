@@ -1,5 +1,14 @@
 import { expect, test } from "@playwright/test";
 import type { Phase4SetupDocument } from "@matchday/contracts";
+import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+
+// These tests intercept setup BFF requests. Blocking the worker keeps those
+// requests observable to page.route instead of allowing an installed worker
+// from a preceding test to answer them outside Playwright's page routing.
+test.use({ serviceWorkers: "block" });
+
+test.beforeEach(async ({ page }) => installConsoleGuard(page));
+test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
 const competitionId = "cmp_sgopen_2026";
 const stepIds = [
@@ -60,10 +69,7 @@ function setupDocument(input: {
         competition_id: competitionId,
         revision: 4,
         time_zone: "Asia/Singapore",
-        area_ids: [
-          "8e66bd53-a9cb-4cde-840a-cc94988ca461",
-          "059d20be-13b3-4707-b4d1-14867693c019",
-        ],
+        area_ids: ["8e66bd53-a9cb-4cde-840a-cc94988ca461", "059d20be-13b3-4707-b4d1-14867693c019"],
         source_hash: "e2e-demo-capacity-hash",
         effective: {
           slotMinutes: 30,
@@ -118,17 +124,26 @@ function setupDocument(input: {
   };
 }
 
-test("production Assisted Setup resumes, PATCHes in place, then advances with the returned revision", async ({ page }) => {
+test("production Assisted Setup resumes, PATCHes in place, then advances with the returned revision", async ({
+  page,
+}) => {
   const resumeBodies: Array<Record<string, unknown>> = [];
   const patchBodies: Array<Record<string, unknown>> = [];
   const putBodies: Array<Record<string, unknown>> = [];
 
+  let serverDocument = setupDocument({ revision: 4, currentStep: "basics", name: "Singapore Open 2026" });
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "matchday-assisted-setup-draft",
+      JSON.stringify({ revision: 999, current_step: "review_publish", name: "Poisoned browser draft" }),
+    );
+  });
   await page.route("**/api/phase4/competitions/*/setup-draft/resume", async (route) => {
     resumeBodies.push(route.request().postDataJSON() as Record<string, unknown>);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(setupDocument({ revision: 4, currentStep: "basics", name: "Singapore Open 2026" })),
+      body: JSON.stringify(serverDocument),
     });
   });
   await page.route("**/api/phase4/competitions/*/setup-draft", async (route) => {
@@ -137,12 +152,13 @@ test("production Assisted Setup resumes, PATCHes in place, then advances with th
     if (request.method() === "PATCH") {
       patchBodies.push(body);
       const step = body.step as { value: { name: string } };
+      serverDocument = setupDocument({ revision: 5, currentStep: "basics", name: step.value.name });
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           outcome: "saved",
-          document: setupDocument({ revision: 5, currentStep: "basics", name: step.value.name }),
+          document: serverDocument,
         }),
       });
       return;
@@ -151,16 +167,17 @@ test("production Assisted Setup resumes, PATCHes in place, then advances with th
       putBodies.push(body);
       const transition = body.transition as { kind: string; step?: { value?: { name?: string } } };
       expect(transition.kind).toBe("save_step");
+      serverDocument = setupDocument({
+        revision: 6,
+        currentStep: "capacity",
+        name: transition.step?.value?.name ?? "Updated Canoe Polo Cup",
+      });
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           outcome: "saved",
-          document: setupDocument({
-            revision: 6,
-            currentStep: "capacity",
-            name: transition.step?.value?.name ?? "Updated Canoe Polo Cup",
-          }),
+          document: serverDocument,
         }),
       });
       return;
@@ -169,8 +186,11 @@ test("production Assisted Setup resumes, PATCHes in place, then advances with th
   });
 
   await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics&resume=1`);
+  await dismissConsent(page);
   await expect.poll(() => resumeBodies.length).toBe(1);
   expect(resumeBodies[0]?.idempotency_key).toEqual(expect.any(String));
+  await expect(page.getByLabel("Competition name")).toHaveValue("Singapore Open 2026");
+  await expect(page.getByText("Poisoned browser draft")).toHaveCount(0);
 
   await page.getByLabel("Competition name").fill("Updated Canoe Polo Cup");
   await expect.poll(() => patchBodies.length).toBe(1);
@@ -192,6 +212,11 @@ test("production Assisted Setup resumes, PATCHes in place, then advances with th
       step: { step_id: "basics", value: { name: "Updated Canoe Polo Cup" } },
     },
   });
+
+  await page.reload();
+  await expect.poll(() => resumeBodies.length).toBe(2);
+  await expect(page.getByRole("heading", { name: "Set the event capacity" })).toBeVisible();
+  await expect(page.getByText("Poisoned browser draft")).toHaveCount(0);
 });
 
 test("rapid Continue interaction after resume does not skip a setup step", async ({ page }) => {
@@ -224,9 +249,75 @@ test("rapid Continue interaction after resume does not skip a setup step", async
   });
 
   await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics&resume=1`);
+  await dismissConsent(page);
   await expect.poll(() => resumeBodies.length).toBe(1);
   await page.getByRole("button", { name: /Continue to capacity/i }).dblclick();
   await expect(page.getByRole("heading", { name: "Set the event capacity" })).toBeVisible();
   await page.waitForTimeout(150);
   expect(putBodies).toHaveLength(1);
+});
+
+test("empty setup accepts the API create wrapper and reloads the canonical server seed", async ({ page }) => {
+  const postBodies: Array<Record<string, unknown>> = [];
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "matchday-assisted-setup-draft",
+      JSON.stringify({ revision: 999, current_step: "review_publish", name: "Poisoned browser draft" }),
+    );
+  });
+  await page.route("**/api/phase4/competitions/*/setup-draft", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    postBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        document: setupDocument({ revision: 1, currentStep: "basics", name: "Transient wrapper seed" }),
+        idempotent_replay: false,
+      }),
+    });
+  });
+
+  await page.goto(`/organiser/competitions/${competitionId}/setup?state=empty&step=basics`);
+  await dismissConsent(page);
+  await expect(page.getByRole("heading", { name: "Start assisted setup" })).toBeVisible();
+  await page.getByRole("button", { name: "Start setup" }).click();
+
+  await expect.poll(() => postBodies.length).toBe(1);
+  expect(postBodies[0]?.idempotency_key).toEqual(expect.any(String));
+  await expect(page).toHaveURL(`/organiser/competitions/${competitionId}/setup?step=basics`);
+  await expect(page.getByLabel("Competition name")).toHaveValue("Singapore Open 2026");
+  await expect(page.getByText("Poisoned browser draft")).toHaveCount(0);
+  await expect(page.getByText("Transient wrapper seed")).toHaveCount(0);
+});
+
+test("setup states are explicit and viewers cannot send mutations", async ({ page }) => {
+  const states = [
+    { id: "loading", kind: "label", text: "Loading assisted setup" },
+    { id: "empty", kind: "heading", text: "Start assisted setup", action: "Start setup" },
+    { id: "offline", kind: "heading", text: "Editing paused while offline" },
+    { id: "permission", kind: "heading", text: "You do not have permission to edit this setup" },
+    { id: "conflict", kind: "heading", text: "A newer setup revision is available", action: "Load latest revision" },
+    { id: "expired", kind: "heading", text: "This setup draft has expired", action: "Reload expiry status" },
+  ] as const;
+
+  for (const state of states) {
+    await page.goto(`/organiser/competitions/${competitionId}/setup?state=${state.id}`);
+    if (state.kind === "label") await expect(page.getByLabel(state.text)).toBeVisible();
+    else await expect(page.getByRole("heading", { name: state.text })).toBeVisible();
+    if ("action" in state) await expect(page.getByRole("button", { name: state.action })).toBeVisible();
+    if (state.id === "expired") await expect(page.getByRole("banner").getByText("Draft expired")).toBeVisible();
+  }
+
+  let mutations = 0;
+  await page.route("**/api/phase4/competitions/*/setup-draft**", async (route) => {
+    mutations += 1;
+    await route.abort();
+  });
+  await page.goto(`/organiser/competitions/${competitionId}/setup?state=read-only&step=capacity&resume=1`);
+  await expect(page.getByTestId("phase4-assisted-setup").getByText("This setup is read only")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Continue to settings/i })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();
+  await page.waitForTimeout(100);
+  expect(mutations).toBe(0);
 });

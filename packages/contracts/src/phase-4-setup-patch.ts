@@ -1,14 +1,8 @@
-import type {
-  Phase4SetupAutosaveResponse,
-  Phase4SetupStepValue,
-} from "./phase-4-setup.js";
+import type { Phase4SetupAutosaveResponse, Phase4SetupStepValue } from "./phase-4-setup.js";
 
 export type Phase4PatchableSetupStepId = "basics" | "format_preferences";
 
-export type Phase4PatchableSetupStep = Extract<
-  Phase4SetupStepValue,
-  { readonly step_id: Phase4PatchableSetupStepId }
->;
+export type Phase4PatchableSetupStep = Extract<Phase4SetupStepValue, { readonly step_id: Phase4PatchableSetupStepId }>;
 
 /**
  * A patch persists the current editable step without changing current_step.
