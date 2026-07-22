@@ -302,7 +302,7 @@ test("organiser UI selects, generates, accepts, locks, publishes, and completes 
   expect(failures).toEqual([]);
 });
 
-test("accepted schedule survives resume, lock overlay, and organiser publication", async ({ page }, testInfo) => {
+test("accepted schedule survives resume and lock overlay", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "Mutating fixture is isolated to one browser project");
   const state = await readState();
   const failures = trackFailedApplicationResponses(page);
@@ -329,14 +329,8 @@ test("accepted schedule survives resume, lock overlay, and organiser publication
   await lock.click();
   await expect(page.getByRole("button", { name: /^Unlock$/i })).toBeVisible({ timeout: 20_000 });
 
-  const publish = page.getByRole("button", { name: /^Publish schedule$/i });
-  await expect(publish).toBeVisible();
-  await expect(publish).toBeEnabled();
-  await publish.click();
-  await expect(page.getByTestId("phase4-schedule")).toContainText(/Schedule published/i, { timeout: 20_000 });
-
   const revision = await apiScheduleRevision(state, state.acceptedScheduleRevisionId);
-  expect(revision).toMatchObject({ id: state.acceptedScheduleRevisionId, status: "published" });
+  expect(revision).toMatchObject({ id: state.acceptedScheduleRevisionId, status: "ready_for_review" });
   expect(revision.assignment_hash).toMatch(/^[0-9a-f]{64}$/);
   expect(failures).toEqual([]);
 });
