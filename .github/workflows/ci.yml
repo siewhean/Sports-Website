@@ -68,6 +68,7 @@ jobs:
       - run: pnpm db:migrate:check
       - run: pnpm backup:verify
       - run: pnpm test:integration
+      - run: pnpm test:performance
       - run: pnpm validate:fixtures
       - run: pnpm --filter @matchday/api openapi:generate
       - run: pnpm openapi:check
