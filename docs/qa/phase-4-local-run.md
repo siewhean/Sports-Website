@@ -101,8 +101,8 @@ Sandbox-only failures (`EPERM` on loopback/process operations and registry DNS d
 - P2: sticky decision/action rails can obscure content in some phone/tablet move and schedule views. Current reachability, safe-area, accessibility and overflow tests pass and no data is lost. Owner Frontend UX; fix or explicitly re-accept before the Gate C browser verdict.
 - P3: some Phase 3 snapshot filenames imply broader responsive coverage than the forced viewports actually provide. Owner QA automation; rename or split before the Gate C visual verdict.
 - P3: the local proof does not replace deployed identity, CDN, telemetry, managed backup or authenticated production-device evidence. Owner Platform/Operations; address at the relevant production release gate.
-- The validated source is committed and independently reviewed. This evidence-only update must be committed before merge. Remote merge remains subject to repository-owner policy; no branch-protection bypass is authorised.
+- The validated source and evidence are committed and independently reviewed. PR #3 was squash-merged as `aa841806192fdaa5418b22fac44ab6e9eb268a38` without bypassing branch protection.
 
 ## Verdict boundary
 
-This document proves the reproducible local validation commands above. It does not claim a hosted runner result, a production deployment, or that the branch has been merged.
+This document proves the reproducible local validation commands above and records the completed PR #3 merge. It does not claim a hosted runner result or a production deployment.
