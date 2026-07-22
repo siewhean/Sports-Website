@@ -30,6 +30,8 @@ BEGIN
      OR candidate.assignment_hash<>phase4_schedule_assignment_hash(candidate.id) THEN
     RAISE EXCEPTION 'schedule publication requires an accepted immutable revision';
   END IF;
+
+  PERFORM 1 FROM competitions WHERE id=candidate.competition_id FOR UPDATE;
   IF EXISTS (
     SELECT 1 FROM schedule_revisions newer
     WHERE newer.competition_id=candidate.competition_id
@@ -39,7 +41,6 @@ BEGIN
     RAISE EXCEPTION 'schedule revision conflict: cannot replace a newer published revision with an older revision';
   END IF;
 
-  PERFORM 1 FROM competitions WHERE id=candidate.competition_id FOR UPDATE;
   SELECT organisation_id INTO target_org FROM competitions WHERE id=candidate.competition_id;
   SELECT id INTO previous_id FROM schedule_revisions
   WHERE competition_id=candidate.competition_id AND status='published' FOR UPDATE;
