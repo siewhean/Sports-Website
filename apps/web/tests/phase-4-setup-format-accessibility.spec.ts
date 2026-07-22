@@ -5,16 +5,18 @@ import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpe
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
+const wcagAaTags = new Set(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]);
+
 for (const [surface, url] of [
   ["assisted setup", "/organiser/competitions/singapore-open/setup?step=basics"],
   ["format designer", "/organiser/competitions/singapore-open/format"],
 ] as const) {
-  test(`${surface} has no serious or critical accessibility violations`, async ({ page }) => {
+  test(`${surface} has no WCAG A or AA accessibility violations`, async ({ page }) => {
     await page.goto(url);
     await dismissConsent(page);
     const results = await new AxeBuilder({ page }).analyze();
     expect(
-      results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
+      results.violations.filter((violation) => violation.tags.some((tag) => wcagAaTags.has(tag))),
     ).toEqual([]);
   });
 }
