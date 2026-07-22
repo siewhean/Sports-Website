@@ -798,6 +798,17 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     >`SELECT status,current_best_option_id FROM schedule_generation_jobs WHERE id=${jobId}`;
     expect(final[0]).toMatchObject({ status: "cancelled" });
     expect(final[0]?.current_best_option_id).toBeTruthy();
+    expect(
+      await sql`SELECT id,status,source_job_id,source_option_id
+        FROM schedule_revisions WHERE id=${accepted!.id}`,
+    ).toEqual([
+      {
+        id: accepted!.id,
+        status: "published",
+        source_job_id: jobId,
+        source_option_id: expect.any(String),
+      },
+    ]);
   });
 
   it("retains immutable multi-division revisions and emits 7/1-day expiry evidence once", async () => {

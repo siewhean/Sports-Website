@@ -138,6 +138,9 @@ export type ScheduleJob = Readonly<{
   status: ScheduleJobStatus;
   objective: ScheduleObjective;
   currentBest: ScheduleOption | null;
+  progressIteration: number | null;
+  exploredCandidates: number;
+  progressUpdatedAt: string | null;
   cancellationRequestedAt: string | null;
   failureClass: string | null;
   startedAt: string | null;
@@ -559,6 +562,9 @@ export function parseScheduleJobView(value: unknown, allowReplay = false): Sched
     "continued_from_job_id",
     "current_best_option_id",
     "current_best",
+    "progress_iteration",
+    "explored_candidates",
+    "progress_updated_at",
     "cancellation_requested_at",
     "started_at",
     "completed_at",
@@ -581,6 +587,9 @@ export function parseScheduleJobView(value: unknown, allowReplay = false): Sched
     !objectives.has(item.objective as ScheduleObjective) ||
     (item.continued_from_job_id !== null && !nonEmpty(item.continued_from_job_id)) ||
     (item.current_best_option_id !== null && !nonEmpty(item.current_best_option_id)) ||
+    (item.progress_iteration !== null && !integer(item.progress_iteration)) ||
+    !integer(item.explored_candidates) ||
+    !nullableIso(item.progress_updated_at) ||
     !nullableIso(item.cancellation_requested_at) ||
     !nullableIso(item.started_at) ||
     !nullableIso(item.completed_at) ||
@@ -598,6 +607,9 @@ export function parseScheduleJobView(value: unknown, allowReplay = false): Sched
     status: item.status as ScheduleJobStatus,
     objective: item.objective as ScheduleObjective,
     currentBest,
+    progressIteration: item.progress_iteration,
+    exploredCandidates: item.explored_candidates,
+    progressUpdatedAt: item.progress_updated_at,
     cancellationRequestedAt: item.cancellation_requested_at,
     failureClass: item.failure_class as string | null,
     startedAt: item.started_at,

@@ -24,6 +24,7 @@ test("schedule exposes measurable alternatives, timeline, inspector and explicit
   await expect(page.getByRole("heading", { name: "Fastest" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Balanced" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Rest-focused" })).toBeVisible();
+  await expect(page.getByText(/13 candidates explored\./)).toBeVisible();
   await expect(page.getByRole("region", { name: "Schedule by playing area and time" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "M1" })).toBeVisible();
   await page.getByRole("button", { name: "Publish schedule" }).click();

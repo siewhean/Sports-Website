@@ -518,6 +518,11 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       constraints,
     };
     const generated = await runtime.generateSchedule({ accountId }, competitionId, request, randomUUID());
+    expect(generated.job).toMatchObject({
+      progress_iteration: null,
+      explored_candidates: 0,
+      progress_updated_at: null,
+    });
     await expect(
       runtime.generateSchedule(
         { accountId },
@@ -526,6 +531,20 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
         randomUUID(),
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: "ACTIVE_SCHEDULE_JOB" });
+    const [persistedJob] = await client<{ input_hash: string }[]>`
+      SELECT input_hash FROM schedule_generation_jobs WHERE id=${generated.job.id}`;
+    const [claimedJob] = await client<{ fence_token: string }[]>`
+      SELECT fence_token FROM phase4_claim_schedule_job(
+        ${generated.job.id},'api-progress-worker',${persistedJob!.input_hash},30
+      )`;
+    await client`SELECT phase4_record_schedule_job_progress(
+      ${generated.job.id},'api-progress-worker',${claimedJob!.fence_token},0,1
+    )`;
+    await expect(runtime.readScheduleJob({ accountId }, generated.job.id)).resolves.toMatchObject({
+      progress_iteration: 0,
+      explored_candidates: 1,
+      progress_updated_at: expect.any(String),
+    });
     const assertCurrent = runtime as unknown as {
       assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string): Promise<void>;
     };

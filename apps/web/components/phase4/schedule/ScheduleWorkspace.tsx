@@ -747,6 +747,14 @@ function JobRail({
                   quality: job.currentBest.quality.score,
                 })
               : phase4ScheduleCopy.selectedUnchanged}
+            {job.exploredCandidates > 0
+              ? ` ${interpolate(
+                  job.exploredCandidates === 1
+                    ? phase4ScheduleCopy.candidateExplored
+                    : phase4ScheduleCopy.candidatesExplored,
+                  { count: job.exploredCandidates },
+                )}`
+              : ""}
           </small>
         </span>
       </div>

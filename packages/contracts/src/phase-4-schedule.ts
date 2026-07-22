@@ -218,6 +218,9 @@ export type ScheduleJobView = {
   continued_from_job_id: string | null;
   current_best_option_id: string | null;
   current_best: ScheduleOptionView | null;
+  progress_iteration: number | null;
+  explored_candidates: number;
+  progress_updated_at: string | null;
   cancellation_requested_at: string | null;
   started_at: string | null;
   completed_at: string | null;

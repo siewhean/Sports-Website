@@ -102,8 +102,11 @@ describe("foundation migrations", () => {
       const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-populated-migrations-"));
       await cp(migrationsDirectory, copiedDirectory, { recursive: true });
       const migration0020 = path.join(copiedDirectory, "0020_phase4_format_recommendation_evidence.sql");
+      const migration0021 = path.join(copiedDirectory, "0021_phase4_schedule_job_progress.sql");
       const migration0020Source = await readFile(migration0020, "utf8");
+      const migration0021Source = await readFile(migration0021, "utf8");
       await rm(migration0020);
+      await rm(migration0021);
       await migrateDatabase({
         databaseUrl: config.databaseUrl,
         migrationsDirectory: copiedDirectory,
@@ -148,12 +151,16 @@ describe("foundation migrations", () => {
         expect(beforeUpgrade).toMatchObject({ confirmed_count: 1, placeholder_count: 1 });
         expect(beforeUpgrade?.entry_ids).toEqual([placeholder]);
         await writeFile(migration0020, migration0020Source);
+        await writeFile(migration0021, migration0021Source);
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgraded.applied).toEqual(["0020_phase4_format_recommendation_evidence.sql"]);
+        expect(upgraded.applied).toEqual([
+          "0020_phase4_format_recommendation_evidence.sql",
+          "0021_phase4_schedule_job_progress.sql",
+        ]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT

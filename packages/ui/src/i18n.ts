@@ -210,6 +210,8 @@ export const messages = {
     bestAvailable: "The current best remains available.",
     selectedUnchanged: "The selected draft remains unchanged.",
     objectiveQuality: "{objective} · quality {quality}",
+    candidateExplored: "{count} candidate explored.",
+    candidatesExplored: "{count} candidates explored.",
     loading: "Loading schedule",
     backToSchedule: "Back to schedule",
     currentSlot: "Current slot",

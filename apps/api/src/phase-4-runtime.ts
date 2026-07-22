@@ -2423,6 +2423,9 @@ export class Phase4Runtime {
         input_snapshot: { source_revision: number; capacity_revision: number; capacity_hash: string } | string;
         continued_from_job_id: string | null;
         current_best_option_id: string | null;
+        progress_iteration: number | null;
+        explored_candidates: number;
+        progress_updated_at: Date | string | null;
         cancellation_requested_at: Date | string | null;
         started_at: Date | string | null;
         completed_at: Date | string | null;
@@ -2458,6 +2461,9 @@ export class Phase4Runtime {
       continued_from_job_id: row.continued_from_job_id,
       current_best_option_id: row.current_best_option_id,
       current_best: option ? this.optionView(option) : null,
+      progress_iteration: row.progress_iteration,
+      explored_candidates: row.explored_candidates,
+      progress_updated_at: instant(row.progress_updated_at),
       cancellation_requested_at: instant(row.cancellation_requested_at),
       started_at: instant(row.started_at),
       completed_at: instant(row.completed_at),

@@ -57,6 +57,9 @@ const job = {
   continued_from_job_id: null,
   current_best_option_id: "option-1",
   current_best: option,
+  progress_iteration: 12,
+  explored_candidates: 13,
+  progress_updated_at: "2026-07-20T04:22:00.000Z",
   cancellation_requested_at: null,
   started_at: "2026-07-20T04:20:00.000Z",
   completed_at: null,
@@ -87,6 +90,7 @@ describe("phase 4 schedule boundary parsers", () => {
     expect(
       parseScheduleJobEnvelope({ job, enqueued: true, recoverable: true, idempotent_replay: false })?.currentBest?.id,
     ).toBe("option-1");
+    expect(parseScheduleJobView(job)?.exploredCandidates).toBe(13);
     expect(
       parseScheduleRevisionView(
         { ...revision, assignment_hash: "c".repeat(64), quality, assignments: [assignment] },

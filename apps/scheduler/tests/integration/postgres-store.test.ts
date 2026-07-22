@@ -116,6 +116,36 @@ describeInfra("PostgresScheduleJobStore", () => {
     });
     expect(claimed.outcome).toBe("claimed");
     if (claimed.outcome !== "claimed") throw new Error("Expected claim");
+    await firstStore.recordProgress({
+      jobId,
+      workerId: "scheduler-one",
+      fenceToken: claimed.job.fenceToken,
+      iteration: 0,
+      exploredCandidates: 1,
+    });
+    expect(
+      await sql<{ progress_iteration: number; explored_candidates: number; progress_updated_at: Date | null }[]>`
+        SELECT progress_iteration,explored_candidates,progress_updated_at
+        FROM schedule_generation_jobs WHERE id=${jobId}`,
+    ).toMatchObject([{ progress_iteration: 0, explored_candidates: 1, progress_updated_at: expect.any(Date) }]);
+    await expect(
+      firstStore.recordProgress({
+        jobId,
+        workerId: "scheduler-one",
+        fenceToken: claimed.job.fenceToken,
+        iteration: 0,
+        exploredCandidates: 2,
+      }),
+    ).rejects.toThrow("iteration must increase");
+    await expect(
+      secondStore.recordProgress({
+        jobId,
+        workerId: "scheduler-two",
+        fenceToken: randomUUID(),
+        iteration: 1,
+        exploredCandidates: 2,
+      }),
+    ).rejects.toThrow("worker fence");
     expect(
       await firstStore.renewLease({
         jobId,
@@ -145,6 +175,22 @@ describeInfra("PostgresScheduleJobStore", () => {
         },
       ],
     };
+    await expect(
+      firstStore.checkpointBest({
+        jobId,
+        workerId: "scheduler-one",
+        fenceToken: claimed.job.fenceToken,
+        expectedInputHash: inputHash,
+        candidate: result,
+        iteration: 0,
+        exploredCandidates: 2,
+      }),
+    ).rejects.toThrow("progress iteration must increase");
+    expect(await sql`SELECT id FROM schedule_generation_options WHERE job_id=${jobId}`).toHaveLength(0);
+    expect(
+      await sql<{ current_best_option_id: string | null }[]>`
+        SELECT current_best_option_id FROM schedule_generation_jobs WHERE id=${jobId}`,
+    ).toEqual([{ current_best_option_id: null }]);
     const checkpoint = await firstStore.checkpointBest({
       jobId,
       workerId: "scheduler-one",
@@ -152,11 +198,16 @@ describeInfra("PostgresScheduleJobStore", () => {
       expectedInputHash: inputHash,
       candidate: result,
       iteration: 7,
+      exploredCandidates: 2,
     });
     expect(checkpoint).toMatchObject({
       accepted: true,
       result: { result_revision: 1, assignment_hash: expect.any(String) },
     });
+    expect(
+      await sql<{ progress_iteration: number; explored_candidates: number }[]>`
+        SELECT progress_iteration,explored_candidates FROM schedule_generation_jobs WHERE id=${jobId}`,
+    ).toEqual([{ progress_iteration: 7, explored_candidates: 2 }]);
     const preferredTieBreak = {
       ...result,
       assignments: [
@@ -181,6 +232,7 @@ describeInfra("PostgresScheduleJobStore", () => {
         expectedInputHash: inputHash,
         candidate: preferredTieBreak,
         iteration: 8,
+        exploredCandidates: 3,
       }),
     ).toMatchObject({ accepted: true, result: { result_revision: 2, quality: { preferred_penalty: 18 } } });
 
@@ -201,9 +253,20 @@ describeInfra("PostgresScheduleJobStore", () => {
     });
     expect(resumed).toMatchObject({
       outcome: "claimed",
-      job: { continuationIteration: 9, currentBest: { result_revision: 2, quality: { score: 81 } } },
+      job: {
+        continuationIteration: 9,
+        exploredCandidates: 3,
+        currentBest: { result_revision: 2, quality: { score: 81 } },
+      },
     });
     if (resumed.outcome !== "claimed") throw new Error("Expected resumed claim");
+    await secondStore.recordProgress({
+      jobId,
+      workerId: "scheduler-two",
+      fenceToken: resumed.job.fenceToken,
+      iteration: 9,
+      exploredCandidates: 4,
+    });
 
     await sql`SELECT phase4_request_schedule_cancellation(${jobId}::uuid,${accountId}::uuid,'cancel-store-test')`;
     expect(await secondStore.getCancellationStatus(jobId, resumed.job.fenceToken)).toMatchObject({
@@ -230,6 +293,51 @@ describeInfra("PostgresScheduleJobStore", () => {
     expect(
       await firstStore.claimJob({ jobId, workerId: "scheduler-three", expectedInputHash: inputHash, leaseMs: 5_000 }),
     ).toEqual({ outcome: "terminal", state: "cancelled", currentBestRevision: 2 });
+
+    const progressOnlyJobId = randomUUID();
+    const progressOnlyInput: ScheduleJobInput = { ...input, job_id: progressOnlyJobId };
+    const progressOnlyInputHash = deterministicJsonHash(progressOnlyInput);
+    await sql`
+      INSERT INTO schedule_generation_jobs(
+        id,organisation_id,competition_id,objective,input_snapshot,input_hash,requested_by,request_id,correlation_id
+      ) VALUES(
+        ${progressOnlyJobId},${organisationId},${competitionId},'balanced',${sql.json(progressOnlyInput)},
+        ${progressOnlyInputHash},${accountId},'request-progress-only','correlation-progress-only'
+      )`;
+    const progressOnlyClaim = await firstStore.claimJob({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-one",
+      expectedInputHash: progressOnlyInputHash,
+      leaseMs: 5_000,
+    });
+    if (progressOnlyClaim.outcome !== "claimed") throw new Error("Expected progress-only claim");
+    await firstStore.recordProgress({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-one",
+      fenceToken: progressOnlyClaim.job.fenceToken,
+      iteration: 4,
+      exploredCandidates: 5,
+    });
+    await sql`UPDATE schedule_generation_jobs SET lease_expires_at=now()-interval '1 second'
+      WHERE id=${progressOnlyJobId}`;
+    const recoveredProgressOnly = await secondStore.claimJob({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-two",
+      expectedInputHash: progressOnlyInputHash,
+      leaseMs: 5_000,
+    });
+    expect(recoveredProgressOnly).toMatchObject({
+      outcome: "claimed",
+      job: { continuationIteration: 5, exploredCandidates: 5, currentBest: null },
+    });
+    if (recoveredProgressOnly.outcome !== "claimed") throw new Error("Expected recovered progress-only claim");
+    await secondStore.finishJob({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-two",
+      fenceToken: recoveredProgressOnly.job.fenceToken,
+      state: "no_solution",
+      currentBestRevision: null,
+    });
 
     const continuationJobId = randomUUID();
     const continuationInput: ScheduleJobInput = { ...input, job_id: continuationJobId };
