@@ -101,21 +101,23 @@ describe("foundation migrations", () => {
     async () => {
       const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-populated-migrations-"));
       await cp(migrationsDirectory, copiedDirectory, { recursive: true });
-      const migration0020 = path.join(copiedDirectory, "0020_phase4_format_recommendation_evidence.sql");
-      const migration0021 = path.join(copiedDirectory, "0021_phase4_schedule_job_progress.sql");
-      const migration0022 = path.join(copiedDirectory, "0022_phase4_schedule_revision_provenance.sql");
-      const migration0023 = path.join(copiedDirectory, "0023_phase4_schedule_publication_expiry.sql");
-      const migration0024 = path.join(copiedDirectory, "0024_phase4_ai_quota_reason.sql");
-      const migration0020Source = await readFile(migration0020, "utf8");
-      const migration0021Source = await readFile(migration0021, "utf8");
-      const migration0022Source = await readFile(migration0022, "utf8");
-      const migration0023Source = await readFile(migration0023, "utf8");
-      const migration0024Source = await readFile(migration0024, "utf8");
-      await rm(migration0020);
-      await rm(migration0021);
-      await rm(migration0022);
-      await rm(migration0023);
-      await rm(migration0024);
+      const deferredMigrationNames = [
+        "0020_phase4_format_recommendation_evidence.sql",
+        "0021_phase4_schedule_job_progress.sql",
+        "0022_phase4_schedule_revision_provenance.sql",
+        "0023_phase4_schedule_publication_expiry.sql",
+        "0024_phase4_ai_quota_reason.sql",
+        "0025_phase4_unselected_recommendation_resume.sql",
+        "0026_phase4_schedule_resume_hash_domains.sql",
+      ] as const;
+      const deferredMigrations = await Promise.all(
+        deferredMigrationNames.map(async (name) => ({
+          name,
+          path: path.join(copiedDirectory, name),
+          source: await readFile(path.join(copiedDirectory, name), "utf8"),
+        })),
+      );
+      await Promise.all(deferredMigrations.map((migration) => rm(migration.path)));
       await migrateDatabase({
         databaseUrl: config.databaseUrl,
         migrationsDirectory: copiedDirectory,
@@ -166,23 +168,13 @@ describe("foundation migrations", () => {
           FROM setup_drafts WHERE competition_id=${competition}`;
         expect(beforeUpgrade).toMatchObject({ confirmed_count: 1, placeholder_count: 1 });
         expect(beforeUpgrade?.entry_ids).toEqual([placeholder]);
-        await writeFile(migration0020, migration0020Source);
-        await writeFile(migration0021, migration0021Source);
-        await writeFile(migration0022, migration0022Source);
-        await writeFile(migration0023, migration0023Source);
-        await writeFile(migration0024, migration0024Source);
+        for (const migration of deferredMigrations) await writeFile(migration.path, migration.source);
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgraded.applied).toEqual([
-          "0020_phase4_format_recommendation_evidence.sql",
-          "0021_phase4_schedule_job_progress.sql",
-          "0022_phase4_schedule_revision_provenance.sql",
-          "0023_phase4_schedule_publication_expiry.sql",
-          "0024_phase4_ai_quota_reason.sql",
-        ]);
+        expect(upgraded.applied).toEqual([...deferredMigrationNames]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
