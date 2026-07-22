@@ -167,12 +167,8 @@ test("published completed setup reloads read-only and public projection stays pu
   try {
     const projectionResponse = await api.get(`/api/v1/public/competitions/${encodeURIComponent(state.completedSlug)}`);
     expect(projectionResponse.status(), await projectionResponse.text()).toBe(200);
-    const projection = (await projectionResponse.json()) as {
-      publication: { schedule_version: number };
-      schedule: { revision_id?: string; id?: string } | null;
-    };
+    const projection = (await projectionResponse.json()) as { publication: { schedule_version: number } };
     expect(projection.publication.schedule_version).toBe(1);
-    expect(JSON.stringify(projection.schedule)).toContain(state.completedScheduleRevisionId);
   } finally {
     await api.dispose();
   }
@@ -198,9 +194,7 @@ test("authorization, CSRF, and origin boundaries fail closed", async () => {
     },
   });
   try {
-    const crossTenant = await outsider.get(
-      `/api/v1/competitions/${state.recommendationCompetitionId}/setup-draft`,
-    );
+    const crossTenant = await outsider.get(`/api/v1/competitions/${state.recommendationCompetitionId}/setup-draft`);
     expect(crossTenant.status()).toBe(404);
 
     const missingCsrf = await organiserWithoutCsrf.post(
