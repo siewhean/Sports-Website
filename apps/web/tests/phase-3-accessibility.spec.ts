@@ -20,7 +20,7 @@ test("sport settings editor has no serious or critical accessibility violations"
 });
 
 test("sport defaults admin identifies provisional authority accessibly", async ({ page }) => {
-  await page.goto("/internal/sport-defaults");
+  await page.goto("/internal/sport-defaults?sport=canoe_polo");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { name: "Sport-pack defaults" })).toBeVisible();
   await expect(page.getByText("Product recommendation — not a federation profile")).toBeVisible();

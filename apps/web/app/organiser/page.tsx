@@ -3,6 +3,7 @@ import { CalendarDots, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
 import { ActionLink, InlineNotice, StatusLine } from "@/components/foundation/Primitives";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 export const metadata: Metadata = {
   title: messages.organiser.title,
@@ -20,7 +21,7 @@ export default function OrganiserPage() {
       <section className="operational-heading" aria-labelledby="organiser-summary">
         <p>{messages.organiser.summaryBody}</p>
         <h2 id="organiser-summary">{messages.organiser.summaryTitle}</h2>
-        <ActionLink href="/format">{messages.organiser.nextAction}</ActionLink>
+        {demoFixturesEnabled() ? <ActionLink href="/format">{messages.organiser.nextAction}</ActionLink> : null}
       </section>
       <div className="operational-divider" />
       <section className="operational-list" aria-labelledby="fixtures-title">

@@ -365,6 +365,7 @@ export const phase2Competition: CompetitionView = {
   id: "cmp_sgopen_2026",
   slug: "singapore-open",
   name: "Singapore Open 2026",
+  sportCode: "canoe_polo",
   sport: "Canoe Polo",
   venue: "Marina Reservoir",
   timezone: "Asia/Singapore",
@@ -373,6 +374,10 @@ export const phase2Competition: CompetitionView = {
   publishedAt: "12 Sep, 09:40 SGT",
   lastUpdated: "12 Sep, 10:24 SGT",
   division: { id: "open", name: "Open division", teamCount: 8, matchCount: 16 },
+  divisions: [
+    { id: "open", name: "Open division" },
+    { id: "women", name: "Women's division" },
+  ],
   teams: [
     "Marina Blue",
     "Harbour Gold",

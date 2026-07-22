@@ -3,7 +3,7 @@
 **Date:** 22 July 2026
 
 **Branch:** `agent/gate-b-organiser-journey`
-**Status:** Verified locally — Gate B PASS
+**Status:** Local validation PASS; merge-readiness remains subject to the fresh independent verdict and repository-owner merge policy
 
 This file tracks the Phase 4 scope in `docs/EXECUTION_ROADMAP.md`. A row is verified only where production implementation and executable evidence both exist. The exact commands, counts, browser limitation, dependency advisories, and external boundary are in `docs/qa/phase-4-acceptance.md`; concept comparison is in `docs/qa/phase-4-fidelity-ledger.md`.
 
@@ -45,7 +45,7 @@ This file tracks the Phase 4 scope in `docs/EXECUTION_ROADMAP.md`. A row is veri
 ## Gate B closure
 
 - [x] One competition and setup-draft lineage runs through create/resume, Canoe Polo to Basketball sport change, canonical capacity/settings refresh, 16 entries across two divisions, preferences, capacity-filtered recommendation, exact format IDs, PostgreSQL materialisation/publication, Redis queue, scheduler worker, alternatives, current best, accept, lock, move, compare, organiser-only publication, setup completion, public schedule versions 1/2, and stale-input fencing.
-- [x] Manual and visual browser projections send the same canonical graph and reload the saved layout lineage; the browser test is demo-backed and is not misrepresented as the real PostgreSQL/Redis lineage above.
+- [x] Manual and visual browser projections send the same canonical graph and reload the saved layout lineage. The generic responsive matrix is complemented by a separately isolated 3/3 real browser→BFF→API→PostgreSQL/Redis journey.
 - [x] Assisted Setup autosaves and resumes without browser-local source of truth; manual fallback preserves organiser text for provider failure and quota exhaustion.
 - [x] The 16-entry cross-division free-plan limit, concurrent writes and non-destructive upgrade path remain enforced by Phase 3/Gate B database evidence.
 - [x] Solver hard constraints, objectives, quality components, alternatives, current-best retention, cancellation and revision isolation pass.
@@ -53,8 +53,8 @@ This file tracks the Phase 4 scope in `docs/EXECUTION_ROADMAP.md`. A row is veri
 - [x] AI validation, privacy, cache identity, bounded retry, accounting, failure non-charging and quota-race behavior pass.
 - [x] Permissions, idempotency, audit/outbox atomicity, loading/empty/error states, accessibility and operator backup evidence satisfy the local gate.
 - [x] Repository checks, migrated PostgreSQL integration, Redis worker integration, production build, retries-disabled browser matrix, console/network guards and four-concept visual inspection pass locally.
-- [x] Independent QA/QC recorded exact `Verdict: PASS` in `docs/qa/phase-4-verdict.md` after finding P0–P3 all zero.
+- [x] Independent QA/QC inspected the complete main diff and recorded its fresh severity counts, accepted residual risks and exact release-gate verdict in `docs/qa/phase-4-verdict.md`.
 
 ## External boundary
 
-Gate B is an internal local organiser-alpha gate. GitHub-hosted CI is presently blocked by the repository/account billing state, so no hosted run is claimed. This work also does not resolve the separate Phase 1 live identity-provider, CDN/purge, hosted telemetry, managed-backup, real payment/billing-provider, or authenticated production-device evidence gaps. Moving the pull request out of draft after this verdict does not resolve or hide the disclosed dependency advisories.
+Gate B is an internal local organiser-alpha gate. Hosted GitHub Actions: Not executed because the account Actions allowance is unavailable. This work also does not resolve the separate Phase 1 live identity-provider, CDN/purge, hosted telemetry, managed-backup, real payment/billing-provider, or authenticated production-device evidence gaps. Moving the pull request out of draft after this verdict does not convert local validation into a hosted result.

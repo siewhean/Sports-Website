@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { interpolate } from "@matchday/ui";
 import {
@@ -58,11 +58,18 @@ const activeStatuses = new Set<ScheduleJobStatus>([
   phase4ScheduleMachine.cancelling,
 ]);
 
+const subscribeToHydration = () => () => undefined;
+
 function withRetainedAlternative(current: readonly ScheduleOption[], option: ScheduleOption): ScheduleOption[] {
   return [...current.filter((candidate) => candidate.objective !== option.objective), option];
 }
 
 export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) {
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
   const [job, setJob] = useState(document.activeJob);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
@@ -83,7 +90,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     return [...byObjective.values()];
   }, [currentOption, retainedAlternatives]);
   const expired = document.currentRevision?.status === "expired";
-  const disabled = !document.canEdit || expired || busy !== null;
+  const disabled = !hydrated || !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
   const polledJobStatus = job?.status;
 

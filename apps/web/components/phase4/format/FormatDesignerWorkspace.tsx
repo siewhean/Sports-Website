@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ArrowRight, CloudSlash, GridFour, Warning } from "@phosphor-icons/react";
 import type { FormatBuilderPageDocument, FormatEditorState, FormatSurfaceState } from "@/lib/phase4-format";
+import type { FormatDivisionOption } from "@/lib/phase4-format-division";
+import { resolveFormatWorkspaceRenderState } from "@/lib/phase4-format-workspace";
 import { opaqueId, translate as t } from "@matchday/ui";
 import { FormatEditor } from "./FormatDesignerParts";
 import { DesignerSkeleton, DesignerState } from "./FormatDesignerPanels";
@@ -30,7 +32,13 @@ const hiddenHeadingStyle = {
   border: 0,
 } as const;
 
-export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocument }) {
+export function FormatDesignerWorkspace({
+  page,
+  divisions,
+}: {
+  page: FormatBuilderPageDocument;
+  divisions: readonly FormatDivisionOption[];
+}) {
   const [draft, setDraft] = useState(page.draft);
   const [viewState, setViewState] = useState(page.state);
   const [busy, setBusy] = useState<"validate" | "save" | "materialise" | "template" | null>(null);
@@ -56,23 +64,11 @@ export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocum
         : null,
     [draft],
   );
-  if (viewState === "loading") return <DesignerSkeleton />;
-  if (viewState === "empty" || !initial || !draft)
-    return (
-      <DesignerState
-        icon={<GridFour />}
-        title={t("prototype.caa4511dd910")}
-        body={t("prototype.d30c489ec255")}
-        action={
-          <Link href={`/organiser/competitions/${page.competitionId}/setup`}>
-            {t("prototype.e2a78250c5f5")}
-            <ArrowRight />
-          </Link>
-        }
-      />
-    );
-  if (viewState !== "ready" && viewState !== "read-only") {
-    const copy = stateCopy[viewState];
+  const renderState = resolveFormatWorkspaceRenderState(viewState, Boolean(initial && draft));
+  if (renderState === "loading") return <DesignerSkeleton />;
+  if (renderState === "problem") {
+    const problemState = viewState as keyof typeof stateCopy;
+    const copy = stateCopy[problemState];
     return (
       <DesignerState
         icon={viewState === "offline" ? <CloudSlash /> : <Warning />}
@@ -86,12 +82,27 @@ export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocum
       />
     );
   }
+  if (renderState === "empty" || !initial || !draft)
+    return (
+      <DesignerState
+        icon={<GridFour />}
+        title={t("prototype.caa4511dd910")}
+        body={t("prototype.d30c489ec255")}
+        action={
+          <Link href={`/organiser/competitions/${page.competitionId}/setup`}>
+            {t("prototype.e2a78250c5f5")}
+            <ArrowRight />
+          </Link>
+        }
+      />
+    );
   return (
     <>
       <h1 style={hiddenHeadingStyle}>{t("prototype.675eeee2578b")}</h1>
       <FormatEditor
         key={draft.draft_id}
         page={page}
+        divisions={divisions}
         initial={initial}
         draft={draft}
         onDraft={setDraft}

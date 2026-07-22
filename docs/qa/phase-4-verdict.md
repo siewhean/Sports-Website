@@ -1,29 +1,33 @@
 # Phase 4 — Independent Gate B verdict
 
-Verdict: PASS
+Verdict: FAIL
 
-## Scope
-
-Independent QA/QC reviewed the complete current Item 9 diff, the canonical Gate B requirements, the fresh competition/setup lineage, AI accounting and failure behavior, migrated PostgreSQL and Redis worker boundaries, the four-project Phase 4 browser matrix, and all four accepted design concepts.
-
-## Findings
+## Fresh independent review
 
 - P0: 0
-- P1: 0
-- P2: 0
-- P3: 0
+- P1: 1
+- P2: 1
+- P3: 2
 
-## Independent evidence
+The complete main diff, migrations, authorisation, idempotency, concurrency, audit/outbox behavior, browser flows, responsive behavior, accessibility, visual baselines, command logs, production dependency audit and residual risks were reviewed independently.
 
-All commands used Node `24.18.0` explicitly.
+## Blocking finding
 
-- Phase 4 API integration: 4 files, 22 tests passed, including the single fresh aggregate journey, real Redis queue and `SchedulerRuntime`, permissions, publication rollback, public versions 1/2, stale fencing, provider failure, cache replay, quota exhaustion and quota-race accounting.
-- Database integration: migrations, Phase 3 schema and Phase 4 schema passed as 3 files and 28 tests; the clean 24-migration check also passed.
-- Scheduler unit suite: 4 files and 30 tests passed.
-- Browser matrix: the explicit nine Phase 4 specs passed across desktop Chromium, tablet WebKit, phone WebKit and phone Chromium with retries disabled: 89 passed, 7 intentional project-applicability skips, 0 failed.
-- Repository checks: formatting, 16-package typecheck and `git diff --check` passed.
-- Visual fidelity: all four concept references and all nine changed browser baselines were inspected at original detail against copy, layout, typography, palette, icons, spacing/container behavior, interaction states and phone collapse.
+P1 — the successful validation currently identifies reviewed commit `4b62a48a90d648cd3f2c9deb360c2bd34ca74e10` plus an uncommitted merge-readiness working tree. That state is not reproducible from an exact source-control SHA. Commit the reviewed closure, rerun the final validation against that SHA, record it in the evidence, and repeat this independent verdict before merge.
 
-## Boundary
+## Accepted only after the P1 is closed
 
-This is a local organiser-alpha Gate B verdict. The browser data is demo-backed and complements, but does not impersonate, the real PostgreSQL/Redis aggregate test. GitHub-hosted CI remains blocked by repository/account billing, and the three disclosed high production dependency advisories (`fast-uri` on two paths and `sharp`/libvips on one path) still require remediation or explicit risk acceptance. No hosted-CI, deployed-provider, production-host, or authenticated real-device pass is claimed.
+- P2: sticky/fixed action rails may obscure terminal phone/tablet content even though current reachability, safe-area, accessibility and overflow tests pass. Owner Frontend UX; fix or explicitly re-accept before the Gate C browser verdict.
+- P3: Phase 3 forced-viewport baseline filenames overstate some native project coverage. Owner QA Automation; rename or split before the Gate C visual verdict.
+- P3: `next>sharp` remains a scoped compatibility override despite a clean audit and passing build/image regressions. Owner Platform Dependency; review at the next stable dependency update.
+
+## Verified evidence
+
+- Generic E2E: 255 passed, 7 intentional project-applicability skips; real local matrix: 3/3 passed.
+- Accessibility: 47/47; visual comparisons: 13/13.
+- Production dependency audit: no known vulnerabilities.
+- `pnpm check`: completed successfully.
+- Migration 0025 serializes revision allocation, checks lock provenance/collisions and emits audit/outbox records.
+- No tracked secret, QA log, temporary credential or production-enabled demo fallback was found.
+
+Hosted GitHub Actions: Not executed because the account Actions allowance is unavailable.

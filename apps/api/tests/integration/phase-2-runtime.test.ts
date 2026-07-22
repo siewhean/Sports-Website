@@ -329,7 +329,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
 
     const workspace = await runtime.competitionWorkspace(actor, competition.id);
     expect(workspace).toMatchObject({
-      competition: { id: competition.id },
+      competition: { id: competition.id, organisation_id: organisationId },
       publication: { schedule_version: 1, result_version: 2 },
     });
     expect(JSON.stringify(workspace.access_passes)).not.toContain(pass.token);

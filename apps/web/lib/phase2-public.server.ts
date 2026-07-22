@@ -2,6 +2,7 @@ import "server-only";
 
 import { cache } from "react";
 import type { PublicCompetitionProjection } from "@matchday/contracts";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { isPublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
 import {
   demoCompetitionReadPort,
@@ -193,6 +194,6 @@ const apiCompetitionReadPort: CompetitionReadPort = {
 };
 
 export const getCompetitionView = cache(async (slug: string): Promise<CompetitionView | null> => {
-  const reader = process.env.MATCHDAY_PHASE2_DATA_MODE === "demo" ? demoCompetitionReadPort : apiCompetitionReadPort;
+  const reader = demoFixturesEnabled() ? demoCompetitionReadPort : apiCompetitionReadPort;
   return reader.getBySlug(slug);
 });

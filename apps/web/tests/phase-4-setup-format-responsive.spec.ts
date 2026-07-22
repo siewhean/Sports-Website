@@ -28,8 +28,10 @@ test("recommendation evidence stays accessible without phone overflow", async ({
   await expect(card.getByText("Ranking coverage", { exact: true })).toBeVisible();
   await expect(card.getByText("Available slots", { exact: true })).toBeVisible();
   await expect(card.getByText("Schedule", { exact: true })).toBeVisible();
-  await card.getByRole("button").focus();
-  await expect(card.getByRole("button")).toBeFocused();
+  const selectButton = card.getByRole("button");
+  await expect(selectButton).toBeEnabled();
+  await selectButton.focus();
+  await expect(selectButton).toBeFocused();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
   ).toBeLessThanOrEqual(1);
@@ -53,6 +55,31 @@ test("format designer defaults to structured manual mode on phones", async ({ pa
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("format designer switches authoritative divisions without sharing draft lineage", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/format");
+  await dismissConsent(page);
+  const designer = page.getByTestId("phase4-format-designer");
+  const division = page.getByRole("combobox", { name: "Division" });
+
+  await expect(division).toHaveValue("open");
+  await expect(designer).toHaveAttribute("data-division-id", "open");
+  await expect(designer).toHaveAttribute("data-draft-id", "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed");
+
+  await division.selectOption("women");
+  await expect(page).toHaveURL(/\/format\?division=women$/);
+  await expect(division).toHaveValue("women");
+  await expect(designer).toHaveAttribute("data-division-id", "women");
+  await expect(designer).toHaveAttribute("data-draft-id", "6b3f7665-c8cd-47e5-b243-fae28f56f6fe");
+
+  await division.selectOption("open");
+  await expect(page).toHaveURL(/\/format\?division=open$/);
+  await expect(designer).toHaveAttribute("data-division-id", "open");
+  await expect(designer).toHaveAttribute("data-draft-id", "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed");
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
 });
 
 test("format designer tablet keeps the complete graph and inspector reachable", async ({ page }, testInfo) => {

@@ -119,6 +119,34 @@ afterAll(async () => {
 });
 
 describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
+  it("loads a schedule workspace ordered across multiple divisions", async () => {
+    const scheduleCompetition = await phase3.createCompetition(
+      { accountId },
+      {
+        organisationId,
+        name: "Schedule workspace ordering",
+        slug: `schedule-workspace-ordering-${randomUUID()}`,
+        sportCode: "canoe_polo",
+        venue: "Test Arena",
+        address: "1 Test Road",
+        countryCode: "SG",
+        startsOn: "2027-08-01",
+        endsOn: "2027-08-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+    await client`INSERT INTO divisions(competition_id,name,team_limit) VALUES
+      (${scheduleCompetition.id},'Second division',8)`;
+
+    const workspace = await runtime.scheduleWorkspace({ accountId }, scheduleCompetition.id);
+
+    expect(workspace.competition.id).toBe(scheduleCompetition.id);
+    expect(workspace.generation.capacity_revision).toBeTypeOf("number");
+    expect(workspace.matches).toEqual([]);
+  });
+
   it("round-trips one canonical format lineage and enforces current template versions", async () => {
     const formatCompetition = await phase3.createCompetition(
       { accountId },
@@ -1140,6 +1168,14 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       randomUUID(),
     );
     expect(repaired.parent_revision_id).toBe(accepted.id);
+    if (!repaired.consequences) throw new Error("Expected move consequences for the repaired schedule");
+    expect(repaired.consequences.to).toEqual({
+      match_id: movable.match_id,
+      playing_area_id: validTarget.area_id,
+      slot_id: validTarget.slot_id,
+      start_epoch_ms: validTarget.start_epoch_ms,
+      end_epoch_ms: validTarget.end_epoch_ms,
+    });
     const acceptedByMatch = new Map(accepted.assignments.map((assignment) => [assignment.match_id, assignment]));
     for (const assignment of repaired.assignments) {
       if (assignment.match_id === movable.match_id) continue;

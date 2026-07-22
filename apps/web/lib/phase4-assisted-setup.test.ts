@@ -92,6 +92,75 @@ describe("Phase 4 assisted-setup web contract", () => {
     ).toBeNull();
   });
 
+  it("accepts the complete multi-division recommendation contract and rejects partial division evidence", () => {
+    const recommendation = {
+      id: "balanced-groups",
+      format_revision_id: null,
+      format_definition_hash: "format-hash",
+      name: "Balanced groups",
+      structure: "Two groups and finals",
+      advantage: "Complete ranking",
+      match_count: 31,
+      minimum_matches_per_entry: 3,
+      guaranteed_matches: 3,
+      ranking_coverage: "all_entries" as const,
+      available_match_slots: 36,
+      division_formats: [
+        {
+          division_id: "division-open",
+          candidate_division_id: "candidate-open",
+          format_revision_id: null,
+          format_definition_hash: "open-hash",
+          match_count: 16,
+          guaranteed_matches: 3,
+          ranking_coverage: "all_entries" as const,
+        },
+        {
+          division_id: "division-women",
+          candidate_division_id: "candidate-women",
+          format_revision_id: "format-women",
+          format_definition_hash: "women-hash",
+          match_count: 15,
+          guaranteed_matches: 3,
+          ranking_coverage: "all_entries" as const,
+        },
+      ],
+      capacity_status: "fits" as const,
+      scheduling_status: "feasible" as const,
+      warning_codes: [],
+    };
+    const populated = {
+      ...document,
+      values: {
+        ...document.values,
+        format_recommendations: {
+          recommendations: [recommendation],
+          requires_changes: null,
+          selected_recommendation_id: recommendation.id,
+          acknowledged_capacity_shortfall: false,
+          recommendation_set_hash: "recommendation-set-hash",
+        },
+      },
+    };
+
+    expect(parseAssistedSetupDocument(populated, competitionId)).toEqual(populated);
+    expect(
+      parseAssistedSetupDocument(
+        {
+          ...populated,
+          values: {
+            ...populated.values,
+            format_recommendations: {
+              ...populated.values.format_recommendations,
+              recommendations: [{ ...recommendation, division_formats: [{ division_id: "division-open" }] }],
+            },
+          },
+        },
+        competitionId,
+      ),
+    ).toBeNull();
+  });
+
   it("accepts only the exact create-draft response wrapper", () => {
     expect(parseAssistedSetupCreateResponse({ document, idempotent_replay: false }, competitionId)).toEqual({
       document,

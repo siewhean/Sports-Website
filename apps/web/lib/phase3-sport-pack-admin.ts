@@ -24,7 +24,7 @@ export type SportPackAdminVersion = Readonly<{
 export type SportDefaultsAdminDocument = Readonly<{
   state: SportPackAdminState;
   canManage: boolean;
-  activeSportId: SportId;
+  activeSportId: SportId | null;
   versions: readonly SportPackAdminVersion[];
 }>;
 

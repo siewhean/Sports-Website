@@ -264,6 +264,39 @@ function scheduleQuality(
   };
 }
 
+async function completeScheduleJob(
+  value: Awaited<ReturnType<typeof world>>,
+  baseInput: Awaited<ReturnType<typeof prepareScheduleInput>>,
+  suffix: string,
+) {
+  const jobId = randomUUID();
+  const input = structuredClone(baseInput);
+  input.job_id = jobId;
+  await sql`INSERT INTO schedule_generation_jobs(id,organisation_id,competition_id,objective,input_snapshot,input_hash,
+    requested_by,request_id,correlation_id)
+    VALUES(${jobId},${value.organisation},${value.competition},'balanced',${sql.json(input)},${hash(input)},
+      ${value.account},${`accept-${suffix}`},${`accept-${suffix}`})`;
+  const [claim] = await sql<{ revision: number; fence_token: string; worker_id: string }[]>`
+    SELECT revision,fence_token,worker_id FROM phase4_claim_schedule_job(
+      ${jobId},${`worker-${suffix}`},${hash(input)},30)`;
+  const assignment = {
+    match_id: input.matches[0]!.match_id,
+    division_id: input.matches[0]!.division_id,
+    area_id: input.slots[0]!.area_id,
+    interval_id: input.slots[0]!.interval_id,
+    slot_id: input.slots[0]!.slot_id,
+    start_epoch_ms: input.slots[0]!.start_epoch_ms,
+    end_epoch_ms: input.slots[0]!.end_epoch_ms,
+    fixed: false,
+  };
+  const [option] = await sql<{ id: string }[]>`SELECT id FROM phase4_checkpoint_schedule_option(
+    ${jobId},${claim!.worker_id},${claim!.fence_token},${claim!.revision},${hash(input)},0,
+    ${sql.json(scheduleQuality())},${sql.json([assignment])},'[]'::jsonb)`;
+  await sql`SELECT phase4_finish_schedule_job(
+    ${jobId},${claim!.worker_id},${claim!.fence_token},'completed',NULL)`;
+  return { jobId, optionId: option!.id, assignment };
+}
+
 beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
@@ -810,6 +843,122 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
         status: "published",
         source_job_id: jobId,
         source_option_id: expect.any(String),
+      },
+    ]);
+  });
+
+  it("serialises concurrent option acceptance and rejects cross-revision lock collisions", async () => {
+    const value = await world("Schedule concurrency");
+    const seedJobId = randomUUID();
+    const input = await prepareScheduleInput(seedJobId, value);
+    const firstJob = await completeScheduleJob(value, input, "first");
+    const secondJob = await completeScheduleJob(value, input, "second");
+
+    const accepted = await Promise.all([
+      sql<{ id: string; revision: number; status: string }[]>`SELECT id,revision,status
+        FROM phase4_accept_schedule_option(${firstJob.optionId},${value.account},'accept-concurrent-first')`,
+      sql<{ id: string; revision: number; status: string }[]>`SELECT id,revision,status
+        FROM phase4_accept_schedule_option(${secondJob.optionId},${value.account},'accept-concurrent-second')`,
+    ]);
+    const acceptedRows = accepted.flat().sort((left, right) => left.revision - right.revision);
+    expect(acceptedRows.map(({ revision, status }) => ({ revision, status }))).toEqual([
+      { revision: 1, status: "ready_for_review" },
+      { revision: 2, status: "ready_for_review" },
+    ]);
+    const [replayedAcceptance] = await sql<{ id: string; revision: number }[]>`SELECT id,revision
+      FROM phase4_accept_schedule_option(${firstJob.optionId},${value.account},'accept-concurrent-first-replay')`;
+    expect(replayedAcceptance).toMatchObject({ id: accepted[0]![0]!.id, revision: accepted[0]![0]!.revision });
+    expect(await sql`SELECT id FROM schedule_revisions WHERE competition_id=${value.competition}`).toHaveLength(2);
+
+    const secondArea = randomUUID();
+    await sql`INSERT INTO playing_areas(id,competition_id,name,slot_minutes)
+      VALUES(${secondArea},${value.competition},'Second job court',30)`;
+    const [secondMatch] = await sql<{ id: string; format_revision_id: string }[]>`
+      SELECT id,format_revision_id FROM matches
+      WHERE competition_id=${value.competition} AND id<>${firstJob.assignment.match_id}
+      ORDER BY ordinal LIMIT 1`;
+    const createDerivedRevision = async (matchId: string, areaId: string, parentId: string, revision: number) => {
+      const revisionId = randomUUID();
+      await sql.begin(async (tx) => {
+        await tx`INSERT INTO schedule_revisions(
+            id,competition_id,format_revision_id,revision,input_hash,status,created_by,parent_revision_id,source_job_id,quality
+          ) VALUES(
+            ${revisionId},${value.competition},${secondMatch!.format_revision_id},${revision},
+            ${hash({ revisionId })},'draft',${value.account},${parentId},${secondJob.jobId},${tx.json(scheduleQuality())}
+          )`;
+        await tx`INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id)
+          SELECT ${revisionId},competition_id,division_id,format_revision_id
+          FROM schedule_revision_formats WHERE schedule_revision_id=${parentId}`;
+        await tx`INSERT INTO scheduled_matches(
+            schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at
+          ) VALUES(
+            ${revisionId},${matchId},${value.competition},${areaId},
+            ${new Date(firstJob.assignment.start_epoch_ms).toISOString()},
+            ${new Date(firstJob.assignment.end_epoch_ms).toISOString()}
+          )`;
+        await tx`SELECT set_config('matchday.phase4_accept_schedule','on',true)`;
+        await tx`UPDATE schedule_revisions
+          SET assignment_hash=phase4_schedule_assignment_hash(id),status='ready_for_review',updated_at=now()
+          WHERE id=${revisionId}`;
+      });
+      return revisionId;
+    };
+    const relocatedRevision = await createDerivedRevision(
+      firstJob.assignment.match_id,
+      secondArea,
+      acceptedRows[1]!.id,
+      3,
+    );
+    const conflictingRevision = await createDerivedRevision(secondMatch!.id, secondArea, relocatedRevision, 4);
+    const startsAt = new Date(firstJob.assignment.start_epoch_ms).toISOString();
+    const endsAt = new Date(firstJob.assignment.end_epoch_ms).toISOString();
+
+    const utcSql = postgres(databaseUrl, {
+      max: 1,
+      onnotice: () => undefined,
+      connection: { search_path: schema },
+    });
+    const singaporeSql = postgres(databaseUrl, {
+      max: 1,
+      onnotice: () => undefined,
+      connection: { search_path: schema },
+    });
+    try {
+      await utcSql`SET TIME ZONE 'UTC'`;
+      await singaporeSql`SET TIME ZONE 'Asia/Singapore'`;
+      await utcSql`SELECT phase4_set_schedule_assignment_lock(
+        ${value.competition},${firstJob.assignment.match_id},${acceptedRows[0]!.id},${firstJob.assignment.area_id},
+        ${startsAt},${endsAt},${value.account},'lock-outbox-first')`;
+      await utcSql`SELECT phase4_set_schedule_assignment_lock(
+        ${value.competition},${firstJob.assignment.match_id},${relocatedRevision},${secondArea},
+        ${startsAt},${endsAt},${value.account},'lock-outbox-relocated')`;
+      await singaporeSql`SELECT phase4_set_schedule_assignment_lock(
+        ${value.competition},${firstJob.assignment.match_id},${relocatedRevision},${secondArea},
+        ${startsAt},${endsAt},${value.account},'lock-outbox-relocated-replay')`;
+    } finally {
+      await Promise.all([utcSql.end(), singaporeSql.end()]);
+    }
+    expect(
+      await sql`SELECT payload FROM outbox_events
+        WHERE event_type='schedule.assignment.locked' AND aggregate_id=${firstJob.assignment.match_id}
+        ORDER BY created_at,id`,
+    ).toMatchObject([
+      { payload: { area_id: firstJob.assignment.area_id, source_schedule_revision_id: acceptedRows[0]!.id } },
+      { payload: { area_id: secondArea, source_schedule_revision_id: relocatedRevision } },
+    ]);
+    await expect(
+      sql`SELECT phase4_set_schedule_assignment_lock(
+        ${value.competition},${secondMatch!.id},${conflictingRevision},${secondArea},
+        ${startsAt},${endsAt},${value.account},'lock-cross-revision-conflict')`,
+    ).rejects.toThrow(/conflicts with an existing locked interval/);
+    expect(
+      await sql`SELECT match_id,source_schedule_revision_id,playing_area_id
+        FROM schedule_assignment_locks WHERE competition_id=${value.competition}`,
+    ).toEqual([
+      {
+        match_id: firstJob.assignment.match_id,
+        source_schedule_revision_id: relocatedRevision,
+        playing_area_id: secondArea,
       },
     ]);
   });

@@ -16,7 +16,13 @@ test("production pages use nonce-based scripts and the full security header set"
     expect(scriptPolicy).toContain("'strict-dynamic'");
     expect(scriptPolicy).not.toContain("'unsafe-inline'");
     expect(csp).toContain("frame-ancestors 'none'");
-    expect(headers["strict-transport-security"]).toContain("max-age=31536000");
+    if (response.url().startsWith("https:")) {
+      expect(csp).toContain("upgrade-insecure-requests");
+      expect(headers["strict-transport-security"]).toContain("max-age=31536000");
+    } else {
+      expect(csp).not.toContain("upgrade-insecure-requests");
+      expect(headers["strict-transport-security"]).toBeUndefined();
+    }
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["x-frame-options"]).toBe("DENY");
     expect(headers["permissions-policy"]).toContain("camera=()");
@@ -48,6 +54,13 @@ test("public home keeps its headline wide and preserves reduced-motion behavior"
   await rejectOptionalConsent(page);
   const headline = page.getByRole("heading", { level: 1 });
   await expect(headline).toBeVisible();
+  const failedImages = await page.locator("img").evaluateAll((images) =>
+    images.flatMap((image) => {
+      if (!(image instanceof HTMLImageElement)) return ["unexpected non-image element"];
+      return !image.complete || image.naturalWidth === 0 ? [image.currentSrc || image.src] : [];
+    }),
+  );
+  expect(failedImages).toEqual([]);
   const lineCount = await headline.evaluate((element) => {
     const styles = getComputedStyle(element);
     return Math.round(element.getBoundingClientRect().height / Number.parseFloat(styles.lineHeight));

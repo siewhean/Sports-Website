@@ -154,7 +154,7 @@ export function MarketingHome() {
       <section className="marketing-action" aria-labelledby="action-title">
         <h2 id="action-title">{messages.home.finalTitle}</h2>
         <p>{messages.home.finalBody}</p>
-        <ActionLink href="/setup" tone="signal">
+        <ActionLink href="/organiser" tone="signal">
           {messages.home.finalAction}
         </ActionLink>
       </section>

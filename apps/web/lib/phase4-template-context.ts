@@ -1,5 +1,9 @@
 const supportedSports = new Set(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"]);
 
+export function isLaunchSportCode(value: string): boolean {
+  return supportedSports.has(value);
+}
+
 export type FormatTemplateCompetitionContext = Readonly<{
   competitionId: string;
   organisationId: string;
@@ -28,16 +32,20 @@ export function parseFormatTemplateCompetitionContext(
 ): FormatTemplateCompetitionContext | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
+  const source =
+    record.competition && typeof record.competition === "object" && !Array.isArray(record.competition)
+      ? (record.competition as Record<string, unknown>)
+      : record;
   if (
-    record.id !== expectedCompetitionId ||
-    typeof record.organisation_id !== "string" ||
-    typeof record.sport_code !== "string" ||
-    !supportedSports.has(record.sport_code)
+    source.id !== expectedCompetitionId ||
+    typeof source.organisation_id !== "string" ||
+    typeof source.sport_code !== "string" ||
+    !isLaunchSportCode(source.sport_code)
   )
     return null;
   return {
     competitionId: expectedCompetitionId,
-    organisationId: record.organisation_id,
-    sportCode: record.sport_code,
+    organisationId: source.organisation_id,
+    sportCode: source.sport_code,
   };
 }

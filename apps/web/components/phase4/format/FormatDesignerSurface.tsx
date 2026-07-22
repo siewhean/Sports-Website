@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import {
   ArrowCounterClockwise,
@@ -24,6 +25,7 @@ import {
   type FormatEditorState,
   type FormatSurfaceState,
 } from "@/lib/phase4-format";
+import { formatDivisionHref, type FormatDivisionOption } from "@/lib/phase4-format-division";
 import { opaqueId, translate as t } from "@matchday/ui";
 import styles from "./FormatDesignerWorkspace.module.css";
 import { Inspector, ManualBuilder, TemplateDialog } from "./FormatDesignerPanels";
@@ -33,6 +35,7 @@ type BusyState = "validate" | "save" | "materialise" | "template" | null;
 
 type FormatDesignerSurfaceProps = {
   page: FormatBuilderPageDocument;
+  divisions: readonly FormatDivisionOption[];
   state: FormatEditorState;
   dispatch: React.Dispatch<Parameters<typeof formatEditorReducer>[1]>;
   draft: Phase4FormatDraftView;
@@ -58,6 +61,7 @@ type FormatDesignerSurfaceProps = {
 
 export function FormatDesignerSurface({
   page,
+  divisions,
   state,
   dispatch,
   draft,
@@ -80,6 +84,7 @@ export function FormatDesignerSurface({
   onReuseTemplate,
   onArchiveTemplate,
 }: FormatDesignerSurfaceProps) {
+  const router = useRouter();
   const canvasRef = useRef<HTMLDivElement>(null);
   const templateTriggerRef = useRef<HTMLButtonElement>(null);
   const drag = useRef<{ stageId: string; pointerId: number; dx: number; dy: number } | null>(null);
@@ -160,7 +165,12 @@ export function FormatDesignerSurface({
   }
 
   return (
-    <div className={styles.designer} data-testid="phase4-format-designer">
+    <div
+      className={styles.designer}
+      data-testid="phase4-format-designer"
+      data-division-id={page.divisionId}
+      data-draft-id={draft.draft_id}
+    >
       <header className={styles.commandBar}>
         <div className={styles.context}>
           <Link href={`/organiser/competitions/${page.competitionId}`} aria-label={t("prototype.52bf5663e489")}>
@@ -168,7 +178,23 @@ export function FormatDesignerSurface({
           </Link>
           <span>
             <strong>{page.competitionName}</strong>
-            <small>{page.divisionName}</small>
+            {divisions.length > 1 ? (
+              <select
+                className={styles.divisionSelect}
+                aria-label={t("prototype.85a0c348e2a1")}
+                value={page.divisionId}
+                disabled={state.dirty || busy !== null}
+                onChange={(event) => router.push(formatDivisionHref(page.competitionId, event.currentTarget.value))}
+              >
+                {divisions.map((division) => (
+                  <option key={division.id} value={division.id}>
+                    {division.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <small>{page.divisionName}</small>
+            )}
           </span>
         </div>
         <div className={styles.modeSwitch} role="group" aria-label={t("prototype.d4d9f813ef5b")}>

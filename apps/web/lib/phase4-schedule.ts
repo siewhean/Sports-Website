@@ -796,6 +796,14 @@ export function parseScheduleRevisionView(
   };
 }
 
+export function parseSchedulePublishResponse(value: unknown): ScheduleRevision | null {
+  const item = record(value);
+  if (!item) return null;
+  const { schedule_version: scheduleVersion, ...revision } = item;
+  if (!integer(scheduleVersion, 1)) return null;
+  return parseScheduleRevisionView(revision, true, true);
+}
+
 export function parseScheduleRevisionComparison(value: unknown): ScheduleRevisionComparison | null {
   const item = record(value);
   if (

@@ -273,6 +273,7 @@ function isFormatPreferences(value: unknown): boolean {
 
 function isRecommendation(value: unknown): boolean {
   const item = record(value);
+  const divisionFormats = item?.division_formats;
   return Boolean(
     item &&
     exactKeys(item, [
@@ -284,14 +285,42 @@ function isRecommendation(value: unknown): boolean {
       "advantage",
       "match_count",
       "minimum_matches_per_entry",
+      "guaranteed_matches",
+      "ranking_coverage",
+      "available_match_slots",
+      "division_formats",
       "capacity_status",
       "scheduling_status",
       "warning_codes",
     ]) &&
-    ["id", "format_revision_id", "format_definition_hash", "name", "structure", "advantage"].every(
-      (key) => typeof item[key] === "string",
-    ) &&
-    integerFields(item, ["match_count", "minimum_matches_per_entry"]) &&
+    ["id", "format_definition_hash", "name", "structure", "advantage"].every((key) => typeof item[key] === "string") &&
+    (item.format_revision_id === null || typeof item.format_revision_id === "string") &&
+    integerFields(item, ["match_count", "minimum_matches_per_entry", "guaranteed_matches"], 1) &&
+    integer(item.available_match_slots) &&
+    oneOf(item.ranking_coverage, ["all_entries", "podium", "champion"]) &&
+    Array.isArray(divisionFormats) &&
+    divisionFormats.length > 0 &&
+    divisionFormats.every((raw) => {
+      const division = record(raw);
+      return Boolean(
+        division &&
+        exactKeys(division, [
+          "division_id",
+          "candidate_division_id",
+          "format_revision_id",
+          "format_definition_hash",
+          "match_count",
+          "guaranteed_matches",
+          "ranking_coverage",
+        ]) &&
+        typeof division.division_id === "string" &&
+        typeof division.candidate_division_id === "string" &&
+        (division.format_revision_id === null || typeof division.format_revision_id === "string") &&
+        typeof division.format_definition_hash === "string" &&
+        integerFields(division, ["match_count", "guaranteed_matches"], 1) &&
+        oneOf(division.ranking_coverage, ["all_entries", "podium", "champion"]),
+      );
+    }) &&
     oneOf(item.capacity_status, ["fits", "tight", "requires_changes"]) &&
     oneOf(item.scheduling_status, ["feasible", "infeasible", "not_checked"]) &&
     stringArray(item.warning_codes),

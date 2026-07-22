@@ -38,7 +38,7 @@ test("settings header reports document truth and scope links expose the current 
 });
 
 test("defaults selector provides keyboard tab semantics without enabling admin mutations", async ({ page }) => {
-  await page.goto("/internal/sport-defaults");
+  await page.goto("/internal/sport-defaults?sport=canoe_polo");
   await dismissConsent(page);
   const tablist = page.getByRole("tablist", { name: "Sport packs" });
   await expect(tablist).toBeVisible();
@@ -68,7 +68,7 @@ test("competition settings preserve conflict, read-only and permission states", 
 });
 
 test("internal defaults admin denies mutations and renders every service state", async ({ page }) => {
-  await page.goto("/internal/sport-defaults");
+  await page.goto("/internal/sport-defaults?sport=canoe_polo");
   await dismissConsent(page);
   await expect(page.getByRole("button", { name: "Save draft" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Activate baseline" })).toBeDisabled();
@@ -83,7 +83,7 @@ test("internal defaults admin denies mutations and renders every service state",
     ["expired", "Administrator session expired"],
     ["revoked", "Administrator access was revoked"],
   ] as const) {
-    await page.goto(`/internal/sport-defaults?state=${state}`);
+    await page.goto(`/internal/sport-defaults?sport=canoe_polo&state=${state}`);
     await expect(page.getByRole("heading", { name: heading })).toBeVisible();
   }
 });

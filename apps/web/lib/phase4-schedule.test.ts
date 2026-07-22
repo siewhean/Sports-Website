@@ -7,6 +7,7 @@ import {
   parseScheduleJobEnvelope,
   parseScheduleJobView,
   parseScheduleOptionView,
+  parseSchedulePublishResponse,
   parseScheduleRevisionComparison,
   parseScheduleRevisionView,
   selectComparableScheduleOptions,
@@ -102,6 +103,21 @@ describe("phase 4 schedule boundary parsers", () => {
         true,
       )?.assignments,
     ).toHaveLength(1);
+  });
+
+  it("accepts the exact publication envelope and rejects extra publication fields", () => {
+    const published = {
+      ...revision,
+      status: "published",
+      published_at: "2026-07-20T04:25:00.000Z",
+      assignment_hash: "c".repeat(64),
+      quality,
+      assignments: [assignment],
+      idempotent_replay: false,
+      schedule_version: 1,
+    };
+    expect(parseSchedulePublishResponse(published)?.status).toBe("published");
+    expect(parseSchedulePublishResponse({ ...published, invented: true })).toBeNull();
   });
 
   it("accepts only exact server-authored revision comparison metrics", () => {

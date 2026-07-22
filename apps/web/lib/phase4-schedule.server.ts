@@ -2,6 +2,7 @@ import "server-only";
 
 import { interpolate } from "@matchday/ui";
 import { cookies, headers } from "next/headers";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { cookieHostMatches } from "@/lib/phase2-organiser";
 import {
   phase4ScheduleCopy,
@@ -89,7 +90,7 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
     input.previewState && previewStates.has(input.previewState as ScheduleSurfaceState)
       ? (input.previewState as ScheduleSurfaceState)
       : null;
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") return demoDocument(input, preview ?? "ready");
+  if (demoFixturesEnabled()) return demoDocument(input, preview ?? "ready");
   if (preview && preview !== "ready" && process.env.NODE_ENV !== "production")
     return scheduleUnavailableDocument(input, preview);
   const base = apiBaseUrl();
@@ -373,8 +374,7 @@ export async function getScheduleRevisionDetail(
   document: ScheduleDocument,
   revisionId: string,
 ): Promise<ScheduleRevision | null> {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo")
-    return document.revisions.find((revision) => revision.id === revisionId) ?? null;
+  if (demoFixturesEnabled()) return document.revisions.find((revision) => revision.id === revisionId) ?? null;
   const base = apiBaseUrl();
   if (!base) return null;
   const cookie = await sessionCookieHeader(base);
@@ -435,7 +435,7 @@ export async function getScheduleRevisionComparison(
       conflicts: { before: beforeConflicts, after: afterConflicts, delta: afterConflicts - beforeConflicts },
     } satisfies ScheduleRevisionComparison;
   };
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") return local();
+  if (demoFixturesEnabled()) return local();
   const base = apiBaseUrl();
   if (!base) return null;
   const cookie = await sessionCookieHeader(base);

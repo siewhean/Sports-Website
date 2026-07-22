@@ -361,7 +361,7 @@
 }
 .summaryRail > strong {
   display: block;
-  color: var(--signal-strong);
+  color: #668100;
   font-family: var(--font-mono);
   font-size: 3.7rem;
   font-weight: 450;

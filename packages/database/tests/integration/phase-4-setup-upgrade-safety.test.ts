@@ -192,6 +192,10 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
         "0019_phase4_format_layout_revisions.sql",
         "0020_phase4_format_recommendation_evidence.sql",
         "0021_phase4_schedule_job_progress.sql",
+        "0022_phase4_schedule_revision_provenance.sql",
+        "0023_phase4_schedule_publication_expiry.sql",
+        "0024_phase4_ai_quota_reason.sql",
+        "0025_phase4_schedule_concurrency_hardening.sql",
       ]);
       upgradeSql = postgres(databaseUrl, {
         max: 1,

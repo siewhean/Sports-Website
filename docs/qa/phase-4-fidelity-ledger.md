@@ -4,7 +4,7 @@
 
 **Reference:** `docs/design/PHASE_4_DESIGN_BRIEF.md`
 
-The four accepted concepts and regenerated Phase 4 browser snapshots were inspected at native/original detail. The comparison covers every category required by the design brief. Nine baseline images changed as part of the corrective pass.
+The four accepted concepts and regenerated Phase 4 browser snapshots were inspected at native/original detail. The comparison covers every category required by the design brief. Eight affected setup/format baseline images changed in the merge-readiness pass after visual inspection; the complete normal comparison subsequently passed 13/13.
 
 | Concept           | Copy                                                                                  | Layout                                                                              | Typography                                                 | Palette                                                | Icon treatment                                   | Spacing / container model                                                                                 | Interaction states                                                                                                                    | Phone collapse                                                                    | Outcome                |
 | ----------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------- |
@@ -22,3 +22,8 @@ The four accepted concepts and regenerated Phase 4 browser snapshots were inspec
 - Assisted Setup displayed `Step2`: corrected to `Step 2 of 8`.
 
 Focused responsive/accessibility/visual evidence passed with no browser console error, page error, unapproved network failure, serious/critical accessibility finding, clipping or horizontal-overflow regression. Any claim beyond these accepted concepts—such as a live authenticated production-device comparison—remains outside this local fidelity ledger.
+
+## Accepted residual fidelity risks
+
+- P2: fixed/sticky action rails can obscure terminal content in some small schedule/move viewports even though actions, safe areas and controls remain reachable. Owner Frontend UX; correct or explicitly re-accept before the Gate C browser verdict.
+- P3: several Phase 3 visual cases force their own viewport within multiple Playwright projects, so the project-specific filenames overstate native responsive coverage. Owner QA Automation; rename or split before the Gate C visual verdict.

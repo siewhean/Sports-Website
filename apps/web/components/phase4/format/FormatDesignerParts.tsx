@@ -13,12 +13,14 @@ import {
   type FormatSurfaceState,
 } from "@/lib/phase4-format";
 import { formatSaveBody, formatTemplateSaveBody, upsertOrganiserTemplate } from "@/lib/phase4-format-persistence";
+import type { FormatDivisionOption } from "@/lib/phase4-format-division";
 import { opaqueId, translate as t } from "@matchday/ui";
 import { FormatDesignerSurface } from "./FormatDesignerSurface";
 import { focusIssue } from "./format-designer-helpers";
 
 export function FormatEditor({
   page,
+  divisions,
   initial,
   draft,
   onDraft,
@@ -36,6 +38,7 @@ export function FormatEditor({
   onTemplateId,
 }: {
   page: FormatBuilderPageDocument;
+  divisions: readonly FormatDivisionOption[];
   initial: FormatEditorState;
   draft: Phase4FormatDraftView;
   onDraft(value: Phase4FormatDraftView): void;
@@ -276,6 +279,7 @@ export function FormatEditor({
   return (
     <FormatDesignerSurface
       page={page}
+      divisions={divisions}
       state={state}
       dispatch={dispatch}
       draft={draft}

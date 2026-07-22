@@ -3372,7 +3372,13 @@ export class Phase4Runtime {
       );
       if (parent.revision !== input.expected_revision || !["draft", "ready_for_review"].includes(parent.status))
         throw new ApiError(409, "REVISION_CONFLICT", "Schedule revision changed; refresh and retry");
-      const preview = await this.validateScheduleMoveOn(tx, await this.revisionDetail(tx, revisionId), input);
+      const preview = await this.validateScheduleMoveOn(tx, await this.revisionDetail(tx, revisionId), {
+        match_id: input.match_id,
+        playing_area_id: input.playing_area_id,
+        slot_id: input.slot_id,
+        start_epoch_ms: input.start_epoch_ms,
+        end_epoch_ms: input.end_epoch_ms,
+      });
       if (!preview.validation.valid)
         throw new ApiError(422, "SCHEDULE_INVALID", "Move violates required schedule constraints");
       const nextId = randomUUID();
@@ -3613,7 +3619,10 @@ export class Phase4Runtime {
         status: string;
         revision: number;
         capacity_revision: number;
-      }>(`SELECT id,name,timezone,status,revision,capacity_revision FROM competitions WHERE id=$1`, [competitionId]),
+      }>(
+        `SELECT id,name,timezone,status,revision,capacity_revision::int capacity_revision FROM competitions WHERE id=$1`,
+        [competitionId],
+      ),
       "COMPETITION_NOT_FOUND",
       "Competition not found",
     );
@@ -3762,7 +3771,7 @@ export class Phase4Runtime {
        WHERE m.competition_id=$1 AND EXISTS (
          SELECT 1 FROM format_revisions fr WHERE fr.id=m.format_revision_id AND fr.status='published'
        )
-       GROUP BY m.id,d.name,home.name,away.name ORDER BY d.created_at,m.ordinal,m.id`,
+       GROUP BY m.id,d.name,d.created_at,home.name,away.name ORDER BY d.created_at,m.ordinal,m.id`,
       [competitionId],
     );
     const revisionRows = await this.sql.unsafe<Parameters<Phase4Runtime["revisionView"]>[0]>(

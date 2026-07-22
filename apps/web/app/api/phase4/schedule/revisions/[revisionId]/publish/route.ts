@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "@/lib/phase3-settings-command.server";
-import { parseScheduleRevisionView, phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
+import { parseSchedulePublishResponse, phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ revisionId: string }> }) {
   const { revisionId } = await params;
@@ -20,6 +20,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     method: phase4ScheduleMachine.post,
     path: `/api/v1/schedule-revisions/${encodeURIComponent(revisionId)}/publish`,
     body,
-    validate: (value) => parseScheduleRevisionView(value, true, true) !== null,
+    validate: (value) => parseSchedulePublishResponse(value) !== null,
   });
 }

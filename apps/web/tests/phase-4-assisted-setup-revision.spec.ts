@@ -185,7 +185,7 @@ test("production Assisted Setup resumes, PATCHes in place, then advances with th
     await route.abort();
   });
 
-  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics&resume=1`);
+  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics`);
   await dismissConsent(page);
   await expect.poll(() => resumeBodies.length).toBe(1);
   expect(resumeBodies[0]?.idempotency_key).toEqual(expect.any(String));
@@ -248,7 +248,7 @@ test("rapid Continue interaction after resume does not skip a setup step", async
     });
   });
 
-  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics&resume=1`);
+  await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics`);
   await dismissConsent(page);
   await expect.poll(() => resumeBodies.length).toBe(1);
   await page.getByRole("button", { name: /Continue to capacity/i }).dblclick();
@@ -314,7 +314,7 @@ test("setup states are explicit and viewers cannot send mutations", async ({ pag
     mutations += 1;
     await route.abort();
   });
-  await page.goto(`/organiser/competitions/${competitionId}/setup?state=read-only&step=capacity&resume=1`);
+  await page.goto(`/organiser/competitions/${competitionId}/setup?state=read-only&step=capacity`);
   await expect(page.getByTestId("phase4-assisted-setup").getByText("This setup is read only")).toBeVisible();
   await expect(page.getByRole("button", { name: /Continue to settings/i })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();

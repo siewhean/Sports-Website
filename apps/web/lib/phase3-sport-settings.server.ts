@@ -2,6 +2,7 @@ import "server-only";
 
 import { cookies, headers } from "next/headers";
 import { SPORT_PACKS, type SportId, type SportPackOverride } from "@matchday/domain";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { cookieHostMatches } from "@/lib/phase2-organiser";
 import {
   parseSportSettingsResponse,
@@ -29,14 +30,14 @@ const previewStates = new Set<SportSettingsSurfaceState>([
 ]);
 
 function safePreviewState(value?: string): SportSettingsSurfaceState {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE !== "demo") return "ready";
+  if (!demoFixturesEnabled()) return "ready";
   return value && previewStates.has(value as SportSettingsSurfaceState)
     ? (value as SportSettingsSurfaceState)
     : "ready";
 }
 
 function safeAdminPreviewState(value?: string): SportPackAdminState {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE !== "demo") return "ready";
+  if (!demoFixturesEnabled()) return "ready";
   const states = new Set<SportPackAdminState>([
     "ready",
     "loading",
@@ -151,7 +152,7 @@ export async function getSportSettingsDocument(input: {
     ...(input.divisionName ? { divisionName: input.divisionName } : {}),
   };
   const preview = safePreviewState(input.previewState);
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
+  if (demoFixturesEnabled()) {
     if (context.scope === "division" && preview === "ready") return documentForState(context, "unavailable");
     return documentForState(context, preview);
   }
@@ -163,8 +164,11 @@ export async function getSportDefaultsAdminDocument(
   versionValue?: string,
   previewState?: string,
 ): Promise<SportDefaultsAdminDocument> {
-  const activeSportId: SportId = sportIdValue && sportIdValue in SPORT_PACKS ? (sportIdValue as SportId) : "canoe_polo";
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
+  if (!sportIdValue || !(sportIdValue in SPORT_PACKS)) {
+    return { state: "error", canManage: false, activeSportId: null, versions: [] };
+  }
+  const activeSportId = sportIdValue as SportId;
+  if (demoFixturesEnabled()) {
     const state = safeAdminPreviewState(previewState);
     const createdAt = "2026-07-17T00:00:00.000Z";
     return {

@@ -1745,7 +1745,7 @@ export class Phase2Runtime {
     await this.requireCompetitionAccess(this.sql, competitionId, actor, false);
     const competition = required(
       await this.sql.unsafe<Record<string, unknown>>(
-        `SELECT id,name,slug,sport_code,timezone,starts_on,ends_on,status,created_at,updated_at
+        `SELECT id,organisation_id,name,slug,sport_code,timezone,starts_on,ends_on,status,created_at,updated_at
          FROM competitions WHERE id=$1`,
         [competitionId],
       ),

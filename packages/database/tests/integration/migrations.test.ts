@@ -106,16 +106,19 @@ describe("foundation migrations", () => {
       const migration0022 = path.join(copiedDirectory, "0022_phase4_schedule_revision_provenance.sql");
       const migration0023 = path.join(copiedDirectory, "0023_phase4_schedule_publication_expiry.sql");
       const migration0024 = path.join(copiedDirectory, "0024_phase4_ai_quota_reason.sql");
+      const migration0025 = path.join(copiedDirectory, "0025_phase4_schedule_concurrency_hardening.sql");
       const migration0020Source = await readFile(migration0020, "utf8");
       const migration0021Source = await readFile(migration0021, "utf8");
       const migration0022Source = await readFile(migration0022, "utf8");
       const migration0023Source = await readFile(migration0023, "utf8");
       const migration0024Source = await readFile(migration0024, "utf8");
+      const migration0025Source = await readFile(migration0025, "utf8");
       await rm(migration0020);
       await rm(migration0021);
       await rm(migration0022);
       await rm(migration0023);
       await rm(migration0024);
+      await rm(migration0025);
       await migrateDatabase({
         databaseUrl: config.databaseUrl,
         migrationsDirectory: copiedDirectory,
@@ -171,6 +174,7 @@ describe("foundation migrations", () => {
         await writeFile(migration0022, migration0022Source);
         await writeFile(migration0023, migration0023Source);
         await writeFile(migration0024, migration0024Source);
+        await writeFile(migration0025, migration0025Source);
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
@@ -182,6 +186,7 @@ describe("foundation migrations", () => {
           "0022_phase4_schedule_revision_provenance.sql",
           "0023_phase4_schedule_publication_expiry.sql",
           "0024_phase4_ai_quota_reason.sql",
+          "0025_phase4_schedule_concurrency_hardening.sql",
         ]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]

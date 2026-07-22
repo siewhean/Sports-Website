@@ -59,6 +59,23 @@ describe("Phase 4 format-template competition context", () => {
     });
     expect(
       parseFormatTemplateCompetitionContext(
+        {
+          competition: {
+            id: competitionId,
+            organisation_id: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
+            sport_code: "canoe_polo",
+          },
+          divisions: [],
+        },
+        competitionId,
+      ),
+    ).toEqual({
+      competitionId,
+      organisationId: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
+      sportCode: "canoe_polo",
+    });
+    expect(
+      parseFormatTemplateCompetitionContext(
         { id: competitionId, organisation_id: "org", sport_code: "football" },
         competitionId,
       ),

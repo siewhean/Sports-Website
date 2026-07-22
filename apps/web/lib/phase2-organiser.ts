@@ -206,7 +206,8 @@ function participantLabel(
 export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): CompetitionView {
   const competition = payload.competition;
   const timezone = string(competition.timezone) ?? "UTC";
-  const sportCode = supportedSportCode(competition.sport_code) ? competition.sport_code : "canoe_polo";
+  if (!supportedSportCode(competition.sport_code)) throw new Error("Competition sport is missing or unsupported");
+  const sportCode = competition.sport_code;
   const divisions = records(payload.divisions);
   const primaryDivision = divisions[0] ?? {};
   const entries = records(primaryDivision.entries);

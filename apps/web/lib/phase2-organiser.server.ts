@@ -2,6 +2,7 @@ import "server-only";
 
 import { cookies, headers } from "next/headers";
 import { demoCompetitionReadPort, phase2Competition, type CompetitionView } from "@/lib/phase2";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { cookieHostMatches, isOrganiserWorkspacePayload, toOrganiserCompetitionView } from "@/lib/phase2-organiser";
 
 export type OrganiserCompetitionReadResult =
@@ -37,7 +38,7 @@ async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
 }
 
 export async function getOrganiserCompetitionView(id: string): Promise<OrganiserCompetitionReadResult> {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
+  if (demoFixturesEnabled()) {
     const competition = await demoCompetitionReadPort.getBySlug(id);
     if (!competition && id !== phase2Competition.id) return { state: "notFound" };
     const demo = competition ?? phase2Competition;

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+
 import { cookies, headers } from "next/headers";
 import type { Phase4FormatBuilderDocument, Phase4FormatDraftView } from "@matchday/contracts";
 import { cookieHostMatches } from "@/lib/phase2-organiser";
@@ -9,7 +11,7 @@ import {
   type FormatBuilderPageDocument,
   type FormatSurfaceState,
 } from "@/lib/phase4-format";
-import { parseFormatTemplateCompetitionContext } from "@/lib/phase4-template-context";
+import { isLaunchSportCode, parseFormatTemplateCompetitionContext } from "@/lib/phase4-template-context";
 
 function apiBaseUrl(): URL | null {
   try {
@@ -210,12 +212,16 @@ function demoDocument(): Phase4FormatBuilderDocument {
 }
 
 function demoDraft(competitionId: string, divisionId: string, readOnly = false): Phase4FormatDraftView {
+  const draftId =
+    divisionId === "women" ? "6b3f7665-c8cd-47e5-b243-fae28f56f6fe" : "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed";
+  const rootRevisionId =
+    divisionId === "women" ? "6a2f6554-b7bc-46d4-a132-e9f17e45e5ed" : "59245771-cf60-4f50-977d-ed558e6eb147";
   return {
     competition_id: competitionId,
     division_id: divisionId,
-    draft_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
-    parent_revision_id: "59245771-cf60-4f50-977d-ed558e6eb147",
-    root_revision_id: "59245771-cf60-4f50-977d-ed558e6eb147",
+    draft_id: draftId,
+    parent_revision_id: rootRevisionId,
+    root_revision_id: rootRevisionId,
     revision: 6,
     status: "draft",
     created_at: "2026-07-20T04:00:00.000Z",
@@ -244,7 +250,16 @@ export async function getFormatBuilderDocument(input: {
   sportCode: string;
   previewState?: string;
 }): Promise<FormatBuilderPageDocument> {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
+  if (!isLaunchSportCode(input.sportCode))
+    return unavailable(
+      input.competitionId,
+      input.competitionName,
+      input.divisionId,
+      input.divisionName,
+      input.sportCode,
+      "error",
+    );
+  if (demoFixturesEnabled()) {
     const allowed = new Set<FormatSurfaceState>([
       "ready",
       "loading",
@@ -276,7 +291,7 @@ export async function getFormatBuilderDocument(input: {
       divisionId: input.divisionId,
       divisionName: input.divisionName,
       organisationId: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
-      sportCode: input.sportCode || "canoe_polo",
+      sportCode: input.sportCode,
       draft: demoDraft(input.competitionId, input.divisionId, state === "read-only"),
       templates: [],
     };

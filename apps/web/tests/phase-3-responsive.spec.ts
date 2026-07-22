@@ -13,7 +13,7 @@ test("settings, capacity and defaults reflow across mobile and layout boundaries
       "/organiser/competitions/singapore-open/settings",
       "/organiser/competitions/singapore-open/capacity",
       "/organiser/competitions/singapore-open/results",
-      "/internal/sport-defaults",
+      "/internal/sport-defaults?sport=canoe_polo",
     ] as const) {
       await page.goto(route);
       await dismissConsent(page);

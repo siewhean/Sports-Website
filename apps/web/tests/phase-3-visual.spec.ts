@@ -21,7 +21,7 @@ test("Phase 3 competition settings visual baseline", async ({ page }) => {
 });
 
 test("Phase 3 defaults admin visual baseline", async ({ page }) => {
-  await page.goto("/internal/sport-defaults");
+  await page.goto("/internal/sport-defaults?sport=canoe_polo");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { name: "Sport-pack defaults" })).toBeVisible();
   await hidePersistentPrivacyControl(page);

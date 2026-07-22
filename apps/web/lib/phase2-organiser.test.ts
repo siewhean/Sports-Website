@@ -203,5 +203,6 @@ describe("organiser competition workspace mapping", () => {
   it("rejects payloads outside the supported organiser workspace contract", () => {
     expect(isOrganiserWorkspacePayload({ competition: { id: competitionId } })).toBe(false);
     expect(isOrganiserWorkspacePayload(workspace("football"))).toBe(false);
+    expect(() => toOrganiserCompetitionView(workspace("football"))).toThrow("missing or unsupported");
   });
 });
