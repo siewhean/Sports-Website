@@ -53,6 +53,7 @@ const checks = [
   { id: "browser-e2e", command: "pnpm", args: ["test:e2e"] },
   { id: "accessibility", command: "pnpm", args: ["test:a11y"] },
   { id: "visual", command: "pnpm", args: ["test:visual"] },
+  { id: "external-evidence", command: "pnpm", args: ["qa:gate-b:external"] },
   { id: "whitespace", command: "git", args: ["diff", "--check"] },
 ];
 
@@ -86,7 +87,7 @@ function markdown(summary) {
   const rows = summary.checks
     .map((check) => `| ${check.id} | ${check.status} | ${check.exitCode ?? "—"} | ${check.durationMs} |`)
     .join("\n");
-  return `# Gate B local validation\n\n- Commit: \`${summary.commit}\`\n- Started: ${summary.startedAt}\n- Finished: ${summary.finishedAt}\n- Environment: ${summary.platform} ${summary.architecture}\n- Node: ${summary.node}\n- pnpm: ${summary.pnpm}\n- Verdict: **${summary.verdict}**\n- Required checks: ${summary.requiredCount}\n- Passed: ${summary.passedCount}\n- Failed: ${summary.failedCount}\n- Skipped: ${summary.skippedCount}\n\n| Check | Status | Exit | Duration ms |\n|---|---:|---:|---:|\n${rows}\n\nA PASS is valid only when every required check executed and passed. Hosted GitHub Actions were not used.\n`;
+  return `# Gate B local validation\n\n- Commit: \`${summary.commit}\`\n- Started: ${summary.startedAt}\n- Finished: ${summary.finishedAt}\n- Environment: ${summary.platform} ${summary.architecture}\n- Node: ${summary.node}\n- pnpm: ${summary.pnpm}\n- Verdict: **${summary.verdict}**\n- Required checks: ${summary.requiredCount}\n- Passed: ${summary.passedCount}\n- Failed: ${summary.failedCount}\n- Skipped: ${summary.skippedCount}\n\n| Check | Status | Exit | Duration ms |\n|---|---:|---:|---:|\n${rows}\n\nA PASS is valid only when every required check executed and passed, including the commit-bound external evidence bundle. Hosted GitHub Actions were not used.\n`;
 }
 
 async function main() {
