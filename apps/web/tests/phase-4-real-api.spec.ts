@@ -23,7 +23,6 @@ async function authenticate(context: BrowserContext, state: GateBRealState): Pro
       name: state.organiserCookieName,
       value: state.organiserCookieValue,
       url: state.webOrigin,
-      path: "/",
       httpOnly: true,
       secure: false,
       sameSite: "Strict",
