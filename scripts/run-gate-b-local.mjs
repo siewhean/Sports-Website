@@ -17,6 +17,7 @@ const outputDirectory = path.resolve(root, process.env.GATE_B_QA_OUTPUT_DIR || `
 const continueAfterFailure = process.argv.includes("--continue-after-failure");
 
 const checks = [
+  { id: "frozen-install", command: "pnpm", args: ["install", "--frozen-lockfile"] },
   { id: "clean-outputs", command: "pnpm", args: ["ci:assert-clean-outputs"] },
   { id: "format", command: "pnpm", args: ["format:check"] },
   { id: "lint", command: "pnpm", args: ["lint"] },
@@ -40,6 +41,11 @@ const checks = [
   { id: "build", command: "pnpm", args: ["build"] },
   { id: "deployment-manifest", command: "pnpm", args: ["deploy:manifest"] },
   { id: "origin-asset-verification", command: "pnpm", args: ["asset-delivery:verify:origin"] },
+  {
+    id: "playwright-engines",
+    command: "pnpm",
+    args: ["--filter", "@matchday/web", "exec", "playwright", "install", "chromium", "webkit"],
+  },
   { id: "gate-b-real-e2e-first", command: "pnpm", args: ["test:e2e:phase4:real"] },
   { id: "gate-b-real-e2e-second", command: "pnpm", args: ["test:e2e:phase4:real"] },
   { id: "browser-e2e", command: "pnpm", args: ["test:e2e"] },
