@@ -52,10 +52,14 @@ function trackFailedApplicationResponses(page: Page): string[] {
   return failures;
 }
 
+function organiserHeaders(state: GateBRealState) {
+  return { cookie: `${state.organiserCookieName}=${state.organiserCookieValue}` };
+}
+
 async function apiDocument(state: GateBRealState, competitionId: string) {
   const context = await playwrightRequest.newContext({
     baseURL: state.apiOrigin,
-    extraHTTPHeaders: { cookie: `${state.organiserCookieName}=${state.organiserCookieValue}` },
+    extraHTTPHeaders: organiserHeaders(state),
   });
   try {
     const response = await context.get(`/api/v1/competitions/${competitionId}/setup-draft`);
@@ -72,6 +76,20 @@ async function apiDocument(state: GateBRealState, competitionId: string) {
         review_publish: { published_schedule_revision_id: string | null } | null;
       };
     };
+  } finally {
+    await context.dispose();
+  }
+}
+
+async function apiScheduleRevision(state: GateBRealState, revisionId: string) {
+  const context = await playwrightRequest.newContext({
+    baseURL: state.apiOrigin,
+    extraHTTPHeaders: organiserHeaders(state),
+  });
+  try {
+    const response = await context.get(`/api/v1/schedule-revisions/${revisionId}`);
+    expect(response.status(), await response.text()).toBe(200);
+    return (await response.json()) as { id: string; revision: number; status: string; assignment_hash: string | null };
   } finally {
     await context.dispose();
   }
@@ -109,7 +127,7 @@ test("unselected canonical recommendations survive authenticated resume and relo
   expect(failures).toEqual([]);
 });
 
-test("accepted schedule evidence survives real resume without changing revision", async ({ page }) => {
+test("accepted schedule survives resume, lock overlay, and organiser publication", async ({ page }) => {
   const state = await readState();
   const failures = trackFailedApplicationResponses(page);
   await page.goto(`/organiser/competitions/${encodeURIComponent(state.acceptedCompetitionId)}/setup`);
@@ -126,6 +144,25 @@ test("accepted schedule evidence survives real resume without changing revision"
     read_only: false,
   });
   expect(document.values.schedule_review?.schedule_revision_id).toBe(state.acceptedScheduleRevisionId);
+
+  await page.goto(`/organiser/competitions/${encodeURIComponent(state.acceptedCompetitionId)}/schedule`);
+  await expect(page.getByTestId("phase4-schedule")).toBeVisible();
+  const lock = page.getByRole("button", { name: /^Lock$/i });
+  await expect(lock).toBeVisible();
+  await expect(lock).toBeEnabled();
+  await lock.click();
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByRole("button", { name: /^Unlock$/i })).toBeVisible();
+
+  const publish = page.getByRole("button", { name: /^Publish$/i });
+  await expect(publish).toBeVisible();
+  await expect(publish).toBeEnabled();
+  await publish.click();
+  await page.waitForLoadState("networkidle");
+
+  const revision = await apiScheduleRevision(state, state.acceptedScheduleRevisionId);
+  expect(revision).toMatchObject({ id: state.acceptedScheduleRevisionId, status: "published" });
+  expect(revision.assignment_hash).toMatch(/^[0-9a-f]{64}$/);
   expect(failures).toEqual([]);
 });
 
@@ -183,12 +220,12 @@ test("authorization, CSRF, and origin boundaries fail closed", async () => {
   });
   const organiserWithoutCsrf = await playwrightRequest.newContext({
     baseURL: state.apiOrigin,
-    extraHTTPHeaders: { cookie: `${state.organiserCookieName}=${state.organiserCookieValue}` },
+    extraHTTPHeaders: organiserHeaders(state),
   });
   const organiserCrossOrigin = await playwrightRequest.newContext({
     baseURL: state.apiOrigin,
     extraHTTPHeaders: {
-      cookie: `${state.organiserCookieName}=${state.organiserCookieValue}`,
+      ...organiserHeaders(state),
       origin: "https://attacker.example",
       "x-csrf-token": state.csrfToken,
     },
