@@ -58,85 +58,99 @@ export function ManualBuilder({
         </button>
       </header>
       <ol>
-        {state.document.graph.stages.map((stage, index) => (
-          <li key={stage.id} data-stage-index={index} data-selected={stage.id === state.selectedStageId} tabIndex={-1}>
-            <button
-              type="button"
-              className={styles.manualSelect}
-              onClick={() => dispatch({ type: "select_stage", stageId: stage.id })}
+        {state.document.graph.stages.map((stage, index) => {
+          const position = state.document.layout.stage_positions.find((item) => item.stage_id === stage.id)!;
+          return (
+            <li
+              key={stage.id}
+              data-stage-index={index}
+              data-stage-id={stage.id}
+              data-stage-x={position.x}
+              data-stage-y={position.y}
+              data-selected={stage.id === state.selectedStageId}
+              tabIndex={-1}
             >
-              <span>{String(index + 1).padStart(2, "0")}</span>
-              <strong>{stage.label}</strong>
-              <small>{stage.kind.replaceAll("_", " ")}</small>
-            </button>
-            <label>
-              <span>{t("prototype.1f31e5b6c525")}</span>
-              <input
-                value={stage.label}
-                disabled={!editable}
-                onChange={(event) =>
-                  dispatch({ type: "update_stage", stageId: stage.id, patch: { label: event.target.value } })
-                }
-              />
-            </label>
-            <label>
-              <span>{t("prototype.bc1e201eb038")}</span>
-              <select
-                value={stage.kind}
-                disabled={!editable}
-                onChange={(event) =>
-                  dispatch({
-                    type: "update_stage",
-                    stageId: stage.id,
-                    patch: { kind: event.target.value as Phase4FormatGraphStage["kind"] },
-                  })
-                }
+              <output className="visually-hidden" aria-label={`${stage.label} canvas position`}>
+                {opaqueId(`Canvas position ${position.x}, ${position.y}`)}
+              </output>
+              <button
+                type="button"
+                className={styles.manualSelect}
+                onClick={() => dispatch({ type: "select_stage", stageId: stage.id })}
               >
-                {formatStageLibrary.map((item) => (
-                  <option value={item.kind} key={item.kind}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>{t("prototype.cb04725bcb62")}</span>
-              <input
-                type="number"
-                min={0}
-                max={64}
-                value={stage.outputRanks}
-                disabled={!editable}
-                onChange={(event) =>
-                  dispatch({
-                    type: "update_stage",
-                    stageId: stage.id,
-                    patch: { outputRanks: Number(event.target.value) },
-                  })
-                }
-              />
-            </label>
-            <label>
-              <span>{t("prototype.ee12c1cc2939")}</span>
-              <input
-                value={(stage.destinationStageIds ?? []).join(", ")}
-                disabled={!editable}
-                onChange={(event) =>
-                  dispatch({
-                    type: "update_stage",
-                    stageId: stage.id,
-                    patch: {
-                      destinationStageIds: event.target.value
-                        .split(",")
-                        .map((value) => value.trim())
-                        .filter(Boolean),
-                    },
-                  })
-                }
-              />
-            </label>
-          </li>
-        ))}
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <strong>{stage.label}</strong>
+                <small>{stage.kind.replaceAll("_", " ")}</small>
+              </button>
+              <label>
+                <span>{t("prototype.1f31e5b6c525")}</span>
+                <input
+                  value={stage.label}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    dispatch({ type: "update_stage", stageId: stage.id, patch: { label: event.target.value } })
+                  }
+                />
+              </label>
+              <label>
+                <span>{t("prototype.bc1e201eb038")}</span>
+                <select
+                  value={stage.kind}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    dispatch({
+                      type: "update_stage",
+                      stageId: stage.id,
+                      patch: { kind: event.target.value as Phase4FormatGraphStage["kind"] },
+                    })
+                  }
+                >
+                  {formatStageLibrary.map((item) => (
+                    <option value={item.kind} key={item.kind}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>{t("prototype.cb04725bcb62")}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={64}
+                  value={stage.outputRanks}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    dispatch({
+                      type: "update_stage",
+                      stageId: stage.id,
+                      patch: { outputRanks: Number(event.target.value) },
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>{t("prototype.ee12c1cc2939")}</span>
+                <input
+                  value={(stage.destinationStageIds ?? []).join(", ")}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    dispatch({
+                      type: "update_stage",
+                      stageId: stage.id,
+                      patch: {
+                        destinationStageIds: event.target.value
+                          .split(",")
+                          .map((value) => value.trim())
+                          .filter(Boolean),
+                      },
+                    })
+                  }
+                />
+              </label>
+            </li>
+          );
+        })}
       </ol>
     </div>
   );
@@ -261,7 +275,9 @@ export function Inspector({
 export function TemplateDialog({
   templates,
   name,
+  selectedTemplateId,
   onName,
+  onSelect,
   busy,
   canSave,
   onClose,
@@ -271,7 +287,9 @@ export function TemplateDialog({
 }: {
   templates: FormatBuilderPageDocument["templates"];
   name: string;
+  selectedTemplateId: string | null;
   onName(value: string): void;
+  onSelect(template: FormatBuilderPageDocument["templates"][number]): void;
   busy: boolean;
   canSave: boolean;
   onClose(): void;
@@ -333,7 +351,11 @@ export function TemplateDialog({
         {templates.length ? (
           <ul className={styles.templateList}>
             {templates.map((template) => (
-              <li key={template.template_version_id} data-archived={template.status === "archived"}>
+              <li
+                key={template.template_id}
+                data-archived={template.status === "archived"}
+                data-selected={template.template_id === selectedTemplateId}
+              >
                 <div>
                   <strong>{template.name}</strong>
                   <small>
@@ -351,6 +373,13 @@ export function TemplateDialog({
                 <button
                   type="button"
                   disabled={busy || template.status === "archived"}
+                  onClick={() => onSelect(template)}
+                >
+                  {opaqueId("Update")}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || template.status === "archived"}
                   onClick={() => onArchive(template.template_id)}
                 >
                   {t("prototype.66f4804ee23d")}
@@ -362,7 +391,7 @@ export function TemplateDialog({
           <p className={styles.templateEmpty}>{t("prototype.173c1e65f846")}</p>
         )}
         <label>
-          <span>{t("prototype.0a05447da7d3")}</span>
+          <span>{selectedTemplateId ? opaqueId("Updated template name") : t("prototype.0a05447da7d3")}</span>
           <input autoFocus value={name} maxLength={120} onChange={(event) => onName(event.target.value)} />
           <small>{t("prototype.a26ecb810eb9")}</small>
         </label>
@@ -371,7 +400,11 @@ export function TemplateDialog({
             {t("prototype.19766ed6ccb2")}
           </button>
           <button type="button" disabled={!canSave || !name.trim() || busy} onClick={onSave}>
-            {busy ? t("prototype.23e39291d613") : t("prototype.47f72a2f3e91")}
+            {busy
+              ? t("prototype.23e39291d613")
+              : selectedTemplateId
+                ? opaqueId("Save new version")
+                : t("prototype.47f72a2f3e91")}
           </button>
         </footer>
       </section>

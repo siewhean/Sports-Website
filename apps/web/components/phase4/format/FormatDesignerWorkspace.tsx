@@ -37,6 +37,7 @@ export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocum
   const [announcement, setAnnouncement] = useState("");
   const [showTemplates, setShowTemplates] = useState(false);
   const [templateName, setTemplateName] = useState("");
+  const [templateId, setTemplateId] = useState<string | null>(null);
   const initial = useMemo<FormatEditorState | null>(
     () =>
       draft
@@ -104,6 +105,8 @@ export function FormatDesignerWorkspace({ page }: { page: FormatBuilderPageDocum
         onShowTemplates={setShowTemplates}
         templateName={templateName}
         onTemplateName={setTemplateName}
+        templateId={templateId}
+        onTemplateId={setTemplateId}
       />
     </>
   );

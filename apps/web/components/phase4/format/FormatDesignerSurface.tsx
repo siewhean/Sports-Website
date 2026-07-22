@@ -43,9 +43,11 @@ type FormatDesignerSurfaceProps = {
   showTemplates: boolean;
   templates: readonly Phase4OrganiserTemplateView[];
   templateName: string;
+  templateId: string | null;
   valid: boolean;
   onShowTemplates(value: boolean): void;
   onTemplateName(value: string): void;
+  onTemplateId(value: string | null): void;
   onSave(): void;
   onValidate(): void;
   onMaterialise(): void;
@@ -66,9 +68,11 @@ export function FormatDesignerSurface({
   showTemplates,
   templates,
   templateName,
+  templateId,
   valid,
   onShowTemplates,
   onTemplateName,
+  onTemplateId,
   onSave,
   onValidate,
   onMaterialise,
@@ -220,11 +224,18 @@ export function FormatDesignerSurface({
         <TemplateDialog
           templates={templates}
           name={templateName}
+          selectedTemplateId={templateId}
           onName={onTemplateName}
+          onSelect={(template) => {
+            onTemplateId(template.template_id);
+            onTemplateName(template.name);
+          }}
           busy={busy === "template"}
           canSave={!state.dirty && valid && Boolean(page.organisationId && page.sportCode)}
           onClose={() => {
             onShowTemplates(false);
+            onTemplateId(null);
+            onTemplateName("");
             window.requestAnimationFrame(() => templateTriggerRef.current?.focus());
           }}
           onSave={onSaveTemplate}
@@ -280,6 +291,9 @@ export function FormatDesignerSurface({
                   <button
                     key={stage.id}
                     className={styles.stageNode}
+                    data-stage-id={stage.id}
+                    data-stage-x={position.x}
+                    data-stage-y={position.y}
                     data-stage-index={state.document.graph.stages.indexOf(stage)}
                     data-selected={stage.id === state.selectedStageId}
                     style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)` }}

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import { createDefaultFormatTemplates } from "@matchday/domain";
-import type { ScheduleConstraints } from "@matchday/contracts";
+import type { Phase4FormatBuilderDocument, ScheduleConstraints } from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { DeterministicPhase4AiStub } from "../../src/phase-4-ai-provider.js";
@@ -91,6 +91,290 @@ afterAll(async () => {
 });
 
 describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
+  it("round-trips one canonical format lineage and enforces current template versions", async () => {
+    const formatCompetition = await phase3.createCompetition(
+      { accountId },
+      {
+        organisationId,
+        name: "Format round trip",
+        slug: `format-round-trip-${randomUUID()}`,
+        sportCode: "canoe_polo",
+        venue: "Test Arena",
+        address: "1 Test Road",
+        countryCode: "SG",
+        startsOn: "2027-08-01",
+        endsOn: "2027-08-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+    const formatCompetitionId = formatCompetition.id;
+    const sourceDivisionId = randomUUID();
+    const sameSportDivisionId = randomUUID();
+    const archivedTargetDivisionId = randomUUID();
+    await client`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES
+      (${sourceDivisionId},${formatCompetitionId},'Format source',8),
+      (${sameSportDivisionId},${formatCompetitionId},'Format target',8),
+      (${archivedTargetDivisionId},${formatCompetitionId},'Archived target',8)`;
+    const graph = structuredClone(createDefaultFormatTemplates(8)[0]!.graph);
+    const document: Phase4FormatBuilderDocument = {
+      schema_version: 1,
+      graph,
+      layout: {
+        schema_version: 1,
+        stage_positions: graph.stages.map((stage, index) => ({ stage_id: stage.id, x: index * 240, y: 80 })),
+      },
+    };
+
+    const validation = await runtime.validateFormat({ accountId }, formatCompetitionId, sourceDivisionId, document);
+    expect(validation).toMatchObject({ valid: true, graph_hash: expect.any(String) });
+    if (!validation.valid) throw new Error("Expected canonical graph to validate");
+    expect(validation.materialisation.matches).toHaveLength(graph.matches.length);
+
+    const root = await runtime.saveFormatRevision(
+      { accountId },
+      formatCompetitionId,
+      sourceDivisionId,
+      {
+        draft_id: null,
+        expected_revision: null,
+        parent_revision_id: null,
+        document,
+        idempotency_key: `format-root-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    const movedDocument = structuredClone(document);
+    const firstPosition = movedDocument.layout.stage_positions[0]!;
+    Object.assign(firstPosition, { x: firstPosition.x + 96, y: firstPosition.y + 48 });
+    const next = await runtime.saveFormatRevision(
+      { accountId },
+      formatCompetitionId,
+      sourceDivisionId,
+      {
+        draft_id: root.draft_id,
+        expected_revision: root.revision,
+        parent_revision_id: root.draft_id,
+        document: movedDocument,
+        idempotency_key: `format-next-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    expect(next).toMatchObject({
+      parent_revision_id: root.draft_id,
+      root_revision_id: root.draft_id,
+      document: movedDocument,
+    });
+    expect(next.document.graph.stages.map((stage) => stage.id)).toEqual(graph.stages.map((stage) => stage.id));
+    expect(next.document.graph.matches).toEqual(graph.matches);
+    const reloaded = await runtime.readFormatBuilder({ accountId }, formatCompetitionId, sourceDivisionId);
+    expect(reloaded.draft).toMatchObject({
+      draft_id: next.draft_id,
+      parent_revision_id: root.draft_id,
+      root_revision_id: root.draft_id,
+      document: movedDocument,
+    });
+    await expect(
+      runtime.saveFormatRevision(
+        { accountId },
+        formatCompetitionId,
+        sourceDivisionId,
+        {
+          draft_id: next.draft_id,
+          expected_revision: next.revision,
+          parent_revision_id: next.draft_id,
+          document: movedDocument,
+          idempotency_key: `format-no-op-${randomUUID()}`,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      runtime.saveFormatRevision(
+        { accountId },
+        formatCompetitionId,
+        sourceDivisionId,
+        {
+          draft_id: root.draft_id,
+          expected_revision: root.revision,
+          parent_revision_id: root.draft_id,
+          document,
+          idempotency_key: `format-stale-${randomUUID()}`,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "REVISION_CONFLICT" });
+
+    const materialised = await runtime.materialiseFormat(
+      { accountId },
+      next.draft_id,
+      `materialise-${randomUUID()}`,
+      randomUUID(),
+    );
+    const replayedProjection = await runtime.materialiseFormat(
+      { accountId },
+      next.draft_id,
+      `materialise-${randomUUID()}`,
+      randomUUID(),
+    );
+    expect(replayedProjection).toMatchObject({
+      match_count: materialised.match_count,
+      materialisation_hash: materialised.materialisation_hash,
+    });
+
+    const createdTemplate = await runtime.saveFormatTemplate(
+      { accountId },
+      organisationId,
+      {
+        template_id: null,
+        parent_version_id: null,
+        expected_version: null,
+        name: "Canonical format",
+        description: null,
+        sport_code: "canoe_polo",
+        source_format_revision_id: next.draft_id,
+        idempotency_key: `template-create-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    const applied = await runtime.applyFormatTemplate(
+      { accountId },
+      organisationId,
+      {
+        competition_id: formatCompetitionId,
+        division_id: sameSportDivisionId,
+        template_version_id: createdTemplate.template_version_id,
+        expected_format_revision: null,
+        idempotency_key: `template-apply-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    expect(applied.document).toEqual(next.document);
+    const appliedMaterialisation = await runtime.materialiseFormat(
+      { accountId },
+      applied.draft_id,
+      `materialise-applied-${randomUUID()}`,
+      randomUUID(),
+    );
+    expect(appliedMaterialisation).toMatchObject({
+      match_count: materialised.match_count,
+      materialisation_hash: materialised.materialisation_hash,
+    });
+    const [sourceFixtures, appliedFixtures] = await Promise.all([
+      client`SELECT graph_match_id,graph_stage_id,graph_pool_id,graph_purpose,round_number,ordinal
+        FROM matches WHERE format_revision_id=${next.draft_id} ORDER BY ordinal`,
+      client`SELECT graph_match_id,graph_stage_id,graph_pool_id,graph_purpose,round_number,ordinal
+        FROM matches WHERE format_revision_id=${applied.draft_id} ORDER BY ordinal`,
+    ]);
+    expect(appliedFixtures).toEqual(sourceFixtures);
+
+    const updatedTemplate = await runtime.saveFormatTemplate(
+      { accountId },
+      organisationId,
+      {
+        template_id: createdTemplate.template_id,
+        parent_version_id: createdTemplate.template_version_id,
+        expected_version: createdTemplate.revision,
+        name: "Canonical format revised",
+        description: null,
+        sport_code: "canoe_polo",
+        source_format_revision_id: next.draft_id,
+        idempotency_key: `template-update-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    expect(updatedTemplate).toMatchObject({ template_id: createdTemplate.template_id, revision: 2 });
+    const listedTemplates = await runtime.listFormatTemplates({ accountId }, organisationId, false);
+    expect(listedTemplates).toHaveLength(1);
+    expect(listedTemplates[0]).toMatchObject({
+      template_id: updatedTemplate.template_id,
+      template_version_id: updatedTemplate.template_version_id,
+      revision: 2,
+    });
+
+    const volleyball = await phase3.createCompetition(
+      { accountId },
+      {
+        organisationId,
+        name: "Cross sport target",
+        slug: `cross-sport-${randomUUID()}`,
+        sportCode: "volleyball",
+        venue: "Test Arena",
+        address: "1 Test Road",
+        countryCode: "SG",
+        startsOn: "2027-08-01",
+        endsOn: "2027-08-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+    const volleyballDivision = randomUUID();
+    await client`INSERT INTO divisions(id,competition_id,name,team_limit)
+      VALUES(${volleyballDivision},${volleyball.id},'Cross sport',8)`;
+    await expect(
+      runtime.applyFormatTemplate(
+        { accountId },
+        organisationId,
+        {
+          competition_id: volleyball.id,
+          division_id: volleyballDivision,
+          template_version_id: updatedTemplate.template_version_id,
+          expected_format_revision: null,
+          idempotency_key: `template-cross-sport-${randomUUID()}`,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 422, code: "DOMAIN_VALIDATION_FAILED" });
+
+    const otherOrganisationId = await client.begin(async (transaction) => {
+      const id = required(
+        await transaction<{ id: string }[]>`INSERT INTO organisations(name,slug)
+          VALUES('Other template org',${`other-template-${randomUUID()}`}) RETURNING id`,
+      ).id;
+      await transaction`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+        VALUES(${id},${accountId},'owner','active')`;
+      return id;
+    });
+    await expect(
+      runtime.applyFormatTemplate(
+        { accountId },
+        otherOrganisationId,
+        {
+          competition_id: formatCompetitionId,
+          division_id: archivedTargetDivisionId,
+          template_version_id: updatedTemplate.template_version_id,
+          expected_format_revision: null,
+          idempotency_key: `template-cross-org-${randomUUID()}`,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+
+    await runtime.archiveFormatTemplate(
+      { accountId },
+      organisationId,
+      updatedTemplate.template_id,
+      { expected_status: "active", idempotency_key: `template-archive-${randomUUID()}` },
+      randomUUID(),
+    );
+    await expect(
+      runtime.applyFormatTemplate(
+        { accountId },
+        organisationId,
+        {
+          competition_id: formatCompetitionId,
+          division_id: archivedTargetDivisionId,
+          template_version_id: updatedTemplate.template_version_id,
+          expected_format_revision: null,
+          idempotency_key: `template-archived-${randomUUID()}`,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "TEMPLATE_ARCHIVED" });
+  });
+
   it("creates setup drafts through the transactional command and replays idempotently", async () => {
     const key = `setup-${randomUUID()}`;
     const created = await runtime.createSetupDraft({ accountId }, competitionId, key, randomUUID());

@@ -115,6 +115,8 @@ function mapPgError(error: unknown): never {
     throw new ApiError(409, "ACTIVE_SCHEDULE_JOB", "A schedule job is already active");
   if (/revision conflict|immediately preceding|expected.*revision/i.test(message))
     throw new ApiError(409, "REVISION_CONFLICT", "The resource changed; refresh and retry");
+  if (/archived format templates/i.test(message))
+    throw new ApiError(409, "TEMPLATE_ARCHIVED", "Archived format templates cannot be applied");
   if (/archived/i.test(message)) throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
   if (/permission|access|active member|tenant/i.test(message))
     throw new ApiError(403, "ACCESS_DENIED", "Access denied");
@@ -1138,8 +1140,13 @@ export class Phase4Runtime {
   async listFormatTemplates(actor: Phase3Actor, organisationId: string, includeArchived: boolean) {
     await this.organisationAccess(this.sql, organisationId, actor);
     const rows = await this.sql.unsafe<Parameters<Phase4Runtime["templateView"]>[0]>(
-      `${this.templateQuery()} WHERE t.organisation_id=$1 AND ($2::boolean OR t.status='active')
-       ORDER BY t.name,v.version DESC,t.id`,
+      `SELECT * FROM (${this.templateQuery()} WHERE t.organisation_id=$1 AND ($2::boolean OR t.status='active')
+       ORDER BY t.id,v.version DESC) latest_versions
+       WHERE (template_id,revision) IN (
+         SELECT template_id,max(revision) FROM (${this.templateQuery()}
+           WHERE t.organisation_id=$1 AND ($2::boolean OR t.status='active')) candidates
+         GROUP BY template_id
+       ) ORDER BY name,revision DESC,template_id`,
       [organisationId, includeArchived],
     );
     return rows.map((row) => this.templateView(row));

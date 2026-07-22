@@ -12,7 +12,7 @@ import {
   type FormatEditorState,
   type FormatSurfaceState,
 } from "@/lib/phase4-format";
-import { formatSaveBody, upsertOrganiserTemplate } from "@/lib/phase4-format-persistence";
+import { formatSaveBody, formatTemplateSaveBody, upsertOrganiserTemplate } from "@/lib/phase4-format-persistence";
 import { opaqueId, translate as t } from "@matchday/ui";
 import { FormatDesignerSurface } from "./FormatDesignerSurface";
 import { focusIssue } from "./format-designer-helpers";
@@ -32,6 +32,8 @@ export function FormatEditor({
   onShowTemplates,
   templateName,
   onTemplateName,
+  templateId,
+  onTemplateId,
 }: {
   page: FormatBuilderPageDocument;
   initial: FormatEditorState;
@@ -47,6 +49,8 @@ export function FormatEditor({
   onShowTemplates(value: boolean): void;
   templateName: string;
   onTemplateName(value: string): void;
+  templateId: string | null;
+  onTemplateId(value: string | null): void;
 }) {
   const [state, dispatch] = useReducer(formatEditorReducer, initial);
   const [templates, setTemplates] = useState(page.templates);
@@ -235,6 +239,7 @@ export function FormatEditor({
   async function saveTemplate() {
     const sportCode = page.sportCode;
     if (!templateName.trim() || busy || state.dirty || !valid || !page.organisationId || !sportCode) return;
+    const currentTemplate = templates.find((template) => template.template_id === templateId) ?? null;
     onBusy(opaqueId("template"));
     try {
       const response = await fetch(
@@ -242,16 +247,7 @@ export function FormatEditor({
         {
           method: opaqueId("POST"),
           headers: { "content-type": opaqueId("application/json") },
-          body: JSON.stringify({
-            template_id: null,
-            parent_version_id: null,
-            expected_version: null,
-            name: templateName.trim(),
-            description: null,
-            sport_code: sportCode,
-            source_format_revision_id: draft.draft_id,
-            idempotency_key: crypto.randomUUID(),
-          }),
+          body: JSON.stringify(formatTemplateSaveBody(draft, templateName, sportCode, currentTemplate)),
         },
       );
       const saved = response.ok
@@ -269,6 +265,7 @@ export function FormatEditor({
       onAnnouncement(`Template “${saved.name}” saved.`);
       onShowTemplates(false);
       onTemplateName("");
+      onTemplateId(null);
     } catch {
       onViewState(opaqueId("offline"));
     } finally {
@@ -289,9 +286,11 @@ export function FormatEditor({
       showTemplates={showTemplates}
       templates={templates}
       templateName={templateName}
+      templateId={templateId}
       valid={valid}
       onShowTemplates={onShowTemplates}
       onTemplateName={onTemplateName}
+      onTemplateId={onTemplateId}
       onSave={() => void save()}
       onValidate={() => void validate()}
       onMaterialise={() => void materialise()}

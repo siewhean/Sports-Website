@@ -32,3 +32,21 @@ export function upsertOrganiserTemplate(
     (left, right) => left.name.localeCompare(right.name) || right.revision - left.revision,
   );
 }
+
+export function formatTemplateSaveBody(
+  draft: Phase4FormatDraftView,
+  name: string,
+  sportCode: string,
+  current: Phase4OrganiserTemplateView | null,
+) {
+  return {
+    template_id: current?.template_id ?? null,
+    parent_version_id: current?.template_version_id ?? null,
+    expected_version: current?.revision ?? null,
+    name: name.trim(),
+    description: current?.description ?? null,
+    sport_code: sportCode,
+    source_format_revision_id: draft.draft_id,
+    idempotency_key: crypto.randomUUID(),
+  };
+}

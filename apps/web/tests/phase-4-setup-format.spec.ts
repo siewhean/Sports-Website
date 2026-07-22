@@ -73,6 +73,223 @@ test("manual and visual format modes edit the same canonical stage", async ({ pa
   expect(after?.x).toBeGreaterThan(before?.x ?? 0);
 });
 
+test.describe("authoritative format round trip", () => {
+  test.use({ serviceWorkers: "block" });
+
+  test("manual and visual projections send one exact graph and reload the saved layout lineage", async ({ page }) => {
+    const validatedDocuments: Record<string, unknown>[] = [];
+    let savedDocument: Record<string, unknown> | null = null;
+    const graphHash = "server-canonical-format-hash-0001";
+    const materialisationHash = "server-deterministic-materialisation-hash-0001";
+
+    await page.route("**/api/phase4/competitions/*/divisions/*/format-builder/validate", async (route) => {
+      const body = route.request().postDataJSON() as { document: Record<string, unknown> };
+      validatedDocuments.push(structuredClone(body.document));
+      const graph = body.document.graph as {
+        matches: Array<{
+          id: string;
+          stageId: string;
+          home: { type: string; matchId?: string };
+          away: { type: string; matchId?: string };
+        }>;
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          valid: true,
+          issues: [],
+          graph_hash: graphHash,
+          materialisation: {
+            match_count: graph.matches.length,
+            fixtures: graph.matches.map((match) => match.id),
+            dependencies: graph.matches.map((match) => ({
+              match_id: match.id,
+              dependency_match_ids: [match.home, match.away]
+                .filter((source) => source.type === "winner" || source.type === "loser")
+                .map((source) => source.matchId),
+            })),
+          },
+        }),
+      });
+    });
+    await page.route("**/api/phase4/competitions/*/divisions/*/format-builder", async (route) => {
+      if (route.request().method() !== "PUT") return route.continue();
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      expect(body).toMatchObject({
+        draft_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
+        expected_revision: 6,
+        parent_revision_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
+      });
+      expect(body.document).toEqual(validatedDocuments.at(-1));
+      savedDocument = structuredClone(body.document as Record<string, unknown>);
+      const graph = (savedDocument as { graph: { matches: unknown[] } }).graph;
+      const segments = new URL(route.request().url()).pathname.split("/");
+      const competitionId = decodeURIComponent(segments[segments.indexOf("competitions") + 1]!);
+      const divisionId = decodeURIComponent(segments[segments.indexOf("divisions") + 1]!);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          competition_id: competitionId,
+          division_id: divisionId,
+          draft_id: "6b3f7665-c8cd-47e5-b243-fae28f56f6fe",
+          parent_revision_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
+          root_revision_id: "59245771-cf60-4f50-977d-ed558e6eb147",
+          revision: 7,
+          status: "draft",
+          created_at: "2026-07-22T08:00:00.000Z",
+          updated_at: "2026-07-22T08:00:00.000Z",
+          permission: "edit",
+          read_only: false,
+          definition_hash: graphHash,
+          document: savedDocument,
+          metrics: { match_count: graph.matches.length, guaranteed_matches: 3, maximum_matches: 5 },
+          capacity: {
+            available_match_slots: 52,
+            required_match_slots: graph.matches.length,
+            spare_match_slots: 52 - graph.matches.length,
+            status: "comfortable",
+            evidence_revision: 4,
+          },
+          validation: { pending: false, validated_definition_hash: graphHash, issues: [] },
+        }),
+      });
+    });
+    await page.route("**/api/phase4/format-revisions/*/materialise", async (route) => {
+      expect(route.request().url()).toContain("6b3f7665-c8cd-47e5-b243-fae28f56f6fe");
+      const graph = (savedDocument as { graph: { matches: unknown[] } }).graph;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          revision: {
+            revision_id: "6b3f7665-c8cd-47e5-b243-fae28f56f6fe",
+            revision: 7,
+            parent_revision_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
+            root_revision_id: "59245771-cf60-4f50-977d-ed558e6eb147",
+            competition_id: "singapore-open",
+            division_id: "open-division",
+            status: "draft",
+            definition_hash: graphHash,
+            document: savedDocument,
+            created_at: "2026-07-22T08:00:00.000Z",
+            published_at: null,
+          },
+          materialised: true,
+          match_count: graph.matches.length,
+          materialisation_hash: materialisationHash,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.goto("/organiser/competitions/singapore-open/format");
+    await dismissConsent(page);
+    await page.getByRole("button", { name: "Manual", exact: true }).click();
+    await page.getByLabel("Stage name").first().fill("Opening pools");
+    await page.getByRole("button", { name: "Visual", exact: true }).click();
+    const openingPools = page.getByRole("button", { name: /Opening pools\. Use arrow keys/ });
+    await openingPools.focus();
+    await page.keyboard.press("ArrowRight");
+    await page.getByRole("button", { name: "Manual", exact: true }).click();
+    await expect(page.getByLabel("Opening pools canvas position")).toHaveText("Canvas position 54, 70");
+
+    await page.getByRole("button", { name: "Validate graph" }).click();
+    await page.getByRole("button", { name: "Visual", exact: true }).click();
+    await page.getByRole("button", { name: "Validate graph" }).click();
+    expect(validatedDocuments).toHaveLength(2);
+    expect(validatedDocuments[1]).toEqual(validatedDocuments[0]);
+
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("Draft r7 saved")).toBeVisible();
+    await expect(page.locator('[data-stage-id="stage-group-a"]')).toHaveAttribute("data-stage-x", "54");
+    await page.getByRole("button", { name: "Materialise matches" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(/16 matches materialised/)).toBeVisible();
+  });
+
+  test("template creation appears immediately and version two replaces the same picker row", async ({ page }) => {
+    let canonicalDocument: Record<string, unknown> | null = null;
+    let saveCount = 0;
+    const templateId = "00000000-0000-4000-8000-000000000030";
+    const firstVersionId = "00000000-0000-4000-8000-000000000031";
+    const secondVersionId = "00000000-0000-4000-8000-000000000032";
+    await page.route("**/api/phase4/competitions/*/divisions/*/format-builder/validate", async (route) => {
+      canonicalDocument = (route.request().postDataJSON() as { document: Record<string, unknown> }).document;
+      const matchCount = (canonicalDocument as { graph: { matches: unknown[] } }).graph.matches.length;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          valid: true,
+          issues: [],
+          graph_hash: "template-source-hash",
+          materialisation: { match_count: matchCount },
+        }),
+      });
+    });
+    await page.route("**/api/phase4/organisations/*/format-templates", async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      saveCount += 1;
+      if (saveCount === 1)
+        expect(body).toMatchObject({ template_id: null, parent_version_id: null, expected_version: null });
+      else
+        expect(body).toMatchObject({
+          template_id: templateId,
+          parent_version_id: firstVersionId,
+          expected_version: 1,
+        });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          template_id: templateId,
+          template_version_id: saveCount === 1 ? firstVersionId : secondVersionId,
+          parent_version_id: saveCount === 1 ? null : firstVersionId,
+          organisation_id: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
+          created_by_account_id: "account-a",
+          name: String(body.name),
+          description: null,
+          sport_code: "canoe_polo",
+          source_format_revision_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
+          status: "active",
+          definition_hash: "template-source-hash",
+          document: canonicalDocument,
+          revision: saveCount,
+          template_created_at: "2026-07-22T00:00:00.000Z",
+          version_created_at: `2026-07-22T0${saveCount}:00:00.000Z`,
+          archived_by_account_id: null,
+          archived_at: null,
+        }),
+      });
+    });
+
+    await page.goto("/organiser/competitions/singapore-open/format");
+    await dismissConsent(page);
+    await page.getByRole("button", { name: "Validate graph" }).click();
+    await page.getByRole("button", { name: "Templates" }).click();
+    await page.getByLabel("New template name").fill("Weekend format");
+    await page.getByRole("button", { name: "Save template" }).click();
+    await expect(page.getByText("Template “Weekend format” saved.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Templates" }).click();
+    const templateRows = page.getByRole("dialog").locator("li");
+    await expect(templateRows).toHaveCount(1);
+    await expect(templateRows.first()).toContainText("Version1 · active");
+    await templateRows.getByRole("button", { name: "Update" }).click();
+    await page.getByLabel("Updated template name").fill("Weekend format revised");
+    await page.getByRole("button", { name: "Save new version" }).click();
+    await expect(page.getByText("Template “Weekend format revised” saved.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Templates" }).click();
+    await expect(templateRows).toHaveCount(1);
+    await expect(templateRows.first()).toContainText("Weekend format revised");
+    await expect(templateRows.first()).toContainText("Version2 · active");
+    expect(saveCount).toBe(2);
+  });
+});
+
 test("server validation controls preview and materialisation state", async ({ page }) => {
   let validatedDocument: Record<string, unknown> | null = null;
   await page.route("**/api/phase4/competitions/*/divisions/*/format-builder/validate", async (route) => {

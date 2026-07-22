@@ -371,16 +371,6 @@ export function isSaveFormatRequest(
   return parseFormatBuilderDocument(item.document) !== null;
 }
 
-export function formatSaveBody(draft: Phase4FormatDraftView, document: Phase4FormatBuilderDocument) {
-  return {
-    draft_id: draft.draft_id,
-    expected_revision: draft.revision,
-    parent_revision_id: draft.draft_id,
-    document,
-    idempotency_key: crypto.randomUUID(),
-  };
-}
-
 export function formatEditorReducer(state: FormatEditorState, action: FormatEditorAction): FormatEditorState {
   if (action.type === "set_mode") return { ...state, mode: action.mode };
   if (action.type === "select_stage") return { ...state, selectedStageId: action.stageId };

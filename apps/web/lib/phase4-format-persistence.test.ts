@@ -4,7 +4,7 @@ import type {
   Phase4FormatDraftView,
   Phase4OrganiserTemplateView,
 } from "@matchday/contracts";
-import { formatSaveBody, upsertOrganiserTemplate } from "./phase4-format-persistence";
+import { formatSaveBody, formatTemplateSaveBody, upsertOrganiserTemplate } from "./phase4-format-persistence";
 
 const document: Phase4FormatBuilderDocument = {
   schema_version: 1,
@@ -129,5 +129,26 @@ describe("Phase 4 format persistence semantics", () => {
     });
 
     expect(upsertOrganiserTemplate([other, oldVersion], saved)).toEqual([saved, other]);
+  });
+
+  it("builds an optimistic new template version from the exact visible version", () => {
+    vi.stubGlobal("crypto", { randomUUID: () => "00000000-0000-4000-8000-000000000099" });
+    const current = template({
+      templateId: "00000000-0000-4000-8000-000000000030",
+      versionId: "00000000-0000-4000-8000-000000000031",
+      revision: 3,
+      name: "Balanced",
+    });
+    expect(formatTemplateSaveBody(draft(), "  Balanced revised  ", "badminton", current)).toEqual({
+      template_id: current.template_id,
+      parent_version_id: current.template_version_id,
+      expected_version: 3,
+      name: "Balanced revised",
+      description: null,
+      sport_code: "badminton",
+      source_format_revision_id: draft().draft_id,
+      idempotency_key: "00000000-0000-4000-8000-000000000099",
+    });
+    vi.unstubAllGlobals();
   });
 });

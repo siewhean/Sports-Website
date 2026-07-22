@@ -189,6 +189,7 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
         "0016_phase4_setup_reference_refresh.sql",
         "0017_phase4_setup_upgrade_safety.sql",
         "0018_phase4_backup_restore_dependencies.sql",
+        "0019_phase4_format_layout_revisions.sql",
       ]);
       upgradeSql = postgres(databaseUrl, {
         max: 1,
