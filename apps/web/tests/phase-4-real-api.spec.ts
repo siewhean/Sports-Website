@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { expect, test } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 type GateBRealState = Readonly<{
@@ -17,7 +17,7 @@ async function readState(): Promise<GateBRealState> {
   return JSON.parse(await readFile(file, "utf8")) as GateBRealState;
 }
 
-async function authenticate(context: Parameters<typeof test>[0] extends never ? never : any, state: GateBRealState) {
+async function authenticate(context: BrowserContext, state: GateBRealState): Promise<void> {
   await context.addCookies([
     {
       name: state.organiserCookieName,
@@ -31,9 +31,9 @@ async function authenticate(context: Parameters<typeof test>[0] extends never ? 
   ]);
 }
 
-function trackFailedApplicationResponses(page: Parameters<typeof test>[0] extends never ? never : any): string[] {
+function trackFailedApplicationResponses(page: Page): string[] {
   const failures: string[] = [];
-  page.on("response", (response: { status(): number; url(): string }) => {
+  page.on("response", (response) => {
     const url = response.url();
     if (response.status() >= 400 && (url.includes("/api/") || url.includes("/organiser/"))) {
       failures.push(`${response.status()} ${url}`);
@@ -77,7 +77,10 @@ test("completed setup is parsed and rendered as a truthful read-only review", as
 
   await expect(page.getByTestId("phase4-assisted-setup")).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: /read.?only/i })).toBeVisible();
-  await expect(page.getByTestId("phase4-assisted-setup").locator("footer button")).toBeDisabled();
+  const footerButtons = page.getByTestId("phase4-assisted-setup").locator("footer button");
+  const footerButtonCount = await footerButtons.count();
+  expect(footerButtonCount).toBeGreaterThan(0);
+  for (let index = 0; index < footerButtonCount; index += 1) await expect(footerButtons.nth(index)).toBeDisabled();
 
   const browserStorage = await page.evaluate(() => ({
     cookie: document.cookie,
