@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Phase4SetupDocument } from "@matchday/contracts";
+import {
+  isAssistedSetupAutosaveRequest,
+  parseAssistedSetupDocument,
+} from "./phase4-assisted-setup-current";
 import type { ScheduleOption } from "./phase4-schedule";
 import { syncAcceptedScheduleWithSetup, syncPublishedScheduleWithSetup } from "./phase4-schedule-setup-sync";
 
@@ -198,7 +202,7 @@ function option(): ScheduleOption {
 }
 
 function revisionWire(status: "ready_for_review" | "published") {
-  return {
+  const revision = {
     id: scheduleId,
     competition_id: competitionId,
     revision: 1,
@@ -216,6 +220,7 @@ function revisionWire(status: "ready_for_review" | "published") {
     assignments: [],
     idempotent_replay: false,
   };
+  return status === "published" ? { ...revision, schedule_version: 1 } : revision;
 }
 
 function fetchSequence(payloads: unknown[], calls: Array<{ url: string; init?: RequestInit }>): typeof fetch {
@@ -226,6 +231,38 @@ function fetchSequence(payloads: unknown[], calls: Array<{ url: string; init?: R
     return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 }
+
+describe("current Assisted Setup recommendation contract", () => {
+  it("accepts selected and unselected canonical recommendation lineage", () => {
+    const selected = setupDocument();
+    expect(parseAssistedSetupDocument(selected, competitionId)).toEqual(selected);
+
+    const unselected = structuredClone(selected);
+    const selection = unselected.values.format_recommendations!;
+    selection.selected_recommendation_id = null;
+    selection.recommendations[0]!.format_revision_id = null;
+    selection.recommendations[0]!.division_formats[0]!.format_revision_id = null;
+    expect(parseAssistedSetupDocument(unselected, competitionId)).toEqual(unselected);
+    expect(
+      isAssistedSetupAutosaveRequest({
+        expected_revision: unselected.revision,
+        idempotency_key: "setup-current-parser-1",
+        transition: {
+          kind: "save_step",
+          step: { step_id: "format_recommendations", value: selection },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects recommendation evidence without per-division lineage", () => {
+    const forged = structuredClone(setupDocument()) as unknown as Record<string, unknown>;
+    const values = forged.values as Record<string, unknown>;
+    const selection = values.format_recommendations as { recommendations: Array<Record<string, unknown>> };
+    delete selection.recommendations[0]!.division_formats;
+    expect(parseAssistedSetupDocument(forged, competitionId)).toBeNull();
+  });
+});
 
 describe("schedule to Assisted Setup synchronization", () => {
   it("stores exact accepted option provenance and reduced settings pointers", async () => {
@@ -309,7 +346,10 @@ describe("schedule to Assisted Setup synchronization", () => {
       publication_status: "published" as const,
       published_schedule_revision_id: scheduleId,
     };
-    const after = setupDocument({ revision: 9, current_step: "review_publish" }, { schedule_review: schedule, review_publish: review });
+    const after = setupDocument(
+      { revision: 9, current_step: "review_publish" },
+      { schedule_review: schedule, review_publish: review },
+    );
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const result = await syncPublishedScheduleWithSetup(
       { competitionId, response: revisionWire("published") },
