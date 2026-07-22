@@ -1570,7 +1570,7 @@ export class Phase2Runtime {
     }));
   }
 
-  private async writePublicProjection(
+  async writePublicProjection(
     tx: PostgresJsSql,
     competitionId: string,
     scheduleVersion: number,
@@ -1581,7 +1581,7 @@ export class Phase2Runtime {
         id: string;
         name: string;
         slug: string;
-        sport_code: "canoe_polo";
+        sport_code: PublicCompetitionProjection["competition"]["sport_code"];
         timezone: string;
         starts_on: Date | string;
         ends_on: Date | string;

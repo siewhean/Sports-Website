@@ -97,19 +97,22 @@ describe("foundation migrations", () => {
   );
 
   it(
-    "upgrades populated Phase 4 setup data through recommendation evidence migration",
+    "upgrades populated Phase 4 data through the latest forward migrations",
     async () => {
       const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-populated-migrations-"));
       await cp(migrationsDirectory, copiedDirectory, { recursive: true });
       const migration0020 = path.join(copiedDirectory, "0020_phase4_format_recommendation_evidence.sql");
       const migration0021 = path.join(copiedDirectory, "0021_phase4_schedule_job_progress.sql");
       const migration0022 = path.join(copiedDirectory, "0022_phase4_schedule_revision_provenance.sql");
+      const migration0023 = path.join(copiedDirectory, "0023_phase4_schedule_publication_expiry.sql");
       const migration0020Source = await readFile(migration0020, "utf8");
       const migration0021Source = await readFile(migration0021, "utf8");
       const migration0022Source = await readFile(migration0022, "utf8");
+      const migration0023Source = await readFile(migration0023, "utf8");
       await rm(migration0020);
       await rm(migration0021);
       await rm(migration0022);
+      await rm(migration0023);
       await migrateDatabase({
         databaseUrl: config.databaseUrl,
         migrationsDirectory: copiedDirectory,
@@ -156,6 +159,7 @@ describe("foundation migrations", () => {
         await writeFile(migration0020, migration0020Source);
         await writeFile(migration0021, migration0021Source);
         await writeFile(migration0022, migration0022Source);
+        await writeFile(migration0023, migration0023Source);
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
@@ -165,6 +169,7 @@ describe("foundation migrations", () => {
           "0020_phase4_format_recommendation_evidence.sql",
           "0021_phase4_schedule_job_progress.sql",
           "0022_phase4_schedule_revision_provenance.sql",
+          "0023_phase4_schedule_publication_expiry.sql",
         ]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
@@ -176,6 +181,13 @@ describe("foundation migrations", () => {
         expect(afterUpgrade).toMatchObject({ confirmed_count: 0, placeholder_count: 1 });
         expect(afterUpgrade?.entry_ids).toEqual([placeholder]);
         expect(await sql`SELECT 1 FROM phase4_format_recommendation_sets`).toEqual([]);
+        expect(
+          (
+            await sql<
+              { expiry: string }[]
+            >`SELECT phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz)::text expiry`
+          )[0]?.expiry,
+        ).toContain("2027-02-28 10:15:00");
       } finally {
         await sql.end({ timeout: 2 });
         await rm(copiedDirectory, { recursive: true, force: true });

@@ -52,6 +52,8 @@ const phase4Runtime = new ReliableGateBPhase4Runtime(
   phase3Runtime,
   scheduleQueue,
   phase4AiProviderFromEnvironment(config.environment),
+  undefined,
+  phase2Runtime,
 );
 const app = await buildApp({
   config,

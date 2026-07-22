@@ -9,6 +9,8 @@ import type { PostgresJsSql } from "@matchday/identity";
 import { DomainScheduleOptimizer } from "@matchday/scheduler";
 import postgres, { type Sql } from "postgres";
 import { DeterministicPhase4AiStub } from "../../src/phase-4-ai-provider.js";
+import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
+import { Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { Phase4Runtime } from "../../src/phase-4-runtime.js";
@@ -23,7 +25,10 @@ const migrationsDirectory = path.resolve(
 let client!: Sql;
 let phase3!: Phase3Runtime;
 let runtime!: Phase4Runtime;
+let phase2!: Phase2Runtime;
 let accountId = "";
+let viewerId = "";
+let officialId = "";
 let organisationId = "";
 let competitionId = "";
 
@@ -42,13 +47,24 @@ beforeAll(async () => {
       { id: string }[]
     >`INSERT INTO accounts(primary_email,display_name,email_verified_at) VALUES('owner@phase4.test','Owner',now()) RETURNING id`,
   ).id;
+  viewerId = required(
+    await client<
+      { id: string }[]
+    >`INSERT INTO accounts(primary_email,display_name,email_verified_at) VALUES('viewer@phase4.test','Viewer',now()) RETURNING id`,
+  ).id;
+  officialId = required(
+    await client<
+      { id: string }[]
+    >`INSERT INTO accounts(primary_email,display_name,email_verified_at) VALUES('official@phase4.test','Official',now()) RETURNING id`,
+  ).id;
   await client.begin(async (tx) => {
     organisationId = required(
       await tx<
         { id: string }[]
       >`INSERT INTO organisations(name,slug) VALUES('Phase 4 Org','phase-4-runtime-org') RETURNING id`,
     ).id;
-    await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES(${organisationId},${accountId},'owner','active')`;
+    await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES
+      (${organisationId},${accountId},'owner','active'),(${organisationId},${viewerId},'viewer','active')`;
   });
   phase3 = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
   competitionId = (
@@ -70,8 +86,11 @@ beforeAll(async () => {
       randomUUID(),
     )
   ).id;
+  await client`INSERT INTO official_grants(account_id,organisation_id,resource_type,resource_id,granted_by)
+    VALUES(${officialId},${organisationId},'competition',${competitionId},${accountId})`;
   await client`INSERT INTO ai_usage_allowances(organisation_id,actor_account_id,action,period_start,action_limit)
     VALUES(${organisationId},${accountId},'text_to_brief',current_date,10)`;
+  phase2 = new Phase2Runtime(client as unknown as PostgresJsSql, phase2DomainAdapter);
   runtime = new Phase4Runtime(
     client as unknown as PostgresJsSql,
     phase3,
@@ -83,6 +102,8 @@ beforeAll(async () => {
       maximumAttempts: 1,
       cacheTtlSeconds: 3_600,
     },
+    undefined,
+    phase2,
   );
 });
 
@@ -717,6 +738,90 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     await expect(
       assertCurrent.assertScheduleJobCurrent(client as unknown as PostgresJsSql, generated.job.id),
     ).resolves.toBeUndefined();
+
+    for (const deniedAccountId of [viewerId, officialId]) {
+      await expect(
+        runtime.publishScheduleRevision(
+          { accountId: deniedAccountId },
+          accepted.id,
+          { idempotency_key: randomUUID(), expected_revision: accepted.revision },
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ code: "ACCESS_DENIED", statusCode: 403 });
+    }
+
+    const failingProjectionRuntime = new Phase4Runtime(
+      client as unknown as PostgresJsSql,
+      phase3,
+      { enqueueSchedule: async () => ({ id: "ignored", name: "schedule.optimize", duplicate: false }) },
+      {
+        mode: "stub",
+        provider: new DeterministicPhase4AiStub(),
+        timeoutMs: 2_000,
+        maximumAttempts: 1,
+        cacheTtlSeconds: 3_600,
+      },
+      undefined,
+      { writePublicProjection: async () => Promise.reject(new Error("projection unavailable")) },
+    );
+    await expect(
+      failingProjectionRuntime.publishScheduleRevision(
+        { accountId },
+        accepted.id,
+        { idempotency_key: randomUUID(), expected_revision: accepted.revision },
+        randomUUID(),
+      ),
+    ).rejects.toThrow("projection unavailable");
+    expect(
+      required(await client<{ status: string }[]>`SELECT status FROM schedule_revisions WHERE id=${accepted.id}`)
+        .status,
+    ).toBe("ready_for_review");
+    expect(
+      required(
+        await client<
+          { schedule_version: number; published_schedule_revision_id: string | null }[]
+        >`SELECT schedule_version,published_schedule_revision_id FROM competition_publications WHERE competition_id=${competitionId}`,
+      ),
+    ).toEqual({ schedule_version: 0, published_schedule_revision_id: null });
+
+    await runtime.publishScheduleRevision(
+      { accountId },
+      accepted.id,
+      { idempotency_key: randomUUID(), expected_revision: accepted.revision },
+      randomUUID(),
+    );
+    const firstPublic = await phase2.publicCompetition("phase-4-cup");
+    expect(firstPublic.publication.schedule_version).toBe(1);
+    expect(firstPublic.schedule.find((match) => match.id === movable.match_id)?.starts_at).toBe(
+      new Date(movable.start_epoch_ms).toISOString(),
+    );
+    expect((await phase2.publicCompetition("phase-4-cup")).publication.schedule_version).toBe(1);
+
+    await runtime.publishScheduleRevision(
+      { accountId },
+      repaired.id,
+      { idempotency_key: randomUUID(), expected_revision: repaired.revision },
+      randomUUID(),
+    );
+    const secondPublic = await phase2.publicCompetition("phase-4-cup");
+    expect(secondPublic.publication.schedule_version).toBe(2);
+    expect(secondPublic.schedule.find((match) => match.id === movable.match_id)?.starts_at).toBe(
+      new Date(validTarget.start_epoch_ms).toISOString(),
+    );
+    expect(
+      await client<{ id: string; status: string }[]>`
+        SELECT id,status FROM schedule_revisions WHERE id IN (${accepted.id},${repaired.id}) ORDER BY revision`,
+    ).toEqual([
+      { id: accepted.id, status: "superseded" },
+      { id: repaired.id, status: "published" },
+    ]);
+    await expect(
+      client`DELETE FROM schedule_revision_formats WHERE schedule_revision_id=${accepted.id}`,
+    ).rejects.toThrow(/format provenance is immutable/);
+    await expect(
+      client`UPDATE scheduled_matches SET starts_at=starts_at+interval '5 minutes' WHERE schedule_revision_id=${repaired.id}`,
+    ).rejects.toThrow(/immutable/);
+
     await client`UPDATE division_entries SET status='withdrawn',withdrawal_reason='Test schedule fence'
       WHERE division_id=${divisionId} AND seed=8`;
     await expect(

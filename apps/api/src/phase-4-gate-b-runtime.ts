@@ -13,7 +13,7 @@ import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
-import { Phase4Runtime, type Phase4AiOptions } from "./phase-4-runtime.js";
+import { Phase4Runtime, type Phase4AiOptions, type Phase4PublicProjectionPort } from "./phase-4-runtime.js";
 import {
   decodePhase4Json,
   phase4SetupDocumentFromStorage,
@@ -102,8 +102,9 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     enqueue: ScheduleEnqueuePort,
     ai: Phase4AiOptions,
     private readonly gateNow: () => Date = () => new Date(),
+    publicProjection?: Phase4PublicProjectionPort,
   ) {
-    super(gateSql, phase3, enqueue, ai, gateNow);
+    super(gateSql, phase3, enqueue, ai, gateNow, publicProjection);
   }
 
   override async autosaveSetupDraft(

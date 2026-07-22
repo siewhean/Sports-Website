@@ -761,6 +761,9 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
           ${accepted!.id},${value.account},'publish-schedule')`
       )[0]?.status,
     ).toBe("published");
+    await expect(sql`DELETE FROM schedule_revision_formats WHERE schedule_revision_id=${accepted!.id}`).rejects.toThrow(
+      /format provenance is immutable/,
+    );
     await expect(sql`UPDATE schedule_revisions SET status='superseded',warnings='[{"forged":true}]'::jsonb
       WHERE id=${accepted!.id}`).rejects.toThrow(/immutable/);
     await expect(sql`INSERT INTO schedule_generation_options(job_id,organisation_id,competition_id,result_revision,solver_iteration,result_status,
@@ -821,10 +824,18 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (${formatB},${value.competition},${value.divisionB},1,${sql.json(definition)},${hash(definition)},${value.account},'phase3')`;
     const warningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
-      VALUES(${warningRevision},${value.competition},${formatA},1,${"1".repeat(64)},'draft',${value.account},now()-interval '23 days')`;
+      VALUES(${warningRevision},${value.competition},${formatA},1,${"1".repeat(64)},'draft',${value.account},
+        current_date+interval '7 days'-interval '1 month')`;
     await sql`INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id) VALUES
       (${warningRevision},${value.competition},${value.divisionA},${formatA}),
       (${warningRevision},${value.competition},${value.divisionB},${formatB})`;
+    const warningExpiry = (
+      await sql<{ editable_until: Date }[]>`SELECT editable_until FROM schedule_revisions WHERE id=${warningRevision}`
+    )[0]!.editable_until;
+    await sql`INSERT INTO schedule_revision_warnings(schedule_revision_id,competition_id,warning_days,expires_at,
+      notified_account_id,idempotency_key)
+      VALUES(${warningRevision},${value.competition},7,${new Date(warningExpiry.getTime() - 86_400_000)},${value.account},
+        ${`phase4:legacy-30-day-warning:${warningRevision}`})`;
     const [first, replay] = await Promise.all([
       sql`SELECT phase4_emit_schedule_expiry_warning(${warningRevision},7,${value.account},'warning-7-a')`,
       sql`SELECT phase4_emit_schedule_expiry_warning(${warningRevision},7,${value.account},'warning-7-b')`,
@@ -833,24 +844,89 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     expect(replay).toHaveLength(1);
     expect(
       await sql`SELECT id FROM schedule_revision_warnings WHERE schedule_revision_id=${warningRevision}`,
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(
       await sql`SELECT id FROM notifications WHERE idempotency_key LIKE ${`phase4:schedule-expiry-warning:${warningRevision}%`}`,
     ).toHaveLength(1);
     const urgentWarningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
-      VALUES(${urgentWarningRevision},${value.competition},${formatA},2,${"3".repeat(64)},'draft',${value.account},now()-interval '29 days')`;
+      VALUES(${urgentWarningRevision},${value.competition},${formatA},2,${"3".repeat(64)},'draft',${value.account},
+        current_date+interval '1 day'-interval '1 month')`;
     await sql`SELECT phase4_emit_schedule_expiry_warning(${urgentWarningRevision},1,${value.account},'warning-1')`;
     expect(
       await sql`SELECT id FROM schedule_revision_warnings WHERE schedule_revision_id=${urgentWarningRevision} AND warning_days=1`,
     ).toHaveLength(1);
     const expiredRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
-      VALUES(${expiredRevision},${value.competition},${formatA},3,${"2".repeat(64)},'draft',${value.account},now()-interval '31 days')`;
+      VALUES(${expiredRevision},${value.competition},${formatA},3,${"2".repeat(64)},'draft',${value.account},
+        now()-interval '1 month'-interval '1 second')`;
+    await sql`INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id)
+      VALUES(${expiredRevision},${value.competition},${value.divisionA},${formatA})`;
     await sql`SELECT phase4_expire_schedule_revision(${expiredRevision},'expire-now')`;
     await expect(sql`UPDATE schedule_revisions SET warnings='["forged"]' WHERE id=${expiredRevision}`).rejects.toThrow(
       /terminal/,
     );
+    await expect(
+      sql`UPDATE schedule_revision_formats SET format_revision_id=${formatA} WHERE schedule_revision_id=${expiredRevision}`,
+    ).rejects.toThrow(/format provenance is immutable/);
+    await expect(
+      sql`DELETE FROM schedule_revision_formats WHERE schedule_revision_id=${expiredRevision}`,
+    ).rejects.toThrow(/format provenance is immutable/);
+    expect(
+      await sql`SELECT action FROM audit_events WHERE target_id=${expiredRevision}::text AND action='schedule.expired'`,
+    ).toHaveLength(1);
+    expect(
+      await sql`SELECT event_type FROM outbox_events WHERE aggregate_id=${expiredRevision}::text AND event_type='schedule.expired'`,
+    ).toHaveLength(1);
+
+    const monthEndRevision = randomUUID();
+    await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
+      VALUES(${monthEndRevision},${value.competition},${formatA},4,${"4".repeat(64)},'draft',${value.account},
+        '2027-01-31T10:15:00Z')`;
+    expect(
+      (
+        await sql<
+          { editable_until: string }[]
+        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${monthEndRevision}`
+      )[0]?.editable_until,
+    ).toContain("2027-02-28 10:15:00");
+
+    const leapRevision = randomUUID();
+    await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
+      VALUES(${leapRevision},${value.competition},${formatA},5,${"5".repeat(64)},'draft',${value.account},
+        '2028-01-31T10:15:00Z')`;
+    expect(
+      (
+        await sql<
+          { editable_until: string }[]
+        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${leapRevision}`
+      )[0]?.editable_until,
+    ).toContain("2028-02-29 10:15:00");
+
+    const yearBoundaryRevision = randomUUID();
+    await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
+      VALUES(${yearBoundaryRevision},${value.competition},${formatA},6,${"6".repeat(64)},'draft',${value.account},
+        '2027-12-31T10:15:00Z')`;
+    expect(
+      (
+        await sql<
+          { editable_until: string }[]
+        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${yearBoundaryRevision}`
+      )[0]?.editable_until,
+    ).toContain("2028-01-31 10:15:00");
+
+    const latestEditRevision = randomUUID();
+    await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
+      VALUES(${latestEditRevision},${value.competition},${formatA},7,${"7".repeat(64)},'draft',${value.account},
+        '2027-03-15T08:00:00Z')`;
+    await sql`UPDATE schedule_revisions SET updated_at='2027-03-20T09:30:00Z' WHERE id=${latestEditRevision}`;
+    expect(
+      (
+        await sql<
+          { editable_until: string }[]
+        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${latestEditRevision}`
+      )[0]?.editable_until,
+    ).toContain("2027-04-20 09:30:00");
   });
 
   it("charges AI successes once, isolates cache tenants, and rejects raw prompt metadata", async () => {

@@ -337,6 +337,15 @@ export type Phase4AiOptions = {
   cacheTtlSeconds: number;
 };
 
+export type Phase4PublicProjectionPort = {
+  writePublicProjection(
+    tx: PostgresJsSql,
+    competitionId: string,
+    scheduleVersion: number,
+    resultVersion: number,
+  ): Promise<void>;
+};
+
 export class Phase4Runtime {
   constructor(
     private readonly sql: PostgresJsSql,
@@ -344,6 +353,7 @@ export class Phase4Runtime {
     private readonly enqueue: ScheduleEnqueuePort,
     private readonly ai: Phase4AiOptions,
     private readonly now: () => Date = () => new Date(),
+    private readonly publicProjection?: Phase4PublicProjectionPort,
   ) {}
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -3769,8 +3779,12 @@ export class Phase4Runtime {
       expires_at: Date | string;
       emitted_at: Date | string;
     }>(
-      `SELECT id,schedule_revision_id,warning_days,expires_at,emitted_at FROM schedule_revision_warnings
-       WHERE competition_id=$1 ORDER BY emitted_at DESC,id`,
+      `SELECT warning.id,warning.schedule_revision_id,warning.warning_days,warning.expires_at,warning.emitted_at
+       FROM schedule_revision_warnings warning
+       JOIN schedule_revisions revision ON revision.id=warning.schedule_revision_id
+       WHERE warning.competition_id=$1 AND revision.status IN ('draft','ready_for_review')
+         AND warning.expires_at=revision.editable_until
+       ORDER BY warning.emitted_at DESC,warning.id`,
       [competitionId],
     );
     return {
@@ -3970,12 +3984,20 @@ export class Phase4Runtime {
         );
       }
       const publication = first(
-        await tx.unsafe<{ schedule_version: number }>(
-          `SELECT schedule_version FROM competition_publications WHERE competition_id=$1`,
+        await tx.unsafe<{ schedule_version: number; result_version: number }>(
+          `SELECT schedule_version,result_version FROM competition_publications WHERE competition_id=$1`,
           [row.competition_id],
         ),
         "PUBLICATION_NOT_FOUND",
         "Publication state not found",
+      );
+      if (!this.publicProjection)
+        throw new ApiError(500, "PUBLIC_PROJECTION_UNAVAILABLE", "Public schedule projection is unavailable");
+      await this.publicProjection.writePublicProjection(
+        tx,
+        row.competition_id,
+        publication.schedule_version,
+        publication.result_version,
       );
       return {
         ...(await this.revisionDetail(tx, revisionId)),
@@ -3999,7 +4021,8 @@ export class Phase4Runtime {
          WHERE sr.status IN ('draft','ready_for_review') AND sr.editable_until IS NOT NULL
            AND current_date=(sr.editable_until AT TIME ZONE 'UTC')::date-d.warning_days
            AND NOT EXISTS (SELECT 1 FROM schedule_revision_warnings w WHERE w.schedule_revision_id=sr.id
-             AND w.warning_days=d.warning_days AND w.notified_account_id=m.account_id)
+             AND w.warning_days=d.warning_days AND w.notified_account_id=m.account_id
+             AND w.expires_at=sr.editable_until)
          ORDER BY sr.id,d.warning_days,m.account_id`,
       );
       for (const due of dueWarnings) {

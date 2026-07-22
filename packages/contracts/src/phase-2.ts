@@ -1,3 +1,5 @@
+import type { Phase3SportCode } from "./phase-3.js";
+
 export type PublicParticipant = {
   id: string | null;
   name: string;
@@ -31,7 +33,7 @@ export type PublicCompetitionProjection = {
     id: string;
     name: string;
     slug: string;
-    sport_code: "canoe_polo";
+    sport_code: Phase3SportCode;
     timezone: string;
     starts_on: string;
     ends_on: string;

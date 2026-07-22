@@ -10,7 +10,7 @@ import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
-import type { Phase4AiOptions } from "./phase-4-runtime.js";
+import type { Phase4AiOptions, Phase4PublicProjectionPort } from "./phase-4-runtime.js";
 import {
   decodePhase4Json,
   phase4SetupDocumentFromStorage,
@@ -45,8 +45,9 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     enqueue: ScheduleEnqueuePort,
     ai: Phase4AiOptions,
     now: () => Date = () => new Date(),
+    publicProjection?: Phase4PublicProjectionPort,
   ) {
-    super(reliableSql, phase3, enqueue, ai, now);
+    super(reliableSql, phase3, enqueue, ai, now, publicProjection);
   }
 
   private async readAccess(sql: PostgresJsSql, actor: Phase3Actor, competitionId: string): Promise<ReadAccess> {
