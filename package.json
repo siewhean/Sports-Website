@@ -18,6 +18,7 @@
     "test": "pnpm test:unit && pnpm test:integration",
     "test:unit": "turbo run test:unit",
     "test:integration": "turbo run test:integration",
+    "test:performance": "pnpm --filter @matchday/scheduler test:performance",
     "test:e2e": "pnpm --filter @matchday/web test:e2e",
     "test:e2e:phase2:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-2-real-e2e.ts",
     "test:e2e:phase4:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e-v2.ts",
@@ -40,7 +41,7 @@
     "secrets:scan": "bash scripts/scan-secrets.sh",
     "qa:gate-b:runner-self-test": "node scripts/test-gate-b-evidence.mjs",
     "qa:gate-b:local": "node scripts/run-gate-b-local.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm dependencies:audit && pnpm secrets:scan && pnpm build && pnpm deploy:manifest && pnpm asset-delivery:verify:origin",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:performance && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm dependencies:audit && pnpm secrets:scan && pnpm build && pnpm deploy:manifest && pnpm asset-delivery:verify:origin",
     "setup:workspace": "node scripts/setup-workspace.mjs"
   },
   "pnpm": {
