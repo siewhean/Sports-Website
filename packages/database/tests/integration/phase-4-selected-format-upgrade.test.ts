@@ -22,6 +22,7 @@ describe("Phase 4 selected-format migration upgrade", () => {
     const migrationNames = [
       "0027_phase4_publish_selected_formats.sql",
       "0028_phase4_latest_schedule_publication.sql",
+      "0030_phase4_idempotent_format_publication.sql",
     ] as const;
     const heldBack = await Promise.all(
       migrationNames.map(async (name) => {
@@ -94,6 +95,11 @@ describe("Phase 4 selected-format migration upgrade", () => {
         { trigger_name: "ab_schedule_revisions_latest_publication_guard" },
         { trigger_name: "zz_setup_drafts_publish_selected_formats" },
       ]);
+      expect(
+        await sql<{ function_name: string }[]>`
+          SELECT proname function_name FROM pg_proc
+          WHERE proname='phase4_publish_format_revision' AND pronamespace=current_schema()::regnamespace`,
+      ).toEqual([{ function_name: "phase4_publish_format_revision" }]);
     } finally {
       await sql.end({ timeout: 2 });
       await rm(copiedDirectory, { recursive: true, force: true });
