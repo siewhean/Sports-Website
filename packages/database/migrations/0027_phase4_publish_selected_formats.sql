@@ -8,10 +8,10 @@ DECLARE
   selected_id text;
   selected_candidate jsonb;
   format_item jsonb;
-  candidate_id uuid;
-  candidate_division_id uuid;
-  revision_id uuid;
-  evidence_division_id uuid;
+  selected_candidate_uuid uuid;
+  selected_candidate_division_uuid uuid;
+  selected_revision_uuid uuid;
+  evidence_division_uuid uuid;
   evidence_definition_hash text;
   revision_row format_revisions%ROWTYPE;
   audit_request_id text;
@@ -24,7 +24,7 @@ BEGIN
      OR selection->>'recommendation_set_hash' !~ '^[0-9a-f]{64}$' THEN
     RAISE EXCEPTION 'selected setup recommendation has invalid set evidence';
   END IF;
-  candidate_id := selected_id::uuid;
+  selected_candidate_uuid := selected_id::uuid;
 
   SELECT candidate.value INTO selected_candidate
   FROM jsonb_array_elements(COALESCE(selection->'recommendations','[]'::jsonb)) candidate(value)
@@ -64,29 +64,29 @@ BEGIN
       RAISE EXCEPTION 'selected setup format must contain complete canonical evidence';
     END IF;
 
-    candidate_division_id := (format_item->>'candidate_division_id')::uuid;
-    revision_id := (format_item->>'format_revision_id')::uuid;
-    SELECT division.id,division.definition_hash
-      INTO evidence_division_id,evidence_definition_hash
+    selected_candidate_division_uuid := (format_item->>'candidate_division_id')::uuid;
+    selected_revision_uuid := (format_item->>'format_revision_id')::uuid;
+    SELECT division.division_id,division.definition_hash
+      INTO evidence_division_uuid,evidence_definition_hash
     FROM phase4_format_recommendation_candidate_divisions division
     JOIN phase4_format_recommendation_candidates candidate ON candidate.id=division.candidate_id
     JOIN phase4_format_recommendation_sets recommendation_set
       ON recommendation_set.id=candidate.recommendation_set_id
-    WHERE candidate.id=candidate_id
-      AND division.id=candidate_division_id
+    WHERE candidate.id=selected_candidate_uuid
+      AND division.id=selected_candidate_division_uuid
       AND recommendation_set.setup_draft_id=NEW.id
       AND recommendation_set.competition_id=NEW.competition_id
       AND recommendation_set.source_hash=selection->>'recommendation_set_hash';
-    IF evidence_division_id IS NULL
-       OR evidence_division_id<>(format_item->>'division_id')::uuid
+    IF evidence_division_uuid IS NULL
+       OR evidence_division_uuid<>(format_item->>'division_id')::uuid
        OR evidence_definition_hash<>format_item->>'format_definition_hash' THEN
       RAISE EXCEPTION 'selected setup format does not match immutable recommendation evidence';
     END IF;
 
-    SELECT * INTO revision_row FROM format_revisions WHERE id=revision_id FOR UPDATE;
+    SELECT * INTO revision_row FROM format_revisions WHERE id=selected_revision_uuid FOR UPDATE;
     IF revision_row.id IS NULL
        OR revision_row.competition_id<>NEW.competition_id
-       OR revision_row.division_id<>evidence_division_id
+       OR revision_row.division_id<>evidence_division_uuid
        OR revision_row.definition_hash<>evidence_definition_hash THEN
       RAISE EXCEPTION 'selected setup format does not match canonical revision evidence';
     END IF;
