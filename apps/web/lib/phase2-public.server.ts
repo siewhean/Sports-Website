@@ -2,6 +2,8 @@ import "server-only";
 
 import { cache } from "react";
 import type { PublicCompetitionProjection } from "@matchday/contracts";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+import { isPublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
 import {
   demoCompetitionReadPort,
   type CompetitionReadPort,
@@ -19,24 +21,6 @@ function apiBaseUrl(): string | null {
   } catch {
     return null;
   }
-}
-
-function isProjection(value: unknown): value is PublicCompetitionProjection {
-  if (!value || typeof value !== "object") return false;
-  const projection = value as Partial<PublicCompetitionProjection>;
-  return Boolean(
-    projection.competition &&
-    typeof projection.competition.id === "string" &&
-    typeof projection.competition.name === "string" &&
-    typeof projection.competition.slug === "string" &&
-    projection.competition.sport_code === "canoe_polo" &&
-    projection.division &&
-    typeof projection.division.id === "string" &&
-    Array.isArray(projection.schedule) &&
-    Array.isArray(projection.results) &&
-    projection.publication &&
-    typeof projection.last_updated_at === "string",
-  );
 }
 
 function titleCase(value: string): string {
@@ -163,7 +147,7 @@ function toCompetitionView(projection: PublicCompetitionProjection): Competition
     id: competition.id,
     slug: competition.slug,
     name: competition.name,
-    sport: "Canoe Polo",
+    sport: publicSportName(competition.sport_code),
     venue: areas.join(" · ") || division.name,
     timezone: competition.timezone,
     dateLabel: dateRange(competition.starts_on, competition.ends_on, competition.timezone),
@@ -202,7 +186,7 @@ const apiCompetitionReadPort: CompetitionReadPort = {
       });
       if (!response.ok) return null;
       const payload: unknown = await response.json();
-      return isProjection(payload) ? toCompetitionView(payload) : null;
+      return isPublicCompetitionProjection(payload) ? toCompetitionView(payload) : null;
     } catch {
       return null;
     }
@@ -210,6 +194,6 @@ const apiCompetitionReadPort: CompetitionReadPort = {
 };
 
 export const getCompetitionView = cache(async (slug: string): Promise<CompetitionView | null> => {
-  const reader = process.env.MATCHDAY_PHASE2_DATA_MODE === "demo" ? demoCompetitionReadPort : apiCompetitionReadPort;
+  const reader = demoFixturesEnabled() ? demoCompetitionReadPort : apiCompetitionReadPort;
   return reader.getBySlug(slug);
 });

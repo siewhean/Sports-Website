@@ -53,7 +53,7 @@ describeInfra("PostgresScheduleJobStore", () => {
           division_id: authoritative.divisionId,
           duration_minutes: 30,
           dependency_match_ids: [],
-          possible_entry_ids: authoritative.entryIds,
+          possible_entry_ids: authoritative.possibleEntryIds,
           official_ids: [],
           is_championship_final: true,
         },
@@ -66,7 +66,21 @@ describeInfra("PostgresScheduleJobStore", () => {
           start_epoch_ms: Date.UTC(2027, 0, 1, 1),
           end_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
         },
+        {
+          slot_id: "store-slot-2",
+          interval_id: authoritative.intervalId,
+          area_id: authoritative.areaId,
+          start_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
+          end_epoch_ms: Date.UTC(2027, 0, 1, 2),
+        },
       ],
+      constraints: {
+        ...baseInput.constraints,
+        featured_playing_area: {
+          ...baseInput.constraints.featured_playing_area,
+          value: { area_id: authoritative.areaId, match_ids: [] },
+        },
+      },
     };
     const inputHash = deterministicJsonHash(input);
     await sql`
@@ -102,6 +116,36 @@ describeInfra("PostgresScheduleJobStore", () => {
     });
     expect(claimed.outcome).toBe("claimed");
     if (claimed.outcome !== "claimed") throw new Error("Expected claim");
+    await firstStore.recordProgress({
+      jobId,
+      workerId: "scheduler-one",
+      fenceToken: claimed.job.fenceToken,
+      iteration: 0,
+      exploredCandidates: 1,
+    });
+    expect(
+      await sql<{ progress_iteration: number; explored_candidates: number; progress_updated_at: Date | null }[]>`
+        SELECT progress_iteration,explored_candidates,progress_updated_at
+        FROM schedule_generation_jobs WHERE id=${jobId}`,
+    ).toMatchObject([{ progress_iteration: 0, explored_candidates: 1, progress_updated_at: expect.any(Date) }]);
+    await expect(
+      firstStore.recordProgress({
+        jobId,
+        workerId: "scheduler-one",
+        fenceToken: claimed.job.fenceToken,
+        iteration: 0,
+        exploredCandidates: 2,
+      }),
+    ).rejects.toThrow("iteration must increase");
+    await expect(
+      secondStore.recordProgress({
+        jobId,
+        workerId: "scheduler-two",
+        fenceToken: randomUUID(),
+        iteration: 1,
+        exploredCandidates: 2,
+      }),
+    ).rejects.toThrow("worker fence");
     expect(
       await firstStore.renewLease({
         jobId,
@@ -114,7 +158,39 @@ describeInfra("PostgresScheduleJobStore", () => {
       await secondStore.claimJob({ jobId, workerId: "scheduler-two", expectedInputHash: inputHash, leaseMs: 5_000 }),
     ).toEqual({ outcome: "busy" });
 
-    const result = { ...candidate(81), job_id: jobId, source_revision: input.source_revision };
+    const result = {
+      ...candidate(81),
+      job_id: jobId,
+      source_revision: input.source_revision,
+      assignments: [
+        {
+          match_id: authoritative.matchId,
+          division_id: authoritative.divisionId,
+          area_id: authoritative.areaId,
+          interval_id: authoritative.intervalId,
+          slot_id: "store-slot-1",
+          start_epoch_ms: Date.UTC(2027, 0, 1, 1),
+          end_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
+          fixed: false,
+        },
+      ],
+    };
+    await expect(
+      firstStore.checkpointBest({
+        jobId,
+        workerId: "scheduler-one",
+        fenceToken: claimed.job.fenceToken,
+        expectedInputHash: inputHash,
+        candidate: result,
+        iteration: 0,
+        exploredCandidates: 2,
+      }),
+    ).rejects.toThrow("progress iteration must increase");
+    expect(await sql`SELECT id FROM schedule_generation_options WHERE job_id=${jobId}`).toHaveLength(0);
+    expect(
+      await sql<{ current_best_option_id: string | null }[]>`
+        SELECT current_best_option_id FROM schedule_generation_jobs WHERE id=${jobId}`,
+    ).toEqual([{ current_best_option_id: null }]);
     const checkpoint = await firstStore.checkpointBest({
       jobId,
       workerId: "scheduler-one",
@@ -122,27 +198,32 @@ describeInfra("PostgresScheduleJobStore", () => {
       expectedInputHash: inputHash,
       candidate: result,
       iteration: 7,
+      exploredCandidates: 2,
     });
     expect(checkpoint).toMatchObject({
       accepted: true,
       result: { result_revision: 1, assignment_hash: expect.any(String) },
     });
+    expect(
+      await sql<{ progress_iteration: number; explored_candidates: number }[]>`
+        SELECT progress_iteration,explored_candidates FROM schedule_generation_jobs WHERE id=${jobId}`,
+    ).toEqual([{ progress_iteration: 7, explored_candidates: 2 }]);
     const preferredTieBreak = {
       ...result,
       assignments: [
         {
-          match_id: randomUUID(),
-          division_id: randomUUID(),
-          area_id: randomUUID(),
-          interval_id: randomUUID(),
-          slot_id: "tie-break-slot",
-          start_epoch_ms: 1_800_000,
-          end_epoch_ms: 3_600_000,
-          fixed: false,
+          ...result.assignments[0]!,
+          slot_id: "store-slot-2",
+          start_epoch_ms: Date.UTC(2027, 0, 1, 1, 30),
+          end_epoch_ms: Date.UTC(2027, 0, 1, 2),
         },
       ],
       quality: { ...result.quality, preferred_penalty: result.quality.preferred_penalty - 1 },
     };
+    expect(
+      await sql<{ valid: boolean }[]>`
+        SELECT phase4_schedule_assignments_valid(${sql.json(input)},${sql.json(preferredTieBreak.assignments)}) AS valid`,
+    ).toEqual([{ valid: true }]);
     expect(
       await firstStore.checkpointBest({
         jobId,
@@ -151,6 +232,7 @@ describeInfra("PostgresScheduleJobStore", () => {
         expectedInputHash: inputHash,
         candidate: preferredTieBreak,
         iteration: 8,
+        exploredCandidates: 3,
       }),
     ).toMatchObject({ accepted: true, result: { result_revision: 2, quality: { preferred_penalty: 18 } } });
 
@@ -171,9 +253,20 @@ describeInfra("PostgresScheduleJobStore", () => {
     });
     expect(resumed).toMatchObject({
       outcome: "claimed",
-      job: { continuationIteration: 9, currentBest: { result_revision: 2, quality: { score: 81 } } },
+      job: {
+        continuationIteration: 9,
+        exploredCandidates: 3,
+        currentBest: { result_revision: 2, quality: { score: 81 } },
+      },
     });
     if (resumed.outcome !== "claimed") throw new Error("Expected resumed claim");
+    await secondStore.recordProgress({
+      jobId,
+      workerId: "scheduler-two",
+      fenceToken: resumed.job.fenceToken,
+      iteration: 9,
+      exploredCandidates: 4,
+    });
 
     await sql`SELECT phase4_request_schedule_cancellation(${jobId}::uuid,${accountId}::uuid,'cancel-store-test')`;
     expect(await secondStore.getCancellationStatus(jobId, resumed.job.fenceToken)).toMatchObject({
@@ -200,6 +293,51 @@ describeInfra("PostgresScheduleJobStore", () => {
     expect(
       await firstStore.claimJob({ jobId, workerId: "scheduler-three", expectedInputHash: inputHash, leaseMs: 5_000 }),
     ).toEqual({ outcome: "terminal", state: "cancelled", currentBestRevision: 2 });
+
+    const progressOnlyJobId = randomUUID();
+    const progressOnlyInput: ScheduleJobInput = { ...input, job_id: progressOnlyJobId };
+    const progressOnlyInputHash = deterministicJsonHash(progressOnlyInput);
+    await sql`
+      INSERT INTO schedule_generation_jobs(
+        id,organisation_id,competition_id,objective,input_snapshot,input_hash,requested_by,request_id,correlation_id
+      ) VALUES(
+        ${progressOnlyJobId},${organisationId},${competitionId},'balanced',${sql.json(progressOnlyInput)},
+        ${progressOnlyInputHash},${accountId},'request-progress-only','correlation-progress-only'
+      )`;
+    const progressOnlyClaim = await firstStore.claimJob({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-one",
+      expectedInputHash: progressOnlyInputHash,
+      leaseMs: 5_000,
+    });
+    if (progressOnlyClaim.outcome !== "claimed") throw new Error("Expected progress-only claim");
+    await firstStore.recordProgress({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-one",
+      fenceToken: progressOnlyClaim.job.fenceToken,
+      iteration: 4,
+      exploredCandidates: 5,
+    });
+    await sql`UPDATE schedule_generation_jobs SET lease_expires_at=now()-interval '1 second'
+      WHERE id=${progressOnlyJobId}`;
+    const recoveredProgressOnly = await secondStore.claimJob({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-two",
+      expectedInputHash: progressOnlyInputHash,
+      leaseMs: 5_000,
+    });
+    expect(recoveredProgressOnly).toMatchObject({
+      outcome: "claimed",
+      job: { continuationIteration: 5, exploredCandidates: 5, currentBest: null },
+    });
+    if (recoveredProgressOnly.outcome !== "claimed") throw new Error("Expected recovered progress-only claim");
+    await secondStore.finishJob({
+      jobId: progressOnlyJobId,
+      workerId: "scheduler-progress-two",
+      fenceToken: recoveredProgressOnly.job.fenceToken,
+      state: "no_solution",
+      currentBestRevision: null,
+    });
 
     const continuationJobId = randomUUID();
     const continuationInput: ScheduleJobInput = { ...input, job_id: continuationJobId };
@@ -263,7 +401,12 @@ describeInfra("PostgresScheduleJobStore", () => {
       workerId: "scheduler-dead-letter",
       fenceToken: deadClaim.job.fenceToken,
       expectedInputHash: deadLetterInputHash,
-      candidate: { ...candidate(50), job_id: deadLetterJobId, source_revision: deadLetterInput.source_revision },
+      candidate: {
+        ...candidate(50),
+        job_id: deadLetterJobId,
+        source_revision: deadLetterInput.source_revision,
+        assignments: result.assignments,
+      },
       iteration: 2,
     });
     await firstStore.releaseAfterFailure({
@@ -330,18 +473,20 @@ async function seedWorld(ids: { accountId: string; organisationId: string; compe
       ${formatRevisionId},${deterministicJsonHash(definition)},false,false,false,false,0,0,0,false,${ids.accountId}
     )`;
   await sql`SELECT phase4_publish_format_revision(${formatRevisionId},${ids.accountId},'publish-scheduler-store')`;
-  const [match] = await sql<{ id: string }[]>`
-    SELECT id FROM matches WHERE format_revision_id=${formatRevisionId} ORDER BY ordinal LIMIT 1`;
+  const [match] = await sql<{ id: string; possible_entry_ids: string[] }[]>`
+    SELECT match.id,
+      ARRAY(SELECT entry_id FROM phase4_match_possible_entries(match.id) ORDER BY entry_id) AS possible_entry_ids
+    FROM matches match WHERE match.format_revision_id=${formatRevisionId} ORDER BY match.ordinal LIMIT 1`;
   const [capacity] = await sql<{ capacity_revision: number; capacity_hash: string }[]>`
     SELECT capacity_revision,phase4_capacity_hash(${ids.competitionId}) AS capacity_hash
     FROM competitions WHERE id=${ids.competitionId}`;
   if (match === undefined || capacity === undefined) throw new Error("Failed to seed authoritative schedule input");
   return {
     divisionId,
-    entryIds,
     areaId,
     intervalId,
     matchId: match.id,
+    possibleEntryIds: match.possible_entry_ids,
     capacityRevision: Number(capacity.capacity_revision),
     capacityHash: capacity.capacity_hash,
   };

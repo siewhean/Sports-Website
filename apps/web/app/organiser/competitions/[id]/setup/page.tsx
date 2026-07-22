@@ -1,11 +1,11 @@
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
-import { AssistedSetupWorkspace } from "@/components/phase4/setup/AssistedSetupWorkspace";
+import { AssistedSetupJourney } from "@/components/phase4/setup/AssistedSetupJourney";
 import { phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase4SetupCopy } from "@/lib/phase4-assisted-setup";
 import { getAssistedSetupDocument } from "@/lib/phase4-assisted-setup.server";
-import { opaqueId } from "@matchday/ui";
+import { opaqueId, translate as t } from "@matchday/ui";
 
 export default async function AssistedSetupPage({
   params,
@@ -36,22 +36,31 @@ export default async function AssistedSetupPage({
             ? phase4SetupCopy.offline
             : setup.state === "conflict"
               ? phase4SetupCopy.conflict
-              : setup.state === "read-only"
-                ? phase4SetupCopy.readOnly
-                : phase4SetupCopy.saved
+              : setup.state === "expired"
+                ? t("prototype.5fa07d1f9ee4")
+                : setup.state === "read-only"
+                  ? phase4SetupCopy.readOnly
+                  : phase4SetupCopy.saved
       }
       syncState={
         setup.state === "offline"
           ? opaqueId("offline")
           : setup.state === "conflict"
             ? opaqueId("conflict")
-            : setup.state === "read-only"
+            : setup.state === "expired"
               ? opaqueId("read-only")
-              : setup.state === "ready"
-                ? opaqueId("saved")
-                : opaqueId("unavailable")
+              : setup.state === "read-only"
+                ? opaqueId("read-only")
+                : setup.state === "ready"
+                  ? opaqueId("saved")
+                  : opaqueId("unavailable")
       }
-      sectionContent={<AssistedSetupWorkspace document={setup} />}
+      sectionContent={
+        <AssistedSetupJourney
+          key={`${setup.state}:${setup.setup?.id ?? opaqueId("no-document")}:${setup.setup?.revision ?? 0}`}
+          document={setup}
+        />
+      }
     />
   );
 }

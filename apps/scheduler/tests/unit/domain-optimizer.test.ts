@@ -16,7 +16,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: new AbortController().signal,
-        maxYieldIntervalMs: 100,
+        maxYieldIntervalMs: 1_000,
       }),
     );
     const replay = await collect(
@@ -25,7 +25,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: new AbortController().signal,
-        maxYieldIntervalMs: 100,
+        maxYieldIntervalMs: 1_000,
       }),
     );
 
@@ -50,7 +50,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: new AbortController().signal,
-        maxYieldIntervalMs: 100,
+        maxYieldIntervalMs: 1_000,
       }),
     );
     expect(generated).toBeDefined();
@@ -102,7 +102,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: abort.signal,
-        maxYieldIntervalMs: 100,
+        maxYieldIntervalMs: 1_000,
       })
       [Symbol.asyncIterator]();
     const first = await iterator.next();

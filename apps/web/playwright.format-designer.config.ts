@@ -21,7 +21,7 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "MATCHDAY_PHASE2_DATA_MODE=demo pnpm build && (MATCHDAY_PHASE2_DATA_MODE=demo pnpm start --hostname 127.0.0.1 --port 3101 & next_pid=$!; trap 'kill $next_pid 2>/dev/null || true' EXIT INT TERM; node tests/helpers/https-proxy.mjs)",
+      "APP_ENV=local MATCHDAY_PHASE2_DATA_MODE=demo MATCHDAY_ALLOW_DEMO_FIXTURES=1 pnpm build && (APP_ENV=local MATCHDAY_PHASE2_DATA_MODE=demo MATCHDAY_ALLOW_DEMO_FIXTURES=1 pnpm start --hostname 127.0.0.1 --port 3101 & next_pid=$!; trap 'kill $next_pid 2>/dev/null || true' EXIT INT TERM; node tests/helpers/https-proxy.mjs)",
     url: "https://127.0.0.1:3100/format",
     ignoreHTTPSErrors: true,
     reuseExistingServer: true,

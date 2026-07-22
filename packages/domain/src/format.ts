@@ -363,6 +363,45 @@ export type FormatRecommendation = {
   readonly graph: FormatGraph;
 };
 
+export type CompetitionFormatRecommendationRequest = {
+  readonly sportCode: string;
+  readonly divisions: readonly Readonly<{ id: string; entryCount: number }>[];
+  readonly availableMatchSlots: number;
+  readonly minimumGuaranteedMatches?: number;
+  readonly rankAllEntries?: boolean;
+  readonly knockoutRequired?: boolean;
+  readonly placementRequired?: boolean;
+  readonly crossGroupAllowed?: boolean;
+  readonly priority?: "speed" | "simplicity" | "participation";
+};
+
+export type CompetitionFormatRecommendation = {
+  readonly id: string;
+  readonly strategy: FormatTemplateStrategy;
+  readonly label: string;
+  readonly advantage: string;
+  readonly capacityStatus: "fits" | "tight" | "requires_changes";
+  readonly scheduleFeasibility: "infeasible" | "not_checked";
+  readonly matchCount: number;
+  readonly guaranteedMatches: number;
+  readonly rankingCoverage: "all_entries" | "podium" | "champion";
+  readonly availableMatchSlots: number;
+  readonly spareMatchSlots: number;
+  readonly divisions: readonly Readonly<{
+    divisionId: string;
+    entryCount: number;
+    graph: FormatGraph;
+    matchCount: number;
+    guaranteedMatches: number;
+  }>[];
+  readonly warningCodes: readonly string[];
+};
+
+export type CompetitionFormatRecommendationSet = {
+  readonly recommendations: readonly CompetitionFormatRecommendation[];
+  readonly requiresChanges: CompetitionFormatRecommendation | null;
+};
+
 type MutableStage = {
   id: string;
   label: string;
@@ -1506,6 +1545,118 @@ export function recommendFormats(request: FormatRecommendationRequest): readonly
         graph: candidate.template.graph,
       })),
   ) as readonly FormatRecommendation[];
+}
+
+/**
+ * Builds competition-level alternatives only after the caller has resolved
+ * exact capacity and per-division entry counts. A family applies the same
+ * strategy to every division, so the displayed totals cannot hide capacity
+ * consumed by another division.
+ */
+export function recommendCompetitionFormats(
+  request: CompetitionFormatRecommendationRequest,
+): CompetitionFormatRecommendationSet {
+  const supportedSports = new Set(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"]);
+  if (!supportedSports.has(request.sportCode)) throw new Error("Sport is not supported for format recommendations");
+  if (!Number.isSafeInteger(request.availableMatchSlots) || request.availableMatchSlots < 0)
+    throw new Error("Available match slots must be a non-negative integer");
+  if (request.divisions.length === 0) throw new Error("At least one division is required");
+  if (new Set(request.divisions.map((division) => division.id)).size !== request.divisions.length)
+    throw new Error("Division IDs must be distinct");
+  const minimumGuaranteedMatches = request.minimumGuaranteedMatches ?? 1;
+  if (!Number.isSafeInteger(minimumGuaranteedMatches) || minimumGuaranteedMatches < 1)
+    throw new Error("Minimum guaranteed matches must be a positive integer");
+
+  const strategies: readonly FormatTemplateStrategy[] = ["full_placement", "championship_focus", "compact_knockout"];
+  const candidates = strategies.flatMap((strategy): CompetitionFormatRecommendation[] => {
+    const divisions = request.divisions.map((division) => {
+      if (!defaultFormatEntryCounts.includes(division.entryCount as DefaultFormatEntryCount))
+        throw new Error(`Division ${division.id} has an unsupported entry count`);
+      const template = createDefaultFormatTemplates(division.entryCount as DefaultFormatEntryCount).find(
+        (item) => item.strategy === strategy,
+      );
+      if (!template) throw new Error(`Missing ${strategy} template for division ${division.id}`);
+      if (!validateFormatGraph(template.graph).valid) return null;
+      return {
+        divisionId: division.id,
+        entryCount: division.entryCount,
+        graph: template.graph,
+        matchCount: template.metrics.matchCount,
+        guaranteedMatches: template.metrics.guaranteedMatches,
+      };
+    });
+    if (divisions.some((division) => division === null)) return [];
+    const exactDivisions = divisions as NonNullable<(typeof divisions)[number]>[];
+    const matchCount = exactDivisions.reduce((total, division) => total + division.matchCount, 0);
+    const guaranteedMatches = Math.min(...exactDivisions.map((division) => division.guaranteedMatches));
+    const purposes = new Set(
+      exactDivisions.flatMap((division) => division.graph.matches.map((match) => match.purpose)),
+    );
+    const rankingCoverage = purposes.has("classification")
+      ? "all_entries"
+      : purposes.has("placement")
+        ? "podium"
+        : "champion";
+    const hasKnockout = exactDivisions.every((division) =>
+      division.graph.stages.some((stage) => stage.kind === "single_elimination"),
+    );
+    const usesCrossGroupQualification = exactDivisions.some((division) =>
+      division.graph.matches.some((match) => match.home.type === "stage_rank" || match.away.type === "stage_rank"),
+    );
+    if (guaranteedMatches < minimumGuaranteedMatches) return [];
+    if (request.rankAllEntries && rankingCoverage !== "all_entries") return [];
+    if (request.placementRequired && strategy !== "full_placement") return [];
+    if (request.knockoutRequired && !hasKnockout) return [];
+    if (request.crossGroupAllowed === false && usesCrossGroupQualification) return [];
+    const spareMatchSlots = request.availableMatchSlots - matchCount;
+    const fits = spareMatchSlots >= 0;
+    const tight = fits && spareMatchSlots <= Math.max(1, Math.floor(request.availableMatchSlots * 0.1));
+    return [
+      {
+        id: `competition-${strategy}`,
+        strategy,
+        label:
+          strategy === "full_placement"
+            ? "Full placement"
+            : strategy === "championship_focus"
+              ? "Championship focus"
+              : "Compact knockout",
+        advantage:
+          strategy === "full_placement"
+            ? "Ranks every entry."
+            : strategy === "championship_focus"
+              ? "Keeps complete group play with shorter finals."
+              : "Uses the fewest match slots.",
+        capacityStatus: fits ? (tight ? "tight" : "fits") : "requires_changes",
+        scheduleFeasibility: fits ? "not_checked" : "infeasible",
+        matchCount,
+        guaranteedMatches,
+        rankingCoverage,
+        availableMatchSlots: request.availableMatchSlots,
+        spareMatchSlots,
+        divisions: exactDivisions,
+        warningCodes: fits ? [] : ["insufficient_capacity"],
+      },
+    ];
+  });
+  const priority = request.priority ?? "simplicity";
+  const preference: Record<typeof priority, readonly FormatTemplateStrategy[]> = {
+    speed: ["compact_knockout", "championship_focus", "full_placement"],
+    simplicity: ["championship_focus", "compact_knockout", "full_placement"],
+    participation: ["full_placement", "championship_focus", "compact_knockout"],
+  };
+  const order = new Map(preference[priority].map((strategy, index) => [strategy, index]));
+  const sorted = [...candidates].sort(
+    (left, right) =>
+      (order.get(left.strategy) ?? 99) - (order.get(right.strategy) ?? 99) || left.id.localeCompare(right.id),
+  );
+  const recommendations = sorted.filter((candidate) => candidate.capacityStatus !== "requires_changes").slice(0, 3);
+  const requiresChanges =
+    sorted
+      .filter((candidate) => candidate.capacityStatus === "requires_changes")
+      .sort((left, right) => right.spareMatchSlots - left.spareMatchSlots || left.id.localeCompare(right.id))[0] ??
+    null;
+  return freezeDeep({ recommendations, requiresChanges }) as CompetitionFormatRecommendationSet;
 }
 
 function stableStringify(value: unknown): string {

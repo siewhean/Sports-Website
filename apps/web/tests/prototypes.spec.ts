@@ -13,8 +13,15 @@ test("all web responses enforce the foundation security headers", async ({ reque
   for (const route of ["/", "/setup", "/missing"] as const) {
     const response = await request.get(route);
     const headers = response.headers();
-    expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
-    expect(headers["strict-transport-security"]).toContain("max-age=31536000");
+    const csp = headers["content-security-policy"] ?? "";
+    expect(csp).toContain("frame-ancestors 'none'");
+    if (response.url().startsWith("https:")) {
+      expect(csp).toContain("upgrade-insecure-requests");
+      expect(headers["strict-transport-security"]).toContain("max-age=31536000");
+    } else {
+      expect(csp).not.toContain("upgrade-insecure-requests");
+      expect(headers["strict-transport-security"]).toBeUndefined();
+    }
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["x-frame-options"]).toBe("DENY");
     expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");

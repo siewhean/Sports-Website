@@ -67,6 +67,12 @@ function runtime() {
       recoverable: true,
       idempotent_replay: false,
     })),
+    runScheduleMaintenance: vi.fn(async () => ({
+      warnings_emitted: 1,
+      revisions_expired: 1,
+      queued_jobs_pending_recovery: 0,
+    })),
+    recoverQueuedScheduleJobs: vi.fn(async () => ({ recovered: 0, failed: 0 })),
     archiveFormatTemplate: vi.fn(async () => {
       throw new ApiError(409, "TEMPLATE_ARCHIVED", "Template is already archived");
     }),
@@ -171,5 +177,30 @@ describe("Phase 4 authenticated route boundary", () => {
     const missing = await app.inject({ method: "GET", url: "/api/v1/phase4/not-a-route" });
     expect(missing.statusCode).toBe(404);
     expect(missing.json().error).toMatchObject({ code: "ROUTE_NOT_FOUND" });
+  });
+
+  it("keeps expiry maintenance hidden behind the operational token", async () => {
+    const phase4 = runtime();
+    const app = await buildApp({
+      config: { ...testConfig(), deepHealthToken: "phase4-maintenance-secret" },
+      probes: healthyProbes,
+      identityRuntime: identityRuntime(),
+      phase4Runtime: phase4,
+    });
+    apps.push(app);
+
+    const hidden = await app.inject({ method: "POST", url: "/internal/phase4/schedule-maintenance" });
+    expect(hidden.statusCode).toBe(404);
+    expect(phase4.runScheduleMaintenance).not.toHaveBeenCalled();
+
+    const maintained = await app.inject({
+      method: "POST",
+      url: "/internal/phase4/schedule-maintenance",
+      headers: { "x-deep-health-token": "phase4-maintenance-secret" },
+    });
+    expect(maintained.statusCode).toBe(200);
+    expect(maintained.json()).toMatchObject({ warnings_emitted: 1, revisions_expired: 1 });
+    expect(phase4.runScheduleMaintenance).toHaveBeenCalledOnce();
+    expect(phase4.recoverQueuedScheduleJobs).toHaveBeenCalledOnce();
   });
 });

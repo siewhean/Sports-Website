@@ -12,7 +12,13 @@ function record(value: unknown): Record<string, unknown> | null {
 function isRequest(value: Record<string, unknown> | null): value is Record<string, unknown> {
   if (!value) return false;
   const keys = Object.keys(value).sort().join(",");
-  if (keys !== "competition_id,idempotency_key,locale,text" && keys !== "competition_id,idempotency_key,text" && keys !== "idempotency_key,locale,text" && keys !== "idempotency_key,text") return false;
+  if (
+    keys !== "competition_id,idempotency_key,locale,text" &&
+    keys !== "competition_id,idempotency_key,text" &&
+    keys !== "idempotency_key,locale,text" &&
+    keys !== "idempotency_key,text"
+  )
+    return false;
   return (
     isPhase4IdempotencyKey(value.idempotency_key) &&
     typeof value.text === "string" &&

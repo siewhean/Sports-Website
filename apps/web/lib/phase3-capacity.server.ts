@@ -1,5 +1,7 @@
 import "server-only";
 
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+
 import { cookies, headers } from "next/headers";
 import { cookieHostMatches } from "@/lib/phase2-organiser";
 import { parseCapacityResponse, type CapacityDocument, type CapacitySurfaceState } from "@/lib/phase3-capacity";
@@ -140,7 +142,7 @@ export async function getCapacityDocument(
   competitionName: string,
   previewState?: string,
 ): Promise<CapacityDocument> {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
+  if (demoFixturesEnabled()) {
     const allowed = new Set<CapacitySurfaceState>([
       "ready",
       "loading",

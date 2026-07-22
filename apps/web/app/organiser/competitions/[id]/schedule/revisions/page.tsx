@@ -11,6 +11,25 @@ export default async function ScheduleRevisionsPage({ params }: { params: Promis
   if (result.state === "notFound") notFound();
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase4ScheduleCopy.errorBody);
-  const document = await getScheduleDocument({ competitionId: result.competition.id, competitionName: result.competition.name, timeZone: result.competition.timezone, publicationRevision: result.competition.publicationRevision });
-  return <OrganiserWorkspace competition={result.competition} section={phase4ScheduleMachine.section} sectionAction={null} pageTitle={phase4ScheduleCopy.revisionHistory} pageIntro={phase4ScheduleCopy.immutablePrivateHistory} pageEyebrow={phase4ScheduleCopy.eyebrow} syncLabel={phase4ScheduleCopy.saved} syncState={document.state === phase4ScheduleMachine.ready ? phase4ScheduleMachine.saved : phase4ScheduleMachine.unavailable} sectionContent={<ScheduleRevisionHistory document={document} />} />;
+  const document = await getScheduleDocument({
+    competitionId: result.competition.id,
+    competitionName: result.competition.name,
+    timeZone: result.competition.timezone,
+    publicationRevision: result.competition.publicationRevision,
+  });
+  return (
+    <OrganiserWorkspace
+      competition={result.competition}
+      section={phase4ScheduleMachine.section}
+      sectionAction={null}
+      pageTitle={phase4ScheduleCopy.revisionHistory}
+      pageIntro={phase4ScheduleCopy.immutablePrivateHistory}
+      pageEyebrow={phase4ScheduleCopy.eyebrow}
+      syncLabel={phase4ScheduleCopy.saved}
+      syncState={
+        document.state === phase4ScheduleMachine.ready ? phase4ScheduleMachine.saved : phase4ScheduleMachine.unavailable
+      }
+      sectionContent={<ScheduleRevisionHistory document={document} />}
+    />
+  );
 }

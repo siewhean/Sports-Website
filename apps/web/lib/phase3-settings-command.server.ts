@@ -2,10 +2,16 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
-import { requestOriginMatchesHost } from "@/lib/phase3-origin";
+import { cookieHostMatches } from "./phase2-organiser";
+import { requestOriginMatchesHost } from "./phase3-origin";
 
 type Validator = (value: unknown) => boolean;
+
+export type Phase3ReadResult = Readonly<{
+  ok: boolean;
+  status: number;
+  payload: unknown;
+}>;
 
 function apiBaseUrl(): URL | null {
   const configured = process.env.MATCHDAY_API_BASE_URL?.trim();
@@ -72,9 +78,34 @@ export function hasExactKeys(value: Record<string, unknown>, keys: readonly stri
   return Object.keys(value).sort().join(",") === [...keys].sort().join(",");
 }
 
+export async function readPhase3Json(request: NextRequest, path: string): Promise<Phase3ReadResult> {
+  const base = apiBaseUrl();
+  if (!base) return { ok: false, status: 503, payload: null };
+  const cookie = sessionCookie(request, base);
+  if (!cookie) return { ok: false, status: 401, payload: null };
+  try {
+    const response = await fetch(new URL(path, base), {
+      cache: "no-store",
+      headers: { accept: "application/json", cookie },
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload: await response.json().catch(() => null),
+    };
+  } catch {
+    return { ok: false, status: 503, payload: null };
+  }
+}
+
 export async function forwardPhase3Mutation(
   request: NextRequest,
-  input: { method: "PUT" | "POST" | "DELETE"; path: string; body?: Record<string, unknown>; validate: Validator },
+  input: {
+    method: "PUT" | "POST" | "PATCH" | "DELETE";
+    path: string;
+    body?: Record<string, unknown>;
+    validate: Validator;
+  },
 ) {
   const requestOrigin = request.headers.get("origin");
   const requestHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || request.headers.get("host");

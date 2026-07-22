@@ -26,6 +26,11 @@ describe("ScheduleJobProcessor", () => {
       exploredCandidates: 3,
     });
     expect(store.checkpoints.map(({ candidate }) => candidate.quality?.score)).toEqual([60, 80]);
+    expect(store.progress).toEqual([
+      { iteration: 0, exploredCandidates: 1 },
+      { iteration: 1, exploredCandidates: 2 },
+      { iteration: 2, exploredCandidates: 3 },
+    ]);
     expect(context.updateProgress).toHaveBeenLastCalledWith({
       iteration: 2,
       explored_candidates: 3,
@@ -44,6 +49,16 @@ describe("ScheduleJobProcessor", () => {
     expect(optimizer.request).toMatchObject({ startIteration: 9, seed: { result_revision: 4 } });
     expect(store.checkpoints).toHaveLength(1);
     expect(store.finished).toEqual({ state: "completed", currentBestRevision: 5 });
+  });
+
+  it("continues the durable progress counter after a retry claim", async () => {
+    const store = new MemoryStore({ continuationIteration: 3, exploredCandidates: 3 });
+    const optimizer = new SequenceOptimizer([{ iteration: 3, result: candidate(75) }]);
+
+    const result = await processorWith(store, optimizer).process(queuePayload(store.input), executionContext());
+
+    expect(result.exploredCandidates).toBe(4);
+    expect(store.progress).toEqual([{ iteration: 3, exploredCandidates: 4 }]);
   });
 
   it("ranks and checkpoints only the trusted recomputed candidate provenance", async () => {
@@ -267,14 +282,20 @@ class MemoryStore implements ScheduleJobStore {
   readonly input = scheduleInput();
   inputHash = queuePayload(this.input).inputHash;
   readonly checkpoints: { candidate: ScheduleJobResult; iteration: number }[] = [];
+  readonly progress: { iteration: number; exploredCandidates: number }[] = [];
   finished: { state: string; currentBestRevision: number | null } | undefined;
   released: { failureClass: string; retainedBestRevision: number | null } | undefined;
   currentBest: ScheduleJobResult | null;
   continuationIteration: number;
 
-  constructor(options: { currentBest?: ScheduleJobResult; continuationIteration?: number } = {}) {
+  readonly exploredCandidates: number;
+
+  constructor(
+    options: { currentBest?: ScheduleJobResult; continuationIteration?: number; exploredCandidates?: number } = {},
+  ) {
     this.currentBest = options.currentBest ?? null;
     this.continuationIteration = options.continuationIteration ?? 0;
+    this.exploredCandidates = options.exploredCandidates ?? 0;
   }
 
   async probe() {
@@ -292,6 +313,7 @@ class MemoryStore implements ScheduleJobStore {
         correlationId: "request-phase4-schedule",
         continuedFromJobId: null,
         continuationIteration: this.continuationIteration,
+        exploredCandidates: this.exploredCandidates,
         currentBest: this.currentBest,
       },
     };
@@ -303,11 +325,17 @@ class MemoryStore implements ScheduleJobStore {
     requested: false,
     requestedAtEpochMs: null,
   }));
-  async checkpointBest(request: { candidate: ScheduleJobResult; iteration: number }) {
+  async checkpointBest(request: { candidate: ScheduleJobResult; iteration: number; exploredCandidates?: number }) {
     this.checkpoints.push({ candidate: request.candidate, iteration: request.iteration });
+    if (request.exploredCandidates !== undefined) {
+      this.progress.push({ iteration: request.iteration, exploredCandidates: request.exploredCandidates });
+    }
     const result = { ...request.candidate, result_revision: (this.currentBest?.result_revision ?? 0) + 1 };
     this.currentBest = result;
     return { accepted: true, result };
+  }
+  async recordProgress(request: { iteration: number; exploredCandidates: number }) {
+    this.progress.push({ iteration: request.iteration, exploredCandidates: request.exploredCandidates });
   }
   async finishJob(request: {
     state: "cancelled" | "completed" | "no_solution" | "stale";

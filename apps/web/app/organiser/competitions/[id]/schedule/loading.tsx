@@ -6,12 +6,15 @@ import { phase4ScheduleMachine } from "@/lib/phase4-schedule";
 import { scheduleUnavailableDocument } from "@/lib/phase4-schedule.server";
 
 export default function ScheduleLoading() {
-  const document = scheduleUnavailableDocument({
-    competitionId: phase2Competition.id,
-    competitionName: phase2Competition.name,
-    timeZone: phase2Competition.timezone,
-    publicationRevision: phase2Competition.publicationRevision,
-  }, phase4ScheduleMachine.loading);
+  const document = scheduleUnavailableDocument(
+    {
+      competitionId: phase2Competition.id,
+      competitionName: phase2Competition.name,
+      timeZone: phase2Competition.timezone,
+      publicationRevision: phase2Competition.publicationRevision,
+    },
+    phase4ScheduleMachine.loading,
+  );
   return (
     <OrganiserWorkspace
       competition={phase2Competition}

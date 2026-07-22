@@ -134,3 +134,9 @@ export {
   type Phase4SetupStepValue,
   type Phase4SetupValues,
 } from "./phase-4-setup.js";
+export type {
+  Phase4PatchableSetupStep,
+  Phase4PatchableSetupStepId,
+  Phase4SetupPatchRequest,
+  Phase4SetupPatchResponse,
+} from "./phase-4-setup-patch.js";

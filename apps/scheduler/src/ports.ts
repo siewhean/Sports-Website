@@ -42,6 +42,7 @@ export type ClaimedScheduleJob = Readonly<{
   correlationId: string;
   continuedFromJobId: string | null;
   continuationIteration: number;
+  exploredCandidates: number;
   currentBest: ScheduleJobResult | null;
 }>;
 
@@ -85,7 +86,15 @@ export interface ScheduleJobStore {
     expectedInputHash: string;
     candidate: ScheduleJobResult;
     iteration: number;
+    exploredCandidates?: number;
   }): Promise<ScheduleCheckpointResult>;
+  recordProgress(request: {
+    jobId: string;
+    workerId: string;
+    fenceToken: string;
+    iteration: number;
+    exploredCandidates: number;
+  }): Promise<void>;
   finishJob(request: {
     jobId: string;
     workerId: string;

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+
 import { cookies, headers } from "next/headers";
 import type { Phase4FormatBuilderDocument, Phase4FormatDraftView } from "@matchday/contracts";
 import { cookieHostMatches } from "@/lib/phase2-organiser";
@@ -9,7 +11,7 @@ import {
   type FormatBuilderPageDocument,
   type FormatSurfaceState,
 } from "@/lib/phase4-format";
-import { parseAssistedSetupDocument } from "@/lib/phase4-assisted-setup";
+import { isLaunchSportCode, parseFormatTemplateCompetitionContext } from "@/lib/phase4-template-context";
 
 function apiBaseUrl(): URL | null {
   try {
@@ -38,6 +40,7 @@ function unavailable(
   competitionName: string,
   divisionId: string,
   divisionName: string,
+  sportCode: string,
   state: FormatSurfaceState,
 ): FormatBuilderPageDocument {
   return {
@@ -47,6 +50,7 @@ function unavailable(
     divisionId,
     divisionName,
     organisationId: "",
+    sportCode,
     draft: null,
     templates: [],
   };
@@ -76,11 +80,75 @@ function demoDocument(): Phase4FormatBuilderDocument {
     }
   }
   const stages = [
-    { id: "stage-group-a", label: "Group A", kind: "group" as const, order: 1, groupIds: ["A"], groupSize: 4, outputRanks: 2, matchIds: groupMatches.filter((match) => match.stageId === "stage-group-a").map((match) => match.id), repetitions: 1, qualificationPositions: [1, 2], destinationStageIds: ["stage-semifinals"], seeding: "snake" as const, carriedResults: "none" as const },
-    { id: "stage-group-b", label: "Group B", kind: "group" as const, order: 2, groupIds: ["B"], groupSize: 4, outputRanks: 2, matchIds: groupMatches.filter((match) => match.stageId === "stage-group-b").map((match) => match.id), repetitions: 1, qualificationPositions: [1, 2], destinationStageIds: ["stage-semifinals"], seeding: "snake" as const, carriedResults: "none" as const },
-    { id: "stage-semifinals", label: "Semifinals", kind: "single_elimination" as const, order: 3, groupIds: [], groupSize: null, outputRanks: 2, matchIds: ["match-sf1", "match-sf2"], qualificationPositions: [1], destinationStageIds: ["stage-final", "stage-bronze"], seeding: "seeded" as const },
-    { id: "stage-bronze", label: "Third-place", kind: "bronze" as const, order: 4, groupIds: [], groupSize: null, outputRanks: 1, matchIds: ["match-bronze"], qualificationPositions: [1], destinationStageIds: [], placementRule: { coverage: "podium" as const, positions: [3] } },
-    { id: "stage-final", label: "Final", kind: "single_elimination" as const, order: 5, groupIds: [], groupSize: null, outputRanks: 1, matchIds: ["match-final"], qualificationPositions: [1], destinationStageIds: [], placementRule: { coverage: "champion_only" as const, positions: [1, 2] } },
+    {
+      id: "stage-group-a",
+      label: "Group A",
+      kind: "group" as const,
+      order: 1,
+      groupIds: ["A"],
+      groupSize: 4,
+      outputRanks: 2,
+      matchIds: groupMatches.filter((match) => match.stageId === "stage-group-a").map((match) => match.id),
+      repetitions: 1,
+      qualificationPositions: [1, 2],
+      destinationStageIds: ["stage-semifinals"],
+      seeding: "snake" as const,
+      carriedResults: "none" as const,
+    },
+    {
+      id: "stage-group-b",
+      label: "Group B",
+      kind: "group" as const,
+      order: 2,
+      groupIds: ["B"],
+      groupSize: 4,
+      outputRanks: 2,
+      matchIds: groupMatches.filter((match) => match.stageId === "stage-group-b").map((match) => match.id),
+      repetitions: 1,
+      qualificationPositions: [1, 2],
+      destinationStageIds: ["stage-semifinals"],
+      seeding: "snake" as const,
+      carriedResults: "none" as const,
+    },
+    {
+      id: "stage-semifinals",
+      label: "Semifinals",
+      kind: "single_elimination" as const,
+      order: 3,
+      groupIds: [],
+      groupSize: null,
+      outputRanks: 2,
+      matchIds: ["match-sf1", "match-sf2"],
+      qualificationPositions: [1],
+      destinationStageIds: ["stage-final", "stage-bronze"],
+      seeding: "seeded" as const,
+    },
+    {
+      id: "stage-bronze",
+      label: "Third-place",
+      kind: "bronze" as const,
+      order: 4,
+      groupIds: [],
+      groupSize: null,
+      outputRanks: 1,
+      matchIds: ["match-bronze"],
+      qualificationPositions: [1],
+      destinationStageIds: [],
+      placementRule: { coverage: "podium" as const, positions: [3] },
+    },
+    {
+      id: "stage-final",
+      label: "Final",
+      kind: "single_elimination" as const,
+      order: 5,
+      groupIds: [],
+      groupSize: null,
+      outputRanks: 1,
+      matchIds: ["match-final"],
+      qualificationPositions: [1],
+      destinationStageIds: [],
+      placementRule: { coverage: "champion_only" as const, positions: [1, 2] },
+    },
   ];
   return {
     schema_version: 1,
@@ -91,10 +159,42 @@ function demoDocument(): Phase4FormatBuilderDocument {
       stages,
       matches: [
         ...groupMatches,
-        { id: "match-sf1", stageId: "stage-semifinals", round: 1, order: 1, purpose: "progression", home: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 1 }, away: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 2 } },
-        { id: "match-sf2", stageId: "stage-semifinals", round: 1, order: 2, purpose: "progression", home: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 1 }, away: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 2 } },
-        { id: "match-bronze", stageId: "stage-bronze", round: 1, order: 3, purpose: "placement", home: { type: "loser", matchId: "match-sf1" }, away: { type: "loser", matchId: "match-sf2" } },
-        { id: "match-final", stageId: "stage-final", round: 1, order: 4, purpose: "championship", home: { type: "winner", matchId: "match-sf1" }, away: { type: "winner", matchId: "match-sf2" } },
+        {
+          id: "match-sf1",
+          stageId: "stage-semifinals",
+          round: 1,
+          order: 1,
+          purpose: "progression",
+          home: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 1 },
+          away: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 2 },
+        },
+        {
+          id: "match-sf2",
+          stageId: "stage-semifinals",
+          round: 1,
+          order: 2,
+          purpose: "progression",
+          home: { type: "stage_rank", stageId: "stage-group-b", groupId: "B", rank: 1 },
+          away: { type: "stage_rank", stageId: "stage-group-a", groupId: "A", rank: 2 },
+        },
+        {
+          id: "match-bronze",
+          stageId: "stage-bronze",
+          round: 1,
+          order: 3,
+          purpose: "placement",
+          home: { type: "loser", matchId: "match-sf1" },
+          away: { type: "loser", matchId: "match-sf2" },
+        },
+        {
+          id: "match-final",
+          stageId: "stage-final",
+          round: 1,
+          order: 4,
+          purpose: "championship",
+          home: { type: "winner", matchId: "match-sf1" },
+          away: { type: "winner", matchId: "match-sf2" },
+        },
       ],
       terminalMatchIds: ["match-bronze", "match-final"],
     },
@@ -112,12 +212,16 @@ function demoDocument(): Phase4FormatBuilderDocument {
 }
 
 function demoDraft(competitionId: string, divisionId: string, readOnly = false): Phase4FormatDraftView {
+  const draftId =
+    divisionId === "women" ? "6b3f7665-c8cd-47e5-b243-fae28f56f6fe" : "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed";
+  const rootRevisionId =
+    divisionId === "women" ? "6a2f6554-b7bc-46d4-a132-e9f17e45e5ed" : "59245771-cf60-4f50-977d-ed558e6eb147";
   return {
     competition_id: competitionId,
     division_id: divisionId,
-    draft_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
-    parent_revision_id: "59245771-cf60-4f50-977d-ed558e6eb147",
-    root_revision_id: "59245771-cf60-4f50-977d-ed558e6eb147",
+    draft_id: draftId,
+    parent_revision_id: rootRevisionId,
+    root_revision_id: rootRevisionId,
     revision: 6,
     status: "draft",
     created_at: "2026-07-20T04:00:00.000Z",
@@ -143,12 +247,43 @@ export async function getFormatBuilderDocument(input: {
   competitionName: string;
   divisionId: string;
   divisionName: string;
+  sportCode: string;
   previewState?: string;
 }): Promise<FormatBuilderPageDocument> {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
-    const allowed = new Set<FormatSurfaceState>(["ready", "loading", "empty", "error", "offline", "permission", "read-only", "conflict", "quota", "plan"]);
-    const state = allowed.has(input.previewState as FormatSurfaceState) ? (input.previewState as FormatSurfaceState) : "ready";
-    if (state !== "ready" && state !== "read-only") return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, state);
+  if (!isLaunchSportCode(input.sportCode))
+    return unavailable(
+      input.competitionId,
+      input.competitionName,
+      input.divisionId,
+      input.divisionName,
+      input.sportCode,
+      "error",
+    );
+  if (demoFixturesEnabled()) {
+    const allowed = new Set<FormatSurfaceState>([
+      "ready",
+      "loading",
+      "empty",
+      "error",
+      "offline",
+      "permission",
+      "read-only",
+      "conflict",
+      "quota",
+      "plan",
+    ]);
+    const state = allowed.has(input.previewState as FormatSurfaceState)
+      ? (input.previewState as FormatSurfaceState)
+      : "ready";
+    if (state !== "ready" && state !== "read-only")
+      return unavailable(
+        input.competitionId,
+        input.competitionName,
+        input.divisionId,
+        input.divisionName,
+        input.sportCode,
+        state,
+      );
     return {
       state,
       competitionId: input.competitionId,
@@ -156,54 +291,120 @@ export async function getFormatBuilderDocument(input: {
       divisionId: input.divisionId,
       divisionName: input.divisionName,
       organisationId: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
+      sportCode: input.sportCode,
       draft: demoDraft(input.competitionId, input.divisionId, state === "read-only"),
       templates: [],
     };
   }
   const base = apiBaseUrl();
-  if (!base) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, "error");
+  if (!base)
+    return unavailable(
+      input.competitionId,
+      input.competitionName,
+      input.divisionId,
+      input.divisionName,
+      input.sportCode,
+      "error",
+    );
   const cookie = await sessionCookie(base);
-  if (!cookie) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, "permission");
+  if (!cookie)
+    return unavailable(
+      input.competitionId,
+      input.competitionName,
+      input.divisionId,
+      input.divisionName,
+      input.sportCode,
+      "permission",
+    );
   try {
-    const [response, setupResponse] = await Promise.all([
+    const [response, competitionResponse] = await Promise.all([
       fetch(
-        new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/divisions/${encodeURIComponent(input.divisionId)}/format-builder`, base),
+        new URL(
+          `/api/v1/competitions/${encodeURIComponent(input.competitionId)}/divisions/${encodeURIComponent(input.divisionId)}/format-builder`,
+          base,
+        ),
         { cache: "no-store", headers: { accept: "application/json", cookie } },
       ),
-      fetch(new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/setup-draft`, base), {
+      fetch(new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}`, base), {
         cache: "no-store",
         headers: { accept: "application/json", cookie },
       }),
     ]);
-    if (response.status === 404) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, "empty");
-    if (response.status === 401 || response.status === 403) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, "permission");
-    if (!response.ok) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, "error");
-    const parsed = parseFormatWorkspaceResponse(await response.json().catch(() => null), input.competitionId, input.divisionId);
-    if (!parsed) return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, "error");
-    const setup = setupResponse.ok
-      ? parseAssistedSetupDocument(await setupResponse.json().catch(() => null), input.competitionId)
-      : null;
-    let templates = [] as FormatBuilderPageDocument["templates"];
-    if (setup) {
-      const templateResponse = await fetch(
-        new URL(`/api/v1/organisations/${encodeURIComponent(setup.organisation_id)}/format-templates`, base),
-        { cache: "no-store", headers: { accept: "application/json", cookie } },
+    if (response.status === 404)
+      return unavailable(
+        input.competitionId,
+        input.competitionName,
+        input.divisionId,
+        input.divisionName,
+        input.sportCode,
+        "empty",
       );
-      if (templateResponse.ok)
-        templates =
-          parseOrganiserTemplateList(await templateResponse.json().catch(() => null), setup.organisation_id) ?? [];
-    }
+    if ([response.status, competitionResponse.status].some((status) => status === 401 || status === 403))
+      return unavailable(
+        input.competitionId,
+        input.competitionName,
+        input.divisionId,
+        input.divisionName,
+        input.sportCode,
+        "permission",
+      );
+    if (!response.ok || !competitionResponse.ok)
+      return unavailable(
+        input.competitionId,
+        input.competitionName,
+        input.divisionId,
+        input.divisionName,
+        input.sportCode,
+        "error",
+      );
+    const parsed = parseFormatWorkspaceResponse(
+      await response.json().catch(() => null),
+      input.competitionId,
+      input.divisionId,
+    );
+    const context = parseFormatTemplateCompetitionContext(
+      await competitionResponse.json().catch(() => null),
+      input.competitionId,
+    );
+    if (!parsed || !context)
+      return unavailable(
+        input.competitionId,
+        input.competitionName,
+        input.divisionId,
+        input.divisionName,
+        input.sportCode,
+        "error",
+      );
+
+    let templates = [] as FormatBuilderPageDocument["templates"];
+    const templateResponse = await fetch(
+      new URL(`/api/v1/organisations/${encodeURIComponent(context.organisationId)}/format-templates`, base),
+      { cache: "no-store", headers: { accept: "application/json", cookie } },
+    );
+    if (templateResponse.ok)
+      templates = (
+        parseOrganiserTemplateList(await templateResponse.json().catch(() => null), context.organisationId) ?? []
+      ).filter((template) => template.sport_code === context.sportCode);
+
     return {
       state: parsed.draft ? (parsed.draft.read_only ? "read-only" : "ready") : "empty",
       competitionId: input.competitionId,
       competitionName: input.competitionName,
       divisionId: input.divisionId,
       divisionName: input.divisionName,
-      organisationId: setup?.organisation_id ?? "",
+      organisationId: context.organisationId,
+      sportCode: context.sportCode,
       draft: parsed.draft,
       templates,
     };
   } catch {
-    return unavailable(input.competitionId, input.competitionName, input.divisionId, input.divisionName, "offline");
+    return unavailable(
+      input.competitionId,
+      input.competitionName,
+      input.divisionId,
+      input.divisionName,
+      input.sportCode,
+      "offline",
+    );
   }
 }

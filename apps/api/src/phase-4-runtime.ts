@@ -11,6 +11,7 @@ import type {
   Phase4FormatDraftView,
   Phase4FormatRevisionView,
   Phase4FormatValidationResponse,
+  Phase4AiFailureCode,
   Phase4OrganiserTemplateView,
   Phase4SaveFormatRevisionRequest,
   Phase4SaveOrganiserTemplateRequest,
@@ -24,6 +25,7 @@ import type {
   ScheduleJobView,
   ScheduleObjective,
   ScheduleOptionView,
+  ScheduleQuality,
   ScheduleRevisionView,
 } from "@matchday/contracts";
 import {
@@ -31,6 +33,7 @@ import {
   deriveSchedulingMatches,
   evaluateScheduleQuality,
   materialiseFormatGraph,
+  recommendCompetitionFormats,
   toScheduleJobInput,
   validateAssistedSetupStep,
   validateFormatBuilderDocument,
@@ -38,6 +41,7 @@ import {
   type AssistedSetupStepValues,
   type FormatBuilderDocument,
   type FormatGraph,
+  type CompetitionFormatRecommendation,
   type ScheduleProblem,
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
@@ -115,6 +119,8 @@ function mapPgError(error: unknown): never {
     throw new ApiError(409, "ACTIVE_SCHEDULE_JOB", "A schedule job is already active");
   if (/revision conflict|immediately preceding|expected.*revision/i.test(message))
     throw new ApiError(409, "REVISION_CONFLICT", "The resource changed; refresh and retry");
+  if (/archived format templates/i.test(message))
+    throw new ApiError(409, "TEMPLATE_ARCHIVED", "Archived format templates cannot be applied");
   if (/archived/i.test(message)) throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
   if (/permission|access|active member|tenant/i.test(message))
     throw new ApiError(403, "ACCESS_DENIED", "Access denied");
@@ -236,6 +242,18 @@ function setupDomainValues(values: Phase4SetupValues): AssistedSetupStepValues {
             advantage: value.advantage,
             matchCount: value.match_count,
             minimumMatchesPerEntry: value.minimum_matches_per_entry,
+            guaranteedMatches: value.guaranteed_matches,
+            rankingCoverage: value.ranking_coverage,
+            availableMatchSlots: value.available_match_slots,
+            divisionFormats: value.division_formats.map((format) => ({
+              divisionId: format.division_id,
+              candidateDivisionId: format.candidate_division_id,
+              formatRevisionId: format.format_revision_id,
+              definitionHash: format.format_definition_hash,
+              matchCount: format.match_count,
+              guaranteedMatches: format.guaranteed_matches,
+              rankingCoverage: format.ranking_coverage,
+            })),
             capacityStatus: value.capacity_status,
             schedulingStatus: value.scheduling_status,
             warningCodes: value.warning_codes,
@@ -250,6 +268,18 @@ function setupDomainValues(values: Phase4SetupValues): AssistedSetupStepValues {
                 advantage: values.format_recommendations.requires_changes.advantage,
                 matchCount: values.format_recommendations.requires_changes.match_count,
                 minimumMatchesPerEntry: values.format_recommendations.requires_changes.minimum_matches_per_entry,
+                guaranteedMatches: values.format_recommendations.requires_changes.guaranteed_matches,
+                rankingCoverage: values.format_recommendations.requires_changes.ranking_coverage,
+                availableMatchSlots: values.format_recommendations.requires_changes.available_match_slots,
+                divisionFormats: values.format_recommendations.requires_changes.division_formats.map((format) => ({
+                  divisionId: format.division_id,
+                  candidateDivisionId: format.candidate_division_id,
+                  formatRevisionId: format.format_revision_id,
+                  definitionHash: format.format_definition_hash,
+                  matchCount: format.match_count,
+                  guaranteedMatches: format.guaranteed_matches,
+                  rankingCoverage: format.ranking_coverage,
+                })),
                 capacityStatus: values.format_recommendations.requires_changes.capacity_status,
                 schedulingStatus: values.format_recommendations.requires_changes.scheduling_status,
                 warningCodes: values.format_recommendations.requires_changes.warning_codes,
@@ -308,6 +338,15 @@ export type Phase4AiOptions = {
   cacheTtlSeconds: number;
 };
 
+export type Phase4PublicProjectionPort = {
+  writePublicProjection(
+    tx: PostgresJsSql,
+    competitionId: string,
+    scheduleVersion: number,
+    resultVersion: number,
+  ): Promise<void>;
+};
+
 export class Phase4Runtime {
   constructor(
     private readonly sql: PostgresJsSql,
@@ -315,6 +354,7 @@ export class Phase4Runtime {
     private readonly enqueue: ScheduleEnqueuePort,
     private readonly ai: Phase4AiOptions,
     private readonly now: () => Date = () => new Date(),
+    private readonly publicProjection?: Phase4PublicProjectionPort,
   ) {}
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -340,6 +380,9 @@ export class Phase4Runtime {
       [competitionId, actor.accountId],
     );
     const access = first(rows, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+    access.capacity_revision = Number(access.capacity_revision);
+    if (!Number.isSafeInteger(access.capacity_revision) || access.capacity_revision < 1)
+      throw new ApiError(500, "INVALID_CAPACITY_REVISION", "Competition capacity revision is invalid");
     if (mutable && access.status === "archived")
       throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
     return access;
@@ -384,7 +427,7 @@ export class Phase4Runtime {
     await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended('phase4-schedule:'||$1,0))`, [competitionId]);
   }
 
-  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string): Promise<void> {
+  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string, includeLockSnapshot = true): Promise<void> {
     const current = (
       await tx.unsafe<{ current: boolean }>(
         `SELECT (
@@ -416,7 +459,7 @@ export class Phase4Runtime {
                 ) possible_ids
               ),'[]'::jsonb)
           )
-          AND COALESCE((
+          AND (NOT $2::boolean OR COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
               'match_id',l.match_id::text,
               'area_id',l.playing_area_id::text,
@@ -433,10 +476,10 @@ export class Phase4Runtime {
             ) ORDER BY item->>'match_id')
             FROM jsonb_array_elements(j.input_snapshot->'matches') item
             WHERE item ? 'fixed_assignment'
-          ),'[]'::jsonb)
+          ),'[]'::jsonb))
         ) current
         FROM schedule_generation_jobs j JOIN competitions c ON c.id=j.competition_id WHERE j.id=$1`,
-        [jobId],
+        [jobId, includeLockSnapshot],
       )
     )[0]?.current;
     if (!current)
@@ -502,14 +545,16 @@ export class Phase4Runtime {
   async createSetupDraft(actor: Phase3Actor, competitionId: string, idempotencyKey: string, requestId: string) {
     return this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, competitionId, actor);
-      const replay = Boolean(
-        (
-          await tx.unsafe<{ found: boolean }>(
-            `SELECT true found FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
-            [access.organisation_id, idempotencyKey],
-          )
-        )[0],
-      );
+      const receipt = (
+        await tx.unsafe<{ operation: string; aggregate_matches: boolean }>(
+          `SELECT operation,(response->>'competition_id')::uuid=$3::uuid aggregate_matches
+           FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
+          [access.organisation_id, idempotencyKey, competitionId],
+        )
+      )[0];
+      if (receipt && (receipt.operation !== "setup.create" || !receipt.aggregate_matches))
+        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+      const replay = Boolean(receipt);
       await tx.unsafe(`SELECT phase4_create_setup_draft($1,$2,$3,$4,$5)`, [
         access.organisation_id,
         competitionId,
@@ -524,6 +569,394 @@ export class Phase4Runtime {
   async readSetupDraft(actor: Phase3Actor, competitionId: string): Promise<Phase4SetupDocument> {
     await this.competitionAccess(this.sql, competitionId, actor, false);
     return this.setupDocument(await this.rawSetup(this.sql, competitionId));
+  }
+
+  private async generateSetupRecommendations(
+    tx: PostgresJsSql,
+    access: CompetitionAccess,
+    actor: Phase3Actor,
+    setupDraftId: string,
+    values: Phase4SetupValues,
+  ): Promise<NonNullable<Phase4SetupValues["format_recommendations"]>> {
+    const capacity = values.capacity;
+    const entries = values.entries;
+    const preferences = values.format_preferences;
+    if (!capacity || !entries || !preferences)
+      throw new ApiError(422, "SETUP_PREREQUISITE_MISSING", "Complete capacity, entries and preferences first");
+    await this.assertCanonicalSetupStep(tx, access, "capacity", values);
+    await this.assertCanonicalSetupStep(tx, access, "entries", values);
+    const sourceEvidence = {
+      sport_code: access.sport_code,
+      capacity: {
+        revision: capacity.revision,
+        source_hash: capacity.source_hash,
+        available_match_slots: capacity.effective.availableMatchSlots,
+      },
+      entries: entries.divisions.map((division) => ({
+        division_id: division.division_id,
+        division_revision: division.division_revision,
+        entry_ids: [...division.entry_ids].sort(),
+        entry_count: division.confirmed_count + division.placeholder_count,
+      })),
+      preferences,
+    };
+    const recommendationSetHash = first(
+      await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [sourceEvidence]),
+      "HASH_FAILED",
+      "Recommendation evidence could not be hashed",
+    ).hash;
+    const existingSet = (
+      await tx.unsafe<{ id: string }>(
+        `SELECT id FROM phase4_format_recommendation_sets WHERE setup_draft_id=$1 AND source_hash=$2`,
+        [setupDraftId, recommendationSetHash],
+      )
+    )[0];
+    if (existingSet) {
+      const rows = await tx.unsafe<{
+        candidate_id: string;
+        category: "normal" | "requires_changes";
+        ordinal: number;
+        aggregate_metrics: JsonObject | string;
+        candidate_division_id: string;
+        division_id: string;
+        definition_hash: string;
+        metrics: JsonObject | string;
+      }>(
+        `SELECT c.id candidate_id,c.category,c.ordinal,c.aggregate_metrics,
+           d.id candidate_division_id,d.division_id,d.definition_hash,d.metrics
+         FROM phase4_format_recommendation_candidates c
+         JOIN phase4_format_recommendation_candidate_divisions d ON d.candidate_id=c.id
+         WHERE c.recommendation_set_id=$1 ORDER BY c.category,c.ordinal,d.division_id`,
+        [existingSet.id],
+      );
+      const candidates = [...new Set(rows.map((row) => row.candidate_id))].map((candidateId) => {
+        const candidateRows = rows.filter((row) => row.candidate_id === candidateId);
+        const firstRow = candidateRows[0]!;
+        const aggregate = decoded<{
+          name: string;
+          structure: string;
+          advantage: string;
+          match_count: number;
+          guaranteed_matches: number;
+          ranking_coverage: "all_entries" | "podium" | "champion";
+          available_match_slots: number;
+          capacity_status: "fits" | "tight" | "requires_changes";
+          scheduling_status: "feasible" | "infeasible" | "not_checked";
+          warning_codes: string[];
+        }>(firstRow.aggregate_metrics);
+        const divisionFormats = candidateRows.map((row) => {
+          const metrics = decoded<{
+            match_count: number;
+            guaranteed_matches: number;
+            ranking_coverage: "all_entries" | "podium" | "champion";
+          }>(row.metrics);
+          return {
+            division_id: row.division_id,
+            candidate_division_id: row.candidate_division_id,
+            format_revision_id: null,
+            format_definition_hash: row.definition_hash,
+            match_count: metrics.match_count,
+            guaranteed_matches: metrics.guaranteed_matches,
+            ranking_coverage: metrics.ranking_coverage,
+          };
+        });
+        return {
+          category: firstRow.category,
+          ordinal: Number(firstRow.ordinal),
+          value: {
+            id: candidateId,
+            format_revision_id: null,
+            format_definition_hash: divisionFormats[0]!.format_definition_hash,
+            name: aggregate.name,
+            structure: aggregate.structure,
+            advantage: aggregate.advantage,
+            match_count: aggregate.match_count,
+            minimum_matches_per_entry: aggregate.guaranteed_matches,
+            guaranteed_matches: aggregate.guaranteed_matches,
+            ranking_coverage: aggregate.ranking_coverage,
+            available_match_slots: aggregate.available_match_slots,
+            division_formats: divisionFormats,
+            capacity_status: aggregate.capacity_status,
+            scheduling_status: aggregate.scheduling_status,
+            warning_codes: aggregate.warning_codes,
+          },
+        };
+      });
+      return {
+        recommendations: candidates
+          .filter((candidate) => candidate.category === "normal")
+          .sort((left, right) => left.ordinal - right.ordinal)
+          .map((candidate) => candidate.value),
+        requires_changes: candidates.find((candidate) => candidate.category === "requires_changes")?.value ?? null,
+        selected_recommendation_id: null,
+        acknowledged_capacity_shortfall: false,
+        recommendation_set_hash: recommendationSetHash,
+      };
+    }
+
+    const generated = recommendCompetitionFormats({
+      sportCode: access.sport_code,
+      divisions: sourceEvidence.entries.map((division) => ({
+        id: division.division_id,
+        entryCount: division.entry_count,
+      })),
+      availableMatchSlots: capacity.effective.availableMatchSlots,
+      minimumGuaranteedMatches: preferences.minimum_matches.per_entry,
+      rankAllEntries: preferences.ranking.rank_all_entries,
+      knockoutRequired: preferences.knockout.required,
+      placementRequired: preferences.placement.required,
+      crossGroupAllowed: preferences.qualification.cross_group_allowed,
+      priority: preferences.priority.value,
+    });
+    const recommendationSetId = randomUUID();
+    await tx.unsafe(
+      `INSERT INTO phase4_format_recommendation_sets(id,organisation_id,competition_id,setup_draft_id,source_hash,source_evidence,created_by)
+       VALUES($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+      [
+        recommendationSetId,
+        access.organisation_id,
+        access.id,
+        setupDraftId,
+        recommendationSetHash,
+        sourceEvidence,
+        actor.accountId,
+      ],
+    );
+    const persistCandidate = async (candidate: CompetitionFormatRecommendation) => {
+      const candidateId = randomUUID();
+      const category = candidate.capacityStatus === "requires_changes" ? "requires_changes" : "normal";
+      const ordinal =
+        category === "normal" ? generated.recommendations.findIndex((item) => item.id === candidate.id) + 1 : 1;
+      await tx.unsafe(
+        `INSERT INTO phase4_format_recommendation_candidates(id,recommendation_set_id,family,category,ordinal,aggregate_metrics)
+         VALUES($1,$2,$3,$4,$5,$6::jsonb)`,
+        [
+          candidateId,
+          recommendationSetId,
+          candidate.strategy,
+          category,
+          ordinal,
+          {
+            name: candidate.label,
+            structure: `${candidate.divisions.length} division${candidate.divisions.length === 1 ? "" : "s"} · ${candidate.strategy.replaceAll("_", " ")}`,
+            advantage: candidate.advantage,
+            match_count: candidate.matchCount,
+            guaranteed_matches: candidate.guaranteedMatches,
+            ranking_coverage: candidate.rankingCoverage,
+            available_match_slots: candidate.availableMatchSlots,
+            capacity_status: candidate.capacityStatus,
+            scheduling_status: candidate.scheduleFeasibility,
+            warning_codes: candidate.warningCodes,
+          },
+        ],
+      );
+      const divisionFormats = [];
+      for (const division of candidate.divisions) {
+        const layout = {
+          schema_version: 1,
+          stage_positions: division.graph.stages.map((stage, index) => ({
+            stage_id: stage.id,
+            x: (index % 3) * 320,
+            y: Math.floor(index / 3) * 220,
+          })),
+        };
+        const candidateDivision = first(
+          await tx.unsafe<{ id: string; definition_hash: string }>(
+            `INSERT INTO phase4_format_recommendation_candidate_divisions
+               (id,candidate_id,division_id,definition,definition_hash,layout,metrics)
+             VALUES($1,$2,$3,$4::jsonb,phase4_sha256_json($4::jsonb),$5::jsonb,$6::jsonb)
+             RETURNING id,definition_hash`,
+            [
+              randomUUID(),
+              candidateId,
+              division.divisionId,
+              division.graph,
+              layout,
+              {
+                match_count: division.matchCount,
+                guaranteed_matches: division.guaranteedMatches,
+                ranking_coverage: candidate.rankingCoverage,
+              },
+            ],
+          ),
+          "RECOMMENDATION_SAVE_FAILED",
+          "Recommended format evidence could not be saved",
+        );
+        divisionFormats.push({
+          division_id: division.divisionId,
+          candidate_division_id: candidateDivision.id,
+          format_revision_id: null,
+          format_definition_hash: candidateDivision.definition_hash,
+          match_count: division.matchCount,
+          guaranteed_matches: division.guaranteedMatches,
+          ranking_coverage: candidate.rankingCoverage,
+        });
+      }
+      return {
+        id: candidateId,
+        format_revision_id: null,
+        format_definition_hash: divisionFormats[0]!.format_definition_hash,
+        name: candidate.label,
+        structure: `${candidate.divisions.length} division${candidate.divisions.length === 1 ? "" : "s"} · ${candidate.strategy.replaceAll("_", " ")}`,
+        advantage: candidate.advantage,
+        match_count: candidate.matchCount,
+        minimum_matches_per_entry: candidate.guaranteedMatches,
+        guaranteed_matches: candidate.guaranteedMatches,
+        ranking_coverage: candidate.rankingCoverage,
+        available_match_slots: candidate.availableMatchSlots,
+        division_formats: divisionFormats,
+        capacity_status: candidate.capacityStatus,
+        scheduling_status: candidate.scheduleFeasibility,
+        warning_codes: candidate.warningCodes,
+      } as const;
+    };
+    const recommendations = [];
+    for (const candidate of generated.recommendations) recommendations.push(await persistCandidate(candidate));
+    const requiresChanges = generated.requiresChanges ? await persistCandidate(generated.requiresChanges) : null;
+    return {
+      recommendations,
+      requires_changes: requiresChanges,
+      selected_recommendation_id: null,
+      acknowledged_capacity_shortfall: false,
+      recommendation_set_hash: recommendationSetHash,
+    };
+  }
+
+  private async applySelectedRecommendation(
+    tx: PostgresJsSql,
+    access: CompetitionAccess,
+    actor: Phase3Actor,
+    setupDraftId: string,
+    values: Phase4SetupValues,
+  ): Promise<void> {
+    const submitted = values.format_recommendations;
+    await this.assertCanonicalSetupStep(tx, access, "capacity", values);
+    await this.assertCanonicalSetupStep(tx, access, "entries", values);
+    if (!submitted) return;
+    const canonical = await this.generateSetupRecommendations(tx, access, actor, setupDraftId, {
+      ...values,
+      format_recommendations: null,
+    });
+    const selection = {
+      ...canonical,
+      selected_recommendation_id: submitted.selected_recommendation_id,
+      acknowledged_capacity_shortfall: submitted.acknowledged_capacity_shortfall,
+    };
+    (values as { format_recommendations: Phase4SetupValues["format_recommendations"] }).format_recommendations =
+      selection;
+    const selected = [
+      ...selection.recommendations,
+      ...(selection.requires_changes ? [selection.requires_changes] : []),
+    ].find((candidate) => candidate.id === selection.selected_recommendation_id);
+    if (!selected) return;
+    const metadata = first(
+      await tx.unsafe<{ aggregate_metrics: JsonObject | string }>(
+        `SELECT c.aggregate_metrics FROM phase4_format_recommendation_candidates c
+         JOIN phase4_format_recommendation_sets s ON s.id=c.recommendation_set_id
+         WHERE c.id=$1 AND s.competition_id=$2 AND s.source_hash=$3`,
+        [selected.id, access.id, selection.recommendation_set_hash],
+      ),
+      "RECOMMENDATION_EVIDENCE_NOT_FOUND",
+      "Recommendation evidence is stale",
+    );
+    const evidenceRows = await tx.unsafe<{
+      id: string;
+      division_id: string;
+      definition: FormatGraph | string;
+      definition_hash: string;
+      layout: JsonObject | string;
+      match_count: number;
+      guaranteed_matches: number;
+      ranking_coverage: "all_entries" | "podium" | "champion";
+    }>(
+      `SELECT d.id,d.division_id,d.definition,d.definition_hash,d.layout,
+         (d.metrics->>'match_count')::int match_count,
+         (d.metrics->>'guaranteed_matches')::int guaranteed_matches,
+         d.metrics->>'ranking_coverage' ranking_coverage
+       FROM phase4_format_recommendation_candidate_divisions d
+       WHERE d.candidate_id=$1 ORDER BY d.division_id`,
+      [selected.id],
+    );
+    if (evidenceRows.length === 0)
+      throw new ApiError(409, "RECOMMENDATION_EVIDENCE_NOT_FOUND", "Recommendation evidence is stale");
+    const applied = [];
+    for (const evidence of evidenceRows) {
+      const latest = (
+        await tx.unsafe<FormatRow>(
+          `SELECT * FROM format_revisions WHERE division_id=$1 ORDER BY revision DESC,id DESC LIMIT 1 FOR UPDATE`,
+          [evidence.division_id],
+        )
+      )[0];
+      const latestLayoutMatches = latest
+        ? Boolean(
+            (
+              await tx.unsafe<{ matches: boolean }>(`SELECT $1::jsonb=$2::jsonb matches`, [
+                decoded(latest.layout),
+                decoded(evidence.layout),
+              ])
+            )[0]?.matches,
+          )
+        : false;
+      const existing = latest?.definition_hash === evidence.definition_hash && latestLayoutMatches ? latest : undefined;
+      const row =
+        existing ??
+        first(
+          await tx.unsafe<FormatRow>(
+            `INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,status,created_by,
+             validation_contract,parent_revision_id,source_kind,layout)
+           VALUES($1,$2,$3,$4,$5::jsonb,$6,'draft',$7,'phase3',$8,'wizard',$9::jsonb) RETURNING *`,
+            [
+              randomUUID(),
+              access.id,
+              evidence.division_id,
+              (latest?.revision ?? 0) + 1,
+              decoded(evidence.definition),
+              evidence.definition_hash,
+              actor.accountId,
+              latest?.id ?? null,
+              decoded(evidence.layout),
+            ],
+          ),
+          "FORMAT_SAVE_FAILED",
+          "Selected format could not be applied",
+        );
+      applied.push({
+        division_id: evidence.division_id,
+        candidate_division_id: evidence.id,
+        format_revision_id: row.id,
+        format_definition_hash: evidence.definition_hash,
+        match_count: evidence.match_count,
+        guaranteed_matches: evidence.guaranteed_matches,
+        ranking_coverage: evidence.ranking_coverage,
+      });
+    }
+    const metrics = decoded<{
+      name: string;
+      structure: string;
+      advantage: string;
+      match_count: number;
+      guaranteed_matches: number;
+      ranking_coverage: "all_entries" | "podium" | "champion";
+      available_match_slots: number;
+      capacity_status: "fits" | "tight" | "requires_changes";
+      scheduling_status: "feasible" | "infeasible" | "not_checked";
+      warning_codes: string[];
+    }>(metadata.aggregate_metrics);
+    Object.assign(selected, {
+      format_revision_id: applied[0]!.format_revision_id,
+      division_formats: applied,
+      name: metrics.name,
+      structure: metrics.structure,
+      advantage: metrics.advantage,
+      match_count: metrics.match_count,
+      minimum_matches_per_entry: metrics.guaranteed_matches,
+      guaranteed_matches: metrics.guaranteed_matches,
+      ranking_coverage: metrics.ranking_coverage,
+      available_match_slots: metrics.available_match_slots,
+      capacity_status: metrics.capacity_status,
+      scheduling_status: metrics.scheduling_status,
+      warning_codes: metrics.warning_codes,
+    });
   }
 
   private async assertCanonicalSetupStep(
@@ -546,7 +979,7 @@ export class Phase4Runtime {
       const actualIds = decoded<string[]>(row.area_ids).sort();
       if (
         values.capacity.competition_id !== access.id ||
-        values.capacity.revision !== row.capacity_revision ||
+        values.capacity.revision !== Number(row.capacity_revision) ||
         values.capacity.source_hash !== row.capacity_hash ||
         JSON.stringify([...values.capacity.area_ids].sort()) !== JSON.stringify(actualIds)
       )
@@ -562,11 +995,11 @@ export class Phase4Runtime {
         }>(
           reference.scope === "competition"
             ? `SELECT s.revision,v.definition_hash,v.version,v.schema_version FROM competition_sport_settings s
-               JOIN competitions c ON c.id=s.competition_id JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.sport_pack_version
+               JOIN competitions c ON c.id=s.competition_id JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.pack_version
                WHERE s.competition_id=$1`
             : `SELECT s.revision,v.definition_hash,v.version,v.schema_version FROM division_sport_settings s
                JOIN divisions d ON d.id=s.division_id JOIN competitions c ON c.id=d.competition_id
-               JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.sport_pack_version
+               JOIN sport_pack_versions v ON v.sport_code=c.sport_code AND v.version=s.pack_version
                WHERE d.competition_id=$1 AND s.division_id=$2`,
           reference.scope === "competition" ? [access.id] : [access.id, reference.division_id],
         );
@@ -590,10 +1023,15 @@ export class Phase4Runtime {
         placeholder_count: number;
       }>(
         `SELECT d.id division_id,d.revision,
-          COALESCE(jsonb_agg(e.id ORDER BY e.id) FILTER (WHERE e.id IS NOT NULL),'[]') entry_ids,
-          count(*) FILTER (WHERE e.status IN ('confirmed','active'))::int confirmed_count,
-          count(*) FILTER (WHERE e.entry_type='placeholder')::int placeholder_count
-         FROM divisions d LEFT JOIN division_entries e ON e.division_id=d.id AND e.status<>'withdrawn'
+          COALESCE(jsonb_agg(e.id ORDER BY e.id)
+            FILTER (WHERE e.id IS NOT NULL AND e.status IN ('confirmed','active')),'[]') entry_ids,
+          count(e.id) FILTER (
+            WHERE e.status IN ('confirmed','active') AND e.entry_type<>'placeholder'
+          )::int confirmed_count,
+          count(e.id) FILTER (
+            WHERE e.status IN ('confirmed','active') AND e.entry_type='placeholder'
+          )::int placeholder_count
+         FROM divisions d LEFT JOIN division_entries e ON e.division_id=d.id
          WHERE d.competition_id=$1 GROUP BY d.id ORDER BY d.id`,
         [access.id],
       );
@@ -618,16 +1056,53 @@ export class Phase4Runtime {
         ...(values.format_recommendations.requires_changes ? [values.format_recommendations.requires_changes] : []),
       ];
       for (const candidate of candidates) {
-        const row = first(
-          await tx.unsafe<{ definition_hash: string; match_count: number }>(
-            `SELECT definition_hash,jsonb_array_length(definition->'matches') match_count FROM format_revisions WHERE id=$1 AND competition_id=$2`,
-            [candidate.format_revision_id, access.id],
-          ),
-          "FORMAT_REFERENCE_NOT_FOUND",
-          "Recommended format was not found",
-        );
-        if (row.definition_hash !== candidate.format_definition_hash || row.match_count !== candidate.match_count)
-          throw new ApiError(409, "STALE_FORMAT_REFERENCE", "Format recommendation is stale");
+        for (const format of candidate.division_formats) {
+          const evidence = first(
+            await tx.unsafe<{ definition_hash: string; match_count: number; division_id: string }>(
+              `SELECT d.definition_hash,jsonb_array_length(d.definition->'matches') match_count,d.division_id
+               FROM phase4_format_recommendation_candidate_divisions d
+               JOIN phase4_format_recommendation_candidates c ON c.id=d.candidate_id
+               JOIN phase4_format_recommendation_sets s ON s.id=c.recommendation_set_id
+               WHERE d.id=$1 AND c.id=$2 AND s.competition_id=$3 AND s.source_hash=$4`,
+              [
+                format.candidate_division_id,
+                candidate.id,
+                access.id,
+                values.format_recommendations.recommendation_set_hash,
+              ],
+            ),
+            "RECOMMENDATION_EVIDENCE_NOT_FOUND",
+            "Recommended format evidence was not found",
+          );
+          if (
+            evidence.division_id !== format.division_id ||
+            evidence.definition_hash !== format.format_definition_hash ||
+            evidence.match_count !== format.match_count
+          )
+            throw new ApiError(409, "STALE_FORMAT_REFERENCE", "Format recommendation is stale");
+          if (format.format_revision_id) {
+            const applied = first(
+              await tx.unsafe<{ definition_hash: string; division_id: string }>(
+                `SELECT definition_hash,division_id FROM format_revisions WHERE id=$1 AND competition_id=$2`,
+                [format.format_revision_id, access.id],
+              ),
+              "FORMAT_REFERENCE_NOT_FOUND",
+              "Applied format was not found",
+            );
+            if (applied.definition_hash !== evidence.definition_hash || applied.division_id !== evidence.division_id)
+              throw new ApiError(
+                409,
+                "STALE_FORMAT_REFERENCE",
+                "Applied format does not match recommendation evidence",
+              );
+          }
+        }
+        if (
+          candidate.match_count !==
+            candidate.division_formats.reduce((total, format) => total + format.match_count, 0) ||
+          candidate.available_match_slots !== values.capacity?.effective.availableMatchSlots
+        )
+          throw new ApiError(409, "STALE_RECOMMENDATION_EVIDENCE", "Recommendation evidence is stale");
       }
     }
     if (stepId === "schedule_review" && values.schedule_review) {
@@ -637,17 +1112,27 @@ export class Phase4Runtime {
           result_revision: number;
           assignment_hash: string;
           option_id: string;
+          revision_status: string;
         }>(
-          `SELECT j.source_revision,o.result_revision,o.assignment_hash,o.id option_id
-           FROM schedule_generation_jobs j JOIN schedule_generation_options o ON o.job_id=j.id
-           WHERE j.id=$1 AND j.competition_id=$2 AND o.result_revision=$3`,
-          [values.schedule_review.schedule_job_id, access.id, values.schedule_review.selected_result_revision],
+          `SELECT (j.input_snapshot->>'source_revision')::int source_revision,
+             o.result_revision,r.assignment_hash,o.id option_id,r.status revision_status
+           FROM schedule_generation_jobs j
+           JOIN schedule_generation_options o ON o.job_id=j.id
+           JOIN schedule_revisions r ON r.source_job_id=j.id AND r.source_option_id=o.id
+           WHERE j.id=$1 AND j.competition_id=$2 AND o.result_revision=$3 AND r.id=$4`,
+          [
+            values.schedule_review.schedule_job_id,
+            access.id,
+            values.schedule_review.selected_result_revision,
+            values.schedule_review.schedule_revision_id,
+          ],
         ),
         "SCHEDULE_OPTION_NOT_FOUND",
         "Selected schedule option not found",
       );
       if (
         row.source_revision !== values.schedule_review.source_revision ||
+        !["ready_for_review", "published"].includes(row.revision_status) ||
         row.assignment_hash !== values.schedule_review.selected_result_hash
       )
         throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Schedule selection is stale");
@@ -683,6 +1168,12 @@ export class Phase4Runtime {
       )[0];
       if (existingReceipt) {
         const saved = decoded<SetupRow>(existingReceipt.response);
+        if (saved.competition_id !== competitionId) {
+          return {
+            outcome: "idempotency_mismatch",
+            document: this.setupDocument(await this.rawSetup(tx, competitionId)),
+          };
+        }
         const savedValues = setupValues(saved);
         const jsonEqual = async (left: unknown, right: unknown) =>
           Boolean((await tx.unsafe<{ equal: boolean }>(`SELECT $1::jsonb=$2::jsonb equal`, [left, right]))[0]?.equal);
@@ -711,9 +1202,15 @@ export class Phase4Runtime {
       if (request.transition.kind === "save_step") {
         const { step_id: stepId, value } = request.transition.step;
         (next as unknown as Record<string, unknown>)[stepId] = value;
+        if (stepId === "format_recommendations")
+          await this.applySelectedRecommendation(tx, access, actor, row.id, next);
         const issues = validateAssistedSetupStep(stepId, setupDomainValues(next));
         if (issues.length > 0) throw new ApiError(422, "SETUP_STEP_INVALID", issues[0]!.message);
         await this.assertCanonicalSetupStep(tx, access, stepId, next);
+        if (stepId === "format_preferences" && next.capacity && next.entries) {
+          (next as { format_recommendations: Phase4SetupValues["format_recommendations"] }).format_recommendations =
+            await this.generateSetupRecommendations(tx, access, actor, row.id, next);
+        }
       } else if (request.transition.kind === "go_to_step") {
         targetStep = request.transition.step_id;
       } else {
@@ -1127,8 +1624,13 @@ export class Phase4Runtime {
   async listFormatTemplates(actor: Phase3Actor, organisationId: string, includeArchived: boolean) {
     await this.organisationAccess(this.sql, organisationId, actor);
     const rows = await this.sql.unsafe<Parameters<Phase4Runtime["templateView"]>[0]>(
-      `${this.templateQuery()} WHERE t.organisation_id=$1 AND ($2::boolean OR t.status='active')
-       ORDER BY t.name,v.version DESC,t.id`,
+      `SELECT * FROM (${this.templateQuery()} WHERE t.organisation_id=$1 AND ($2::boolean OR t.status='active')
+       ORDER BY t.id,v.version DESC) latest_versions
+       WHERE (template_id,revision) IN (
+         SELECT template_id,max(revision) FROM (${this.templateQuery()}
+           WHERE t.organisation_id=$1 AND ($2::boolean OR t.status='active')) candidates
+         GROUP BY template_id
+       ) ORDER BY name,revision DESC,template_id`,
       [organisationId, includeArchived],
     );
     return rows.map((row) => this.templateView(row));
@@ -1485,7 +1987,12 @@ export class Phase4Runtime {
       ledgerId: string;
       cached: Phase4CompetitionBrief | null;
       replay: boolean;
-      finalized: null | { outcome: string; cache_status: string; charged_units: 0 | 1; failure_code: string | null };
+      finalized: null | {
+        outcome: string;
+        cache_status: string;
+        charged_units: 0 | 1;
+        failure_code: Phase4AiFailureCode | null;
+      };
       quotaAvailable: boolean;
     };
     const begin = await this.transaction<Begin>(async (tx) => {
@@ -1534,7 +2041,7 @@ export class Phase4Runtime {
           outcome: string;
           cache_status: string;
           charged_units: 0 | 1;
-          failure_code: string | null;
+          failure_code: Phase4AiFailureCode | null;
         };
         cache_result: Phase4CompetitionBrief | null;
       }>(began.value);
@@ -1562,7 +2069,7 @@ export class Phase4Runtime {
       return {
         status:
           begin.finalized.outcome === "manual_fallback"
-            ? begin.finalized.failure_code === "unknown"
+            ? begin.finalized.failure_code === "quota_exhausted"
               ? ("quota_exhausted" as const)
               : ("manual_fallback" as const)
             : ("manual_fallback" as const),
@@ -1579,12 +2086,12 @@ export class Phase4Runtime {
     let result: Phase4CompetitionBrief | JsonObject = begin.cached ?? {};
     let attempts = 0;
     let durationMs = 0;
-    let failureCode: string | null = null;
+    let failureCode: Phase4AiFailureCode | null = null;
     let providerRequestId: string | undefined;
     if (begin.cached) {
       outcome = "success";
     } else if (!begin.quotaAvailable) {
-      failureCode = "unknown";
+      failureCode = "quota_exhausted";
     } else if (this.ai.provider === null) {
       failureCode = "provider_unavailable";
     } else {
@@ -1648,7 +2155,7 @@ export class Phase4Runtime {
       if (outcome === "success" && /quota exhausted/i.test(error instanceof Error ? error.message : "")) {
         outcome = "manual_fallback";
         cacheStatus = "not_checked";
-        failureCode = "unknown";
+        failureCode = "quota_exhausted";
         result = {};
         ledger = await finalize(outcome, cacheStatus);
       } else {
@@ -1669,11 +2176,8 @@ export class Phase4Runtime {
       };
     }
     return {
-      status:
-        !begin.quotaAvailable || failureCode === "unknown"
-          ? ("quota_exhausted" as const)
-          : ("manual_fallback" as const),
-      ...(failureCode && failureCode !== "unknown" ? { reason: failureCode } : {}),
+      status: failureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(failureCode ? { reason: failureCode } : {}),
       preserved_text: normalizedText,
       charged_units: 0 as const,
       usage: await usage(),
@@ -1924,7 +2428,7 @@ export class Phase4Runtime {
       result_revision: row.result_revision,
       solver_iteration: row.solver_iteration,
       result_status: row.result_status,
-      quality: decoded(row.quality),
+      quality: decoded<ScheduleQuality>(row.quality),
       assignments: decoded(row.assignments),
       violations: decoded(row.violations),
       assignment_hash: row.assignment_hash,
@@ -1943,6 +2447,9 @@ export class Phase4Runtime {
         input_snapshot: { source_revision: number; capacity_revision: number; capacity_hash: string } | string;
         continued_from_job_id: string | null;
         current_best_option_id: string | null;
+        progress_iteration: number | null;
+        explored_candidates: number;
+        progress_updated_at: Date | string | null;
         cancellation_requested_at: Date | string | null;
         started_at: Date | string | null;
         completed_at: Date | string | null;
@@ -1978,6 +2485,9 @@ export class Phase4Runtime {
       continued_from_job_id: row.continued_from_job_id,
       current_best_option_id: row.current_best_option_id,
       current_best: option ? this.optionView(option) : null,
+      progress_iteration: row.progress_iteration,
+      explored_candidates: row.explored_candidates,
+      progress_updated_at: instant(row.progress_updated_at),
       cancellation_requested_at: instant(row.cancellation_requested_at),
       started_at: instant(row.started_at),
       completed_at: instant(row.completed_at),
@@ -2395,7 +2905,7 @@ export class Phase4Runtime {
     return {
       ...this.revisionView(row),
       assignment_hash: row.assignment_hash,
-      quality: decoded(row.quality),
+      quality: decoded<ScheduleQuality | null>(row.quality),
       assignments: assignments.map((assignment) => ({
         match_id: assignment.match_id,
         division_id: assignment.division_id,
@@ -2509,7 +3019,53 @@ export class Phase4Runtime {
       const after = rightByMatch.get(matchId) ?? null;
       return JSON.stringify(before) === JSON.stringify(after) ? [] : [{ match_id: matchId, before, after }];
     });
-    return { competition_id: left.competition_id, left, right, changes, changed_match_count: changes.length };
+    const movedMatchIds = changes
+      .filter(({ before, after }) =>
+        Boolean(
+          before &&
+          after &&
+          (before.area_id !== after.area_id ||
+            before.start_epoch_ms !== after.start_epoch_ms ||
+            before.end_epoch_ms !== after.end_epoch_ms),
+        ),
+      )
+      .map(({ match_id }) => match_id);
+    const completion = (assignments: typeof left.assignments) =>
+      assignments.length ? Math.max(...assignments.map((assignment) => assignment.end_epoch_ms)) : null;
+    const leftCompletion = completion(left.assignments);
+    const rightCompletion = completion(right.assignments);
+    const leftRest = left.quality?.minimum_rest_minutes ?? null;
+    const rightRest = right.quality?.minimum_rest_minutes ?? null;
+    const leftConflicts = left.quality?.required_violation_count ?? 0;
+    const rightConflicts = right.quality?.required_violation_count ?? 0;
+    return {
+      competition_id: left.competition_id,
+      left,
+      right,
+      changes,
+      changed_match_count: changes.length,
+      comparison: {
+        moved_match_ids: movedMatchIds,
+        moved_match_count: movedMatchIds.length,
+        scheduled_match_delta: right.assignments.length - left.assignments.length,
+        minimum_rest_minutes: {
+          before: leftRest,
+          after: rightRest,
+          delta: leftRest === null || rightRest === null ? null : rightRest - leftRest,
+        },
+        completion: {
+          before_epoch_ms: leftCompletion,
+          after_epoch_ms: rightCompletion,
+          delta_minutes:
+            leftCompletion === null || rightCompletion === null ? null : (rightCompletion - leftCompletion) / 60_000,
+        },
+        conflicts: {
+          before: leftConflicts,
+          after: rightConflicts,
+          delta: rightConflicts - leftConflicts,
+        },
+      },
+    };
   }
 
   private problemFromSnapshot(snapshotValue: JsonObject | string): ScheduleProblem {
@@ -2630,7 +3186,10 @@ export class Phase4Runtime {
       "SCHEDULE_JOB_NOT_FOUND",
       "Schedule source job not found",
     );
-    await this.assertScheduleJobCurrent(tx, revision.source_job_id);
+    // Locks are a deliberate overlay added after an accepted source job. A
+    // local append-only move must still fence capacity, entries and formats,
+    // but should not become stale merely because another match was locked.
+    await this.assertScheduleJobCurrent(tx, revision.source_job_id, false);
     const problem = this.problemFromSnapshot(job.input_snapshot);
     const slot = problem.slots.find(
       (candidate) =>
@@ -2813,7 +3372,13 @@ export class Phase4Runtime {
       );
       if (parent.revision !== input.expected_revision || !["draft", "ready_for_review"].includes(parent.status))
         throw new ApiError(409, "REVISION_CONFLICT", "Schedule revision changed; refresh and retry");
-      const preview = await this.validateScheduleMoveOn(tx, await this.revisionDetail(tx, revisionId), input);
+      const preview = await this.validateScheduleMoveOn(tx, await this.revisionDetail(tx, revisionId), {
+        match_id: input.match_id,
+        playing_area_id: input.playing_area_id,
+        slot_id: input.slot_id,
+        start_epoch_ms: input.start_epoch_ms,
+        end_epoch_ms: input.end_epoch_ms,
+      });
       if (!preview.validation.valid)
         throw new ApiError(422, "SCHEDULE_INVALID", "Move violates required schedule constraints");
       const nextId = randomUUID();
@@ -3054,7 +3619,10 @@ export class Phase4Runtime {
         status: string;
         revision: number;
         capacity_revision: number;
-      }>(`SELECT id,name,timezone,status,revision,capacity_revision FROM competitions WHERE id=$1`, [competitionId]),
+      }>(
+        `SELECT id,name,timezone,status,revision,capacity_revision::int capacity_revision FROM competitions WHERE id=$1`,
+        [competitionId],
+      ),
       "COMPETITION_NOT_FOUND",
       "Competition not found",
     );
@@ -3203,7 +3771,7 @@ export class Phase4Runtime {
        WHERE m.competition_id=$1 AND EXISTS (
          SELECT 1 FROM format_revisions fr WHERE fr.id=m.format_revision_id AND fr.status='published'
        )
-       GROUP BY m.id,d.name,home.name,away.name ORDER BY d.created_at,m.ordinal,m.id`,
+       GROUP BY m.id,d.name,d.created_at,home.name,away.name ORDER BY d.created_at,m.ordinal,m.id`,
       [competitionId],
     );
     const revisionRows = await this.sql.unsafe<Parameters<Phase4Runtime["revisionView"]>[0]>(
@@ -3233,8 +3801,12 @@ export class Phase4Runtime {
       expires_at: Date | string;
       emitted_at: Date | string;
     }>(
-      `SELECT id,schedule_revision_id,warning_days,expires_at,emitted_at FROM schedule_revision_warnings
-       WHERE competition_id=$1 ORDER BY emitted_at DESC,id`,
+      `SELECT warning.id,warning.schedule_revision_id,warning.warning_days,warning.expires_at,warning.emitted_at
+       FROM schedule_revision_warnings warning
+       JOIN schedule_revisions revision ON revision.id=warning.schedule_revision_id
+       WHERE warning.competition_id=$1 AND revision.status IN ('draft','ready_for_review')
+         AND warning.expires_at=revision.editable_until
+       ORDER BY warning.emitted_at DESC,warning.id`,
       [competitionId],
     );
     return {
@@ -3434,12 +4006,20 @@ export class Phase4Runtime {
         );
       }
       const publication = first(
-        await tx.unsafe<{ schedule_version: number }>(
-          `SELECT schedule_version FROM competition_publications WHERE competition_id=$1`,
+        await tx.unsafe<{ schedule_version: number; result_version: number }>(
+          `SELECT schedule_version,result_version FROM competition_publications WHERE competition_id=$1`,
           [row.competition_id],
         ),
         "PUBLICATION_NOT_FOUND",
         "Publication state not found",
+      );
+      if (!this.publicProjection)
+        throw new ApiError(500, "PUBLIC_PROJECTION_UNAVAILABLE", "Public schedule projection is unavailable");
+      await this.publicProjection.writePublicProjection(
+        tx,
+        row.competition_id,
+        publication.schedule_version,
+        publication.result_version,
       );
       return {
         ...(await this.revisionDetail(tx, revisionId)),
@@ -3463,7 +4043,8 @@ export class Phase4Runtime {
          WHERE sr.status IN ('draft','ready_for_review') AND sr.editable_until IS NOT NULL
            AND current_date=(sr.editable_until AT TIME ZONE 'UTC')::date-d.warning_days
            AND NOT EXISTS (SELECT 1 FROM schedule_revision_warnings w WHERE w.schedule_revision_id=sr.id
-             AND w.warning_days=d.warning_days AND w.notified_account_id=m.account_id)
+             AND w.warning_days=d.warning_days AND w.notified_account_id=m.account_id
+             AND w.expires_at=sr.editable_until)
          ORDER BY sr.id,d.warning_days,m.account_id`,
       );
       for (const due of dueWarnings) {

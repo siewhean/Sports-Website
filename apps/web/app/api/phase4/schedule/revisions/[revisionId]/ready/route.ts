@@ -6,6 +6,20 @@ import { parseScheduleRevisionView, phase4ScheduleCopy, phase4ScheduleMachine } 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ revisionId: string }> }) {
   const { revisionId } = await params;
   const body = await jsonBody(request);
-  if (!body || !hasExactKeys(body, [phase4ScheduleMachine.idempotencyKeyField, phase4ScheduleMachine.expectedRevisionField]) || typeof body.idempotency_key !== "string" || !Number.isSafeInteger(body.expected_revision)) return NextResponse.json({ error: { code: phase4ScheduleMachine.validationError, message: phase4ScheduleCopy.invalidCommand } }, { status: 400 });
-  return forwardPhase3Mutation(request, { method: phase4ScheduleMachine.post, path: `/api/v1/schedule-revisions/${encodeURIComponent(revisionId)}/ready`, body, validate: (value) => parseScheduleRevisionView(value, true, true) !== null });
+  if (
+    !body ||
+    !hasExactKeys(body, [phase4ScheduleMachine.idempotencyKeyField, phase4ScheduleMachine.expectedRevisionField]) ||
+    typeof body.idempotency_key !== "string" ||
+    !Number.isSafeInteger(body.expected_revision)
+  )
+    return NextResponse.json(
+      { error: { code: phase4ScheduleMachine.validationError, message: phase4ScheduleCopy.invalidCommand } },
+      { status: 400 },
+    );
+  return forwardPhase3Mutation(request, {
+    method: phase4ScheduleMachine.post,
+    path: `/api/v1/schedule-revisions/${encodeURIComponent(revisionId)}/ready`,
+    body,
+    validate: (value) => parseScheduleRevisionView(value, true, true) !== null,
+  });
 }

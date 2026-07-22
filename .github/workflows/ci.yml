@@ -5,13 +5,17 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:18.4-alpine
@@ -49,13 +53,11 @@ jobs:
       LOG_LEVEL: silent
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.33.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.18.0
-          cache: pnpm
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm ci:assert-clean-outputs
       - run: pnpm dependencies:audit
@@ -67,14 +69,17 @@ jobs:
       - run: pnpm backup:verify
       - run: pnpm test:integration
       - run: pnpm validate:fixtures
+      - run: pnpm --filter @matchday/api openapi:generate
       - run: pnpm openapi:check
       - run: pnpm build
       - run: pnpm deploy:manifest
       - run: pnpm asset-delivery:verify:origin
       - uses: actions/upload-artifact@v4
         with:
-          name: deployment-manifest
-          path: artifacts/deployment-manifest.json
+          name: verified-contracts-and-deployment
+          path: |
+            apps/api/openapi.generated.json
+            artifacts/deployment-manifest.json
           if-no-files-found: error
       - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
       - run: pnpm test:e2e
@@ -83,8 +88,10 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Scan the repository for secrets
+        run: bash scripts/scan-secrets.sh

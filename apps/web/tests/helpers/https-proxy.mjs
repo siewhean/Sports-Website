@@ -31,7 +31,7 @@ const server = createServer({ key, cert: certificate }, (incoming, outgoing) => 
       port: 3101,
       path: incoming.url,
       method: incoming.method,
-      headers: { ...incoming.headers, host: "127.0.0.1:3101" },
+      headers: { ...incoming.headers, host: "127.0.0.1:3101", "x-forwarded-proto": "https" },
     },
     (response) => {
       outgoing.writeHead(response.statusCode ?? 502, response.headers);

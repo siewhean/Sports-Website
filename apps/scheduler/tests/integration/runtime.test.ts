@@ -118,6 +118,7 @@ class IntegrationStore implements ScheduleJobStore {
         correlationId: "request-phase4-schedule",
         continuedFromJobId: null,
         continuationIteration: 0,
+        exploredCandidates: 0,
         currentBest: this.currentBest,
       },
     };
@@ -132,6 +133,7 @@ class IntegrationStore implements ScheduleJobStore {
     this.currentBest = { ...request.candidate, result_revision: (this.currentBest?.result_revision ?? 0) + 1 };
     return { accepted: true, result: this.currentBest };
   }
+  async recordProgress() {}
   async finishJob(request: { state: "cancelled" | "completed" | "no_solution" | "stale" }) {
     this.finished = { state: request.state };
   }

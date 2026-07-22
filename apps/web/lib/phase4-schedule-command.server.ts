@@ -45,7 +45,8 @@ export async function forwardScheduleRead(request: NextRequest, path: string, va
       if (isUpstreamError(payload)) return NextResponse.json(payload, { status: response.status });
       return error(response.status, "UPSTREAM_ERROR", "The schedule read failed");
     }
-    if (!validate(payload)) return error(502, "SCHEDULE_RESPONSE_INVALID", "The schedule service returned an invalid response");
+    if (!validate(payload))
+      return error(502, "SCHEDULE_RESPONSE_INVALID", "The schedule service returned an invalid response");
     return NextResponse.json(payload);
   } catch {
     return error(503, "API_UNAVAILABLE", "The schedule service is unavailable");

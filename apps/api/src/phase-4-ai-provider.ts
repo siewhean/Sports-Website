@@ -78,7 +78,13 @@ export type Phase4AiProviderMode = "disabled" | "stub";
 export function phase4AiProviderFromEnvironment(
   environment: string,
   source: NodeJS.ProcessEnv = process.env,
-): { mode: Phase4AiProviderMode; provider: AiProviderPort | null; timeoutMs: number; maximumAttempts: number; cacheTtlSeconds: number } {
+): {
+  mode: Phase4AiProviderMode;
+  provider: AiProviderPort | null;
+  timeoutMs: number;
+  maximumAttempts: number;
+  cacheTtlSeconds: number;
+} {
   const mode = source.PHASE4_AI_PROVIDER ?? "disabled";
   if (mode !== "disabled" && mode !== "stub") throw new Error("PHASE4_AI_PROVIDER must be disabled or stub");
   if (mode === "stub" && environment !== "local" && environment !== "test") {

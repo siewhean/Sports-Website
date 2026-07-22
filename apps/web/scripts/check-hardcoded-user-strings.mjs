@@ -93,6 +93,23 @@ const machineCallNames = new Set([
   "window.addEventListener",
   "window.removeEventListener",
 ]);
+const cssStylePropertyNames = new Set(["clip", "overflow", "position", "whiteSpace"]);
+const httpMethods = new Set(["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]);
+
+function isInsideCssStyleObject(node, source) {
+  if (!ts.isPropertyAssignment(node.parent) || node.parent.initializer !== node) return false;
+  let container = node.parent.parent;
+  if (!ts.isObjectLiteralExpression(container)) return false;
+  let parent = container.parent;
+  while (ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent) || ts.isParenthesizedExpression(parent)) {
+    container = parent;
+    parent = parent.parent;
+  }
+  if (ts.isVariableDeclaration(parent)) return /Styles?$/.test(parent.name.getText(source));
+  return (
+    ts.isJsxExpression(parent) && ts.isJsxAttribute(parent.parent) && parent.parent.name.getText(source) === "style"
+  );
+}
 
 function collectFiles(directory) {
   return fs
@@ -203,6 +220,22 @@ function isMachineLiteral(node, source) {
   if (!/[\p{L}\p{N}]/u.test(value) || /^\s*$/.test(value)) return true;
   if (value === "use client" || value === "use server") return true;
   if (ts.isPropertyAssignment(node.parent) && node.parent.name === node) return true;
+  if (
+    ts.isPropertyAssignment(node.parent) &&
+    node.parent.initializer === node &&
+    cssStylePropertyNames.has(propertyName(node, source)) &&
+    isInsideCssStyleObject(node, source)
+  ) {
+    return true;
+  }
+  if (
+    httpMethods.has(value) &&
+    ts.isCallExpression(node.parent) &&
+    node.parent.arguments[0] === node &&
+    node.parent.expression.getText(source) === "sendMutation"
+  ) {
+    return true;
+  }
   if (/^(?:https?:|mailto:|tel:|\/|\.\/|\.\.\/|@\/)/.test(value)) return true;
   if (/^(?:\.?[#[]|[.#][A-Za-z_-])/.test(value)) return true;
   if (/^(?:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}T.*|[A-Z][A-Z0-9_-]*-\d+)$/.test(value)) return true;
@@ -471,6 +504,18 @@ function runSelfTest(catalogue) {
       false,
     ],
     ["logic discriminant", 'const x = state === "ready"', false],
+    [
+      "CSS-in-JS machine values",
+      'const visuallyHiddenStyle={position:"absolute",overflow:"hidden",clip:"rect(0, 0, 0, 0)",whiteSpace:"nowrap"}',
+      false,
+    ],
+    [
+      "visible style-named property",
+      'const copy={position:"Visible position"}; export const A=()=> <p>{copy.position}</p>',
+      true,
+    ],
+    ["HTTP mutation method", 'sendMutation("PATCH", body)', false],
+    ["visible HTTP-looking text", "export const A=()=> <button>PUT</button>", true],
   ];
 
   const failures = cases.filter(([name, sourceText, shouldFail]) => {

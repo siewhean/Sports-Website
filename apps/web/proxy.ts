@@ -4,7 +4,13 @@ function createNonce() {
   return btoa(crypto.randomUUID());
 }
 
-function contentSecurityPolicy(nonce: string) {
+function requestUsesHttps(request: NextRequest) {
+  const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim().toLowerCase();
+  if (forwardedProtocol === "http" || forwardedProtocol === "https") return forwardedProtocol === "https";
+  return request.nextUrl.protocol === "https:";
+}
+
+function contentSecurityPolicy(nonce: string, useTransportSecurity: boolean) {
   const developmentEval = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
   return [
     "default-src 'self'",
@@ -20,13 +26,14 @@ function contentSecurityPolicy(nonce: string) {
     "script-src-attr 'none'",
     "style-src 'self' 'unsafe-inline'",
     "worker-src 'self'",
-    "upgrade-insecure-requests",
+    ...(useTransportSecurity ? ["upgrade-insecure-requests"] : []),
   ].join("; ");
 }
 
 export function proxy(request: NextRequest) {
   const nonce = createNonce();
-  const csp = contentSecurityPolicy(nonce);
+  const useTransportSecurity = requestUsesHttps(request);
+  const csp = contentSecurityPolicy(nonce, useTransportSecurity);
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("content-security-policy", csp);
   requestHeaders.set("x-nonce", nonce);
@@ -39,7 +46,7 @@ export function proxy(request: NextRequest) {
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("X-Frame-Options", "DENY");
-  if (process.env.NODE_ENV === "production") {
+  if (useTransportSecurity) {
     response.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
   }
   return response;

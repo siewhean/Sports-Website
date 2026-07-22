@@ -96,6 +96,7 @@ export class ScheduleJobProcessor {
         throw new SchedulerInvariantError("Persisted schedule input failed strict domain validation");
       }
       best = claimed.currentBest;
+      exploredCandidates = claimed.exploredCandidates;
       lastIteration = claimed.continuationIteration - 1;
       this.callMetric((metrics) => metrics.jobStarted(claimed.input.objective));
       this.callMetric((metrics) => metrics.activeJobs(1));
@@ -175,6 +176,7 @@ export class ScheduleJobProcessor {
             verified === null
               ? null
               : normalizeCandidate({ iteration: candidate.iteration, result: verified }, claimed).result;
+          let progressCheckpointed = false;
           if (verifiedResult !== null && isStrictImprovement(verifiedResult, best)) {
             const checkpoint = await this.#options.store.checkpointBest({
               jobId: claimed.jobId,
@@ -183,14 +185,25 @@ export class ScheduleJobProcessor {
               expectedInputHash: claimed.inputHash,
               candidate: verifiedResult,
               iteration: candidate.iteration,
+              exploredCandidates,
             });
             if (checkpoint.accepted) {
               if (checkpoint.result === null) {
                 throw new SchedulerInvariantError("Accepted checkpoint did not return its persisted result");
               }
               best = checkpoint.result;
+              progressCheckpointed = true;
               this.callMetric((metrics) => metrics.bestCheckpointed(claimed.input.objective));
             }
+          }
+          if (!progressCheckpointed) {
+            await this.#options.store.recordProgress({
+              jobId: claimed.jobId,
+              workerId: this.#options.workerId,
+              fenceToken: claimed.fenceToken,
+              iteration: candidate.iteration,
+              exploredCandidates,
+            });
           }
           await context.updateProgress({
             iteration: candidate.iteration,

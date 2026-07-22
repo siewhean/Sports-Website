@@ -8,11 +8,33 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
   await page.goto("/organiser/competitions/singapore-open/setup?step=capacity");
   await dismissConsent(page);
   const mobileProgress = page.getByTestId("setup-mobile-progress");
-  if (testInfo.project.name.includes("phone")) await expect(mobileProgress).toBeVisible();
-  else await expect(mobileProgress).toBeHidden();
+  if (testInfo.project.name.includes("phone")) {
+    await expect(mobileProgress).toBeVisible();
+    await expect(mobileProgress.getByText("Step 2 of 8", { exact: true })).toBeVisible();
+  } else await expect(mobileProgress).toBeHidden();
   await expect(page.getByRole("button", { name: /Continue to settings/ })).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("recommendation evidence stays accessible without phone overflow", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/setup?step=format_recommendations");
+  await dismissConsent(page);
+  const card = page.locator("article").filter({ hasText: "Balanced groups" });
+  await expect(card.getByText("Matches", { exact: true })).toBeVisible();
+  await expect(card.getByText("Minimum play", { exact: true })).toBeVisible();
+  await expect(card.getByText("Ranking coverage", { exact: true })).toBeVisible();
+  await expect(card.getByText("Available slots", { exact: true })).toBeVisible();
+  await expect(card.getByText("Schedule", { exact: true })).toBeVisible();
+  const selectButton = card.getByRole("button");
+  await expect(selectButton).toBeEnabled();
+  await selectButton.focus();
+  await expect(selectButton).toBeFocused();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
 });
 
 test("format designer defaults to structured manual mode on phones", async ({ page }, testInfo) => {
@@ -29,6 +51,56 @@ test("format designer defaults to structured manual mode on phones", async ({ pa
   expect(finalBox).not.toBeNull();
   expect(barBox).not.toBeNull();
   expect((finalBox?.y ?? 0) + (finalBox?.height ?? 0)).toBeLessThanOrEqual((barBox?.y ?? 0) - 8);
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("format designer switches authoritative divisions without sharing draft lineage", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/format");
+  await dismissConsent(page);
+  const designer = page.getByTestId("phase4-format-designer");
+  const division = page.getByRole("combobox", { name: "Division" });
+
+  await expect(division).toHaveValue("open");
+  await expect(designer).toHaveAttribute("data-division-id", "open");
+  await expect(designer).toHaveAttribute("data-draft-id", "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed");
+
+  await division.selectOption("women");
+  await expect(page).toHaveURL(/\/format\?division=women$/);
+  await expect(division).toHaveValue("women");
+  await expect(designer).toHaveAttribute("data-division-id", "women");
+  await expect(designer).toHaveAttribute("data-draft-id", "6b3f7665-c8cd-47e5-b243-fae28f56f6fe");
+
+  await division.selectOption("open");
+  await expect(page).toHaveURL(/\/format\?division=open$/);
+  await expect(designer).toHaveAttribute("data-division-id", "open");
+  await expect(designer).toHaveAttribute("data-draft-id", "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed");
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
+});
+
+test("format designer tablet keeps the complete graph and inspector reachable", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("tablet"), "Tablet reachability only");
+  await page.goto("/organiser/competitions/singapore-open/format");
+  await dismissConsent(page);
+  const canvas = page.getByTestId("format-canvas");
+  const finalStage = canvas.locator('[data-stage-id="stage-final"]');
+  const inspector = page.getByRole("complementary", { name: "Stage inspector" });
+  await expect(canvas).toBeVisible();
+  await expect(inspector).toBeVisible();
+  expect(await canvas.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  await finalStage.scrollIntoViewIfNeeded();
+  await finalStage.click();
+  await expect(inspector.locator("input").first()).toHaveValue("Final");
+  const [canvasBox, finalBox] = await Promise.all([canvas.boundingBox(), finalStage.boundingBox()]);
+  expect(canvasBox).not.toBeNull();
+  expect(finalBox).not.toBeNull();
+  expect(finalBox!.x).toBeGreaterThanOrEqual(canvasBox!.x);
+  expect(finalBox!.x + finalBox!.width).toBeLessThanOrEqual(canvasBox!.x + canvasBox!.width + 1);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(1);
 });

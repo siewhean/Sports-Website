@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";
@@ -10,6 +11,10 @@ export type MigrationResult = {
   applied: readonly string[];
   current: readonly string[];
 };
+
+function migrationChecksum(contents: string): string {
+  return createHash("sha256").update(contents).digest("hex");
+}
 
 export async function migrateDatabase(options: {
   databaseUrl: string;
@@ -36,21 +41,56 @@ export async function migrateDatabase(options: {
     await sql`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         name text PRIMARY KEY,
-        applied_at timestamptz NOT NULL DEFAULT now()
+        applied_at timestamptz NOT NULL DEFAULT now(),
+        checksum text CHECK (checksum IS NULL OR checksum ~ '^[0-9a-f]{64}$')
       )
     `;
+    // Older installations only recorded migration names. Adding a nullable
+    // digest is backward compatible; the first run on that installation pins
+    // the exact files present, and every later run rejects drift.
+    await sql`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text`;
+    await sql.unsafe(`DO $migration_checksum_constraint$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid='schema_migrations'::regclass
+            AND conname='schema_migrations_checksum_check'
+        ) THEN
+          ALTER TABLE schema_migrations ADD CONSTRAINT schema_migrations_checksum_check
+            CHECK (checksum IS NULL OR checksum ~ '^[0-9a-f]{64}$');
+        END IF;
+      END;
+    $migration_checksum_constraint$`);
 
-    const currentRows = await sql<{ name: string }[]>`SELECT name FROM schema_migrations ORDER BY name`;
+    const currentRows = await sql<{ name: string; checksum: string | null }[]>`
+      SELECT name,checksum FROM schema_migrations ORDER BY name`;
     const current = new Set(currentRows.map((row) => row.name));
+    const migrationContents = new Map<string, string>();
+    for (const name of migrationNames) {
+      migrationContents.set(name, await readFile(path.join(options.migrationsDirectory, name), "utf8"));
+    }
+    for (const row of currentRows) {
+      const contents = migrationContents.get(row.name);
+      if (contents === undefined) {
+        throw new Error(`Applied migration is missing from disk: ${row.name}`);
+      }
+      const checksum = migrationChecksum(contents);
+      if (row.checksum === null) {
+        await sql`UPDATE schema_migrations SET checksum=${checksum} WHERE name=${row.name} AND checksum IS NULL`;
+      } else if (row.checksum !== checksum) {
+        throw new Error(`Applied migration checksum mismatch: ${row.name}`);
+      }
+    }
     const applied: string[] = [];
 
     for (const name of migrationNames) {
       if (current.has(name)) continue;
-      const contents = await readFile(path.join(options.migrationsDirectory, name), "utf8");
+      const contents = migrationContents.get(name)!;
+      const checksum = migrationChecksum(contents);
       await sql.begin(async (transaction) => {
         await transaction.unsafe(`SET LOCAL search_path TO "${schema}", public`);
         await transaction.unsafe(contents);
-        await transaction`INSERT INTO schema_migrations (name) VALUES (${name})`;
+        await transaction`INSERT INTO schema_migrations (name,checksum) VALUES (${name},${checksum})`;
       });
       current.add(name);
       applied.push(name);

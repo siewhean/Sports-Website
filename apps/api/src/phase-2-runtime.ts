@@ -1570,7 +1570,7 @@ export class Phase2Runtime {
     }));
   }
 
-  private async writePublicProjection(
+  async writePublicProjection(
     tx: PostgresJsSql,
     competitionId: string,
     scheduleVersion: number,
@@ -1581,7 +1581,7 @@ export class Phase2Runtime {
         id: string;
         name: string;
         slug: string;
-        sport_code: "canoe_polo";
+        sport_code: PublicCompetitionProjection["competition"]["sport_code"];
         timezone: string;
         starts_on: Date | string;
         ends_on: Date | string;
@@ -1745,7 +1745,7 @@ export class Phase2Runtime {
     await this.requireCompetitionAccess(this.sql, competitionId, actor, false);
     const competition = required(
       await this.sql.unsafe<Record<string, unknown>>(
-        `SELECT id,name,slug,sport_code,timezone,starts_on,ends_on,status,created_at,updated_at
+        `SELECT id,organisation_id,name,slug,sport_code,timezone,starts_on,ends_on,status,created_at,updated_at
          FROM competitions WHERE id=$1`,
         [competitionId],
       ),

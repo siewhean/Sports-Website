@@ -5,6 +5,7 @@ import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 import { phase2Copy, type CompetitionView } from "@/lib/phase2";
 
 export function PublicCompetition({ competition }: { competition: CompetitionView }) {
+  const publicationVersion = publicPublicationVersion(competition.publicationRevision);
   const finalMatch = competition.matches.find((match) => match.status === "final");
   const liveMatch = competition.matches.find((match) => match.status === "live");
   const nextMatches = competition.matches.filter((match) => match.status === "scheduled");
@@ -118,7 +119,7 @@ export function PublicCompetition({ competition }: { competition: CompetitionVie
               <p>{competition.division.name}</p>
               <h2 id="public-table-title">{phase2Copy.table}</h2>
             </div>
-            <span>{phase2Copy.publishedVersion}</span>
+            <span>{publicationVersion}</span>
           </header>
           <div className="p2-public-table" role="table" aria-label={phase2Copy.table}>
             <div role="row">
@@ -165,7 +166,7 @@ export function PublicCompetition({ competition }: { competition: CompetitionVie
         </section>
         <footer className="p2-public-version">
           <div>
-            <strong>{phase2Copy.publishedVersion}</strong>
+            <strong>{publicationVersion}</strong>
             <span>{competition.publishedAt}</span>
           </div>
           <p>{phase2Copy.refreshNote}</p>
@@ -178,4 +179,11 @@ export function PublicCompetition({ competition }: { competition: CompetitionVie
       <SiteFooter />
     </div>
   );
+}
+
+function publicPublicationVersion(value: string): string {
+  const match = /^sch_(\d+) · res_(\d+)$/.exec(value);
+  if (match) return `Schedule ${match[1]} · Results ${match[2]}`;
+  const legacy = /^pub_(\d+)$/.exec(value);
+  return legacy ? `Published revision ${Number(legacy[1])}` : value;
 }

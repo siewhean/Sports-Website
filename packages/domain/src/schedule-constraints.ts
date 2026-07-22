@@ -1064,6 +1064,21 @@ export function evaluateScheduleQuality(
   const timeBalanceScore = violationScore(["early_match_balance", "late_match_balance"]);
   const divisionScore = violationScore(["division_area_spread"]);
   const preservationScore = violationScore(["existing_schedule_moved"]);
+  const existingAssignments = Object.entries(problem.constraints.preserveExistingSchedule.value.byMatchId);
+  const movement = existingAssignments.reduce(
+    (summary, [matchId, existing]) => {
+      const assignment = sorted.find((candidate) => candidate.matchId === matchId);
+      if (!assignment) return summary;
+      const startShiftMinutes = Math.abs(assignment.startEpochMs - existing.startEpochMs) / MINUTE_MS;
+      const changedArea = assignment.areaId !== existing.areaId;
+      if (startShiftMinutes > 0 || changedArea) summary.movedMatchCount += 1;
+      summary.totalStartShiftMinutes = Math.round((summary.totalStartShiftMinutes + startShiftMinutes) * 100) / 100;
+      if (changedArea) summary.areaChangeCount += 1;
+      return summary;
+    },
+    { movedMatchCount: 0, totalStartShiftMinutes: 0, areaChangeCount: 0 },
+  );
+  const areaChangeSummary = `${movement.areaChangeCount} playing-area ${movement.areaChangeCount === 1 ? "change" : "changes"}`;
   const entryAvailabilityScore = violationScore(["entry_unavailable"]);
   const officialAvailabilityScore = violationScore(["official_unavailable"]);
   const components: ScheduleQualityComponent[] = [
@@ -1141,9 +1156,9 @@ export function evaluateScheduleQuality(
       key: "schedule_preservation",
       score: preservationScore,
       weight: weights.schedule_preservation,
-      measured: Object.keys(problem.constraints.preserveExistingSchedule.value.byMatchId).length,
+      measured: movement.movedMatchCount,
       unit: "matches",
-      explanation: `Movement is measured for ${Object.keys(problem.constraints.preserveExistingSchedule.value.byMatchId).length} existing assignments.`,
+      explanation: `${movement.movedMatchCount} of ${existingAssignments.length} existing assignments move; total start-time shift is ${movement.totalStartShiftMinutes} minutes with ${areaChangeSummary}.`,
     },
     {
       key: "entry_availability",

@@ -22,6 +22,8 @@ type JobRow = {
   correlation_id: string;
   continued_from_job_id: string | null;
   current_best_option_id: string | null;
+  progress_iteration: number | null;
+  explored_candidates: number;
   fence_token: string | null;
 };
 type OptionRow = {
@@ -112,7 +114,11 @@ export class PostgresScheduleJobStore implements ScheduleJobStore {
         fenceToken: row.fence_token,
         correlationId: row.correlation_id,
         continuedFromJobId: row.continued_from_job_id,
-        continuationIteration: option === undefined ? 0 : option.solver_iteration + 1,
+        continuationIteration: Math.max(
+          option === undefined ? 0 : option.solver_iteration + 1,
+          row.progress_iteration === null ? 0 : row.progress_iteration + 1,
+        ),
+        exploredCandidates: row.explored_candidates,
         currentBest,
       },
     };
@@ -162,23 +168,37 @@ export class PostgresScheduleJobStore implements ScheduleJobStore {
     expectedInputHash: string;
     candidate: ScheduleJobResult;
     iteration: number;
+    exploredCandidates?: number;
   }): Promise<ScheduleCheckpointResult> {
     const revision = this.#revisionsByFence.get(request.fenceToken);
     if (revision === undefined) throw new Error("Unknown schedule persistence fence");
     let rows: OptionRow[];
     try {
-      rows = await this.#sql<OptionRow[]>`
-        SELECT * FROM phase4_checkpoint_schedule_option(
-          ${request.jobId}::uuid,
-          ${request.workerId}::text,
-          ${request.fenceToken}::uuid,
-          ${revision}::integer,
-          ${request.expectedInputHash}::text,
-          ${request.iteration}::integer,
-          ${this.#sql.json(request.candidate.quality!)}::jsonb,
-          ${this.#sql.json(request.candidate.assignments)}::jsonb,
-          ${this.#sql.json(request.candidate.violations)}::jsonb
-        )`;
+      rows = await this.#sql.begin(async (tx) => {
+        const checkpoint = await tx<OptionRow[]>`
+          SELECT * FROM phase4_checkpoint_schedule_option(
+            ${request.jobId}::uuid,
+            ${request.workerId}::text,
+            ${request.fenceToken}::uuid,
+            ${revision}::integer,
+            ${request.expectedInputHash}::text,
+            ${request.iteration}::integer,
+            ${tx.json(request.candidate.quality!)}::jsonb,
+            ${tx.json(request.candidate.assignments)}::jsonb,
+            ${tx.json(request.candidate.violations)}::jsonb
+          )`;
+        if (request.exploredCandidates !== undefined) {
+          await tx`
+            SELECT phase4_record_schedule_job_progress(
+              ${request.jobId}::uuid,
+              ${request.workerId}::text,
+              ${request.fenceToken}::uuid,
+              ${request.iteration}::integer,
+              ${request.exploredCandidates}::integer
+            )`;
+        }
+        return checkpoint;
+      });
     } catch (error: unknown) {
       if (isCancellationCheckpoint(error)) return { accepted: false, result: null };
       throw error;
@@ -208,6 +228,23 @@ export class PostgresScheduleJobStore implements ScheduleJobStore {
         NULL::text
       )`;
     this.#revisionsByFence.delete(request.fenceToken);
+  }
+
+  async recordProgress(request: {
+    jobId: string;
+    workerId: string;
+    fenceToken: string;
+    iteration: number;
+    exploredCandidates: number;
+  }): Promise<void> {
+    await this.#sql`
+      SELECT phase4_record_schedule_job_progress(
+        ${request.jobId}::uuid,
+        ${request.workerId}::text,
+        ${request.fenceToken}::uuid,
+        ${request.iteration}::integer,
+        ${request.exploredCandidates}::integer
+      )`;
   }
 
   async releaseAfterFailure(request: {

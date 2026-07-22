@@ -3150,7 +3150,7 @@ Each decision includes a recommendation. Items marked **✅ Recommended** have a
 | 14 | Placement formats for initial Canoe Polo pilot | Third-place match + classification matches for positions 5–8. Full placement bracket deferred. Confirm with pilot organiser during Phase 0. | ⚠️ Needs input |
 | 15 | Withdrawals in partially completed groups | Completed matches stand with results preserved. Remaining matches for the withdrawn team become forfeits with configurable forfeit score. Standings recalculate. | ✅ Recommended |
 | 16 | Unknown scorer at finalisation | Allow as an organiser-enabled toggle per competition. Default off. When enabled, goals may be finalised with "unknown" scorer but flagged for post-event cleanup. | ✅ Recommended |
-| 17 | Schedule-draft expiry: 30 days or one calendar month | 30 calendar days (not one calendar month). Simpler to implement and explain. | ✅ Recommended |
+| 17 | Schedule-draft expiry: 30 days or one calendar month | One calendar month from the latest edit. Month-end dates clamp naturally (for example, 31 January to 28 February). | ✅ Confirmed |
 | 18 | Result correction visibility during downstream conflict | Display corrected result immediately with a visible "downstream review required" badge. Do not hide the correction behind "under review" — transparency builds trust. | ✅ Recommended |
 
 ---

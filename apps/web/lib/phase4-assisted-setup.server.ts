@@ -2,6 +2,7 @@ import "server-only";
 
 import { cookies, headers } from "next/headers";
 import type { Phase4SetupDocument } from "@matchday/contracts";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { cookieHostMatches } from "@/lib/phase2-organiser";
 import {
   parseAssistedSetupDocument,
@@ -36,10 +37,10 @@ function unavailable(
   competitionName: string,
   state: AssistedSetupSurfaceState,
 ): AssistedSetupPageDocument {
-  return { state, competitionId, competitionName, setup: null };
+  return { state, competitionId, competitionName, setup: null, resumeRequired: false };
 }
 
-function demoSetup(competitionId: string): Phase4SetupDocument {
+export function demoAssistedSetupDocument(competitionId: string, previewStep?: string): Phase4SetupDocument {
   const now = "2026-07-20T06:18:00.000Z";
   const expires = "2026-08-19T06:18:00.000Z";
   const stepIds = [
@@ -52,7 +53,7 @@ function demoSetup(competitionId: string): Phase4SetupDocument {
     "schedule_review",
     "review_publish",
   ] as const;
-  return {
+  const setup: Phase4SetupDocument = {
     schema_version: 1,
     id: "0cc48815-adc6-4bda-838f-3b52eb8c7862",
     organisation_id: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
@@ -156,6 +157,29 @@ function demoSetup(competitionId: string): Phase4SetupDocument {
             advantage: "Every team plays at least three matches with a complete podium.",
             match_count: 31,
             minimum_matches_per_entry: 3,
+            guaranteed_matches: 3,
+            ranking_coverage: "all_entries",
+            available_match_slots: 36,
+            division_formats: [
+              {
+                division_id: "a641f08e-23de-4611-8893-01bfebf42684",
+                candidate_division_id: "43e3501f-df87-466c-b2a7-ded47ae92ee1",
+                format_revision_id: "43e3501f-df87-466c-b2a7-ded47ae92ee5",
+                format_definition_hash: "demo-format-balanced",
+                match_count: 16,
+                guaranteed_matches: 3,
+                ranking_coverage: "all_entries",
+              },
+              {
+                division_id: "fd16448b-61ab-4dd0-a0a1-b61e77fd5c3a",
+                candidate_division_id: "43e3501f-df87-466c-b2a7-ded47ae92ee2",
+                format_revision_id: "43e3501f-df87-466c-b2a7-ded47ae92ee6",
+                format_definition_hash: "demo-format-balanced-women",
+                match_count: 15,
+                guaranteed_matches: 3,
+                ranking_coverage: "all_entries",
+              },
+            ],
             capacity_status: "fits",
             scheduling_status: "feasible",
             warning_codes: [],
@@ -169,6 +193,29 @@ function demoSetup(competitionId: string): Phase4SetupDocument {
             advantage: "Finishes earlier while preserving final rankings.",
             match_count: 23,
             minimum_matches_per_entry: 2,
+            guaranteed_matches: 2,
+            ranking_coverage: "all_entries",
+            available_match_slots: 36,
+            division_formats: [
+              {
+                division_id: "a641f08e-23de-4611-8893-01bfebf42684",
+                candidate_division_id: "8f94c1f8-41dd-4500-9368-d8a4e7ca73c1",
+                format_revision_id: "8f94c1f8-41dd-4500-9368-d8a4e7ca73c8",
+                format_definition_hash: "demo-format-compact",
+                match_count: 12,
+                guaranteed_matches: 2,
+                ranking_coverage: "all_entries",
+              },
+              {
+                division_id: "fd16448b-61ab-4dd0-a0a1-b61e77fd5c3a",
+                candidate_division_id: "8f94c1f8-41dd-4500-9368-d8a4e7ca73c2",
+                format_revision_id: "8f94c1f8-41dd-4500-9368-d8a4e7ca73c9",
+                format_definition_hash: "demo-format-compact-women",
+                match_count: 11,
+                guaranteed_matches: 2,
+                ranking_coverage: "all_entries",
+              },
+            ],
             capacity_status: "fits",
             scheduling_status: "feasible",
             warning_codes: [],
@@ -189,6 +236,21 @@ function demoSetup(competitionId: string): Phase4SetupDocument {
     updated_at: now,
     completed_at: null,
   };
+  const previewStepIds = setup.steps.map((step) => step.id);
+  const selectedStep = previewStepIds.includes(previewStep as (typeof previewStepIds)[number])
+    ? (previewStep as (typeof previewStepIds)[number])
+    : setup.current_step;
+  const selectedIndex = previewStepIds.indexOf(selectedStep);
+  return {
+    ...setup,
+    current_step: selectedStep,
+    completed_steps: previewStepIds.slice(0, selectedIndex),
+    steps: setup.steps.map((step, index) => ({
+      ...step,
+      status: index < selectedIndex ? "completed" : index === selectedIndex ? "current" : "not_started",
+      completed_at: index < selectedIndex ? setup.updated_at : null,
+    })),
+  };
 }
 
 export async function getAssistedSetupDocument(
@@ -197,7 +259,7 @@ export async function getAssistedSetupDocument(
   previewState?: string,
   previewStep?: string,
 ): Promise<AssistedSetupPageDocument> {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
+  if (demoFixturesEnabled()) {
     const allowed = new Set<AssistedSetupSurfaceState>([
       "ready",
       "loading",
@@ -207,6 +269,7 @@ export async function getAssistedSetupDocument(
       "permission",
       "read-only",
       "conflict",
+      "expired",
       "quota",
       "plan",
     ]);
@@ -214,27 +277,15 @@ export async function getAssistedSetupDocument(
       ? (previewState as AssistedSetupSurfaceState)
       : "ready";
     if (state !== "ready" && state !== "read-only") return unavailable(competitionId, competitionName, state);
-    const baseSetup = demoSetup(competitionId);
-    const previewStepIds = baseSetup.steps.map((step) => step.id);
-    const selectedStep = previewStepIds.includes(previewStep as (typeof previewStepIds)[number])
-      ? (previewStep as (typeof previewStepIds)[number])
-      : baseSetup.current_step;
-    const selectedIndex = previewStepIds.indexOf(selectedStep);
-    const setup: Phase4SetupDocument = {
-      ...baseSetup,
-      current_step: selectedStep,
-      completed_steps: previewStepIds.slice(0, selectedIndex),
-      steps: baseSetup.steps.map((step, index) => ({
-        ...step,
-        status: index < selectedIndex ? "completed" : index === selectedIndex ? "current" : "not_started",
-        completed_at: index < selectedIndex ? baseSetup.updated_at : null,
-      })),
-    };
+    const setup = demoAssistedSetupDocument(competitionId, previewStep);
     return {
       state,
       competitionId,
       competitionName,
       setup: state === "read-only" ? { ...setup, permission: "read", read_only: true } : setup,
+      // This fixture represents an existing server-owned draft. Resume state is
+      // derived from the fixture identity, never from a browser query switch.
+      resumeRequired: competitionId === "cmp_sgopen_2026" && state === "ready" && !setup.read_only,
     };
   }
   const base = apiBaseUrl();
@@ -242,10 +293,13 @@ export async function getAssistedSetupDocument(
   const cookie = await sessionCookie(base);
   if (!cookie) return unavailable(competitionId, competitionName, "permission");
   try {
-    const response = await fetch(new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/setup-draft`, base), {
-      cache: "no-store",
-      headers: { accept: "application/json", cookie },
-    });
+    const response = await fetch(
+      new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/setup-draft`, base),
+      {
+        cache: "no-store",
+        headers: { accept: "application/json", cookie },
+      },
+    );
     if (response.status === 404) return unavailable(competitionId, competitionName, "empty");
     if (response.status === 401 || response.status === 403)
       return unavailable(competitionId, competitionName, "permission");
@@ -253,10 +307,11 @@ export async function getAssistedSetupDocument(
     const setup = parseAssistedSetupDocument(await response.json().catch(() => null), competitionId);
     if (!setup) return unavailable(competitionId, competitionName, "error");
     return {
-      state: setup.read_only ? "read-only" : "ready",
+      state: setup.status === "expired" ? "expired" : setup.read_only ? "read-only" : "ready",
       competitionId,
       competitionName,
       setup,
+      resumeRequired: !setup.read_only,
     };
   } catch {
     return unavailable(competitionId, competitionName, "offline");

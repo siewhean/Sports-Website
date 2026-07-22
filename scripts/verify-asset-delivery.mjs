@@ -16,6 +16,7 @@ const manifestAssets = new Map(manifest.assets.map((asset) => [asset.path, asset
 assert(manifestAssets.size === manifest.assets.length, "Manifest contains duplicate asset paths");
 const configuredBaseUrl = process.env.ASSET_VERIFY_BASE_URL;
 const baseUrl = configuredBaseUrl ?? "http://127.0.0.1:3217";
+const baseProtocol = new URL(baseUrl).protocol;
 let child;
 
 try {
@@ -75,7 +76,6 @@ try {
     assert(!/immutable/iu.test(policy), `${privatePath} must never be immutable`);
     for (const header of [
       "content-security-policy",
-      "strict-transport-security",
       "x-content-type-options",
       "x-frame-options",
       "referrer-policy",
@@ -83,7 +83,20 @@ try {
     ]) {
       assert(response.headers.has(header), `${privatePath} is missing ${header}`);
     }
+    if (baseProtocol === "https:") {
+      assert(response.headers.has("strict-transport-security"), `${privatePath} is missing strict-transport-security`);
+    } else {
+      assert(
+        !response.headers.has("strict-transport-security"),
+        `${privatePath} must not advertise strict-transport-security over HTTP`,
+      );
+    }
     await response.body?.cancel();
+  }
+
+  for (const demoOnlyPath of ["/setup", "/format"]) {
+    const status = await requestStatus(`${baseUrl}${demoOnlyPath}`);
+    assert(status === 404, `${demoOnlyPath} returned ${status}; demo-only routes must be absent from production`);
   }
 
   const serviceWorker = await fetchChecked(`${baseUrl}/sw.js`);
@@ -156,7 +169,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function requestStatus(url, headers) {
+function requestStatus(url, headers = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const client = parsed.protocol === "https:" ? https : http;

@@ -41,6 +41,7 @@ const stateCopy: Record<
   permission: { title: phase4SetupCopy.permission, body: t("prototype.72b2c902df68") },
   "read-only": { title: phase4SetupCopy.readOnly, body: t("prototype.4f2da4d7aaa9") },
   conflict: { title: phase4SetupCopy.conflict, body: t("prototype.ab445f863ccd") },
+  expired: { title: t("prototype.ccc6652a3553"), body: t("prototype.f4d72f1cb57d") },
   quota: { title: phase4SetupCopy.quota, body: t("prototype.3f9a74ef1f28") },
   plan: { title: phase4SetupCopy.plan, body: t("prototype.4e1fab500c6e") },
 };
@@ -710,29 +711,27 @@ function PreferencesStep({
       </fieldset>
       <fieldset>
         <legend>{t("prototype.6a72d069484d")}</legend>
-        {([opaqueId("speed"), opaqueId("simplicity"), opaqueId("participation")] as const).map(
-          (priority) => (
-            <label className={styles.radioRow} key={priority}>
-              <input
-                type="radio"
-                name="priority"
-                checked={value.priority.value === priority}
-                disabled={disabled}
-                onChange={() => onChange({ ...value, priority: { value: priority } })}
-              />
-              <span>
-                <strong>{priority[0]!.toUpperCase() + priority.slice(1)}</strong>
-                <small>
-                  {priority === "speed"
-                    ? t("prototype.077e5c942bb4")
-                    : priority === "simplicity"
-                      ? t("prototype.92bd4efd1fa8")
-                      : t("prototype.d7d3f2be1138")}
-                </small>
-              </span>
-            </label>
-          ),
-        )}
+        {([opaqueId("speed"), opaqueId("simplicity"), opaqueId("participation")] as const).map((priority) => (
+          <label className={styles.radioRow} key={priority}>
+            <input
+              type="radio"
+              name="priority"
+              checked={value.priority.value === priority}
+              disabled={disabled}
+              onChange={() => onChange({ ...value, priority: { value: priority } })}
+            />
+            <span>
+              <strong>{priority[0]!.toUpperCase() + priority.slice(1)}</strong>
+              <small>
+                {priority === "speed"
+                  ? t("prototype.077e5c942bb4")
+                  : priority === "simplicity"
+                    ? t("prototype.92bd4efd1fa8")
+                    : t("prototype.d7d3f2be1138")}
+              </small>
+            </span>
+          </label>
+        ))}
       </fieldset>
     </div>
   );
@@ -848,13 +847,11 @@ function ScheduleStep({ setup, competitionId }: { setup: Phase4SetupDocument; co
 }
 
 function ReviewStep({ setup }: { setup: Phase4SetupDocument }) {
-  const rows = assistedSetupSteps
-    .slice(0, 7)
-    .map((step) => ({
-      step,
-      complete: setup.completed_steps.includes(step.id),
-      issues: setup.steps.find((item) => item.id === step.id)?.errors ?? [],
-    }));
+  const rows = assistedSetupSteps.slice(0, 7).map((step) => ({
+    step,
+    complete: setup.completed_steps.includes(step.id),
+    issues: setup.steps.find((item) => item.id === step.id)?.errors ?? [],
+  }));
   return (
     <div className={styles.review}>
       <ul>

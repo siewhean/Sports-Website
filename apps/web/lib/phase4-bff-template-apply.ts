@@ -7,11 +7,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const body = await jsonBody(request);
   if (
     !body ||
-    !hasExactKeys(body, ["competition_id", "division_id", "template_version_id", "expected_format_revision", "idempotency_key"]) ||
+    !hasExactKeys(body, [
+      "competition_id",
+      "division_id",
+      "template_version_id",
+      "expected_format_revision",
+      "idempotency_key",
+    ]) ||
     typeof body.competition_id !== "string" ||
     typeof body.division_id !== "string" ||
     typeof body.template_version_id !== "string" ||
-    !(body.expected_format_revision === null || (Number.isSafeInteger(body.expected_format_revision) && (body.expected_format_revision as number) >= 1)) ||
+    !(
+      body.expected_format_revision === null ||
+      (Number.isSafeInteger(body.expected_format_revision) && (body.expected_format_revision as number) >= 1)
+    ) ||
     !isPhase4IdempotencyKey(body.idempotency_key)
   )
     return NextResponse.json(

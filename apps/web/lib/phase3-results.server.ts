@@ -1,5 +1,7 @@
 import "server-only";
 
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+
 import { cookies, headers } from "next/headers";
 import { cookieHostMatches } from "@/lib/phase2-organiser";
 import {
@@ -285,7 +287,7 @@ type ResultsInput = Readonly<{
 }>;
 
 export async function getResultsDocument(input: ResultsInput): Promise<ResultsDocument> {
-  if (process.env.MATCHDAY_PHASE2_DATA_MODE === "demo") {
+  if (demoFixturesEnabled()) {
     const state =
       input.previewState && previewStates.has(input.previewState as ResultsSurfaceState)
         ? (input.previewState as ResultsSurfaceState)

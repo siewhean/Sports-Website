@@ -209,7 +209,7 @@
   place-items: center;
   border-radius: 50%;
   background: #89ad00;
-  color: #fff;
+  color: #171918;
   font:
     700 1rem/1 var(--font-geist-mono),
     monospace;
@@ -309,6 +309,10 @@
   cursor: not-allowed;
   color: #777974;
   background: #f3f2ed;
+}
+
+.slotDisclosure {
+  display: none;
 }
 
 .validation {
@@ -435,7 +439,9 @@
 }
 
 @keyframes move-check {
-  to { background-position: -200% 0; }
+  to {
+    background-position: -200% 0;
+  }
 }
 
 @media (max-width: 600px) {
@@ -479,6 +485,24 @@
 
   .choices label > span {
     align-items: flex-start;
+  }
+
+  .choices:not([data-expanded="true"]) label:nth-child(n + 7) {
+    display: none;
+  }
+
+  .slotDisclosure {
+    display: inline-flex;
+    width: 100%;
+    min-height: 48px;
+    align-items: center;
+    justify-content: center;
+    margin-top: 0.65rem;
+    border: 1px solid var(--ink);
+    border-radius: 0.45rem;
+    background: transparent;
+    color: var(--ink);
+    font-weight: 650;
   }
 }
 
