@@ -40,6 +40,7 @@
     "dependencies:audit": "pnpm dependencies:known-advisories && pnpm audit --prod --audit-level moderate",
     "secrets:scan": "bash scripts/scan-secrets.sh",
     "qa:gate-b:runner-self-test": "node scripts/test-gate-b-evidence.mjs",
+    "qa:gate-b:external": "node scripts/verify-gate-b-external-evidence.mjs",
     "qa:gate-b:local": "node scripts/run-gate-b-local.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:performance && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm dependencies:audit && pnpm secrets:scan && pnpm build && pnpm deploy:manifest && pnpm asset-delivery:verify:origin",
     "setup:workspace": "node scripts/setup-workspace.mjs"
