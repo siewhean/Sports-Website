@@ -8,7 +8,11 @@ DECLARE
   selected_id text;
   selected_candidate jsonb;
   format_item jsonb;
+  candidate_id uuid;
+  candidate_division_id uuid;
   revision_id uuid;
+  evidence_division_id uuid;
+  evidence_definition_hash text;
   revision_row format_revisions%ROWTYPE;
   audit_request_id text;
 BEGIN
@@ -16,6 +20,11 @@ BEGIN
   IF selection IS NULL OR jsonb_typeof(selection)<>'object' THEN RETURN NEW; END IF;
   selected_id := selection->>'selected_recommendation_id';
   IF selected_id IS NULL OR btrim(selected_id)='' THEN RETURN NEW; END IF;
+  IF jsonb_typeof(selection->'recommendation_set_hash')<>'string'
+     OR selection->>'recommendation_set_hash' !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'selected setup recommendation has invalid set evidence';
+  END IF;
+  candidate_id := selected_id::uuid;
 
   SELECT candidate.value INTO selected_candidate
   FROM jsonb_array_elements(COALESCE(selection->'recommendations','[]'::jsonb)) candidate(value)
@@ -36,21 +45,49 @@ BEGIN
      OR jsonb_array_length(selected_candidate->'division_formats')=0 THEN
     RAISE EXCEPTION 'selected setup recommendation has no division formats';
   END IF;
+  IF (SELECT count(*)<>count(DISTINCT item.value->>'division_id')
+      FROM jsonb_array_elements(selected_candidate->'division_formats') item(value))
+     OR jsonb_array_length(selected_candidate->'division_formats')<>
+        (SELECT count(*) FROM divisions WHERE competition_id=NEW.competition_id) THEN
+    RAISE EXCEPTION 'selected setup recommendation must cover each division exactly once';
+  END IF;
 
   FOR format_item IN SELECT value FROM jsonb_array_elements(selected_candidate->'division_formats') item(value) LOOP
     IF jsonb_typeof(format_item)<>'object'
+       OR jsonb_typeof(format_item->'division_id')<>'string'
+       OR jsonb_typeof(format_item->'candidate_division_id')<>'string'
        OR format_item->'format_revision_id' IS NULL
        OR format_item->'format_revision_id'='null'::jsonb
-       OR jsonb_typeof(format_item->'format_revision_id')<>'string' THEN
-      RAISE EXCEPTION 'selected setup format must reference an applied revision';
+       OR jsonb_typeof(format_item->'format_revision_id')<>'string'
+       OR jsonb_typeof(format_item->'format_definition_hash')<>'string'
+       OR format_item->>'format_definition_hash' !~ '^[0-9a-f]{64}$' THEN
+      RAISE EXCEPTION 'selected setup format must contain complete canonical evidence';
     END IF;
 
+    candidate_division_id := (format_item->>'candidate_division_id')::uuid;
     revision_id := (format_item->>'format_revision_id')::uuid;
+    SELECT division.id,division.definition_hash
+      INTO evidence_division_id,evidence_definition_hash
+    FROM phase4_format_recommendation_candidate_divisions division
+    JOIN phase4_format_recommendation_candidates candidate ON candidate.id=division.candidate_id
+    JOIN phase4_format_recommendation_sets recommendation_set
+      ON recommendation_set.id=candidate.recommendation_set_id
+    WHERE candidate.id=candidate_id
+      AND division.id=candidate_division_id
+      AND recommendation_set.setup_draft_id=NEW.id
+      AND recommendation_set.competition_id=NEW.competition_id
+      AND recommendation_set.source_hash=selection->>'recommendation_set_hash';
+    IF evidence_division_id IS NULL
+       OR evidence_division_id<>(format_item->>'division_id')::uuid
+       OR evidence_definition_hash<>format_item->>'format_definition_hash' THEN
+      RAISE EXCEPTION 'selected setup format does not match immutable recommendation evidence';
+    END IF;
+
     SELECT * INTO revision_row FROM format_revisions WHERE id=revision_id FOR UPDATE;
     IF revision_row.id IS NULL
        OR revision_row.competition_id<>NEW.competition_id
-       OR revision_row.division_id<>(format_item->>'division_id')::uuid
-       OR revision_row.definition_hash<>format_item->>'format_definition_hash' THEN
+       OR revision_row.division_id<>evidence_division_id
+       OR revision_row.definition_hash<>evidence_definition_hash THEN
       RAISE EXCEPTION 'selected setup format does not match canonical revision evidence';
     END IF;
 
