@@ -59,7 +59,7 @@ describe("foundation migrations", () => {
             FROM pg_depend dependency
             WHERE dependency.classid = 'pg_proc'::regclass
               AND dependency.refclassid = 'pg_proc'::regclass
-              AND dependency.objid = to_regprocedure(${`${schema}.phase4_sha256_jsonb(jsonb)`})
+              AND dependency.objid = to_regprocedure(${`${schema}.phase4_sha256_json(jsonb)`})
               AND dependency.refobjid = to_regprocedure(${`${schema}.phase3_canonical_jsonb(jsonb)`})
           ) AS "shaDependsOnCanonical"
       `;
