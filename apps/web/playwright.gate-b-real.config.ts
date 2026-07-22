@@ -4,7 +4,7 @@ const isCI = Boolean(process.env.CI);
 
 export default defineConfig({
   testDir: "./tests",
-  testMatch: /phase-4-real-api\.spec\.ts/,
+  testMatch: /phase-4-real-(?:api|gate-b)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,
