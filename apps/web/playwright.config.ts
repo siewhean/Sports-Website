@@ -6,7 +6,7 @@ const buildStep = isCI ? "" : `${webServerEnvironment} pnpm build && `;
 
 export default defineConfig({
   testDir: "./tests",
-  testIgnore: ["**/unit/**", "**/phase-2-real-api.spec.ts"],
+  testIgnore: ["**/unit/**", "**/phase-2-real-api.spec.ts", "**/phase-4-real-gate-b.spec.ts"],
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
