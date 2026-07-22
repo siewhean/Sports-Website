@@ -20,6 +20,7 @@
     "test:integration": "turbo run test:integration",
     "test:e2e": "pnpm --filter @matchday/web test:e2e",
     "test:e2e:phase2:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-2-real-e2e.ts",
+    "test:e2e:phase4:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
     "test:a11y": "pnpm --filter @matchday/web test:a11y",
     "test:visual": "pnpm --filter @matchday/web test:visual",
     "validate:fixtures": "node scripts/validate-canonical-fixtures.mjs",
