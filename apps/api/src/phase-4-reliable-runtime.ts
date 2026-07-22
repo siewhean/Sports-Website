@@ -98,13 +98,13 @@ export function canonicalRecommendationSelection(
 export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   constructor(
     private readonly reliableSql: PostgresJsSql,
-    phase3: Phase3Runtime,
+    private readonly reliablePhase3: Phase3Runtime,
     enqueue: ScheduleEnqueuePort,
     ai: Phase4AiOptions,
     now: () => Date = () => new Date(),
     private readonly reliablePublicProjection?: Phase4PublicProjectionPort,
   ) {
-    super(reliableSql, phase3, enqueue, ai, now, reliablePublicProjection);
+    super(reliableSql, reliablePhase3, enqueue, ai, now, reliablePublicProjection);
   }
 
   private async readAccess(sql: PostgresJsSql, actor: Phase3Actor, competitionId: string): Promise<ReadAccess> {
@@ -233,12 +233,52 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     return super.patchSetupDraft(actor, competitionId, request, requestId);
   }
 
-  override async readFormatBuilder(...args: Parameters<GateBPhase4Runtime["readFormatBuilder"]>) {
-    const workspace = await super.readFormatBuilder(...args);
-    return {
-      ...workspace,
-      draft: workspace.draft ? correctFormatDraftMetrics(workspace.draft) : null,
+  override async readFormatBuilder(actor: Phase3Actor, competitionId: string, divisionId: string) {
+    const workspace = await super.readFormatBuilder(actor, competitionId, divisionId);
+    if (workspace.draft) {
+      return { ...workspace, draft: correctFormatDraftMetrics(workspace.draft) };
+    }
+
+    const published = workspace.revisions.find((revision) => revision.status === "published");
+    if (!published) return workspace;
+
+    const capacity = await this.reliablePhase3.capacity(actor, competitionId);
+    const metrics = calculateFormatMetrics(published.document.graph as FormatGraph);
+    const available = capacity.effective.availableMatchSlots;
+    const required = metrics.matchCount;
+    const selected: Phase4FormatDraftView = {
+      competition_id: published.competition_id,
+      division_id: published.division_id,
+      draft_id: published.revision_id,
+      parent_revision_id: published.parent_revision_id,
+      root_revision_id: published.root_revision_id,
+      revision: published.revision,
+      status: published.status,
+      created_at: published.created_at,
+      updated_at: published.published_at ?? published.created_at,
+      permission: "view",
+      read_only: true,
+      definition_hash: published.definition_hash,
+      document: published.document,
+      metrics: {
+        match_count: metrics.matchCount,
+        guaranteed_matches: metrics.guaranteedMatches,
+        maximum_matches: metrics.maximumMatches,
+      },
+      capacity: {
+        available_match_slots: available,
+        required_match_slots: required,
+        spare_match_slots: available - required,
+        status: available < required ? "does_not_fit" : available === required ? "tight" : "comfortable",
+        evidence_revision: capacity.revision,
+      },
+      validation: {
+        pending: false,
+        validated_definition_hash: published.definition_hash,
+        issues: [],
+      },
     };
+    return { ...workspace, draft: selected };
   }
 
   override async saveFormatRevision(...args: Parameters<GateBPhase4Runtime["saveFormatRevision"]>) {
