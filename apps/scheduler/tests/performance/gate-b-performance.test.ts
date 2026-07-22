@@ -56,14 +56,17 @@ describe("Gate B scheduler performance qualification", () => {
 function qualificationInput(): ScheduleJobInput {
   const base = scheduleInput();
   const start = Date.UTC(2027, 7, 1, 0, 0);
+  const divisions = [qualificationUuid("8001", 1), qualificationUuid("8001", 2)] as const;
+  const areas = [qualificationUuid("8002", 1), qualificationUuid("8002", 2)] as const;
+  const intervals = [qualificationUuid("8003", 1), qualificationUuid("8003", 2)] as const;
   const matches = Array.from({ length: 16 }, (_, index) => ({
-    match_id: `qualification-match-${index + 1}`,
-    division_id: index < 8 ? "qualification-division-a" : "qualification-division-b",
+    match_id: qualificationUuid("8004", index + 1),
+    division_id: index < 8 ? divisions[0] : divisions[1],
     duration_minutes: 30,
     dependency_match_ids: [],
     possible_entry_ids: [
-      `qualification-entry-${index * 2 + 1}`,
-      `qualification-entry-${index * 2 + 2}`,
+      qualificationUuid("8005", index * 2 + 1),
+      qualificationUuid("8005", index * 2 + 2),
     ],
     official_ids: [],
     is_championship_final: index === 15,
@@ -72,9 +75,9 @@ function qualificationInput(): ScheduleJobInput {
     const areaIndex = index % 2;
     const slotIndex = Math.floor(index / 2);
     return {
-      slot_id: `qualification-slot-${index + 1}`,
-      interval_id: `qualification-interval-${areaIndex + 1}`,
-      area_id: `qualification-area-${areaIndex + 1}`,
+      slot_id: qualificationUuid("8006", index + 1),
+      interval_id: intervals[areaIndex],
+      area_id: areas[areaIndex],
       start_epoch_ms: start + slotIndex * 30 * 60_000,
       end_epoch_ms: start + (slotIndex + 1) * 30 * 60_000,
     };
@@ -95,11 +98,15 @@ function qualificationInput(): ScheduleJobInput {
       featured_playing_area: {
         mode: "preferred",
         weight: 1,
-        value: { area_id: "qualification-area-1", match_ids: [matches.at(-1)!.match_id] },
+        value: { area_id: areas[0], match_ids: [matches.at(-1)!.match_id] },
       },
       keep_division_together: { mode: "preferred", weight: 1, value: { maximum_area_count: 2 } },
     },
   };
+}
+
+function qualificationUuid(variant: string, value: number): string {
+  return `00000000-0000-4000-${variant}-${value.toString(16).padStart(12, "0")}`;
 }
 
 function percentile95(values: readonly number[]): number {
