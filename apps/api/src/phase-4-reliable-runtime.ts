@@ -5,6 +5,7 @@ import type {
   Phase4SetupDocument,
   Phase4SetupPatchRequest,
   Phase4SetupPatchResponse,
+  Phase4SetupRecommendationSelection,
 } from "@matchday/contracts";
 import { calculateFormatMetrics, type FormatGraph } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
@@ -62,6 +63,34 @@ export function correctFormatDraftMetrics(draft: Phase4FormatDraftView): Phase4F
   };
 }
 
+export function canonicalRecommendationSelection(
+  current: Phase4SetupRecommendationSelection,
+  requested: Phase4SetupRecommendationSelection,
+): Phase4SetupRecommendationSelection {
+  const requestedId = requested.selected_recommendation_id;
+  if (requestedId === null)
+    throw new ApiError(422, "FORMAT_RECOMMENDATION_REQUIRED", "Select a format recommendation before continuing");
+  const candidate = [
+    ...current.recommendations,
+    ...(current.requires_changes ? [current.requires_changes] : []),
+  ].find((item) => item.id === requestedId);
+  if (!candidate)
+    throw new ApiError(409, "STALE_FORMAT_REFERENCE", "The selected format recommendation is no longer available");
+  if (candidate.capacity_status === "requires_changes" && !requested.acknowledged_capacity_shortfall) {
+    throw new ApiError(
+      422,
+      "CAPACITY_SHORTFALL_ACKNOWLEDGEMENT_REQUIRED",
+      "Acknowledge the capacity shortfall before selecting this format",
+    );
+  }
+  return {
+    ...current,
+    selected_recommendation_id: requestedId,
+    acknowledged_capacity_shortfall:
+      candidate.capacity_status === "requires_changes" && requested.acknowledged_capacity_shortfall,
+  };
+}
+
 export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   constructor(
     private readonly reliableSql: PostgresJsSql,
@@ -101,6 +130,30 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     return access;
   }
 
+  private async canonicalizeSetupRequest(
+    actor: Phase3Actor,
+    competitionId: string,
+    request: Phase4SetupAutosaveRequest,
+  ): Promise<Phase4SetupAutosaveRequest> {
+    if (request.transition.kind !== "save_step" || request.transition.step.step_id !== "format_recommendations") {
+      return request;
+    }
+    const current = await this.readSetupDraft(actor, competitionId);
+    const currentSelection = current.values.format_recommendations;
+    if (!currentSelection)
+      throw new ApiError(409, "STALE_FORMAT_REFERENCE", "Format recommendations must be regenerated");
+    return {
+      ...request,
+      transition: {
+        kind: "save_step",
+        step: {
+          step_id: "format_recommendations",
+          value: canonicalRecommendationSelection(currentSelection, request.transition.step.value),
+        },
+      },
+    };
+  }
+
   override async autosaveSetupDraft(
     actor: Phase3Actor,
     competitionId: string,
@@ -109,7 +162,10 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   ): Promise<Phase4SetupAutosaveResponse> {
     if (request.transition.kind === "save_step" && request.transition.step.step_id === "basics")
       await this.assertSetupWrite(actor, competitionId);
-    return normalizeSetupAutosaveResponse(await super.autosaveSetupDraft(actor, competitionId, request, requestId));
+    const canonicalRequest = await this.canonicalizeSetupRequest(actor, competitionId, request);
+    return normalizeSetupAutosaveResponse(
+      await super.autosaveSetupDraft(actor, competitionId, canonicalRequest, requestId),
+    );
   }
 
   override async patchSetupDraft(
