@@ -70,6 +70,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   useEffect(() => {
     if (!selectedSlot?.available || !canEdit) return;
     let active = true;
+    let settled = false;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setValidatingSlotId(selectedSlot.id);
@@ -110,12 +111,13 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
           setError(phase4ScheduleCopy.offlineBody);
         }
       } finally {
+        settled = true;
         if (active) setValidatingSlotId((current) => (current === selectedSlot.id ? null : current));
       }
     }, 180);
     return () => {
       active = false;
-      controller.abort();
+      if (!settled) controller.abort();
       window.clearTimeout(timer);
     };
   }, [canEdit, currentRevisionId, match.id, selectedSlot]);
