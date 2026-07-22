@@ -12,6 +12,32 @@ Local Gate B validation: PASS
 
 Hosted GitHub Actions: Not executed because the account Actions allowance is unavailable.
 
+## Post-merge lockfile and clean-isolation revalidation — 23 July 2026
+
+**Branch:** `codex/gate-b-lockfile-integrity`
+
+**Validated source commit:** `aa87be059a35a790a6801d74f5074457bb5c84d2`
+
+Local Gate B validation: PASS
+
+Durable raw logs are under the ignored local path `artifacts/qa/gate-b-revalidation/`.
+
+| Requirement                                  | Final result | Evidence                                                                                                                                                      |
+| -------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node 24.18 container and frozen pnpm install | PASS         | `01d-container-frozen-install-corrected-lock-retry.log`: Node 24.18.0, pnpm 10.33.0, empty in-memory store, 571 packages                                      |
+| Formatting, lint and TypeScript              | PASS         | `02-host-static-checks.log` and `02b-host-static-checks-uncached.log`: formatting passed; 0 cached lint/typecheck tasks; 3 lint and 16 typecheck tasks passed |
+| PostgreSQL migrations                        | PASS         | `03-host-migrations-integration.log`: clean-schema verification passed all 25 forward migrations                                                              |
+| PostgreSQL/Redis integration                 | PASS         | `03d-host-integration-uncached-retry.log`: 20/20 tasks, 0 cached; database 53/53 and Redis queue 4/4 passed                                                   |
+| Production dependency audit                  | PASS         | `04b-pnpm-audit-corrected-lockfile.log`: no known vulnerabilities                                                                                             |
+| Real Gate B journey, isolation 1             | PASS         | `05b-real-gate-b-run-1.log`: production build; phone Chromium, tablet WebKit and desktop Chromium 3/3; persistence and Redis-cleanup oracles passed           |
+| Real Gate B journey, isolation 2             | PASS         | `06-real-gate-b-run-2.log`: separate Redis database and disposable PostgreSQL isolation; 3/3; persistence and Redis-cleanup oracles passed                    |
+| Chromium/WebKit accessibility                | PASS         | `07-a11y-chromium-webkit.log`: 47/47 passed                                                                                                                   |
+| Chromium/WebKit visual comparison            | PASS         | `08b-visual-retry-after-enospc.log`: 13/13 matched approved baselines                                                                                         |
+
+The revalidation found a malformed `fast-uri@4.1.1` SRI in the merged lockfile. The recorded digest decoded to 65 bytes, which is impossible for SHA-512. npm metadata and an independently downloaded 34,614-byte tarball agreed on the canonical 64-byte digest. Commit `aa87be0` changes only the invalid `hQw==` suffix to `hQ==`; integrity verification remains enabled. A fresh container/store frozen install then passed.
+
+Earlier failures remain recorded rather than being replaced: two frozen installs rejected the malformed SRI; Docker image reads and one visual attachment failed while the host disk was exhausted; and the first fully uncached integration run timed out one Phase 4 upgrade-safety case at 5 seconds while 52/53 database tests passed. After disk recovery and Docker restart, the isolated test passed 8/8, the complete visual suite passed 13/13, two real Gate B journeys passed, and the complete uncached integration suite passed 20/20 tasks with the formerly timed-out case completing in 4.836 seconds. The narrow timeout margin remains a local reliability risk to monitor; no timeout or test assertion was weakened.
+
 ## Environment
 
 | Component        | Exact version used                                                                     |
