@@ -6,10 +6,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { gateBSecretValues, gateBVerdict, redactGateBEvidence } from "./gate-b-evidence.mjs";
 
 const requiredNode = "24.18.";
 const requiredPnpm = "10.33.0";
-const secretNamePattern = /(secret|token|password|credential|cookie|private.?key|api.?key|bearer)/i;
 const root = process.cwd();
 const startedAt = new Date();
 const stamp = startedAt.toISOString().replaceAll(":", "-").replaceAll(".", "-");
@@ -17,6 +17,7 @@ const outputDirectory = path.resolve(root, process.env.GATE_B_QA_OUTPUT_DIR || `
 const continueAfterFailure = process.argv.includes("--continue-after-failure");
 
 const checks = [
+  { id: "runner-self-test", command: "node", args: ["scripts/test-gate-b-evidence.mjs"] },
   { id: "frozen-install", command: "pnpm", args: ["install", "--frozen-lockfile"] },
   { id: "clean-outputs", command: "pnpm", args: ["ci:assert-clean-outputs"] },
   { id: "format", command: "pnpm", args: ["format:check"] },
@@ -54,28 +55,8 @@ const checks = [
   { id: "whitespace", command: "git", args: ["diff", "--check"] },
 ];
 
-function redactText(value, secretValues) {
-  let redacted = String(value);
-  for (const secret of secretValues) {
-    if (secret.length >= 6) redacted = redacted.split(secret).join("[REDACTED]");
-  }
-  redacted = redacted.replace(
-    /((?:secret|token|password|credential|cookie|private[_-]?key|api[_-]?key|bearer)[A-Za-z0-9_.-]*\s*[=:]\s*)([^\s,;]+)/gi,
-    "$1[REDACTED]",
-  );
-  return redacted;
-}
-
-function secretValues(environment) {
-  return Object.entries(environment)
-    .filter(([name, value]) => secretNamePattern.test(name) && typeof value === "string" && value.length >= 6)
-    .map(([, value]) => value)
-    .sort((left, right) => right.length - left.length);
-}
-
 async function run(command, args, extraEnvironment = {}) {
   const environment = { ...process.env, ...extraEnvironment };
-  const secrets = secretValues(environment);
   const child = spawn(command, args, {
     cwd: root,
     env: environment,
@@ -90,7 +71,7 @@ async function run(command, args, extraEnvironment = {}) {
   });
   return {
     exitCode: exitCode ?? 1,
-    output: redactText(Buffer.concat(chunks).toString("utf8"), secrets),
+    output: redactGateBEvidence(Buffer.concat(chunks).toString("utf8"), gateBSecretValues(environment)),
   };
 }
 
@@ -141,7 +122,7 @@ async function main() {
   const passedCount = results.filter((item) => item.status === "PASS").length;
   const failedCount = results.filter((item) => item.status === "FAIL").length;
   const skippedCount = results.filter((item) => item.status === "SKIPPED").length;
-  const verdict = failedCount === 0 && skippedCount === 0 && passedCount === checks.length ? "PASS" : "FAIL";
+  const verdict = gateBVerdict(results, checks.length);
   const finishedAt = new Date();
   const summary = {
     schemaVersion: 1,
