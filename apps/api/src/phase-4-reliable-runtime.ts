@@ -1,10 +1,13 @@
 import type {
+  Phase4FormatDraftView,
   Phase4SetupAutosaveRequest,
   Phase4SetupAutosaveResponse,
   Phase4SetupDocument,
   Phase4SetupPatchRequest,
   Phase4SetupPatchResponse,
+  Phase4SetupRecommendationSelection,
 } from "@matchday/contracts";
+import { calculateFormatMetrics, type FormatGraph } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
@@ -29,12 +32,66 @@ function first<T>(rows: readonly T[], code: string, message: string): T {
   return row;
 }
 
-function readOnlyDocument(document: Phase4SetupDocument): Phase4SetupDocument {
+export function readOnlySetupDocument(document: Phase4SetupDocument): Phase4SetupDocument {
   return {
     ...document,
     permission: "read",
     read_only: true,
-    autosave: { ...document.autosave, status: "read_only" },
+    autosave: {
+      ...document.autosave,
+      status: document.status === "expired" ? "expired" : "read_only",
+    },
+  };
+}
+
+function truthfulSetupDocument(document: Phase4SetupDocument): Phase4SetupDocument {
+  return document.read_only ? readOnlySetupDocument(document) : document;
+}
+
+export function normalizeSetupAutosaveResponse(response: Phase4SetupAutosaveResponse): Phase4SetupAutosaveResponse {
+  if (response.outcome === "conflict") {
+    return { ...response, current: truthfulSetupDocument(response.current) };
+  }
+  return { ...response, document: truthfulSetupDocument(response.document) };
+}
+
+export function correctFormatDraftMetrics(draft: Phase4FormatDraftView): Phase4FormatDraftView {
+  const metrics = calculateFormatMetrics(draft.document.graph as FormatGraph);
+  return {
+    ...draft,
+    metrics: {
+      match_count: metrics.matchCount,
+      guaranteed_matches: metrics.guaranteedMatches,
+      maximum_matches: metrics.maximumMatches,
+    },
+  };
+}
+
+export function canonicalRecommendationSelection(
+  current: Phase4SetupRecommendationSelection,
+  requested: Phase4SetupRecommendationSelection,
+): Phase4SetupRecommendationSelection {
+  const requestedId = requested.selected_recommendation_id;
+  if (requestedId === null)
+    throw new ApiError(422, "FORMAT_RECOMMENDATION_REQUIRED", "Select a format recommendation before continuing");
+  const candidate = [
+    ...current.recommendations,
+    ...(current.requires_changes ? [current.requires_changes] : []),
+  ].find((item) => item.id === requestedId);
+  if (!candidate)
+    throw new ApiError(409, "STALE_FORMAT_REFERENCE", "The selected format recommendation is no longer available");
+  if (candidate.capacity_status === "requires_changes" && !requested.acknowledged_capacity_shortfall) {
+    throw new ApiError(
+      422,
+      "CAPACITY_SHORTFALL_ACKNOWLEDGEMENT_REQUIRED",
+      "Acknowledge the capacity shortfall before selecting this format",
+    );
+  }
+  return {
+    ...current,
+    selected_recommendation_id: requestedId,
+    acknowledged_capacity_shortfall:
+      candidate.capacity_status === "requires_changes" && requested.acknowledged_capacity_shortfall,
   };
 }
 
@@ -77,6 +134,30 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     return access;
   }
 
+  private async canonicalizeSetupRequest(
+    actor: Phase3Actor,
+    competitionId: string,
+    request: Phase4SetupAutosaveRequest,
+  ): Promise<Phase4SetupAutosaveRequest> {
+    if (request.transition.kind !== "save_step" || request.transition.step.step_id !== "format_recommendations") {
+      return request;
+    }
+    const current = await this.readSetupDraft(actor, competitionId);
+    const currentSelection = current.values.format_recommendations;
+    if (!currentSelection)
+      throw new ApiError(409, "STALE_FORMAT_REFERENCE", "Format recommendations must be regenerated");
+    return {
+      ...request,
+      transition: {
+        kind: "save_step",
+        step: {
+          step_id: "format_recommendations",
+          value: canonicalRecommendationSelection(currentSelection, request.transition.step.value),
+        },
+      },
+    };
+  }
+
   override async autosaveSetupDraft(
     actor: Phase3Actor,
     competitionId: string,
@@ -85,7 +166,10 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   ): Promise<Phase4SetupAutosaveResponse> {
     if (request.transition.kind === "save_step" && request.transition.step.step_id === "basics")
       await this.assertSetupWrite(actor, competitionId);
-    return super.autosaveSetupDraft(actor, competitionId, request, requestId);
+    const canonicalRequest = await this.canonicalizeSetupRequest(actor, competitionId, request);
+    return normalizeSetupAutosaveResponse(
+      await super.autosaveSetupDraft(actor, competitionId, canonicalRequest, requestId),
+    );
   }
 
   override async patchSetupDraft(
@@ -96,6 +180,22 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   ): Promise<Phase4SetupPatchResponse> {
     await this.assertSetupWrite(actor, competitionId);
     return super.patchSetupDraft(actor, competitionId, request, requestId);
+  }
+
+  override async readFormatBuilder(...args: Parameters<GateBPhase4Runtime["readFormatBuilder"]>) {
+    const workspace = await super.readFormatBuilder(...args);
+    return {
+      ...workspace,
+      draft: workspace.draft ? correctFormatDraftMetrics(workspace.draft) : null,
+    };
+  }
+
+  override async saveFormatRevision(...args: Parameters<GateBPhase4Runtime["saveFormatRevision"]>) {
+    return correctFormatDraftMetrics(await super.saveFormatRevision(...args));
+  }
+
+  override async applyFormatTemplate(...args: Parameters<GateBPhase4Runtime["applyFormatTemplate"]>) {
+    return correctFormatDraftMetrics(await super.applyFormatTemplate(...args));
   }
 
   async resumeSetupDraft(
@@ -120,7 +220,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           "SETUP_DRAFT_NOT_FOUND",
           "Setup draft not found",
         );
-        return readOnlyDocument(phase4SetupDocumentFromStorage(row));
+        return readOnlySetupDocument(phase4SetupDocumentFromStorage(row));
       }
       if (access.status === "archived")
         throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
@@ -134,7 +234,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
       );
       const row = decodePhase4Json<Phase4SetupStorageRow>(resumed.value);
       row.competition_status = access.status;
-      return phase4SetupDocumentFromStorage(row);
+      return truthfulSetupDocument(phase4SetupDocumentFromStorage(row));
     });
   }
 
@@ -151,7 +251,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
       "SETUP_DRAFT_NOT_FOUND",
       "Setup draft not found",
     );
-    const document = phase4SetupDocumentFromStorage(row);
-    return access.membership_role === "viewer" ? readOnlyDocument(document) : document;
+    const document = truthfulSetupDocument(phase4SetupDocumentFromStorage(row));
+    return access.membership_role === "viewer" ? readOnlySetupDocument(document) : document;
   }
 }
