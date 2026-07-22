@@ -199,6 +199,51 @@ describeInfrastructure("Assisted Setup selected format publication", () => {
       match_count: selected?.division_formats[0]?.match_count,
     });
 
+    const builder = await phase4.readFormatBuilder({ accountId }, competition.id, divisionId);
+    expect(builder.draft).toMatchObject({
+      draft_id: formatRevisionId,
+      status: "published",
+      permission: "view",
+      read_only: true,
+      definition_hash: selected?.division_formats[0]?.format_definition_hash,
+    });
+
+    const evidenceBefore = required(
+      await sql<{ audit_count: number; outbox_count: number }[]>`
+        SELECT
+          (SELECT count(*)::int FROM audit_events
+            WHERE action='format.published' AND target_id=${formatRevisionId}) audit_count,
+          (SELECT count(*)::int FROM outbox_events
+            WHERE event_type='format.published' AND aggregate_id=${formatRevisionId}) outbox_count`,
+      "Publication evidence counts were unavailable",
+    );
+    const publicationKey = `selected-format-republish-${randomUUID()}`;
+    const firstRepublish = await phase4.publishFormat(
+      { accountId },
+      formatRevisionId,
+      publicationKey,
+      randomUUID(),
+    );
+    const replayedRepublish = await phase4.publishFormat(
+      { accountId },
+      formatRevisionId,
+      publicationKey,
+      randomUUID(),
+    );
+    expect(firstRepublish).toMatchObject({ status: "published", idempotent_replay: false });
+    expect(replayedRepublish).toMatchObject({ status: "published", idempotent_replay: true });
+    expect(
+      required(
+        await sql<{ audit_count: number; outbox_count: number }[]>`
+          SELECT
+            (SELECT count(*)::int FROM audit_events
+              WHERE action='format.published' AND target_id=${formatRevisionId}) audit_count,
+            (SELECT count(*)::int FROM outbox_events
+              WHERE event_type='format.published' AND aggregate_id=${formatRevisionId}) outbox_count`,
+        "Publication evidence counts were unavailable after replay",
+      ),
+    ).toEqual(evidenceBefore);
+
     const workspace = await phase4.scheduleWorkspace({ accountId }, competition.id);
     const generated = await phase4.generateSchedule(
       { accountId },
