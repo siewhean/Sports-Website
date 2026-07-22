@@ -461,10 +461,15 @@
   font-size: 0.72rem;
 }
 
-.matchBlock svg {
+.matchBlock .matchStatus {
   position: absolute;
   right: 0.35rem;
   bottom: 0.35rem;
+  display: flex;
+  gap: 0.2rem;
+}
+
+.matchBlock .matchStatus svg {
   width: 0.82rem;
   height: 0.82rem;
 }
@@ -865,6 +870,24 @@ button:disabled {
   .semanticTimeline strong,
   .semanticTimeline small {
     display: block;
+  }
+
+  .semanticTimeline .semanticStatus {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.7rem;
+    align-items: center;
+    color: var(--schedule-ink);
+  }
+
+  .semanticStatus svg {
+    width: 0.85rem;
+    height: 0.85rem;
+  }
+
+  .semanticTimeline li[data-conflict="true"] {
+    box-shadow: inset 3px 0 #c9473a;
+    padding-left: 0.7rem;
   }
 
   .semanticTimeline strong {

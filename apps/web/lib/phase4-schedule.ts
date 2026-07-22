@@ -345,6 +345,44 @@ export function matchesForArea(
     .sort((left, right) => Date.parse(left.assignment.startsAt) - Date.parse(right.assignment.startsAt));
 }
 
+export function scheduleConflictForMatch(document: ScheduleDocument, matchId: string): boolean {
+  const match = document.matches.find((candidate) => candidate.id === matchId);
+  if (match?.status === "conflict") return true;
+  if (document.currentRevision?.violations.some((violation) => violation.matchIds.includes(matchId))) return true;
+  const assignment = assignmentForMatch(document.currentRevision, matchId);
+  if (!assignment || !document.currentRevision) return false;
+  const start = Date.parse(assignment.startsAt);
+  const end = Date.parse(assignment.endsAt);
+  return document.currentRevision.assignments.some(
+    (candidate) =>
+      candidate.matchId !== matchId &&
+      candidate.areaId === assignment.areaId &&
+      Date.parse(candidate.startsAt) < end &&
+      Date.parse(candidate.endsAt) > start,
+  );
+}
+
+/** Capacity slots annotated for moving one match, without pretending occupied area time is available. */
+export function moveSlotsForMatch(document: ScheduleDocument, matchId: string): readonly ScheduleSlot[] {
+  const assignments = document.currentRevision?.assignments ?? [];
+  const current = assignmentForMatch(document.currentRevision, matchId);
+  return document.slots.map((slot) => {
+    if (!slot.available) return slot;
+    if (current?.slotId === slot.id)
+      return { ...slot, available: false, disabledReason: phase4ScheduleCopy.currentMatchSlot };
+    const start = Date.parse(slot.startsAt);
+    const end = Date.parse(slot.endsAt);
+    const occupied = assignments.some(
+      (assignment) =>
+        assignment.matchId !== matchId &&
+        assignment.areaId === slot.areaId &&
+        Date.parse(assignment.startsAt) < end &&
+        Date.parse(assignment.endsAt) > start,
+    );
+    return occupied ? { ...slot, available: false, disabledReason: phase4ScheduleCopy.playingAreaOccupied } : slot;
+  });
+}
+
 export function surfaceStateFromStatus(status: number): ScheduleSurfaceState {
   if (status === 401 || status === 403) return "permission";
   return status >= 500 ? "offline" : "error";

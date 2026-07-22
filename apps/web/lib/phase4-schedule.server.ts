@@ -280,9 +280,11 @@ export function parseScheduleWorkspace(value: unknown, input: ScheduleInput): Sc
       status:
         match.status === "complete" || match.status === "completed"
           ? "complete"
-          : assigned.has(match.id as string)
-            ? "scheduled"
-            : "unscheduled",
+          : match.status === "conflict"
+            ? "conflict"
+            : assigned.has(match.id as string)
+              ? "scheduled"
+              : "unscheduled",
     });
   }
   const locks: Array<ScheduleDocument["locks"][number]> = [];
@@ -674,12 +676,16 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     (_, index) => `30000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
   );
   const slots = [areaA, areaB].flatMap((areaId, areaIndex) =>
-    Array.from({ length: 18 }, (_, index) => ({
+    Array.from({ length: areaIndex === 0 ? 18 : 22 }, (_, index) => ({
       id: `${areaIndex ? intervalB : intervalA}:${index + 1}`,
       intervalId: areaIndex ? intervalB : intervalA,
       areaId,
-      startsAt: new Date(base + index * 30 * 60_000).toISOString(),
-      endsAt: new Date(base + (index + 1) * 30 * 60_000).toISOString(),
+      startsAt: new Date(
+        base + (index < 18 ? index * 30 * 60_000 : 24 * 60 * 60_000 + (index - 18) * 30 * 60_000),
+      ).toISOString(),
+      endsAt: new Date(
+        base + (index < 18 ? (index + 1) * 30 * 60_000 : 24 * 60 * 60_000 + (index - 17) * 30 * 60_000),
+      ).toISOString(),
       available: index !== 11,
       disabledReason: index === 11 ? "Dependency conflict" : null,
     })),

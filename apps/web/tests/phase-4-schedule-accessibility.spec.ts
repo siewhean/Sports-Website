@@ -4,6 +4,29 @@ import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpe
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
+test.use({ serviceWorkers: "block" });
+
+function relativeLuminance([red, green, blue]: number[]): number {
+  return [red, green, blue]
+    .map((channel) => channel / 255)
+    .map((channel) => (channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
+    .reduce((luminance, channel, index) => luminance + channel * [0.2126, 0.7152, 0.0722][index]!, 0);
+}
+
+function parseRgb(value: string): number[] {
+  return (
+    value
+      .match(/[\d.]+/g)
+      ?.slice(0, 3)
+      .map(Number) ?? []
+  );
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const lighter = Math.max(relativeLuminance(parseRgb(foreground)), relativeLuminance(parseRgb(background)));
+  const darker = Math.min(relativeLuminance(parseRgb(foreground)), relativeLuminance(parseRgb(background)));
+  return (lighter + 0.05) / (darker + 0.05);
+}
 
 test("schedule has no serious or critical accessibility violations", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/schedule");
@@ -44,4 +67,12 @@ test("move flow has no serious or critical accessibility violations", async ({ p
   expect(
     results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
   ).toEqual([]);
+  const stepNumberColors = await page
+    .getByTestId("move-step-number")
+    .first()
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { foreground: style.color, background: style.backgroundColor };
+    });
+  expect(contrastRatio(stepNumberColors.foreground, stepNumberColors.background)).toBeGreaterThanOrEqual(4.5);
 });

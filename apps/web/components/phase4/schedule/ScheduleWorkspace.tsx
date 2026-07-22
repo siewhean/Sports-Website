@@ -31,6 +31,7 @@ import {
   objectiveLabel,
   phase4ScheduleCopy,
   phase4ScheduleMachine,
+  scheduleConflictForMatch,
   parseScheduleJobEnvelope,
   parseScheduleJobView,
   type ScheduleDocument,
@@ -576,23 +577,26 @@ function Timeline({
                 const left = ((Date.parse(assignment.startsAt) - start) / span) * 100;
                 const width = ((Date.parse(assignment.endsAt) - Date.parse(assignment.startsAt)) / span) * 100;
                 const locked = Boolean(lockForMatch(document.locks, match.id));
+                const conflict = scheduleConflictForMatch(document, match.id);
+                const timeLabel = `${formatScheduleTime(assignment.startsAt, document.timeZone)}–${formatScheduleTime(assignment.endsAt, document.timeZone)}`;
                 return (
                   <button
                     key={match.id}
                     type="button"
                     className={styles.matchBlock}
                     style={{ left: `${left}%`, width: `${Math.max(width, 9)}%` }}
-                    data-conflict={match.status === "conflict" || undefined}
+                    data-conflict={conflict || undefined}
                     aria-pressed={selectedMatchId === match.id}
+                    aria-label={`${match.code}, ${match.roundLabel}, ${match.homeLabel} ${phase4ScheduleCopy.versus} ${match.awayLabel}, ${timeLabel}${conflict ? `, ${phase4ScheduleCopy.conflictLegend}` : ""}${locked ? `, ${phase4ScheduleCopy.locked}` : ""}`}
                     onClick={() => onSelect(match.id)}
                   >
                     <span>{match.roundLabel}</span>
                     <strong>{match.code}</strong>
-                    <small>
-                      {formatScheduleTime(assignment.startsAt, document.timeZone)}–
-                      {formatScheduleTime(assignment.endsAt, document.timeZone)}
-                    </small>
-                    {locked ? <LockKey aria-label={phase4ScheduleCopy.locked} /> : null}
+                    <small>{timeLabel}</small>
+                    <span className={styles.matchStatus} aria-hidden="true">
+                      {conflict ? <Warning /> : null}
+                      {locked ? <LockKey /> : null}
+                    </span>
                   </button>
                 );
               })}
@@ -606,21 +610,44 @@ function Timeline({
           <section key={area.id} aria-labelledby={`area-${area.id}`}>
             <h3 id={`area-${area.id}`}>{area.name}</h3>
             <ol>
-              {matchesForArea(document, area.id).map(({ match, assignment }) => (
-                <li key={match.id}>
-                  <button type="button" onClick={() => onSelect(match.id)} aria-pressed={selectedMatchId === match.id}>
-                    <time>{formatScheduleTime(assignment.startsAt, document.timeZone)}</time>
-                    <span>
-                      <strong>
-                        {match.code} · {match.roundLabel}
-                      </strong>
-                      <small>
-                        {match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}
-                      </small>
-                    </span>
-                  </button>
-                </li>
-              ))}
+              {matchesForArea(document, area.id).map(({ match, assignment }) => {
+                const locked = Boolean(lockForMatch(document.locks, match.id));
+                const conflict = scheduleConflictForMatch(document, match.id);
+                return (
+                  <li key={match.id} data-conflict={conflict || undefined}>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(match.id)}
+                      aria-pressed={selectedMatchId === match.id}
+                      aria-label={`${match.code}, ${match.roundLabel}, ${match.homeLabel} ${phase4ScheduleCopy.versus} ${match.awayLabel}, ${formatScheduleTime(assignment.startsAt, document.timeZone)}${conflict ? `, ${phase4ScheduleCopy.conflictLegend}` : ""}${locked ? `, ${phase4ScheduleCopy.locked}` : ""}`}
+                    >
+                      <time>{formatScheduleTime(assignment.startsAt, document.timeZone)}</time>
+                      <span>
+                        <strong>
+                          {match.code} · {match.roundLabel}
+                        </strong>
+                        <small>
+                          {match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}
+                        </small>
+                        {conflict || locked ? (
+                          <small className={styles.semanticStatus} aria-hidden="true">
+                            {conflict ? (
+                              <>
+                                <Warning /> {phase4ScheduleCopy.conflictLegend}
+                              </>
+                            ) : null}
+                            {locked ? (
+                              <>
+                                <LockKey /> {phase4ScheduleCopy.locked}
+                              </>
+                            ) : null}
+                          </small>
+                        ) : null}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
             </ol>
           </section>
         ))}

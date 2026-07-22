@@ -3,11 +3,14 @@ import {
   isScheduleLockResponse,
   isScheduleMoveValidation,
   isScheduleUnlockResponse,
+  moveSlotsForMatch,
   parseScheduleJobEnvelope,
   parseScheduleJobView,
   parseScheduleOptionView,
   parseScheduleRevisionView,
   selectComparableScheduleOptions,
+  scheduleConflictForMatch,
+  type ScheduleDocument,
 } from "./phase4-schedule";
 
 const quality = {
@@ -211,5 +214,115 @@ describe("phase 4 schedule boundary parsers", () => {
     expect(
       isScheduleUnlockResponse({ match_id: "match-1", unlocked: true, idempotent_replay: false, surprise: 1 }),
     ).toBe(false);
+  });
+
+  it("marks occupied playing-area time unavailable and exposes overlapping assignments as conflicts", () => {
+    const startsAt = new Date(assignment.start_epoch_ms).toISOString();
+    const endsAt = new Date(assignment.end_epoch_ms).toISOString();
+    const document = {
+      state: "ready",
+      competitionId: "competition-1",
+      competitionName: "Open",
+      timeZone: "Asia/Singapore",
+      publicationRevision: "0",
+      sourceRevision: 1,
+      capacityRevision: 1,
+      constraints: {},
+      canEdit: true,
+      canPublish: false,
+      activeJob: null,
+      currentRevision: {
+        id: "revision-1",
+        revision: 1,
+        parentRevisionId: null,
+        status: "draft",
+        editableUntil: null,
+        publishedAt: null,
+        expiredAt: null,
+        createdAt: startsAt,
+        updatedAt: startsAt,
+        quality: null,
+        violations: [],
+        assignments: [
+          {
+            matchId: "match-1",
+            divisionId: "division-1",
+            areaId: "area-1",
+            intervalId: "interval-1",
+            slotId: "slot-1",
+            startsAt,
+            endsAt,
+            fixed: false,
+          },
+          {
+            matchId: "match-2",
+            divisionId: "division-1",
+            areaId: "area-1",
+            intervalId: "interval-1",
+            slotId: "slot-1",
+            startsAt,
+            endsAt,
+            fixed: false,
+          },
+        ],
+      },
+      revisions: [],
+      alternatives: [],
+      areas: [{ id: "area-1", name: "Court 1", kind: "playing_area" }],
+      slots: [
+        {
+          id: "slot-1",
+          intervalId: "interval-1",
+          areaId: "area-1",
+          startsAt,
+          endsAt,
+          available: true,
+          disabledReason: null,
+        },
+        {
+          id: "slot-2",
+          intervalId: "interval-1",
+          areaId: "area-1",
+          startsAt,
+          endsAt,
+          available: true,
+          disabledReason: null,
+        },
+      ],
+      matches: [
+        {
+          id: "match-1",
+          divisionId: "division-1",
+          divisionName: "Open",
+          roundLabel: "Round 1",
+          code: "M1",
+          homeLabel: "A",
+          awayLabel: "B",
+          durationMinutes: 30,
+          dependencyMatchIds: [],
+          status: "scheduled",
+        },
+        {
+          id: "match-2",
+          divisionId: "division-1",
+          divisionName: "Open",
+          roundLabel: "Round 1",
+          code: "M2",
+          homeLabel: "C",
+          awayLabel: "D",
+          durationMinutes: 30,
+          dependencyMatchIds: [],
+          status: "scheduled",
+        },
+      ],
+      locks: [],
+      warnings: [],
+    } satisfies ScheduleDocument;
+
+    expect(scheduleConflictForMatch(document, "match-1")).toBe(true);
+    expect(moveSlotsForMatch(document, "match-1")).toEqual([
+      expect.objectContaining({ available: false, disabledReason: "This match is already in this slot." }),
+      expect.objectContaining({ available: false, disabledReason: "Another match already uses this playing area." }),
+    ]);
   });
 });

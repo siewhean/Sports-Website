@@ -20,6 +20,7 @@ import {
   createIdempotencyKey,
   formatScheduleDay,
   formatScheduleTime,
+  moveSlotsForMatch,
   phase4ScheduleCopy,
   phase4ScheduleMachine,
   type MoveConsequence,
@@ -43,21 +44,22 @@ const emptyConsequences: MoveConsequence = {
 
 export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocument; match: ScheduleMatch }) {
   const current = assignmentForMatch(document.currentRevision, match.id);
+  const moveSlots = useMemo(() => moveSlotsForMatch(document, match.id), [document, match.id]);
   const days = useMemo(
-    () => [...new Set(document.slots.map((slot) => formatDayKey(slot.startsAt, document.timeZone)))],
-    [document.slots, document.timeZone],
+    () => [...new Set(moveSlots.map((slot) => formatDayKey(slot.startsAt, document.timeZone)))],
+    [moveSlots, document.timeZone],
   );
   const [day, setDay] = useState(current ? formatDayKey(current.startsAt, document.timeZone) : (days[0] ?? ""));
   const [areaId, setAreaId] = useState(current?.areaId ?? document.areas[0]?.id ?? "");
-  const eligibleSlots = document.slots.filter(
+  const eligibleSlots = moveSlots.filter(
     (slot) => slot.areaId === areaId && formatDayKey(slot.startsAt, document.timeZone) === day,
   );
   const [slotId, setSlotId] = useState(
-    eligibleSlots.find((slot) => slot.id !== current?.slotId && slot.available)?.id ?? eligibleSlots[0]?.id ?? "",
+    eligibleSlots.find((slot) => slot.id !== current?.slotId && slot.available)?.id ?? "",
   );
-  const selectedSlot = document.slots.find((slot) => slot.id === slotId) ?? null;
-  const [validation, setValidation] = useState<MoveValidation | null>(null);
-  const [validating, setValidating] = useState(false);
+  const selectedSlot = moveSlots.find((slot) => slot.id === slotId) ?? null;
+  const [validation, setValidation] = useState<Readonly<{ slotId: string; result: MoveValidation }> | null>(null);
+  const [validatingSlotId, setValidatingSlotId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -65,11 +67,11 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   const currentRevisionId = document.currentRevision?.id;
 
   useEffect(() => {
-    if (!selectedSlot || !canEdit) return;
+    if (!selectedSlot?.available || !canEdit) return;
     let active = true;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      setValidating(true);
+      setValidatingSlotId(selectedSlot.id);
       setError("");
       try {
         const response = await fetch(
@@ -100,14 +102,14 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
           setError(phase4ScheduleCopy.malformed);
           return;
         }
-        setValidation(parsed);
+        setValidation({ slotId: selectedSlot.id, result: parsed });
       } catch (caught) {
         if (active && !(caught instanceof DOMException && caught.name === "AbortError")) {
           setValidation(null);
           setError(phase4ScheduleCopy.offlineBody);
         }
       } finally {
-        if (active) setValidating(false);
+        if (active) setValidatingSlotId((current) => (current === selectedSlot.id ? null : current));
       }
     }, 180);
     return () => {
@@ -119,22 +121,35 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
 
   function chooseDay(value: string) {
     setDay(value);
-    const first = document.slots.find(
+    const first = moveSlots.find(
       (slot) => slot.areaId === areaId && formatDayKey(slot.startsAt, document.timeZone) === value && slot.available,
     );
-    if (first) setSlotId(first.id);
+    if (first) {
+      setSlotId(first.id);
+      return;
+    }
+    const available = moveSlots.find(
+      (slot) => formatDayKey(slot.startsAt, document.timeZone) === value && slot.available,
+    );
+    if (available) {
+      setAreaId(available.areaId);
+      setSlotId(available.id);
+    } else setSlotId("");
   }
 
   function chooseArea(value: string) {
     setAreaId(value);
-    const first = document.slots.find(
+    const first = moveSlots.find(
       (slot) => slot.areaId === value && formatDayKey(slot.startsAt, document.timeZone) === day && slot.available,
     );
     if (first) setSlotId(first.id);
   }
 
+  const displayedValidation = validation !== null && validation.slotId === selectedSlot?.id ? validation.result : null;
+  const validating = validatingSlotId === selectedSlot?.id;
+
   async function confirmMove() {
-    if (!selectedSlot || !validation?.valid || !document.currentRevision || busy) return;
+    if (!selectedSlot?.available || !displayedValidation?.valid || !document.currentRevision || busy) return;
     setBusy(true);
     setError("");
     try {
@@ -168,7 +183,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
     }
   }
 
-  const consequences = validation?.consequences ?? emptyConsequences;
+  const consequences = displayedValidation?.consequences ?? emptyConsequences;
   return (
     <main className={styles.page} data-testid="phase4-move-flow">
       <p className={styles.live} aria-live="polite">
@@ -239,7 +254,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
             <legend>{phase4ScheduleCopy.selectDay}</legend>
             <div className={styles.dayChoices}>
               {days.map((value) => {
-                const representative = document.slots.find(
+                const representative = moveSlots.find(
                   (slot) => formatDayKey(slot.startsAt, document.timeZone) === value,
                 )!;
                 return (
@@ -265,7 +280,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
             <legend>{phase4ScheduleCopy.selectArea}</legend>
             <div className={styles.choices}>
               {document.areas.map((area) => {
-                const hasSlot = document.slots.some(
+                const hasSlot = moveSlots.some(
                   (slot) =>
                     slot.areaId === area.id && formatDayKey(slot.startsAt, document.timeZone) === day && slot.available,
                 );
@@ -320,12 +335,12 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
               ))}
             </div>
           </fieldset>
-          {validation && !validation.valid ? (
+          {displayedValidation && !displayedValidation.valid ? (
             <div className={styles.validation} role="alert">
               <Warning />
               <div>
                 <strong>{phase4ScheduleCopy.timeValidation}</strong>
-                {validation.violations.map((violation) => (
+                {displayedValidation.violations.map((violation) => (
                   <p key={violation.message}>{violation.message}</p>
                 ))}
               </div>
@@ -371,7 +386,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
                 {consequences.messages.map((item) => (
                   <p key={item}>{item}</p>
                 ))}
-                {validation?.valid ? (
+                {displayedValidation?.valid ? (
                   <div className={styles.valid}>
                     <CheckCircle />
                     <p>
@@ -391,7 +406,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
         <Link href={`/organiser/competitions/${document.competitionId}/schedule`}>{phase4ScheduleCopy.cancel}</Link>
         <button
           type="button"
-          disabled={!canEdit || !validation?.valid || validating || busy}
+          disabled={!canEdit || !displayedValidation?.valid || validating || busy}
           onClick={() => void confirmMove()}
         >
           <Check />
@@ -404,7 +419,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
 
 function StepNumber({ value }: { value: string }) {
   return (
-    <span className={styles.stepNumber} aria-hidden="true">
+    <span className={styles.stepNumber} data-testid="move-step-number" aria-hidden="true">
       {value}
     </span>
   );
