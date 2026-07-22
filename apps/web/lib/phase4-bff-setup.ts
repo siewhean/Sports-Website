@@ -5,7 +5,7 @@ import {
   isPhase4SetupIdempotencyKey,
   parseAssistedSetupAutosaveResponse,
   parseAssistedSetupCreateResponse,
-} from "./phase4-assisted-setup";
+} from "./phase4-assisted-setup-current";
 import { isAssistedSetupPatchRequest } from "./phase4-assisted-setup-patch";
 import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "./phase3-settings-command.server";
 
