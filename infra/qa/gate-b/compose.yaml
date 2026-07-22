@@ -31,11 +31,6 @@ services:
     environment:
       MP_MAX_MESSAGES: 500
       MP_DATABASE: /tmp/mailpit.db
-    healthcheck:
-      test: ["CMD", "/mailpit", "readyz"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
     tmpfs:
       - /tmp
 
@@ -49,7 +44,7 @@ services:
       redis:
         condition: service_healthy
       mailpit:
-        condition: service_healthy
+        condition: service_started
     environment:
       APP_ENV: test
       DATABASE_URL: postgres://matchday:matchday@postgres:5432/matchday
