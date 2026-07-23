@@ -13,8 +13,8 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
   const routeEvidence = [
     ["/organiser/competitions/singapore-open/setup", "Set the event capacity", "Singapore Open 2026"],
     ["/organiser/competitions/singapore-open/settings", "Competition settings", "2"],
-    ["/organiser/competitions/singapore-open/entries", "Entries and divisions", "Open division"],
-    ["/organiser/competitions/singapore-open/entries", "Entries and divisions", "Pasir Ris Rapids"],
+    ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Open division"],
+    ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Women's division"],
     ["/organiser/competitions/singapore-open/capacity", "Capacity", "Required match slots"],
     ["/organiser/competitions/singapore-open/format", "Competition format", "Group A"],
     ["/organiser/competitions/singapore-open/format", "Competition format", "Semifinals"],

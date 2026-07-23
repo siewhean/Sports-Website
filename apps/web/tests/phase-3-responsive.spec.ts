@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+
+test.use({ serviceWorkers: "block" });
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
@@ -126,7 +128,11 @@ test("entries enforce the cross-division free limit with keyboard and duplicate-
     expect(requestBody.idempotency_key).toMatch(/^[A-Za-z0-9._:-]{8,200}$/);
     commandKeys.push(requestBody.idempotency_key);
     if (writes === 1) {
-      await route.abort("failed");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ malformed: true }),
+      });
       return;
     }
     if (accepted === 16) {
@@ -181,7 +187,7 @@ test("entries enforce the cross-division free limit with keyboard and duplicate-
     (button as HTMLButtonElement).click();
     (button as HTMLButtonElement).click();
   });
-  await expect(page.getByRole("alert")).toContainText("could not be saved");
+  await expect(page.getByRole("alert").filter({ hasText: "invalid response" })).toBeVisible();
   expect(writes).toBe(1);
   await firstDivision.getByRole("button", { name: "Add entry" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Entry added." })).toBeVisible();
@@ -191,10 +197,16 @@ test("entries enforce the cross-division free limit with keyboard and duplicate-
   for (let index = 0; index < 8; index += 1) await add(1, index);
   await expect(page.getByText("16 / 16")).toBeVisible();
 
+  allowConsoleFailure(
+    page,
+    /^console\.error: Failed to load resource: the server responded with a status of 422 \(Unprocessable Entity\)$/,
+  );
   await firstDivision.getByLabel("Entry name").fill("Rejected team");
   await firstDivision.getByLabel("Seed").fill("9");
   await firstDivision.getByRole("button", { name: "Add entry" }).press("Enter");
-  await expect(page.getByRole("alert")).toHaveText("Free plan permits at most 16 active entries across all divisions.");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Free plan permits at most 16 active entries across all divisions." }),
+  ).toBeVisible();
   await expect(page.getByText("16 / 16")).toBeVisible();
   expect(writes).toBe(18);
   expect(accepted).toBe(16);

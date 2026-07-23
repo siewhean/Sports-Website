@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
 import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
+test.use({ serviceWorkers: "block" });
+
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
@@ -70,7 +72,9 @@ test("@a11y competition creation preserves recovery context and strict WCAG A/AA
   await page.getByLabel("Competition name").fill("National Open");
   await expect(page.getByRole("alert").filter({ hasText: "Your organisations could not be loaded" })).toBeVisible();
   await page.getByRole("button", { name: "Retry organisation list" }).click();
-  await page.getByLabel("Organisation").selectOption({ label: "National Sports · Organiser" });
+  const organisation = page.getByLabel("Organisation");
+  await expect(organisation).toBeEnabled();
+  await organisation.selectOption({ label: "National Sports · Organiser" });
   await expect(page.getByLabel("Competition name")).toHaveValue("National Open");
 
   await page.getByRole("button", { name: "Create competition" }).click();
