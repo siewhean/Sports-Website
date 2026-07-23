@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { assertNoWcagAAViolations } from "./helpers/accessibility-gate";
 import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
@@ -9,13 +10,10 @@ for (const [surface, url] of [
   ["assisted setup", "/organiser/competitions/singapore-open/setup?step=basics"],
   ["format designer", "/organiser/competitions/singapore-open/format"],
 ] as const) {
-  test(`${surface} has no serious or critical accessibility violations`, async ({ page }) => {
+  test(`${surface} has no WCAG A/AA accessibility violations`, async ({ page }) => {
     await page.goto(url);
     await dismissConsent(page);
-    const results = await new AxeBuilder({ page }).analyze();
-    expect(
-      results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
-    ).toEqual([]);
+    assertNoWcagAAViolations(await new AxeBuilder({ page }).analyze());
   });
 }
 
