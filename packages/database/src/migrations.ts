@@ -5,7 +5,7 @@ import postgres from "postgres";
 
 const migrationPattern = /^\d{4}_[a-z0-9_]+\.sql$/;
 const identifierPattern = /^[a-z][a-z0-9_]*$/;
-const migrationAdvisoryLockId = 1_450_121_337;
+export const migrationAdvisoryLockId = 1_450_121_337;
 
 export type MigrationResult = {
   applied: readonly string[];
@@ -36,6 +36,10 @@ export async function migrateDatabase(options: {
     // A session lock keeps parallel deploy/test migrators from racing before either transaction commits.
     await sql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
     lockAcquired = true;
+    // Keep database-global extension objects out of isolated application/test
+    // schemas. Otherwise dropping one schema can remove pgcrypto while another
+    // schema is still using migration functions that depend on it.
+    await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public`;
     await sql.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
     await sql.unsafe(`SET search_path TO "${schema}", public`);
     await sql`

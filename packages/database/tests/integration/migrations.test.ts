@@ -40,6 +40,14 @@ describe("foundation migrations", () => {
 
       const sql = postgres(config.databaseUrl, { max: 1, connection: { search_path: schema } });
       try {
+        const [extension] = await sql<{ namespace: string }[]>`
+          SELECT namespace.nspname AS namespace
+          FROM pg_extension extension
+          JOIN pg_namespace namespace ON namespace.oid=extension.extnamespace
+          WHERE extension.extname='pgcrypto'
+        `;
+        expect(extension).toEqual({ namespace: "public" });
+
         const [dependencies] = await sql<
           { hashSemanticsPreserved: boolean; scheduleDependsOnSha: boolean; shaDependsOnCanonical: boolean }[]
         >`

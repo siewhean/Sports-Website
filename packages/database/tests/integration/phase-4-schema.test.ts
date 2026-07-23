@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDefaultFormatTemplates, type FormatGraph } from "../../../domain/src/index.js";
-import { dropTestSchema, migrateDatabase } from "../../src/migrations.js";
+import { dropTestSchema, migrateDatabase, migrationAdvisoryLockId } from "../../src/migrations.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -322,12 +322,17 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     });
     try {
       await upgradeSql.unsafe(`CREATE SCHEMA "${upgradeSchema}"`);
-      for (const name of (await readdir(migrationsDirectory))
-        .filter((item) => /^00(0[1-9]|1[0-2])_/.test(item))
-        .sort()) {
-        await upgradeSql.begin((tx) =>
-          readFile(path.join(migrationsDirectory, name), "utf8").then((body) => tx.unsafe(body)),
-        );
+      await upgradeSql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
+      try {
+        for (const name of (await readdir(migrationsDirectory))
+          .filter((item) => /^00(0[1-9]|1[0-2])_/.test(item))
+          .sort()) {
+          await upgradeSql.begin((tx) =>
+            readFile(path.join(migrationsDirectory, name), "utf8").then((body) => tx.unsafe(body)),
+          );
+        }
+      } finally {
+        await upgradeSql`SELECT pg_advisory_unlock(${migrationAdvisoryLockId})`;
       }
       const account = randomUUID();
       const organisation = randomUUID();

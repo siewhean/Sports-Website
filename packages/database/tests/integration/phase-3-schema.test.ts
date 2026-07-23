@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { dropTestSchema, migrateDatabase } from "../../src/migrations.js";
+import { dropTestSchema, migrateDatabase, migrationAdvisoryLockId } from "../../src/migrations.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -324,9 +324,14 @@ describeInfrastructure("Phase 3 PostgreSQL guardrails", () => {
       const migrationNames = (await readdir(migrationsDirectory))
         .filter((name) => /^000[1-8]_[a-z0-9_]+\.sql$/.test(name))
         .sort();
-      for (const name of migrationNames) {
-        const contents = await readFile(path.join(migrationsDirectory, name), "utf8");
-        await upgradeSql.begin((tx) => tx.unsafe(contents));
+      await upgradeSql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
+      try {
+        for (const name of migrationNames) {
+          const contents = await readFile(path.join(migrationsDirectory, name), "utf8");
+          await upgradeSql.begin((tx) => tx.unsafe(contents));
+        }
+      } finally {
+        await upgradeSql`SELECT pg_advisory_unlock(${migrationAdvisoryLockId})`;
       }
 
       const account = randomUUID();
