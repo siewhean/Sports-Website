@@ -1,11 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { assertNoWcagAAViolations } from "./helpers/accessibility-gate";
 
-async function expectNoBlockingAccessibilityViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(
-    results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
-  ).toEqual([]);
+async function expectNoWcagAAViolations(page: Page) {
+  assertNoWcagAAViolations(await new AxeBuilder({ page }).analyze());
 }
 
 test("Assisted Setup blocks invalid required fields and focuses the first error", async ({ page }) => {
@@ -127,7 +125,7 @@ test("phone navigation, validation, accessibility, and console remain healthy", 
   await page.getByLabel("Competition name").fill("");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByLabel("Competition name")).toBeFocused();
-  await expectNoBlockingAccessibilityViolations(page);
+  await expectNoWcagAAViolations(page);
 
   await page.getByLabel("Competition name").fill("Marina Cup 2026");
   await page.getByRole("button", { name: "Continue" }).click();
