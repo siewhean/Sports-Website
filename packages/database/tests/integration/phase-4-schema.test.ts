@@ -6,6 +6,7 @@ import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDefaultFormatTemplates, type FormatGraph } from "../../../domain/src/index.js";
 import { dropTestSchema, migrateDatabase, migrationAdvisoryLockId } from "../../src/migrations.js";
+import { contendedMigrationTestTimeoutMs } from "./migration-test-settings.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -313,46 +314,50 @@ afterAll(async () => {
 });
 
 describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
-  it("upgrades a populated 0012 schema without rewriting legacy rows", async () => {
-    const upgradeSchema = `test_phase4_upgrade_${randomUUID().replaceAll("-", "")}`;
-    const upgradeSql = postgres(databaseUrl, {
-      max: 1,
-      onnotice: () => undefined,
-      connection: { search_path: upgradeSchema },
-    });
-    try {
-      await upgradeSql.unsafe(`CREATE SCHEMA "${upgradeSchema}"`);
-      await upgradeSql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
-      try {
-        for (const name of (await readdir(migrationsDirectory))
-          .filter((item) => /^00(0[1-9]|1[0-2])_/.test(item))
-          .sort()) {
-          await upgradeSql.begin((tx) =>
-            readFile(path.join(migrationsDirectory, name), "utf8").then((body) => tx.unsafe(body)),
-          );
-        }
-      } finally {
-        await upgradeSql`SELECT pg_advisory_unlock(${migrationAdvisoryLockId})`;
-      }
-      const account = randomUUID();
-      const organisation = randomUUID();
-      const competition = randomUUID();
-      await upgradeSql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${account},${`${account}@test`},'Upgrade')`;
-      await upgradeSql.begin(async (tx) => {
-        await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisation},'Upgrade',${`upgrade-${organisation}`})`;
-        await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES(${organisation},${account},'owner','active')`;
+  it(
+    "upgrades a populated 0012 schema without rewriting legacy rows",
+    async () => {
+      const upgradeSchema = `test_phase4_upgrade_${randomUUID().replaceAll("-", "")}`;
+      const upgradeSql = postgres(databaseUrl, {
+        max: 1,
+        onnotice: () => undefined,
+        connection: { search_path: upgradeSchema },
       });
-      await upgradeSql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on)
+      try {
+        await upgradeSql.unsafe(`CREATE SCHEMA "${upgradeSchema}"`);
+        await upgradeSql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
+        try {
+          for (const name of (await readdir(migrationsDirectory))
+            .filter((item) => /^00(0[1-9]|1[0-2])_/.test(item))
+            .sort()) {
+            await upgradeSql.begin((tx) =>
+              readFile(path.join(migrationsDirectory, name), "utf8").then((body) => tx.unsafe(body)),
+            );
+          }
+        } finally {
+          await upgradeSql`SELECT pg_advisory_unlock(${migrationAdvisoryLockId})`;
+        }
+        const account = randomUUID();
+        const organisation = randomUUID();
+        const competition = randomUUID();
+        await upgradeSql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${account},${`${account}@test`},'Upgrade')`;
+        await upgradeSql.begin(async (tx) => {
+          await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisation},'Upgrade',${`upgrade-${organisation}`})`;
+          await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES(${organisation},${account},'owner','active')`;
+        });
+        await upgradeSql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on)
         VALUES(${competition},${organisation},${account},'Upgrade Cup',${`upgrade-${competition}`},'badminton','UTC','2027-01-01','2027-01-02')`;
-      const migration = await readFile(path.join(migrationsDirectory, "0013_phase4_organiser_alpha.sql"), "utf8");
-      await upgradeSql.begin((tx) => tx.unsafe(migration));
-      const row = await upgradeSql`SELECT id,name,status FROM competitions WHERE id=${competition}`;
-      expect(row).toMatchObject([{ id: competition, name: "Upgrade Cup", status: "draft" }]);
-    } finally {
-      await upgradeSql.end({ timeout: 2 });
-      await dropTestSchema(databaseUrl, upgradeSchema);
-    }
-  });
+        const migration = await readFile(path.join(migrationsDirectory, "0013_phase4_organiser_alpha.sql"), "utf8");
+        await upgradeSql.begin((tx) => tx.unsafe(migration));
+        const row = await upgradeSql`SELECT id,name,status FROM competitions WHERE id=${competition}`;
+        expect(row).toMatchObject([{ id: competition, name: "Upgrade Cup", status: "draft" }]);
+      } finally {
+        await upgradeSql.end({ timeout: 2 });
+        await dropTestSchema(databaseUrl, upgradeSchema);
+      }
+    },
+    contendedMigrationTestTimeoutMs,
+  );
 
   it("persists setup autosaves with optimistic concurrency and exact idempotent replay", async () => {
     const value = await world("Setup");

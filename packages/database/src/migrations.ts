@@ -111,9 +111,18 @@ export async function dropTestSchema(databaseUrl: string, schema: string): Promi
   if (!identifierPattern.test(schema) || !schema.startsWith("test_")) {
     throw new Error("Refusing to drop a non-test schema");
   }
-  const sql = postgres(databaseUrl, { max: 1 });
+  const sql = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
   try {
-    await sql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    // A migrated test schema contains enough dependent objects that concurrent
+    // DROP SCHEMA operations can exhaust PostgreSQL's shared lock table. Use
+    // the same database-global lock as migrations so setup and teardown remain
+    // isolated without weakening the rest of the integration suite's concurrency.
+    // The transaction-scoped form also releases the lock automatically if the
+    // DROP fails, so cleanup cannot strand the database-global migration lock.
+    await sql.begin(async (transaction) => {
+      await transaction`SELECT pg_advisory_xact_lock(${migrationAdvisoryLockId})`;
+      await transaction.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    });
   } finally {
     await sql.end();
   }
