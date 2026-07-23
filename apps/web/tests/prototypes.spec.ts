@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { assertNoWcagAAViolations } from "./helpers/accessibility-gate";
 
 async function openScorekeeper(page: Page) {
   await page.goto("/score");
@@ -177,25 +178,17 @@ test("Offline finalisation remains pending until server acknowledgement", async 
 });
 
 for (const route of ["/setup", "/format", "/score"] as const) {
-  test(`${route} has no serious or critical automated accessibility violations`, async ({ page }) => {
+  test(`${route} has no WCAG A/AA automated accessibility violations`, async ({ page }) => {
     await page.goto(route);
     await page.locator('[data-hydrated="true"]').waitFor();
-    const results = await new AxeBuilder({ page }).analyze();
-    const blocking = results.violations.filter(
-      (violation) => violation.impact === "serious" || violation.impact === "critical",
-    );
-    expect(blocking).toEqual([]);
+    assertNoWcagAAViolations(await new AxeBuilder({ page }).analyze());
   });
 }
 
-test("live scorekeeper has no serious or critical automated accessibility violations", async ({ page }) => {
+test("live scorekeeper has no WCAG A/AA automated accessibility violations", async ({ page }) => {
   await openScorekeeper(page);
   await page.getByRole("button", { name: "Goal Marina Blue" }).click();
-  const results = await new AxeBuilder({ page }).analyze();
-  const blocking = results.violations.filter(
-    (violation) => violation.impact === "serious" || violation.impact === "critical",
-  );
-  expect(blocking).toEqual([]);
+  assertNoWcagAAViolations(await new AxeBuilder({ page }).analyze());
 });
 
 test("known breakpoints do not introduce page overflow", async ({ page }) => {
