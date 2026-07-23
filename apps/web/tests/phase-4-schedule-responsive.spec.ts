@@ -177,31 +177,46 @@ test("smaller-screen organiser selects a match, day, available area and valid ti
   await expect(slotChoices.locator("label:visible")).toHaveCount(18);
   await expect(page.getByRole("button", { name: "Show fewer times" })).toBeVisible({ visible: isPhone });
 
-  await page.getByRole("radio", { name: "Sun, 16 Aug" }).check();
+  const confirmMove = page.getByRole("button", { name: "Confirm move" });
+  const selectAndWaitForValidation = async (select: () => Promise<void>) => {
+    const responsePromise = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/phase4/schedule/revisions/${revisionId}/moves/validate`) &&
+        response.request().method() === "POST",
+    );
+    await select();
+    await expect(confirmMove).toBeDisabled();
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+    await expect(confirmMove).toBeEnabled();
+  };
+
+  await expect(confirmMove).toBeEnabled();
+  await selectAndWaitForValidation(() => page.getByRole("radio", { name: "Sun, 16 Aug" }).check());
   await expect(page.getByRole("radio", { name: /Pool A/ })).toBeDisabled();
   await expect(page.getByRole("radio", { name: /Pool B/ })).toBeChecked();
-  await page.getByRole("radio", { name: "Sat, 15 Aug" }).check();
-  await page.getByRole("radio", { name: /Pool A/ }).check();
+  await selectAndWaitForValidation(() => page.getByRole("radio", { name: "Sat, 15 Aug" }).check());
+  await selectAndWaitForValidation(() => page.getByRole("radio", { name: /Pool A/ }).check());
   if (isPhone) await page.getByRole("button", { name: "Show all 18 times" }).click();
   const validTimes = page
     .getByRole("group", { name: "Select valid time" })
     .locator('input[type="radio"]:not(:disabled)');
-  await validTimes.last().check();
+  await selectAndWaitForValidation(() => validTimes.last().check());
   await expect.poll(() => validationRequests).toBeGreaterThan(0);
   await expect(page.getByText("Only the selected match changes.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Confirm move" })).toBeEnabled();
+  await expect(confirmMove).toBeEnabled();
   slowAreaBValidation = true;
   await page.getByRole("radio", { name: /Pool B/ }).check();
-  await expect(page.getByRole("button", { name: "Confirm move" })).toBeDisabled();
+  await expect(confirmMove).toBeDisabled();
   await expect(page.getByText("Only the selected match changes.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Confirm move" })).toBeEnabled();
+  await expect(confirmMove).toBeEnabled();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
   ).toBeLessThanOrEqual(1);
   const returnedToSchedule = page.waitForURL(
     new RegExp(`/organiser/competitions/[^/]+/schedule\\?match=${matchId}&notice=moved$`),
   );
-  await page.getByRole("button", { name: "Confirm move" }).click();
+  await confirmMove.click();
   await expect.poll(() => moveBody).not.toBeNull();
   await returnedToSchedule;
   expect(moveBody).toMatchObject({ expected_revision: 4, match_id: matchId });
