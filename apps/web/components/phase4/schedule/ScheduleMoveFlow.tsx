@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { interpolate } from "@matchday/ui";
 import {
   ArrowLeft,
@@ -28,6 +29,7 @@ import {
   type ScheduleMatch,
 } from "@/lib/phase4-schedule";
 import styles from "./ScheduleMoveFlow.module.css";
+import { storeScheduleNavigationAnnouncement } from "./use-preserved-router-refresh";
 
 type MoveValidation = Readonly<{
   valid: boolean;
@@ -43,6 +45,8 @@ const emptyConsequences: MoveConsequence = {
 };
 
 export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocument; match: ScheduleMatch }) {
+  const router = useRouter();
+  const statusRef = useRef<HTMLParagraphElement>(null);
   const current = assignmentForMatch(document.currentRevision, match.id);
   const moveSlots = useMemo(() => moveSlotsForMatch(document, match.id), [document, match.id]);
   const days = useMemo(
@@ -180,7 +184,9 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
         return;
       }
       setMessage(phase4ScheduleCopy.moved);
-      window.location.assign(`/organiser/competitions/${document.competitionId}/schedule`);
+      statusRef.current?.focus({ preventScroll: true });
+      storeScheduleNavigationAnnouncement(phase4ScheduleCopy.moved);
+      router.replace(`/organiser/competitions/${document.competitionId}/schedule`, { scroll: false });
     } catch {
       setError(phase4ScheduleCopy.offlineBody);
     } finally {
@@ -191,7 +197,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   const consequences = displayedValidation?.consequences ?? emptyConsequences;
   return (
     <main className={styles.page} data-testid="phase4-move-flow">
-      <p className={styles.live} aria-live="polite">
+      <p ref={statusRef} className={styles.live} role="status" aria-live="polite" aria-atomic="true" tabIndex={-1}>
         {message || (validating ? phase4ScheduleCopy.validating : error)}
       </p>
       <header className={styles.topbar}>
