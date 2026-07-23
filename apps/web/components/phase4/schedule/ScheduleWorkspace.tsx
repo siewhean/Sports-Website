@@ -42,6 +42,7 @@ import {
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
 import styles from "./ScheduleWorkspace.module.css";
+import { usePreservedRouterRefresh } from "./use-preserved-router-refresh";
 
 type ErrorPayload = { error?: { code?: string } };
 
@@ -70,6 +71,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     () => true,
     () => false,
   );
+  const { statusRef, refreshing, refresh } = usePreservedRouterRefresh();
   const [job, setJob] = useState(document.activeJob);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
@@ -90,9 +92,14 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     return [...byObjective.values()];
   }, [currentOption, retainedAlternatives]);
   const expired = document.currentRevision?.status === "expired";
-  const disabled = !hydrated || !document.canEdit || expired || busy !== null;
+  const disabled = !hydrated || !document.canEdit || expired || busy !== null || refreshing;
   const polledJobId = job?.id;
   const polledJobStatus = job?.status;
+
+  useEffect(() => {
+    if (selectedMatchId === null || document.matches.some((match) => match.id === selectedMatchId)) return;
+    setSelectedMatchId(document.currentRevision?.assignments[0]?.matchId ?? document.matches[0]?.id ?? null);
+  }, [document.currentRevision?.assignments, document.matches, selectedMatchId]);
 
   useEffect(() => {
     if (!polledJobId || !polledJobStatus || !activeStatuses.has(polledJobStatus)) return;
@@ -133,7 +140,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     name: string,
     url: string,
     body: Record<string, unknown>,
-    onSuccess?: (payload: unknown) => void,
+    onSuccess?: (payload: unknown) => void | Promise<void>,
     method: "POST" | "DELETE" = phase4ScheduleMachine.post,
   ) {
     if (busy) return;
@@ -151,7 +158,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         setCommandError(commandErrorMessage(response.status, errorCode(payload)));
         return;
       }
-      onSuccess?.(payload);
+      await onSuccess?.(payload);
     } catch {
       setCommandError(phase4ScheduleCopy.offlineBody);
     } finally {
@@ -217,6 +224,11 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     );
   }
 
+  function announceAndRefresh(announcement: string) {
+    setMessage(announcement);
+    refresh();
+  }
+
   async function acceptOption(option: ScheduleOption) {
     if (option.jobRevision === null) {
       setCommandError(phase4ScheduleCopy.malformed);
@@ -229,10 +241,7 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         idempotency_key: createIdempotencyKey(phase4ScheduleMachine.acceptKey),
         expected_job_revision: option.jobRevision,
       },
-      () => {
-        setMessage(phase4ScheduleCopy.optionSaved);
-        window.location.reload();
-      },
+      () => announceAndRefresh(phase4ScheduleCopy.optionSaved),
     );
   }
 
@@ -245,22 +254,20 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         idempotency_key: createIdempotencyKey(phase4ScheduleMachine.publishKey),
         expected_revision: document.currentRevision.revision,
       },
-      () => {
-        setMessage(phase4ScheduleCopy.publishSuccess);
-        window.location.reload();
-      },
+      () => announceAndRefresh(phase4ScheduleCopy.publishSuccess),
     );
   }
 
   async function toggleLock() {
     if (!selectedMatch || !assignment) return;
-    const url = selectedLock
+    const wasLocked = Boolean(selectedLock);
+    const url = wasLocked
       ? `/api/phase4/schedule/revisions/${encodeURIComponent(document.currentRevision!.id)}/locks/${encodeURIComponent(selectedMatch.id)}`
       : `/api/phase4/schedule/revisions/${encodeURIComponent(document.currentRevision!.id)}/locks`;
     await command(
       phase4ScheduleMachine.lockAction,
       url,
-      selectedLock
+      wasLocked
         ? { idempotency_key: createIdempotencyKey(phase4ScheduleMachine.unlockKey) }
         : {
             idempotency_key: createIdempotencyKey(phase4ScheduleMachine.lockKey),
@@ -269,8 +276,8 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
             start_epoch_ms: Date.parse(assignment.startsAt),
             end_epoch_ms: Date.parse(assignment.endsAt),
           },
-      () => window.location.reload(),
-      selectedLock ? phase4ScheduleMachine.delete : phase4ScheduleMachine.post,
+      () => announceAndRefresh(`${wasLocked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}.`),
+      wasLocked ? phase4ScheduleMachine.delete : phase4ScheduleMachine.post,
     );
   }
 
@@ -280,8 +287,15 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   }
 
   return (
-    <div className={styles.workspace} data-testid="phase4-schedule">
-      <p className={styles.live} aria-live="polite">
+    <div className={styles.workspace} data-testid="phase4-schedule" data-refreshing={refreshing || undefined}>
+      <p
+        ref={statusRef}
+        className={styles.live}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        tabIndex={-1}
+      >
         {message || commandError}
       </p>
 
