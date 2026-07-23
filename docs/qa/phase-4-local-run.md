@@ -1,5 +1,41 @@
 # Phase 4 — reproducible local Gate B run
 
+## Final exact-SHA closure — 23 July 2026
+
+**Branch:** `codex/gate-b-lockfile-integrity`
+
+**Validated source commit:** `c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`
+
+Local Gate B validation: PASS
+
+Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
+
+The final raw logs are retained under the ignored local path
+`artifacts/qa/gate-b-final-c87287f/`. The sanitised, hash-bound command ledger,
+browser versions, artifact hashes, isolation records and accepted residual
+risks are in
+[`phase-4-final-evidence.json`](./phase-4-final-evidence.json).
+
+All required commands passed at the exact source SHA. Key totals are: 684 unit
+tests; database integration 54/54; generic E2E 274 passed; embedded real journey
+3/3; accessibility 68/68; visual comparison 13/13; and two additional isolated
+real journeys at 3/3 each. The two isolated runs used different disposable
+PostgreSQL databases, different Redis queues and newly started API, worker and
+production web processes. Each produced three passing persistence oracles and
+deleted 15/15 inspected Redis keys.
+
+The populated Phase 3 upgrade test passed five of five uncached runs on
+PostgreSQL 18.4: minimum 1.07 s, median 1.09 s and maximum 1.11 s against its
+narrowly scoped 15 s timeout, with no concurrent test load. The complete
+infrastructure-enabled integration command subsequently passed. PostgreSQL
+finished with zero residual `test_*` schemas and zero granted advisory locks.
+
+The final source fix serialises test-schema teardown under the existing
+transaction-scoped migration advisory lock. This closes the reproduced
+PostgreSQL lock-table exhaustion caused by concurrent `DROP SCHEMA ... CASCADE`
+operations without raising server lock limits, reducing general test
+concurrency, or removing assertions.
+
 **Executed:** 22 July 2026, 19:48–21:07 SGT (`+08`)
 
 **Repository:** complete local checkout on `agent/gate-b-organiser-journey`
@@ -10,7 +46,7 @@
 
 Local Gate B validation: PASS
 
-Hosted GitHub Actions: Not executed because the account Actions allowance is unavailable.
+Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
 
 ## Post-merge lockfile and clean-isolation revalidation — 23 July 2026
 
@@ -126,7 +162,10 @@ Sandbox-only failures (`EPERM` on loopback/process operations and registry DNS d
 
 - P2: sticky decision/action rails can obscure content in some phone/tablet move and schedule views. Current reachability, safe-area, accessibility and overflow tests pass and no data is lost. Owner Frontend UX; fix or explicitly re-accept before the Gate C browser verdict.
 - P3: some Phase 3 snapshot filenames imply broader responsive coverage than the forced viewports actually provide. Owner QA automation; rename or split before the Gate C visual verdict.
-- P3: the local proof does not replace deployed identity, CDN, telemetry, managed backup or authenticated production-device evidence. Owner Platform/Operations; address at the relevant production release gate.
+- Evidence boundary: the local proof does not replace deployed identity, CDN,
+  telemetry, managed backup or authenticated production-device evidence. Owner
+  Platform/Operations; address at the relevant production release gate. This is
+  not a Gate B defect or a third P3 finding.
 - The validated source and evidence are committed and independently reviewed. PR #3 was squash-merged as `aa841806192fdaa5418b22fac44ab6e9eb268a38` without bypassing branch protection.
 
 ## Verdict boundary

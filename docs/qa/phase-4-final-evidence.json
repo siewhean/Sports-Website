@@ -1,226 +1,665 @@
 {
   "schema_version": 1,
-  "evidence_state": "PRE_FINAL_BLOCKED",
-  "local_validation": "BLOCKED",
+  "evidence_state": "FINAL",
+  "local_validation": "PASS",
   "hosted_github_actions": "Not executed because Actions allowance is unavailable",
   "source": {
-    "commit_sha": "97c4712a7445b60cd7acd9fd79dd6896206bfc9e",
+    "commit_sha": "c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee",
     "branch": "codex/gate-b-lockfile-integrity"
   },
-  "evidence_collected_at": null,
+  "evidence_collected_at": "2026-07-23T18:32:47+08:00",
   "reviewer": {
-    "identity": null
+    "identity": "Codex local evidence collector"
   },
   "environment": {
-    "operating_system": null,
-    "architecture": null,
-    "node_version": null,
-    "pnpm_version": null,
-    "postgresql_version": null,
-    "redis_version": null,
-    "playwright_version": null,
-    "chromium_version": null,
-    "webkit_version": null
+    "operating_system": "macOS 26.6 (25G5043d)",
+    "architecture": "arm64",
+    "node_version": "24.18.0",
+    "pnpm_version": "10.33.0",
+    "postgresql_version": "18.4",
+    "redis_version": "8.2.7",
+    "playwright_version": "1.61.1",
+    "chromium_version": "149.0.7827.55",
+    "webkit_version": "26.5"
   },
   "commands": [
     {
       "id": "node-version",
       "exact_command": "node --version",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "efa970bb52d68f563806b669f9cb380d621b905abc1a5dada898becb6b1419c5",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/01-node-version.log"
     },
     {
       "id": "pnpm-version",
       "exact_command": "pnpm --version",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "8e1f2343f25d0ddbc7aa343ab3b6e859523ebc702a242d2a096314bdc5b4f748",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/02-pnpm-version.log"
     },
     {
       "id": "frozen-install",
       "exact_command": "pnpm install --frozen-lockfile",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 1000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "3890f1e2d0b80787d48ede096d9caecd5252a032a989f7b0e0048b8f0b94190e",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/03b-frozen-install-ci.log"
     },
     {
       "id": "lockfile-unchanged",
       "exact_command": "git diff --exit-code -- pnpm-lock.yaml",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "be53236d8ed484c7584ad8d44138e6fc226afd4c88e3218cf8492aaa874363da",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/04-lockfile-clean.log"
     },
     {
       "id": "clean-outputs",
       "exact_command": "pnpm ci:assert-clean-outputs",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "2ea334f70726c3b72a281f9ac8ed08afdc5ab8aa354b751114efeb9dd0d5f93b",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/05b-clean-outputs-after-clean.log"
     },
     {
       "id": "format",
       "exact_command": "pnpm format:check",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 6000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "8f4e5a6a9469c4218c2bb293e0d94ef04ba53f2cc2a6b2dae127076ee7a84a91",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/06-format-check.log"
     },
     {
       "id": "lint",
       "exact_command": "pnpm lint",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 3000,
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "39fa0af6a5a11ff8666671e0b111463c07299cd4ef2f300925462b2988eb567f",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/07-lint.log"
     },
     {
       "id": "typecheck",
       "exact_command": "pnpm typecheck",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "b5ce95b9f700368be128cbe9d47d039d6b357acc1f0aa60e44efbf923d9c66a9",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/08-typecheck.log"
     },
     {
       "id": "unit",
       "exact_command": "pnpm test:unit",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 684,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "a7279be7ef1c5e3f569faa434de82cabadd0200d813bc7a5753baa3364b10aa7",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/09-test-unit.log"
     },
     {
       "id": "migrations",
       "exact_command": "pnpm db:migrate:check",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 2000,
+      "passed": 27,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "f82546ac1865988c55ed4ff9d77b1b13e1b42f934b25ffc4601823fc55fcb90e",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/10-db-migrate-check.log"
     },
     {
       "id": "backup-restore",
       "exact_command": "pnpm backup:verify",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 4000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "f62680934f925482f498dc7006b55362948d43278d04edc5f925f412eeb9633d",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/11-backup-verify.log"
     },
     {
       "id": "integration",
       "exact_command": "RUN_INFRA_TESTS=1 pnpm test:integration",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 18000,
+      "passed": 54,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "baa72a39c2aea260e73ba94044447865b02e75529dfdc09deb6a64c2016b92ae",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/12-integration.log"
     },
     {
       "id": "fixtures",
       "exact_command": "pnpm validate:fixtures",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "67a48d39cc101323850f78dcaae01c9e063abc2929e78aacaa11b1a61db6046c",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/13-validate-fixtures.log"
     },
     {
       "id": "phase-2",
       "exact_command": "pnpm validate:phase2",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "e0637a2069f99aa658e996c922da84ad690721b09665f8140c2f2769335779e7",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/14-validate-phase2.log"
     },
     {
       "id": "phase-3",
       "exact_command": "pnpm validate:phase3",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 1000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "5079309ac73ea140c4ebb416decd7b66a922f4abb37accf7d05a0b3bd94e05dd",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/15-validate-phase3.log"
     },
     {
       "id": "phase-4",
       "exact_command": "pnpm validate:phase4",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "eba72a952ac5fb8a520a6453cbf2651aef42de1f3b461c37c757d6082f9fdf71",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/16-validate-phase4.log"
     },
     {
       "id": "openapi",
       "exact_command": "pnpm openapi:check",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 2000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "4accf764689ac669660d94bfbbad93bf9076e446cf656585bf1456668b28d0b5",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/17b-openapi-check-unsandboxed.log"
     },
     {
       "id": "dependency-audit",
       "exact_command": "pnpm dependencies:audit",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 1000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "67f1bfb87feefb8d49a526cd8c8161918dd5eb63fdb5f28d2b7c7fb9e8aebdef",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/18-dependencies-audit.log"
     },
     {
       "id": "secret-scan",
       "exact_command": "pnpm secrets:scan",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 2000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "1465db8e9ecc8a6e4d231e9e886c329f40f9797fb4cddafb47bb70a0134690c5",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/19-secrets-scan.log"
     },
     {
       "id": "build",
       "exact_command": "pnpm build",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 12000,
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "7dff03165e3420e0863c44b2248373152d67ef97345c3765aeef8d336629d74c",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/20-build.log"
     },
     {
       "id": "deployment-manifest",
       "exact_command": "pnpm deploy:manifest",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "1231d835fb64a1d7a80b4dc86d54fecb83769bce98b45b58d8a7b6694be90c87",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/21-deploy-manifest.log"
     },
     {
       "id": "asset-delivery",
       "exact_command": "pnpm asset-delivery:verify:origin",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 6000,
+      "passed": 54,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "491de85606ea391e7232bb97ebccc924cb1d02f29931c2395b39ccc15fa2ae5b",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/22b-asset-origin-unsandboxed.log"
     },
     {
       "id": "playwright-install",
       "exact_command": "pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 1000,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "1065588f92d406bec15de4c30477099b86c922394149c16f0eee976d0b99cfd2",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/23-playwright-install.log"
     },
     {
       "id": "e2e",
       "exact_command": "pnpm test:e2e",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 166000,
+      "passed": 277,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "count_semantics": "Required Gate B checks: 277 passed and none skipped. Raw Playwright output: 277 passed and 9 project-applicability skips.",
+      "raw_runner_counts": {
+        "passed": 277,
+        "failed": 0,
+        "skipped": 9,
+        "skip_reason": "Nine generic E2E cases declare a narrower browser or viewport project matrix; every project required by each case executed."
+      },
+      "raw_log_sha256": "87bcc14c1557a051e279d5bd982d3e722672e486b8ed85a7f920a806cba2dd88",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/24-test-e2e.log"
     },
     {
       "id": "accessibility",
       "exact_command": "pnpm test:a11y",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 35000,
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "687ed1dc3362ea6e219bef0a09e3968bc48c770bc04c54ed11b9f782f4f13cec",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/25-test-a11y.log"
     },
     {
       "id": "visual",
       "exact_command": "pnpm test:visual",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 16000,
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "d280f6f9868f056f7e6f6567e253c0970d2a5be10d6e2d61f1102385144727d0",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/26-test-visual.log"
     },
     {
       "id": "diff-check",
       "exact_command": "git diff --check",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "6ef0ca4732682e6a8488e05e9e3954c8c9d8fcf3019facb59014cefcc1ce57b0",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/27-git-diff-check.log"
     },
     {
       "id": "umbrella-check",
       "exact_command": "pnpm check",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 28000,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "count_semantics": "The umbrella command passed. Its internal integration subcommand intentionally ran without RUN_INFRA_TESTS; the separately required infrastructure-enabled command passed all suites.",
+      "raw_integration_subcommand_counts": {
+        "passed": 71,
+        "failed": 0,
+        "skipped": 99,
+        "skip_reason": "The umbrella command does not set RUN_INFRA_TESTS. The canonical RUN_INFRA_TESTS=1 pnpm test:integration command was executed separately and passed the complete PostgreSQL and Redis suite."
+      },
+      "raw_log_sha256": "0ee79e804f73fd76a0c0fcf5459f8bb17b9b1f96189ab68c028316307437b030",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/28-pnpm-check.log"
     },
     {
       "id": "real-journey-1",
       "exact_command": "pnpm test:e2e:phase4:real",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 78000,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "5ff9cdf49bc2f84791be50b763c97c0cdc9b9b75601064b570c46f0da3e5ff90",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/29-real-journey-isolation-a.log"
     },
     {
       "id": "real-journey-2",
       "exact_command": "pnpm test:e2e:phase4:real",
-      "status": "PENDING"
+      "status": "PASS",
+      "exit_status": 0,
+      "duration_ms": 81000,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reason": null,
+      "raw_log_sha256": "a51b374d30f97164fd95a4e61ff5aaeb5ce631b80e8de3378405e80139f755aa",
+      "raw_log_retention_location": "artifacts/qa/gate-b-final-c87287f/commands/30-real-journey-isolation-b.log"
     }
   ],
+  "diagnostic_attempts": [
+    {
+      "command": "pnpm install --frozen-lockfile",
+      "outcome": "The first non-interactive invocation lacked CI=1 and pnpm refused to replace node_modules; the unchanged canonical command passed with the pinned environment."
+    },
+    {
+      "command": "pnpm ci:assert-clean-outputs",
+      "outcome": "The first preflight identified ignored output from earlier work; only the named generated directories were removed and the unchanged guard passed."
+    },
+    {
+      "command": "pnpm openapi:check and pnpm asset-delivery:verify:origin",
+      "outcome": "Sandbox process and loopback restrictions caused EPERM; unchanged commands passed with local execution permission."
+    }
+  ],
+  "supplemental_raw_logs": [
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/03-frozen-install.log",
+      "sha256": "933aa1e20887116b9da432ea34b98d9c677a064454629df1f121ec289973df2d",
+      "purpose": "Retained non-interactive environment diagnostic"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/05-clean-outputs.log",
+      "sha256": "3e177a6fcd7366139e9eb1d2ab51cc93e3a53f41d9e6e1c690f2ef4915326de8",
+      "purpose": "Retained clean-output preflight diagnostic"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/17-openapi-check.log",
+      "sha256": "e1634fe89c8c521132cecdad9e08f6f97e2f5b26f55b2781526e6e4ddb1612db",
+      "purpose": "Retained sandbox process-permission diagnostic"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/22-asset-origin.log",
+      "sha256": "a6b443011852e908c485bba44c9da581eb9b3a580774298bd2cad889b2b1c3c6",
+      "purpose": "Retained sandbox loopback-permission diagnostic"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/31-phase3-upgrade-profile-1.log",
+      "sha256": "d74c6b8463abcb3cf32dc95c31ce50cc925886aa3bb6095542e372eaac57b673",
+      "purpose": "Uncached migration reliability run 1"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/31-phase3-upgrade-profile-2.log",
+      "sha256": "83e0d646d05df2e46c9e7133e79e6ed50024ebfba8e53905c985e13491544f86",
+      "purpose": "Uncached migration reliability run 2"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/31-phase3-upgrade-profile-3.log",
+      "sha256": "69f5c2d23d9ee7eaa2698ce46b317dc603562256e470c21feeead5abc4a2feba",
+      "purpose": "Uncached migration reliability run 3"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/31-phase3-upgrade-profile-4.log",
+      "sha256": "527204fea1e1c5cd3ba7dde5407759ada37b878a340818c65645f8ae7645ea86",
+      "purpose": "Uncached migration reliability run 4"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/31-phase3-upgrade-profile-5.log",
+      "sha256": "836e5df3631e511633d02459d05ba4141ae6c724fed7aa4f7a1659fec1519aed",
+      "purpose": "Uncached migration reliability run 5"
+    },
+    {
+      "retention_location": "artifacts/qa/gate-b-final-c87287f/commands/32-post-db-oracle.log",
+      "sha256": "5b854bb237487bfe878e7429e010f7ff01281a7cdd9ebb81dfbe1b6792bb713e",
+      "purpose": "Post-suite PostgreSQL cleanup oracle"
+    }
+  ],
+  "project_applicability": {
+    "generic_e2e_not_run_for_inapplicable_projects": 9,
+    "reason": "Nine cases declare a narrower responsive or engine matrix; every project required by each case executed. No Gate B requirement was skipped."
+  },
   "isolated_journeys": [
     {
       "id": "isolation-1",
       "command_id": "real-journey-1",
-      "status": "PENDING",
-      "database_isolation_identifier": null,
-      "redis_isolation_identifier": null,
-      "browser_projects": []
+      "status": "PASS",
+      "database_isolation_identifier": "redacted:isolation-a-database",
+      "redis_isolation_identifier": "redacted:isolation-a-queue",
+      "browser_projects": ["phone-chromium", "tablet-webkit", "desktop-chromium"],
+      "persistence_oracles": 3,
+      "redis_keys_scanned": 15,
+      "redis_keys_deleted": 15
     },
     {
       "id": "isolation-2",
       "command_id": "real-journey-2",
-      "status": "PENDING",
-      "database_isolation_identifier": null,
-      "redis_isolation_identifier": null,
-      "browser_projects": []
+      "status": "PASS",
+      "database_isolation_identifier": "redacted:isolation-b-database",
+      "redis_isolation_identifier": "redacted:isolation-b-queue",
+      "browser_projects": ["phone-chromium", "tablet-webkit", "desktop-chromium"],
+      "persistence_oracles": 3,
+      "redis_keys_scanned": 15,
+      "redis_keys_deleted": 15
     }
   ],
   "artifacts": {
-    "playwright_html_reports": [],
-    "screenshots": [],
-    "traces": []
+    "playwright_html_reports": [
+      {
+        "retention_location": "artifacts/qa/gate-b-final-c87287f/browser-artifacts/playwright-report-visual.tar.gz",
+        "sha256": "0a558e5d286905b36871e63713783e0c7cc3c86762a3c595535bf3326b7edb0c"
+      }
+    ],
+    "screenshots": [
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-desktop-chromium-darwin.png",
+        "sha256": "4a79902c4ce3fca8704ca3171342318f0cc6831329e21f1e9de47296f439f9ea"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-move-desktop-chromium-darwin.png",
+        "sha256": "c6d87749ff53a1cfbea91ef315686cfc6dbb891d414caf47309c7a101409969b"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-move-phone-chromium-darwin.png",
+        "sha256": "cb66487caa8236043b6cb520b91e7afd21e63764dee01e48001da406d1477c45"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-move-phone-webkit-darwin.png",
+        "sha256": "869c4edac91a5f63a06963f9dfb0f35ab93e85a3a3e00d6e9cdfdb374211c732"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-move-tablet-webkit-darwin.png",
+        "sha256": "e6096b41f71bafcb2a66dac1fff6bfd76ace92885915ac59c49f1b8134d19f3e"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-phone-chromium-darwin.png",
+        "sha256": "8a0fec6b3bbdda03917b9e4206b53be88990ce9ec4df6fe7916c394d51562d83"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-phone-webkit-darwin.png",
+        "sha256": "695193b9b537c962cebc397f426cec370e90659853b6fe598c054095cae688ee"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-schedule-visual.spec.ts-snapshots/phase-4-schedule-tablet-webkit-darwin.png",
+        "sha256": "7d395c1487c9ba36c4f5e9f46cbfd93e3aee1f3da11785392e3da101712654ac"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-assisted-setup-desktop-chromium-darwin.png",
+        "sha256": "3ed5ea30fc5ff11954ad8b0d5aece8f272a8cc2966a47bb08eb84b1f2c83b42a"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-assisted-setup-phone-chromium-darwin.png",
+        "sha256": "d6d5bd8314110f7dbdc6ca48baa8cb646a3bff5ca95902c2b68ed0f16bf2f7ce"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-assisted-setup-phone-webkit-darwin.png",
+        "sha256": "b9262b74011dfba48688f910673c10c402c962cfb957ad3874a3fd7e9a5c1df5"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-assisted-setup-tablet-webkit-darwin.png",
+        "sha256": "689aa9d3ffd459367815aa73899933dbc168cb9cb31c9f7a5825c8aceecbccea"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-format-designer-desktop-chromium-darwin.png",
+        "sha256": "d49ff73974dcced2902b74f9dfdb5927e8550166fec59d551e7b2d8e357a57e7"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-format-designer-phone-chromium-darwin.png",
+        "sha256": "39ebc106947e322decb65c29d0671130fb73ac1a72ca4b2870e4f8c32fb2cf7a"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-format-designer-phone-webkit-darwin.png",
+        "sha256": "5147d0f32de8d153ee035687c069b601d1b982c6ec5974a6ada126e5f81adf08"
+      },
+      {
+        "retention_location": "apps/web/tests/phase-4-setup-format-visual.spec.ts-snapshots/phase-4-format-designer-tablet-webkit-darwin.png",
+        "sha256": "0416c528391174c389d48ba157434b5c21c5e5a22423425723c0159e20502e83"
+      }
+    ],
+    "traces": [
+      {
+        "retention_location": "artifacts/qa/gate-b-final-c87287f/browser-artifacts/trace-capture/phase-4-schedule-visual-phase-4-schedule-visual-baselines-desktop-chromium/trace.zip",
+        "sha256": "66616c74cc6746bd31be651fc29246552a8072f707906ecefd6a118c0193b044"
+      }
+    ]
+  },
+  "migration_reliability": {
+    "test": "Phase 3 populated upgrade safety",
+    "uncached_runs": 5,
+    "passed": 5,
+    "failed": 0,
+    "minimum_seconds": 1.07,
+    "median_seconds": 1.09,
+    "maximum_seconds": 1.11,
+    "timeout_seconds": 15,
+    "postgresql_version": "18.4",
+    "concurrent_test_load": "none"
   },
   "summaries": {
     "accessibility": {
-      "status": "PENDING",
-      "wcag_a_aa_violations": null,
-      "browser_console_errors": null,
-      "page_errors": null
+      "status": "PASS",
+      "tests_passed": 68,
+      "wcag_a_aa_violations": 0,
+      "browser_console_errors": 0,
+      "page_errors": 0
     },
     "visual": {
-      "status": "PENDING",
-      "unmatched_diffs": null,
-      "demo_fixture_boundary_confirmed": null
+      "status": "PASS",
+      "comparisons_passed": 13,
+      "unmatched_diffs": 0,
+      "demo_fixture_boundary_confirmed": true
     },
     "browser_runtime": {
-      "status": "PENDING",
-      "console_errors": null,
-      "page_errors": null,
-      "failed_requests": null
+      "status": "PASS",
+      "console_errors": 0,
+      "page_errors": 0,
+      "failed_requests": 0
+    },
+    "dependency_audit": {
+      "status": "PASS",
+      "known_production_vulnerabilities": 0
     }
   },
   "residual_risks": [
     {
-      "finding": "Final exact-commit execution evidence has not yet been collected.",
-      "owner": "Gate B implementation",
-      "target": "Before final Gate B verdict"
+      "severity": "P2",
+      "finding": "Sticky action rails may obscure intermediate content on smaller screens; reachability and overflow checks pass.",
+      "owner": "Frontend UX",
+      "target": "Before Gate C browser verdict",
+      "gate_b_acceptance": "Accepted because terminal content and every action remain reachable without data loss."
+    },
+    {
+      "severity": "P3",
+      "finding": "Some Phase 3 visual filenames imply broader native-project coverage than the forced viewport provides.",
+      "owner": "QA Automation",
+      "target": "Before Gate C visual verdict",
+      "gate_b_acceptance": "Accepted because the viewport behavior itself is covered and Phase 4 filenames are accurate."
+    },
+    {
+      "severity": "P3",
+      "finding": "The scoped next>sharp 0.35.3 override remains.",
+      "owner": "Platform Dependency",
+      "target": "Next stable dependency update",
+      "gate_b_acceptance": "Accepted because the production audit, build, image processing and rendering checks pass."
     }
   ]
 }

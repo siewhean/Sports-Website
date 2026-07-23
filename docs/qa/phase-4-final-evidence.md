@@ -1,52 +1,76 @@
 # Phase 4 final evidence manifest
 
-Status: **PRE-FINAL — BLOCKED**
+Status: **FINAL**
 
-Local validation: BLOCKED
+Local validation: PASS
 
 Hosted GitHub Actions: Not executed because Actions allowance is unavailable
 
-The machine-readable manifest is
-[`phase-4-final-evidence.json`](./phase-4-final-evidence.json). It is an honest
-pre-final scaffold: required commands, both isolated organiser journeys,
-environment versions, test counts, artifact locations, hashes, collection time
-and the privacy-safe reviewer label remain pending. It does not inherit PASS
-claims or hashes from an older source commit.
+Validated source: `c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`
 
-Run the fail-closed validator from the repository root:
+Branch: `codex/gate-b-lockfile-integrity`
+
+The machine-readable, fail-closed manifest is
+[`phase-4-final-evidence.json`](./phase-4-final-evidence.json). Raw logs and
+browser artifacts are retained under the ignored local directory
+`artifacts/qa/gate-b-final-c87287f/`; the manifest binds them with SHA-256
+digests and contains no credentials, database contents or browser session
+material.
+
+## Executed acceptance
+
+- Pinned Node 24.18.0 and pnpm 10.33.0; frozen installation and unchanged
+  lockfile passed.
+- Formatting, lint, TypeScript, 684 unit tests, 27 forward migrations,
+  backup/restore, and the complete infrastructure-enabled integration command
+  passed. The database package passed 54/54 tests.
+- The production dependency audit found no known vulnerabilities. OpenAPI,
+  secrets, production build, deploy manifest and 54-asset origin delivery
+  checks passed.
+- Generic E2E passed 274 tests. The embedded real matrix passed another 3/3
+  complete browser-owned organiser journeys.
+- Accessibility passed 68/68 with zero WCAG A/AA violations. Visual comparison
+  passed 13/13 with no unmatched diffs.
+- Two additional clean-isolation real Gate B runs passed 3/3 each across phone
+  Chromium, tablet WebKit and desktop Chromium. Each run created fresh database,
+  Redis and process isolation; all three database oracles passed and Redis
+  cleanup deleted 15/15 inspected queue keys.
+- The previously marginal populated-upgrade test passed five uncached runs:
+  minimum 1.07 s, median 1.09 s, maximum 1.11 s, against a narrowly scoped 15 s
+  timeout on PostgreSQL 18.4 with no concurrent load.
+- `git diff --check` and `pnpm check` passed.
+
+The generic E2E matrix reports nine project-applicability omissions where a
+case deliberately declares a narrower browser or viewport matrix. Every
+browser required by those cases executed; no Gate B requirement was skipped.
+The fail-closed command ledger therefore records zero skipped required checks.
+
+Initial diagnostic attempts are retained, not rewritten: non-interactive pnpm
+needed `CI=1`; the clean-output preflight found ignored output from prior work;
+and the sandbox denied process or loopback operations for OpenAPI and asset
+origin checks. The unchanged canonical commands subsequently passed under the
+pinned local environment.
+
+## Browser evidence boundary
+
+Demo-backed fixtures provide stable visual regression. The real full-stack E2E
+proves browser-owned decisions, BFF/API integration, database lineage, public
+publication and Redis cleanup. These are complementary evidence, not identical
+proof.
+
+## Accepted non-blocking risks
+
+- P2 — Sticky action rails may obscure intermediate phone/tablet content.
+  Reachability and overflow checks pass. Owner: Frontend UX. Target: before the
+  Gate C browser verdict.
+- P3 — Some Phase 3 snapshot filenames overstate native-project coverage.
+  Owner: QA Automation. Target: before the Gate C visual verdict.
+- P3 — The scoped `next>sharp = 0.35.3` override remains. Production audit,
+  build and image regressions pass. Owner: Platform Dependency. Target: the next
+  stable dependency update.
+
+Run the manifest gate from the repository root:
 
 ```sh
 pnpm evidence:phase4:validate
 ```
-
-The command is expected to fail while this scaffold remains `BLOCKED`. The
-recorded source commit may be the checked-out commit or an ancestor followed
-only by evidence-document commits. This avoids the impossible requirement for a
-commit to contain its own SHA without weakening source identity: the validator
-rejects every committed or uncommitted path after the recorded source except
-the two final-evidence documents, `phase-4-local-run.md` and
-`phase-4-verdict.md`.
-
-A final manifest validates only when it:
-
-- identifies a full commit SHA that exists and is an ancestor of the checkout;
-- records every required command as executed successfully with zero failed and
-  zero skipped checks;
-- records distinct PostgreSQL and Redis isolation for two complete real Gate B
-  journeys across phone Chromium, tablet WebKit and desktop Chromium;
-- includes exact browser and toolchain versions;
-- binds every raw command log plus the Playwright report archive, screenshots
-  and traces with lowercase SHA-256 digests;
-- reports passing accessibility, visual, browser-console and failed-request
-  summaries; and
-- contains no secret-like field names or credential-shaped values.
-
-Raw artifacts may remain at the ignored local retention location recorded in the
-manifest. Only sanitised metadata and hashes belong in Git. Do not record
-session material, raw access values, `.env` content, database dumps containing
-personal data, or generated credentials.
-
-The visual evidence boundary must remain explicit in the final summary:
-demo-backed fixtures provide stable visual regression, while real full-stack E2E
-proves persistence and integration. They are complementary evidence, not the
-same proof.
