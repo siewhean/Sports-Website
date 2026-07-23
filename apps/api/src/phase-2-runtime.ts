@@ -95,7 +95,13 @@ export type PersistedResult = {
   state: "final" | "corrected";
 };
 
-type CompetitionRow = { id: string; organisation_id: string; status: string; division_id?: string };
+type CompetitionRow = {
+  id: string;
+  organisation_id: string;
+  status: string;
+  division_id?: string;
+  membership_role?: "owner" | "organiser" | "viewer";
+};
 type EntryRow = { id: string; name: string; seed: number };
 type FormatRow = { id: string; definition: Record<string, unknown>; revision: number };
 type EventRow = {
@@ -175,7 +181,7 @@ export class Phase2Runtime {
   ): Promise<CompetitionRow> {
     const roles = mutable ? ["owner", "organiser"] : ["owner", "organiser", "viewer"];
     const rows = await tx.unsafe<CompetitionRow>(
-      `SELECT c.id, c.organisation_id, c.status
+      `SELECT c.id, c.organisation_id, c.status, om.role AS membership_role
        FROM competitions c
        JOIN organisation_memberships om ON om.organisation_id = c.organisation_id
        WHERE c.id = $1 AND om.account_id = $2 AND om.status = 'active' AND om.role = ANY($3::text[])
@@ -1742,7 +1748,7 @@ export class Phase2Runtime {
   }
 
   async competitionWorkspace(actor: Phase2Actor, competitionId: string) {
-    await this.requireCompetitionAccess(this.sql, competitionId, actor, false);
+    const access = await this.requireCompetitionAccess(this.sql, competitionId, actor, false);
     const competition = required(
       await this.sql.unsafe<Record<string, unknown>>(
         `SELECT id,organisation_id,name,slug,sport_code,timezone,starts_on,ends_on,status,created_at,updated_at
@@ -1824,6 +1830,8 @@ export class Phase2Runtime {
       private_schedule: privateSchedule,
       publication,
       access_passes: accessPasses,
+      permission: access.membership_role === "viewer" ? "read" : "write",
+      read_only: access.membership_role === "viewer" || access.status === "archived",
     };
   }
 

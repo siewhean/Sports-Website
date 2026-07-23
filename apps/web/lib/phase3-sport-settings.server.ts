@@ -78,6 +78,7 @@ function documentForState(context: SportSettingsContext, state: SportSettingsSur
     authority: pack.authority,
     definitions: pack.settingsSchema,
     recommended,
+    competitionOverride: {},
     effective: { ...recommended, ...override },
     override,
     mode: Object.keys(override).length ? "customised" : "recommended",

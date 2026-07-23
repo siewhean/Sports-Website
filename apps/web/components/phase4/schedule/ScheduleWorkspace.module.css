@@ -10,6 +10,18 @@
   color: var(--schedule-ink);
 }
 
+.commandStatus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .live {
   position: absolute;
   width: 1px;
@@ -373,11 +385,9 @@
 .axis,
 .areaRow {
   display: grid;
-  grid-template-columns: 6.5rem minmax(41rem, 1fr);
 }
 
 .axis {
-  grid-template-columns: 6.5rem repeat(10, minmax(4.1rem, 1fr));
   min-height: 34px;
   border-block: 1px solid var(--schedule-line);
 }
@@ -415,13 +425,13 @@
 
 .areaTrack {
   position: relative;
-  background: repeating-linear-gradient(to right, #e3e3dd 0 1px, transparent 1px 10%);
+  background-image: linear-gradient(to right, #e3e3dd 0 1px, transparent 1px);
+  background-repeat: repeat-x;
 }
 
 .matchBlock {
   position: absolute;
   top: 14px;
-  min-width: 5.4rem;
   min-height: 84px;
   overflow: hidden;
   border: 1px solid #aeb0a7;
@@ -589,7 +599,7 @@
 }
 
 .jobRail {
-  position: sticky;
+  position: relative;
   bottom: 0;
   display: flex;
   justify-content: space-between;
@@ -601,6 +611,10 @@
   border-top: 1px solid var(--schedule-line);
   background: rgb(247 246 240 / 96%);
   backdrop-filter: blur(10px);
+}
+
+.jobRailActive {
+  position: sticky;
 }
 
 .jobRail > div,
@@ -746,75 +760,7 @@ button:disabled {
   }
 }
 
-@media (max-width: 767px) {
-  .workspace {
-    gap: 1.2rem;
-  }
-
-  .strategy > div,
-  .quality,
-  .optionRows dl {
-    grid-template-columns: 1fr;
-  }
-
-  .strategy button {
-    justify-content: flex-start;
-    border-right: 0;
-    border-bottom: 1px solid #a9aaa4;
-    padding-inline: 1rem;
-  }
-
-  .strategy button:last-child {
-    border-bottom: 0;
-  }
-
-  .quality div,
-  .optionRows dl > div {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    min-height: 44px;
-    align-items: center;
-    border-left: 0;
-    border-bottom: 1px solid var(--schedule-line);
-    padding: 0;
-  }
-
-  .quality dd,
-  .optionRows dd {
-    margin: 0;
-  }
-
-  .headerActions {
-    display: grid;
-  }
-
-  .options > header,
-  .timeline > header {
-    display: block;
-  }
-
-  .options header > span,
-  .timeline header a {
-    display: inline-flex;
-    margin-top: 0.8rem;
-  }
-
-  .optionRows article {
-    grid-template-columns: 1fr;
-    gap: 0.8rem;
-    padding: 1rem 0;
-  }
-
-  .optionRows article > button {
-    grid-column: auto;
-    justify-self: stretch;
-  }
-
-  .tray ul {
-    grid-template-columns: 1fr;
-  }
-
+@media (max-width: 900px) {
   .desktopTimeline,
   .legend {
     display: none;
@@ -901,6 +847,76 @@ button:disabled {
     margin-top: 0.2rem;
     color: var(--schedule-muted);
     font-size: 0.68rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .workspace {
+    gap: 1.2rem;
+  }
+
+  .strategy > div,
+  .quality,
+  .optionRows dl {
+    grid-template-columns: 1fr;
+  }
+
+  .strategy button {
+    justify-content: flex-start;
+    border-right: 0;
+    border-bottom: 1px solid #a9aaa4;
+    padding-inline: 1rem;
+  }
+
+  .strategy button:last-child {
+    border-bottom: 0;
+  }
+
+  .quality div,
+  .optionRows dl > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 44px;
+    align-items: center;
+    border-left: 0;
+    border-bottom: 1px solid var(--schedule-line);
+    padding: 0;
+  }
+
+  .quality dd,
+  .optionRows dd {
+    margin: 0;
+  }
+
+  .headerActions {
+    display: grid;
+  }
+
+  .options > header,
+  .timeline > header {
+    display: block;
+  }
+
+  .options header > span,
+  .timeline header a {
+    display: inline-flex;
+    margin-top: 0.8rem;
+  }
+
+  .optionRows article {
+    grid-template-columns: 1fr;
+    gap: 0.8rem;
+    padding: 1rem 0;
+  }
+
+  .optionRows article > button {
+    grid-column: auto;
+    justify-self: stretch;
+  }
+
+  .tray ul {
+    grid-template-columns: 1fr;
   }
 
   .inspector {

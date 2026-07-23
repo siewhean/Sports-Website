@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run lib/*.test.ts tests/unit",
     "test:e2e": "env -u NO_COLOR playwright test",
-    "test:a11y": "env -u NO_COLOR playwright test --grep 'accessibility violations'",
+    "test:a11y": "env -u NO_COLOR playwright test --grep '@a11y'",
     "test:visual": "env -u NO_COLOR playwright test --grep 'visual baselines'"
   },
   "dependencies": {

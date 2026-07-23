@@ -1,11 +1,13 @@
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { CapacityEditor } from "@/components/phase3/CapacityEditor";
+import { EntriesEditor } from "@/components/phase3/EntriesEditor";
 import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase3CapacityCopy, phase3CapacityMachine } from "@/lib/phase3-capacity";
 import { getCapacityDocument } from "@/lib/phase3-capacity.server";
+import { phase3EntriesCopy, phase3EntriesMachine, totalActiveEntries } from "@/lib/phase3-entries";
 import { phase3ResultsCopy, phase3ResultsMachine, resultVersionLabel } from "@/lib/phase3-results";
 import { getResultsDocument } from "@/lib/phase3-results.server";
 
@@ -46,6 +48,33 @@ export default async function CompetitionSectionPage({
                 : phase3CapacityMachine.unavailable
         }
         sectionContent={<CapacityEditor document={capacity} />}
+      />
+    );
+  }
+  if (section === phase3EntriesMachine.section) {
+    const divisions = (result.competition.divisions ?? []).map((division) => ({
+      id: division.id,
+      name: division.name,
+      entryLimit: division.entryLimit ?? 16,
+      entries: division.entries ?? [],
+    }));
+    return (
+      <OrganiserWorkspace
+        competition={result.competition}
+        section={phase3EntriesMachine.section}
+        sectionAction={null}
+        pageTitle={phase3EntriesCopy.title}
+        pageIntro={phase3EntriesCopy.intro}
+        pageEyebrow={phase3EntriesCopy.eyebrow}
+        syncLabel={`${totalActiveEntries(divisions)} / 16`}
+        syncState={phase3CapacityMachine.saved}
+        sectionContent={
+          <EntriesEditor
+            competitionId={result.competition.id}
+            initialDivisions={divisions}
+            canEdit={result.competition.canEdit ?? false}
+          />
+        }
       />
     );
   }

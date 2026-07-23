@@ -10,7 +10,7 @@ export default async function SchedulePage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ state?: string }>;
+  searchParams: Promise<{ state?: string; match?: string; notice?: string }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -47,7 +47,13 @@ export default async function SchedulePage({
               ? phase4ScheduleMachine.saved
               : phase4ScheduleMachine.unavailable
       }
-      sectionContent={<ScheduleWorkspace document={document} />}
+      sectionContent={
+        <ScheduleWorkspace
+          document={document}
+          initialSelectedMatchId={query.match}
+          initialNotice={query.notice === phase4ScheduleMachine.moveNotice ? phase4ScheduleMachine.moveNotice : null}
+        />
+      }
     />
   );
 }

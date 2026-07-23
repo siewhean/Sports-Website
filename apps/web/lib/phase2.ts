@@ -51,7 +51,12 @@ export type CompetitionView = {
   publishedAt: string;
   lastUpdated: string;
   division: { id: string; name: string; teamCount: number; matchCount: number };
-  divisions?: ReadonlyArray<{ id: string; name: string }>;
+  divisions?: ReadonlyArray<{
+    id: string;
+    name: string;
+    entryLimit?: number;
+    entries?: ReadonlyArray<{ id: string; name: string; seed: number | null; status: string }>;
+  }>;
   teams: string[];
   areas: string[];
   matches: MatchView[];
@@ -67,6 +72,7 @@ export type CompetitionView = {
   publishedVersionLabel?: string;
   publicationState?: "draft" | "published";
   formatSummary?: ReadonlyArray<readonly [string, string]>;
+  canEdit?: boolean;
 };
 
 export type CompetitionReadPort = {
@@ -482,6 +488,7 @@ export const phase2Competition: CompetitionView = {
   attention: { body: phase2Copy.attentionBody, href: "/organiser/competitions/cmp_sgopen_2026/access" },
   publishedVersionLabel: phase2Copy.publishedVersion,
   publicationState: "published",
+  canEdit: true,
 };
 
 export const demoCompetitionReadPort: CompetitionReadPort = {

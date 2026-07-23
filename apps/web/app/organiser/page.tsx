@@ -21,6 +21,7 @@ export default function OrganiserPage() {
       <section className="operational-heading" aria-labelledby="organiser-summary">
         <p>{messages.organiser.summaryBody}</p>
         <h2 id="organiser-summary">{messages.organiser.summaryTitle}</h2>
+        <ActionLink href="/organiser/competitions/new">{messages.organiser.createCompetition}</ActionLink>
         {demoFixturesEnabled() ? <ActionLink href="/format">{messages.organiser.nextAction}</ActionLink> : null}
       </section>
       <div className="operational-divider" />

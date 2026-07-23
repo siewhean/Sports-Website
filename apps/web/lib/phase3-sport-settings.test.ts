@@ -5,6 +5,7 @@ import {
   displaySettingValue,
   parseSportSettingsResponse,
   settingsMode,
+  sportSettingsScopeBaseline,
   validateSettingsDraft,
 } from "./phase3-sport-settings";
 
@@ -46,6 +47,7 @@ describe("Phase 3 sport settings view model", () => {
       pack_schema_version: pack.schemaVersion,
       pack_version: pack.version,
       recommended_snapshot: pack.recommendedSettings,
+      competition_override: {},
       override: {},
       effective: pack.recommendedSettings,
       mode: "recommended",
@@ -75,6 +77,7 @@ describe("Phase 3 sport settings view model", () => {
       pack_schema_version: pack.schemaVersion,
       pack_version: pack.version,
       recommended_snapshot: pack.recommendedSettings,
+      competition_override: {},
       override: {},
       effective: pack.recommendedSettings,
       mode: "recommended",
@@ -109,6 +112,7 @@ describe("Phase 3 sport settings view model", () => {
         pack_definition_hash: "b".repeat(64),
         pack_definition: activated,
         recommended_snapshot: activated.recommendedSettings,
+        competition_override: {},
         override: {},
         effective: activated.recommendedSettings,
         mode: "recommended",
@@ -122,5 +126,46 @@ describe("Phase 3 sport settings view model", () => {
     expect(document?.packVersion).toBe("9.0.0");
     expect(document?.sportName).toBe("Canoe Polo 2030");
     expect(document?.packDefinition).toEqual(activated);
+  });
+
+  it("hydrates division settings with inherited competition overrides", () => {
+    const context = {
+      scope: "division" as const,
+      competitionId: "46f0050a-ddd3-4fd5-bf30-c063694ae52a",
+      competitionName: "Open",
+      divisionId: "f491586e-bb02-4729-8f79-40bc569b278c",
+      divisionName: "Women",
+    };
+    const competitionOverride = { slotMinutes: 35 };
+    const document = parseSportSettingsResponse(
+      {
+        competition_id: context.competitionId,
+        division_id: context.divisionId,
+        sport_code: pack.sportId,
+        pack_schema_version: pack.schemaVersion,
+        pack_version: pack.version,
+        pack_definition_hash: "c".repeat(64),
+        pack_definition: pack,
+        recommended_snapshot: pack.recommendedSettings,
+        competition_override: competitionOverride,
+        override: {},
+        effective: { ...pack.recommendedSettings, ...competitionOverride },
+        mode: "recommended",
+        revision: 1,
+        permission: "write",
+        read_only: false,
+        organisation_id: "80e92ffb-77fc-4688-8a72-02a7be7bd601",
+      },
+      context,
+    );
+
+    expect(document?.effective.slotMinutes).toBe(35);
+    expect(document?.mode).toBe("recommended");
+    expect(document?.competitionOverride).toEqual(competitionOverride);
+    expect(
+      document
+        ? deriveSportSettingsOverride(document.effective, sportSettingsScopeBaseline(document))
+        : { invalid: true },
+    ).toEqual({});
   });
 });

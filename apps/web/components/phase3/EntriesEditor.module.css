@@ -1,0 +1,146 @@
+.workspace {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.usage,
+.createDivision,
+.division {
+  border: 1px solid var(--p2-line, #d9d4ca);
+  border-radius: 1rem;
+  background: #fff;
+  padding: 1rem;
+}
+
+.usage {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.usage > div,
+.division header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.usage p,
+.division p {
+  margin: 0;
+}
+
+.usage strong {
+  font-size: 1.5rem;
+}
+
+.usage progress {
+  width: 100%;
+  accent-color: #1d4d3e;
+}
+
+.createDivision,
+.createEntry {
+  display: grid;
+  grid-template-columns: minmax(12rem, 2fr) minmax(8rem, 1fr) minmax(8rem, 1fr) auto;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.createDivision label,
+.createEntry label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 650;
+}
+
+.createDivision input,
+.createDivision select,
+.createEntry input {
+  min-height: 2.75rem;
+  border: 1px solid #8d8a83;
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+}
+
+.createDivision button,
+.createEntry button {
+  min-height: 2.75rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: #173d34;
+  color: #fff;
+  padding: 0.6rem 1rem;
+  font: inherit;
+  font-weight: 700;
+}
+
+.createDivision button:disabled,
+.createEntry button:disabled {
+  opacity: 0.55;
+}
+
+.divisions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.division {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+}
+
+.division h2 {
+  margin: 0;
+}
+
+.entries {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.entries li {
+  display: grid;
+  grid-template-columns: 2rem 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+  border-top: 1px solid #ece8e0;
+  padding-top: 0.45rem;
+}
+
+.createEntry {
+  grid-template-columns: minmax(10rem, 1fr) 5rem auto;
+}
+
+.status,
+.error {
+  min-height: 1.5rem;
+  margin: 0;
+  font-weight: 650;
+}
+
+.readOnly {
+  margin: 0;
+  border-left: 0.25rem solid #7a6c2f;
+  background: #fff8d8;
+  padding: 0.75rem 1rem;
+  font-weight: 650;
+}
+
+.error {
+  color: #a62920;
+}
+
+@media (max-width: 820px) {
+  .createDivision,
+  .createEntry,
+  .divisions {
+    grid-template-columns: 1fr;
+  }
+}

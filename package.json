@@ -27,6 +27,7 @@
     "validate:phase2": "node scripts/validate-phase-2-fixtures.mjs",
     "validate:phase3": "node scripts/validate-phase-3-fixtures.mjs",
     "validate:phase4": "node scripts/validate-phase-4-schedule-fixtures.mjs",
+    "evidence:phase4:validate": "node scripts/validate-phase-4-final-evidence.mjs",
     "db:migrate": "pnpm --filter @matchday/database db:migrate",
     "db:migrate:check": "pnpm --filter @matchday/database db:migrate:check",
     "backup:verify": "bash scripts/verify-backup-restore.sh",

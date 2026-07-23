@@ -260,7 +260,9 @@ export async function registerPhase2Routes(
   app.post<{
     Params: { competitionId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { name: string; team_limit: 8 | 16 } | { name: string; code?: string; entry_limit: 8 | 12 | 16 | 24 | 48 };
+    Body:
+      | { name: string; team_limit: 8 | 16; idempotency_key: string }
+      | { name: string; code?: string; entry_limit: 8 | 12 | 16 | 24 | 48; idempotency_key: string };
   }>(
     "/api/v1/competitions/:competitionId/divisions",
     {
@@ -269,60 +271,49 @@ export async function registerPhase2Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id }),
-        body: Type.Union([
-          Type.Object(
-            {
-              name: Type.String({ minLength: 1, maxLength: 100 }),
-              team_limit: Type.Union([Type.Literal(8), Type.Literal(16)]),
-            },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              name: Type.String({ minLength: 1, maxLength: 100 }),
-              code: Type.Optional(Type.String()),
-              entry_limit: Type.Union([
-                Type.Literal(8),
-                Type.Literal(12),
-                Type.Literal(16),
-                Type.Literal(24),
-                Type.Literal(48),
-              ]),
-            },
-            { additionalProperties: false },
-          ),
-        ]),
+        body: Type.Object(
+          {
+            name: Type.String({ minLength: 1, maxLength: 100 }),
+            code: Type.Optional(Type.String()),
+            team_limit: Type.Optional(Type.Union([Type.Literal(8), Type.Literal(16)])),
+            entry_limit: Type.Optional(
+              Type.Union([Type.Literal(8), Type.Literal(12), Type.Literal(16), Type.Literal(24), Type.Literal(48)]),
+            ),
+            idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
+          },
+          { additionalProperties: false },
+        ),
         response: { 201: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
         tags: ["competitions"],
       },
     },
     async (request, reply) => {
       const authenticated = await actor(request);
+      if (!options.phase3Runtime) throw new ApiError(503, "PHASE3_UNAVAILABLE", "Phase 3 runtime is unavailable");
+      let entryLimit: 8 | 12 | 16 | 24 | 48;
       if ("entry_limit" in request.body) {
-        if (!options.phase3Runtime) throw new ApiError(503, "PHASE3_UNAVAILABLE", "Phase 3 runtime is unavailable");
-        return reply.code(201).send(
-          await options.phase3Runtime.createDivision(
-            authenticated,
-            request.params.competitionId,
-            {
-              name: request.body.name,
-              ...(request.body.code ? { code: request.body.code } : {}),
-              entryLimit: request.body.entry_limit,
-            },
-            request.id,
-          ),
-        );
+        if ("team_limit" in request.body) {
+          throw new ApiError(400, "VALIDATION_ERROR", "Provide exactly one division limit");
+        }
+        entryLimit = request.body.entry_limit;
+      } else if ("team_limit" in request.body) {
+        entryLimit = request.body.team_limit;
+      } else {
+        throw new ApiError(400, "VALIDATION_ERROR", "Provide exactly one division limit");
       }
-      return reply
-        .code(201)
-        .send(
-          await options.runtime.createDivision(
-            authenticated,
-            request.params.competitionId,
-            { name: request.body.name, teamLimit: request.body.team_limit },
-            request.id,
-          ),
-        );
+      return reply.code(201).send(
+        await options.phase3Runtime.createDivision(
+          authenticated,
+          request.params.competitionId,
+          {
+            name: request.body.name,
+            ...("code" in request.body && request.body.code ? { code: request.body.code } : {}),
+            entryLimit,
+          },
+          request.id,
+          request.body.idempotency_key,
+        ),
+      );
     },
   );
 

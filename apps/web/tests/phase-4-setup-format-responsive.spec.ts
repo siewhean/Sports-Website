@@ -17,6 +17,11 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Visual", exact: true }).click();
+  const canvas = page.getByTestId("format-canvas");
+  await expect(canvas).toBeVisible();
+  await expect(canvas.locator('[data-stage-id="stage-groups"]')).toBeVisible();
+  expect(await canvas.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
 });
 
 test("recommendation evidence stays accessible without phone overflow", async ({ page }) => {

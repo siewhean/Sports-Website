@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
 
 async function rejectOptionalConsent(page: Page) {
   const button = page.getByRole("button", { name: "Reject optional" });
@@ -193,14 +193,10 @@ for (const route of [
   "/maintenance",
   "/offline",
 ] as const) {
-  test(`${route} has no serious or critical accessibility violations`, async ({ page }) => {
+  test(`@a11y ${route} has no WCAG A or AA accessibility violations`, async ({ page }) => {
     await page.goto(route);
     await rejectOptionalConsent(page);
-    const results = await new AxeBuilder({ page }).analyze();
-    const blocking = results.violations.filter(
-      (violation) => violation.impact === "serious" || violation.impact === "critical",
-    );
-    expect(blocking).toEqual([]);
+    await assertNoWcagAOrAaViolations(page);
   });
 }
 

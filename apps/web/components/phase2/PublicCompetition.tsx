@@ -100,7 +100,7 @@ export function PublicCompetition({ competition }: { competition: CompetitionVie
           </header>
           <ol className="p2-public-fixtures">
             {nextMatches.map((match) => (
-              <li key={match.id}>
+              <li key={match.id} data-match-id={match.id}>
                 <time>{match.time}</time>
                 <span>{match.area}</span>
                 <strong>

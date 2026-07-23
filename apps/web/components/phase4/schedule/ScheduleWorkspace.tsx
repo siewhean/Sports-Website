@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { interpolate } from "@matchday/ui";
 import {
   ArrowsClockwise,
@@ -34,6 +34,10 @@ import {
   scheduleConflictForMatch,
   parseScheduleJobEnvelope,
   parseScheduleJobView,
+  parseScheduleLockResponse,
+  parseSchedulePublishEnvelope,
+  parseScheduleRevisionView,
+  parseScheduleUnlockResponse,
   type ScheduleDocument,
   type ScheduleJob,
   type ScheduleJobStatus,
@@ -64,7 +68,24 @@ function withRetainedAlternative(current: readonly ScheduleOption[], option: Sch
   return [...current.filter((candidate) => candidate.objective !== option.objective), option];
 }
 
-export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) {
+function withRevision(document: ScheduleDocument, revision: NonNullable<ScheduleDocument["currentRevision"]>) {
+  return {
+    ...document,
+    currentRevision: revision,
+    revisions: [...document.revisions.filter((candidate) => candidate.id !== revision.id), revision],
+  };
+}
+
+export function ScheduleWorkspace({
+  document: initialDocument,
+  initialSelectedMatchId = null,
+  initialNotice = null,
+}: {
+  document: ScheduleDocument;
+  initialSelectedMatchId?: string | null;
+  initialNotice?: typeof phase4ScheduleMachine.moveNotice | null;
+}) {
+  const [document, setDocument] = useState(initialDocument);
   const hydrated = useSyncExternalStore(
     subscribeToHydration,
     () => true,
@@ -74,11 +95,20 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
   const [selectedMatchId, setSelectedMatchId] = useState(
-    document.currentRevision?.assignments[0]?.matchId ?? document.matches[0]?.id ?? null,
+    (initialSelectedMatchId && document.matches.some((match) => match.id === initialSelectedMatchId)
+      ? initialSelectedMatchId
+      : null) ??
+      document.currentRevision?.assignments[0]?.matchId ??
+      document.matches[0]?.id ??
+      null,
   );
   const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(
+    initialNotice === phase4ScheduleMachine.moveNotice ? phase4ScheduleCopy.moved : "",
+  );
   const [commandError, setCommandError] = useState("");
+  const statusHeadingRef = useRef<HTMLHeadingElement>(null);
+  const initialNoticeFocused = useRef(false);
   const selectedMatch = document.matches.find((match) => match.id === selectedMatchId) ?? null;
   const assignment = selectedMatch ? assignmentForMatch(document.currentRevision, selectedMatch.id) : null;
   const selectedLock = selectedMatch ? lockForMatch(document.locks, selectedMatch.id) : null;
@@ -93,6 +123,16 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
   const disabled = !hydrated || !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
   const polledJobStatus = job?.status;
+
+  function focusStatusHeading() {
+    window.requestAnimationFrame(() => statusHeadingRef.current?.focus({ preventScroll: true }));
+  }
+
+  useEffect(() => {
+    if (!initialNotice || initialNoticeFocused.current) return;
+    initialNoticeFocused.current = true;
+    focusStatusHeading();
+  }, [initialNotice]);
 
   useEffect(() => {
     if (!polledJobId || !polledJobStatus || !activeStatuses.has(polledJobStatus)) return;
@@ -137,6 +177,9 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
     method: "POST" | "DELETE" = phase4ScheduleMachine.post,
   ) {
     if (busy) return;
+    const invokingControl =
+      globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
+    let restoreInvoker = false;
     setBusy(name);
     setCommandError("");
     setMessage("");
@@ -149,13 +192,20 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         setCommandError(commandErrorMessage(response.status, errorCode(payload)));
+        restoreInvoker = true;
         return;
       }
       onSuccess?.(payload);
     } catch {
       setCommandError(phase4ScheduleCopy.offlineBody);
+      restoreInvoker = true;
     } finally {
       setBusy(null);
+      if (restoreInvoker) {
+        window.requestAnimationFrame(() => {
+          if (invokingControl?.isConnected) invokingControl.focus({ preventScroll: true });
+        });
+      }
     }
   }
 
@@ -229,9 +279,18 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         idempotency_key: createIdempotencyKey(phase4ScheduleMachine.acceptKey),
         expected_job_revision: option.jobRevision,
       },
-      () => {
+      (payload) => {
+        const revision = parseScheduleRevisionView(payload, true, true);
+        if (!revision) {
+          setCommandError(phase4ScheduleCopy.malformed);
+          return;
+        }
+        setDocument((current) => ({
+          ...withRevision(current, revision),
+          canPublish: current.canEdit && revision.status !== "expired" && revision.status !== "published",
+        }));
         setMessage(phase4ScheduleCopy.optionSaved);
-        window.location.reload();
+        focusStatusHeading();
       },
     );
   }
@@ -245,9 +304,18 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
         idempotency_key: createIdempotencyKey(phase4ScheduleMachine.publishKey),
         expected_revision: document.currentRevision.revision,
       },
-      () => {
+      (payload) => {
+        const published = parseSchedulePublishEnvelope(payload);
+        if (!published) {
+          setCommandError(phase4ScheduleCopy.malformed);
+          return;
+        }
+        setDocument((current) => ({
+          ...withRevision(current, published.revision),
+          canPublish: false,
+        }));
         setMessage(phase4ScheduleCopy.publishSuccess);
-        window.location.reload();
+        focusStatusHeading();
       },
     );
   }
@@ -269,7 +337,32 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
             start_epoch_ms: Date.parse(assignment.startsAt),
             end_epoch_ms: Date.parse(assignment.endsAt),
           },
-      () => window.location.reload(),
+      (payload) => {
+        if (selectedLock) {
+          const receipt = parseScheduleUnlockResponse(payload);
+          if (!receipt || receipt.matchId !== selectedMatch.id) {
+            setCommandError(phase4ScheduleCopy.malformed);
+            return;
+          }
+          setDocument((current) => ({
+            ...current,
+            locks: current.locks.filter((lock) => lock.matchId !== receipt.matchId),
+          }));
+          setMessage(phase4ScheduleCopy.unlockSuccess);
+        } else {
+          const lock = parseScheduleLockResponse(payload);
+          if (!lock || lock.matchId !== selectedMatch.id) {
+            setCommandError(phase4ScheduleCopy.malformed);
+            return;
+          }
+          setDocument((current) => ({
+            ...current,
+            locks: [...current.locks.filter((candidate) => candidate.matchId !== lock.matchId), lock],
+          }));
+          setMessage(phase4ScheduleCopy.lockSuccess);
+        }
+        focusStatusHeading();
+      },
       selectedLock ? phase4ScheduleMachine.delete : phase4ScheduleMachine.post,
     );
   }
@@ -281,7 +374,10 @@ export function ScheduleWorkspace({ document }: { document: ScheduleDocument }) 
 
   return (
     <div className={styles.workspace} data-testid="phase4-schedule">
-      <p className={styles.live} aria-live="polite">
+      <h2 ref={statusHeadingRef} className={styles.commandStatus} tabIndex={-1}>
+        {phase4ScheduleCopy.commandStatus}
+      </h2>
+      <p className={styles.live} aria-live="polite" aria-atomic="true">
         {message || commandError}
       </p>
 
@@ -549,12 +645,19 @@ function Timeline({
     ? Math.max(...allAssignments.map((assignment) => Date.parse(assignment.endsAt)))
     : 0;
   const span = Math.max(end - start, 30 * 60_000);
+  const trackMinWidthRem = Math.max(41, (span / (30 * 60_000)) * 5.4);
   const ticks = start
-    ? Array.from(
-        { length: Math.min(10, Math.max(2, Math.ceil(span / 3_600_000) + 1)) },
-        (_, index) => start + index * 3_600_000,
-      )
+    ? Array.from({ length: Math.max(2, Math.ceil(span / 3_600_000) + 1) }, (_, index) => start + index * 3_600_000)
     : [];
+  const axisStyle: CSSProperties = {
+    gridTemplateColumns: `6.5rem repeat(${ticks.length}, minmax(${trackMinWidthRem / ticks.length}rem, 1fr))`,
+  };
+  const areaRowStyle: CSSProperties = {
+    gridTemplateColumns: `6.5rem minmax(${trackMinWidthRem}rem, 1fr)`,
+  };
+  const trackStyle: CSSProperties = {
+    backgroundSize: `${100 / Math.max(1, ticks.length - 1)}% 100%`,
+  };
   return (
     <section className={styles.timeline} aria-labelledby="timeline-title">
       <header>
@@ -567,19 +670,19 @@ function Timeline({
         </Link>
       </header>
       <div className={styles.desktopTimeline} role="region" aria-label={phase4ScheduleCopy.timelineRegion} tabIndex={0}>
-        <div className={styles.axis} aria-hidden="true">
+        <div className={styles.axis} style={axisStyle} aria-hidden="true">
           <span />
           {ticks.map((tick) => (
             <time key={tick}>{formatScheduleTime(new Date(tick).toISOString(), document.timeZone)}</time>
           ))}
         </div>
         {document.areas.map((area) => (
-          <div className={styles.areaRow} key={area.id}>
+          <div className={styles.areaRow} style={areaRowStyle} key={area.id}>
             <div className={styles.areaLabel}>
               <strong>{area.name}</strong>
               <span>{area.kind}</span>
             </div>
-            <div className={styles.areaTrack}>
+            <div className={styles.areaTrack} style={trackStyle}>
               {matchesForArea(document, area.id).map(({ match, assignment }) => {
                 const left = ((Date.parse(assignment.startsAt) - start) / span) * 100;
                 const width = ((Date.parse(assignment.endsAt) - Date.parse(assignment.startsAt)) / span) * 100;
@@ -591,7 +694,7 @@ function Timeline({
                     key={match.id}
                     type="button"
                     className={styles.matchBlock}
-                    style={{ left: `${left}%`, width: `${Math.max(width, 9)}%` }}
+                    style={{ left: `${left}%`, width: `${width}%` }}
                     data-conflict={conflict || undefined}
                     aria-pressed={selectedMatchId === match.id}
                     aria-label={`${match.code}, ${match.roundLabel}, ${match.homeLabel} ${phase4ScheduleCopy.versus} ${match.awayLabel}, ${timeLabel}${conflict ? `, ${phase4ScheduleCopy.conflictLegend}` : ""}${locked ? `, ${phase4ScheduleCopy.locked}` : ""}`}
@@ -620,15 +723,16 @@ function Timeline({
               {matchesForArea(document, area.id).map(({ match, assignment }) => {
                 const locked = Boolean(lockForMatch(document.locks, match.id));
                 const conflict = scheduleConflictForMatch(document, match.id);
+                const timeLabel = `${formatScheduleTime(assignment.startsAt, document.timeZone)}–${formatScheduleTime(assignment.endsAt, document.timeZone)}`;
                 return (
                   <li key={match.id} data-conflict={conflict || undefined}>
                     <button
                       type="button"
                       onClick={() => onSelect(match.id)}
                       aria-pressed={selectedMatchId === match.id}
-                      aria-label={`${match.code}, ${match.roundLabel}, ${match.homeLabel} ${phase4ScheduleCopy.versus} ${match.awayLabel}, ${formatScheduleTime(assignment.startsAt, document.timeZone)}${conflict ? `, ${phase4ScheduleCopy.conflictLegend}` : ""}${locked ? `, ${phase4ScheduleCopy.locked}` : ""}`}
+                      aria-label={`${match.code}, ${match.roundLabel}, ${match.homeLabel} ${phase4ScheduleCopy.versus} ${match.awayLabel}, ${timeLabel}${conflict ? `, ${phase4ScheduleCopy.conflictLegend}` : ""}${locked ? `, ${phase4ScheduleCopy.locked}` : ""}`}
                     >
-                      <time>{formatScheduleTime(assignment.startsAt, document.timeZone)}</time>
+                      <time>{timeLabel}</time>
                       <span>
                         <strong>
                           {match.code} · {match.roundLabel}
@@ -801,7 +905,7 @@ function JobRail({
     );
   const active = activeStatuses.has(job.status);
   return (
-    <footer className={styles.jobRail} data-job-status={job.status}>
+    <footer className={`${styles.jobRail} ${active ? styles.jobRailActive : ""}`} data-job-status={job.status}>
       <div>
         {job.currentBest ? <CheckCircle /> : <ArrowsClockwise />}
         <span>

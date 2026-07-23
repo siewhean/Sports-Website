@@ -7,6 +7,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseConfig } from "@matchday/config";
 import { dropTestSchema, migrateDatabase } from "../../src/migrations.js";
+import { populatedUpgradeTestName, populatedUpgradeTimeoutMs } from "./migration-test-settings.js";
 
 const config = parseConfig(process.env);
 const schema = `test_migrations_${randomUUID().replaceAll("-", "")}`;
@@ -14,7 +15,7 @@ const concurrentSchema = `test_migrations_concurrent_${randomUUID().replaceAll("
 const populatedSchema = `test_migrations_populated_${randomUUID().replaceAll("-", "")}`;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 // Full-suite integration runs intentionally contend for the same local PostgreSQL instance.
-// Keep the larger ceiling scoped to the two tests that apply the complete migration chain.
+// Keep this larger ceiling scoped to the empty-schema tests that apply the complete chain.
 const fullMigrationChainTimeoutMs = 15_000;
 
 beforeAll(async () =>
@@ -97,28 +98,26 @@ describe("foundation migrations", () => {
   );
 
   it(
-    "upgrades populated Phase 4 data through the latest forward migrations",
+    populatedUpgradeTestName,
     async () => {
       const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-populated-migrations-"));
       await cp(migrationsDirectory, copiedDirectory, { recursive: true });
-      const migration0020 = path.join(copiedDirectory, "0020_phase4_format_recommendation_evidence.sql");
-      const migration0021 = path.join(copiedDirectory, "0021_phase4_schedule_job_progress.sql");
-      const migration0022 = path.join(copiedDirectory, "0022_phase4_schedule_revision_provenance.sql");
-      const migration0023 = path.join(copiedDirectory, "0023_phase4_schedule_publication_expiry.sql");
-      const migration0024 = path.join(copiedDirectory, "0024_phase4_ai_quota_reason.sql");
-      const migration0025 = path.join(copiedDirectory, "0025_phase4_schedule_concurrency_hardening.sql");
-      const migration0020Source = await readFile(migration0020, "utf8");
-      const migration0021Source = await readFile(migration0021, "utf8");
-      const migration0022Source = await readFile(migration0022, "utf8");
-      const migration0023Source = await readFile(migration0023, "utf8");
-      const migration0024Source = await readFile(migration0024, "utf8");
-      const migration0025Source = await readFile(migration0025, "utf8");
-      await rm(migration0020);
-      await rm(migration0021);
-      await rm(migration0022);
-      await rm(migration0023);
-      await rm(migration0024);
-      await rm(migration0025);
+      const forwardMigrationNames = [
+        "0020_phase4_format_recommendation_evidence.sql",
+        "0021_phase4_schedule_job_progress.sql",
+        "0022_phase4_schedule_revision_provenance.sql",
+        "0023_phase4_schedule_publication_expiry.sql",
+        "0024_phase4_ai_quota_reason.sql",
+        "0025_phase4_schedule_concurrency_hardening.sql",
+        "0026_phase4_setup_lineage_reconciliation.sql",
+      ] as const;
+      const forwardMigrations = await Promise.all(
+        forwardMigrationNames.map(async (name) => {
+          const migrationPath = path.join(copiedDirectory, name);
+          return { name, migrationPath, source: await readFile(migrationPath, "utf8") };
+        }),
+      );
+      await Promise.all(forwardMigrations.map(({ migrationPath }) => rm(migrationPath)));
       await migrateDatabase({
         databaseUrl: config.databaseUrl,
         migrationsDirectory: copiedDirectory,
@@ -169,25 +168,13 @@ describe("foundation migrations", () => {
           FROM setup_drafts WHERE competition_id=${competition}`;
         expect(beforeUpgrade).toMatchObject({ confirmed_count: 1, placeholder_count: 1 });
         expect(beforeUpgrade?.entry_ids).toEqual([placeholder]);
-        await writeFile(migration0020, migration0020Source);
-        await writeFile(migration0021, migration0021Source);
-        await writeFile(migration0022, migration0022Source);
-        await writeFile(migration0023, migration0023Source);
-        await writeFile(migration0024, migration0024Source);
-        await writeFile(migration0025, migration0025Source);
+        await Promise.all(forwardMigrations.map(({ migrationPath, source }) => writeFile(migrationPath, source)));
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgraded.applied).toEqual([
-          "0020_phase4_format_recommendation_evidence.sql",
-          "0021_phase4_schedule_job_progress.sql",
-          "0022_phase4_schedule_revision_provenance.sql",
-          "0023_phase4_schedule_publication_expiry.sql",
-          "0024_phase4_ai_quota_reason.sql",
-          "0025_phase4_schedule_concurrency_hardening.sql",
-        ]);
+        expect(upgraded.applied).toEqual(forwardMigrationNames);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
@@ -222,7 +209,7 @@ describe("foundation migrations", () => {
         await rm(copiedDirectory, { recursive: true, force: true });
       }
     },
-    fullMigrationChainTimeoutMs,
+    populatedUpgradeTimeoutMs,
   );
 
   it("rejects checksum drift in an already-applied migration", async () => {

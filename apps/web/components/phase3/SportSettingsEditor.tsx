@@ -26,6 +26,7 @@ import {
   phase3SettingsMachine,
   phase3CommandMachine,
   settingsMode,
+  sportSettingsScopeBaseline,
   validateSettingsDraft,
   type SportSettingsDocument,
   type SportSettingsSurfaceState,
@@ -64,11 +65,12 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
   const [commandState, setCommandState] = useState<SportSettingsSurfaceState | null>(null);
   const [busyAction, setBusyAction] = useState<"save" | "default" | "copy" | null>(null);
   const [revision, setRevision] = useState(document.revision);
+  const scopeBaseline = sportSettingsScopeBaseline(document);
   const errors = useMemo(
     () => validateSettingsDraft(document.packDefinition, values),
     [document.packDefinition, values],
   );
-  const mode = settingsMode(values, document.recommended);
+  const mode = settingsMode(values, scopeBaseline);
   const dirty = JSON.stringify(values) !== JSON.stringify(savedValues);
   const blocked =
     !document.canEdit || !document.capabilities.save || Object.keys(errors).length > 0 || busyAction !== null;
@@ -86,7 +88,7 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
   }
 
   function reset() {
-    setValues(document.recommended);
+    setValues(scopeBaseline);
     setAnnouncement(phase3SettingsCopy.restoredAnnouncement);
   }
 
@@ -108,7 +110,7 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
         ? {
             pack_version: document.packVersion,
             revision,
-            override: deriveSportSettingsOverride(values, document.recommended),
+            override: deriveSportSettingsOverride(values, scopeBaseline),
           }
         : action === "default"
           ? { pack_version: document.packVersion, settings: values }

@@ -41,7 +41,7 @@ export function FormatDesignerWorkspace({
 }) {
   const [draft, setDraft] = useState(page.draft);
   const [viewState, setViewState] = useState(page.state);
-  const [busy, setBusy] = useState<"validate" | "save" | "materialise" | "template" | null>(null);
+  const [busy, setBusy] = useState<"validate" | "save" | "materialise" | "publish" | "template" | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [showTemplates, setShowTemplates] = useState(false);
   const [templateName, setTemplateName] = useState("");

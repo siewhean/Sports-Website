@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "evidence_state": "PRE_FINAL_BLOCKED",
+  "local_validation": "BLOCKED",
+  "hosted_github_actions": "Not executed because Actions allowance is unavailable",
+  "source": {
+    "commit_sha": "97c4712a7445b60cd7acd9fd79dd6896206bfc9e",
+    "branch": "codex/gate-b-lockfile-integrity"
+  },
+  "evidence_collected_at": null,
+  "reviewer": {
+    "identity": null
+  },
+  "environment": {
+    "operating_system": null,
+    "architecture": null,
+    "node_version": null,
+    "pnpm_version": null,
+    "postgresql_version": null,
+    "redis_version": null,
+    "playwright_version": null,
+    "chromium_version": null,
+    "webkit_version": null
+  },
+  "commands": [
+    {
+      "id": "node-version",
+      "exact_command": "node --version",
+      "status": "PENDING"
+    },
+    {
+      "id": "pnpm-version",
+      "exact_command": "pnpm --version",
+      "status": "PENDING"
+    },
+    {
+      "id": "frozen-install",
+      "exact_command": "pnpm install --frozen-lockfile",
+      "status": "PENDING"
+    },
+    {
+      "id": "lockfile-unchanged",
+      "exact_command": "git diff --exit-code -- pnpm-lock.yaml",
+      "status": "PENDING"
+    },
+    {
+      "id": "clean-outputs",
+      "exact_command": "pnpm ci:assert-clean-outputs",
+      "status": "PENDING"
+    },
+    {
+      "id": "format",
+      "exact_command": "pnpm format:check",
+      "status": "PENDING"
+    },
+    {
+      "id": "lint",
+      "exact_command": "pnpm lint",
+      "status": "PENDING"
+    },
+    {
+      "id": "typecheck",
+      "exact_command": "pnpm typecheck",
+      "status": "PENDING"
+    },
+    {
+      "id": "unit",
+      "exact_command": "pnpm test:unit",
+      "status": "PENDING"
+    },
+    {
+      "id": "migrations",
+      "exact_command": "pnpm db:migrate:check",
+      "status": "PENDING"
+    },
+    {
+      "id": "backup-restore",
+      "exact_command": "pnpm backup:verify",
+      "status": "PENDING"
+    },
+    {
+      "id": "integration",
+      "exact_command": "RUN_INFRA_TESTS=1 pnpm test:integration",
+      "status": "PENDING"
+    },
+    {
+      "id": "fixtures",
+      "exact_command": "pnpm validate:fixtures",
+      "status": "PENDING"
+    },
+    {
+      "id": "phase-2",
+      "exact_command": "pnpm validate:phase2",
+      "status": "PENDING"
+    },
+    {
+      "id": "phase-3",
+      "exact_command": "pnpm validate:phase3",
+      "status": "PENDING"
+    },
+    {
+      "id": "phase-4",
+      "exact_command": "pnpm validate:phase4",
+      "status": "PENDING"
+    },
+    {
+      "id": "openapi",
+      "exact_command": "pnpm openapi:check",
+      "status": "PENDING"
+    },
+    {
+      "id": "dependency-audit",
+      "exact_command": "pnpm dependencies:audit",
+      "status": "PENDING"
+    },
+    {
+      "id": "secret-scan",
+      "exact_command": "pnpm secrets:scan",
+      "status": "PENDING"
+    },
+    {
+      "id": "build",
+      "exact_command": "pnpm build",
+      "status": "PENDING"
+    },
+    {
+      "id": "deployment-manifest",
+      "exact_command": "pnpm deploy:manifest",
+      "status": "PENDING"
+    },
+    {
+      "id": "asset-delivery",
+      "exact_command": "pnpm asset-delivery:verify:origin",
+      "status": "PENDING"
+    },
+    {
+      "id": "playwright-install",
+      "exact_command": "pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit",
+      "status": "PENDING"
+    },
+    {
+      "id": "e2e",
+      "exact_command": "pnpm test:e2e",
+      "status": "PENDING"
+    },
+    {
+      "id": "accessibility",
+      "exact_command": "pnpm test:a11y",
+      "status": "PENDING"
+    },
+    {
+      "id": "visual",
+      "exact_command": "pnpm test:visual",
+      "status": "PENDING"
+    },
+    {
+      "id": "diff-check",
+      "exact_command": "git diff --check",
+      "status": "PENDING"
+    },
+    {
+      "id": "umbrella-check",
+      "exact_command": "pnpm check",
+      "status": "PENDING"
+    },
+    {
+      "id": "real-journey-1",
+      "exact_command": "pnpm test:e2e:phase4:real",
+      "status": "PENDING"
+    },
+    {
+      "id": "real-journey-2",
+      "exact_command": "pnpm test:e2e:phase4:real",
+      "status": "PENDING"
+    }
+  ],
+  "isolated_journeys": [
+    {
+      "id": "isolation-1",
+      "command_id": "real-journey-1",
+      "status": "PENDING",
+      "database_isolation_identifier": null,
+      "redis_isolation_identifier": null,
+      "browser_projects": []
+    },
+    {
+      "id": "isolation-2",
+      "command_id": "real-journey-2",
+      "status": "PENDING",
+      "database_isolation_identifier": null,
+      "redis_isolation_identifier": null,
+      "browser_projects": []
+    }
+  ],
+  "artifacts": {
+    "playwright_html_reports": [],
+    "screenshots": [],
+    "traces": []
+  },
+  "summaries": {
+    "accessibility": {
+      "status": "PENDING",
+      "wcag_a_aa_violations": null,
+      "browser_console_errors": null,
+      "page_errors": null
+    },
+    "visual": {
+      "status": "PENDING",
+      "unmatched_diffs": null,
+      "demo_fixture_boundary_confirmed": null
+    },
+    "browser_runtime": {
+      "status": "PENDING",
+      "console_errors": null,
+      "page_errors": null,
+      "failed_requests": null
+    }
+  },
+  "residual_risks": [
+    {
+      "finding": "Final exact-commit execution evidence has not yet been collected.",
+      "owner": "Gate B implementation",
+      "target": "Before final Gate B verdict"
+    }
+  ]
+}

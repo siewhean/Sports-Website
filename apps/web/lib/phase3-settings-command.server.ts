@@ -105,6 +105,7 @@ export async function forwardPhase3Mutation(
     path: string;
     body?: Record<string, unknown>;
     validate: Validator;
+    successStatus?: number;
   },
 ) {
   const requestOrigin = request.headers.get("origin");
@@ -151,7 +152,7 @@ export async function forwardPhase3Mutation(
     }
     if (!input.validate(payload))
       return error(502, "COMMAND_RESPONSE_INVALID", "The settings service returned an invalid response");
-    return NextResponse.json(payload);
+    return NextResponse.json(payload, { status: input.successStatus ?? 200 });
   } catch {
     return error(503, "API_UNAVAILABLE", "The settings service is unavailable");
   }

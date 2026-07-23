@@ -11,6 +11,8 @@ export type OrganiserWorkspacePayload = {
   private_schedule: WorkspaceRecord | null;
   publication: WorkspaceRecord | null;
   access_passes: WorkspaceRecord[];
+  permission: "read" | "write";
+  read_only: boolean;
 };
 
 const sportLabels = {
@@ -43,6 +45,22 @@ function supportedSportCode(value: unknown): value is SupportedSportCode {
   return typeof value === "string" && Object.hasOwn(sportLabels, value);
 }
 
+function validWorkspaceDivision(value: unknown): boolean {
+  const division = record(value);
+  if (!division || !string(division.id) || !string(division.name) || !Array.isArray(division.entries)) return false;
+  return division.entries.every((rawEntry) => {
+    const entry = record(rawEntry);
+    return Boolean(
+      entry &&
+      string(entry.id) &&
+      string(entry.name) &&
+      (entry.seed === null || (Number.isInteger(entry.seed) && (entry.seed as number) >= 1)) &&
+      typeof entry.status === "string" &&
+      ["active", "confirmed", "withdrawn", "replaced"].includes(entry.status),
+    );
+  });
+}
+
 export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserWorkspacePayload {
   const payload = record(value);
   const competition = record(payload?.competition);
@@ -57,8 +75,11 @@ export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserW
     string(competition.starts_on) &&
     string(competition.ends_on) &&
     Array.isArray(payload.divisions) &&
+    payload.divisions.every(validWorkspaceDivision) &&
     Array.isArray(payload.capacity) &&
-    Array.isArray(payload.access_passes),
+    Array.isArray(payload.access_passes) &&
+    (payload.permission === "read" || payload.permission === "write") &&
+    typeof payload.read_only === "boolean",
   );
 }
 
@@ -300,7 +321,24 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     divisions: divisions.flatMap((division) => {
       const id = string(division.id);
       const name = string(division.name);
-      return id && name ? [{ id, name }] : [];
+      const entryLimit = number(division.team_limit);
+      const divisionEntries = records(division.entries).flatMap((entry) => {
+        const entryId = string(entry.id);
+        const entryName = string(entry.name);
+        const status = string(entry.status);
+        const seed = number(entry.seed);
+        return entryId && entryName && status ? [{ id: entryId, name: entryName, seed, status }] : [];
+      });
+      return id && name
+        ? [
+            {
+              id,
+              name,
+              ...(entryLimit === null ? {} : { entryLimit }),
+              entries: divisionEntries,
+            },
+          ]
+        : [];
     }),
     teams: entries.flatMap((entry) => (string(entry.name) ? [string(entry.name)!] : [])),
     areas,
@@ -331,5 +369,6 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     publishedVersionLabel: isPublished ? `Schedule ${scheduleVersion} · Results ${resultVersion}` : undefined,
     publicationState: isPublished ? "published" : "draft",
     formatSummary,
+    canEdit: payload.permission === "write" && !payload.read_only,
   };
 }

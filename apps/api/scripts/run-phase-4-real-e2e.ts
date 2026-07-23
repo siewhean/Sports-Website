@@ -5,9 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseConfig } from "@matchday/config";
-import type { ScheduleConstraints } from "@matchday/contracts";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
-import { createDefaultFormatTemplates } from "@matchday/domain";
 import { hashSessionSecret, systemClock, type PostgresJsSql } from "@matchday/identity";
 import {
   DomainScheduleOptimizer,
@@ -49,28 +47,23 @@ type Isolation =
 type SeedState = {
   apiOrigin: string;
   webOrigin: string;
-  competitionId: string;
   organisationId: string;
-  divisionId: string;
+  fixtureKey: string;
+  organiserCookie: string;
+};
+
+type BrowserJourneyResult = {
+  project: string;
+  competitionId: string;
   slug: string;
-  formatRevisionId: string;
-  scheduleJobId: string;
-  scheduleJobRevision: number;
-  scheduleOptionId: string;
-  moveTarget: {
+  divisionIds: [string, string];
+  moved: {
     match_id: string;
-    match_code: string;
     playing_area_id: string;
     slot_id: string;
     start_epoch_ms: number;
     end_epoch_ms: number;
   };
-  organiserCookie: string;
-};
-
-type BrowserMoveResult = {
-  project: string;
-  target: Omit<SeedState["moveTarget"], "match_code">;
 };
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -200,12 +193,7 @@ function connectIsolation(isolation: Isolation): Sql {
     : postgres(isolation.databaseUrl, { max: 10, onnotice: () => undefined });
 }
 
-async function seed(
-  sql: Sql,
-  phase3: Phase3Runtime,
-  phase4: ReliableGateBPhase4Runtime,
-  fixtureKey: string,
-): Promise<SeedState> {
+async function seed(sql: Sql, fixtureKey: string): Promise<SeedState> {
   const accountId = randomUUID();
   const organisationId = randomUUID();
   await sql.begin(async (transaction) => {
@@ -222,227 +210,6 @@ async function seed(
       VALUES (${organisationId},${accountId},'owner','active')
     `;
   });
-  const competition = await phase3.createCompetition(
-    { accountId },
-    {
-      organisationId,
-      name: "Phase 4 Real E2E Cup",
-      slug: `phase-4-real-e2e-${fixtureKey}`,
-      sportCode: "canoe_polo",
-      venue: "Real E2E Arena",
-      address: "4 Integration Road",
-      countryCode: "SG",
-      startsOn: "2027-08-01",
-      endsOn: "2027-08-01",
-      timezone: "Asia/Singapore",
-      locale: "en-SG",
-    },
-    randomUUID(),
-  );
-  const divisionId = randomUUID();
-  await sql`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competition.id},'Open',8)`;
-  for (let seedNumber = 1; seedNumber <= 8; seedNumber += 1) {
-    await sql`INSERT INTO division_entries(id,division_id,name,seed,status)
-      VALUES(${randomUUID()},${divisionId},${`Real E2E Team ${seedNumber}`},${seedNumber},'confirmed')`;
-  }
-  const pack = await sql<{ pack_version: string }[]>`
-    SELECT pack_version FROM competition_sport_settings WHERE competition_id=${competition.id}
-  `;
-  if (!pack[0]) throw new Error("Competition sport settings were not seeded");
-  await sql`INSERT INTO division_sport_settings(
-    division_id,competition_id,sport_code,pack_version,settings_override,updated_by
-  ) VALUES(${divisionId},${competition.id},'canoe_polo',${pack[0].pack_version},'{}'::jsonb,${accountId})`;
-  await phase3.replaceCapacity(
-    { accountId },
-    competition.id,
-    {
-      revision: 1,
-      areas: [
-        {
-          name: "Court 1",
-          slotMinutes: 30,
-          availability: [{ date: "2027-08-01", startTime: "08:00", endTime: "18:00" }],
-        },
-      ],
-    },
-    randomUUID(),
-  );
-
-  const graph = structuredClone(createDefaultFormatTemplates(8)[2]!.graph);
-  const document = {
-    schema_version: 1 as const,
-    graph,
-    layout: {
-      schema_version: 1 as const,
-      stage_positions: graph.stages.map((stage, index) => ({ stage_id: stage.id, x: index * 240, y: 80 })),
-    },
-  };
-  const saved = await phase4.saveFormatRevision(
-    { accountId },
-    competition.id,
-    divisionId,
-    {
-      draft_id: null,
-      expected_revision: null,
-      parent_revision_id: null,
-      document,
-      idempotency_key: `real-format-${randomUUID()}`,
-    },
-    randomUUID(),
-  );
-  await phase4.materialiseFormat({ accountId }, saved.draft_id, `real-materialise-${randomUUID()}`, randomUUID());
-  await sql`INSERT INTO format_validation_evidence(
-    format_revision_id,definition_hash,valid,graph_acyclic,graph_reachable,slots_unambiguous,
-    deterministic_match_count,available_match_slots,required_match_slots,recommendation_fits_capacity,validated_by
-  ) SELECT id,definition_hash,false,false,false,false,0,0,0,false,${accountId}
-    FROM format_revisions WHERE id=${saved.draft_id}`;
-  const publicationOracle = await sql<
-    {
-      materialized: boolean;
-      exact: boolean;
-      hash_matches: boolean;
-      declared_count: number;
-      match_count: number;
-      source_count: number;
-    }[]
-  >`
-    SELECT graph_materialized_at IS NOT NULL materialized,
-      phase4_materialization_is_exact(id) exact,
-      graph_materialization_hash=phase4_expected_materialization_hash(id) hash_matches,
-      graph_match_count declared_count,
-      (SELECT count(*)::int FROM matches WHERE format_revision_id=format_revisions.id) match_count,
-      (SELECT count(*)::int FROM format_match_sources WHERE format_revision_id=format_revisions.id) source_count
-    FROM format_revisions WHERE id=${saved.draft_id}
-  `;
-  if (
-    !publicationOracle[0]?.materialized ||
-    !publicationOracle[0].exact ||
-    !publicationOracle[0].hash_matches ||
-    publicationOracle[0].declared_count !== publicationOracle[0].match_count ||
-    publicationOracle[0].source_count !== publicationOracle[0].match_count * 2
-  )
-    throw new Error(`Format publication oracle failed: ${JSON.stringify(publicationOracle[0])}`);
-  await sql`SELECT phase4_publish_format_revision(${saved.draft_id},${accountId},${randomUUID()})`;
-
-  const revisions = await sql<{ revision: number; capacity_revision: number; area_id: string; window_id: string }[]>`
-    SELECT c.revision,c.capacity_revision,pa.id area_id,w.id window_id
-    FROM competitions c JOIN playing_areas pa ON pa.competition_id=c.id
-    JOIN competition_availability_windows w ON w.playing_area_id=pa.id WHERE c.id=${competition.id}
-  `;
-  if (!revisions[0]) throw new Error("Capacity revision was not seeded");
-  const ignored = <T>(value: T) => ({ mode: "ignored" as const, value });
-  const constraints: ScheduleConstraints = {
-    minimum_rest: ignored({ minutes: 0 }),
-    maximum_matches_per_day: ignored({ matches: 8 }),
-    preferred_final_time: ignored({
-      target_start_epoch_ms: Date.parse("2027-08-01T12:00:00Z"),
-      tolerance_minutes: 60,
-    }),
-    entry_unavailable: ignored({ by_entry_id: {} }),
-    official_availability: ignored({ by_official_id: {} }),
-    featured_playing_area: ignored({ area_id: revisions[0].area_id, match_ids: [] }),
-    avoid_consecutive_matches: ignored({ minutes: 0 }),
-    balance_early_matches: ignored({ before_local_time: "09:00" }),
-    balance_late_matches: ignored({ at_or_after_local_time: "18:00" }),
-    keep_division_together: ignored({ maximum_area_count: 1 }),
-    preserve_existing_schedule: ignored({ maximum_shift_minutes: 0, by_match_id: {} }),
-  };
-  const access = await sql<
-    {
-      id: string;
-      organisation_id: string;
-      sport_code: string;
-      status: string;
-      timezone: string;
-      capacity_revision: number;
-      revision: number;
-    }[]
-  >`SELECT id,organisation_id,sport_code,status,timezone,capacity_revision,revision
-    FROM competitions WHERE id=${competition.id}`;
-  const internal = phase4 as unknown as {
-    buildScheduleProblem(
-      tx: PostgresJsSql,
-      competition: (typeof access)[number],
-      objective: "balanced",
-      constraints: ScheduleConstraints,
-    ): Promise<{
-      problem: {
-        matches: Array<{ id: string; possibleEntryIds: string[]; dependencyMatchIds: string[] }>;
-      };
-    }>;
-  };
-  const preflight = await internal.buildScheduleProblem(
-    sql as unknown as PostgresJsSql,
-    { ...access[0]!, capacity_revision: Number(access[0]!.capacity_revision) },
-    "balanced",
-    constraints,
-  );
-  for (const match of preflight.problem.matches) {
-    const authoritative = await sql<{ possible_ids: string[]; dependency_ids: string[] }[]>`
-      SELECT ARRAY(SELECT entry_id::text FROM phase4_match_possible_entries(${match.id}) ORDER BY entry_id::text) possible_ids,
-        ARRAY(SELECT source_match_id::text FROM match_dependencies WHERE match_id=${match.id} ORDER BY source_match_id::text) dependency_ids
-    `;
-    const expectedPossible = [...match.possibleEntryIds].sort();
-    const expectedDependencies = [...match.dependencyMatchIds].sort();
-    if (
-      JSON.stringify(authoritative[0]?.possible_ids ?? []) !== JSON.stringify(expectedPossible) ||
-      JSON.stringify(authoritative[0]?.dependency_ids ?? []) !== JSON.stringify(expectedDependencies)
-    )
-      throw new Error(`Schedule preflight mismatch: ${JSON.stringify({ match, authoritative: authoritative[0] })}`);
-  }
-  const generated = await phase4.generateSchedule(
-    { accountId },
-    competition.id,
-    {
-      idempotency_key: `real-schedule-${randomUUID()}`,
-      expected_source_revision: revisions[0].revision,
-      expected_capacity_revision: Number(revisions[0].capacity_revision),
-      objective: "balanced",
-      constraints,
-    },
-    randomUUID(),
-  );
-  const deadline = Date.now() + 15_000;
-  let job = await phase4.readScheduleJob({ accountId }, generated.job.id);
-  while (job.status !== "completed" && Date.now() < deadline) {
-    if (job.status === "failed" || job.status === "cancelled") throw new Error(`Schedule job ended in ${job.status}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    job = await phase4.readScheduleJob({ accountId }, generated.job.id);
-  }
-  if (job.status !== "completed" || !job.current_best_option_id)
-    throw new Error("Redis scheduler did not produce a current-best option");
-  const options = await phase4.listScheduleOptions({ accountId }, job.id);
-  const selected = options.find((option) => option.id === job.current_best_option_id);
-  if (!selected?.assignments[0]) throw new Error("Schedule option has no assignments");
-  const editableDocument = structuredClone(document);
-  editableDocument.layout.stage_positions[0]!.x += 24;
-  const editable = await phase4.saveFormatRevision(
-    { accountId },
-    competition.id,
-    divisionId,
-    {
-      draft_id: saved.draft_id,
-      expected_revision: saved.revision,
-      parent_revision_id: saved.draft_id,
-      document: editableDocument,
-      idempotency_key: `real-editable-format-${randomUUID()}`,
-    },
-    randomUUID(),
-  );
-  const editableAfterSave = await phase4.readFormatBuilder({ accountId }, competition.id, divisionId);
-  if (editableAfterSave.draft?.draft_id !== editable.draft_id)
-    throw new Error(`Editable format was not readable after save: ${JSON.stringify(editableAfterSave)}`);
-  const occupied = new Set(selected.assignments.map((assignment) => assignment.slot_id));
-  const movableAssignment = selected.assignments.at(-1);
-  if (!movableAssignment) throw new Error("Schedule option has no movable assignment");
-  const movableMatch = await sql<{ code: string }[]>`SELECT code FROM matches WHERE id=${movableAssignment.match_id}`;
-  if (!movableMatch[0]) throw new Error("Schedule option references an unknown movable match");
-  const freeIndex = Array.from({ length: 20 }, (_, index) => index + 1).find(
-    (index) => !occupied.has(`${revisions[0]!.window_id}:${index}`),
-  );
-  if (!freeIndex) throw new Error("No free schedule slot was available for the move oracle");
-  const startEpochMs = Date.parse("2027-08-01T00:00:00.000Z") + (freeIndex - 1) * 30 * 60_000;
-
   const sessionId = randomUUID();
   const sessionSecret = randomBytes(32).toString("base64url");
   const now = new Date();
@@ -452,63 +219,34 @@ async function seed(
     ${sessionId},${accountId},${hashSessionSecret(sessionSecret)},${now},${now},
     ${new Date(now.getTime() + 30 * 60_000)},${new Date(now.getTime() + 12 * 60 * 60_000)}
   )`;
-  const editableBeforeBrowser = await phase4.readFormatBuilder({ accountId }, competition.id, divisionId);
-  if (editableBeforeBrowser.draft?.draft_id !== editable.draft_id)
-    throw new Error(`Editable format changed before browser launch: ${JSON.stringify(editableBeforeBrowser)}`);
   return {
     apiOrigin,
     webOrigin,
-    competitionId: competition.id,
     organisationId,
-    divisionId,
-    slug: `phase-4-real-e2e-${fixtureKey}`,
-    formatRevisionId: editable.draft_id,
-    scheduleJobId: job.id,
-    scheduleJobRevision: job.revision,
-    scheduleOptionId: job.current_best_option_id,
-    moveTarget: {
-      match_id: movableAssignment.match_id,
-      match_code: movableMatch[0].code,
-      playing_area_id: revisions[0].area_id,
-      slot_id: `${revisions[0].window_id}:${freeIndex}`,
-      start_epoch_ms: startEpochMs,
-      end_epoch_ms: startEpochMs + 30 * 60_000,
-    },
+    fixtureKey,
     organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
   };
 }
 
-async function assertDatabaseOracle(
-  sql: Sql,
-  state: SeedState,
-  browserMove: BrowserMoveResult["target"],
-): Promise<void> {
+async function assertDatabaseOracle(sql: Sql, result: BrowserJourneyResult): Promise<void> {
   const rows = await sql<
     {
       setup_count: number;
-      template_count: number;
       published_count: number;
       schedule_version: number;
       audit_count: number;
     }[]
   >`
     SELECT
-      (SELECT count(*)::int FROM setup_drafts WHERE competition_id=${state.competitionId}) setup_count,
-      (SELECT count(*)::int FROM format_templates WHERE organisation_id=${state.organisationId}) template_count,
-      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=${state.competitionId} AND status='published') published_count,
-      (SELECT schedule_version::int FROM competition_publications WHERE competition_id=${state.competitionId}) schedule_version,
-      (SELECT count(*)::int FROM audit_events WHERE target_id=${state.competitionId} OR target_id IN (
-        SELECT id::text FROM schedule_revisions WHERE competition_id=${state.competitionId}
+      (SELECT count(*)::int FROM setup_drafts WHERE competition_id=${result.competitionId}) setup_count,
+      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=${result.competitionId} AND status='published') published_count,
+      (SELECT schedule_version::int FROM competition_publications WHERE competition_id=${result.competitionId}) schedule_version,
+      (SELECT count(*)::int FROM audit_events WHERE target_id=${result.competitionId} OR target_id IN (
+        SELECT id::text FROM schedule_revisions WHERE competition_id=${result.competitionId}
       )) audit_count
   `;
   const row = rows[0];
-  if (
-    !row ||
-    row.setup_count !== 1 ||
-    row.template_count !== 1 ||
-    row.published_count !== 1 ||
-    row.schedule_version !== 1
-  )
+  if (!row || row.setup_count !== 1 || row.published_count !== 1 || row.schedule_version !== 1)
     throw new Error(`Phase 4 persistence oracle failed: ${JSON.stringify(row)}`);
   if (row.audit_count < 4) throw new Error(`Phase 4 audit oracle was incomplete: ${JSON.stringify(row)}`);
   const moved = await sql<
@@ -527,7 +265,7 @@ async function assertDatabaseOracle(
     JOIN schedule_revisions sr ON sr.id=cp.published_schedule_revision_id
     JOIN scheduled_matches child ON child.schedule_revision_id=sr.id
     JOIN scheduled_matches parent ON parent.schedule_revision_id=sr.parent_revision_id AND parent.match_id=child.match_id
-    WHERE cp.competition_id=${state.competitionId}
+    WHERE cp.competition_id=${result.competitionId}
       AND (child.playing_area_id,child.starts_at,child.ends_at)
           IS DISTINCT FROM (parent.playing_area_id,parent.starts_at,parent.ends_at)
   `;
@@ -535,17 +273,17 @@ async function assertDatabaseOracle(
   if (
     moved.length !== 1 ||
     !changed ||
-    changed.match_id !== browserMove.match_id ||
-    changed.playing_area_id !== browserMove.playing_area_id ||
-    new Date(changed.starts_at).getTime() !== browserMove.start_epoch_ms ||
-    new Date(changed.ends_at).getTime() !== browserMove.end_epoch_ms
+    changed.match_id !== result.moved.match_id ||
+    changed.playing_area_id !== result.moved.playing_area_id ||
+    new Date(changed.starts_at).getTime() !== result.moved.start_epoch_ms ||
+    new Date(changed.ends_at).getTime() !== result.moved.end_epoch_ms
   )
     throw new Error(`Published move oracle failed: ${JSON.stringify(moved)}`);
   const projectionRows = await sql<{ projection: unknown }[]>`
     SELECT p.projection FROM competition_publications cp
     JOIN public_competition_projections p ON p.competition_id=cp.competition_id
       AND p.schedule_version=cp.schedule_version AND p.result_version=cp.result_version
-    WHERE cp.competition_id=${state.competitionId}
+    WHERE cp.competition_id=${result.competitionId}
   `;
   const projection = projectionRows[0]?.projection;
   const projectionObject =
@@ -565,11 +303,122 @@ async function assertDatabaseOracle(
       : undefined;
   if (
     !publicMoved ||
-    publicMoved.starts_at !== new Date(browserMove.start_epoch_ms).toISOString() ||
-    publicMoved.ends_at !== new Date(browserMove.end_epoch_ms).toISOString() ||
-    publicArea?.id !== browserMove.playing_area_id
+    publicMoved.starts_at !== new Date(result.moved.start_epoch_ms).toISOString() ||
+    publicMoved.ends_at !== new Date(result.moved.end_epoch_ms).toISOString() ||
+    publicArea?.id !== result.moved.playing_area_id
   )
     throw new Error(`Public move projection oracle failed: ${JSON.stringify(publicMoved)}`);
+  const aggregate = await sql<
+    {
+      sport_code: string;
+      division_count: number;
+      entry_count: number;
+      settings_count: number;
+      competition_settings_valid: boolean;
+      division_settings_valid: boolean;
+      published_formats: number;
+      exact_formats: number;
+      materialised_matches: number;
+      schedule_jobs: number;
+      schedule_objectives: number;
+      child_revisions: number;
+      lock_count: number;
+      outbox_count: number;
+      setup_read_only: boolean;
+      audit_actions: string[];
+      outbox_types: string[];
+      selected_recommendation: boolean;
+      setup_schedule_valid: boolean;
+      setup_publication_valid: boolean;
+      locked_different_match: boolean;
+      division_ids: string[];
+    }[]
+  >`
+    SELECT c.sport_code,
+      (SELECT count(*)::int FROM divisions d WHERE d.competition_id=c.id) division_count,
+      (SELECT count(*)::int FROM division_entries e JOIN divisions d ON d.id=e.division_id
+        WHERE d.competition_id=c.id AND e.status IN ('active','confirmed')) entry_count,
+      (SELECT count(*)::int FROM division_sport_settings s WHERE s.competition_id=c.id) settings_count,
+      (SELECT count(*)=1 FROM competition_sport_settings s
+        JOIN sport_pack_versions p ON p.sport_code=s.sport_code AND p.version=s.pack_version
+        WHERE s.competition_id=c.id AND s.sport_code=c.sport_code) competition_settings_valid,
+      (SELECT count(*)=2 FROM division_sport_settings s
+        JOIN sport_pack_versions p ON p.sport_code=s.sport_code AND p.version=s.pack_version
+        WHERE s.competition_id=c.id AND s.sport_code=c.sport_code) division_settings_valid,
+      (SELECT count(*)::int FROM format_revisions f WHERE f.competition_id=c.id AND f.status='published') published_formats,
+      (SELECT count(*)::int FROM format_revisions f WHERE f.competition_id=c.id
+        AND f.status='published' AND phase4_materialization_is_exact(f.id)
+        AND f.graph_materialization_hash=phase4_expected_materialization_hash(f.id)) exact_formats,
+      (SELECT count(*)::int FROM matches m JOIN format_revisions f ON f.id=m.format_revision_id
+        WHERE f.competition_id=c.id) materialised_matches,
+      (SELECT count(*)::int FROM schedule_generation_jobs j WHERE j.competition_id=c.id) schedule_jobs,
+      (SELECT count(DISTINCT objective)::int FROM schedule_generation_jobs j WHERE j.competition_id=c.id) schedule_objectives,
+      (SELECT count(*)::int FROM schedule_revisions r WHERE r.competition_id=c.id AND r.parent_revision_id IS NOT NULL) child_revisions,
+      (SELECT count(*)::int FROM schedule_assignment_locks l WHERE l.competition_id=c.id) lock_count,
+      (SELECT count(*)::int FROM outbox_events o WHERE o.aggregate_id=c.id::text OR o.payload->>'competition_id'=c.id::text) outbox_count,
+      (SELECT status='completed' FROM setup_drafts s WHERE s.competition_id=c.id ORDER BY created_at DESC LIMIT 1) setup_read_only,
+      (SELECT array_agg(DISTINCT a.action ORDER BY a.action) FROM audit_events a
+        WHERE a.organisation_id=c.organisation_id) audit_actions,
+      (SELECT array_agg(DISTINCT o.event_type ORDER BY o.event_type) FROM outbox_events o
+        WHERE o.aggregate_id=c.id::text OR o.payload->>'competition_id'=c.id::text
+          OR o.aggregate_id IN (SELECT id::text FROM setup_drafts WHERE competition_id=c.id)
+          OR o.aggregate_id IN (SELECT id::text FROM format_revisions WHERE competition_id=c.id)
+          OR o.aggregate_id IN (SELECT id::text FROM schedule_revisions WHERE competition_id=c.id)
+          OR o.aggregate_id IN (SELECT id::text FROM schedule_generation_jobs WHERE competition_id=c.id)
+          OR o.aggregate_id IN (SELECT id::text FROM matches WHERE competition_id=c.id)) outbox_types,
+      (SELECT s.steps->'format_recommendations'->>'selected_recommendation_id' IS NOT NULL
+        FROM setup_drafts s WHERE s.competition_id=c.id) selected_recommendation,
+      (SELECT NOT phase4_setup_schedule_evidence_stale(
+          c.id,s.steps->'capacity',s.steps->'settings',s.steps->'format_recommendations',s.steps->'schedule_review')
+        FROM setup_drafts s WHERE s.competition_id=c.id) setup_schedule_valid,
+      (SELECT NOT phase4_setup_publication_evidence_stale(
+          c.id,s.steps->'capacity',s.steps->'settings',s.steps->'schedule_review',s.steps->'review_publish')
+        FROM setup_drafts s WHERE s.competition_id=c.id) setup_publication_valid,
+      (SELECT bool_and(l.match_id<>${result.moved.match_id})
+        FROM schedule_assignment_locks l WHERE l.competition_id=c.id) locked_different_match,
+      (SELECT array_agg(d.id::text ORDER BY d.id::text) FROM divisions d WHERE d.competition_id=c.id) division_ids
+    FROM competitions c WHERE c.id=${result.competitionId}
+  `;
+  const aggregateRow = aggregate[0];
+  if (
+    !aggregateRow ||
+    aggregateRow.sport_code !== "canoe_polo" ||
+    aggregateRow.division_count !== 2 ||
+    aggregateRow.entry_count !== 16 ||
+    aggregateRow.settings_count !== 2 ||
+    !aggregateRow.competition_settings_valid ||
+    !aggregateRow.division_settings_valid ||
+    aggregateRow.published_formats !== 2 ||
+    aggregateRow.exact_formats !== 2 ||
+    aggregateRow.materialised_matches <= 0 ||
+    aggregateRow.schedule_jobs < 3 ||
+    aggregateRow.schedule_objectives !== 3 ||
+    aggregateRow.child_revisions < 1 ||
+    aggregateRow.lock_count !== 1 ||
+    aggregateRow.outbox_count <= 0 ||
+    !aggregateRow.setup_read_only ||
+    !aggregateRow.selected_recommendation ||
+    !aggregateRow.setup_schedule_valid ||
+    !aggregateRow.setup_publication_valid ||
+    !aggregateRow.locked_different_match ||
+    JSON.stringify(aggregateRow.division_ids) !== JSON.stringify([...result.divisionIds].sort())
+  )
+    throw new Error(`Browser-owned aggregate oracle failed: ${JSON.stringify(aggregateRow)}`);
+  const expectedEvidence = [
+    "setup.created",
+    "setup.saved",
+    "format.published",
+    "schedule.option.accepted",
+    "schedule.assignment.locked",
+    "schedule.match.moved",
+    "schedule.published",
+  ];
+  for (const action of expectedEvidence) {
+    if (!aggregateRow.audit_actions.includes(action))
+      throw new Error(`Missing audit evidence ${action}: ${JSON.stringify(aggregateRow.audit_actions)}`);
+    if (!aggregateRow.outbox_types.includes(action))
+      throw new Error(`Missing outbox evidence ${action}: ${JSON.stringify(aggregateRow.outbox_types)}`);
+  }
   process.stdout.write(
     `Phase 4 persistence oracle: ${JSON.stringify({ ...row, moved_match_id: changed.match_id, published_revision_id: changed.published_revision_id, parent_revision_id: changed.parent_revision_id })}\n`,
   );
@@ -595,6 +444,9 @@ async function unlinkQueueKeys(redis: Redis, pattern: string, phase: "startup" |
     scanned += keys.length;
     if (keys.length > 0) deleted += await redis.unlink(...keys);
   } while (cursor !== "0");
+  const [, remaining] = await redis.scan("0", "MATCH", pattern, "COUNT", 100);
+  if (remaining.length > 0)
+    throw new Error(`Phase 4 Redis ${phase} cleanup left ${remaining.length} queue keys for ${pattern}`);
   process.stdout.write(`Phase 4 Redis ${phase} cleanup: ${JSON.stringify({ pattern, scanned, deleted })}\n`);
 }
 
@@ -610,7 +462,7 @@ async function main(): Promise<void> {
   assertPinnedToolchain();
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase4-e2e-"));
   const stateFile = path.join(temp, "state.json");
-  const resultFile = path.join(temp, "browser-moves.ndjson");
+  const resultFile = path.join(temp, "browser-journeys.ndjson");
   const admin = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
   let isolation: Isolation | null = null;
   let sql: Sql | null = null;
@@ -646,9 +498,18 @@ async function main(): Promise<void> {
       redisUrl,
       workerId: `phase4-real-e2e-${randomUUID()}`,
       store: new PostgresScheduleJobStore(sql),
-      optimizer: new DomainScheduleOptimizer({ maxIterationsPerRun: 3 }),
+      // The harness itself runs through tsx, while production runs the built
+      // scheduler. Do not make solver startup inherit tsx loader hooks that
+      // are absent from the production worker process.
+      optimizer: new DomainScheduleOptimizer({ maxIterationsPerRun: 3, workerExecArgv: [] }),
       concurrency: 1,
       processor: { leaseMs: 5_000, cancellationPollMs: 20, maxYieldIntervalMs: 1_000 },
+      onHealthChange: (health) => {
+        if (health.reason) process.stdout.write(`Phase 4 scheduler health: ${JSON.stringify(health)}\n`);
+      },
+      onDeadLettered: (event) => {
+        process.stdout.write(`Phase 4 scheduler dead letter: ${JSON.stringify(event)}\n`);
+      },
     });
     const phase4 = new ReliableGateBPhase4Runtime(
       identitySql,
@@ -672,7 +533,7 @@ async function main(): Promise<void> {
     ] as const;
     const projects: Record<string, SeedState> = {};
     for (const [index, projectName] of projectNames.entries()) {
-      projects[projectName] = await seed(sql, phase3, phase4, `project-${index + 1}`);
+      projects[projectName] = await seed(sql, `project-${index + 1}`);
     }
     await writeFile(stateFile, `${JSON.stringify({ projects })}\n`, { mode: 0o600 });
     await writeFile(resultFile, "", { mode: 0o600 });
@@ -716,27 +577,6 @@ async function main(): Promise<void> {
     });
     await app.listen({ host: "127.0.0.1", port: apiPort });
     await waitFor(`${apiOrigin}/health/ready`, "Phase 4 API");
-    const apiProbeState = projects[projectNames[0]]!;
-    const apiFormatProbe = await fetch(
-      `${apiOrigin}/api/v1/competitions/${apiProbeState.competitionId}/divisions/${apiProbeState.divisionId}/format-builder`,
-      { headers: { cookie: apiProbeState.organiserCookie } },
-    );
-    const apiFormatProbeBody: unknown = await apiFormatProbe.json().catch(() => null);
-    const apiDraft =
-      apiFormatProbeBody && typeof apiFormatProbeBody === "object" && !Array.isArray(apiFormatProbeBody)
-        ? (apiFormatProbeBody as { draft?: { draft_id?: string } | null }).draft
-        : undefined;
-    if (!apiFormatProbe.ok || apiDraft?.draft_id !== apiProbeState.formatRevisionId) {
-      const rows = await sql<{ id: string; revision: number; status: string }[]>`
-        SELECT id,revision,status FROM format_revisions
-        WHERE competition_id=${apiProbeState.competitionId} AND division_id=${apiProbeState.divisionId}
-        ORDER BY revision
-      `;
-      throw new Error(
-        `Production API format probe failed with HTTP ${apiFormatProbe.status}: ${JSON.stringify({ apiFormatProbeBody, rows })}`,
-      );
-    }
-
     const runtimeEnv: NodeJS.ProcessEnv = {
       ...process.env,
       MATCHDAY_API_BASE_URL: apiOrigin,
@@ -758,48 +598,18 @@ async function main(): Promise<void> {
     );
     await waitFor(`${webOrigin}/`, "production web", web, webBuildId);
     const probeState = projects[projectNames[0]]!;
-    const formatProbe = await fetch(`${webOrigin}/organiser/competitions/${probeState.competitionId}/format`, {
+    const formatProbe = await fetch(`${webOrigin}/organiser/competitions/new`, {
       headers: { cookie: probeState.organiserCookie },
     });
     const formatProbeBody = await formatProbe.text();
-    if (!formatProbe.ok || !formatProbeBody.includes('data-testid="phase4-format-designer"'))
+    if (!formatProbe.ok || !formatProbeBody.includes("Create competition"))
       throw new Error(
-        `Production format-page probe failed with HTTP ${formatProbe.status}: ${formatProbeBody
+        `Production competition-create probe failed with HTTP ${formatProbe.status}: ${formatProbeBody
           .replaceAll(/<script[\s\S]*?<\/script>/g, " ")
           .replaceAll(/<style[\s\S]*?<\/style>/g, " ")
           .replaceAll(/<[^>]+>/g, " ")
           .replaceAll(/\s+/g, " ")
-          .slice(0, 4_000)} API=${JSON.stringify(apiFormatProbeBody).slice(0, 12_000)}`,
-      );
-    const apiScheduleProbe = await fetch(
-      `${apiOrigin}/api/v1/competitions/${probeState.competitionId}/schedule-workspace`,
-      { headers: { cookie: probeState.organiserCookie } },
-    );
-    const apiScheduleProbeBody: unknown = await apiScheduleProbe.json().catch(() => null);
-    const apiScheduleJobsProbe = await fetch(
-      `${apiOrigin}/api/v1/competitions/${probeState.competitionId}/schedule-jobs`,
-      { headers: { cookie: probeState.organiserCookie } },
-    );
-    const apiScheduleJobsProbeBody: unknown = await apiScheduleJobsProbe.json().catch(() => null);
-    if (!apiScheduleJobsProbe.ok || !Array.isArray(apiScheduleJobsProbeBody))
-      throw new Error(
-        `Production API schedule-jobs probe did not satisfy the web contract: HTTP ${apiScheduleJobsProbe.status} ${JSON.stringify(apiScheduleJobsProbeBody).slice(0, 12_000)}`,
-      );
-    const scheduleProbe = await fetch(`${webOrigin}/organiser/competitions/${probeState.competitionId}/schedule`, {
-      headers: { cookie: probeState.organiserCookie },
-    });
-    const scheduleProbeBody = await scheduleProbe.text();
-    if (!scheduleProbe.ok || !scheduleProbeBody.includes('data-testid="phase4-schedule"'))
-      throw new Error(
-        `Production schedule-page probe failed with HTTP ${scheduleProbe.status}: ${scheduleProbeBody
-          .replaceAll(/<script[\s\S]*?<\/script>/g, " ")
-          .replaceAll(/<style[\s\S]*?<\/style>/g, " ")
-          .replaceAll(/<[^>]+>/g, " ")
-          .replaceAll(/\s+/g, " ")
-          .slice(
-            0,
-            4_000,
-          )} API=${JSON.stringify(apiScheduleProbeBody).slice(0, 12_000)} JOBS=${JSON.stringify(apiScheduleJobsProbeBody).slice(0, 12_000)}`,
+          .slice(0, 4_000)}`,
       );
     await runProcess(
       "Phase 4 real Playwright",
@@ -817,16 +627,16 @@ async function main(): Promise<void> {
       runtimeEnv,
       true,
     );
-    const moveResults = (await readFile(resultFile, "utf8"))
+    const journeyResults = (await readFile(resultFile, "utf8"))
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as BrowserMoveResult);
+      .map((line) => JSON.parse(line) as BrowserJourneyResult);
     const projectsToVerify = process.env.PHASE4_E2E_PROJECT ? [process.env.PHASE4_E2E_PROJECT] : projectNames;
     for (const projectName of projectsToVerify) {
       const state = projects[projectName];
-      const browserMove = moveResults.find((result) => result.project === projectName)?.target;
-      if (!state || !browserMove) throw new Error(`Browser move result missing for ${projectName}`);
-      await assertDatabaseOracle(sql, state, browserMove);
+      const journey = journeyResults.find((result) => result.project === projectName);
+      if (!state || !journey) throw new Error(`Browser journey result missing for ${projectName}`);
+      await assertDatabaseOracle(sql, journey);
     }
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });

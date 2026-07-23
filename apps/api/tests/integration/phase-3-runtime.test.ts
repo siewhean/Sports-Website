@@ -58,6 +58,221 @@ function required<T>(rows: readonly T[]): T {
 }
 
 describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
+  it("lists active writable organisations and excludes viewer-only memberships", async () => {
+    await client.begin(async (tx) => {
+      const viewerOrganisation = required(
+        await tx<
+          { id: string }[]
+        >`INSERT INTO organisations (name,slug) VALUES ('Viewer only','phase-3-viewer-only') RETURNING id`,
+      ).id;
+      const viewerOrganisationOwner = required(
+        await tx<{ id: string }[]>`INSERT INTO accounts (primary_email,display_name,email_verified_at)
+          VALUES ('viewer-org-owner@phase3.test','Viewer organisation owner',now()) RETURNING id`,
+      ).id;
+      await tx`INSERT INTO organisation_memberships (organisation_id,account_id,role,status) VALUES
+        (${viewerOrganisation},${viewerOrganisationOwner},'owner','active'),
+        (${viewerOrganisation},${accountId},'viewer','active')`;
+    });
+
+    const options = await runtime.listWritableOrganisations({ accountId });
+
+    expect(options).toEqual([{ id: organisationId, name: "Phase 3 Org", role: "owner" }]);
+  });
+
+  it("replays a lost competition-create response and rejects mismatched key reuse", async () => {
+    const actor = { accountId };
+    const input = {
+      organisationId,
+      name: "Replay Cup",
+      slug: `replay-cup-${randomUUID()}`,
+      sportCode: "volleyball" as const,
+      venue: "Replay Hall",
+      address: "2 Replay Road",
+      countryCode: "SG",
+      startsOn: "2027-09-01",
+      endsOn: "2027-09-02",
+      timezone: "Asia/Singapore",
+      locale: "en-SG",
+    };
+    const idempotencyKey = `competition-create-${randomUUID()}`;
+
+    const [originalReceipt, concurrentReceipt] = await Promise.all([
+      runtime.createCompetition(actor, input, randomUUID(), idempotencyKey),
+      runtime.createCompetition(actor, input, randomUUID(), idempotencyKey),
+    ]);
+    expect(concurrentReceipt).toEqual(originalReceipt);
+    const replayedReceipt = await runtime.createCompetition(actor, input, randomUUID(), idempotencyKey);
+
+    expect(replayedReceipt).toEqual(originalReceipt);
+    const { count } = required(
+      await client<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM competitions WHERE slug=${input.slug}`,
+    );
+    expect(count).toBe(1);
+    const { audit_count: auditCount, outbox_count: outboxCount } = required(
+      await client<{ audit_count: number; outbox_count: number }[]>`
+        SELECT
+          (SELECT count(*)::int FROM audit_events
+           WHERE target_id=${originalReceipt.id} AND action='competition.created') AS audit_count,
+          (SELECT count(*)::int FROM outbox_events
+           WHERE aggregate_id=${originalReceipt.id} AND event_type='competition.created') AS outbox_count`,
+    );
+    expect({ auditCount, outboxCount }).toEqual({ auditCount: 1, outboxCount: 1 });
+
+    await expect(
+      runtime.createCompetition(actor, { ...input, name: "Different Cup" }, randomUUID(), idempotencyKey),
+    ).rejects.toMatchObject({ statusCode: 409, code: "IDEMPOTENCY_KEY_REUSED" });
+  });
+
+  it("replays division and entry creation without duplicate domain, audit, or outbox rows", async () => {
+    const actor = { accountId };
+    const competition = await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Entry replay cup",
+        slug: `entry-replay-${randomUUID()}`,
+        sportCode: "badminton",
+        venue: "Replay Hall",
+        address: "3 Replay Road",
+        countryCode: "SG",
+        startsOn: "2027-10-01",
+        endsOn: "2027-10-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+    const divisionInput = { name: "Open", entryLimit: 16 as const };
+    const divisionKey = `division-create-${randomUUID()}`;
+    const [divisionResult, divisionReplay] = await Promise.all([
+      runtime.createDivision(actor, competition.id, divisionInput, randomUUID(), divisionKey),
+      runtime.createDivision(actor, competition.id, divisionInput, randomUUID(), divisionKey),
+    ]);
+    const division = divisionResult as { id: string };
+    expect(divisionReplay).toEqual(expect.objectContaining({ id: division.id }));
+
+    const entryInput = { action: "create" as const, name: "Replay team", seed: 1 };
+    const entryKey = `entry-create-${randomUUID()}`;
+    const [entryResult, entryReplay] = await Promise.all([
+      runtime.mutateEntry(actor, competition.id, division.id, entryInput, randomUUID(), entryKey),
+      runtime.mutateEntry(actor, competition.id, division.id, entryInput, randomUUID(), entryKey),
+    ]);
+    const entry = entryResult as { id: string };
+    expect(entryReplay).toEqual(expect.objectContaining({ id: entry.id }));
+
+    await expect(
+      runtime.mutateEntry(
+        actor,
+        competition.id,
+        division.id,
+        { ...entryInput, name: "Different team" },
+        randomUUID(),
+        entryKey,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "IDEMPOTENCY_KEY_REUSED" });
+
+    const counts = required(
+      await client<{ division_count: number; entry_count: number; audit_count: number; outbox_count: number }[]>`SELECT
+          (SELECT count(*)::int FROM divisions WHERE id=${division.id}) AS division_count,
+          (SELECT count(*)::int FROM division_entries WHERE id=${entry.id}) AS entry_count,
+          (SELECT count(*)::int FROM audit_events
+           WHERE target_id IN (${division.id},${entry.id}) AND action IN ('division.created','entry.created'))
+            AS audit_count,
+          (SELECT count(*)::int FROM outbox_events
+           WHERE aggregate_id IN (${division.id},${entry.id}) AND event_type IN ('division.created','entry.created'))
+            AS outbox_count`,
+    );
+    expect(counts).toEqual({ division_count: 1, entry_count: 1, audit_count: 2, outbox_count: 2 });
+
+    const conflictingKey = `entry-conflict-${randomUUID()}`;
+    const conflicts = await Promise.allSettled([
+      runtime.mutateEntry(
+        actor,
+        competition.id,
+        division.id,
+        { action: "create", name: "Conflict A", seed: 2 },
+        randomUUID(),
+        conflictingKey,
+      ),
+      runtime.mutateEntry(
+        actor,
+        competition.id,
+        division.id,
+        { action: "create", name: "Conflict B", seed: 3 },
+        randomUUID(),
+        conflictingKey,
+      ),
+    ]);
+    expect(conflicts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(conflicts.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(conflicts.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { statusCode: 409, code: "IDEMPOTENCY_KEY_REUSED" },
+    });
+    const conflictRows = await client<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM division_entries
+      WHERE division_id=${division.id} AND name IN ('Conflict A','Conflict B')`;
+    expect(required(conflictRows).count).toBe(1);
+  });
+
+  it("maps the cross-division free-plan entry boundary to an unprocessable request", async () => {
+    const actor = { accountId };
+    const competition = await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Free entry boundary cup",
+        slug: `free-entry-boundary-${randomUUID()}`,
+        sportCode: "canoe_polo",
+        venue: "Boundary Hall",
+        address: "16 Boundary Road",
+        countryCode: "SG",
+        startsOn: "2027-11-01",
+        endsOn: "2027-11-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+    const divisions = await Promise.all(
+      ["Open", "Women"].map((name) =>
+        runtime.createDivision(
+          actor,
+          competition.id,
+          { name, entryLimit: 16 },
+          randomUUID(),
+          `free-boundary-division-${randomUUID()}`,
+        ),
+      ),
+    );
+    for (const [divisionIndex, division] of divisions.entries()) {
+      for (let seed = 1; seed <= 8; seed += 1) {
+        await runtime.mutateEntry(
+          actor,
+          competition.id,
+          (division as { id: string }).id,
+          { action: "create", name: `Boundary ${divisionIndex + 1}-${seed}`, seed },
+          randomUUID(),
+          `free-boundary-entry-${randomUUID()}`,
+        );
+      }
+    }
+
+    await expect(
+      runtime.mutateEntry(
+        actor,
+        competition.id,
+        (divisions[0] as { id: string }).id,
+        { action: "create", name: "Boundary 17", seed: 9 },
+        randomUUID(),
+        `free-boundary-rejection-${randomUUID()}`,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: "FREE_ENTRY_LIMIT_REACHED",
+    });
+  });
+
   it("matches JavaScript and PostgreSQL canonical hashes across key order and undefined optionals", async () => {
     const value = {
       scorecard: { z: 1, optional: undefined },
@@ -94,6 +309,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         competition.id,
         { name: "Open", entryLimit: 8 },
         randomUUID(),
+        randomUUID(),
       )) as { id: string };
       await runtime.replaceCapacity(
         actor,
@@ -116,6 +332,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
           competition.id,
           division.id,
           { action: "create", name: `${sportCode} team ${seed}`, seed },
+          randomUUID(),
           randomUUID(),
         );
       }
@@ -324,6 +541,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       competition.id,
       { name: "Open", entryLimit: 8 },
       randomUUID(),
+      randomUUID(),
     )) as { id: string };
     await runtime.replaceCapacity(
       actor,
@@ -348,6 +566,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         division.id,
         { action: "create", name: `Pre-start team ${seed}`, seed },
         randomUUID(),
+        randomUUID(),
       )) as { id: string };
       entryIds.push(entry.id);
     }
@@ -367,6 +586,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       competition.id,
       division.id,
       { action: "withdraw", entryId: homeEntryId, reason: "Withdrew before play" },
+      randomUUID(),
       randomUUID(),
     );
     expect(
@@ -403,6 +623,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       competition.id,
       { name: "Open", entryLimit: 8 },
       randomUUID(),
+      randomUUID(),
     )) as { id: string };
     await runtime.replaceCapacity(
       actor,
@@ -425,6 +646,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         competition.id,
         division.id,
         { action: "create", name: `Withdrawal team ${seed}`, seed },
+        randomUUID(),
         randomUUID(),
       );
     }
@@ -547,6 +769,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       division.id,
       { action: "withdraw", entryId: entryForSeed(1), reason: "Injury" },
       withdrawalRequestId,
+      withdrawalRequestId,
     );
     expect(
       required(
@@ -633,6 +856,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       competition.id,
       { name: "Open", entryLimit: 8 },
       randomUUID(),
+      randomUUID(),
     )) as { id: string };
     await runtime.replaceCapacity(
       actor,
@@ -655,6 +879,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         competition.id,
         division.id,
         { action: "create", name: `Pool team ${seed}`, seed },
+        randomUUID(),
         randomUUID(),
       );
     }
@@ -768,6 +993,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       competition.id,
       { name: "Open", entryLimit: 48 },
       randomUUID(),
+      randomUUID(),
     )) as { id: string };
     await runtime.updateSettings(
       actor,
@@ -811,6 +1037,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         division.id,
         { action: "create", name: `Team ${index + 1}` },
         randomUUID(),
+        randomUUID(),
       );
     const first = required(
       await client<
@@ -822,6 +1049,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       competition.id,
       division.id,
       { action: "replace", entryId: first.id, replacementName: "Replacement" },
+      randomUUID(),
       randomUUID(),
     );
     expect(
@@ -888,7 +1116,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       randomUUID(),
     )) as { revision: number };
     await expect(
-      runtime.createDivision(actor, competition.id, { name: "Blocked", entryLimit: 8 }, randomUUID()),
+      runtime.createDivision(actor, competition.id, { name: "Blocked", entryLimit: 8 }, randomUUID(), randomUUID()),
     ).rejects.toMatchObject({ code: "COMPETITION_ARCHIVED" });
     await runtime.mutateCompetition(
       actor,
@@ -928,6 +1156,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       actor,
       competition.id,
       { name: "Open", entryLimit: 8 },
+      randomUUID(),
       randomUUID(),
     )) as { id: string };
     await runtime.replaceCapacity(
@@ -1051,7 +1280,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       starts_on: "2027-04-03",
       ends_on: "2027-04-04",
     });
-    await runtime.createDivision(actor, competition.id, { name: "Open", entryLimit: 8 }, randomUUID());
+    await runtime.createDivision(actor, competition.id, { name: "Open", entryLimit: 8 }, randomUUID(), randomUUID());
     const ready = (await runtime.transitionCompetition(
       actor,
       competition.id,
@@ -1100,6 +1329,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       actor,
       competition.id,
       { name: "Open", entryLimit: 8 },
+      randomUUID(),
       randomUUID(),
     )) as { id: string };
     const invalid = await runtime.importEntries(
@@ -1169,9 +1399,17 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       division.id,
       { action: "create", name: "Withdraw me" },
       randomUUID(),
+      randomUUID(),
     )) as { id: string };
     await expect(
-      runtime.mutateEntry(actor, competition.id, division.id, { action: "withdraw", entryId: entry.id }, randomUUID()),
+      runtime.mutateEntry(
+        actor,
+        competition.id,
+        division.id,
+        { action: "withdraw", entryId: entry.id },
+        randomUUID(),
+        randomUUID(),
+      ),
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     await runtime.mutateEntry(
       actor,
@@ -1179,12 +1417,14 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       division.id,
       { action: "withdraw", entryId: entry.id, reason: "Player unavailable" },
       randomUUID(),
+      randomUUID(),
     );
     await runtime.mutateEntry(
       actor,
       competition.id,
       division.id,
       { action: "replace", entryId: entry.id, replacementName: "Replacement team" },
+      randomUUID(),
       randomUUID(),
     );
     const lineage = required(
@@ -1221,6 +1461,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       actor,
       competition.id,
       { name: "Open", entryLimit: 8 },
+      randomUUID(),
       randomUUID(),
     )) as { id: string };
     await expect(
@@ -1403,11 +1644,13 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       competition.id,
       { name: "Open", entryLimit: 8 },
       randomUUID(),
+      randomUUID(),
     )) as { id: string };
     const secondDivision = (await runtime.createDivision(
       actor,
       competition.id,
       { name: "Women", entryLimit: 8 },
+      randomUUID(),
       randomUUID(),
     )) as { id: string };
 
@@ -1518,6 +1761,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       actor,
       competition.id,
       { name: "Open", entryLimit: 8 },
+      randomUUID(),
       randomUUID(),
     )) as { id: string };
     const initial = await runtime.replaceCapacity(

@@ -21,9 +21,11 @@ import type { ScheduleOptimizer } from "./ports.js";
 
 export class DomainScheduleOptimizer implements ScheduleOptimizer {
   readonly #maxIterationsPerRun: number;
+  readonly #workerExecArgv: string[] | undefined;
 
-  constructor(options: { maxIterationsPerRun?: number } = {}) {
+  constructor(options: { maxIterationsPerRun?: number; workerExecArgv?: readonly string[] } = {}) {
     this.#maxIterationsPerRun = options.maxIterationsPerRun ?? 64;
+    this.#workerExecArgv = options.workerExecArgv ? [...options.workerExecArgv] : undefined;
     if (
       !Number.isInteger(this.#maxIterationsPerRun) ||
       this.#maxIterationsPerRun < 1 ||
@@ -51,7 +53,7 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
     const verified = await runSolverThread<{
       validation: ReturnType<typeof validateSchedule>;
       quality: ReturnType<typeof evaluateScheduleQuality>;
-    }>({ operation: "verify", problem, assignments }, context.signal, context.maxYieldIntervalMs);
+    }>({ operation: "verify", problem, assignments }, context.signal, context.maxYieldIntervalMs, this.#workerExecArgv);
     if (verified === null) return null;
     const { validation, quality } = verified;
     if (!validation.valid || !quality.valid) return null;
@@ -69,7 +71,12 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
       const verifiedSeed = await runSolverThread<{
         validation: ReturnType<typeof validateSchedule>;
         quality: ReturnType<typeof evaluateScheduleQuality>;
-      }>({ operation: "verify", problem, assignments: seed }, request.signal, request.maxYieldIntervalMs);
+      }>(
+        { operation: "verify", problem, assignments: seed },
+        request.signal,
+        request.maxYieldIntervalMs,
+        this.#workerExecArgv,
+      );
       if (verifiedSeed === null) return;
       if (!verifiedSeed.validation.valid || !verifiedSeed.quality.valid) {
         throw new Error("Persisted continuation seed is invalid");
@@ -84,7 +91,12 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
           validation: ReturnType<typeof validateSchedule>;
           quality: ReturnType<typeof evaluateScheduleQuality>;
         }>
-      >({ operation: "generate", problem, iteration }, request.signal, request.maxYieldIntervalMs);
+      >(
+        { operation: "generate", problem, iteration },
+        request.signal,
+        request.maxYieldIntervalMs,
+        this.#workerExecArgv,
+      );
       if (generated === null) return;
       for (const { candidate, validation, quality } of generated) {
         if (request.signal.aborted) return;
@@ -113,10 +125,14 @@ async function runSolverThread<Result>(
   workerData: Record<string, unknown>,
   signal: AbortSignal,
   deadlineMs: number,
+  workerExecArgv?: readonly string[],
 ): Promise<Result | null> {
   if (signal.aborted) return null;
   return new Promise<Result | null>((resolve, reject) => {
-    const worker = new Worker(new URL("./solver-thread.mjs", import.meta.url), { workerData });
+    const worker = new Worker(new URL("./solver-thread.mjs", import.meta.url), {
+      workerData,
+      ...(workerExecArgv === undefined ? {} : { execArgv: [...workerExecArgv] }),
+    });
     let settled = false;
     const finish = (operation: () => void) => {
       if (settled) return;

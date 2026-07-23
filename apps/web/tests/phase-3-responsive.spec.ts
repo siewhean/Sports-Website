@@ -111,3 +111,91 @@ test("decision rail stays in flow at the 900 CSS pixel boundary and sticks when 
     await expect(page.getByLabel("Settings tools")).toHaveCSS("position", expected);
   }
 });
+
+test("entries enforce the cross-division free limit with keyboard and duplicate-submit safety", async ({ page }) => {
+  let writes = 0;
+  let accepted = 0;
+  const commandKeys: string[] = [];
+  await page.route("**/api/phase3/competitions/*/divisions/*/entries", async (route) => {
+    writes += 1;
+    const requestBody = route.request().postDataJSON() as {
+      name: string;
+      seed: number;
+      idempotency_key: string;
+    };
+    expect(requestBody.idempotency_key).toMatch(/^[A-Za-z0-9._:-]{8,200}$/);
+    commandKeys.push(requestBody.idempotency_key);
+    if (writes === 1) {
+      await route.abort("failed");
+      return;
+    }
+    if (accepted === 16) {
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "FREE_ENTRY_LIMIT_REACHED",
+            message: "The free plan supports 16 active entries across all divisions",
+            request_id: "entry-limit-request",
+          },
+        }),
+      });
+      return;
+    }
+    accepted += 1;
+    const segments = new URL(route.request().url()).pathname.split("/");
+    const divisionId = segments.at(-2) ?? "";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: `entry-${accepted}`,
+        division_id: divisionId,
+        name: requestBody.name,
+        seed: requestBody.seed,
+        status: "active",
+      }),
+    });
+  });
+
+  await page.goto("/organiser/competitions/singapore-open/entries");
+  await dismissConsent(page);
+  await expect(page.getByRole("heading", { level: 1, name: "Divisions and entries" })).toBeVisible();
+  const divisions = page.locator("section").filter({ has: page.getByRole("button", { name: "Add entry" }) });
+  await expect(divisions).toHaveCount(2);
+
+  const add = async (divisionIndex: number, entryIndex: number, keyboard = false) => {
+    const division = divisions.nth(divisionIndex);
+    await division.getByLabel("Entry name").fill(`Team ${divisionIndex + 1}-${entryIndex + 1}`);
+    await division.getByLabel("Seed").fill(String(entryIndex + 1));
+    if (keyboard) await division.getByLabel("Seed").press("Enter");
+    else await division.getByRole("button", { name: "Add entry" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Entry added." })).toBeVisible();
+  };
+
+  const firstDivision = divisions.nth(0);
+  await firstDivision.getByLabel("Entry name").fill("Team 1-1");
+  await firstDivision.getByLabel("Seed").fill("1");
+  await firstDivision.getByRole("button", { name: "Add entry" }).evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  await expect(page.getByRole("alert")).toContainText("could not be saved");
+  expect(writes).toBe(1);
+  await firstDivision.getByRole("button", { name: "Add entry" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Entry added." })).toBeVisible();
+  expect(commandKeys[1]).toBe(commandKeys[0]);
+
+  for (let index = 1; index < 8; index += 1) await add(0, index, index === 1);
+  for (let index = 0; index < 8; index += 1) await add(1, index);
+  await expect(page.getByText("16 / 16")).toBeVisible();
+
+  await firstDivision.getByLabel("Entry name").fill("Rejected team");
+  await firstDivision.getByLabel("Seed").fill("9");
+  await firstDivision.getByRole("button", { name: "Add entry" }).press("Enter");
+  await expect(page.getByRole("alert")).toHaveText("Free plan permits at most 16 active entries across all divisions.");
+  await expect(page.getByText("16 / 16")).toBeVisible();
+  expect(writes).toBe(18);
+  expect(accepted).toBe(16);
+});

@@ -22,6 +22,16 @@ const Sport = Type.Union([
   Type.Literal("volleyball"),
   Type.Literal("basketball"),
 ]);
+const OrganisationOptionsResponse = Type.Array(
+  Type.Object(
+    {
+      id: Id,
+      name: Type.String({ minLength: 1 }),
+      role: Type.Union([Type.Literal("owner"), Type.Literal("organiser")]),
+    },
+    { additionalProperties: false },
+  ),
+);
 const JsonObject = Type.Record(Type.String(), Type.Unknown());
 const SportSettingsResponse = Type.Object(
   {
@@ -374,6 +384,18 @@ export async function registerPhase3Routes(
     return { accountId: session.account.id };
   };
 
+  app.get(
+    "/api/v1/organisations/competition-options",
+    {
+      schema: {
+        security: [{ sessionCookie: [] }],
+        response: { 200: OrganisationOptionsResponse, 401: ErrorResponse },
+        tags: ["phase3-competitions"],
+      },
+    },
+    async (request) => options.runtime.listWritableOrganisations(await readActor(request)),
+  );
+
   app.get<{ Params: { competitionId: string } }>(
     "/api/v1/competitions/:competitionId/phase3",
     {
@@ -402,6 +424,7 @@ export async function registerPhase3Routes(
       ends_on: string;
       timezone: string;
       locale: string;
+      idempotency_key: string;
     };
   }>(
     "/api/v1/competitions/phase3",
@@ -423,6 +446,7 @@ export async function registerPhase3Routes(
             ends_on: Type.String({ format: "date" }),
             timezone: Type.String(),
             locale: Type.String(),
+            idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
           },
           { additionalProperties: false },
         ),
@@ -449,6 +473,7 @@ export async function registerPhase3Routes(
             locale: request.body.locale,
           },
           request.id,
+          request.body.idempotency_key,
         ),
       ),
   );
@@ -662,7 +687,7 @@ export async function registerPhase3Routes(
     app.post<{
       Params: { competitionId: string };
       Headers: { origin?: string; "x-csrf-token"?: string };
-      Body: { name: string; code?: string; entry_limit: 8 | 12 | 16 | 24 | 48 };
+      Body: { name: string; code?: string; entry_limit: 8 | 12 | 16 | 24 | 48; idempotency_key: string };
     }>(
       "/api/v1/competitions/:competitionId/divisions",
       {
@@ -675,6 +700,7 @@ export async function registerPhase3Routes(
               name: Type.String({ minLength: 1 }),
               code: Type.Optional(Type.String()),
               entry_limit: Type.Union([8, 12, 16, 24, 48].map((value) => Type.Literal(value))),
+              idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
             },
             { additionalProperties: false },
           ),
@@ -693,6 +719,7 @@ export async function registerPhase3Routes(
               entryLimit: request.body.entry_limit,
             },
             request.id,
+            request.body.idempotency_key,
           ),
         ),
     );
@@ -779,6 +806,7 @@ export async function registerPhase3Routes(
       seed?: number | null;
       metadata?: Record<string, unknown>;
       availability?: Array<{ start: string; end: string }>;
+      idempotency_key: string;
     };
   }>(
     "/api/v1/competitions/:competitionId/divisions/:divisionId/entries",
@@ -796,6 +824,7 @@ export async function registerPhase3Routes(
             seed: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 48 }), Type.Null()])),
             metadata: Type.Optional(Generic),
             availability: Type.Optional(EntryAvailability),
+            idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
           },
           { additionalProperties: false },
         ),
@@ -818,6 +847,7 @@ export async function registerPhase3Routes(
             ...(request.body.availability === undefined ? {} : { availability: request.body.availability }),
           },
           request.id,
+          request.body.idempotency_key,
         ),
       ),
   );
@@ -937,6 +967,7 @@ export async function registerPhase3Routes(
                   : { replacementAvailability: request.body.replacement_availability }),
               }),
         },
+        request.id,
         request.id,
       ),
   );

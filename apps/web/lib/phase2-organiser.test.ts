@@ -39,8 +39,8 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
         id: divisionId,
         name: "Open",
         entries: [
-          { id: homeId, name: "North", seed: 1 },
-          { id: awayId, name: "South", seed: 2 },
+          { id: homeId, name: "North", seed: 1, status: "active" },
+          { id: awayId, name: "South", seed: 2, status: "active" },
         ],
       },
     ],
@@ -102,6 +102,8 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
         short_code: "must-not-leak",
       },
     ],
+    permission: "write",
+    read_only: false,
   };
 }
 
@@ -122,6 +124,7 @@ describe("organiser competition workspace mapping", () => {
       publicationState: "published",
       division: { id: divisionId, name: "Open", teamCount: 2, matchCount: 2 },
       teams: ["North", "South"],
+      canEdit: true,
     });
     expect(view.matches).toEqual(
       expect.arrayContaining([
@@ -135,6 +138,16 @@ describe("organiser competition workspace mapping", () => {
       ]),
     );
     expect(view.accessPasses).toEqual([expect.objectContaining({ matchId, displayCode: "••••-••" })]);
+    expect(view.divisions).toEqual([
+      {
+        id: divisionId,
+        name: "Open",
+        entries: [
+          { id: homeId, name: "North", seed: 1, status: "active" },
+          { id: awayId, name: "South", seed: 2, status: "active" },
+        ],
+      },
+    ]);
     expect(JSON.stringify(view)).not.toContain("must-not-leak");
     expect(view.accessPasses?.[0]).not.toHaveProperty("scoringHref");
     expect(view.scheduleRows).toEqual([
@@ -200,9 +213,25 @@ describe("organiser competition workspace mapping", () => {
     expect(cookieHostMatches("app.matchday.test.evil:3000", "app.matchday.test")).toBe(false);
   });
 
+  it("projects viewer permission as read only", () => {
+    const payload = workspace();
+    payload.permission = "read";
+    payload.read_only = true;
+    expect(toOrganiserCompetitionView(payload).canEdit).toBe(false);
+  });
+
   it("rejects payloads outside the supported organiser workspace contract", () => {
     expect(isOrganiserWorkspacePayload({ competition: { id: competitionId } })).toBe(false);
     expect(isOrganiserWorkspacePayload(workspace("football"))).toBe(false);
     expect(() => toOrganiserCompetitionView(workspace("football"))).toThrow("missing or unsupported");
+
+    const malformedStatus = workspace();
+    const malformedEntries = malformedStatus.divisions[0]?.entries as Array<Record<string, unknown>>;
+    delete malformedEntries[0]?.status;
+    expect(isOrganiserWorkspacePayload(malformedStatus)).toBe(false);
+
+    const missingPermission = workspace();
+    delete (missingPermission as Partial<OrganiserWorkspacePayload>).permission;
+    expect(isOrganiserWorkspacePayload(missingPermission)).toBe(false);
   });
 });
