@@ -16,6 +16,7 @@ import {
   UsersThree,
   Warning,
 } from "@phosphor-icons/react";
+import { useRouter } from "next/navigation";
 import type { Phase4SetupDocument, Phase4SetupStepId } from "@matchday/contracts";
 import { opaqueId, translate as t } from "@matchday/ui";
 import {
@@ -120,6 +121,13 @@ export function AssistedSetupJourneyView({
   onSelectRecommendation(id: string, acknowledged: boolean): void;
   onComplete(): void;
 }) {
+  const router = useRouter();
+  const refresh = () => {
+    router.refresh();
+    setTimeout(() => {
+      headingRef.current?.focus();
+    }, 0);
+  };
   if (viewState === "loading") return <SetupSkeleton />;
   if (viewState === "empty")
     return (
@@ -144,11 +152,11 @@ export function AssistedSetupJourneyView({
         action={
           viewState === "expired" ? (
             <div className={styles.stateActions}>
-              <button onClick={() => window.location.reload()}>{t("prototype.b2430ebbca75")}</button>
+              <button onClick={refresh}>{t("prototype.b2430ebbca75")}</button>
               <Link href={`/organiser/competitions/${document.competitionId}`}>{t("prototype.ab6b40c62c47")}</Link>
             </div>
           ) : viewState === "conflict" ? (
-            <button onClick={() => window.location.reload()}>{t("prototype.4b46950ea4dd")}</button>
+            <button onClick={refresh}>{t("prototype.4b46950ea4dd")}</button>
           ) : null
         }
       />
@@ -241,7 +249,12 @@ export function AssistedSetupJourneyView({
                 disabled={disabled}
               />
             ) : (
-              <InlineEmpty title={copy.setupUnavailable} href="" action={t("prototype.4b46950ea4dd")} />
+              <InlineEmpty
+                title={copy.setupUnavailable}
+                href=""
+                action={t("prototype.4b46950ea4dd")}
+                onReload={refresh}
+              />
             )
           ) : null}
           {setup.current_step === "capacity" ? (
@@ -257,7 +270,12 @@ export function AssistedSetupJourneyView({
             preferences ? (
               <PreferencesStep value={preferences} onChange={onPreferences} disabled={disabled} />
             ) : (
-              <InlineEmpty title={copy.setupUnavailable} href="" action={t("prototype.4b46950ea4dd")} />
+              <InlineEmpty
+                title={copy.setupUnavailable}
+                href=""
+                action={t("prototype.4b46950ea4dd")}
+                onReload={refresh}
+              />
             )
           ) : null}
           {setup.current_step === "format_recommendations" ? (
@@ -899,7 +917,17 @@ function Field({ id, label, helper, children }: { id?: string; label: string; he
   );
 }
 
-function InlineEmpty({ title, href, action }: { title: string; href: string; action: string }) {
+function InlineEmpty({
+  title,
+  href,
+  action,
+  onReload,
+}: {
+  title: string;
+  href: string;
+  action: string;
+  onReload?: () => void;
+}) {
   const content = (
     <>
       {action}
@@ -911,7 +939,7 @@ function InlineEmpty({ title, href, action }: { title: string; href: string; act
       <Info />
       <h2>{title}</h2>
       <p>{t("prototype.aa2bdd7e6e23")}</p>
-      {href ? <Link href={href}>{content}</Link> : <button onClick={() => window.location.reload()}>{content}</button>}
+      {href ? <Link href={href}>{content}</Link> : <button onClick={onReload}>{content}</button>}
     </div>
   );
 }

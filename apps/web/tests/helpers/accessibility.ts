@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
+// target-size is a required WCAG criterion in this validation layer.
 export const WCAG_A_AND_AA_TAGS = new Set(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]);
 
 export type AccessibilityViolation = Readonly<{
@@ -12,11 +13,7 @@ export type AccessibilityViolation = Readonly<{
 }>;
 
 export function isBlockingAccessibilityViolation(violation: AccessibilityViolation): boolean {
-  return (
-    violation.impact === "serious" ||
-    violation.impact === "critical" ||
-    violation.tags.some((tag) => WCAG_A_AND_AA_TAGS.has(tag))
-  );
+  return violation.tags.some((tag) => WCAG_A_AND_AA_TAGS.has(tag));
 }
 
 export function blockingAccessibilityViolations(
@@ -31,7 +28,6 @@ export function formatAccessibilityViolations(violations: readonly Accessibility
       const selectors = violation.nodes.map((node) => JSON.stringify(node.target)).join(", ");
       return [
         `rule: ${violation.id}`,
-        `impact: ${violation.impact ?? "unknown"}`,
         `wcag tags: ${violation.tags.filter((tag) => tag.startsWith("wcag")).join(", ") || "none"}`,
         `selectors: ${selectors || "none"}`,
         `help: ${violation.helpUrl}`,

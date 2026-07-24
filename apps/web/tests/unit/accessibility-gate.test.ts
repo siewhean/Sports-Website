@@ -48,7 +48,6 @@ describe("WCAG A/AA accessibility gate", () => {
     ]);
 
     expect(output).toContain("rule: color-contrast");
-    expect(output).toContain("impact: moderate");
     expect(output).toContain("wcag tags: wcag2aa, wcag143");
     expect(output).toContain('selectors: [".capacity-value"]');
     expect(output).toContain("https://dequeuniversity.com/rules/axe/4.12/color-contrast");

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useMemo, useRef, useState } from "react";
 import { ArrowRight, CloudSlash, GridFour, Warning } from "@phosphor-icons/react";
 import type { FormatBuilderPageDocument, FormatEditorState, FormatSurfaceState } from "@/lib/phase4-format";
 import type { FormatDivisionOption } from "@/lib/phase4-format-division";
@@ -39,6 +40,14 @@ export function FormatDesignerWorkspace({
   page: FormatBuilderPageDocument;
   divisions: readonly FormatDivisionOption[];
 }) {
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const router = useRouter();
+  const refresh = () => {
+    router.refresh();
+    setTimeout(() => {
+      headingRef.current?.focus();
+    }, 0);
+  };
   const [draft, setDraft] = useState(page.draft);
   const [viewState, setViewState] = useState(page.state);
   const [busy, setBusy] = useState<"validate" | "save" | "materialise" | "publish" | "template" | null>(null);
@@ -74,11 +83,7 @@ export function FormatDesignerWorkspace({
         icon={viewState === "offline" ? <CloudSlash /> : <Warning />}
         title={copy.title}
         body={copy.body}
-        action={
-          viewState === "conflict" ? (
-            <button onClick={() => window.location.reload()}>{t("prototype.4b46950ea4dd")}</button>
-          ) : undefined
-        }
+        action={viewState === "conflict" ? <button onClick={refresh}>{t("prototype.4b46950ea4dd")}</button> : undefined}
       />
     );
   }
@@ -98,7 +103,9 @@ export function FormatDesignerWorkspace({
     );
   return (
     <>
-      <h1 style={hiddenHeadingStyle}>{t("prototype.675eeee2578b")}</h1>
+      <h1 ref={headingRef} tabIndex={-1} style={hiddenHeadingStyle}>
+        {t("prototype.675eeee2578b")}
+      </h1>
       <FormatEditor
         key={draft.draft_id}
         page={page}

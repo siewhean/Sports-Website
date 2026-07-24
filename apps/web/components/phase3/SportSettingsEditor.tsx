@@ -482,6 +482,10 @@ function SettingsState({
   state: Exclude<SportSettingsSurfaceState, "ready" | "loading">;
   compact?: boolean;
 }) {
+  const router = useRouter();
+  const onConflictRetry = () => {
+    router.refresh();
+  };
   const copy = stateCopy[state];
   const Icon = state === "permission" || state === "read-only" ? LockKey : Warning;
   return (
@@ -495,11 +499,7 @@ function SettingsState({
         <h2>{copy.title}</h2>
         <p>{copy.body}</p>
         {state === "conflict" ? (
-          <button
-            className={cx("p3-button", "p3-button--secondary")}
-            type="button"
-            onClick={() => window.location.reload()}
-          >
+          <button className={cx("p3-button", "p3-button--secondary")} type="button" onClick={onConflictRetry}>
             {phase3SettingsCopy.reload}
           </button>
         ) : null}

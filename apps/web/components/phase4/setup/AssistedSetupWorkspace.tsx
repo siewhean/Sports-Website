@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -47,6 +48,7 @@ const stateCopy: Record<
 };
 
 export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPageDocument }) {
+  const router = useRouter();
   const [setup, setSetup] = useState(document.setup);
   const [viewState, setViewState] = useState(document.state);
   const [busy, setBusy] = useState(false);
@@ -127,8 +129,10 @@ export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPa
           body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
         },
       );
-      if (response.ok) window.location.reload();
-      else
+      if (response.ok) {
+        router.refresh();
+        headingRef.current?.focus();
+      } else
         setViewState(response.status === 401 || response.status === 403 ? opaqueId("permission") : opaqueId("error"));
     } catch {
       setViewState(opaqueId("offline"));
@@ -245,7 +249,7 @@ export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPa
         body={copy.body}
         action={
           viewState === "conflict" ? (
-            <button onClick={() => window.location.reload()}>{t("prototype.4b46950ea4dd")}</button>
+            <button onClick={() => router.refresh()}>{t("prototype.4b46950ea4dd")}</button>
           ) : null
         }
       />
