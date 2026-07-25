@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
-  "evidence_state": "FINAL",
-  "local_validation": "PASS",
+  "evidence_state": "HISTORICAL_SUPERSEDED",
+  "historical_notice": "HISTORICAL/SUPERSEDED: schema-1 evidence is retained for audit history only and is not an active Gate B PASS.",
+  "local_validation": "HISTORICAL_PASS_NOT_ACTIVE",
   "hosted_github_actions": "Not executed because Actions allowance is unavailable",
   "source": {
     "commit_sha": "c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee",

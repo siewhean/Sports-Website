@@ -83,7 +83,13 @@ export function FormatDesignerWorkspace({
         icon={viewState === "offline" ? <CloudSlash /> : <Warning />}
         title={copy.title}
         body={copy.body}
-        action={viewState === "conflict" ? <button onClick={refresh}>{t("prototype.4b46950ea4dd")}</button> : undefined}
+        action={
+          viewState === "conflict" ? (
+            <button data-testid="phase4-format-conflict-reload" onClick={refresh}>
+              {t("prototype.4b46950ea4dd")}
+            </button>
+          ) : undefined
+        }
       />
     );
   }

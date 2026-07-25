@@ -1,6 +1,6 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,13 +29,12 @@ const apiPort = 4101;
 const webPort = 3103;
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
 const webOrigin = `http://localhost:${webPort}`;
-const csrfSecret = randomBytes(32).toString("base64url");
 const databasePrefix = "matchday_phase4_e2e_";
 const schemaPrefix = "test_phase4_e2e_";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const migrationsDirectory = path.join(root, "packages/database/migrations");
 const adminDatabaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
-const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
+const baseRedisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
 
 type Tail = { label: string; lines: string[] };
 type RunningProcess = { child: ChildProcess; tail: Tail };
@@ -43,6 +42,34 @@ const activeProcesses = new Set<RunningProcess>();
 type Isolation =
   | { kind: "database"; databaseName: string; databaseUrl: string }
   | { kind: "schema"; schema: string; databaseUrl: string };
+
+type RunConfiguration = {
+  recordFile: string;
+  redisDatabase: number;
+};
+
+type IsolationRecord = {
+  run: number;
+  status: "passed" | "failed";
+  started_at_utc: string;
+  finished_at_utc: string;
+  postgres: { kind: Isolation["kind"]; identifier: string } | null;
+  redis: {
+    logical_database: number;
+    namespace_redacted: string | null;
+    namespace_hash: string | null;
+    initial_owned_key_count: number | null;
+    final_owned_key_count: number | null;
+    unrelated_guard_preserved: boolean | null;
+  };
+};
+
+export type RedisOwnership = {
+  queueName: string;
+  rateLimitNameSpace: string;
+  namespaceHash: string;
+  scanPatterns: readonly string[];
+};
 
 type SeedState = {
   apiOrigin: string;
@@ -78,6 +105,111 @@ function databaseUrlFor(name: string): string {
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+function redisUrlForLogicalDatabase(logicalDatabase: number): string {
+  if (!Number.isInteger(logicalDatabase) || logicalDatabase < 0 || logicalDatabase > 15)
+    throw new Error(`Refusing unsafe Redis logical database: ${logicalDatabase}`);
+  const url = new URL(baseRedisUrl);
+  if (url.protocol !== "redis:" && url.protocol !== "rediss:")
+    throw new Error(`Phase 4 real E2E requires a redis URL, received ${url.protocol}`);
+  url.pathname = `/${logicalDatabase}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function sanitizedIsolationIdentifier(isolation: Isolation): string {
+  return isolation.kind === "database" ? isolation.databaseName : isolation.schema;
+}
+
+const queueNamePattern =
+  /^matchday-phase4-real-e2e-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
+const redisScanCount = 100;
+const redisUnlinkBatchSize = 100;
+const maximumOwnedRedisKeys = 25_000;
+const maximumRedisScanIterations = 10_000;
+const redactedRedisNamespace = "matchday-phase4-real-e2e-[uuid]";
+
+export function sha256Identifier(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export function createRedisOwnership(queueName: string): RedisOwnership {
+  const match = queueNamePattern.exec(queueName);
+  if (!match?.[1]) throw new Error("Refusing non-canonical Phase 4 real E2E queue name");
+  const runId = match[1];
+  const rateLimitNameSpace = `matchday:phase4-real-e2e:rate-limit:${runId}:`;
+  const scanPatterns = [
+    `bull:${queueName}:*`,
+    `bull:${queueName}.dead-letter:*`,
+    `matchday:job-cancellation:bull:${queueName}:*`,
+    `${rateLimitNameSpace}*`,
+  ] as const;
+  return {
+    queueName,
+    rateLimitNameSpace,
+    namespaceHash: sha256Identifier(`${queueName}\0${rateLimitNameSpace}`),
+    scanPatterns,
+  };
+}
+
+export function isOwnedRedisKey(ownership: RedisOwnership, key: string): boolean {
+  return (
+    key.startsWith(`bull:${ownership.queueName}:`) ||
+    key.startsWith(`bull:${ownership.queueName}.dead-letter:`) ||
+    key.startsWith(`matchday:job-cancellation:bull:${ownership.queueName}:`) ||
+    key.startsWith(ownership.rateLimitNameSpace)
+  );
+}
+
+async function scanOwnedRedisKeys(redis: Redis, ownership: RedisOwnership): Promise<string[]> {
+  const ownedKeys = new Set<string>();
+  for (const pattern of ownership.scanPatterns) {
+    let cursor = "0";
+    let iterations = 0;
+    do {
+      const [nextCursor, keys] = await redis.scan(cursor, "MATCH", pattern, "COUNT", redisScanCount);
+      cursor = nextCursor;
+      iterations += 1;
+      if (iterations > maximumRedisScanIterations)
+        throw new Error(`Phase 4 Redis owned-key scan exceeded ${maximumRedisScanIterations} iterations`);
+      for (const key of keys) {
+        if (!isOwnedRedisKey(ownership, key))
+          throw new Error(`Phase 4 Redis scan returned a key outside the owned namespace`);
+        ownedKeys.add(key);
+        if (ownedKeys.size > maximumOwnedRedisKeys)
+          throw new Error(`Phase 4 Redis owned-key count exceeded ${maximumOwnedRedisKeys}`);
+      }
+    } while (cursor !== "0");
+  }
+  return [...ownedKeys].sort();
+}
+
+export async function assertEmptyOwnedRedisNamespace(redis: Redis, ownership: RedisOwnership): Promise<number> {
+  const keys = await scanOwnedRedisKeys(redis, ownership);
+  if (keys.length !== 0)
+    throw new Error(
+      `Phase 4 Redis startup found ${keys.length} keys in namespace ${ownership.namespaceHash}; refusing deletion`,
+    );
+  return keys.length;
+}
+
+export async function unlinkOwnedRedisKeys(redis: Redis, ownership: RedisOwnership): Promise<number> {
+  const keys = await scanOwnedRedisKeys(redis, ownership);
+  for (let index = 0; index < keys.length; index += redisUnlinkBatchSize) {
+    const batch = keys.slice(index, index + redisUnlinkBatchSize);
+    if (batch.length > 0) await redis.unlink(...batch);
+  }
+  const remaining = await scanOwnedRedisKeys(redis, ownership);
+  if (remaining.length !== 0)
+    throw new Error(`Phase 4 Redis cleanup left ${remaining.length} keys in namespace ${ownership.namespaceHash}`);
+  return remaining.length;
+}
+
+async function appendIsolationRecord(recordFile: string, record: IsolationRecord): Promise<void> {
+  await mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
+  await appendFile(recordFile, `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
 
 function appendTail(tail: Tail, chunk: Buffer | string): void {
@@ -434,22 +566,6 @@ async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promis
   }
 }
 
-async function unlinkQueueKeys(redis: Redis, pattern: string, phase: "startup" | "shutdown"): Promise<void> {
-  let cursor = "0";
-  let scanned = 0;
-  let deleted = 0;
-  do {
-    const [nextCursor, keys] = await redis.scan(cursor, "MATCH", pattern, "COUNT", 100);
-    cursor = nextCursor;
-    scanned += keys.length;
-    if (keys.length > 0) deleted += await redis.unlink(...keys);
-  } while (cursor !== "0");
-  const [, remaining] = await redis.scan("0", "MATCH", pattern, "COUNT", 100);
-  if (remaining.length > 0)
-    throw new Error(`Phase 4 Redis ${phase} cleanup left ${remaining.length} queue keys for ${pattern}`);
-  process.stdout.write(`Phase 4 Redis ${phase} cleanup: ${JSON.stringify({ pattern, scanned, deleted })}\n`);
-}
-
 function assertPinnedToolchain(): void {
   if (process.version !== "v24.18.0")
     throw new Error(`Phase 4 real E2E requires Node v24.18.0; received ${process.version}`);
@@ -458,12 +574,14 @@ function assertPinnedToolchain(): void {
     throw new Error(`Phase 4 real E2E requires pnpm 10.33.0; received ${packageManager || "unknown"}`);
 }
 
-async function main(): Promise<void> {
-  assertPinnedToolchain();
+export async function runOnce(runNumber: number, configuration: RunConfiguration): Promise<void> {
+  const startedAt = new Date().toISOString();
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase4-e2e-"));
   const stateFile = path.join(temp, "state.json");
   const resultFile = path.join(temp, "browser-journeys.ndjson");
   const admin = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
+  const redisUrl = redisUrlForLogicalDatabase(configuration.redisDatabase);
+  const csrfSecret = randomBytes(32).toString("base64url");
   let isolation: Isolation | null = null;
   let sql: Sql | null = null;
   let app: Awaited<ReturnType<typeof buildApp>> | null = null;
@@ -471,8 +589,13 @@ async function main(): Promise<void> {
   let scheduler: SchedulerRuntime | null = null;
   let scheduleQueue: ScheduleJobQueue | null = null;
   let queueName: string | null = null;
+  let redisOwnership: RedisOwnership | null = null;
+  let unrelatedGuardKey: string | null = null;
   let rateLimitRedis: Redis | null = null;
   let primaryError: unknown = null;
+  let initialOwnedRedisKeyCount: number | null = null;
+  let finalOwnedRedisKeyCount: number | null = null;
+  let unrelatedGuardPreserved: boolean | null = null;
   const markInterrupted = () => {
     for (const running of activeProcesses) void stopProcess(running);
   };
@@ -487,6 +610,19 @@ async function main(): Promise<void> {
     );
     rateLimitRedis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
     queueName = `matchday-phase4-real-e2e-${randomUUID()}`;
+    redisOwnership = createRedisOwnership(queueName);
+    initialOwnedRedisKeyCount = await assertEmptyOwnedRedisNamespace(rateLimitRedis, redisOwnership);
+    unrelatedGuardKey = `bull:${queueName}-foreign:ttl-sentinel`;
+    const guardCreated = await rateLimitRedis.set(unrelatedGuardKey, "preserve", "PX", 300_000, "NX");
+    if (guardCreated !== "OK") throw new Error("Phase 4 Redis unrelated TTL guard already existed");
+    process.stdout.write(
+      `Phase 4 Redis startup isolation: ${JSON.stringify({
+        logical_database: configuration.redisDatabase,
+        namespace_redacted: redactedRedisNamespace,
+        namespace_hash: redisOwnership.namespaceHash,
+        initial_owned_key_count: initialOwnedRedisKeyCount,
+      })}\n`,
+    );
     isolation = await prepareIsolation(admin);
     sql = connectIsolation(isolation);
     const identitySql = sql as unknown as PostgresJsSql;
@@ -508,7 +644,17 @@ async function main(): Promise<void> {
         if (health.reason) process.stdout.write(`Phase 4 scheduler health: ${JSON.stringify(health)}\n`);
       },
       onDeadLettered: (event) => {
-        process.stdout.write(`Phase 4 scheduler dead letter: ${JSON.stringify(event)}\n`);
+        process.stdout.write(
+          `Phase 4 scheduler dead letter: ${JSON.stringify({
+            type: event.type,
+            namespace_redacted: redactedRedisNamespace,
+            namespace_hash: redisOwnership?.namespaceHash,
+            job_id_sha256: sha256Identifier(event.jobId),
+            job_name: event.jobName,
+            attempts_made: event.attemptsMade,
+            dead_lettered_at: event.deadLetteredAt,
+          })}\n`,
+        );
       },
     });
     const phase4 = new ReliableGateBPhase4Runtime(
@@ -570,6 +716,7 @@ async function main(): Promise<void> {
         redis: async () => (await rateLimitRedis?.ping()) === "PONG",
       },
       rateLimitRedis,
+      rateLimitNameSpace: redisOwnership.rateLimitNameSpace,
       identityRuntime: identity,
       phase2Runtime: phase2,
       phase3Runtime: phase3,
@@ -614,16 +761,7 @@ async function main(): Promise<void> {
     await runProcess(
       "Phase 4 real Playwright",
       "pnpm",
-      [
-        "--filter",
-        "@matchday/web",
-        "exec",
-        "playwright",
-        "test",
-        "--config",
-        "playwright.phase4-real.config.ts",
-        ...(process.env.PHASE4_E2E_PROJECT ? ["--project", process.env.PHASE4_E2E_PROJECT] : []),
-      ],
+      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", "playwright.phase4-real.config.ts"],
       runtimeEnv,
       true,
     );
@@ -631,8 +769,7 @@ async function main(): Promise<void> {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as BrowserJourneyResult);
-    const projectsToVerify = process.env.PHASE4_E2E_PROJECT ? [process.env.PHASE4_E2E_PROJECT] : projectNames;
-    for (const projectName of projectsToVerify) {
+    for (const projectName of projectNames) {
       const state = projects[projectName];
       const journey = journeyResults.find((result) => result.project === projectName);
       if (!state || !journey) throw new Error(`Browser journey result missing for ${projectName}`);
@@ -654,14 +791,29 @@ async function main(): Promise<void> {
     await cleanup("API shutdown", async () => app?.close());
     await cleanup("Scheduler shutdown", async () => scheduler?.stop());
     await cleanup("Schedule queue shutdown", async () => scheduleQueue?.close());
-    await cleanup("Schedule queue Redis key cleanup", async () => {
-      const cleanupQueueName = queueName;
-      if (!cleanupQueueName) return;
+    await cleanup("Owned Redis namespace cleanup", async () => {
+      const ownership = redisOwnership;
+      const guardKey = unrelatedGuardKey;
+      if (!ownership || !guardKey) return;
       const activeRedis = rateLimitRedis;
       const ownedCleanupRedis = !activeRedis || activeRedis.status === "end";
       const cleanupRedis = ownedCleanupRedis ? new Redis(redisUrl, { maxRetriesPerRequest: 1 }) : activeRedis;
       try {
-        await unlinkQueueKeys(cleanupRedis, `bull:${cleanupQueueName}*`, "shutdown");
+        finalOwnedRedisKeyCount = await unlinkOwnedRedisKeys(cleanupRedis, ownership);
+        const [guardValue, guardTtl] = await Promise.all([cleanupRedis.get(guardKey), cleanupRedis.pttl(guardKey)]);
+        unrelatedGuardPreserved = guardValue === "preserve" && guardTtl > 0;
+        if (!unrelatedGuardPreserved)
+          throw new Error("Phase 4 Redis owned cleanup removed or expired the unrelated near-prefix TTL guard");
+        await cleanupRedis.unlink(guardKey);
+        process.stdout.write(
+          `Phase 4 Redis shutdown isolation: ${JSON.stringify({
+            logical_database: configuration.redisDatabase,
+            namespace_redacted: redactedRedisNamespace,
+            namespace_hash: ownership.namespaceHash,
+            final_owned_key_count: finalOwnedRedisKeyCount,
+            unrelated_guard_preserved: unrelatedGuardPreserved,
+          })}\n`,
+        );
       } finally {
         if (ownedCleanupRedis) await cleanupRedis.quit();
       }
@@ -681,14 +833,42 @@ async function main(): Promise<void> {
         ? new AggregateError([primaryError, cleanupError], "E2E and cleanup failed")
         : cleanupError;
     }
+    await appendIsolationRecord(configuration.recordFile, {
+      run: runNumber,
+      status: primaryError ? "failed" : "passed",
+      started_at_utc: startedAt,
+      finished_at_utc: new Date().toISOString(),
+      postgres: isolation ? { kind: isolation.kind, identifier: sanitizedIsolationIdentifier(isolation) } : null,
+      redis: {
+        logical_database: configuration.redisDatabase,
+        namespace_redacted: redisOwnership ? redactedRedisNamespace : null,
+        namespace_hash: redisOwnership?.namespaceHash ?? null,
+        initial_owned_key_count: initialOwnedRedisKeyCount,
+        final_owned_key_count: finalOwnedRedisKeyCount,
+        unrelated_guard_preserved: unrelatedGuardPreserved,
+      },
+    });
   }
   if (primaryError) throw primaryError;
   process.stdout.write(
-    `Phase 4 real E2E passed (${isolation?.kind === "database" ? "disposable database" : "isolated schema"}).\n`,
+    `Phase 4 real E2E run ${runNumber} passed with Redis database ${configuration.redisDatabase}.\n`,
   );
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
-  process.exitCode = 1;
-});
+async function main(): Promise<void> {
+  assertPinnedToolchain();
+  const recordFile =
+    process.env.PHASE4_E2E_ISOLATION_RECORD_FILE ?? path.join(root, "artifacts/qa/phase4-real-isolation.ndjson");
+  await mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
+  await writeFile(recordFile, "", { mode: 0o600 });
+  await runOnce(1, { recordFile, redisDatabase: 14 });
+  await runOnce(2, { recordFile, redisDatabase: 15 });
+  process.stdout.write(`Phase 4 real E2E isolation records: ${recordFile}\n`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

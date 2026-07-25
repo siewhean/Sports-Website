@@ -232,6 +232,7 @@ export function FormatDesignerSurface({
           <button
             type="button"
             className={styles.primaryCommand}
+            data-testid="phase4-format-save"
             onClick={onSave}
             disabled={!editable || busy !== null || !state.dirty}
           >

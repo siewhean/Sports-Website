@@ -4,9 +4,15 @@
 
 **Branch:** `agent/gate-b-organiser-journey`
 **Validated source commit:** `b2306e6dfc9d44c8d53bf756c00b1530202188e0`
-**Status:** Local validation PASS; independent `Verdict: PASS`; PR #3 merged
+**Historical status:** Superseded local PASS for the commit above; PR #3 merged
+**Current Gate B status:** `BLOCKED` while `fix/gate-b-local-remediation-20260724-132224` awaits clean exact-SHA
+validation and a fresh independent verdict.
 
-This file tracks the Phase 4 scope in `docs/EXECUTION_ROADMAP.md`. A row is verified only where production implementation and executable evidence both exist. The exact commands, counts, browser limitation, dependency advisories, and external boundary are in `docs/qa/phase-4-acceptance.md`; concept comparison is in `docs/qa/phase-4-fidelity-ledger.md`.
+This file records the traceability previously established for the validated source commit above. Its verified rows are
+historical and must not be reused as evidence for changed source. Current exact commands, counts, browser limitations,
+dependency findings and release status are maintained in `docs/qa/phase-4-acceptance.md`,
+`docs/qa/phase-4-local-run.md`, and `docs/qa/phase-4-verdict.md`; concept comparison is in
+`docs/qa/phase-4-fidelity-ledger.md`.
 
 ## Format builder
 

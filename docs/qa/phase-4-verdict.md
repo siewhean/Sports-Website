@@ -1,6 +1,11 @@
 # Phase 4 — Independent Gate B verdict
 
-Verdict: PASS
+> **Historical verdict — superseded for the 24 July 2026 remediation.** This
+> review is an audit record for `c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`, not
+> a certification of `fix/gate-b-local-remediation-20260724-132224` or any
+> later SHA. Do not use it for the remediation release decision.
+
+Historical outcome: PASS (superseded)
 
 ## Exact-SHA review
 

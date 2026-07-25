@@ -1,23 +1,27 @@
-# Phase 4 final evidence manifest
+# Phase 4 historical evidence manifest
 
-Status: **FINAL**
+Status: **HISTORICAL/SUPERSEDED**
 
-Local validation: PASS
+Local validation: HISTORICAL PASS — NOT ACTIVE
 
 Hosted GitHub Actions: Not executed because Actions allowance is unavailable
+
+This schema-1 record is retained for audit history only. It was superseded by
+changed Gate B source and must not be used as an active release-gate verdict.
+Current certification requires a schema-v2 exact-SHA evidence bundle.
 
 Validated source: `c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`
 
 Branch: `codex/gate-b-lockfile-integrity`
 
-The machine-readable, fail-closed manifest is
+The historical machine-readable record is
 [`phase-4-final-evidence.json`](./phase-4-final-evidence.json). Raw logs and
 browser artifacts are retained under the ignored local directory
 `artifacts/qa/gate-b-final-c87287f/`; the manifest binds them with SHA-256
 digests and contains no credentials, database contents or browser session
 material.
 
-## Executed acceptance
+## Historical executed acceptance
 
 - Pinned Node 24.18.0 and pnpm 10.33.0; frozen installation and unchanged
   lockfile passed.
@@ -69,7 +73,9 @@ proof.
   build and image regressions pass. Owner: Platform Dependency. Target: the next
   stable dependency update.
 
-Run the manifest gate from the repository root:
+Do not run the active schema-v2 gate against this historical file. A new
+candidate must retain its immutable bundle and generated manifest under
+`artifacts/qa/gate-b/<HEAD SHA>/`, then run:
 
 ```sh
 pnpm evidence:phase4:validate

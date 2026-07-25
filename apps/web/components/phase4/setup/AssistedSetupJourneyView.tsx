@@ -16,7 +16,6 @@ import {
   UsersThree,
   Warning,
 } from "@phosphor-icons/react";
-import { useRouter } from "next/navigation";
 import type { Phase4SetupDocument, Phase4SetupStepId } from "@matchday/contracts";
 import { opaqueId, translate as t } from "@matchday/ui";
 import {
@@ -98,6 +97,7 @@ export function AssistedSetupJourneyView({
   onContinue,
   onSelectRecommendation,
   onComplete,
+  onRetry,
 }: {
   document: AssistedSetupPageDocument;
   setup: Phase4SetupDocument | null;
@@ -120,14 +120,8 @@ export function AssistedSetupJourneyView({
   onContinue(): void;
   onSelectRecommendation(id: string, acknowledged: boolean): void;
   onComplete(): void;
+  onRetry(): void;
 }) {
-  const router = useRouter();
-  const refresh = () => {
-    router.refresh();
-    setTimeout(() => {
-      headingRef.current?.focus();
-    }, 0);
-  };
   if (viewState === "loading") return <SetupSkeleton />;
   if (viewState === "empty")
     return (
@@ -149,14 +143,19 @@ export function AssistedSetupJourneyView({
         icon={viewState === "offline" ? <CloudSlash aria-hidden="true" /> : <Warning aria-hidden="true" />}
         title={surface.title}
         body={surface.body}
+        assertive
         action={
           viewState === "expired" ? (
             <div className={styles.stateActions}>
-              <button onClick={refresh}>{t("prototype.b2430ebbca75")}</button>
+              <button data-testid="assisted-setup-offline-retry" disabled={commandBusy} onClick={onRetry}>
+                {t("prototype.b2430ebbca75")}
+              </button>
               <Link href={`/organiser/competitions/${document.competitionId}`}>{t("prototype.ab6b40c62c47")}</Link>
             </div>
           ) : viewState === "conflict" ? (
-            <button onClick={refresh}>{t("prototype.4b46950ea4dd")}</button>
+            <button data-testid="assisted-setup-conflict-retry" disabled={commandBusy} onClick={onRetry}>
+              {t("prototype.4b46950ea4dd")}
+            </button>
           ) : null
         }
       />
@@ -253,7 +252,9 @@ export function AssistedSetupJourneyView({
                 title={copy.setupUnavailable}
                 href=""
                 action={t("prototype.4b46950ea4dd")}
-                onReload={refresh}
+                onReload={onRetry}
+                disabled={commandBusy}
+                actionTestId={opaqueId("assisted-setup-inline-conflict-retry")}
               />
             )
           ) : null}
@@ -274,7 +275,9 @@ export function AssistedSetupJourneyView({
                 title={copy.setupUnavailable}
                 href=""
                 action={t("prototype.4b46950ea4dd")}
-                onReload={refresh}
+                onReload={onRetry}
+                disabled={commandBusy}
+                actionTestId={opaqueId("assisted-setup-inline-conflict-retry")}
               />
             )
           ) : null}
@@ -921,11 +924,15 @@ function InlineEmpty({
   title,
   href,
   action,
+  actionTestId,
+  disabled,
   onReload,
 }: {
   title: string;
   href: string;
   action: string;
+  actionTestId?: string;
+  disabled?: boolean;
   onReload?: () => void;
 }) {
   const content = (
@@ -939,7 +946,13 @@ function InlineEmpty({
       <Info />
       <h2>{title}</h2>
       <p>{t("prototype.aa2bdd7e6e23")}</p>
-      {href ? <Link href={href}>{content}</Link> : <button onClick={onReload}>{content}</button>}
+      {href ? (
+        <Link href={href}>{content}</Link>
+      ) : (
+        <button data-testid={actionTestId} disabled={Boolean(disabled)} onClick={onReload}>
+          {content}
+        </button>
+      )}
     </div>
   );
 }
@@ -949,14 +962,20 @@ function SetupState({
   title,
   body,
   action,
+  assertive,
 }: {
   icon: ReactNode;
   title: string;
   body: string;
   action?: ReactNode;
+  assertive?: boolean;
 }) {
   return (
-    <section className={styles.state}>
+    <section
+      className={styles.state}
+      role={assertive ? "alert" : undefined}
+      aria-live={assertive ? "assertive" : undefined}
+    >
       <span>{icon}</span>
       <h1>{title}</h1>
       <p>{body}</p>

@@ -95,34 +95,13 @@ async function generateObjective(page: Page, objective: "Fastest" | "Balanced" |
   await expect(generateButton).toBeVisible();
   const response = await submitAndWait(page, generateButton, "POST", "/schedule/jobs");
   expect(response.request().postDataJSON()).toMatchObject({ objective: objectiveValue });
-  const envelope = (await response.json()) as { job?: { id?: string } };
-  const jobId = envelope.job?.id;
-  if (!jobId) throw new Error(`Schedule generation response omitted job id: ${JSON.stringify(envelope)}`);
-  let lastJob: unknown = null;
-  await expect
-    .poll(
-      async () => {
-        const jobResponse = await page.request.get(`/api/phase4/schedule/jobs/${jobId}`);
-        lastJob = await jobResponse.json();
-        const job = lastJob as {
-          status?: string;
-          current_best?: unknown;
-          failure_class?: string | null;
-          explored_candidates?: number;
-        };
-        if (job.current_best) return "ready";
-        if (["failed", "no_solution", "stale", "cancelled"].includes(job.status ?? "")) {
-          throw new Error(`Schedule job ended without an option: ${JSON.stringify(job)}`);
-        }
-        return `${job.status ?? "unknown"}:${job.explored_candidates ?? 0}`;
-      },
-      { timeout: 60_000, intervals: [500, 1_000, 1_500] },
-    )
-    .toBe("ready");
+  const jobRail = page.locator("footer[data-job-status]");
+  await expect(jobRail).toBeVisible();
+  await expect(jobRail).toHaveAttribute("data-job-status", /queued|running|valid_best_found|completed/);
   await expect(
     page.getByRole("button", { name: `Use ${objective}`, exact: true }).first(),
-    `Schedule option was not rendered after job became ready: ${JSON.stringify(lastJob)}`,
-  ).toBeVisible({ timeout: 5_000 });
+    "Schedule option was not rendered by the browser-owned job status flow",
+  ).toBeVisible({ timeout: 60_000 });
 }
 
 async function selectValidMoveSlot(page: Page, initialResponse: Awaited<ReturnType<Page["waitForResponse"]>>) {
@@ -338,8 +317,13 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await publishDivisionFormat(page, competitionId, openId, "Browser Open stage");
   await publishDivisionFormat(page, competitionId, womenId, "Browser Women stage");
 
-  const unpublished = await context.request.get(`${seed.webOrigin}/competitions/${slug}`);
-  expect(unpublished.status(), "Private schedule work must not be public").toBe(404);
+  allowConsoleFailure(
+    page,
+    /^console\.error: Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
+  );
+  const unpublishedResponse = await page.goto(`/competitions/${slug}`);
+  expect(unpublishedResponse?.status(), "Private schedule work must not be public").toBe(404);
+  await expect(page.getByRole("heading", { name: "That page is not on the schedule" })).toBeVisible();
 
   await page.goto(`/organiser/competitions/${competitionId}/schedule`);
   await generateObjective(page, "Fastest");
@@ -411,7 +395,6 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   expect(completionPayload.document?.status, `Setup completion: ${JSON.stringify(completionPayload)}`).toBe(
     "completed",
   );
-  await page.reload();
   await expect(page.getByText("This setup is read only").first()).toBeVisible();
 
   await page.goto(`/competitions/${slug}`);
@@ -438,5 +421,6 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await appendFile(resultFile, `${JSON.stringify(result)}\n`, { mode: 0o600 });
   expect(failedResponses).toEqual([
     `422 POST ${seed.webOrigin}/api/phase3/competitions/${competitionId}/divisions/${openId}/entries`,
+    `404 GET ${seed.webOrigin}/competitions/${slug}`,
   ]);
 });

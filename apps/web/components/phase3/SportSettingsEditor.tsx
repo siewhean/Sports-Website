@@ -76,7 +76,7 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
     !document.canEdit || !document.capabilities.save || Object.keys(errors).length > 0 || busyAction !== null;
 
   if (document.state === "loading") return <SettingsSkeleton />;
-  if (commandState && commandState !== "ready")
+  if (commandState && commandState !== "ready" && commandState !== phase3SettingsMachine.conflict)
     return <SettingsState state={commandState as Exclude<SportSettingsSurfaceState, "ready" | "loading">} />;
   if (document.state !== "ready" && document.state !== "conflict" && document.state !== "read-only") {
     return <SettingsState state={document.state} />;
@@ -164,8 +164,15 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
       <p className={cx("p3-live")} aria-live="polite">
         {announcement}
       </p>
-      {document.state === phase3SettingsMachine.conflict ? (
-        <SettingsState state={phase3SettingsMachine.conflict} compact />
+      {document.state === phase3SettingsMachine.conflict || commandState === phase3SettingsMachine.conflict ? (
+        <SettingsState
+          state={phase3SettingsMachine.conflict}
+          compact
+          onConflictRetry={() => {
+            setCommandState(null);
+            router.refresh();
+          }}
+        />
       ) : null}
       {document.state === phase3SettingsMachine.readOnly ? (
         <SettingsState state={phase3SettingsMachine.readOnly} compact />
@@ -478,12 +485,14 @@ function moveItem(values: readonly string[], from: number, to: number): readonly
 function SettingsState({
   state,
   compact = false,
+  onConflictRetry,
 }: {
   state: Exclude<SportSettingsSurfaceState, "ready" | "loading">;
   compact?: boolean;
+  onConflictRetry?: () => void;
 }) {
   const router = useRouter();
-  const onConflictRetry = () => {
+  const refresh = () => {
     router.refresh();
   };
   const copy = stateCopy[state];
@@ -499,7 +508,11 @@ function SettingsState({
         <h2>{copy.title}</h2>
         <p>{copy.body}</p>
         {state === "conflict" ? (
-          <button className={cx("p3-button", "p3-button--secondary")} type="button" onClick={onConflictRetry}>
+          <button
+            className={cx("p3-button", "p3-button--secondary")}
+            type="button"
+            onClick={onConflictRetry ?? refresh}
+          >
             {phase3SettingsCopy.reload}
           </button>
         ) : null}

@@ -14,7 +14,7 @@ test("@a11y sport settings editor has no WCAG A or AA accessibility violations",
   await assertNoWcagAOrAaViolations(page);
 });
 
-test("@a11y sport defaults admin identifies provisional authority accessibly", async ({ page }) => {
+test("@a11y sport defaults admin meets WCAG A/AA requirements for provisional authority", async ({ page }) => {
   await page.goto("/internal/sport-defaults?sport=canoe_polo");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { name: "Sport-pack defaults" })).toBeVisible();
@@ -22,7 +22,7 @@ test("@a11y sport defaults admin identifies provisional authority accessibly", a
   await assertNoWcagAOrAaViolations(page);
 });
 
-test("@a11y capacity status and lossless source editor are accessible", async ({ page }) => {
+test("@a11y capacity status and lossless source editor meet WCAG A/AA requirements", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/capacity");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { level: 1, name: "Capacity" })).toBeVisible();
@@ -30,7 +30,7 @@ test("@a11y capacity status and lossless source editor are accessible", async ({
   await assertNoWcagAOrAaViolations(page);
 });
 
-test("@a11y division and entry controls are accessible", async ({ page }) => {
+test("@a11y division and entry controls meet WCAG A/AA requirements", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/entries");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { level: 1, name: "Divisions and entries" })).toBeVisible();
@@ -85,7 +85,7 @@ test("@a11y competition creation preserves recovery context and strict WCAG A/AA
   await assertNoWcagAOrAaViolations(page);
 });
 
-test("@a11y standings evidence and advancement conflicts are accessible", async ({ page }) => {
+test("@a11y standings evidence and advancement conflicts meet WCAG A/AA requirements", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/results");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { level: 1, name: "Standings and advancement" })).toBeVisible();

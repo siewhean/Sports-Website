@@ -1,5 +1,11 @@
 # Phase 4 — Gate B local acceptance evidence
 
+> **Historical evidence — superseded for the 24 July 2026 remediation.** This
+> record applies only to `b2306e6dfc9d44c8d53bf756c00b1530202188e0` and must
+> not be used to certify `fix/gate-b-local-remediation-20260724-132224` or any
+> later SHA. A remediation decision requires a new exact-SHA browser evidence
+> artifact and independent review.
+
 **Date:** 22 July 2026
 
 **Branch:** `agent/gate-b-organiser-journey`

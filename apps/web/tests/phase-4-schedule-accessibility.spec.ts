@@ -28,14 +28,14 @@ function contrastRatio(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-test("@a11y schedule has no WCAG A or AA accessibility violations", async ({ page }) => {
+test("@a11y schedule meets WCAG A/AA requirements", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/schedule");
   await dismissConsent(page);
   await expect(page.getByTestId("phase4-schedule")).toBeVisible();
   await assertNoWcagAOrAaViolations(page);
 });
 
-test("@a11y move flow has no WCAG A or AA accessibility violations", async ({ page }) => {
+test("@a11y move flow meets WCAG A/AA requirements", async ({ page }) => {
   await page.route("**/moves/validate", async (route) =>
     route.fulfill({
       status: 200,
@@ -71,7 +71,7 @@ test("@a11y move flow has no WCAG A or AA accessibility violations", async ({ pa
   expect(contrastRatio(stepNumberColors.foreground, stepNumberColors.background)).toBeGreaterThanOrEqual(4.5);
 });
 
-test("@a11y revision comparison has no WCAG A or AA accessibility violations", async ({ page }) => {
+test("@a11y revision comparison meets WCAG A/AA requirements", async ({ page }) => {
   await page.goto(
     "/organiser/competitions/singapore-open/schedule/compare?left=70000000-0000-4000-8000-000000000003&right=70000000-0000-4000-8000-000000000004",
   );

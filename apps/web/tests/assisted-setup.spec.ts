@@ -107,7 +107,7 @@ test("UI Back and rapid Continue preserve every wizard step", async ({ page }) =
   await expect(page.getByRole("heading", { name: "Basics", exact: true })).toBeVisible();
 });
 
-test("@a11y phone navigation, validation, accessibility, and console remain healthy", async ({ page }) => {
+test("@a11y phone navigation and validation meet WCAG A/AA requirements without console errors", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());

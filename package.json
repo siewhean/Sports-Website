@@ -27,7 +27,9 @@
     "validate:phase2": "node scripts/validate-phase-2-fixtures.mjs",
     "validate:phase3": "node scripts/validate-phase-3-fixtures.mjs",
     "validate:phase4": "node scripts/validate-phase-4-schedule-fixtures.mjs",
-    "evidence:phase4:validate": "node scripts/validate-phase-4-final-evidence.mjs",
+    "evidence:phase4:validate": "node scripts/validate-browser-gate-evidence.mjs",
+    "evidence:phase4:write": "node scripts/write-browser-gate-evidence.mjs",
+    "test:evidence:phase4": "node --test scripts/write-browser-gate-evidence.test.mjs",
     "db:migrate": "pnpm --filter @matchday/database db:migrate",
     "db:migrate:check": "pnpm --filter @matchday/database db:migrate:check",
     "backup:verify": "bash scripts/verify-backup-restore.sh",
@@ -38,11 +40,14 @@
     "openapi:check": "pnpm --filter @matchday/api openapi:check",
     "dependencies:audit": "pnpm audit --prod --audit-level moderate",
     "secrets:scan": "bash scripts/scan-secrets.sh",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm dependencies:audit && pnpm secrets:scan && pnpm build && pnpm deploy:manifest && pnpm asset-delivery:verify:origin",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:evidence:phase4 && pnpm test && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm dependencies:audit && pnpm secrets:scan && pnpm build && pnpm deploy:manifest && pnpm asset-delivery:verify:origin",
     "setup:workspace": "node scripts/setup-workspace.mjs"
   },
   "pnpm": {
     "overrides": {
+      "@fastify/swagger-ui>@fastify/static": "10.1.2",
+      "fastify>find-my-way": "9.7.0",
+      "minimatch@10.2.5>brace-expansion": "5.0.8",
       "postcss": "8.5.19",
       "next>sharp": "0.35.3"
     }

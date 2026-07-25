@@ -1,12 +1,18 @@
 # Phase 4 — reproducible local Gate B run
 
+> **Historical run record — superseded for the 24 July 2026 remediation.** All
+> outcomes below are attached to their stated older SHAs only. They are not
+> evidence for `fix/gate-b-local-remediation-20260724-132224` or any later SHA.
+> The remediation may be certified only by a newly generated immutable browser
+> evidence artifact and a fresh independent review at the exact tested SHA.
+
 ## Final exact-SHA closure — 23 July 2026
 
 **Branch:** `codex/gate-b-lockfile-integrity`
 
 **Validated source commit:** `c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`
 
-Local Gate B validation: PASS
+Historical local Gate B result: PASS (superseded)
 
 Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
 
@@ -44,7 +50,7 @@ concurrency, or removing assertions.
 
 **Validation state:** clean source tree at the commit above; no Gate C work is included. The evidence-only verdict update follows this source commit and does not alter production or test code.
 
-Local Gate B validation: PASS
+Historical local Gate B result: PASS (superseded)
 
 Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
 
@@ -54,7 +60,7 @@ Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
 
 **Validated source commit:** `aa87be059a35a790a6801d74f5074457bb5c84d2`
 
-Local Gate B validation: PASS
+Historical local Gate B result: PASS (superseded)
 
 Durable raw logs are under the ignored local path `artifacts/qa/gate-b-revalidation/`.
 
