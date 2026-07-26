@@ -121,6 +121,8 @@ function validateCommands(commands, errors) {
       continue;
     }
     if (command.command !== canonical.get(id)) errors.push(`command ${id} does not match the canonical command`);
+    if (!Number.isInteger(command.duration_ms) || command.duration_ms <= 0)
+      errors.push(`command ${id} duration_ms must be a positive integer`);
     for (const count of ["passed", "failed", "skipped"]) {
       if (!Number.isInteger(command?.counts?.[count]) || command.counts[count] < 0)
         errors.push(`command ${id} has invalid ${count} count`);

@@ -57,6 +57,7 @@ function input(sha, bundlePath) {
       id,
       command,
       exit_code: 0,
+      duration_ms: 1,
       counts: { passed: 3, failed: 0, skipped: 0 },
       skip_reasons: [],
       unexpected_skipped: 0,
@@ -124,6 +125,10 @@ test("builds a sanitized manifest by hashing a real exact-SHA bundle and derivin
   assert.equal(evidence.immutable_publication.evidence_bundle_sha256, digest);
   assert.equal(evidence.immutable_publication.bytes, bytes.byteLength);
   assert.equal(evidence.immutable_publication.uri, `artifact://gate-b/${sha}/${digest}`);
+  assert.equal(
+    evidence.commands.every((command) => command.duration_ms === 1),
+    true,
+  );
   assert.equal(evidence.isolation_runs[1].final_owned_key_count, 0);
   assert.equal(evidence.isolation_runs[1].unrelated_guard_preserved, true);
   assert.deepEqual(await validateBrowserGateEvidence({ root, manifest: evidence }), []);
@@ -324,6 +329,54 @@ test("writer and validator enforce exact canonical command text", async () => {
       "command typecheck does not match the canonical command",
     ),
   );
+});
+
+test("writer and validator require a positive integer duration_ms for every canonical command", async (t) => {
+  const cases = [
+    {
+      name: "missing",
+      mutate(command) {
+        delete command.duration_ms;
+      },
+    },
+    {
+      name: "zero",
+      mutate(command) {
+        command.duration_ms = 0;
+      },
+    },
+    {
+      name: "negative",
+      mutate(command) {
+        command.duration_ms = -1;
+      },
+    },
+    {
+      name: "non-integer",
+      mutate(command) {
+        command.duration_ms = 1.5;
+      },
+    },
+  ];
+
+  for (const durationCase of cases) {
+    await t.test(durationCase.name, async () => {
+      const { root, sha, bundlePath } = await fixtureRoot();
+      const ledger = input(sha, bundlePath);
+      delete ledger.source_sha_for_fixture_only;
+      durationCase.mutate(ledger.commands.find((command) => command.id === "typecheck"));
+      await assert.rejects(() => buildBrowserGateEvidence({ root, input: ledger }), /duration_ms/u);
+
+      ledger.commands.find((command) => command.id === "typecheck").duration_ms = 1;
+      const evidence = await buildBrowserGateEvidence({ root, input: ledger });
+      durationCase.mutate(evidence.commands.find((command) => command.id === "typecheck"));
+      assert.ok(
+        (await validateBrowserGateEvidence({ root, manifest: evidence })).includes(
+          "command typecheck duration_ms must be a positive integer",
+        ),
+      );
+    });
+  }
 });
 
 test("writer and validator accept only exactly accounted intentional test-case skips", async () => {

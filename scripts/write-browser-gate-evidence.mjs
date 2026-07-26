@@ -225,6 +225,8 @@ async function canonicalCommands(root, source) {
     if (command.command !== exactCommand) fail(`command ${id} does not match the canonical command`);
 
     const exitCode = requiredInteger(command.exit_code, `commands[${index}].exit_code`);
+    const durationMs = requiredInteger(command.duration_ms, `commands[${index}].duration_ms`);
+    if (durationMs === 0) fail(`commands[${index}].duration_ms must be positive`);
     const counts = assertPlainObject(command.counts, `commands[${index}].counts`);
     const passed = requiredInteger(counts.passed, `commands[${index}].counts.passed`);
     const failed = requiredInteger(counts.failed, `commands[${index}].counts.failed`);
@@ -237,6 +239,7 @@ async function canonicalCommands(root, source) {
       id,
       command: exactCommand,
       exit_code: 0,
+      duration_ms: durationMs,
       counts: { passed, failed: 0, skipped },
       skip_reasons: reasons,
       unexpected_skipped: 0,
