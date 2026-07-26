@@ -28,6 +28,10 @@ const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../packages/database/migrations",
 );
+// This hook applies the complete migration chain and seeds the Phase 4 runtime
+// while the integration workspace is exercising PostgreSQL concurrently.
+// Keep the wider margin local to this setup rather than raising global limits.
+const phase4RuntimeSetupTimeoutMs = 30_000;
 let client!: Sql;
 let phase3!: Phase3Runtime;
 let runtime!: Phase4Runtime;
@@ -111,7 +115,7 @@ beforeAll(async () => {
     undefined,
     phase2,
   );
-});
+}, phase4RuntimeSetupTimeoutMs);
 
 afterAll(async () => {
   await client?.end({ timeout: 2 });
