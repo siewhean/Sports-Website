@@ -93,5 +93,5 @@ test("public projection is complete in raw server-rendered HTML", async ({ reque
 
 test("scoring helper reaches the single-active-writer surface", async ({ page }) => {
   await openPhase2Scorekeeper(page);
-  await expect(page.getByRole("status")).toContainText("Active scorer");
+  await expect(page.locator(".p2-writer")).toContainText("Active scorer");
 });

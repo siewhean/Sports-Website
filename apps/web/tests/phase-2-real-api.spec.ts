@@ -75,7 +75,7 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
   await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
 
   await page.reload();
-  await expect(page.getByRole("status")).toContainText("Active scorer");
+  await expect(page.locator(".p2-writer")).toContainText("Active scorer");
   await expect(page.getByLabel(`${state.homeName} 1`)).toBeVisible();
   await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
   const recoveredStorage = await page.evaluate(() => ({
