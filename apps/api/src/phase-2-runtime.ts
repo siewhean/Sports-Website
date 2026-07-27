@@ -211,6 +211,120 @@ function serializedDate(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : value;
 }
 
+const fallbackCodeAttempts = 5;
+const activeFallbackCodeConstraint = "scoring_access_pass_active_code_unique";
+const issuanceIdempotencyConstraint = "scoring_access_passes_issue_idempotency_unique";
+
+type FallbackCodeGenerator = () => string;
+type PostgresConstraintError = {
+  code?: unknown;
+  constraint?: unknown;
+  constraint_name?: unknown;
+  detail?: unknown;
+  message?: unknown;
+  cause?: unknown;
+};
+
+function nextFallbackCode(generator: FallbackCodeGenerator): string {
+  const value = generator();
+  if (!/^\d{12}$/.test(value)) {
+    throw new Error("Fallback code generator must return exactly 12 digits");
+  }
+  return value;
+}
+
+function postgresConstraintName(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const source = error as PostgresConstraintError;
+  const value = source.constraint_name ?? source.constraint;
+  return typeof value === "string" ? value : null;
+}
+
+function isUniqueConstraintViolation(error: unknown, constraint: string): boolean {
+  if (!error || typeof error !== "object") return false;
+  const source = error as PostgresConstraintError;
+  if (source.code !== "23505") return false;
+  const candidate = postgresConstraintName(source);
+  if (!candidate) return false;
+  return candidate === constraint || candidate.endsWith(`.${constraint}`) || candidate.includes(constraint);
+}
+
+type PostgresConstraintSignal = {
+  code: string | null;
+  message: string | null;
+  detail: string | null;
+  constraintName: string | null;
+  serialized: string | null;
+};
+
+function toErrorSignals(error: unknown): PostgresConstraintSignal {
+  const signals: PostgresConstraintSignal = {
+    code: null,
+    message: null,
+    detail: null,
+    constraintName: null,
+    serialized: null,
+  };
+
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  let depth = 0;
+  while (current && typeof current === "object" && depth < 4 && !seen.has(current)) {
+    seen.add(current);
+
+    const currentError = current as PostgresConstraintError & { message?: unknown; detail?: unknown; code?: unknown };
+    if (currentError.code !== undefined) {
+      signals.code = String(currentError.code);
+    }
+    if (typeof currentError.message === "string") signals.message = currentError.message;
+    if (typeof currentError.detail === "string") signals.detail = currentError.detail;
+
+    const nextConstraint = postgresConstraintName(currentError);
+    if (nextConstraint) signals.constraintName = nextConstraint;
+
+    if (!signals.message) {
+      try {
+        const fallbackMessage = JSON.stringify(current);
+        if (!signals.serialized) signals.serialized = fallbackMessage;
+      } catch {
+        // ignore serialization issues in transient driver objects
+      }
+    }
+
+    const next = (current as PostgresConstraintError & { cause?: unknown }).cause;
+    current = next;
+    depth += 1;
+  }
+
+  return signals;
+}
+
+function isIssuanceIdempotencyViolation(signals: PostgresConstraintSignal): boolean {
+  const message = signals.message ?? "";
+  const detail = signals.detail ?? "";
+  const serialized = signals.serialized ?? "";
+  const constraint = signals.constraintName ?? "";
+  return (
+    signals.code === "23505" &&
+    (constraint.includes(issuanceIdempotencyConstraint) ||
+      message.includes(issuanceIdempotencyConstraint) ||
+      detail.includes("issuance_idempotency_key") ||
+      serialized.includes(issuanceIdempotencyConstraint) ||
+      serialized.includes("issuance_idempotency_key"))
+  );
+}
+
+function withSavepoint<T>(
+  tx: PostgresJsSql,
+  _name: "gate_c_access_code_attempt",
+  operation: () => PromiseLike<T>,
+): Promise<T> {
+  if (!tx.savepoint) {
+    throw new Error("PostgreSQL savepoints are required for collision retries.");
+  }
+  return Promise.resolve(tx.savepoint(async () => operation()));
+}
+
 function hashSecret(secret: string): Buffer {
   return createHash("sha256").update(secret, "utf8").digest();
 }
@@ -1097,40 +1211,43 @@ export class Phase2Runtime {
         normalized.role === "viewer"
           ? ["score:read"]
           : ["score:read", "score:write", "score:reverse", "score:finalise"];
-      const replay = await tx.unsafe<{
-        id: string;
-        match_id: string;
-        role: "scorekeeper" | "viewer";
-        scope: ScoringPermission[] | string;
-        expires_at: Date | string;
-        revoked_at: Date | string | null;
-      }>(
-        `SELECT id,match_id,role,scope,expires_at,revoked_at
+      const readReplay = async () =>
+        tx.unsafe<{
+          id: string;
+          match_id: string;
+          role: "scorekeeper" | "viewer";
+          scope: ScoringPermission[] | string;
+          expires_at: Date | string;
+          revoked_at: Date | string | null;
+        }>(
+          `SELECT id,match_id,role,scope,expires_at,revoked_at
          FROM scoring_access_passes
          WHERE competition_id=$1 AND issuance_idempotency_key=$2`,
-        [competitionId, normalized.idempotencyKey],
-      );
-      if (replay[0]) {
+          [competitionId, normalized.idempotencyKey],
+        );
+      const replayResponse = (row: Awaited<ReturnType<typeof readReplay>>[number]) => {
         if (
-          replay[0].match_id !== matchId ||
-          replay[0].role !== normalized.role ||
-          serializedDate(replay[0].expires_at) !== normalized.expiresAt
+          row.match_id !== matchId ||
+          row.role !== normalized.role ||
+          serializedDate(row.expires_at) !== normalized.expiresAt
         ) {
           throw new ApiError(409, "ACCESS_IDEMPOTENCY_CONFLICT", "Idempotency key was used with different input");
         }
         return {
-          id: replay[0].id,
-          match_id: replay[0].match_id,
-          role: replay[0].role,
-          permissions: jsonValue<ScoringPermission[]>(replay[0].scope),
-          expires_at: serializedDate(replay[0].expires_at),
+          id: row.id,
+          match_id: row.match_id,
+          role: row.role,
+          permissions: jsonValue<ScoringPermission[]>(row.scope),
+          expires_at: serializedDate(row.expires_at),
           token: null,
           short_code: null,
           qr_path: null,
           duplicate: true as const,
-          revoked: Boolean(replay[0].revoked_at),
+          revoked: Boolean(row.revoked_at),
         };
-      }
+      };
+      const replay = await readReplay();
+      if (replay[0]) return replayResponse(replay[0]);
       if (new Date(normalized.expiresAt).getTime() <= this.now().getTime()) {
         throw new ApiError(422, "ACCESS_EXPIRY_INVALID", "Access expiry must be in the future");
       }
@@ -1147,68 +1264,62 @@ export class Phase2Runtime {
       const secret = opaqueSecret();
       let shortCode = "";
       let pass: { id: string } | undefined;
-      for (let attempt = 0; attempt < 5 && !pass; attempt += 1) {
-        shortCode = this.fallbackCodeGenerator();
-        const rows = await tx.unsafe<{ id: string }>(
-          `INSERT INTO scoring_access_passes (
-             competition_id,match_id,secret_hash,short_code_hash,expires_at,created_by,
-             role,scope,issuance_idempotency_key,fallback_code_hash_version
-           ) VALUES (
-             $1,$2,$3,$4,$5,$6,$7,
-             CASE WHEN $7='viewer'
-               THEN '["score:read"]'::jsonb
-               ELSE '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
-             END,
-             $8,'hmac_sha256_v1'
-           )
-           ON CONFLICT DO NOTHING RETURNING id`,
-          [
-            competitionId,
-            match.id,
-            hashSecret(secret),
-            hashFallbackCode(shortCode, this.fallbackCodeHmacSecret),
-            normalized.expiresAt,
-            actor.accountId,
-            normalized.role,
-            normalized.idempotencyKey,
-          ],
-        );
-        pass = rows[0];
+      let collisionCount = 0;
+      for (let attempt = 0; attempt < fallbackCodeAttempts && !pass; attempt += 1) {
+        shortCode = nextFallbackCode(this.fallbackCodeGenerator);
+        try {
+          const rows = await withSavepoint(tx, "gate_c_access_code_attempt", () =>
+            tx.unsafe<{ id: string }>(
+              `INSERT INTO scoring_access_passes (
+                 competition_id,match_id,secret_hash,short_code_hash,expires_at,created_by,
+                 role,scope,issuance_idempotency_key,fallback_code_hash_version
+               ) VALUES (
+                 $1,$2,$3,$4,$5,$6,$7,
+                 CASE WHEN $7='viewer'
+                   THEN '["score:read"]'::jsonb
+                   ELSE '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
+                 END,
+                 $8,
+                 'hmac_sha256_v1'
+               ) ON CONFLICT (short_code_hash)
+                 WHERE short_code_hash IS NOT NULL
+                   AND revoked_at IS NULL
+               DO NOTHING
+               RETURNING id`,
+              [
+                competitionId,
+                match.id,
+                hashSecret(secret),
+                hashFallbackCode(shortCode, this.fallbackCodeHmacSecret),
+                normalized.expiresAt,
+                actor.accountId,
+                normalized.role,
+                normalized.idempotencyKey,
+              ],
+            ),
+          );
+          if (!rows[0]) {
+            collisionCount += 1;
+            continue;
+          }
+          pass = rows[0];
+        } catch (error) {
+          const signals = toErrorSignals(error);
+          if (isUniqueConstraintViolation(error, activeFallbackCodeConstraint)) {
+            collisionCount += 1;
+            continue;
+          }
+          const idempotencyViolation =
+            isIssuanceIdempotencyViolation(signals) ||
+            isUniqueConstraintViolation(error, issuanceIdempotencyConstraint);
+          if (idempotencyViolation) {
+            const concurrentReplay = await readReplay();
+            if (concurrentReplay[0]) return replayResponse(concurrentReplay[0]);
+          }
+          throw error;
+        }
       }
       if (!pass) {
-        const concurrentReplay = await tx.unsafe<{
-          id: string;
-          match_id: string;
-          role: "scorekeeper" | "viewer";
-          scope: ScoringPermission[] | string;
-          expires_at: Date | string;
-          revoked_at: Date | string | null;
-        }>(
-          `SELECT id,match_id,role,scope,expires_at,revoked_at FROM scoring_access_passes
-           WHERE competition_id=$1 AND issuance_idempotency_key=$2`,
-          [competitionId, normalized.idempotencyKey],
-        );
-        if (concurrentReplay[0]) {
-          if (
-            concurrentReplay[0].match_id !== matchId ||
-            concurrentReplay[0].role !== normalized.role ||
-            serializedDate(concurrentReplay[0].expires_at) !== normalized.expiresAt
-          ) {
-            throw new ApiError(409, "ACCESS_IDEMPOTENCY_CONFLICT", "Idempotency key was used with different input");
-          }
-          return {
-            id: concurrentReplay[0].id,
-            match_id: matchId,
-            role: concurrentReplay[0].role,
-            permissions: jsonValue<ScoringPermission[]>(concurrentReplay[0].scope),
-            expires_at: serializedDate(concurrentReplay[0].expires_at),
-            token: null,
-            short_code: null,
-            qr_path: null,
-            duplicate: true as const,
-            revoked: Boolean(concurrentReplay[0].revoked_at),
-          };
-        }
         throw new ApiError(503, "ACCESS_CODE_UNAVAILABLE", "A unique access code could not be issued");
       }
       await this.evidence(tx, {
@@ -1219,6 +1330,7 @@ export class Phase2Runtime {
         targetType: "scoring_access_pass",
         targetId: pass.id,
         after: { match_id: matchId, expires_at: normalized.expiresAt, role: normalized.role, permissions },
+        metadata: { fallback_code_collision_count: collisionCount },
         eventPayload: { competition_id: competitionId, match_id: matchId, role: normalized.role },
       });
       // Secrets are returned once and are deliberately absent from audit/outbox/log metadata.
@@ -1264,32 +1376,41 @@ export class Phase2Runtime {
            AND metadata->>'idempotency_key'=$2 LIMIT 1`,
         [passId, idempotencyKey],
       );
-      if (alreadyRotated[0]) {
-        return { id: passId, short_code: null, duplicate: true as const };
-      }
+      if (alreadyRotated[0]) return { id: passId, short_code: null, duplicate: true as const };
       let shortCode = "";
       let rotated = false;
-      for (let attempt = 0; attempt < 5 && !rotated; attempt += 1) {
-        shortCode = this.fallbackCodeGenerator();
-        if (!tx.savepoint) throw new Error("Fallback-code rotation requires PostgreSQL savepoint support.");
+      let collisionCount = 0;
+      for (let attempt = 0; attempt < fallbackCodeAttempts && !rotated; attempt += 1) {
+        shortCode = nextFallbackCode(this.fallbackCodeGenerator);
+        const candidateHash = hashFallbackCode(shortCode, this.fallbackCodeHmacSecret);
         try {
-          rotated = await tx.savepoint(async (savepoint) => {
-            const rows = await savepoint.unsafe<{ id: string }>(
+          const rows = await withSavepoint(tx, "gate_c_access_code_attempt", () =>
+            tx.unsafe<{ id: string }>(
               `UPDATE scoring_access_passes
-               SET short_code_hash=$3,fallback_code_rotated_at=$4,
+               SET short_code_hash=$3,
+                   fallback_code_rotated_at=$4,
                    fallback_code_hash_version='hmac_sha256_v1'
-               WHERE id=$1 AND competition_id=$2 RETURNING id`,
-              [passId, competitionId, hashFallbackCode(shortCode, this.fallbackCodeHmacSecret), this.now()],
-            );
-            return Boolean(rows[0]);
-          });
+               WHERE id=$1
+                 AND competition_id=$2
+                 AND NOT EXISTS (
+                   SELECT 1 FROM scoring_access_passes
+                    WHERE id<>$1
+                      AND competition_id=$2
+                      AND short_code_hash=$3
+                      AND revoked_at IS NULL
+                 )
+               RETURNING id`,
+              [passId, competitionId, candidateHash, this.now()],
+            ),
+          );
+          if (!rows[0]) {
+            collisionCount += 1;
+            continue;
+          }
+          rotated = true;
         } catch (error) {
-          if (
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code?: string }).code === "23505"
-          ) {
+          if (isUniqueConstraintViolation(error, activeFallbackCodeConstraint)) {
+            collisionCount += 1;
             continue;
           }
           throw error;
@@ -1303,7 +1424,7 @@ export class Phase2Runtime {
         action: "scoring_access.fallback_rotated",
         targetType: "scoring_access_pass",
         targetId: passId,
-        metadata: { idempotency_key: idempotencyKey },
+        metadata: { idempotency_key: idempotencyKey, fallback_code_collision_count: collisionCount },
         eventPayload: { competition_id: competitionId, match_id: pass.match_id },
       });
       return { id: passId, short_code: shortCode, duplicate: false as const };
