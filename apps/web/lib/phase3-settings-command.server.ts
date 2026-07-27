@@ -111,7 +111,7 @@ export async function forwardPhase3Mutation(
   const requestOrigin = request.headers.get("origin");
   const requestHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || request.headers.get("host");
   const requestProtocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || request.nextUrl.protocol;
-  if (!requestOriginMatchesHost(requestOrigin, requestHost, requestProtocol))
+  if (!requestOrigin || !requestOriginMatchesHost(requestOrigin, requestHost, requestProtocol))
     return error(403, "ORIGIN_REJECTED", "Request origin is not allowed");
   const base = apiBaseUrl();
   if (!base) return error(503, "API_UNAVAILABLE", "The settings service is unavailable");
@@ -132,7 +132,7 @@ export async function forwardPhase3Mutation(
       headers: {
         accept: "application/json",
         cookie,
-        origin: request.nextUrl.origin,
+        origin: requestOrigin,
         "x-csrf-token": csrf,
         ...(input.body ? { "content-type": "application/json" } : {}),
       },

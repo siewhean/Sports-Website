@@ -19,7 +19,15 @@ type ApiSessionState = {
     home: { id: string | null; name: string | null };
     away: { id: string | null; name: string | null };
   };
-  writer: { generation: number; expires_at: string; read_only: boolean };
+  access: {
+    mode: "writer" | "candidate" | "viewer" | "transferred";
+    permissions: string[];
+    generation: number | null;
+    lease_expires_at: string | null;
+    expires_at: string;
+    read_only: boolean;
+    takeover_status: "none" | "pending" | "approved" | "denied";
+  };
   score: { home: number; away: number };
   through_sequence: number;
   events: Array<{
@@ -34,18 +42,30 @@ type ApiSessionState = {
 };
 
 export class ScoringTransportError extends Error {
-  constructor(public readonly state: "access" | "conflict" | "unavailable") {
+  constructor(
+    public readonly state: "access" | "conflict" | "expired" | "rate_limited" | "revoked" | "unavailable",
+    public readonly retryAfterSeconds: number | null = null,
+  ) {
     super(state);
     this.name = "ScoringTransportError";
   }
 }
 
 async function responsePayload<T>(response: Response): Promise<T> {
-  if (response.status === 409) throw new ScoringTransportError("conflict");
-  if (!response.ok)
-    throw new ScoringTransportError(
-      response.status === 400 || response.status === 401 || response.status === 403 ? "access" : "unavailable",
-    );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    const state =
+      payload?.error === "conflict" ||
+      payload?.error === "expired" ||
+      payload?.error === "rate_limited" ||
+      payload?.error === "revoked"
+        ? payload.error
+        : response.status === 400 || response.status === 401 || response.status === 403
+          ? "access"
+          : "unavailable";
+    const retryAfter = Number(response.headers.get("retry-after"));
+    throw new ScoringTransportError(state, Number.isFinite(retryAfter) ? retryAfter : null);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -105,7 +125,15 @@ function sessionView(state: ApiSessionState): ScoringSessionView {
     homeScore: state.score.home,
     awayScore: state.score.away,
     events,
-    readOnly: state.writer.read_only,
+    throughSequence: state.through_sequence,
+    mode: state.access.mode,
+    permissions: state.access.permissions,
+    generation: state.access.generation,
+    leaseExpiresAt: state.access.lease_expires_at,
+    expiresAt: state.access.expires_at,
+    takeoverStatus: state.access.takeover_status,
+    readOnly:
+      state.access.read_only || state.access.mode !== "writer" || !state.access.permissions.includes("score:write"),
   };
 }
 
@@ -146,7 +174,11 @@ class ApiScoringCommandPort implements ScoringCommandPort {
     const response = await fetch("/api/scoring/access/exchange", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(input.token ? { token: input.token } : { shortCode: input.shortCode }),
+      body: JSON.stringify(
+        input.token
+          ? { token: input.token, deviceId: input.device.id, deviceLabel: input.device.label }
+          : { shortCode: input.shortCode, deviceId: input.device.id, deviceLabel: input.device.label },
+      ),
       credentials: "same-origin",
     });
     return sessionView(await responsePayload<ApiSessionState>(response));
@@ -157,8 +189,39 @@ class ApiScoringCommandPort implements ScoringCommandPort {
       cache: "no-store",
       credentials: "same-origin",
     });
-    if (response.status === 401 || response.status === 403) return null;
+    if (response.status === 204 || response.status === 401) return null;
     return sessionView(await responsePayload<ApiSessionState>(response));
+  }
+
+  async heartbeat(input: {
+    lastAcknowledgedSequence: number;
+    pendingEventCount: number;
+    pendingThroughSequence: number | null;
+  }): Promise<ScoringSessionView> {
+    const response = await fetch("/api/scoring/session/heartbeat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        lastAcknowledgedSequence: input.lastAcknowledgedSequence,
+        pendingEventCount: input.pendingEventCount,
+        pendingThroughSequence: input.pendingThroughSequence,
+      }),
+      credentials: "same-origin",
+    });
+    return sessionView(await responsePayload<ApiSessionState>(response));
+  }
+
+  async requestTakeover(input: {
+    pendingEventCount: number;
+    pendingThroughSequence: number | null;
+  }): Promise<{ status: "pending"; requestId: string }> {
+    const response = await fetch("/api/scoring/takeover", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+      credentials: "same-origin",
+    });
+    return responsePayload<{ status: "pending"; requestId: string }>(response);
   }
 
   async appendEvent(command: ScoringEventCommand): Promise<ScoringAppendReceipt> {
@@ -198,6 +261,13 @@ const demoSession: ScoringSessionView = {
   homeScore: 0,
   awayScore: 0,
   events: [],
+  throughSequence: 0,
+  mode: "writer",
+  permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+  generation: 1,
+  leaseExpiresAt: "2030-01-01T00:00:00.000Z",
+  expiresAt: "2030-01-01T00:30:00.000Z",
+  takeoverStatus: "none",
   readOnly: false,
 };
 
@@ -216,6 +286,14 @@ class DemoScoringCommandPort implements ScoringCommandPort {
 
   async recoverSession(): Promise<ScoringSessionView | null> {
     return this.active ? demoSession : null;
+  }
+
+  async heartbeat(): Promise<ScoringSessionView> {
+    return demoSession;
+  }
+
+  async requestTakeover(): Promise<{ status: "pending"; requestId: string }> {
+    return { status: "pending", requestId: crypto.randomUUID() };
   }
 
   async appendEvent(command: ScoringEventCommand): Promise<ScoringAppendReceipt> {

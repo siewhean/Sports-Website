@@ -21,7 +21,7 @@ const EVENT_TYPES = new Set([
   "match_reopened",
 ]);
 
-type SafeError = "access" | "conflict" | "unavailable";
+type SafeError = "access" | "conflict" | "expired" | "rate_limited" | "revoked" | "unavailable";
 
 function jsonResponse(payload: unknown, status: number, cookie?: string): Response {
   const headers = new Headers({
@@ -35,13 +35,28 @@ function jsonResponse(payload: unknown, status: number, cookie?: string): Respon
   return new Response(JSON.stringify(payload), { status, headers });
 }
 
-function safeError(status: number, clearCookie = false): Response {
-  const state: SafeError = status === 409 ? "conflict" : [400, 401, 403].includes(status) ? "access" : "unavailable";
-  return jsonResponse({ error: state }, status, clearCookie ? expiredScoringSessionCookie() : undefined);
+function safeError(status: number, clearCookie = false, explicitState?: SafeError, sourceHeaders?: Headers): Response {
+  const state: SafeError =
+    explicitState ??
+    (status === 409
+      ? "conflict"
+      : status === 410
+        ? "expired"
+        : status === 429
+          ? "rate_limited"
+          : [400, 401, 403].includes(status)
+            ? "access"
+            : "unavailable");
+  const response = jsonResponse({ error: state }, status, clearCookie ? expiredScoringSessionCookie() : undefined);
+  for (const name of ["ratelimit-limit", "ratelimit-remaining", "ratelimit-reset", "retry-after"]) {
+    const value = sourceHeaders?.get(name);
+    if (value) response.headers.set(name, value);
+  }
+  return response;
 }
 
 function exposedStatus(status: number): number {
-  return [400, 401, 403, 409, 422, 429].includes(status) ? status : 503;
+  return [400, 401, 403, 409, 410, 422, 429].includes(status) ? status : 503;
 }
 
 function sameOriginMutation(request: Request): boolean {
@@ -123,14 +138,15 @@ function cookieValue(request: Request): string | null {
   return null;
 }
 
-function authHeaders(auth: ScoringServerAuth): HeadersInit {
-  return {
+function authHeaders(auth: ScoringServerAuth): Headers {
+  const headers = new Headers({
     accept: "application/json",
     "content-type": "application/json",
     "x-scoring-session-id": auth.sessionId,
     "x-scoring-session-token": auth.sessionToken,
-    "x-writer-generation": String(auth.generation),
-  };
+  });
+  if (auth.generation !== null) headers.set("x-writer-generation", String(auth.generation));
+  return headers;
 }
 
 function authenticatedRequest(request: Request): { auth: ScoringServerAuth; baseUrl: URL } | { response: Response } {
@@ -179,6 +195,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
   const source = value as Record<string, unknown>;
   const competition = source.competition as Record<string, unknown> | null;
   const match = source.match as Record<string, unknown> | null;
+  const access = source.access as Record<string, unknown> | null;
   const writer = source.writer as Record<string, unknown> | null;
   const score = source.score as Record<string, unknown> | null;
   const home = match?.home as Record<string, unknown> | null;
@@ -188,6 +205,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     typeof competition.slug !== "string" ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(competition.slug) ||
     !match ||
+    !access ||
     !writer ||
     !score ||
     !UUID_PATTERN.test(String(match.id ?? "")) ||
@@ -199,9 +217,14 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     nullableString(home.name, 200) === undefined ||
     nullableString(away.id, 64) === undefined ||
     nullableString(away.name, 200) === undefined ||
-    !Number.isSafeInteger(writer.generation) ||
-    typeof writer.expires_at !== "string" ||
+    !["writer", "candidate", "viewer", "transferred"].includes(String(access.mode ?? "")) ||
+    !Array.isArray(access.permissions) ||
+    !access.permissions.every((permission) => typeof permission === "string") ||
+    (writer.generation !== null && !Number.isSafeInteger(writer.generation)) ||
+    (writer.expires_at !== null && typeof writer.expires_at !== "string") ||
     typeof writer.read_only !== "boolean" ||
+    typeof access.session_expires_at !== "string" ||
+    !["none", "pending", "approved", "denied"].includes(String(source.takeover_status ?? "none")) ||
     !Number.isSafeInteger(score.home) ||
     !Number.isSafeInteger(score.away) ||
     !Number.isSafeInteger(source.through_sequence) ||
@@ -244,10 +267,14 @@ function scoringState(value: unknown): Record<string, unknown> | null {
       home: { id: home.id, name: home.name },
       away: { id: away.id, name: away.name },
     },
-    writer: {
+    access: {
+      mode: access.mode,
+      permissions: access.permissions,
       generation: writer.generation,
-      expires_at: writer.expires_at,
+      lease_expires_at: writer.expires_at,
+      expires_at: access.session_expires_at,
       read_only: writer.read_only,
+      takeover_status: source.takeover_status ?? "none",
     },
     score: { home: score.home, away: score.away },
     through_sequence: source.through_sequence,
@@ -255,16 +282,63 @@ function scoringState(value: unknown): Record<string, unknown> | null {
   };
 }
 
-function exchangeInput(value: unknown): { token?: string; short_code?: string } | null {
+function refreshAuthFromState(auth: ScoringServerAuth, state: Record<string, unknown>): ScoringServerAuth | null {
+  const access = state.access;
+  if (!access || typeof access !== "object" || Array.isArray(access)) return null;
+  const source = access as Record<string, unknown>;
+  if (
+    (source.mode !== "writer" &&
+      source.mode !== "candidate" &&
+      source.mode !== "viewer" &&
+      source.mode !== "transferred") ||
+    !Array.isArray(source.permissions) ||
+    !source.permissions.every((permission) => typeof permission === "string") ||
+    (source.generation !== null && !Number.isSafeInteger(source.generation)) ||
+    typeof source.expires_at !== "string" ||
+    (source.lease_expires_at !== null && typeof source.lease_expires_at !== "string")
+  ) {
+    return null;
+  }
+  return {
+    ...auth,
+    mode: source.mode,
+    permissions: source.permissions as string[],
+    generation: source.generation as number | null,
+    expiresAt: source.expires_at,
+    leaseExpiresAt: source.lease_expires_at as string | null,
+  };
+}
+
+function exchangeInput(
+  value: unknown,
+): { token?: string; short_code?: string; device_id: string; device_label?: string } | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
   const token = input.token;
   const shortCode = input.shortCode;
+  const deviceId = input.deviceId;
+  const deviceLabel = input.deviceLabel;
+  if (
+    typeof deviceId !== "string" ||
+    !UUID_PATTERN.test(deviceId) ||
+    (deviceLabel !== undefined &&
+      (typeof deviceLabel !== "string" || deviceLabel.trim().length < 1 || deviceLabel.length > 80))
+  ) {
+    return null;
+  }
   if (isScoringAccessToken(token) && shortCode === undefined) {
-    return { token };
+    return {
+      token,
+      device_id: deviceId,
+      ...(typeof deviceLabel === "string" ? { device_label: deviceLabel.trim() } : {}),
+    };
   }
   if (typeof shortCode === "string" && /^\d{12}$/.test(shortCode) && token === undefined) {
-    return { short_code: shortCode };
+    return {
+      short_code: shortCode,
+      device_id: deviceId,
+      ...(typeof deviceLabel === "string" ? { device_label: deviceLabel.trim() } : {}),
+    };
   }
   return null;
 }
@@ -275,15 +349,22 @@ function exchangedAuth(value: unknown): ScoringServerAuth | null {
   const auth = {
     sessionId: source.session_id,
     sessionToken: source.session_token,
+    mode: source.mode,
+    permissions: source.permissions,
     generation: source.generation,
     matchId: source.match_id,
     expiresAt: source.expires_at,
+    leaseExpiresAt: source.lease_expires_at,
   };
   return typeof auth.sessionId === "string" &&
     typeof auth.sessionToken === "string" &&
-    typeof auth.generation === "number" &&
+    (auth.mode === "writer" || auth.mode === "candidate" || auth.mode === "viewer" || auth.mode === "transferred") &&
+    Array.isArray(auth.permissions) &&
+    auth.permissions.every((permission) => typeof permission === "string") &&
+    (auth.generation === null || typeof auth.generation === "number") &&
     typeof auth.matchId === "string" &&
-    typeof auth.expiresAt === "string"
+    typeof auth.expiresAt === "string" &&
+    (auth.leaseExpiresAt === null || typeof auth.leaseExpiresAt === "string")
     ? (auth as ScoringServerAuth)
     : null;
 }
@@ -334,6 +415,24 @@ async function upstreamFetch(url: URL, init: RequestInit): Promise<Response | nu
   }
 }
 
+async function upstreamSafeError(response: Response, clearCookie = false): Promise<Response> {
+  const payload = await readJson(response);
+  const envelope =
+    payload && typeof payload === "object" && (payload as Record<string, unknown>).error
+      ? ((payload as Record<string, unknown>).error as Record<string, unknown>)
+      : null;
+  const code = envelope && typeof envelope.code === "string" ? envelope.code : "";
+  const state: SafeError | undefined =
+    code === "ACCESS_RATE_LIMITED"
+      ? "rate_limited"
+      : code === "ACCESS_REVOKED" || code === "SCORING_SESSION_REVOKED"
+        ? "revoked"
+        : code === "ACCESS_EXPIRED" || code === "SCORING_SESSION_EXPIRED"
+          ? "expired"
+          : undefined;
+  return safeError(exposedStatus(response.status), clearCookie, state, response.headers);
+}
+
 export async function exchangeScoringSession(request: Request): Promise<Response> {
   if (!sameOriginMutation(request)) return safeError(403);
   const baseUrl = apiBaseUrl();
@@ -354,7 +453,7 @@ export async function exchangeScoringSession(request: Request): Promise<Response
   });
   if (!exchange) return safeError(503);
   if (!exchange.ok) {
-    return safeError(exposedStatus(exchange.status), [401, 403].includes(exchange.status));
+    return upstreamSafeError(exchange, [401, 403, 410, 429].includes(exchange.status));
   }
   const auth = exchangedAuth(await readJson(exchange));
   if (!auth) return safeError(503);
@@ -371,8 +470,8 @@ export async function exchangeScoringSession(request: Request): Promise<Response
   if (!stateResponse) return withCookie(safeError(503), cookie);
   if (!stateResponse.ok) {
     return [401, 403].includes(stateResponse.status)
-      ? safeError(exposedStatus(stateResponse.status), true)
-      : withCookie(safeError(exposedStatus(stateResponse.status)), cookie);
+      ? upstreamSafeError(stateResponse, true)
+      : withCookie(await upstreamSafeError(stateResponse), cookie);
   }
   const state = scoringState(await readJson(stateResponse));
   if (!state) return withCookie(safeError(503), cookie);
@@ -380,6 +479,17 @@ export async function exchangeScoringSession(request: Request): Promise<Response
 }
 
 export async function recoverScoringSession(request: Request): Promise<Response> {
+  if (!cookieValue(request)) {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "cache-control": "private, no-store",
+        pragma: "no-cache",
+        vary: "Cookie",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  }
   const authenticated = authenticatedRequest(request);
   if ("response" in authenticated) return authenticated.response;
   const upstream = await upstreamFetch(new URL("/api/v1/scoring/session", authenticated.baseUrl), {
@@ -387,9 +497,128 @@ export async function recoverScoringSession(request: Request): Promise<Response>
     cache: "no-store",
   });
   if (!upstream) return safeError(503);
-  if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));
+  if (!upstream.ok) return upstreamSafeError(upstream, [401, 403, 410].includes(upstream.status));
   const state = scoringState(await readJson(upstream));
-  return state ? jsonResponse(state, 200) : safeError(503);
+  const sessionSealer = sealer();
+  if (!state || !sessionSealer) return safeError(503);
+  const refreshedAuth = refreshAuthFromState(authenticated.auth, state);
+  if (!refreshedAuth) return safeError(503, true);
+  try {
+    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+  } catch {
+    return safeError(503, true);
+  }
+}
+
+function heartbeatInput(value: unknown): Record<string, number> | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const lastAcknowledgedSequence = source.lastAcknowledgedSequence;
+  const pendingEventCount = source.pendingEventCount;
+  const pendingThroughSequence = source.pendingThroughSequence;
+  if (
+    !Number.isSafeInteger(lastAcknowledgedSequence) ||
+    Number(lastAcknowledgedSequence) < 0 ||
+    !Number.isSafeInteger(pendingEventCount) ||
+    Number(pendingEventCount) < 0 ||
+    (pendingThroughSequence !== null &&
+      (!Number.isSafeInteger(pendingThroughSequence) || Number(pendingThroughSequence) < 0))
+  ) {
+    return null;
+  }
+  return {
+    last_acknowledged_sequence: Number(lastAcknowledgedSequence),
+    pending_event_count: Number(pendingEventCount),
+    pending_through_sequence:
+      pendingThroughSequence === null ? Number(lastAcknowledgedSequence) : Number(pendingThroughSequence),
+  };
+}
+
+export async function heartbeatScoringSession(request: Request): Promise<Response> {
+  if (!sameOriginMutation(request)) return safeError(403);
+  const authenticated = authenticatedRequest(request);
+  if ("response" in authenticated) return authenticated.response;
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return safeError(400);
+  }
+  const input = heartbeatInput(body);
+  if (!input) return safeError(400);
+  const heartbeat = await upstreamFetch(new URL("/api/v1/scoring/sessions/heartbeat", authenticated.baseUrl), {
+    method: "POST",
+    headers: authHeaders(authenticated.auth),
+    body: JSON.stringify(input),
+  });
+  if (!heartbeat) return safeError(503);
+  if (!heartbeat.ok) return upstreamSafeError(heartbeat, [401, 403, 410].includes(heartbeat.status));
+  const heartbeatPayload = await readJson(heartbeat);
+  const heartbeatState =
+    heartbeatPayload && typeof heartbeatPayload === "object" ? (heartbeatPayload as Record<string, unknown>) : null;
+  const refreshedAuth: ScoringServerAuth =
+    heartbeatState &&
+    (heartbeatState.mode === "writer" ||
+      heartbeatState.mode === "candidate" ||
+      heartbeatState.mode === "viewer" ||
+      heartbeatState.mode === "transferred") &&
+    (heartbeatState.generation === null || Number.isSafeInteger(heartbeatState.generation)) &&
+    typeof heartbeatState.session_expires_at === "string" &&
+    (heartbeatState.lease_expires_at === null || typeof heartbeatState.lease_expires_at === "string")
+      ? {
+          ...authenticated.auth,
+          mode: heartbeatState.mode,
+          generation: heartbeatState.generation as number | null,
+          expiresAt: heartbeatState.session_expires_at,
+          leaseExpiresAt: heartbeatState.lease_expires_at as string | null,
+        }
+      : authenticated.auth;
+  const stateResponse = await upstreamFetch(new URL("/api/v1/scoring/session", authenticated.baseUrl), {
+    headers: authHeaders(refreshedAuth),
+    cache: "no-store",
+  });
+  if (!stateResponse) return safeError(503);
+  if (!stateResponse.ok) return upstreamSafeError(stateResponse, [401, 403, 410].includes(stateResponse.status));
+  const state = scoringState(await readJson(stateResponse));
+  const sessionSealer = sealer();
+  if (!state || !sessionSealer) return safeError(503);
+  try {
+    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+  } catch {
+    return safeError(503, true);
+  }
+}
+
+export async function requestScoringTakeover(request: Request): Promise<Response> {
+  if (!sameOriginMutation(request)) return safeError(403);
+  const authenticated = authenticatedRequest(request);
+  if ("response" in authenticated) return authenticated.response;
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return safeError(400);
+  }
+  const input = heartbeatInput({
+    ...(body && typeof body === "object" ? body : {}),
+    lastAcknowledgedSequence: 0,
+  });
+  if (!input) return safeError(400);
+  const takeover = await upstreamFetch(new URL("/api/v1/scoring/takeover-requests", authenticated.baseUrl), {
+    method: "POST",
+    headers: authHeaders(authenticated.auth),
+    body: JSON.stringify({
+      pending_event_count: input.pending_event_count,
+      pending_through_sequence: input.pending_through_sequence ?? 0,
+    }),
+  });
+  if (!takeover) return safeError(503);
+  if (!takeover.ok) return upstreamSafeError(takeover, [401, 403, 410].includes(takeover.status));
+  const payload = await readJson(takeover);
+  const requestId = payload && typeof payload === "object" ? (payload as Record<string, unknown>).id : undefined;
+  return typeof requestId === "string" && UUID_PATTERN.test(requestId)
+    ? jsonResponse({ status: "pending", requestId }, 202)
+    : safeError(503);
 }
 
 export async function appendScoringEvent(request: Request): Promise<Response> {
