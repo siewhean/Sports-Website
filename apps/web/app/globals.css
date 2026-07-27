@@ -899,6 +899,22 @@
   grid-template-columns: minmax(0, 1.2fr) 130px minmax(160px, 0.7fr) minmax(220px, auto);
 }
 
+.p5-access > div > *,
+.p5-access-history li > *,
+.p5-takeovers li > *,
+.p5-takeover-dialog dl > div {
+  min-width: 0;
+}
+
+.p5-access > div code,
+.p5-access > div span,
+.p5-access-history li span,
+.p5-takeovers li span,
+.p5-takeovers time,
+.p5-takeover-dialog dd {
+  overflow-wrap: anywhere;
+}
+
 .p5-access__actions {
   display: flex !important;
   flex-wrap: wrap;
@@ -917,6 +933,7 @@
   border-radius: 999px;
   background: #fff;
   color: #202320;
+  min-height: 44px;
   font: 600 0.72rem/1 var(--font-sans);
   padding: 9px 12px;
 }
@@ -953,8 +970,8 @@
 
 .p5-access-dialog header button {
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   border: 0;
   background: transparent;
@@ -1128,7 +1145,7 @@
 }
 
 .p5-scoring-device input {
-  min-height: 40px;
+  min-height: 44px;
   border: 1px solid #a7aaa4;
   border-radius: 8px;
   padding: 8px 10px;
@@ -1136,10 +1153,49 @@
 }
 
 @media (max-width: 760px) {
+  .p5-access > div,
   .p5-takeovers li,
   .p5-access-history li,
   .p5-takeover-dialog dl {
-    grid-template-columns: 1fr;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .p5-access > div {
+    gap: 8px;
+    align-items: start;
+    padding: 14px 0;
+  }
+
+  .p5-access > div > span:nth-child(3) {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    column-gap: 6px;
+    row-gap: 2px;
+    flex-wrap: wrap;
+    white-space: normal;
+    grid-column: 1 / -1;
+  }
+
+  .p5-access > div > span:nth-child(4) {
+    grid-column: 1 / -1;
+  }
+
+  .p5-access > div > span:nth-child(3) > * {
+    min-width: 0;
+  }
+
+  .p5-access > div > span:nth-child(3) > svg {
+    flex: 0 0 auto;
+  }
+
+  .p5-access__actions {
+    justify-content: flex-start;
+  }
+
+  .p5-access__actions small {
+    text-align: left;
   }
 
   .p5-scoring-device,
@@ -2613,6 +2669,19 @@ body:has(.p2-score-receipt) {
   .p2-access > div > span:nth-child(3) {
     grid-column: 1 / -1;
     grid-row: 2;
+  }
+
+  .p5-access > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .p5-access > div > span:nth-child(3) {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
+  .p5-access > div > span:nth-child(4) {
+    grid-column: 1 / -1;
   }
 
   .p2-audit li {

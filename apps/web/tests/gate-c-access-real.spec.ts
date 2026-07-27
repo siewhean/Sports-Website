@@ -119,14 +119,93 @@ async function attachSurface(page: Page, testInfo: TestInfo, name: string) {
   });
 }
 
+async function assertAccessSummaryReflows(page: Page): Promise<void> {
+  const layout = await page.locator(".p5-access > div").evaluateAll((elements) => {
+    const viewportWidth = document.documentElement.clientWidth;
+    return {
+      viewportWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      rows: elements.map((element, rowIndex) => {
+        const rectangle = element.getBoundingClientRect();
+        return {
+          rowIndex,
+          left: rectangle.left,
+          right: rectangle.right,
+          textContent: element.textContent ?? "",
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+        };
+      }),
+    };
+  });
+
+  expect(layout.rows.length).toBeGreaterThan(0);
+  expect(layout.documentScrollWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  for (const row of layout.rows) {
+    expect(row.left).toBeGreaterThanOrEqual(-1);
+    expect(row.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    if (Number(process.env.GATE_C_ACCESS_DEBUG_LAYOUT ?? 0)) {
+      console.log(
+        `layout-check row=${row.rowIndex} left=${row.left} right=${row.right} viewport=${layout.viewportWidth} scroll=${row.scrollWidth} client=${row.clientWidth}`,
+      );
+      console.log(`layout-check row=${row.rowIndex} text=${JSON.stringify(row.textContent)}`);
+    }
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+  }
+}
+
+async function debugLayoutRows(page: Page, label: string): Promise<void> {
+  if (!Number(process.env.GATE_C_ACCESS_DEBUG_LAYOUT ?? 0)) return;
+
+  const rows = await page.locator(".p5-access > div").evaluateAll((elements) =>
+    elements.map((element, rowIndex) => ({
+      rowIndex,
+      count: element.children.length,
+      text: element.textContent ?? "",
+      childWidths: Array.from(element.children).map((child) => {
+        const childRect = child.getBoundingClientRect();
+        return {
+          tagName: (child as Element).tagName,
+          className: (child as Element).className,
+          textLength: ((child as Element).textContent ?? "").length,
+          textSnippet: ((child as Element).textContent ?? "").slice(0, 64),
+          styleDisplay: getComputedStyle(child as Element).display,
+          styleWhiteSpace: getComputedStyle(child as Element).whiteSpace,
+          scrollWidth: (child as Element).scrollWidth,
+          clientWidth: (child as Element).clientWidth,
+          rectWidth: childRect.width,
+          rectRight: childRect.right,
+          rectLeft: childRect.left,
+        };
+      }),
+      className: element.className,
+      html: element.innerHTML.slice(0, 140),
+    })),
+  );
+  console.log(`layout-rows label=${label} count=${rows.length}`);
+  for (const row of rows) {
+    console.log(
+      `layout-rows label=${label} row=${row.rowIndex} children=${row.count} text=${JSON.stringify(row.text)}`,
+    );
+    for (const child of row.childWidths) {
+      console.log(
+        `layout-rows label=${label} row=${row.rowIndex} childTag=${child.tagName} class=${JSON.stringify(
+          child.className,
+        )} textLen=${child.textLength} text=${JSON.stringify(child.textSnippet)} display=${child.styleDisplay} whiteSpace=${child.styleWhiteSpace} rectW=${child.rectWidth.toFixed(2)} clientW=${child.clientWidth} scrollW=${child.scrollWidth} left=${child.rectLeft} right=${child.rectRight}`,
+      );
+    }
+  }
+}
+
 test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse", async ({
   browser,
   context,
   page,
 }, testInfo) => {
-  test.setTimeout(180_000);
+  test.setTimeout(120_000);
   const state = await seedState();
   const phone = testInfo.project.name.includes("phone");
+  if (phone) await page.setViewportSize({ width: 320, height: 800 });
   const [, organiserCookie] = state.organiserCookie.split("=", 2);
   if (!organiserCookie) throw new Error("Organiser cookie fixture is malformed");
   await context.addCookies([
@@ -146,8 +225,28 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   await dismissConsent(page);
   await expect(page.getByRole("heading", { name: "Match-scoped passes" })).toBeVisible();
   await assertNoWcagAOrAaViolations(page);
+  await debugLayoutRows(page, "before-first-assert");
+  await assertAccessSummaryReflows(page);
 
   const viewer = await issuePass(page, "viewer", state.matchId, true);
+  await debugLayoutRows(page, "after-issue-pass-before-mutate");
+  if (phone) {
+    await page
+      .locator(".p5-access > div")
+      .first()
+      .evaluate((row) => {
+        const cells = Array.from(row.children);
+        const title = cells[0]?.querySelector("strong");
+        const detail = cells[0]?.querySelector("small");
+        const expiry = cells[2];
+        if (title) title.textContent = "International Mixed Under-21 Championship Qualification Match 128";
+        if (detail) detail.textContent = "Very Long Home Team Name · Very Long Away Team Name";
+        if (expiry) expiry.append(" · 30 September 2026, 23:59:59 Singapore Standard Time");
+      });
+  }
+  await debugLayoutRows(page, "after-manual-mutate");
+  await assertAccessSummaryReflows(page);
+  if (phone) await attachSurface(page, testInfo, `${testInfo.project.name}-access-summary-320-reflow`);
   const viewerContext = await scoringContext(browser, page, phone);
   const viewerPage = await viewerContext.newPage();
   viewerPage.on("request", (request) => requestUrls.push(request.url()));
