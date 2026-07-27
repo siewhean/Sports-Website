@@ -1,10 +1,12 @@
 # Gate C — event-operation beta preparation and QC contract
 
-**Status:** PREPARED / BLOCKED
+**Status:** IN PROGRESS
 
-**Preparation branch:** `agent/gates-c-f-preparation-20260725`
+**Implementation branch:** `agent/gate-c-event-operations`
 
-**Dependency:** Rebase this commit onto the final, exact-SHA Gate B source before implementation or certification. The preparation branch currently descends from remote Gate B candidate `97c4712a7445b60cd7acd9fd79dd6896206bfc9e`; it must not overwrite or certify unpushed local Gate B work.
+**Certified Gate B base:** `d432cb4f7c8b8c419acb1c8f556ed02dcd48b834`
+
+**Dependency status:** Satisfied for implementation. This branch was created directly from the certified Gate B evidence commit and imported only the Gate C preparation contract from `a264fbefe4cd462c383937391a18bc4325777bb2`. Gate C certification remains blocked until every Gate C work package receives executable exact-SHA evidence and independent review.
 
 ## 1. Gate contract
 
@@ -26,20 +28,20 @@ Gate C cannot pass until concurrent-device, expired/revoked access, refresh/rest
 
 The repository already contains a useful vertical-slice foundation. This is not equivalent to Gate C completion.
 
-| Area | Current evidence | Readiness judgment |
-| --- | --- | --- |
-| Match-scoped access | `scoring_access_passes`, secret hashes, fallback-code hashes, expiry and revocation fields; organiser pass creation and revocation runtime | Strong foundation; QR rendering and dedicated code-attempt controls remain |
-| Writer fencing | `scoring_access_sessions`, `match_writer_leases`, monotonically increasing generation, stale-writer rejection | Strong server foundation |
-| Transfer | Runtime creates a replacement session, revokes the prior session, advances generation and audits transfer | Server path exists; device UX and unsynchronised-event transfer policy are not complete |
-| Append-only events | `score_events` uniqueness on `(match_id, client_event_id)` and `(match_id, sequence)` plus mutation-prevention trigger | Strong persistence foundation |
-| Event idempotency and ordering | Runtime checks duplicate client IDs, uses an advisory lock and allocates the next sequence transactionally | Strong online vertical slice; offline replay ordering is still missing |
-| Result projection | Match-result, standings, bracket and public projection snapshots exist; finalisation and organiser correction paths update projections | Strong Canoe Polo vertical slice; full Gate C public and downstream behavior still needs coverage |
-| Conflict fencing | Writer generation and downstream-correction conflict checks exist | Must be extended to offline/device-transfer conflicts and organiser review UX |
-| Web scoring | Phone scoring shell, access exchange, session recovery, manual event time, recent-event state and finalisation are present | Generic/Canoe Polo slice only; five-sport parity and full correction/transfer UX are missing |
-| BFF security | Same-origin mutation checks, sealed scoring-session cookie, strict payload parsing and safe upstream error mapping exist | Good boundary; must be penetration- and rate-limit-tested |
-| Offline | No authoritative durable browser queue, cached authorised match package, ordered replay protocol or restart recovery was identified | P0 blocker |
-| Printed fallback | No accepted schedule PDF and emergency score-sheet pack was identified | P0 blocker |
-| Real-device/load evidence | No final Gate C device matrix, score-write load evidence or public-update latency evidence exists | P0 blocker |
+| Area                           | Current evidence                                                                                                                           | Readiness judgment                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Match-scoped access            | `scoring_access_passes`, secret hashes, fallback-code hashes, expiry and revocation fields; organiser pass creation and revocation runtime | Strong foundation; QR rendering and dedicated code-attempt controls remain                        |
+| Writer fencing                 | `scoring_access_sessions`, `match_writer_leases`, monotonically increasing generation, stale-writer rejection                              | Strong server foundation                                                                          |
+| Transfer                       | Runtime creates a replacement session, revokes the prior session, advances generation and audits transfer                                  | Server path exists; device UX and unsynchronised-event transfer policy are not complete           |
+| Append-only events             | `score_events` uniqueness on `(match_id, client_event_id)` and `(match_id, sequence)` plus mutation-prevention trigger                     | Strong persistence foundation                                                                     |
+| Event idempotency and ordering | Runtime checks duplicate client IDs, uses an advisory lock and allocates the next sequence transactionally                                 | Strong online vertical slice; offline replay ordering is still missing                            |
+| Result projection              | Match-result, standings, bracket and public projection snapshots exist; finalisation and organiser correction paths update projections     | Strong Canoe Polo vertical slice; full Gate C public and downstream behavior still needs coverage |
+| Conflict fencing               | Writer generation and downstream-correction conflict checks exist                                                                          | Must be extended to offline/device-transfer conflicts and organiser review UX                     |
+| Web scoring                    | Phone scoring shell, access exchange, session recovery, manual event time, recent-event state and finalisation are present                 | Generic/Canoe Polo slice only; five-sport parity and full correction/transfer UX are missing      |
+| BFF security                   | Same-origin mutation checks, sealed scoring-session cookie, strict payload parsing and safe upstream error mapping exist                   | Good boundary; must be penetration- and rate-limit-tested                                         |
+| Offline                        | No authoritative durable browser queue, cached authorised match package, ordered replay protocol or restart recovery was identified        | P0 blocker                                                                                        |
+| Printed fallback               | No accepted schedule PDF and emergency score-sheet pack was identified                                                                     | P0 blocker                                                                                        |
+| Real-device/load evidence      | No final Gate C device matrix, score-write load evidence or public-update latency evidence exists                                          | P0 blocker                                                                                        |
 
 ## 3. Task-level gap matrix
 
