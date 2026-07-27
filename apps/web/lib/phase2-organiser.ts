@@ -348,9 +348,24 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     audit: [],
     scheduleRows: scheduleRows(matches, areas, schedule),
     accessPasses: records(payload.access_passes).flatMap((pass) => {
+      const id = string(pass.id);
       const matchId = string(pass.match_id);
-      if (!matchId) return [];
-      return [{ matchId, displayCode: "••••-••", expiresAt: dateTime(pass.expires_at, timezone) }];
+      const role = pass.role;
+      if (!id || !matchId || (role !== "viewer" && role !== "scorekeeper")) return [];
+      const revoked = Boolean(pass.revoked_at ?? pass.revoked);
+      const expiresAt = string(pass.expires_at);
+      const expired = expiresAt ? Date.parse(expiresAt) <= Date.now() : true;
+      return [
+        {
+          id,
+          matchId,
+          role,
+          displayCode: "••••••••••••",
+          expiresAt: dateTime(pass.expires_at, timezone),
+          revoked,
+          status: revoked ? "revoked" : expired ? "expired" : "active",
+        },
+      ];
     }),
     settings: settings
       ? [

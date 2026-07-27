@@ -64,7 +64,15 @@ export type CompetitionView = {
   bracket: Array<{ round: string; fixture: string; score: string; state: string }>;
   audit: Array<{ time: string; actor: string; action: string; detail: string }>;
   scheduleRows?: ReadonlyArray<{ id: string; time: string; cells: readonly string[] }>;
-  accessPasses?: ReadonlyArray<{ matchId: string; displayCode: string; expiresAt: string; scoringHref?: string }>;
+  accessPasses?: ReadonlyArray<{
+    id: string;
+    matchId: string;
+    role: "viewer" | "scorekeeper";
+    displayCode: string;
+    expiresAt: string;
+    revoked: boolean;
+    status: "active" | "expired" | "revoked";
+  }>;
   settings?: ReadonlyArray<readonly [string, string]>;
   capacityAreas?: ReadonlyArray<{ name: string; availability: string; slotCount: number | null }>;
   availableCapacity?: number | null;
@@ -95,7 +103,13 @@ export type ScoringAppendReceipt = {
   syncState: "acknowledged" | "pending";
 };
 
-export type ScoringAccessInput = { token: string; shortCode?: never } | { token?: never; shortCode: string };
+export type ScoringDeviceView = { id: string; label: string };
+
+export type ScoringAccessInput =
+  | { token: string; shortCode?: never; device: ScoringDeviceView }
+  | { token?: never; shortCode: string; device: ScoringDeviceView };
+
+export type ScoringAccessMode = "writer" | "candidate" | "viewer" | "transferred";
 
 export type ScoringSessionView = {
   competitionSlug: string;
@@ -107,6 +121,13 @@ export type ScoringSessionView = {
   homeScore: number;
   awayScore: number;
   events: ScoringEventCommand[];
+  throughSequence: number;
+  mode: ScoringAccessMode;
+  permissions: string[];
+  generation: number | null;
+  leaseExpiresAt: string | null;
+  expiresAt: string;
+  takeoverStatus: "none" | "pending" | "approved" | "denied";
   readOnly: boolean;
 };
 
@@ -120,6 +141,15 @@ export type FinalizeResultCommand = {
 export type ScoringCommandPort = {
   exchangeAccess(input: ScoringAccessInput): Promise<ScoringSessionView>;
   recoverSession(): Promise<ScoringSessionView | null>;
+  heartbeat(input: {
+    lastAcknowledgedSequence: number;
+    pendingEventCount: number;
+    pendingThroughSequence: number | null;
+  }): Promise<ScoringSessionView>;
+  requestTakeover(input: {
+    pendingEventCount: number;
+    pendingThroughSequence: number | null;
+  }): Promise<{ status: "pending"; requestId: string }>;
   appendEvent(command: ScoringEventCommand): Promise<ScoringAppendReceipt>;
   finalizeResult(command: FinalizeResultCommand): Promise<{ receiptId: string; publishedAt: string }>;
 };
@@ -249,6 +279,18 @@ export const phase2Copy = {
   writerActive: "Active scorer",
   synced: "Synced",
   readOnly: "Read only",
+  candidate: "Waiting for takeover",
+  candidateBody: "You can review the match, but only the active scorer can record events.",
+  transferred: "Scoring moved to another device",
+  transferredBody: "Your previous entries remain visible. This device can no longer change the match.",
+  checkingAccess: "Checking scoring access",
+  takeoverRequested: "Takeover requested",
+  requestTakeover: "Request scoring access",
+  sessionExpired: "This scoring session has expired",
+  sessionRevoked: "This scoring access was revoked",
+  rateLimited: "Too many access attempts. Wait before trying again.",
+  accessRestored: "Authoritative scoring access restored.",
+  leaseExpiring: "Writer access is expiring. Reconnecting now.",
   syncPending: "1 event pending sync",
   writerConflict: "Another device is the active scorer",
   writerConflictBody:
@@ -334,6 +376,15 @@ export const phase2Machine = {
   loading: "loading" as const,
   empty: "empty" as const,
   active: "active" as const,
+  candidate: "candidate" as const,
+  checking: "checking" as const,
+  conflict: "conflict" as const,
+  expired: "expired" as const,
+  rateLimited: "rate-limited" as const,
+  readOnly: "read-only" as const,
+  revoked: "revoked" as const,
+  transferred: "transferred" as const,
+  writer: "writer" as const,
   access: "access" as const,
   goal: "goal",
   home: "home" as const,
@@ -475,9 +526,33 @@ export const phase2Competition: CompetitionView = {
   ],
   scheduleRows: phase2ScheduleGrid.map((row, index) => ({ id: `demo-${index}`, time: row[0], cells: row.slice(1) })),
   accessPasses: [
-    { matchId: "M12", displayCode: "POLO-12", expiresAt: "11:00", scoringHref: "/score/m12-access" },
-    { matchId: "M13", displayCode: "••••-••", expiresAt: "10:30", scoringHref: "/score/m13-access" },
-    { matchId: "M14", displayCode: "••••-••", expiresAt: "10:30", scoringHref: "/score/m14-access" },
+    {
+      id: "pass-m12",
+      matchId: "M12",
+      role: "scorekeeper",
+      displayCode: "••••••••••••",
+      expiresAt: "11:00",
+      revoked: false,
+      status: "active",
+    },
+    {
+      id: "pass-m13",
+      matchId: "M13",
+      role: "viewer",
+      displayCode: "••••••••••••",
+      expiresAt: "10:30",
+      revoked: false,
+      status: "active",
+    },
+    {
+      id: "pass-m14",
+      matchId: "M14",
+      role: "scorekeeper",
+      displayCode: "••••••••••••",
+      expiresAt: "10:30",
+      revoked: false,
+      status: "active",
+    },
   ],
   settings: canoePoloSettings,
   capacityAreas: [

@@ -895,6 +895,273 @@
   height: 48px;
 }
 
+.p5-access > div {
+  grid-template-columns: minmax(0, 1.2fr) 130px minmax(160px, 0.7fr) minmax(220px, auto);
+}
+
+.p5-access__actions {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.p5-access__actions small {
+  flex-basis: 100%;
+  text-align: right;
+}
+
+.p5-access__actions button,
+.p5-access-reveal__actions button {
+  border: 1px solid #b9b7ae;
+  border-radius: 999px;
+  background: #fff;
+  color: #202320;
+  font: 600 0.72rem/1 var(--font-sans);
+  padding: 9px 12px;
+}
+
+.p5-access-dialog {
+  width: min(560px, calc(100% - 32px));
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid #202320;
+  border-radius: 20px;
+  color: #202320;
+}
+
+.p5-access-dialog::backdrop {
+  background: rgb(16 27 25 / 54%);
+}
+
+.p5-access-dialog > form,
+.p5-access-dialog > section {
+  display: grid;
+  gap: 20px;
+  padding: 28px;
+}
+
+.p5-access-dialog header,
+.p5-access-dialog footer,
+.p5-access-reveal__actions {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.p5-access-dialog header button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+}
+
+.p5-access-dialog label,
+.p5-access-dialog dl,
+.p5-access-dialog dl > div {
+  display: grid;
+  gap: 7px;
+}
+
+.p5-access-dialog input,
+.p5-access-dialog select,
+.p5-access-dialog textarea {
+  min-height: 46px;
+  border: 1px solid #aaa89f;
+  border-radius: 10px;
+  background: #fff;
+  color: #202320;
+  font: 500 0.9rem/1.3 var(--font-sans);
+  padding: 10px 12px;
+}
+
+.p5-access-dialog textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.p5-access-reveal img {
+  width: min(320px, 100%);
+  height: auto;
+  justify-self: center;
+}
+
+.p5-access-reveal code {
+  overflow-wrap: anywhere;
+}
+
+.p5-access-reveal__actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.p5-access-reveal__actions button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.p5-access-reveal__actions svg {
+  width: 16px;
+}
+
+.p5-takeovers {
+  margin-top: 38px;
+  padding-top: 28px;
+  border-top: 1px solid #202320;
+}
+
+.p5-access-history {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid #d7d3c8;
+}
+
+.p5-access-history ol {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.p5-access-history li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px minmax(160px, 0.7fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 0;
+  border-top: 1px solid #e2dfd7;
+}
+
+.p5-access-history li > span {
+  display: grid;
+}
+
+.p5-access-history li > span:nth-child(3) {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.p5-access-history small,
+.p5-access-history li > span:nth-child(3) {
+  color: #555a54;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.p5-takeovers > header,
+.p5-takeovers li {
+  display: grid;
+  gap: 18px;
+}
+
+.p5-takeovers ol {
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.p5-takeovers li {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  padding: 16px 0;
+  border-top: 1px solid #d7d3c8;
+}
+
+.p5-takeovers li > span {
+  display: grid;
+}
+
+.p5-takeovers time,
+.p5-takeovers small {
+  color: #71746e;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.p5-takeover-dialog dl {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.p5-takeover-warning {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #a86f16;
+  border-radius: 12px;
+  background: #fff7e6;
+}
+
+.p5-takeover-warning label {
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+}
+
+.p5-takeover-warning input {
+  min-height: 0;
+}
+
+.p5-scoring-device {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 10px;
+}
+
+.p5-scoring-device > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.p5-scoring-device label {
+  display: grid;
+  gap: 4px;
+}
+
+.p5-scoring-device input {
+  min-height: 40px;
+  border: 1px solid #a7aaa4;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+@media (max-width: 760px) {
+  .p5-takeovers li,
+  .p5-access-history li,
+  .p5-takeover-dialog dl {
+    grid-template-columns: 1fr;
+  }
+
+  .p5-scoring-device,
+  .p5-scoring-device > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media print {
+  body:has(.p5-access-reveal[open]) > *:not(.p5-access-reveal),
+  .p5-access-reveal[open] button {
+    display: none !important;
+  }
+
+  .p5-access-reveal[open] {
+    position: static;
+    display: block;
+    border: 0;
+  }
+}
+
 .p2-audit li {
   grid-template-columns: 86px minmax(0, 1fr) minmax(120px, 0.35fr);
   min-height: 76px;
@@ -1293,6 +1560,10 @@ body:has(.p2-score-receipt) {
   color: #cdd0cb;
   font-size: 0.73rem;
   font-weight: 620;
+}
+
+.p2-event-context small {
+  color: #b8bdb8;
 }
 
 .p2-input-icon {

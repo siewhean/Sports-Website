@@ -11,6 +11,7 @@ import { createOidcIdentityProvider } from "./oidc-provider.js";
 import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 import { Phase2Runtime } from "./phase-2-runtime.js";
+import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { Phase3Runtime } from "./phase-3-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
@@ -41,7 +42,16 @@ const identityRuntime = new IdentityApiRuntime(
   config.identity.csrfHmacSecret,
   systemClock,
 );
-const phase2Runtime = new Phase2Runtime(identitySql, phase2DomainAdapter);
+const phase2Runtime = new Phase2Runtime(
+  identitySql,
+  phase2DomainAdapter,
+  undefined,
+  new RedisScoringAccessRateLimiter(
+    rateLimitRedis,
+    config.scoringAccess.rateLimitHmacSecret,
+    `matchday:${config.environment}:scoring-access:`,
+  ),
+);
 const phase3Runtime = new Phase3Runtime(identitySql, phase3DomainAdapter);
 const scheduleQueue = new ScheduleJobQueue({
   queueName: schedulerQueueName(config.environment),

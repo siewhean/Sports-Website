@@ -13,6 +13,7 @@ export async function generateOpenApiDocument() {
     API_ALLOWED_ORIGINS: "https://app.matchday.example",
     LOG_LEVEL: "silent",
     IDENTITY_CSRF_HMAC_SECRET: "o".repeat(32),
+    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "openapi-scoring-access-rate-limit-secret",
     IDENTITY_PROVIDER: "oidc",
     IDENTITY_OIDC_ISSUER: "https://identity.matchday.example",
     IDENTITY_OIDC_CLIENT_ID: "openapi-client",

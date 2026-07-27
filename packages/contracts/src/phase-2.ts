@@ -58,7 +58,12 @@ export type ScoringSessionState = {
     home: { id: string | null; name: string | null };
     away: { id: string | null; name: string | null };
   };
-  writer: { generation: number; expires_at: string; read_only: boolean };
+  access: {
+    mode: "writer" | "candidate" | "viewer" | "transferred";
+    permissions: Array<"score:read" | "score:write" | "score:reverse" | "score:finalise">;
+    session_expires_at: string;
+  };
+  writer: { generation: number | null; expires_at: string | null; read_only: boolean };
   score: { home: number; away: number };
   through_sequence: number;
   events: Array<{

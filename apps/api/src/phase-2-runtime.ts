@@ -7,8 +7,77 @@ import type {
 } from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError } from "./errors.js";
+import {
+  NoopScoringAccessRateLimiter,
+  scoringAccessRateLimited,
+  type ScoringAccessRateLimitHeaders,
+  type ScoringAccessRateLimiter,
+} from "./scoring-access-rate-limit.js";
 
 export type Phase2Actor = { accountId: string };
+export type ScoringPermission = "score:read" | "score:write" | "score:reverse" | "score:finalise";
+export type ScoringSessionMode = "writer" | "candidate" | "viewer" | "transferred";
+export type ScoringSessionAuth = {
+  sessionId: string;
+  sessionToken: string;
+  generation?: number | null;
+};
+type IssuedAccessPass = {
+  id: string;
+  match_id: string;
+  role: "scorekeeper" | "viewer";
+  permissions: ScoringPermission[];
+  token: string;
+  short_code: string;
+  qr_path: string;
+  expires_at: string;
+  duplicate: false;
+  revoked: false;
+};
+type ExchangedScoringSession = {
+  session_id: string;
+  session_token: string;
+  match_id: string;
+  mode: ScoringSessionMode;
+  permissions: ScoringPermission[];
+  generation: number | null;
+  expires_at: string;
+  lease_expires_at: string | null;
+  rate_limit: ScoringAccessRateLimitHeaders;
+};
+
+export class ScoringAccessRateLimitError extends ApiError {
+  constructor(public readonly rateLimit: ScoringAccessRateLimitHeaders) {
+    super(429, "ACCESS_RATE_LIMITED", "Too many invalid access attempts. Try again later.");
+  }
+}
+
+export class ScoringAccessRejectedError extends ApiError {
+  constructor(
+    statusCode: number,
+    code: string,
+    message: string,
+    public readonly rateLimit: ScoringAccessRateLimitHeaders,
+  ) {
+    super(statusCode, code, message);
+  }
+}
+
+class ScoringAccessDeniedError extends ApiError {
+  constructor(
+    statusCode: number,
+    code: string,
+    message: string,
+    readonly accessContext: {
+      competitionId: string;
+      matchId: string;
+      accessPassId: string;
+      organisationId: string;
+    },
+  ) {
+    super(statusCode, code, message);
+  }
+}
 
 export type NormalizedMatch = {
   id: string;
@@ -166,6 +235,7 @@ export class Phase2Runtime {
     private readonly sql: PostgresJsSql,
     private readonly domain: Phase2DomainAdapter,
     private readonly now: () => Date = () => new Date(),
+    private readonly scoringAccessRateLimiter: ScoringAccessRateLimiter = new NoopScoringAccessRateLimiter(),
   ) {}
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -260,6 +330,153 @@ export class Phase2Runtime {
         occurredAt,
       ],
     );
+  }
+
+  private async recordAccessAttempt(input: {
+    requestId: string;
+    credential: string;
+    ipAddress: string;
+    credentialKind: "token" | "fallback_code";
+    outcome: string;
+    competitionId?: string | null;
+    matchId?: string | null;
+    accessPassId?: string | null;
+    organisationId?: string | null;
+    cooldownUntil?: Date | null;
+  }): Promise<void> {
+    const fingerprints = this.scoringAccessRateLimiter.fingerprints(input.credential, input.ipAddress);
+    await this.transaction(async (tx) => {
+      await tx.unsafe(
+        `INSERT INTO scoring_access_attempts (
+           competition_id,match_id,access_pass_id,credential_kind,outcome,
+           credential_hmac,ip_hmac,request_id,attempted_at,cooldown_until
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          input.competitionId ?? null,
+          input.matchId ?? null,
+          input.accessPassId ?? null,
+          input.credentialKind,
+          input.outcome,
+          fingerprints.credential,
+          fingerprints.ip,
+          input.requestId,
+          this.now(),
+          input.cooldownUntil ?? null,
+        ],
+      );
+      await tx.unsafe(
+        `INSERT INTO audit_events (
+           occurred_at,request_id,actor_account_id,actor_type,organisation_id,
+           action,target_type,target_id,reason,before_state,after_state,metadata
+         ) VALUES ($1,$2,NULL,'access_pass',$3,$4,$5,$6,NULL,NULL,NULL,$7::jsonb)`,
+        [
+          this.now(),
+          input.requestId,
+          input.organisationId ?? null,
+          `scoring_access.${input.outcome}`,
+          input.accessPassId ? "scoring_access_pass" : "scoring_access_attempt",
+          input.accessPassId ?? input.requestId,
+          JSON.stringify({
+            credential_kind: input.credentialKind,
+            match_id: input.matchId ?? null,
+            competition_id: input.competitionId ?? null,
+          }),
+        ],
+      );
+    });
+  }
+
+  private async recordScoringSessionDenial(
+    auth: ScoringSessionAuth,
+    requestId: string,
+    action: string,
+    errorCode: string,
+  ): Promise<void> {
+    const rows = await this.sql.unsafe<{
+      id: string;
+      session_token_hash: Buffer;
+      organisation_id: string;
+      match_id: string;
+    }>(
+      `SELECT s.id,s.session_token_hash,c.organisation_id,s.match_id
+       FROM scoring_access_sessions s
+       JOIN matches m ON m.id=s.match_id
+       JOIN competitions c ON c.id=m.competition_id
+       WHERE s.id=$1`,
+      [auth.sessionId],
+    );
+    const session = rows[0];
+    if (!session || !safeEqual(Buffer.from(session.session_token_hash), hashSecret(auth.sessionToken))) return;
+    await this.transaction(async (tx) => {
+      await tx.unsafe(
+        `INSERT INTO audit_events (
+           occurred_at,request_id,actor_account_id,actor_type,organisation_id,
+           action,target_type,target_id,reason,before_state,after_state,metadata
+         ) VALUES ($1,$2,NULL,'access_pass',$3,$4,'scoring_session',$5,NULL,NULL,NULL,$6::jsonb)`,
+        [
+          this.now(),
+          requestId,
+          session.organisation_id,
+          action,
+          session.id,
+          JSON.stringify({ error_code: errorCode, match_id: session.match_id }),
+        ],
+      );
+    });
+  }
+
+  private async recordStaleScoreSubmission(
+    auth: ScoringSessionAuth,
+    input: Omit<PersistedScoreEvent, "sequence">,
+    requestId: string,
+  ): Promise<void> {
+    const rows = await this.sql.unsafe<{
+      id: string;
+      session_token_hash: Buffer;
+      organisation_id: string;
+      match_id: string;
+    }>(
+      `SELECT s.id,s.session_token_hash,c.organisation_id,s.match_id
+       FROM scoring_access_sessions s
+       JOIN matches m ON m.id=s.match_id
+       JOIN competitions c ON c.id=m.competition_id
+       WHERE s.id=$1`,
+      [auth.sessionId],
+    );
+    const session = rows[0];
+    if (!session || !safeEqual(Buffer.from(session.session_token_hash), hashSecret(auth.sessionToken))) return;
+    await this.transaction(async (tx) => {
+      await tx.unsafe(
+        `INSERT INTO audit_events (
+           occurred_at,request_id,actor_account_id,actor_type,organisation_id,
+           action,target_type,target_id,reason,before_state,after_state,metadata
+         ) VALUES ($1,$2,NULL,'access_pass',$3,'scoring_event.stale_submission_rejected',
+                   'match',$4,$5,NULL,$6::jsonb,$7::jsonb)`,
+        [
+          this.now(),
+          requestId,
+          session.organisation_id,
+          session.match_id,
+          input.correctionReason,
+          JSON.stringify({
+            client_event_id: input.clientEventId,
+            event_type: input.type,
+            team_slot: input.teamSlot,
+            scorer: input.scorer,
+            manual_period: input.manualPeriod,
+            manual_event_seconds: input.manualEventSeconds,
+            payload: input.payload,
+            correction_reason: input.correctionReason,
+            occurred_at: input.occurredAt.toISOString(),
+          }),
+          JSON.stringify({
+            scoring_session_id: session.id,
+            submitted_generation: auth.generation ?? null,
+            retained_for_review: true,
+          }),
+        ],
+      );
+    });
   }
 
   async createCompetition(
@@ -761,12 +978,87 @@ export class Phase2Runtime {
     actor: Phase2Actor,
     competitionId: string,
     matchId: string,
-    expiresAt: string,
+    input: string,
+    requestId: string,
+  ): Promise<IssuedAccessPass>;
+  async createAccessPass(
+    actor: Phase2Actor,
+    competitionId: string,
+    matchId: string,
+    input: {
+      expiresAt: string;
+      role: "scorekeeper" | "viewer";
+      idempotencyKey: string;
+    },
+    requestId: string,
+  ): Promise<
+    | IssuedAccessPass
+    | (Omit<IssuedAccessPass, "token" | "short_code" | "qr_path" | "duplicate" | "revoked"> & {
+        token: null;
+        short_code: null;
+        qr_path: null;
+        duplicate: true;
+        revoked: boolean;
+      })
+  >;
+  async createAccessPass(
+    actor: Phase2Actor,
+    competitionId: string,
+    matchId: string,
+    input:
+      | string
+      | {
+          expiresAt: string;
+          role: "scorekeeper" | "viewer";
+          idempotencyKey: string;
+        },
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
-      if (new Date(expiresAt).getTime() <= this.now().getTime()) {
+      const normalized =
+        typeof input === "string"
+          ? { expiresAt: input, role: "scorekeeper" as const, idempotencyKey: requestId }
+          : input;
+      const permissions: ScoringPermission[] =
+        normalized.role === "viewer"
+          ? ["score:read"]
+          : ["score:read", "score:write", "score:reverse", "score:finalise"];
+      const replay = await tx.unsafe<{
+        id: string;
+        match_id: string;
+        role: "scorekeeper" | "viewer";
+        scope: ScoringPermission[] | string;
+        expires_at: Date | string;
+        revoked_at: Date | string | null;
+      }>(
+        `SELECT id,match_id,role,scope,expires_at,revoked_at
+         FROM scoring_access_passes
+         WHERE competition_id=$1 AND issuance_idempotency_key=$2`,
+        [competitionId, normalized.idempotencyKey],
+      );
+      if (replay[0]) {
+        if (
+          replay[0].match_id !== matchId ||
+          replay[0].role !== normalized.role ||
+          serializedDate(replay[0].expires_at) !== normalized.expiresAt
+        ) {
+          throw new ApiError(409, "ACCESS_IDEMPOTENCY_CONFLICT", "Idempotency key was used with different input");
+        }
+        return {
+          id: replay[0].id,
+          match_id: replay[0].match_id,
+          role: replay[0].role,
+          permissions: jsonValue<ScoringPermission[]>(replay[0].scope),
+          expires_at: serializedDate(replay[0].expires_at),
+          token: null,
+          short_code: null,
+          qr_path: null,
+          duplicate: true as const,
+          revoked: Boolean(replay[0].revoked_at),
+        };
+      }
+      if (new Date(normalized.expiresAt).getTime() <= this.now().getTime()) {
         throw new ApiError(422, "ACCESS_EXPIRY_INVALID", "Access expiry must be in the future");
       }
       const match = required(
@@ -786,14 +1078,66 @@ export class Phase2Runtime {
         shortCode = randomBytes(8).readBigUInt64BE().toString().slice(0, 12).padStart(12, "0");
         const rows = await tx.unsafe<{ id: string }>(
           `INSERT INTO scoring_access_passes (
-             match_id,secret_hash,short_code_hash,expires_at,created_by
-           ) VALUES ($1,$2,$3,$4,$5)
+             competition_id,match_id,secret_hash,short_code_hash,expires_at,created_by,
+             role,scope,issuance_idempotency_key
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,
+             CASE WHEN $7='viewer'
+               THEN '["score:read"]'::jsonb
+               ELSE '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
+             END,
+             $8
+           )
            ON CONFLICT DO NOTHING RETURNING id`,
-          [match.id, hashSecret(secret), hashSecret(shortCode), expiresAt, actor.accountId],
+          [
+            competitionId,
+            match.id,
+            hashSecret(secret),
+            hashSecret(shortCode),
+            normalized.expiresAt,
+            actor.accountId,
+            normalized.role,
+            normalized.idempotencyKey,
+          ],
         );
         pass = rows[0];
       }
-      if (!pass) throw new ApiError(503, "ACCESS_CODE_UNAVAILABLE", "A unique access code could not be issued");
+      if (!pass) {
+        const concurrentReplay = await tx.unsafe<{
+          id: string;
+          match_id: string;
+          role: "scorekeeper" | "viewer";
+          scope: ScoringPermission[] | string;
+          expires_at: Date | string;
+          revoked_at: Date | string | null;
+        }>(
+          `SELECT id,match_id,role,scope,expires_at,revoked_at FROM scoring_access_passes
+           WHERE competition_id=$1 AND issuance_idempotency_key=$2`,
+          [competitionId, normalized.idempotencyKey],
+        );
+        if (concurrentReplay[0]) {
+          if (
+            concurrentReplay[0].match_id !== matchId ||
+            concurrentReplay[0].role !== normalized.role ||
+            serializedDate(concurrentReplay[0].expires_at) !== normalized.expiresAt
+          ) {
+            throw new ApiError(409, "ACCESS_IDEMPOTENCY_CONFLICT", "Idempotency key was used with different input");
+          }
+          return {
+            id: concurrentReplay[0].id,
+            match_id: matchId,
+            role: concurrentReplay[0].role,
+            permissions: jsonValue<ScoringPermission[]>(concurrentReplay[0].scope),
+            expires_at: serializedDate(concurrentReplay[0].expires_at),
+            token: null,
+            short_code: null,
+            qr_path: null,
+            duplicate: true as const,
+            revoked: Boolean(concurrentReplay[0].revoked_at),
+          };
+        }
+        throw new ApiError(503, "ACCESS_CODE_UNAVAILABLE", "A unique access code could not be issued");
+      }
       await this.evidence(tx, {
         requestId,
         actorAccountId: actor.accountId,
@@ -801,27 +1145,124 @@ export class Phase2Runtime {
         action: "scoring_access.created",
         targetType: "scoring_access_pass",
         targetId: pass.id,
-        after: { match_id: matchId, expires_at: expiresAt },
+        after: { match_id: matchId, expires_at: normalized.expiresAt, role: normalized.role, permissions },
+        eventPayload: { competition_id: competitionId, match_id: matchId, role: normalized.role },
       });
       // Secrets are returned once and are deliberately absent from audit/outbox/log metadata.
-      return { id: pass.id, match_id: matchId, token: secret, short_code: shortCode, expires_at: expiresAt };
+      return {
+        id: pass.id,
+        match_id: matchId,
+        role: normalized.role,
+        permissions,
+        token: secret,
+        short_code: shortCode,
+        qr_path: `/score#access=${secret}`,
+        expires_at: normalized.expiresAt,
+        duplicate: false as const,
+        revoked: false,
+      };
     });
   }
 
-  async revokeAccessPass(actor: Phase2Actor, competitionId: string, passId: string, requestId: string) {
+  async rotateFallbackCode(
+    actor: Phase2Actor,
+    competitionId: string,
+    passId: string,
+    idempotencyKey: string,
+    requestId: string,
+  ) {
+    return this.transaction(async (tx) => {
+      const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      const pass = required(
+        await tx.unsafe<{ id: string; match_id: string; revoked_at: Date | string | null; expires_at: Date | string }>(
+          `SELECT id,match_id,revoked_at,expires_at FROM scoring_access_passes
+           WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
+          [passId, competitionId],
+        ),
+        "Access pass not found",
+      );
+      if (pass.revoked_at || date(pass.expires_at).getTime() <= this.now().getTime()) {
+        throw new ApiError(409, "ACCESS_INACTIVE", "Only an active access pass can be rotated");
+      }
+      const alreadyRotated = await tx.unsafe<{ request_id: string }>(
+        `SELECT request_id FROM audit_events
+         WHERE target_type='scoring_access_pass' AND target_id=$1
+           AND action='scoring_access.fallback_rotated'
+           AND metadata->>'idempotency_key'=$2 LIMIT 1`,
+        [passId, idempotencyKey],
+      );
+      if (alreadyRotated[0]) {
+        return { id: passId, short_code: null, duplicate: true as const };
+      }
+      let shortCode = "";
+      let rotated = false;
+      for (let attempt = 0; attempt < 5 && !rotated; attempt += 1) {
+        shortCode = randomBytes(8).readBigUInt64BE().toString().slice(0, 12).padStart(12, "0");
+        const rows = await tx.unsafe<{ id: string }>(
+          `UPDATE scoring_access_passes
+           SET short_code_hash=$3,fallback_code_rotated_at=$4
+           WHERE id=$1 AND competition_id=$2 RETURNING id`,
+          [passId, competitionId, hashSecret(shortCode), this.now()],
+        );
+        rotated = Boolean(rows[0]);
+      }
+      if (!rotated) throw new ApiError(503, "ACCESS_CODE_UNAVAILABLE", "A unique access code could not be issued");
+      await this.evidence(tx, {
+        requestId,
+        actorAccountId: actor.accountId,
+        organisationId: competition.organisation_id,
+        action: "scoring_access.fallback_rotated",
+        targetType: "scoring_access_pass",
+        targetId: passId,
+        metadata: { idempotency_key: idempotencyKey },
+        eventPayload: { competition_id: competitionId, match_id: pass.match_id },
+      });
+      return { id: passId, short_code: shortCode, duplicate: false as const };
+    });
+  }
+
+  async listAccessPasses(actor: Phase2Actor, competitionId: string) {
+    await this.requireCompetitionAccess(this.sql, competitionId, actor);
+    return this.sql.unsafe<Record<string, unknown>>(
+      `SELECT p.id,p.match_id,p.role,p.scope,p.expires_at,p.created_at,p.revoked_at,
+              p.fallback_code_rotated_at,p.revocation_reason,
+              CASE
+                WHEN p.revoked_at IS NOT NULL THEN 'revoked'
+                WHEN p.expires_at<=now() THEN 'expired'
+                ELSE 'active'
+              END AS status
+       FROM scoring_access_passes p
+       WHERE p.competition_id=$1 ORDER BY p.created_at DESC`,
+      [competitionId],
+    );
+  }
+
+  async revokeAccessPass(
+    actor: Phase2Actor,
+    competitionId: string,
+    passId: string,
+    requestId: string,
+    reason: string | null = null,
+  ) {
     return this.transaction(async (tx) => {
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
       const rows = await tx.unsafe<{ id: string }>(
-        `UPDATE scoring_access_passes p SET revoked_at=$4,revoked_by=$3
+        `UPDATE scoring_access_passes p SET revoked_at=$4,revoked_by=$3,revocation_reason=$5
          FROM matches m WHERE p.id=$1 AND p.match_id=m.id AND m.competition_id=$2 AND p.revoked_at IS NULL
          RETURNING p.id`,
-        [passId, competitionId, actor.accountId, this.now()],
+        [passId, competitionId, actor.accountId, this.now(), reason],
       );
       required(rows, "Active access pass not found");
       await tx.unsafe(
         `UPDATE scoring_access_sessions SET revoked_at=$2
          WHERE access_pass_id=$1 AND revoked_at IS NULL`,
         [passId, this.now()],
+      );
+      await tx.unsafe(
+        `DELETE FROM match_writer_leases l
+         USING scoring_access_sessions s
+         WHERE l.access_session_id=s.id AND s.access_pass_id=$1`,
+        [passId],
       );
       await this.evidence(tx, {
         requestId,
@@ -830,127 +1271,279 @@ export class Phase2Runtime {
         action: "scoring_access.revoked",
         targetType: "scoring_access_pass",
         targetId: passId,
+        reason,
+        eventPayload: { competition_id: competitionId },
       });
       return { id: passId, revoked: true as const };
     });
   }
 
-  async exchangeAccess(input: { token?: string; shortCode?: string; expectedMatchId?: string }, requestId: string) {
-    return this.transaction(async (tx) => {
-      if (Boolean(input.token) === Boolean(input.shortCode)) {
-        throw new ApiError(400, "ACCESS_SECRET_AMBIGUOUS", "Provide exactly one access token or short code");
-      }
-      const presented = input.token ?? input.shortCode;
-      if (!presented) throw new ApiError(400, "ACCESS_SECRET_REQUIRED", "Access token or code is required");
-      const digest = hashSecret(presented);
-      const column = input.token ? "secret_hash" : "short_code_hash";
-      const candidates = await tx.unsafe<{
-        id: string;
-        match_id: string;
-        secret_hash: Buffer;
-        short_code_hash: Buffer | null;
-        expires_at: Date | string;
-        revoked_at: Date | string | null;
-        organisation_id: string;
-        competition_status: string;
-      }>(
-        `SELECT p.id,p.match_id,p.secret_hash,p.short_code_hash,p.expires_at,p.revoked_at,c.organisation_id,
+  async exchangeAccess(
+    input: { token?: string; shortCode?: string; expectedMatchId?: string },
+    requestId: string,
+  ): Promise<ExchangedScoringSession & { generation: number; mode: "writer" }>;
+  async exchangeAccess(
+    input: {
+      token?: string;
+      shortCode?: string;
+      expectedMatchId?: string;
+      deviceId: string;
+      deviceLabel?: string;
+      ipAddress?: string;
+    },
+    requestId: string,
+  ): Promise<ExchangedScoringSession>;
+  async exchangeAccess(
+    input: {
+      token?: string;
+      shortCode?: string;
+      expectedMatchId?: string;
+      deviceId?: string;
+      deviceLabel?: string;
+      ipAddress?: string;
+    },
+    requestId: string,
+  ) {
+    if (Boolean(input.token) === Boolean(input.shortCode)) {
+      throw new ApiError(400, "ACCESS_SECRET_AMBIGUOUS", "Provide exactly one access token or short code");
+    }
+    const presented = input.token ?? input.shortCode;
+    if (!presented) throw new ApiError(400, "ACCESS_SECRET_REQUIRED", "Access token or code is required");
+    const ipAddress = input.ipAddress ?? "runtime-test";
+    const credentialKind = input.token ? ("token" as const) : ("fallback_code" as const);
+    const initialLimit = await this.scoringAccessRateLimiter.assertAllowed(presented, ipAddress);
+    if (scoringAccessRateLimited(initialLimit)) {
+      await this.recordAccessAttempt({
+        requestId,
+        credential: presented,
+        ipAddress,
+        credentialKind,
+        outcome: "rate_limited",
+        cooldownUntil: new Date(this.now().getTime() + (initialLimit.retryAfterSeconds ?? 0) * 1_000),
+      });
+      throw new ScoringAccessRateLimitError(initialLimit);
+    }
+    try {
+      const result = await this.transaction(async (tx) => {
+        if (Boolean(input.token) === Boolean(input.shortCode)) {
+          throw new ApiError(400, "ACCESS_SECRET_AMBIGUOUS", "Provide exactly one access token or short code");
+        }
+        const digest = hashSecret(presented);
+        const column = input.token ? "secret_hash" : "short_code_hash";
+        const candidates = await tx.unsafe<{
+          id: string;
+          competition_id: string;
+          match_id: string;
+          secret_hash: Buffer;
+          short_code_hash: Buffer | null;
+          role: "scorekeeper" | "viewer";
+          scope: ScoringPermission[] | string;
+          expires_at: Date | string;
+          revoked_at: Date | string | null;
+          organisation_id: string;
+          competition_status: string;
+        }>(
+          `SELECT p.id,p.competition_id,p.match_id,p.secret_hash,p.short_code_hash,p.role,p.scope,
+                p.expires_at,p.revoked_at,c.organisation_id,
                 c.status AS competition_status
          FROM scoring_access_passes p
          JOIN matches m ON m.id=p.match_id JOIN competitions c ON c.id=m.competition_id
          WHERE p.${column}=$1 LIMIT 1 FOR UPDATE OF p`,
-        [digest],
-      );
-      const pass = candidates[0];
-      const stored = input.token ? pass?.secret_hash : pass?.short_code_hash;
-      if (!pass || !stored || !safeEqual(Buffer.from(stored), digest)) {
-        throw new ApiError(403, "ACCESS_DENIED", "Access is invalid");
-      }
-      if (pass.competition_status === "archived") {
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
-      }
-      if (pass.revoked_at) throw new ApiError(403, "ACCESS_REVOKED", "Access has been revoked");
-      if (date(pass.expires_at).getTime() <= this.now().getTime())
-        throw new ApiError(403, "ACCESS_EXPIRED", "Access has expired");
-      if (input.expectedMatchId && input.expectedMatchId !== pass.match_id) {
-        throw new ApiError(403, "ACCESS_WRONG_MATCH", "Access does not belong to this match");
-      }
-      const sessionSecret = opaqueSecret();
-      const lease = await tx.unsafe<{ generation: number; expires_at: Date | string }>(
-        `SELECT generation,expires_at FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
-        [pass.match_id],
-      );
-      if (lease[0] && date(lease[0].expires_at).getTime() > this.now().getTime()) {
-        throw new ApiError(409, "WRITER_ACTIVE", "Another scorekeeper currently controls this match");
-      }
-      const generation = (lease[0]?.generation ?? 0) + 1;
-      const now = this.now();
-      const expiresAt = new Date(Math.min(date(pass.expires_at).getTime(), now.getTime() + 30 * 60_000));
-      const session = required(
-        await tx.unsafe<{ id: string }>(
-          `INSERT INTO scoring_access_sessions (
-             access_pass_id,match_id,session_token_hash,generation,issued_at,expires_at
-           ) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-          [pass.id, pass.match_id, hashSecret(sessionSecret), generation, now, expiresAt],
-        ),
-        "Scoring session was not created",
-      );
-      await tx.unsafe(
-        `INSERT INTO match_writer_leases (match_id,access_session_id,generation,acquired_at,expires_at)
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (match_id) DO UPDATE SET
-           access_session_id=EXCLUDED.access_session_id,generation=EXCLUDED.generation,
-           acquired_at=EXCLUDED.acquired_at,expires_at=EXCLUDED.expires_at`,
-        [pass.match_id, session.id, generation, now, expiresAt],
-      );
-      await this.evidence(tx, {
-        requestId,
-        actorAccountId: null,
-        actorType: "access_pass",
-        organisationId: pass.organisation_id,
-        action: "scoring_access.exchanged",
-        targetType: "scoring_session",
-        targetId: session.id,
-        after: { match_id: pass.match_id, generation, expires_at: expiresAt.toISOString() },
+          [digest],
+        );
+        const pass = candidates[0];
+        const stored = input.token ? pass?.secret_hash : pass?.short_code_hash;
+        if (!pass || !stored || !safeEqual(Buffer.from(stored), digest)) {
+          throw new ApiError(403, "ACCESS_DENIED", "Access is invalid");
+        }
+        if (pass.competition_status === "archived") {
+          throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+        }
+        const accessContext = {
+          competitionId: pass.competition_id,
+          matchId: pass.match_id,
+          accessPassId: pass.id,
+          organisationId: pass.organisation_id,
+        };
+        if (pass.revoked_at) {
+          throw new ScoringAccessDeniedError(403, "ACCESS_REVOKED", "Access has been revoked", accessContext);
+        }
+        if (date(pass.expires_at).getTime() <= this.now().getTime())
+          throw new ScoringAccessDeniedError(403, "ACCESS_EXPIRED", "Access has expired", accessContext);
+        if (input.expectedMatchId && input.expectedMatchId !== pass.match_id) {
+          throw new ScoringAccessDeniedError(
+            403,
+            "ACCESS_WRONG_MATCH",
+            "Access does not belong to this match",
+            accessContext,
+          );
+        }
+        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [pass.match_id]);
+        const sessionSecret = opaqueSecret();
+        const lease = await tx.unsafe<{ access_session_id: string; generation: number; expires_at: Date | string }>(
+          `SELECT access_session_id,generation,expires_at FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
+          [pass.match_id],
+        );
+        const now = this.now();
+        const expiresAt = new Date(Math.min(date(pass.expires_at).getTime(), now.getTime() + 30 * 60_000));
+        const activeLease = Boolean(lease[0] && date(lease[0].expires_at).getTime() > now.getTime());
+        if (!input.deviceId && activeLease) {
+          throw new ApiError(409, "WRITER_ACTIVE", "Another scorekeeper currently controls this match");
+        }
+        const mode: ScoringSessionMode = pass.role === "viewer" ? "viewer" : activeLease ? "candidate" : "writer";
+        const generation = mode === "writer" ? (lease[0]?.generation ?? 0) + 1 : null;
+        const leaseExpiresAt =
+          mode === "writer" ? new Date(Math.min(expiresAt.getTime(), now.getTime() + 45_000)) : null;
+        const deviceId = input.deviceId ?? opaqueSecret();
+        const session = required(
+          await tx.unsafe<{ id: string }>(
+            `INSERT INTO scoring_access_sessions (
+             access_pass_id,competition_id,match_id,session_token_hash,generation,issued_at,expires_at,
+             mode,device_id_hash,device_label,last_heartbeat_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$6) RETURNING id`,
+            [
+              pass.id,
+              pass.competition_id,
+              pass.match_id,
+              hashSecret(sessionSecret),
+              generation,
+              now,
+              expiresAt,
+              mode,
+              hashSecret(deviceId),
+              input.deviceLabel?.trim() || null,
+            ],
+          ),
+          "Scoring session was not created",
+        );
+        if (mode === "writer" && generation && leaseExpiresAt) {
+          await tx.unsafe(
+            `INSERT INTO match_writer_leases (
+             competition_id,match_id,access_session_id,generation,acquired_at,expires_at
+           ) VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (match_id) DO UPDATE SET
+             competition_id=EXCLUDED.competition_id,access_session_id=EXCLUDED.access_session_id,
+             generation=EXCLUDED.generation,acquired_at=EXCLUDED.acquired_at,expires_at=EXCLUDED.expires_at`,
+            [pass.competition_id, pass.match_id, session.id, generation, now, leaseExpiresAt],
+          );
+        }
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: null,
+          actorType: "access_pass",
+          organisationId: pass.organisation_id,
+          action: "scoring_access.exchanged",
+          targetType: "scoring_session",
+          targetId: session.id,
+          after: { match_id: pass.match_id, mode, generation, expires_at: expiresAt.toISOString() },
+          eventPayload: { competition_id: pass.competition_id, match_id: pass.match_id, mode },
+        });
+        return {
+          session_id: session.id,
+          session_token: sessionSecret,
+          match_id: pass.match_id,
+          mode,
+          permissions: jsonValue<ScoringPermission[]>(pass.scope),
+          generation,
+          expires_at: expiresAt.toISOString(),
+          lease_expires_at: leaseExpiresAt?.toISOString() ?? null,
+          rate_limit: initialLimit,
+          access_pass_id: pass.id,
+          competition_id: pass.competition_id,
+          organisation_id: pass.organisation_id,
+        };
       });
-      return {
-        session_id: session.id,
-        session_token: sessionSecret,
-        match_id: pass.match_id,
-        generation,
-        expires_at: expiresAt.toISOString(),
-      };
-    });
+      await this.scoringAccessRateLimiter.recordSuccess(presented, ipAddress);
+      await this.recordAccessAttempt({
+        requestId,
+        credential: presented,
+        ipAddress,
+        credentialKind,
+        outcome: "accepted",
+        competitionId: result.competition_id,
+        matchId: result.match_id,
+        accessPassId: result.access_pass_id,
+        organisationId: result.organisation_id,
+      });
+      const publicResult: Record<string, unknown> = { ...result };
+      delete publicResult.access_pass_id;
+      delete publicResult.competition_id;
+      delete publicResult.organisation_id;
+      return publicResult as ExchangedScoringSession;
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        ["ACCESS_DENIED", "ACCESS_WRONG_MATCH", "ACCESS_REVOKED", "ACCESS_EXPIRED"].includes(error.code)
+      ) {
+        const state = await this.scoringAccessRateLimiter.recordInvalid(presented, ipAddress);
+        const accessContext = error instanceof ScoringAccessDeniedError ? error.accessContext : null;
+        await this.recordAccessAttempt({
+          requestId,
+          credential: presented,
+          ipAddress,
+          credentialKind,
+          outcome:
+            error.code === "ACCESS_WRONG_MATCH"
+              ? "wrong_match"
+              : error.code === "ACCESS_REVOKED"
+                ? "revoked"
+                : error.code === "ACCESS_EXPIRED"
+                  ? "expired"
+                  : "invalid",
+          cooldownUntil: state.retryAfterSeconds
+            ? new Date(this.now().getTime() + state.retryAfterSeconds * 1_000)
+            : null,
+          ...(accessContext
+            ? {
+                competitionId: accessContext.competitionId,
+                matchId: accessContext.matchId,
+                accessPassId: accessContext.accessPassId,
+                organisationId: accessContext.organisationId,
+              }
+            : {}),
+        });
+        if (scoringAccessRateLimited(state)) throw new ScoringAccessRateLimitError(state);
+        throw new ScoringAccessRejectedError(error.statusCode, error.code, error.message, state);
+      }
+      throw error;
+    }
   }
 
   private async authenticateScoringSession(
     tx: PostgresJsSql,
     sessionId: string,
     sessionToken: string,
-    generation: number,
+    generation: number | null | undefined,
+    requireWriter = true,
   ) {
     const rows = await tx.unsafe<{
       id: string;
+      competition_id: string;
       match_id: string;
       session_token_hash: Buffer;
-      generation: number;
+      generation: number | null;
+      mode: ScoringSessionMode;
+      scope: ScoringPermission[] | string;
+      pass_expires_at: Date | string;
       expires_at: Date | string;
       revoked_at: Date | string | null;
       access_pass_id: string;
-      lease_session_id: string;
-      lease_generation: number;
-      lease_expires_at: Date | string;
+      lease_session_id: string | null;
+      lease_generation: number | null;
+      lease_expires_at: Date | string | null;
       organisation_id: string;
       division_id: string;
       competition_status: string;
     }>(
-      `SELECT s.id,s.match_id,s.session_token_hash,s.generation,s.expires_at,s.revoked_at,s.access_pass_id,
+      `SELECT s.id,s.competition_id,s.match_id,s.session_token_hash,s.generation,s.mode,s.expires_at,
+              s.revoked_at,s.access_pass_id,p.scope,p.expires_at AS pass_expires_at,
               l.access_session_id AS lease_session_id,l.generation AS lease_generation,l.expires_at AS lease_expires_at,
               c.organisation_id,m.division_id,c.status AS competition_status
        FROM scoring_access_sessions s
-       JOIN match_writer_leases l ON l.match_id=s.match_id
+       JOIN scoring_access_passes p ON p.id=s.access_pass_id
+       LEFT JOIN match_writer_leases l ON l.match_id=s.match_id
        JOIN matches m ON m.id=s.match_id JOIN competitions c ON c.id=m.competition_id
-       WHERE s.id=$1 FOR UPDATE OF s,l`,
+       WHERE s.id=$1 FOR UPDATE OF s`,
       [sessionId],
     );
     const session = rows[0];
@@ -961,25 +1554,29 @@ export class Phase2Runtime {
       throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
     }
     const now = this.now().getTime();
-    if (
-      session.lease_session_id !== session.id ||
-      session.lease_generation !== generation ||
-      session.generation !== generation ||
-      date(session.lease_expires_at).getTime() <= now
-    ) {
-      throw new ApiError(409, "STALE_WRITER_GENERATION", "A newer scorekeeper has control of this match");
+    if (session.revoked_at) {
+      throw new ApiError(403, "SCORING_SESSION_REVOKED", "Scoring session has been revoked");
     }
-    if (session.revoked_at || date(session.expires_at).getTime() <= now) {
+    if (date(session.expires_at).getTime() <= now) {
       throw new ApiError(403, "SCORING_SESSION_EXPIRED", "Scoring session has expired");
+    }
+    if (requireWriter) {
+      if (
+        session.mode !== "writer" ||
+        generation == null ||
+        session.lease_session_id !== session.id ||
+        session.lease_generation !== generation ||
+        session.generation !== generation ||
+        !session.lease_expires_at ||
+        date(session.lease_expires_at).getTime() <= now
+      ) {
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+      }
     }
     return session;
   }
 
-  async appendScoreEvent(
-    auth: { sessionId: string; sessionToken: string; generation: number },
-    input: Omit<PersistedScoreEvent, "sequence">,
-    requestId: string,
-  ) {
+  async appendScoreEvent(auth: ScoringSessionAuth, input: Omit<PersistedScoreEvent, "sequence">, requestId: string) {
     if (input.type === "goal_added" && (!input.teamSlot || !input.scorer?.trim())) {
       throw new ApiError(422, "GOAL_ATTRIBUTION_REQUIRED", "Goals require a team and scorer attribution");
     }
@@ -1006,110 +1603,445 @@ export class Phase2Runtime {
     if (input.type === "match_reopened" && !input.correctionReason?.trim()) {
       throw new ApiError(422, "REOPEN_REASON_REQUIRED", "Reopening a match requires a reason");
     }
-    return this.transaction(async (tx) => {
-      const session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
-      const duplicate = await tx.unsafe<{ sequence: number }>(
-        `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
-        [session.match_id, input.clientEventId],
-      );
-      if (duplicate[0]) return { duplicate: true as const, sequence: duplicate[0].sequence };
-      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
-      const next = await tx.unsafe<{ sequence: number }>(
-        `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
-        [session.match_id],
-      );
-      const sequence = next[0]?.sequence ?? 1;
-      await tx.unsafe(
-        `INSERT INTO score_events (
+    try {
+      return await this.transaction(async (tx) => {
+        let session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
+        session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+        const permissions = jsonValue<ScoringPermission[]>(session.scope);
+        const writerGeneration = session.generation;
+        if (!writerGeneration) {
+          throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+        }
+        if (input.type === "match_reopened" || input.type === "correction") {
+          throw new ApiError(403, "ORGANISER_PERMISSION_REQUIRED", "Reopening and correction are organiser-only");
+        }
+        const requiredPermission: ScoringPermission =
+          input.type === "goal_reversed" || input.type === "card_reversed" ? "score:reverse" : "score:write";
+        if (!permissions.includes(requiredPermission)) {
+          throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session lacks the required permission");
+        }
+        const duplicate = await tx.unsafe<{ sequence: number }>(
+          `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
+          [session.match_id, input.clientEventId],
+        );
+        if (duplicate[0]) return { duplicate: true as const, sequence: duplicate[0].sequence };
+        const next = await tx.unsafe<{ sequence: number }>(
+          `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
+          [session.match_id],
+        );
+        const sequence = next[0]?.sequence ?? 1;
+        await tx.unsafe(
+          `INSERT INTO score_events (
            match_id,client_event_id,sequence,writer_generation,event_type,team_slot,scorer,
            manual_period,manual_event_seconds,payload,actor_access_session_id,correction_reason,occurred_at
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)`,
-        [
-          session.match_id,
-          input.clientEventId,
-          sequence,
-          auth.generation,
-          input.type,
-          input.teamSlot,
-          input.scorer,
-          input.manualPeriod,
-          input.manualEventSeconds,
-          JSON.stringify(input.payload),
-          session.id,
-          input.correctionReason,
-          input.occurredAt,
-        ],
-      );
-      await tx.unsafe(
-        `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2)
+          [
+            session.match_id,
+            input.clientEventId,
+            sequence,
+            writerGeneration,
+            input.type,
+            input.teamSlot,
+            input.scorer,
+            input.manualPeriod,
+            input.manualEventSeconds,
+            JSON.stringify(input.payload),
+            session.id,
+            input.correctionReason,
+            input.occurredAt,
+          ],
+        );
+        await tx.unsafe(
+          `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2)
          WHERE competition_id=(SELECT competition_id FROM matches WHERE id=$1)`,
-        [session.match_id, this.now()],
-      );
-      await this.evidence(tx, {
-        requestId,
-        actorAccountId: null,
-        actorType: "access_pass",
-        organisationId: session.organisation_id,
-        action: `score.${input.type}.appended`,
-        targetType: "match",
-        targetId: session.match_id,
-        reason: input.correctionReason,
-        after: { client_event_id: input.clientEventId, sequence, generation: auth.generation },
+          [session.match_id, this.now()],
+        );
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: null,
+          actorType: "access_pass",
+          organisationId: session.organisation_id,
+          action: `score.${input.type}.appended`,
+          targetType: "match",
+          targetId: session.match_id,
+          reason: input.correctionReason,
+          after: { client_event_id: input.clientEventId, sequence, generation: writerGeneration },
+        });
+        return { duplicate: false as const, sequence };
       });
-      return { duplicate: false as const, sequence };
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "STALE_WRITER_GENERATION") {
+        await this.recordStaleScoreSubmission(auth, input, requestId);
+      }
+      throw error;
+    }
+  }
+
+  async transferWriter(auth: ScoringSessionAuth, requestId: string) {
+    void requestId;
+    return this.transaction(async (tx) => {
+      await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation, false);
+      throw new ApiError(
+        403,
+        "SELF_TRANSFER_FORBIDDEN",
+        "A writer cannot transfer itself. A candidate must request organiser approval.",
+      );
     });
   }
 
-  async transferWriter(auth: { sessionId: string; sessionToken: string; generation: number }, requestId: string) {
-    return this.transaction(async (tx) => {
-      const current = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
-      const sessionSecret = opaqueSecret();
-      const generation = current.generation + 1;
-      const now = this.now();
-      const expiresAt = new Date(Math.min(date(current.expires_at).getTime(), now.getTime() + 30 * 60_000));
-      const replacement = required(
-        await tx.unsafe<{ id: string }>(
-          `INSERT INTO scoring_access_sessions (
-             access_pass_id,match_id,session_token_hash,generation,issued_at,expires_at
-           ) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-          [current.access_pass_id, current.match_id, hashSecret(sessionSecret), generation, now, expiresAt],
-        ),
-        "Replacement scoring session was not created",
-      );
-      await tx.unsafe(`UPDATE scoring_access_sessions SET revoked_at=$2,transferred_to_session_id=$3 WHERE id=$1`, [
-        current.id,
-        now,
-        replacement.id,
-      ]);
-      await tx.unsafe(
-        `UPDATE match_writer_leases SET access_session_id=$2,generation=$3,acquired_at=$4,expires_at=$5 WHERE match_id=$1`,
-        [current.match_id, replacement.id, generation, now, expiresAt],
-      );
-      await this.evidence(tx, {
-        requestId,
-        actorAccountId: null,
-        actorType: "access_pass",
-        organisationId: current.organisation_id,
-        action: "scoring_writer.transferred",
-        targetType: "match",
-        targetId: current.match_id,
-        after: { generation, replaced_session_id: current.id },
+  async heartbeatScoringSession(
+    auth: ScoringSessionAuth,
+    input: {
+      lastAcknowledgedSequence: number;
+      pendingEventCount: number;
+      pendingThroughSequence: number;
+    },
+    requestId: string,
+  ) {
+    try {
+      return await this.transaction(async (tx) => {
+        let session = await this.authenticateScoringSession(
+          tx,
+          auth.sessionId,
+          auth.sessionToken,
+          auth.generation,
+          false,
+        );
+        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
+        session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation, false);
+        const now = this.now();
+        const renewedSessionExpiry = new Date(
+          Math.min(date(session.pass_expires_at).getTime(), now.getTime() + 30 * 60_000),
+        );
+        await tx.unsafe(
+          `UPDATE scoring_access_sessions SET
+           last_heartbeat_at=$2,last_acknowledged_sequence=$3,reported_pending_event_count=$4,
+           reported_pending_through_sequence=$5,expires_at=$6
+         WHERE id=$1`,
+          [
+            session.id,
+            now,
+            input.lastAcknowledgedSequence,
+            input.pendingEventCount,
+            input.pendingThroughSequence,
+            renewedSessionExpiry,
+          ],
+        );
+        let leaseExpiresAt: Date | null = null;
+        if (session.mode === "writer") {
+          if (auth.generation == null || session.generation !== auth.generation) {
+            throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+          }
+          leaseExpiresAt = new Date(Math.min(renewedSessionExpiry.getTime(), now.getTime() + 45_000));
+          const lease = await tx.unsafe<{ match_id: string }>(
+            `UPDATE match_writer_leases SET expires_at=$4
+           WHERE match_id=$1 AND access_session_id=$2 AND generation=$3 AND expires_at>$5
+           RETURNING match_id`,
+            [session.match_id, session.id, auth.generation, leaseExpiresAt, now],
+          );
+          if (!lease[0]) {
+            throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+          }
+        }
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: null,
+          actorType: "access_pass",
+          organisationId: session.organisation_id,
+          action: "scoring_session.heartbeat",
+          targetType: "scoring_session",
+          targetId: session.id,
+          after: {
+            mode: session.mode,
+            pending_event_count: input.pendingEventCount,
+            last_acknowledged_sequence: input.lastAcknowledgedSequence,
+          },
+          eventPayload: { match_id: session.match_id, mode: session.mode },
+        });
+        return {
+          mode: session.mode,
+          generation: session.generation,
+          session_expires_at: renewedSessionExpiry.toISOString(),
+          lease_expires_at: leaseExpiresAt?.toISOString() ?? null,
+          read_only: session.mode !== "writer",
+        };
       });
+    } catch (error) {
+      if (error instanceof ApiError && ["SCORING_SESSION_EXPIRED", "STALE_WRITER_GENERATION"].includes(error.code)) {
+        await this.recordScoringSessionDenial(auth, requestId, "scoring_session.heartbeat_denied", error.code);
+      }
+      throw error;
+    }
+  }
+
+  async requestTakeover(
+    auth: ScoringSessionAuth,
+    input: { pendingEventCount: number; pendingThroughSequence: number },
+    requestId: string,
+  ) {
+    return this.transaction(async (tx) => {
+      const candidate = await this.authenticateScoringSession(
+        tx,
+        auth.sessionId,
+        auth.sessionToken,
+        auth.generation,
+        false,
+      );
+      if (candidate.mode !== "candidate") {
+        throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
+      }
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [candidate.match_id]);
+      const lease = required(
+        await tx.unsafe<{ access_session_id: string }>(
+          `SELECT access_session_id FROM match_writer_leases
+           WHERE match_id=$1 AND expires_at>$2 FOR UPDATE`,
+          [candidate.match_id, this.now()],
+        ),
+        "Active writer lease not found",
+      );
+      const incumbent = required(
+        await tx.unsafe<{
+          last_heartbeat_at: Date | string | null;
+          reported_pending_event_count: number;
+        }>(
+          `SELECT last_heartbeat_at,reported_pending_event_count
+           FROM scoring_access_sessions WHERE id=$1 FOR UPDATE`,
+          [lease.access_session_id],
+        ),
+        "Incumbent scoring session not found",
+      );
+      const heartbeatRecent =
+        incumbent.last_heartbeat_at && date(incumbent.last_heartbeat_at).getTime() >= this.now().getTime() - 30_000;
+      const incumbentPendingState = !heartbeatRecent
+        ? "unknown"
+        : incumbent.reported_pending_event_count > 0
+          ? "present"
+          : "none";
+      await tx.unsafe(
+        `UPDATE scoring_access_sessions SET
+           last_heartbeat_at=$2,reported_pending_event_count=$3,reported_pending_through_sequence=$4
+         WHERE id=$1`,
+        [candidate.id, this.now(), input.pendingEventCount, input.pendingThroughSequence],
+      );
+      const insertedTakeover = await tx.unsafe<{ id: string; requested_at: Date | string }>(
+        `INSERT INTO scoring_takeover_requests (
+             competition_id,match_id,requesting_session_id,incumbent_session_id,status,
+             requester_pending_event_count,incumbent_pending_state,requested_at
+           ) VALUES ($1,$2,$3,$4,'pending',$5,$6,$7)
+           ON CONFLICT (match_id,requesting_session_id) WHERE status='pending'
+           DO NOTHING
+           RETURNING id,requested_at`,
+        [
+          candidate.competition_id,
+          candidate.match_id,
+          candidate.id,
+          lease.access_session_id,
+          input.pendingEventCount,
+          incumbentPendingState,
+          this.now(),
+        ],
+      );
+      const takeover =
+        insertedTakeover[0] ??
+        required(
+          await tx.unsafe<{ id: string; requested_at: Date | string }>(
+            `SELECT id,requested_at FROM scoring_takeover_requests
+             WHERE match_id=$1 AND requesting_session_id=$2 AND status='pending'`,
+            [candidate.match_id, candidate.id],
+          ),
+          "Takeover request was not created",
+        );
+      if (insertedTakeover[0]) {
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: null,
+          actorType: "access_pass",
+          organisationId: candidate.organisation_id,
+          action: "scoring_takeover.requested",
+          targetType: "scoring_takeover_request",
+          targetId: takeover.id,
+          after: { match_id: candidate.match_id, incumbent_pending_state: incumbentPendingState },
+          eventPayload: { competition_id: candidate.competition_id, match_id: candidate.match_id },
+        });
+      }
       return {
-        session_id: replacement.id,
-        session_token: sessionSecret,
-        match_id: current.match_id,
-        generation,
-        expires_at: expiresAt.toISOString(),
+        id: takeover.id,
+        status: "pending" as const,
+        incumbent_pending_state: incumbentPendingState,
+        requested_at: serializedDate(takeover.requested_at),
+        duplicate: !insertedTakeover[0],
       };
     });
   }
 
-  async finalise(
-    auth: { sessionId: string; sessionToken: string; generation: number },
-    clientEventId: string,
+  async listTakeoverRequests(actor: Phase2Actor, competitionId: string) {
+    await this.requireCompetitionAccess(this.sql, competitionId, actor);
+    return this.sql.unsafe<Record<string, unknown>>(
+      `SELECT tr.id,tr.match_id,tr.requesting_session_id,tr.incumbent_session_id,tr.status,
+              tr.requester_pending_event_count,tr.incumbent_pending_state,tr.requested_at,
+              tr.resolved_at,tr.resolution_reason,tr.override_acknowledged,
+              candidate.device_label AS requesting_device_label,
+              incumbent.device_label AS incumbent_device_label
+       FROM scoring_takeover_requests tr
+       JOIN scoring_access_sessions candidate ON candidate.id=tr.requesting_session_id
+       JOIN scoring_access_sessions incumbent ON incumbent.id=tr.incumbent_session_id
+       WHERE tr.competition_id=$1 ORDER BY tr.requested_at DESC`,
+      [competitionId],
+    );
+  }
+
+  async resolveTakeover(
+    actor: Phase2Actor,
+    competitionId: string,
+    takeoverId: string,
+    input: { decision: "approve" | "deny"; overrideAcknowledged: boolean; reason: string },
     requestId: string,
   ) {
+    return this.transaction(async (tx) => {
+      const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      const takeover = required(
+        await tx.unsafe<{
+          id: string;
+          match_id: string;
+          requesting_session_id: string;
+          incumbent_session_id: string;
+          status: string;
+          requester_pending_event_count: number;
+          incumbent_pending_state: "unknown" | "none" | "present";
+        }>(
+          `SELECT id,match_id,requesting_session_id,incumbent_session_id,status,
+                  requester_pending_event_count,incumbent_pending_state
+           FROM scoring_takeover_requests
+           WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
+          [takeoverId, competitionId],
+        ),
+        "Takeover request not found",
+      );
+      if (takeover.status !== "pending") {
+        throw new ApiError(409, "TAKEOVER_ALREADY_RESOLVED", "Takeover request is no longer pending");
+      }
+      if (input.reason.trim().length < 3) {
+        throw new ApiError(422, "TAKEOVER_REASON_REQUIRED", "A takeover decision requires a reason");
+      }
+      if (input.decision === "deny") {
+        await tx.unsafe(
+          `UPDATE scoring_takeover_requests SET
+             status='denied',resolved_at=$2,resolved_by_account_id=$3,resolution_reason=$4
+           WHERE id=$1`,
+          [takeover.id, this.now(), actor.accountId, input.reason.trim()],
+        );
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "scoring_takeover.denied",
+          targetType: "scoring_takeover_request",
+          targetId: takeover.id,
+          reason: input.reason.trim(),
+          eventPayload: { competition_id: competitionId, match_id: takeover.match_id },
+        });
+        return { id: takeover.id, status: "denied" as const };
+      }
+      if (takeover.incumbent_pending_state !== "none" && !input.overrideAcknowledged) {
+        throw new ApiError(
+          409,
+          "TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED",
+          "Pending or unknown incumbent state requires explicit organiser acknowledgement",
+        );
+      }
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [takeover.match_id]);
+      const lease = required(
+        await tx.unsafe<{ generation: number; access_session_id: string }>(
+          `SELECT generation,access_session_id FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
+          [takeover.match_id],
+        ),
+        "Writer lease not found",
+      );
+      if (lease.access_session_id !== takeover.incumbent_session_id) {
+        throw new ApiError(409, "TAKEOVER_STALE", "The active writer changed before approval");
+      }
+      const candidate = required(
+        await tx.unsafe<{ expires_at: Date | string; mode: ScoringSessionMode }>(
+          `SELECT expires_at,mode FROM scoring_access_sessions WHERE id=$1 FOR UPDATE`,
+          [takeover.requesting_session_id],
+        ),
+        "Candidate scoring session not found",
+      );
+      if (candidate.mode !== "candidate") {
+        throw new ApiError(409, "TAKEOVER_CANDIDATE_INACTIVE", "Candidate scoring session is no longer eligible");
+      }
+      const generation = lease.generation + 1;
+      const now = this.now();
+      const leaseExpiresAt = new Date(Math.min(date(candidate.expires_at).getTime(), now.getTime() + 45_000));
+      await tx.unsafe(
+        `UPDATE scoring_access_sessions SET mode='transferred',transferred_to_session_id=$2 WHERE id=$1`,
+        [takeover.incumbent_session_id, takeover.requesting_session_id],
+      );
+      await tx.unsafe(
+        `UPDATE scoring_access_sessions SET mode='writer',generation=$2,last_heartbeat_at=$3 WHERE id=$1`,
+        [takeover.requesting_session_id, generation, now],
+      );
+      await tx.unsafe(
+        `UPDATE match_writer_leases SET
+           access_session_id=$2,generation=$3,acquired_at=$4,expires_at=$5
+         WHERE match_id=$1`,
+        [takeover.match_id, takeover.requesting_session_id, generation, now, leaseExpiresAt],
+      );
+      await tx.unsafe(
+        `UPDATE scoring_takeover_requests SET
+           status='approved',resolved_at=$2,resolved_by_account_id=$3,resolution_reason=$4,
+           override_acknowledged=$5
+         WHERE id=$1`,
+        [takeover.id, now, actor.accountId, input.reason.trim(), input.overrideAcknowledged],
+      );
+      let conflictId: string | null = null;
+      if (takeover.incumbent_pending_state !== "none") {
+        const conflict = required(
+          await tx.unsafe<{ id: string }>(
+            `INSERT INTO scoring_transfer_conflicts (
+               competition_id,match_id,takeover_request_id,stale_session_id,replacement_session_id,
+               stale_generation,pending_event_count,pending_through_sequence,status,created_at
+             )
+             SELECT $1,$2,$3,$4,$5,$6,reported_pending_event_count,
+                    reported_pending_through_sequence,'open',$7
+             FROM scoring_access_sessions WHERE id=$4 RETURNING id`,
+            [
+              competitionId,
+              takeover.match_id,
+              takeover.id,
+              takeover.incumbent_session_id,
+              takeover.requesting_session_id,
+              lease.generation,
+              now,
+            ],
+          ),
+          "Transfer conflict was not created",
+        );
+        conflictId = conflict.id;
+      }
+      await this.evidence(tx, {
+        requestId,
+        actorAccountId: actor.accountId,
+        organisationId: competition.organisation_id,
+        action: "scoring_takeover.approved",
+        targetType: "scoring_takeover_request",
+        targetId: takeover.id,
+        reason: input.reason.trim(),
+        after: { generation, conflict_id: conflictId },
+        eventPayload: { competition_id: competitionId, match_id: takeover.match_id, generation },
+      });
+      return {
+        id: takeover.id,
+        status: "approved" as const,
+        generation,
+        lease_expires_at: leaseExpiresAt.toISOString(),
+        conflict_id: conflictId,
+      };
+    });
+  }
+
+  async finalise(auth: ScoringSessionAuth, clientEventId: string, requestId: string) {
     return this.publishResult(auth, { clientEventId, correctionReason: null }, requestId);
   }
 
@@ -1212,13 +2144,21 @@ export class Phase2Runtime {
   }
 
   private async publishResult(
-    auth: { sessionId: string; sessionToken: string; generation: number },
+    auth: ScoringSessionAuth,
     input: { clientEventId: string; correctionReason: string | null },
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
-      const session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+      let session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
+      session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+      const writerGeneration = session.generation;
+      if (!writerGeneration) {
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+      }
+      if (!jsonValue<ScoringPermission[]>(session.scope).includes("score:finalise")) {
+        throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session cannot finalise this match");
+      }
       const duplicate = await tx.unsafe<{ sequence: number }>(
         `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
         [session.match_id, input.clientEventId],
@@ -1248,7 +2188,7 @@ export class Phase2Runtime {
           session.match_id,
           input.clientEventId,
           sequence,
-          auth.generation,
+          writerGeneration,
           session.id,
           eventContext?.manual_period ?? 1,
           eventContext?.manual_event_seconds ?? 0,
@@ -1816,7 +2756,13 @@ export class Phase2Runtime {
         )
       )[0] ?? null;
     const accessPasses = await this.sql.unsafe<Record<string, unknown>>(
-      `SELECT p.id,p.match_id,p.role,p.scope,p.expires_at,p.created_at,p.revoked_at
+      `SELECT p.id,p.match_id,p.role,p.scope,p.expires_at,p.created_at,p.revoked_at,
+              p.fallback_code_rotated_at,p.revocation_reason,
+              CASE
+                WHEN p.revoked_at IS NOT NULL THEN 'revoked'
+                WHEN p.expires_at<=now() THEN 'expired'
+                ELSE 'active'
+              END AS status
        FROM scoring_access_passes p JOIN matches m ON m.id=p.match_id
        WHERE m.competition_id=$1 ORDER BY p.created_at DESC`,
       [competitionId],
@@ -1835,13 +2781,15 @@ export class Phase2Runtime {
     };
   }
 
-  async scoringSessionState(auth: {
-    sessionId: string;
-    sessionToken: string;
-    generation: number;
-  }): Promise<ScoringSessionState> {
+  async scoringSessionState(auth: ScoringSessionAuth): Promise<ScoringSessionState> {
     return this.transaction(async (tx) => {
-      const session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+      const session = await this.authenticateScoringSession(
+        tx,
+        auth.sessionId,
+        auth.sessionToken,
+        auth.generation,
+        false,
+      );
       const match = required(
         await tx.unsafe<{
           id: string;
@@ -1864,6 +2812,15 @@ export class Phase2Runtime {
         "Match not found",
       );
       const events = await this.persistedEvents(tx, session.match_id);
+      const writerActive =
+        session.mode === "writer" &&
+        session.lease_session_id === session.id &&
+        session.lease_generation === session.generation &&
+        Boolean(session.lease_expires_at && date(session.lease_expires_at).getTime() > this.now().getTime());
+      const writerLeaseExpiresAt =
+        session.mode === "writer" && session.lease_session_id === session.id && session.lease_expires_at
+          ? date(session.lease_expires_at).toISOString()
+          : null;
       const reversed = new Set(
         events
           .filter((event) => event.type === "goal_reversed")
@@ -1880,10 +2837,15 @@ export class Phase2Runtime {
           home: { id: match.home_entry_id, name: match.home_name },
           away: { id: match.away_entry_id, name: match.away_name },
         },
+        access: {
+          mode: session.mode,
+          permissions: jsonValue<ScoringPermission[]>(session.scope),
+          session_expires_at: date(session.expires_at).toISOString(),
+        },
         writer: {
           generation: session.generation,
-          expires_at: date(session.expires_at).toISOString(),
-          read_only: false,
+          expires_at: writerLeaseExpiresAt,
+          read_only: !writerActive,
         },
         score: {
           home: goals.filter((event) => event.teamSlot === "home").length,

@@ -3,7 +3,13 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
-import type { PersistedScoreEvent, Phase2Actor, Phase2Runtime } from "./phase-2-runtime.js";
+import {
+  ScoringAccessRateLimitError,
+  ScoringAccessRejectedError,
+  type PersistedScoreEvent,
+  type Phase2Actor,
+  type Phase2Runtime,
+} from "./phase-2-runtime.js";
 import type { Phase3Runtime } from "./phase-3-runtime.js";
 
 const Id = Type.String({ format: "uuid" });
@@ -17,7 +23,7 @@ const MutationHeaders = Type.Object({
 const ScoringHeaders = Type.Object({
   "x-scoring-session-id": Id,
   "x-scoring-session-token": Type.String({ minLength: 32, maxLength: 256 }),
-  "x-writer-generation": Type.String({ pattern: "^[1-9][0-9]*$" }),
+  "x-writer-generation": Type.Optional(Type.String({ pattern: "^[1-9][0-9]*$" })),
 });
 const GenericSuccess = Type.Record(Type.String(), Type.Any());
 const PublicParticipantSchema = Type.Object({
@@ -86,9 +92,26 @@ const ScoringSessionStateSchema = Type.Object({
     away: Type.Object({ id: Type.Union([Id, Type.Null()]), name: Type.Union([Type.String(), Type.Null()]) }),
   }),
   writer: Type.Object({
-    generation: Type.Integer({ minimum: 1 }),
-    expires_at: Type.String({ format: "date-time" }),
+    generation: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+    expires_at: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
     read_only: Type.Boolean(),
+  }),
+  access: Type.Object({
+    mode: Type.Union([
+      Type.Literal("writer"),
+      Type.Literal("candidate"),
+      Type.Literal("viewer"),
+      Type.Literal("transferred"),
+    ]),
+    permissions: Type.Array(
+      Type.Union([
+        Type.Literal("score:read"),
+        Type.Literal("score:write"),
+        Type.Literal("score:reverse"),
+        Type.Literal("score:finalise"),
+      ]),
+    ),
+    session_expires_at: Type.String({ format: "date-time" }),
   }),
   score: Type.Object({
     home: Type.Integer({ minimum: 0 }),
@@ -126,7 +149,7 @@ const ScoringSessionStateSchema = Type.Object({
 type ScoringHeaderValues = {
   "x-scoring-session-id": string;
   "x-scoring-session-token": string;
-  "x-writer-generation": string;
+  "x-writer-generation"?: string;
 };
 
 function requireOrigin(request: FastifyRequest, allowedOrigins: readonly string[]): void {
@@ -140,8 +163,18 @@ function scoringAuth(headers: ScoringHeaderValues) {
   return {
     sessionId: headers["x-scoring-session-id"],
     sessionToken: headers["x-scoring-session-token"],
-    generation: Number(headers["x-writer-generation"]),
+    generation: headers["x-writer-generation"] ? Number(headers["x-writer-generation"]) : null,
   };
+}
+
+function setAccessRateLimitHeaders(
+  reply: { header(name: string, value: string | number): unknown },
+  input: { limit: number; remaining: number; resetSeconds: number; retryAfterSeconds?: number },
+) {
+  reply.header("RateLimit-Limit", input.limit);
+  reply.header("RateLimit-Remaining", input.remaining);
+  reply.header("RateLimit-Reset", input.resetSeconds);
+  if (input.retryAfterSeconds) reply.header("Retry-After", input.retryAfterSeconds);
 }
 
 export async function registerPhase2Routes(
@@ -561,7 +594,7 @@ export async function registerPhase2Routes(
   app.post<{
     Params: { competitionId: string; matchId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { expires_at: string };
+    Body: { expires_at: string; role: "scorekeeper" | "viewer"; idempotency_key: string };
   }>(
     "/api/v1/competitions/:competitionId/matches/:matchId/access-passes",
     {
@@ -570,28 +603,81 @@ export async function registerPhase2Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id, matchId: Id }),
-        body: Type.Object({ expires_at: Type.String({ format: "date-time" }) }),
+        body: Type.Object(
+          {
+            expires_at: Type.String({ format: "date-time" }),
+            role: Type.Union([Type.Literal("scorekeeper"), Type.Literal("viewer")]),
+            idempotency_key: Type.String({ minLength: 8, maxLength: 160 }),
+          },
+          { additionalProperties: false },
+        ),
         response: { 201: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 422: ErrorResponse },
         tags: ["scoring-access"],
       },
     },
     async (request, reply) =>
-      reply
-        .code(201)
-        .send(
-          await options.runtime.createAccessPass(
-            await actor(request),
-            request.params.competitionId,
-            request.params.matchId,
-            request.body.expires_at,
-            request.id,
-          ),
+      reply.code(201).send(
+        await options.runtime.createAccessPass(
+          await actor(request),
+          request.params.competitionId,
+          request.params.matchId,
+          {
+            expiresAt: request.body.expires_at,
+            role: request.body.role,
+            idempotencyKey: request.body.idempotency_key,
+          },
+          request.id,
         ),
+      ),
+  );
+
+  app.get<{ Params: { competitionId: string } }>(
+    "/api/v1/competitions/:competitionId/access-passes",
+    {
+      schema: {
+        description: "List secret-free scoring access passes for an organiser.",
+        security: [{ sessionCookie: [] }],
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) => ({
+      access_passes: await options.runtime.listAccessPasses(await readActor(request), request.params.competitionId),
+    }),
+  );
+
+  app.post<{
+    Params: { competitionId: string; passId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { idempotency_key: string };
+  }>(
+    "/api/v1/competitions/:competitionId/access-passes/:passId/fallback-code/rotate",
+    {
+      schema: {
+        description: "Rotate and reveal a fallback number code once.",
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id, passId: Id }),
+        body: Type.Object({ idempotency_key: Type.String({ minLength: 8, maxLength: 160 }) }),
+        response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) =>
+      options.runtime.rotateFallbackCode(
+        await actor(request),
+        request.params.competitionId,
+        request.params.passId,
+        request.body.idempotency_key,
+        request.id,
+      ),
   );
 
   app.delete<{
     Params: { competitionId: string; passId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { reason?: string };
   }>(
     "/api/v1/competitions/:competitionId/access-passes/:passId",
     {
@@ -600,6 +686,7 @@ export async function registerPhase2Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id, passId: Id }),
+        body: Type.Optional(Type.Object({ reason: Type.Optional(Type.String({ minLength: 3, maxLength: 500 })) })),
         response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse },
         tags: ["scoring-access"],
       },
@@ -610,13 +697,22 @@ export async function registerPhase2Routes(
         request.params.competitionId,
         request.params.passId,
         request.id,
+        request.body?.reason ?? null,
       ),
   );
 
-  app.post<{ Body: { token?: string; short_code?: string; expected_match_id?: string } }>(
+  app.post<{
+    Body: {
+      token?: string;
+      short_code?: string;
+      expected_match_id?: string;
+      device_id: string;
+      device_label?: string;
+    };
+  }>(
     "/api/v1/scoring/access/exchange",
     {
-      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      config: { rateLimit: false },
       schema: {
         description:
           "Exchange a QR token or number code in the request body for a short-lived writer session. The secret never appears in the URL.",
@@ -625,6 +721,8 @@ export async function registerPhase2Routes(
             token: Type.Optional(Type.String({ minLength: 32, maxLength: 256 })),
             short_code: Type.Optional(Type.String({ pattern: "^[0-9]{12}$" })),
             expected_match_id: Type.Optional(Id),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            device_label: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
           },
           { additionalProperties: false },
         ),
@@ -638,22 +736,36 @@ export async function registerPhase2Routes(
         tags: ["scoring-access"],
       },
     },
-    async (request) =>
-      options.runtime.exchangeAccess(
-        {
-          ...(request.body.token ? { token: request.body.token } : {}),
-          ...(request.body.short_code ? { shortCode: request.body.short_code } : {}),
-          ...(request.body.expected_match_id ? { expectedMatchId: request.body.expected_match_id } : {}),
-        },
-        request.id,
-      ),
+    async (request, reply) => {
+      try {
+        const result = await options.runtime.exchangeAccess(
+          {
+            ...(request.body.token ? { token: request.body.token } : {}),
+            ...(request.body.short_code ? { shortCode: request.body.short_code } : {}),
+            ...(request.body.expected_match_id ? { expectedMatchId: request.body.expected_match_id } : {}),
+            deviceId: request.body.device_id,
+            ...(request.body.device_label ? { deviceLabel: request.body.device_label } : {}),
+            ipAddress: request.ip,
+          },
+          request.id,
+        );
+        setAccessRateLimitHeaders(reply, result.rate_limit);
+        return result;
+      } catch (error) {
+        if (error instanceof ScoringAccessRateLimitError || error instanceof ScoringAccessRejectedError) {
+          setAccessRateLimitHeaders(reply, error.rateLimit);
+        }
+        throw error;
+      }
+    },
   );
 
   app.post<{ Headers: ScoringHeaderValues }>(
     "/api/v1/scoring/sessions/transfer",
     {
       schema: {
-        description: "Explicitly transfer the active writer lease and fence the previous session.",
+        description:
+          "Deprecated self-transfer endpoint. Always rejects; candidates must request organiser-approved takeover.",
         headers: ScoringHeaders,
         security: [{ scoringSession: [] }],
         response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse },
@@ -662,6 +774,128 @@ export async function registerPhase2Routes(
     },
     async (request) => options.runtime.transferWriter(scoringAuth(request.headers), request.id),
   );
+
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: {
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+    };
+  }>(
+    "/api/v1/scoring/sessions/heartbeat",
+    {
+      schema: {
+        description: "Renew an authoritative scoring session and, for the active writer, its short lease.",
+        headers: ScoringHeaders,
+        security: [{ scoringSession: [] }],
+        body: Type.Object({
+          last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+          pending_event_count: Type.Integer({ minimum: 0 }),
+          pending_through_sequence: Type.Integer({ minimum: 0 }),
+        }),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) =>
+      options.runtime.heartbeatScoringSession(
+        scoringAuth(request.headers),
+        {
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+        },
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: { pending_event_count: number; pending_through_sequence: number };
+  }>(
+    "/api/v1/scoring/takeover-requests",
+    {
+      schema: {
+        description: "Request organiser approval for a candidate device to take the writer lease.",
+        headers: ScoringHeaders,
+        security: [{ scoringSession: [] }],
+        body: Type.Object({
+          pending_event_count: Type.Integer({ minimum: 0 }),
+          pending_through_sequence: Type.Integer({ minimum: 0 }),
+        }),
+        response: { 201: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request, reply) =>
+      reply.code(201).send(
+        await options.runtime.requestTakeover(
+          scoringAuth(request.headers),
+          {
+            pendingEventCount: request.body.pending_event_count,
+            pendingThroughSequence: request.body.pending_through_sequence,
+          },
+          request.id,
+        ),
+      ),
+  );
+
+  app.get<{ Params: { competitionId: string } }>(
+    "/api/v1/competitions/:competitionId/takeover-requests",
+    {
+      schema: {
+        description: "List scoring takeover requests for organiser review.",
+        security: [{ sessionCookie: [] }],
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: Type.Array(GenericSuccess), 401: ErrorResponse, 403: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) => options.runtime.listTakeoverRequests(await readActor(request), request.params.competitionId),
+  );
+
+  for (const decision of ["approve", "deny"] as const) {
+    app.post<{
+      Params: { competitionId: string; requestId: string };
+      Headers: { origin?: string; "x-csrf-token"?: string };
+      Body: { override_acknowledged?: boolean; reason: string };
+    }>(
+      `/api/v1/competitions/:competitionId/takeover-requests/:requestId/${decision}`,
+      {
+        schema: {
+          description: `${decision === "approve" ? "Approve" : "Deny"} a scoring writer takeover request.`,
+          security: [{ sessionCookie: [] }],
+          headers: MutationHeaders,
+          params: Type.Object({ competitionId: Id, requestId: Id }),
+          body: Type.Object({
+            override_acknowledged: Type.Optional(Type.Boolean()),
+            reason: Type.String({ minLength: 3, maxLength: 500 }),
+          }),
+          response: {
+            200: GenericSuccess,
+            401: ErrorResponse,
+            403: ErrorResponse,
+            409: ErrorResponse,
+            422: ErrorResponse,
+          },
+          tags: ["scoring-access"],
+        },
+      },
+      async (request) =>
+        options.runtime.resolveTakeover(
+          await actor(request),
+          request.params.competitionId,
+          request.params.requestId,
+          {
+            decision,
+            overrideAcknowledged: request.body.override_acknowledged ?? false,
+            reason: request.body.reason,
+          },
+          request.id,
+        ),
+    );
+  }
 
   app.get<{ Headers: ScoringHeaderValues }>(
     "/api/v1/scoring/session",
