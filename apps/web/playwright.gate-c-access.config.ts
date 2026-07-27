@@ -18,7 +18,10 @@ export default defineConfig({
   forbidOnly: true,
   retries: 0,
   preserveOutput: "always",
-  reporter: "list",
+  reporter: [
+    ["list"],
+    ["json", { outputFile: process.env.GATE_C_ACCESS_PLAYWRIGHT_JSON ?? "test-results/gate-c-access-results.json" }],
+  ],
   outputDir: process.env.PHASE2_E2E_OUTPUT_DIR,
   projects: [
     { name: "gate-c-access-phone-chromium", use: { ...devices["Pixel 7"] } },

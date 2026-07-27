@@ -41,11 +41,17 @@ local ip_count = redis.call("INCR", KEYS[2])
 if ip_count == 1 then redis.call("EXPIRE", KEYS[2], ARGV[1]) end
 local pair_ttl = redis.call("TTL", KEYS[1])
 local ip_ttl = redis.call("TTL", KEYS[2])
-if pair_count >= tonumber(ARGV[2]) or ip_count >= tonumber(ARGV[3]) then
+local pair_cooldown = 0
+local ip_cooldown = 0
+if pair_count >= tonumber(ARGV[2]) then
   redis.call("SET", KEYS[3], "1", "EX", ARGV[4])
-  return { pair_count, ip_count, pair_ttl, ip_ttl, tonumber(ARGV[4]) }
+  pair_cooldown = tonumber(ARGV[4])
 end
-return { pair_count, ip_count, pair_ttl, ip_ttl, 0 }
+if ip_count >= tonumber(ARGV[3]) then
+  redis.call("SET", KEYS[4], "1", "EX", ARGV[4])
+  ip_cooldown = tonumber(ARGV[4])
+end
+return { pair_count, ip_count, pair_ttl, ip_ttl, pair_cooldown, ip_cooldown }
 `;
 
 export class RedisScoringAccessRateLimiter implements ScoringAccessRateLimiter {
@@ -77,24 +83,40 @@ export class RedisScoringAccessRateLimiter implements ScoringAccessRateLimiter {
     return {
       pair: `${this.namespace}invalid:pair:${credentialHash}:${ipHash}`,
       ip: `${this.namespace}invalid:ip:${ipHash}`,
-      cooldown: `${this.namespace}cooldown:ip:${ipHash}`,
+      pairCooldown: `${this.namespace}cooldown:pair:${credentialHash}:${ipHash}`,
+      ipCooldown: `${this.namespace}cooldown:ip:${ipHash}`,
     };
   }
 
   async assertAllowed(credential: string, ipAddress: string): Promise<ScoringAccessRateLimitHeaders> {
     const keys = this.keys(credential, ipAddress);
-    const [cooldownTtl, pairCount, pairTtl, ipCount, ipTtl] = await this.redis
+    const [pairCooldownTtl, ipCooldownTtl, pairCount, pairTtl, ipCount, ipTtl] = await this.redis
       .multi()
-      .ttl(keys.cooldown)
+      .ttl(keys.pairCooldown)
+      .ttl(keys.ipCooldown)
       .get(keys.pair)
       .ttl(keys.pair)
       .get(keys.ip)
       .ttl(keys.ip)
       .exec()
       .then((rows) => rows?.map((entry) => entry[1]) ?? []);
-    const retryAfterSeconds = Math.max(Number(cooldownTtl ?? -1), 0);
-    if (retryAfterSeconds > 0) {
-      return { limit: this.policy.ipLimit, remaining: 0, resetSeconds: retryAfterSeconds, retryAfterSeconds };
+    const ipRetryAfterSeconds = Math.max(Number(ipCooldownTtl ?? -1), 0);
+    if (ipRetryAfterSeconds > 0) {
+      return {
+        limit: this.policy.ipLimit,
+        remaining: 0,
+        resetSeconds: ipRetryAfterSeconds,
+        retryAfterSeconds: ipRetryAfterSeconds,
+      };
+    }
+    const pairRetryAfterSeconds = Math.max(Number(pairCooldownTtl ?? -1), 0);
+    if (pairRetryAfterSeconds > 0) {
+      return {
+        limit: this.policy.pairLimit,
+        remaining: 0,
+        resetSeconds: pairRetryAfterSeconds,
+        retryAfterSeconds: pairRetryAfterSeconds,
+      };
     }
     const pairRemaining = Math.max(0, this.policy.pairLimit - Number(pairCount ?? 0));
     const ipRemaining = Math.max(0, this.policy.ipLimit - Number(ipCount ?? 0));
@@ -109,16 +131,18 @@ export class RedisScoringAccessRateLimiter implements ScoringAccessRateLimiter {
     const keys = this.keys(credential, ipAddress);
     const result = (await this.redis.eval(
       incrementScript,
-      3,
+      4,
       keys.pair,
       keys.ip,
-      keys.cooldown,
+      keys.pairCooldown,
+      keys.ipCooldown,
       this.policy.windowSeconds,
       this.policy.pairLimit,
       this.policy.ipLimit,
       this.policy.cooldownSeconds,
-    )) as [number, number, number, number, number];
-    const [pairCount, ipCount, pairTtl, ipTtl, cooldownTtl] = result.map(Number) as [
+    )) as [number, number, number, number, number, number];
+    const [pairCount, ipCount, pairTtl, ipTtl, pairCooldownTtl, ipCooldownTtl] = result.map(Number) as [
+      number,
       number,
       number,
       number,
@@ -128,16 +152,20 @@ export class RedisScoringAccessRateLimiter implements ScoringAccessRateLimiter {
     const pairRemaining = Math.max(0, this.policy.pairLimit - pairCount);
     const ipRemaining = Math.max(0, this.policy.ipLimit - ipCount);
     return {
-      limit: pairRemaining <= ipRemaining ? this.policy.pairLimit : this.policy.ipLimit,
+      limit: ipCooldownTtl > 0 || ipRemaining < pairRemaining ? this.policy.ipLimit : this.policy.pairLimit,
       remaining: Math.min(pairRemaining, ipRemaining),
-      resetSeconds: cooldownTtl || Math.max(pairTtl, ipTtl, 0),
-      ...(cooldownTtl > 0 ? { retryAfterSeconds: cooldownTtl } : {}),
+      resetSeconds: ipCooldownTtl || pairCooldownTtl || Math.max(pairTtl, ipTtl, 0),
+      ...(ipCooldownTtl > 0
+        ? { retryAfterSeconds: ipCooldownTtl }
+        : pairCooldownTtl > 0
+          ? { retryAfterSeconds: pairCooldownTtl }
+          : {}),
     };
   }
 
   async recordSuccess(credential: string, ipAddress: string): Promise<void> {
     const keys = this.keys(credential, ipAddress);
-    await this.redis.del(keys.pair);
+    await this.redis.del(keys.pair, keys.pairCooldown);
   }
 }
 

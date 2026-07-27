@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -18,6 +18,12 @@ import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
 import { RedisScoringAccessRateLimiter } from "../src/scoring-access-rate-limit.js";
 import { Redis } from "ioredis";
+import {
+  passedPlaywrightTestCount,
+  redactedIdentifierHash,
+  redisLogicalDatabase,
+  retainedArtifacts,
+} from "./gate-c-access-evidence.js";
 
 const apiPort = 4100;
 const webPort = 3102;
@@ -33,7 +39,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.
 const migrationsDirectory = path.join(root, "packages/database/migrations");
 const adminDatabaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
-const retainedArtifactsRoot = path.join(root, "artifacts/qa/gate-c-access");
+const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+const retainedArtifactsRoot = path.join(root, "artifacts/qa/gate-c-access", sourceSha);
 
 type Tail = { label: string; lines: string[] };
 type RunningProcess = { child: ChildProcess; tail: Tail };
@@ -475,8 +482,22 @@ async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promis
 }
 
 async function main(): Promise<void> {
+  const startedAt = new Date();
+  const startedAtNanoseconds = process.hrtime.bigint();
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase2-e2e-"));
   const stateFile = path.join(temp, "state.json");
+  const retainedDirectory = retainedArtifactsDirectory();
+  if (retainedDirectory) {
+    await mkdir(retainedArtifactsRoot, { recursive: true });
+    if ((await realpath(retainedArtifactsRoot)) !== retainedArtifactsRoot) {
+      throw new Error("Gate C access retention root must not traverse symlinks");
+    }
+    await mkdir(path.dirname(retainedDirectory), { recursive: true });
+    await mkdir(retainedDirectory);
+    if (!(await realpath(retainedDirectory)).startsWith(`${retainedArtifactsRoot}${path.sep}`)) {
+      throw new Error("Gate C access retained directory escaped its exact-SHA root");
+    }
+  }
   const admin = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
   let isolation: Isolation | null = null;
   let sql: Sql | null = null;
@@ -484,6 +505,10 @@ async function main(): Promise<void> {
   let redis: Redis | null = null;
   let redisNamespace: string | null = null;
   let redisGuardKey: string | null = null;
+  let initialOwnedRedisKeyCount: number | null = null;
+  let finalOwnedRedisKeyCount: number | null = null;
+  let redisGuardPreserved = false;
+  let playwrightPassCount: number | null = null;
   let web: RunningProcess | null = null;
   let httpsProxy: https.Server | null = null;
   let interrupted = false;
@@ -529,6 +554,7 @@ async function main(): Promise<void> {
     redisNamespace = `matchday:test:phase2-e2e:${randomUUID()}:`;
     redisGuardKey = `${redisNamespace.slice(0, -1)}-unrelated-guard`;
     const dirtyOwnedKeys = await redisKeys(redis, `${redisNamespace}*`);
+    initialOwnedRedisKeyCount = dirtyOwnedKeys.length;
     if (dirtyOwnedKeys.length > 0) {
       throw new Error(`Refusing dirty scoring-access Redis namespace (${dirtyOwnedKeys.length} owned keys)`);
     }
@@ -562,6 +588,7 @@ async function main(): Promise<void> {
       PHASE2_E2E_WEB_BASE_URL: webOrigin,
       PHASE2_E2E_STATE_FILE: stateFile,
       PHASE2_E2E_OUTPUT_DIR: path.join(temp, "playwright-output"),
+      GATE_C_ACCESS_PLAYWRIGHT_JSON: path.join(temp, "playwright-output", "results.json"),
       SCORING_SESSION_SEAL_KEY: Buffer.alloc(32, 23).toString("base64url"),
     };
     delete runtimeEnv.MATCHDAY_PHASE2_DATA_MODE;
@@ -610,6 +637,10 @@ async function main(): Promise<void> {
       ],
       runtimeEnv,
     );
+    if (process.env.PHASE2_E2E_PROJECT) {
+      const report = JSON.parse(readFileSync(runtimeEnv.GATE_C_ACCESS_PLAYWRIGHT_JSON!, "utf8")) as unknown;
+      playwrightPassCount = passedPlaywrightTestCount(report, process.env.PHASE2_E2E_PROJECT);
+    }
     if (process.env.PHASE2_E2E_SKIP_PHASE2_ORACLE === "1") {
       await assertGateCAccessOracle(sql, state);
     } else {
@@ -640,10 +671,12 @@ async function main(): Promise<void> {
       const ownedKeys = await redisKeys(redis, `${redisNamespace}*`);
       if (ownedKeys.length > 0) await redis.unlink(...ownedKeys);
       const remainingOwnedKeys = await redisKeys(redis, `${redisNamespace}*`);
+      finalOwnedRedisKeyCount = remainingOwnedKeys.length;
       if (remainingOwnedKeys.length !== 0) {
         throw new Error(`Redis scoring-access cleanup left ${remainingOwnedKeys.length} owned keys`);
       }
-      if ((await redis.get(redisGuardKey)) !== "preserve") {
+      redisGuardPreserved = (await redis.get(redisGuardKey)) === "preserve";
+      if (!redisGuardPreserved) {
         throw new Error("Redis scoring-access cleanup removed the unrelated guard key");
       }
       await redis.unlink(redisGuardKey);
@@ -659,13 +692,17 @@ async function main(): Promise<void> {
       await admin.end({ timeout: 2 });
     });
     await cleanup("Playwright artifact retention failed", async () => {
-      const retained = retainedArtifactsDirectory();
-      if (!retained) return;
-      await rm(retained, { recursive: true, force: true });
-      await mkdir(retained, { recursive: true });
-      await cp(path.join(temp, "playwright-output"), path.join(retained, "playwright-output"), {
+      if (!retainedDirectory) return;
+      const outputDirectory = path.join(temp, "playwright-output");
+      try {
+        await access(outputDirectory);
+      } catch {
+        return;
+      }
+      await cp(outputDirectory, path.join(retainedDirectory, "playwright-output"), {
         recursive: true,
-        force: true,
+        force: false,
+        errorOnExist: true,
       });
     });
     await cleanup("Temporary artifact cleanup failed", () => rm(temp, { recursive: true, force: true }));
@@ -678,12 +715,58 @@ async function main(): Promise<void> {
   if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "E2E and cleanup failed");
   if (primaryError) throw primaryError;
   if (cleanupError) throw cleanupError;
+  if (retainedDirectory && process.env.PHASE2_E2E_PROJECT) {
+    if (
+      !isolation ||
+      !redisNamespace ||
+      initialOwnedRedisKeyCount !== 0 ||
+      finalOwnedRedisKeyCount !== 0 ||
+      !redisGuardPreserved ||
+      !playwrightPassCount
+    ) {
+      throw new Error("Gate C access run did not produce complete isolation evidence");
+    }
+    const retained = await retainedArtifacts(retainedDirectory);
+    const databaseIdentifier = isolation.kind === "database" ? isolation.databaseName : isolation.schema;
+    const record = {
+      schema_version: 1,
+      source_sha: sourceSha,
+      project_name: process.env.PHASE2_E2E_PROJECT,
+      pass_count: playwrightPassCount,
+      started_at: startedAt.toISOString(),
+      duration_ms: Number(process.hrtime.bigint() - startedAtNanoseconds) / 1_000_000,
+      postgresql: {
+        isolation_kind: isolation.kind,
+        identifier_sha256: redactedIdentifierHash("postgres", databaseIdentifier),
+      },
+      redis: {
+        logical_database: redisLogicalDatabase(redisUrl),
+        namespace_sha256: redactedIdentifierHash("redis-namespace", redisNamespace),
+        initial_owned_key_count: initialOwnedRedisKeyCount,
+        final_owned_key_count: finalOwnedRedisKeyCount,
+        unrelated_guard_preserved: redisGuardPreserved,
+      },
+      screenshot_paths: retained.filter((artifact) => artifact.path.endsWith(".png")).map((artifact) => artifact.path),
+      result_paths: retained.filter((artifact) => artifact.path.endsWith(".json")).map((artifact) => artifact.path),
+      artifacts: retained,
+    };
+    await writeFile(path.join(retainedDirectory, "project-evidence.json"), `${JSON.stringify(record, null, 2)}\n`, {
+      flag: "wx",
+    });
+  }
   process.stdout.write(
     `Phase 2 real E2E passed (${isolation?.kind === "database" ? "disposable database" : "isolated schema"}).\n`,
   );
 }
 
+function formatFailure(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const primary = error.stack ?? error.message;
+  if (!(error instanceof AggregateError)) return primary;
+  return [primary, ...error.errors.map((cause, index) => `[cause ${index + 1}] ${formatFailure(cause)}`)].join("\n");
+}
+
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+  process.stderr.write(`${formatFailure(error)}\n`);
   process.exitCode = 1;
 });

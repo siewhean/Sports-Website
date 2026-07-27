@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { parseTakeoverDecision, parseTakeoverRequests } from "../../lib/gate-c-access";
+import { LatestRequestFence } from "../../lib/latest-request";
 
 const requestId = "00000000-0000-4000-8000-000000000201";
 const matchId = "00000000-0000-4000-8000-000000000202";
@@ -99,5 +100,74 @@ describe("Gate C access source guards", () => {
     expect(scoringSource).toContain("await renameScoringDevice(deviceLabelDraft)");
     expect(scoringSource).toContain("editDeviceButtonRef.current?.focus()");
     expect(scoringSource).toContain('setAnnouncement(t("prototype.d9ff75e574c6"))');
+  });
+
+  it("recovers takeover state in place and restores focus without browser reloads", async () => {
+    const scoringSource = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
+    const browserSource = await readFile(new URL("../gate-c-access-real.spec.ts", import.meta.url), "utf8");
+
+    expect(scoringSource).toContain("refreshScoringSessionAccess(");
+    expect(scoringSource).toContain("liveScorerInputRef.current?.focus()");
+    expect(scoringSource).toContain("matchHeadingRef.current?.focus()");
+    expect(scoringSource).toContain("setAnnouncement(nextState");
+    expect(scoringSource).not.toContain('role="status"');
+    expect(browserSource).not.toContain("candidatePage.reload()");
+    expect(browserSource).not.toContain("incumbentPage.reload()");
+  });
+
+  it("invalidates session refreshes before authoritative scoring mutations", async () => {
+    const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
+    expect(source).toContain("mutationInFlightRef.current > 0");
+    for (const [handler, mutation] of [
+      ["const requestTakeover = async () =>", "await port.requestTakeover"],
+      ["const startScoring = async () =>", "await port.appendEvent"],
+      ["const record = async", "await port.appendEvent"],
+      ["const finalize = async () =>", "await port.finalizeResult"],
+    ] as const) {
+      const handlerIndex = source.indexOf(handler);
+      const invalidationIndex = source.indexOf("sessionRefreshFenceRef.current.cancel()", handlerIndex);
+      const mutationIndex = source.indexOf(mutation, handlerIndex);
+      expect(handlerIndex).toBeGreaterThan(-1);
+      expect(invalidationIndex).toBeGreaterThan(handlerIndex);
+      expect(mutationIndex).toBeGreaterThan(invalidationIndex);
+    }
+    expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(4);
+    expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(4);
+  });
+});
+
+describe("latest request fencing", () => {
+  it("aborts and ignores an older response that resolves after the latest request", async () => {
+    let resolveOlder: (value: string) => void = () => undefined;
+    let resolveLatest: (value: string) => void = () => undefined;
+    const older = new Promise<string>((resolve) => {
+      resolveOlder = resolve;
+    });
+    const latest = new Promise<string>((resolve) => {
+      resolveLatest = resolve;
+    });
+    const fence = new LatestRequestFence();
+    const committed: string[] = [];
+    const signals: AbortSignal[] = [];
+
+    const olderRun = fence.run(
+      (signal) => {
+        signals.push(signal);
+        return older;
+      },
+      (value) => committed.push(value),
+    );
+    const latestRun = fence.run(
+      () => latest,
+      (value) => committed.push(value),
+    );
+
+    resolveLatest("latest");
+    await latestRun;
+    resolveOlder("older");
+    await olderRun;
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(committed).toEqual(["latest"]);
   });
 });

@@ -16,7 +16,8 @@ import {
 import { translate as t } from "@matchday/ui";
 import { phase2Copy, phase2Machine, type ScoringEventCommand, type ScoringSessionView } from "@/lib/phase2";
 import { getScoringDeviceIdentity, renameScoringDevice } from "@/lib/scoring-device";
-import { createScoringCommandPort, ScoringTransportError } from "@/lib/phase2-scoring";
+import { createScoringCommandPort, refreshScoringSessionAccess, ScoringTransportError } from "@/lib/phase2-scoring";
+import { LatestRequestFence } from "@/lib/latest-request";
 
 type ScoringPhase = "access" | "confirm" | "live" | "review" | "receipt";
 type WriterState =
@@ -79,6 +80,10 @@ export function PhoneScoring({
   const bootstrappedRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const writerStateRef = useRef<WriterState>(initialWriterState);
+  const sessionRefreshFenceRef = useRef(new LatestRequestFence());
+  const mutationInFlightRef = useRef(0);
+  const matchHeadingRef = useRef<HTMLHeadingElement>(null);
+  const liveScorerInputRef = useRef<HTMLInputElement>(null);
   const editDeviceButtonRef = useRef<HTMLButtonElement>(null);
   const deviceLabelInputRef = useRef<HTMLInputElement>(null);
 
@@ -113,6 +118,7 @@ export function PhoneScoring({
 
   const applySession = useCallback((session: ScoringSessionView | null) => {
     if (!session) return;
+    const previousState = writerStateRef.current;
     setCompetitionSlug(session.competitionSlug);
     setMatchId(session.matchId);
     setMatchLabel(session.matchLabel);
@@ -135,9 +141,20 @@ export function PhoneScoring({
     writerStateRef.current = nextState;
     setWriterState(nextState);
     setTakeoverPending(session.takeoverStatus === "pending");
+    if (
+      (previousState === phase2Machine.candidate && nextState === phase2Machine.active) ||
+      (previousState === phase2Machine.active && nextState === phase2Machine.transferred)
+    ) {
+      setAnnouncement(nextState === phase2Machine.active ? phase2Copy.accessRestored : phase2Copy.transferred);
+      window.requestAnimationFrame(() => {
+        if (nextState === phase2Machine.active) liveScorerInputRef.current?.focus();
+        else matchHeadingRef.current?.focus();
+      });
+    }
   }, []);
 
   const handleTransportError = useCallback((error: unknown, accessMessage: string = phase2Copy.serviceUnavailable) => {
+    sessionRefreshFenceRef.current.cancel();
     if (error instanceof ScoringTransportError) {
       if (error.state === phase2Machine.conflict) {
         writerStateRef.current = phase2Machine.conflict;
@@ -215,31 +232,47 @@ export function PhoneScoring({
 
   useEffect(() => {
     if (phase !== "live" && phase !== "review") return;
+    const sessionRefreshFence = sessionRefreshFenceRef.current;
     const refresh = async () => {
-      if (!sessionActiveRef.current || document.visibilityState !== "visible") return;
-      writerStateRef.current = "checking";
-      setWriterState("checking");
+      if (!sessionActiveRef.current || document.visibilityState !== "visible" || mutationInFlightRef.current > 0) {
+        return;
+      }
       try {
-        const session = await port.heartbeat({
-          lastAcknowledgedSequence: throughSequence,
-          pendingEventCount: pendingSync ? 1 : 0,
-          pendingThroughSequence: pendingSync ? throughSequence : null,
-        });
-        applySession(session);
+        const recoverAuthoritatively = writerStateRef.current === phase2Machine.candidate || takeoverPending;
+        await sessionRefreshFence.run(
+          (signal) =>
+            refreshScoringSessionAccess(
+              port,
+              {
+                lastAcknowledgedSequence: throughSequence,
+                pendingEventCount: pendingSync ? 1 : 0,
+                pendingThroughSequence: pendingSync ? throughSequence : null,
+              },
+              recoverAuthoritatively,
+              signal,
+            ),
+          (session) => {
+            applySession(session);
+          },
+        );
       } catch (error) {
         handleTransportError(error);
       }
     };
-    const interval = window.setInterval(() => void refresh(), 15_000);
+    const interval = window.setInterval(
+      () => void refresh(),
+      writerState === phase2Machine.candidate || takeoverPending ? 2_000 : 15_000,
+    );
     const visibility = () => {
       if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", visibility);
     return () => {
+      sessionRefreshFence.cancel();
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [applySession, handleTransportError, pendingSync, phase, port, throughSequence]);
+  }, [applySession, handleTransportError, pendingSync, phase, port, takeoverPending, throughSequence, writerState]);
 
   useEffect(() => {
     if (!pendingGoal || !goalDialogRef.current) return;
@@ -292,6 +325,8 @@ export function PhoneScoring({
   };
 
   const requestTakeover = async () => {
+    mutationInFlightRef.current += 1;
+    sessionRefreshFenceRef.current.cancel();
     try {
       const result = await port.requestTakeover({
         pendingEventCount: pendingSync ? 1 : 0,
@@ -301,10 +336,15 @@ export function PhoneScoring({
       setAnnouncement(phase2Copy.takeoverRequested);
     } catch (error) {
       handleTransportError(error);
+    } finally {
+      sessionRefreshFenceRef.current.cancel();
+      mutationInFlightRef.current -= 1;
     }
   };
 
   const startScoring = async () => {
+    mutationInFlightRef.current += 1;
+    sessionRefreshFenceRef.current.cancel();
     setStarting(true);
     try {
       const receipt = await port.appendEvent({
@@ -320,6 +360,8 @@ export function PhoneScoring({
     } catch (error) {
       handleTransportError(error);
     } finally {
+      sessionRefreshFenceRef.current.cancel();
+      mutationInFlightRef.current -= 1;
       setStarting(false);
     }
   };
@@ -343,6 +385,8 @@ export function PhoneScoring({
       period: Number(period),
       manualTime: eventTime,
     };
+    mutationInFlightRef.current += 1;
+    sessionRefreshFenceRef.current.cancel();
     try {
       const receipt = await port.appendEvent(command);
       setEvents((current) => [command, ...current]);
@@ -351,6 +395,9 @@ export function PhoneScoring({
     } catch (error) {
       handleTransportError(error);
       return false;
+    } finally {
+      sessionRefreshFenceRef.current.cancel();
+      mutationInFlightRef.current -= 1;
     }
   };
 
@@ -373,6 +420,8 @@ export function PhoneScoring({
   };
 
   const finalize = async () => {
+    mutationInFlightRef.current += 1;
+    sessionRefreshFenceRef.current.cancel();
     try {
       const receipt = await port.finalizeResult({
         matchId,
@@ -384,6 +433,9 @@ export function PhoneScoring({
       setPhase("receipt");
     } catch (error) {
       handleTransportError(error);
+    } finally {
+      sessionRefreshFenceRef.current.cancel();
+      mutationInFlightRef.current -= 1;
     }
   };
 
@@ -499,9 +551,11 @@ export function PhoneScoring({
       <header className="p2-score__header">
         <div>
           <p>{stage}</p>
-          <h1>{matchLabel}</h1>
+          <h1 ref={matchHeadingRef} tabIndex={-1}>
+            {matchLabel}
+          </h1>
         </div>
-        <div className={`p2-writer p2-writer--${writerState}`} role="status">
+        <div className={`p2-writer p2-writer--${writerState}`} aria-label={writerTitle}>
           {writerState === "active" ? <CloudCheck /> : writerState === "conflict" ? <ShieldWarning /> : <LockKey />}
           <span>
             <strong>{writerTitle}</strong>
@@ -559,7 +613,7 @@ export function PhoneScoring({
       writerState === phase2Machine.revoked ||
       writerState === phase2Machine.rateLimited ||
       writerState === phase2Machine.readOnly ? (
-        <section className="p2-score-warning" role="status">
+        <section className="p2-score-warning">
           <LockKey />
           <div>
             <strong>{writerTitle}</strong>
@@ -629,6 +683,7 @@ export function PhoneScoring({
                 <span className="p2-input-icon">
                   <UserCircle />
                   <input
+                    ref={liveScorerInputRef}
                     value={scorer}
                     onChange={(event) => setScorer(event.target.value)}
                     aria-invalid={Boolean(scorerError)}

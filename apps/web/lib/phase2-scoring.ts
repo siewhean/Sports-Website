@@ -184,20 +184,24 @@ class ApiScoringCommandPort implements ScoringCommandPort {
     return sessionView(await responsePayload<ApiSessionState>(response));
   }
 
-  async recoverSession(): Promise<ScoringSessionView | null> {
+  async recoverSession(signal?: AbortSignal): Promise<ScoringSessionView | null> {
     const response = await fetch("/api/scoring/session", {
       cache: "no-store",
       credentials: "same-origin",
+      signal,
     });
     if (response.status === 204 || response.status === 401) return null;
     return sessionView(await responsePayload<ApiSessionState>(response));
   }
 
-  async heartbeat(input: {
-    lastAcknowledgedSequence: number;
-    pendingEventCount: number;
-    pendingThroughSequence: number | null;
-  }): Promise<ScoringSessionView> {
+  async heartbeat(
+    input: {
+      lastAcknowledgedSequence: number;
+      pendingEventCount: number;
+      pendingThroughSequence: number | null;
+    },
+    signal?: AbortSignal,
+  ): Promise<ScoringSessionView> {
     const response = await fetch("/api/scoring/session/heartbeat", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -207,6 +211,7 @@ class ApiScoringCommandPort implements ScoringCommandPort {
         pendingThroughSequence: input.pendingThroughSequence,
       }),
       credentials: "same-origin",
+      signal,
     });
     return sessionView(await responsePayload<ApiSessionState>(response));
   }
@@ -249,6 +254,23 @@ class ApiScoringCommandPort implements ScoringCommandPort {
       publishedAt: new Date().toISOString(),
     };
   }
+}
+
+export async function refreshScoringSessionAccess(
+  port: Pick<ScoringCommandPort, "heartbeat" | "recoverSession">,
+  input: {
+    lastAcknowledgedSequence: number;
+    pendingEventCount: number;
+    pendingThroughSequence: number | null;
+  },
+  recoverAuthoritatively: boolean,
+  signal?: AbortSignal,
+): Promise<ScoringSessionView | null> {
+  if (recoverAuthoritatively) {
+    const recovered = await port.recoverSession(signal);
+    if (!recovered || recovered.mode !== "writer" || recovered.readOnly) return recovered;
+  }
+  return port.heartbeat(input, signal);
 }
 
 const demoSession: ScoringSessionView = {

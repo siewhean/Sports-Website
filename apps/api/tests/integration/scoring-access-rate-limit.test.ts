@@ -50,6 +50,9 @@ describeInfra("Redis scoring access rate limiting", () => {
     expect(scoringAccessRateLimited(limited)).toBe(true);
     expect(limited.retryAfterSeconds).toBe(900);
     expect(scoringAccessRateLimited(await second.assertAllowed(credential, ip))).toBe(true);
+    const unrelatedCredential = await second.assertAllowed("another-official-at-same-venue", ip);
+    expect(scoringAccessRateLimited(unrelatedCredential)).toBe(false);
+    expect(unrelatedCredential.remaining).toBeGreaterThan(0);
     expect((await ownedKeys()).join("\n")).not.toContain(credential);
     expect((await ownedKeys()).join("\n")).not.toContain(ip);
   });

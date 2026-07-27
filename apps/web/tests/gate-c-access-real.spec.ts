@@ -169,24 +169,30 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry"
   await candidatePage.getByRole("button", { name: "Request scoring access" }).click();
   await expect(candidatePage.getByText("Takeover requested", { exact: true }).last()).toBeVisible();
 
-  await page.reload();
   const pending = page
     .locator(".p5-takeovers li")
     .filter({ hasText: /scoring device/i })
     .first();
-  await expect(pending).toBeVisible();
+  await expect(pending).toBeVisible({ timeout: 10_000 });
   await pending.getByRole("button", { name: "Review" }).click();
   const takeover = page.getByRole("dialog", { name: "Review takeover" });
   await assertNoWcagAOrAaViolations(page);
   await attachSurface(page, testInfo, `${testInfo.project.name}-takeover-review`);
   await takeover.getByLabel("Decision reason").fill("Approved court-side replacement");
+  const candidateHeartbeat = candidatePage.waitForResponse(
+    (response) => response.url().endsWith("/api/scoring/session/heartbeat") && response.status() === 200,
+    { timeout: 20_000 },
+  );
   await takeover.getByRole("button", { name: "Approve and transfer" }).click();
   await expect(page.getByText("Takeover approved.", { exact: true })).toBeAttached();
 
-  await candidatePage.reload();
-  await expect(candidatePage.locator(".p2-writer")).toContainText("Active scorer");
-  await incumbentPage.reload();
-  await expect(incumbentPage.locator(".p2-writer")).toContainText("Scoring moved to another device");
+  await expect(candidatePage.locator(".p2-writer")).toContainText("Active scorer", { timeout: 10_000 });
+  await expect(candidatePage.getByLabel("Scorer name")).toBeFocused();
+  await candidateHeartbeat;
+  await expect(incumbentPage.locator(".p2-writer")).toContainText("Scoring moved to another device", {
+    timeout: 20_000,
+  });
+  await expect(incumbentPage.getByRole("heading", { name: "Match 12" })).toBeFocused();
   await expect(incumbentPage.getByRole("button", { name: "Review final score" })).toHaveCount(0);
   await expect(incumbentPage.getByLabel("Scorer name")).toBeDisabled();
   await assertNoWcagAOrAaViolations(incumbentPage);

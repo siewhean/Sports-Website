@@ -101,9 +101,12 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const secondMatch = format.matches[1];
     const thirdMatch = format.matches[2];
     const fourthMatch = format.matches[3];
+    const fifthMatch = format.matches[4];
     expect(firstMatch?.homeEntryId).toBeTruthy();
     expect(firstMatch?.awayEntryId).toBeTruthy();
-    if (!firstMatch || !secondMatch || !thirdMatch || !fourthMatch) throw new Error("Expected generated matches");
+    if (!firstMatch || !secondMatch || !thirdMatch || !fourthMatch || !fifthMatch) {
+      throw new Error("Expected generated matches");
+    }
     const pass = await runtime.createAccessPass(actor, competition.id, firstMatch.id, accessExpiry, randomUUID());
     const hashes = await client<{ secret_hash: Buffer; short_code_hash: Buffer }[]>`
       SELECT secret_hash,short_code_hash FROM scoring_access_passes WHERE id=${pass.id}
@@ -327,7 +330,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const retainedStaleSubmission = await client<
       {
         after_state: string;
-        metadata: string;
+        metadata: string | Record<string, unknown>;
       }[]
     >`
       SELECT after_state,metadata FROM audit_events
@@ -336,7 +339,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     `;
     expect({
       after_state: JSON.parse(retainedStaleSubmission[0]?.after_state ?? "{}"),
-      metadata: JSON.parse(retainedStaleSubmission[0]?.metadata ?? "{}"),
+      metadata:
+        typeof retainedStaleSubmission[0]?.metadata === "string"
+          ? JSON.parse(retainedStaleSubmission[0].metadata)
+          : retainedStaleSubmission[0]?.metadata,
     }).toMatchObject({
       after_state: { client_event_id: staleSubmissionId, event_type: "goal_added" },
       metadata: { submitted_generation: null, retained_for_review: true },
@@ -580,7 +586,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const transferredStaleEvidence = await client<
       {
         after_state: string;
-        metadata: string;
+        metadata: string | Record<string, unknown>;
       }[]
     >`
       SELECT after_state,metadata FROM audit_events
@@ -589,7 +595,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     `;
     expect({
       after_state: JSON.parse(transferredStaleEvidence[0]?.after_state ?? "{}"),
-      metadata: JSON.parse(transferredStaleEvidence[0]?.metadata ?? "{}"),
+      metadata:
+        typeof transferredStaleEvidence[0]?.metadata === "string"
+          ? JSON.parse(transferredStaleEvidence[0].metadata)
+          : transferredStaleEvidence[0]?.metadata,
     }).toMatchObject({
       after_state: { client_event_id: transferredStaleEventId },
       metadata: { submitted_generation: secondWriter.generation, retained_for_review: true },
@@ -710,11 +719,15 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       },
       randomUUID(),
     );
-    await client`
-      UPDATE scoring_access_sessions
-      SET issued_at=now()-interval '2 minutes',last_heartbeat_at=now()-interval '2 minutes'
-      WHERE id=${unknownWriter.session_id}
-    `;
+    await runtime.heartbeatScoringSession(
+      {
+        sessionId: unknownWriter.session_id,
+        sessionToken: unknownWriter.session_token,
+        generation: unknownWriter.generation,
+      },
+      { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
     const unknownTakeover = await runtime.requestTakeover(
       {
         sessionId: unknownCandidate.session_id,
@@ -724,7 +737,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       { pendingEventCount: 0, pendingThroughSequence: 0 },
       randomUUID(),
     );
-    expect(unknownTakeover).toMatchObject({ incumbent_pending_state: "unknown", duplicate: false });
+    expect(unknownTakeover).toMatchObject({ incumbent_pending_state: "none", duplicate: false });
     expect(
       await runtime.requestTakeover(
         {
@@ -736,6 +749,15 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         randomUUID(),
       ),
     ).toMatchObject({ id: unknownTakeover.id, duplicate: true });
+    await runtime.heartbeatScoringSession(
+      {
+        sessionId: unknownWriter.session_id,
+        sessionToken: unknownWriter.session_token,
+        generation: unknownWriter.generation,
+      },
+      { lastAcknowledgedSequence: 0, pendingEventCount: 2, pendingThroughSequence: 2 },
+      randomUUID(),
+    );
     await expect(
       runtime.resolveTakeover(
         actor,
@@ -756,7 +778,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       {
         decision: "approve",
         overrideAcknowledged: true,
-        reason: "Old writer state is unknown and reviewed",
+        reason: "New incumbent pending events were reviewed",
       },
       randomUUID(),
     );
@@ -770,7 +792,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       SELECT pending_event_count,pending_through_sequence,status
       FROM scoring_transfer_conflicts WHERE id=${conflictId}
     `;
-    expect(conflict[0]).toEqual({ pending_event_count: 0, pending_through_sequence: 0, status: "open" });
+    expect(conflict[0]).toEqual({ pending_event_count: 2, pending_through_sequence: 2, status: "open" });
     await expect(
       runtime.appendScoreEvent(
         {
@@ -793,13 +815,129 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
 
+    const [revocationWriterPass, revocationCandidatePass] = await Promise.all(
+      ["writer", "candidate"].map((label) =>
+        runtime.createAccessPass(
+          actor,
+          competition.id,
+          fifthMatch.id,
+          {
+            expiresAt: accessExpiry,
+            role: "scorekeeper",
+            idempotencyKey: `approval-revocation-${label}-${randomUUID()}`,
+          },
+          randomUUID(),
+        ),
+      ),
+    );
+    if (!revocationWriterPass?.token || !revocationCandidatePass?.token) {
+      throw new Error("Expected one-time approval-revocation access secrets");
+    }
+    const revocationWriter = await runtime.exchangeAccess(
+      {
+        token: revocationWriterPass.token,
+        deviceId: randomUUID(),
+        ipAddress: "203.0.113.41",
+      },
+      randomUUID(),
+    );
+    const revocationCandidate = await runtime.exchangeAccess(
+      {
+        token: revocationCandidatePass.token,
+        deviceId: randomUUID(),
+        ipAddress: "203.0.113.42",
+      },
+      randomUUID(),
+    );
+    await runtime.heartbeatScoringSession(
+      {
+        sessionId: revocationWriter.session_id,
+        sessionToken: revocationWriter.session_token,
+        generation: revocationWriter.generation,
+      },
+      { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    const revocationTakeover = await runtime.requestTakeover(
+      {
+        sessionId: revocationCandidate.session_id,
+        sessionToken: revocationCandidate.session_token,
+        generation: null,
+      },
+      { pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    const [revocationResult, approvalResult] = await Promise.allSettled([
+      runtime.revokeAccessPass(
+        actor,
+        competition.id,
+        revocationCandidatePass.id,
+        randomUUID(),
+        "Candidate authorization withdrawn",
+      ),
+      runtime.resolveTakeover(
+        actor,
+        competition.id,
+        revocationTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Must not approve revoked candidate",
+        },
+        randomUUID(),
+      ),
+    ]);
+    expect(revocationResult.status).toBe("fulfilled");
+    if (approvalResult.status === "rejected") {
+      expect(approvalResult.reason).toMatchObject({
+        statusCode: 409,
+        code: "TAKEOVER_CANDIDATE_INACTIVE",
+      });
+    }
+    const revokedCandidateState = await client<{ revoked_at: Date | null }[]>`
+      SELECT revoked_at FROM scoring_access_sessions WHERE id=${revocationCandidate.session_id}
+    `;
+    expect(revokedCandidateState[0]?.revoked_at).not.toBeNull();
+    const retainedWriterLease = await client<{ access_session_id: string }[]>`
+      SELECT access_session_id FROM match_writer_leases WHERE match_id=${fifthMatch.id}
+    `;
+    expect(
+      retainedWriterLease[0]?.access_session_id === undefined ||
+        retainedWriterLease[0]?.access_session_id === revocationWriter.session_id,
+    ).toBe(true);
+
     const workspace = await runtime.competitionWorkspace(actor, competition.id);
     expect(workspace).toMatchObject({
       competition: { id: competition.id, organisation_id: organisationId },
       publication: { schedule_version: 1, result_version: 2 },
     });
     expect(JSON.stringify(workspace.access_passes)).not.toContain(pass.token);
-    expect(await runtime.audit(actor, competition.id)).not.toHaveLength(0);
+    const scoringAuditMetadata = await client<
+      { action: string; metadata: string; metadata_type: string; competition_id: string | null }[]
+    >`
+      SELECT action,metadata::text, jsonb_typeof(metadata) AS metadata_type,
+             metadata->>'competition_id' AS competition_id
+      FROM audit_events
+      WHERE action IN (
+        'scoring_access.created','scoring_access.exchanged','scoring_session.heartbeat',
+        'scoring_takeover.requested','scoring_takeover.approved'
+      )
+      ORDER BY occurred_at
+    `;
+    expect(scoringAuditMetadata).not.toHaveLength(0);
+    expect(scoringAuditMetadata.every((event) => event.metadata_type === "object")).toBe(true);
+    expect(scoringAuditMetadata.every((event) => event.competition_id === competition.id)).toBe(true);
+    const organiserAudit = await runtime.audit(actor, competition.id);
+    const organiserAuditActions = new Set(organiserAudit.map((event) => event.action));
+    expect([...organiserAuditActions]).toEqual(
+      expect.arrayContaining([
+        "scoring_access.created",
+        "scoring_access.exchanged",
+        "scoring_session.heartbeat",
+        "scoring_takeover.requested",
+        "scoring_takeover.approved",
+      ]),
+    );
 
     await client`INSERT INTO advancement_conflicts
       (competition_id,division_id,result_version,rule_id,target_slot_id,reason)

@@ -297,11 +297,19 @@ export class Phase2Runtime {
     },
   ): Promise<void> {
     const occurredAt = this.now();
+    const metadata = { ...(input.metadata ?? {}) };
+    const competitionId = input.eventPayload?.competition_id;
+    if (typeof competitionId === "string" && metadata.competition_id === undefined) {
+      metadata.competition_id = competitionId;
+    }
     await tx.unsafe(
       `INSERT INTO audit_events (
          occurred_at, request_id, actor_account_id, actor_type, organisation_id,
          action, target_type, target_id, reason, before_state, after_state, metadata
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb)`,
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,
+         ($12::jsonb #>> '{}')::jsonb
+       )`,
       [
         occurredAt,
         input.requestId,
@@ -314,7 +322,7 @@ export class Phase2Runtime {
         input.reason ?? null,
         input.before === undefined ? null : JSON.stringify(input.before),
         input.after === undefined ? null : JSON.stringify(input.after),
-        JSON.stringify(input.metadata ?? {}),
+        JSON.stringify(metadata),
       ],
     );
     await tx.unsafe(
@@ -368,7 +376,10 @@ export class Phase2Runtime {
         `INSERT INTO audit_events (
            occurred_at,request_id,actor_account_id,actor_type,organisation_id,
            action,target_type,target_id,reason,before_state,after_state,metadata
-         ) VALUES ($1,$2,NULL,'access_pass',$3,$4,$5,$6,NULL,NULL,NULL,$7::jsonb)`,
+         ) VALUES (
+           $1,$2,NULL,'access_pass',$3,$4,$5,$6,NULL,NULL,NULL,
+           ($7::jsonb #>> '{}')::jsonb
+         )`,
         [
           this.now(),
           input.requestId,
@@ -396,9 +407,10 @@ export class Phase2Runtime {
       id: string;
       session_token_hash: Buffer;
       organisation_id: string;
+      competition_id: string;
       match_id: string;
     }>(
-      `SELECT s.id,s.session_token_hash,c.organisation_id,s.match_id
+      `SELECT s.id,s.session_token_hash,c.organisation_id,s.competition_id,s.match_id
        FROM scoring_access_sessions s
        JOIN matches m ON m.id=s.match_id
        JOIN competitions c ON c.id=m.competition_id
@@ -412,14 +424,21 @@ export class Phase2Runtime {
         `INSERT INTO audit_events (
            occurred_at,request_id,actor_account_id,actor_type,organisation_id,
            action,target_type,target_id,reason,before_state,after_state,metadata
-         ) VALUES ($1,$2,NULL,'access_pass',$3,$4,'scoring_session',$5,NULL,NULL,NULL,$6::jsonb)`,
+         ) VALUES (
+           $1,$2,NULL,'access_pass',$3,$4,'scoring_session',$5,NULL,NULL,NULL,
+           ($6::jsonb #>> '{}')::jsonb
+         )`,
         [
           this.now(),
           requestId,
           session.organisation_id,
           action,
           session.id,
-          JSON.stringify({ error_code: errorCode, match_id: session.match_id }),
+          JSON.stringify({
+            error_code: errorCode,
+            competition_id: session.competition_id,
+            match_id: session.match_id,
+          }),
         ],
       );
     });
@@ -434,9 +453,10 @@ export class Phase2Runtime {
       id: string;
       session_token_hash: Buffer;
       organisation_id: string;
+      competition_id: string;
       match_id: string;
     }>(
-      `SELECT s.id,s.session_token_hash,c.organisation_id,s.match_id
+      `SELECT s.id,s.session_token_hash,c.organisation_id,s.competition_id,s.match_id
        FROM scoring_access_sessions s
        JOIN matches m ON m.id=s.match_id
        JOIN competitions c ON c.id=m.competition_id
@@ -451,7 +471,7 @@ export class Phase2Runtime {
            occurred_at,request_id,actor_account_id,actor_type,organisation_id,
            action,target_type,target_id,reason,before_state,after_state,metadata
          ) VALUES ($1,$2,NULL,'access_pass',$3,'scoring_event.stale_submission_rejected',
-                   'match',$4,$5,NULL,$6::jsonb,$7::jsonb)`,
+                   'match',$4,$5,NULL,$6::jsonb,($7::jsonb #>> '{}')::jsonb)`,
         [
           this.now(),
           requestId,
@@ -471,6 +491,7 @@ export class Phase2Runtime {
           }),
           JSON.stringify({
             scoring_session_id: session.id,
+            competition_id: session.competition_id,
             submitted_generation: auth.generation ?? null,
             retained_for_review: true,
           }),
@@ -1246,6 +1267,15 @@ export class Phase2Runtime {
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      const accessPass = required(
+        await tx.unsafe<{ match_id: string }>(
+          `SELECT match_id FROM scoring_access_passes
+           WHERE id=$1 AND competition_id=$2 AND revoked_at IS NULL`,
+          [passId, competitionId],
+        ),
+        "Active access pass not found",
+      );
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [accessPass.match_id]);
       const rows = await tx.unsafe<{ id: string }>(
         `UPDATE scoring_access_passes p SET revoked_at=$4,revoked_by=$3,revocation_reason=$5
          FROM matches m WHERE p.id=$1 AND p.match_id=m.id AND m.competition_id=$2 AND p.revoked_at IS NULL
@@ -1757,7 +1787,7 @@ export class Phase2Runtime {
             pending_event_count: input.pendingEventCount,
             last_acknowledged_sequence: input.lastAcknowledgedSequence,
           },
-          eventPayload: { match_id: session.match_id, mode: session.mode },
+          eventPayload: { competition_id: session.competition_id, match_id: session.match_id, mode: session.mode },
         });
         return {
           mode: session.mode,
@@ -1943,17 +1973,11 @@ export class Phase2Runtime {
         });
         return { id: takeover.id, status: "denied" as const };
       }
-      if (takeover.incumbent_pending_state !== "none" && !input.overrideAcknowledged) {
-        throw new ApiError(
-          409,
-          "TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED",
-          "Pending or unknown incumbent state requires explicit organiser acknowledgement",
-        );
-      }
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [takeover.match_id]);
       const lease = required(
-        await tx.unsafe<{ generation: number; access_session_id: string }>(
-          `SELECT generation,access_session_id FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
+        await tx.unsafe<{ generation: number; access_session_id: string; expires_at: Date | string }>(
+          `SELECT generation,access_session_id,expires_at
+           FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
           [takeover.match_id],
         ),
         "Writer lease not found",
@@ -1961,18 +1985,70 @@ export class Phase2Runtime {
       if (lease.access_session_id !== takeover.incumbent_session_id) {
         throw new ApiError(409, "TAKEOVER_STALE", "The active writer changed before approval");
       }
+      const now = this.now();
+      if (date(lease.expires_at).getTime() <= now.getTime()) {
+        throw new ApiError(409, "TAKEOVER_STALE", "The incumbent writer lease expired before approval");
+      }
       const candidate = required(
-        await tx.unsafe<{ expires_at: Date | string; mode: ScoringSessionMode }>(
-          `SELECT expires_at,mode FROM scoring_access_sessions WHERE id=$1 FOR UPDATE`,
-          [takeover.requesting_session_id],
+        await tx.unsafe<{
+          expires_at: Date | string;
+          revoked_at: Date | string | null;
+          mode: ScoringSessionMode;
+          pass_expires_at: Date | string;
+          pass_revoked_at: Date | string | null;
+          role: "scorekeeper" | "viewer";
+          scope: ScoringPermission[] | string;
+        }>(
+          `SELECT s.expires_at,s.revoked_at,s.mode,p.expires_at AS pass_expires_at,
+                  p.revoked_at AS pass_revoked_at,p.role,p.scope
+           FROM scoring_access_sessions s
+           JOIN scoring_access_passes p ON p.id=s.access_pass_id
+           WHERE s.id=$1 AND s.competition_id=$2 AND s.match_id=$3
+           FOR UPDATE OF s,p`,
+          [takeover.requesting_session_id, competitionId, takeover.match_id],
         ),
         "Candidate scoring session not found",
       );
-      if (candidate.mode !== "candidate") {
+      const candidatePermissions = jsonValue<ScoringPermission[]>(candidate.scope);
+      if (
+        candidate.mode !== "candidate" ||
+        candidate.revoked_at ||
+        candidate.pass_revoked_at ||
+        date(candidate.expires_at).getTime() <= now.getTime() ||
+        date(candidate.pass_expires_at).getTime() <= now.getTime() ||
+        candidate.role !== "scorekeeper" ||
+        !candidatePermissions.includes("score:write")
+      ) {
         throw new ApiError(409, "TAKEOVER_CANDIDATE_INACTIVE", "Candidate scoring session is no longer eligible");
       }
+      const incumbent = required(
+        await tx.unsafe<{
+          last_heartbeat_at: Date | string | null;
+          reported_pending_event_count: number;
+          reported_pending_through_sequence: number;
+        }>(
+          `SELECT last_heartbeat_at,reported_pending_event_count,reported_pending_through_sequence
+           FROM scoring_access_sessions
+           WHERE id=$1 AND competition_id=$2 AND match_id=$3 FOR UPDATE`,
+          [takeover.incumbent_session_id, competitionId, takeover.match_id],
+        ),
+        "Incumbent scoring session not found",
+      );
+      const heartbeatRecent =
+        incumbent.last_heartbeat_at && date(incumbent.last_heartbeat_at).getTime() >= now.getTime() - 30_000;
+      const authoritativePendingState: "unknown" | "none" | "present" = !heartbeatRecent
+        ? "unknown"
+        : incumbent.reported_pending_event_count > 0
+          ? "present"
+          : "none";
+      if (authoritativePendingState !== "none" && !input.overrideAcknowledged) {
+        throw new ApiError(
+          409,
+          "TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED",
+          "Current pending or unknown incumbent state requires explicit organiser acknowledgement",
+        );
+      }
       const generation = lease.generation + 1;
-      const now = this.now();
       const leaseExpiresAt = new Date(Math.min(date(candidate.expires_at).getTime(), now.getTime() + 45_000));
       await tx.unsafe(
         `UPDATE scoring_access_sessions SET mode='transferred',transferred_to_session_id=$2 WHERE id=$1`,
@@ -1996,7 +2072,7 @@ export class Phase2Runtime {
         [takeover.id, now, actor.accountId, input.reason.trim(), input.overrideAcknowledged],
       );
       let conflictId: string | null = null;
-      if (takeover.incumbent_pending_state !== "none") {
+      if (authoritativePendingState !== "none") {
         const conflict = required(
           await tx.unsafe<{ id: string }>(
             `INSERT INTO scoring_transfer_conflicts (
@@ -2028,7 +2104,12 @@ export class Phase2Runtime {
         targetType: "scoring_takeover_request",
         targetId: takeover.id,
         reason: input.reason.trim(),
-        after: { generation, conflict_id: conflictId },
+        after: {
+          generation,
+          conflict_id: conflictId,
+          requested_incumbent_pending_state: takeover.incumbent_pending_state,
+          authoritative_incumbent_pending_state: authoritativePendingState,
+        },
         eventPayload: { competition_id: competitionId, match_id: takeover.match_id, generation },
       });
       return {

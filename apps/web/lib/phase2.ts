@@ -140,12 +140,15 @@ export type FinalizeResultCommand = {
 
 export type ScoringCommandPort = {
   exchangeAccess(input: ScoringAccessInput): Promise<ScoringSessionView>;
-  recoverSession(): Promise<ScoringSessionView | null>;
-  heartbeat(input: {
-    lastAcknowledgedSequence: number;
-    pendingEventCount: number;
-    pendingThroughSequence: number | null;
-  }): Promise<ScoringSessionView>;
+  recoverSession(signal?: AbortSignal): Promise<ScoringSessionView | null>;
+  heartbeat(
+    input: {
+      lastAcknowledgedSequence: number;
+      pendingEventCount: number;
+      pendingThroughSequence: number | null;
+    },
+    signal?: AbortSignal,
+  ): Promise<ScoringSessionView>;
   requestTakeover(input: {
     pendingEventCount: number;
     pendingThroughSequence: number | null;

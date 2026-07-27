@@ -6,6 +6,7 @@ import { Check, Clock, Copy, DownloadSimple, Printer, QrCode, ShieldWarning, X }
 import { toDataURL, toString as qrToString } from "qrcode";
 import { translate as t } from "@matchday/ui";
 import type { CompetitionView, MatchView } from "@/lib/phase2";
+import { LatestRequestFence } from "@/lib/latest-request";
 import {
   gateCAccessMachine,
   gateCAccessPermissions,
@@ -130,30 +131,46 @@ export function AccessPassManager({
   const takeoverReturnTarget = useRef<HTMLButtonElement | null>(null);
   const issueButton = useRef<HTMLButtonElement>(null);
   const revealClose = useRef<HTMLButtonElement>(null);
+  const takeoverLoadFence = useRef(new LatestRequestFence());
 
-  const loadTakeovers = useCallback(async () => {
-    const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/takeover-requests`, {
-      cache: gateCAccessMachine.noStore,
-      credentials: gateCAccessMachine.sameOrigin,
-    });
-    const payload = (await response.json().catch(() => null)) as { takeover_requests?: unknown } | null;
-    const requests = parseTakeoverRequests(payload?.takeover_requests);
-    if (!response.ok || !requests) throw new Error(copy.failed);
-    return requests;
-  }, [competitionId]);
+  const loadTakeovers = useCallback(
+    async (signal?: AbortSignal) => {
+      const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/takeover-requests`, {
+        cache: gateCAccessMachine.noStore,
+        credentials: gateCAccessMachine.sameOrigin,
+        signal,
+      });
+      const payload = (await response.json().catch(() => null)) as { takeover_requests?: unknown } | null;
+      const requests = parseTakeoverRequests(payload?.takeover_requests);
+      if (!response.ok || !requests) throw new Error(copy.failed);
+      return requests;
+    },
+    [competitionId],
+  );
 
   useEffect(() => {
     if (!enableRemoteTakeovers) return;
-    let active = true;
-    void loadTakeovers()
-      .then((requests) => {
-        if (active) setTakeovers(requests);
-      })
-      .catch(() => {
-        if (active) setAnnouncement(copy.failed);
-      });
+    const loadFence = takeoverLoadFence.current;
+    const refresh = () => {
+      void loadFence
+        .run(
+          (signal) => loadTakeovers(signal),
+          (requests) => setTakeovers(requests),
+        )
+        .catch(() => {
+          setAnnouncement(copy.failed);
+        });
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 2_000);
+    const visibility = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", visibility);
     return () => {
-      active = false;
+      loadFence.cancel();
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", visibility);
     };
   }, [enableRemoteTakeovers, loadTakeovers]);
 
@@ -362,6 +379,7 @@ export function AccessPassManager({
       );
       const result = parseTakeoverDecision(await response.json().catch(() => null));
       if (!response.ok || !result) throw new Error(copy.failed);
+      takeoverLoadFence.current.cancel();
       setTakeovers((current) =>
         current.map((request) => (request.id === result.id ? { ...request, status: result.status } : request)),
       );
