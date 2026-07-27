@@ -16,7 +16,13 @@ import {
 import { translate as t } from "@matchday/ui";
 import { phase2Copy, phase2Machine, type ScoringEventCommand, type ScoringSessionView } from "@/lib/phase2";
 import { getScoringDeviceIdentity, renameScoringDevice } from "@/lib/scoring-device";
-import { createScoringCommandPort, refreshScoringSessionAccess, ScoringTransportError } from "@/lib/phase2-scoring";
+import {
+  createScoringCommandPort,
+  refreshScoringSessionAccess,
+  scoringSessionAnnouncement,
+  scoringWriterAvailability,
+  ScoringTransportError,
+} from "@/lib/phase2-scoring";
 import { LatestRequestFence } from "@/lib/latest-request";
 
 type ScoringPhase = "access" | "confirm" | "live" | "review" | "receipt";
@@ -26,6 +32,7 @@ type WriterState =
   | "checking"
   | "conflict"
   | "expired"
+  | "expiring"
   | "rate-limited"
   | "read-only"
   | "revoked"
@@ -80,7 +87,7 @@ export function PhoneScoring({
   const bootstrappedRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const writerStateRef = useRef<WriterState>(initialWriterState);
-  const pendingWriterFocusRef = useRef<"active" | "transferred" | null>(null);
+  const pendingWriterFocusRef = useRef<WriterState | null>(null);
   const sessionRefreshFenceRef = useRef(new LatestRequestFence());
   const mutationInFlightRef = useRef(0);
   const writerStatusRef = useRef<HTMLDivElement>(null);
@@ -103,19 +110,21 @@ export function PhoneScoring({
       ? phase2Copy.writerActive
       : writerState === phase2Machine.expired
         ? phase2Copy.sessionExpired
-        : writerState === phase2Machine.revoked
-          ? phase2Copy.sessionRevoked
-          : writerState === phase2Machine.rateLimited
-            ? phase2Copy.rateLimited
-            : writerState === phase2Machine.candidate
-              ? phase2Copy.candidate
-              : writerState === phase2Machine.transferred
-                ? phase2Copy.transferred
-                : writerState === phase2Machine.checking
-                  ? phase2Copy.checkingAccess
-                  : writerState === phase2Machine.conflict
-                    ? phase2Copy.writerConflict
-                    : phase2Copy.readOnly;
+        : writerState === phase2Machine.expiring
+          ? phase2Copy.leaseExpiring
+          : writerState === phase2Machine.revoked
+            ? phase2Copy.sessionRevoked
+            : writerState === phase2Machine.rateLimited
+              ? phase2Copy.rateLimited
+              : writerState === phase2Machine.candidate
+                ? phase2Copy.candidate
+                : writerState === phase2Machine.transferred
+                  ? phase2Copy.transferred
+                  : writerState === phase2Machine.checking
+                    ? phase2Copy.checkingAccess
+                    : writerState === phase2Machine.conflict
+                      ? phase2Copy.writerConflict
+                      : phase2Copy.readOnly;
 
   const applySession = useCallback((session: ScoringSessionView | null) => {
     if (!session) return;
@@ -130,9 +139,7 @@ export function PhoneScoring({
     setThroughSequence(session.throughSequence);
     const nextState: WriterState =
       session.mode === "writer"
-        ? session.readOnly
-          ? phase2Machine.expired
-          : phase2Machine.active
+        ? scoringWriterAvailability(session)
         : session.mode === "candidate"
           ? phase2Machine.candidate
           : session.mode === "transferred"
@@ -143,12 +150,24 @@ export function PhoneScoring({
     setWriterState(nextState);
     setTakeoverPending(session.takeoverStatus === "pending");
     if (
-      (previousState === phase2Machine.candidate && nextState === phase2Machine.active) ||
-      (previousState === phase2Machine.active && nextState === phase2Machine.transferred)
+      ((previousState === phase2Machine.candidate || previousState === phase2Machine.expiring) &&
+        nextState === phase2Machine.active) ||
+      (previousState !== phase2Machine.expiring && nextState === phase2Machine.expiring) ||
+      (previousState !== phase2Machine.transferred && nextState === phase2Machine.transferred)
     ) {
-      setAnnouncement(nextState === phase2Machine.active ? phase2Copy.accessRestored : phase2Copy.transferred);
+      setAnnouncement(
+        nextState === phase2Machine.active
+          ? phase2Copy.accessRestored
+          : nextState === phase2Machine.expiring
+            ? phase2Copy.leaseExpiring
+            : phase2Copy.transferred,
+      );
       pendingWriterFocusRef.current =
-        nextState === phase2Machine.active ? phase2Machine.active : phase2Machine.transferred;
+        nextState === phase2Machine.active
+          ? phase2Machine.active
+          : nextState === phase2Machine.expiring
+            ? phase2Machine.expiring
+            : phase2Machine.transferred;
     }
   }, []);
 
@@ -217,7 +236,7 @@ export function PhoneScoring({
         .then((session) => {
           applySession(session);
           setPhase(session.mode === phase2Machine.writer ? "confirm" : "live");
-          setAnnouncement(phase2Copy.accessRestored);
+          setAnnouncement(scoringSessionAnnouncement(session));
         })
         .catch((error: unknown) => {
           handleTransportError(error, phase2Copy.codeError);
@@ -243,12 +262,15 @@ export function PhoneScoring({
   useEffect(() => {
     if (phase !== "live" && phase !== "review") return;
     const sessionRefreshFence = sessionRefreshFenceRef.current;
-    const refresh = async () => {
+    const refresh = async (forceAuthoritative = false) => {
       if (!sessionActiveRef.current || document.visibilityState !== "visible" || mutationInFlightRef.current > 0) {
         return;
       }
       try {
-        const recoverAuthoritatively = writerStateRef.current === phase2Machine.candidate || takeoverPending;
+        const recoverAuthoritatively =
+          forceAuthoritative ||
+          writerStateRef.current === phase2Machine.candidate ||
+          writerStateRef.current === phase2Machine.expiring;
         await sessionRefreshFence.run(
           (signal) =>
             refreshScoringSessionAccess(
@@ -269,20 +291,37 @@ export function PhoneScoring({
         handleTransportError(error);
       }
     };
-    const interval = window.setInterval(
-      () => void refresh(),
-      writerState === phase2Machine.candidate || takeoverPending ? 2_000 : 15_000,
-    );
+    let active = true;
+    let refreshTimer = 0;
+    const scheduleRefresh = () => {
+      if (!active) return;
+      const delay =
+        writerStateRef.current === phase2Machine.candidate || writerStateRef.current === phase2Machine.expiring
+          ? 2_000
+          : 15_000;
+      refreshTimer = window.setTimeout(() => {
+        void refresh().finally(scheduleRefresh);
+      }, delay);
+    };
+    scheduleRefresh();
     const visibility = () => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState !== "visible") return;
+      if (writerStateRef.current === phase2Machine.active) {
+        writerStateRef.current = phase2Machine.expiring;
+        setWriterState(phase2Machine.expiring);
+        setAnnouncement(phase2Copy.leaseExpiring);
+        pendingWriterFocusRef.current = phase2Machine.expiring;
+      }
+      void refresh(true);
     };
     document.addEventListener("visibilitychange", visibility);
     return () => {
+      active = false;
       sessionRefreshFence.cancel();
-      window.clearInterval(interval);
+      window.clearTimeout(refreshTimer);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [applySession, handleTransportError, pendingSync, phase, port, takeoverPending, throughSequence, writerState]);
+  }, [applySession, handleTransportError, pendingSync, phase, port, throughSequence]);
 
   useEffect(() => {
     if (!pendingGoal || !goalDialogRef.current) return;
@@ -302,6 +341,7 @@ export function PhoneScoring({
       applySession(session);
       setCodeError("");
       setPhase(session.mode === phase2Machine.writer ? "confirm" : "live");
+      setAnnouncement(scoringSessionAnnouncement(session));
     } catch (error) {
       handleTransportError(error, phase2Copy.codeError);
     } finally {
@@ -452,7 +492,7 @@ export function PhoneScoring({
   if (phase === "access" || phase === "confirm") {
     return (
       <main className="p2-score-access" id="score-main">
-        <p className="sr-only" aria-live="polite" aria-atomic="true">
+        <p className="visually-hidden" aria-live="polite" aria-atomic="true">
           {announcement}
         </p>
         <header>
@@ -555,7 +595,7 @@ export function PhoneScoring({
 
   return (
     <main className="p2-score" id="score-main" data-writer-state={writerState}>
-      <p className="sr-only" aria-live="polite" aria-atomic="true">
+      <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
       <header className="p2-score__header">
@@ -623,6 +663,7 @@ export function PhoneScoring({
       writerState === phase2Machine.transferred ||
       writerState === phase2Machine.checking ||
       writerState === phase2Machine.expired ||
+      writerState === phase2Machine.expiring ||
       writerState === phase2Machine.revoked ||
       writerState === phase2Machine.rateLimited ||
       writerState === phase2Machine.readOnly ? (
@@ -635,15 +676,17 @@ export function PhoneScoring({
                 ? phase2Copy.candidateBody
                 : writerState === phase2Machine.transferred
                   ? phase2Copy.transferredBody
-                  : writerState === phase2Machine.expired
-                    ? phase2Copy.qrUnavailableBody
-                    : writerState === phase2Machine.revoked
-                      ? phase2Copy.sessionRevoked
-                      : writerState === phase2Machine.rateLimited
-                        ? phase2Copy.rateLimited
-                        : writerState === phase2Machine.readOnly
-                          ? phase2Copy.candidateBody
-                          : phase2Copy.leaseExpiring}
+                  : writerState === phase2Machine.expiring
+                    ? phase2Copy.leaseExpiringBody
+                    : writerState === phase2Machine.expired
+                      ? phase2Copy.qrUnavailableBody
+                      : writerState === phase2Machine.revoked
+                        ? phase2Copy.sessionRevoked
+                        : writerState === phase2Machine.rateLimited
+                          ? phase2Copy.rateLimited
+                          : writerState === phase2Machine.readOnly
+                            ? phase2Copy.candidateBody
+                            : phase2Copy.leaseExpiringBody}
             </p>
             {writerState === phase2Machine.candidate && !takeoverPending ? (
               <button className="p2-score-secondary" type="button" onClick={() => void requestTakeover()}>

@@ -206,6 +206,22 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(exchanged.statusCode).toBe(200);
     expect(exchanged.headers["ratelimit-limit"]).toBe("5");
     expect(exchanged.headers["ratelimit-remaining"]).toBe("5");
+    const tooLongDeviceLabel = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      payload: { token: "q".repeat(43), device_id: "d".repeat(43), device_label: "x".repeat(81) },
+    });
+    expect(tooLongDeviceLabel.statusCode).toBe(400);
+    const maximumDeviceLabel = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      payload: { token: "q".repeat(43), device_id: "d".repeat(43), device_label: "x".repeat(80) },
+    });
+    expect(maximumDeviceLabel.statusCode).toBe(200);
+    expect(runtime.exchangeAccess).toHaveBeenLastCalledWith(
+      expect.objectContaining({ deviceLabel: "x".repeat(80) }),
+      expect.any(String),
+    );
 
     const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
     expect(publicView.statusCode).toBe(200);

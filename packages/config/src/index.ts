@@ -29,6 +29,11 @@ const rawConfigSchema = z.object({
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
   SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-scoring-access-rate-key"),
+  SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: z
+    .string()
+    .min(32)
+    .max(1_024)
+    .default("local-test-scoring-fallback-code-key"),
   LOG_LEVEL: logLevelSchema.default("info"),
   DEEP_HEALTH_TOKEN: z.string().min(32).optional(),
   IDENTITY_CSRF_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-csrf-secret-change-me-32"),
@@ -84,6 +89,7 @@ export type AppConfig = {
   redisUrl: string;
   scoringAccess: {
     rateLimitHmacSecret: string;
+    fallbackCodeHmacSecret: string;
   };
   logLevel: z.infer<typeof logLevelSchema>;
   deepHealthToken?: string;
@@ -325,6 +331,12 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
     throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET must be explicitly configured outside local/test");
   }
+  if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET) {
+    throw new Error("SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET must be explicitly configured outside local/test");
+  }
+  if (parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET === parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
+    throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+  }
 
   let telemetryEndpoint: string | undefined;
   if (parsed.OTEL_EXPORTER_OTLP_ENDPOINT) {
@@ -365,7 +377,10 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     },
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
-    scoringAccess: { rateLimitHmacSecret: parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET },
+    scoringAccess: {
+      rateLimitHmacSecret: parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET,
+      fallbackCodeHmacSecret: parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    },
     logLevel: parsed.LOG_LEVEL,
     ...(parsed.DEEP_HEALTH_TOKEN ? { deepHealthToken: parsed.DEEP_HEALTH_TOKEN } : {}),
     identity: {
@@ -410,6 +425,7 @@ export function safeConfigSummary(config: AppConfig) {
     redisUrl: redactUrl(config.redisUrl),
     scoringAccess: {
       rateLimitHmacSecretConfigured: Boolean(config.scoringAccess.rateLimitHmacSecret),
+      fallbackCodeHmacSecretConfigured: Boolean(config.scoringAccess.fallbackCodeHmacSecret),
     },
     logLevel: config.logLevel,
     deepHealthTokenConfigured: Boolean(config.deepHealthToken),

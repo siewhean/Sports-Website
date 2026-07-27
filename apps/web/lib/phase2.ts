@@ -293,7 +293,9 @@ export const phase2Copy = {
   sessionRevoked: "This scoring access was revoked",
   rateLimited: "Too many access attempts. Wait before trying again.",
   accessRestored: "Authoritative scoring access restored.",
-  leaseExpiring: "Writer access is expiring. Reconnecting now.",
+  leaseExpiring: "Writer lease needs reconnection",
+  leaseExpiringBody:
+    "Scoring is read only because the 45-second writer lease is near or past its deadline. Your scoring session and access pass remain valid while authoritative access is checked.",
   syncPending: "1 event pending sync",
   writerConflict: "Another device is the active scorer",
   writerConflictBody:
@@ -383,6 +385,7 @@ export const phase2Machine = {
   checking: "checking" as const,
   conflict: "conflict" as const,
   expired: "expired" as const,
+  expiring: "expiring" as const,
   rateLimited: "rate-limited" as const,
   readOnly: "read-only" as const,
   revoked: "revoked" as const,

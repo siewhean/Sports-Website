@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import type {
   PublicCompetitionProjection,
   PublicMatchResult,
@@ -44,6 +44,19 @@ type ExchangedScoringSession = {
   expires_at: string;
   lease_expires_at: string | null;
   rate_limit: ScoringAccessRateLimitHeaders;
+};
+type AccessPassExchangeRow = {
+  id: string;
+  competition_id: string;
+  match_id: string;
+  secret_hash: Buffer;
+  short_code_hash: Buffer | null;
+  role: "scorekeeper" | "viewer";
+  scope: ScoringPermission[] | string;
+  expires_at: Date | string;
+  revoked_at: Date | string | null;
+  organisation_id: string;
+  competition_status: string;
 };
 
 export class ScoringAccessRateLimitError extends ApiError {
@@ -202,6 +215,10 @@ function hashSecret(secret: string): Buffer {
   return createHash("sha256").update(secret, "utf8").digest();
 }
 
+function hashFallbackCode(shortCode: string, hmacSecret: string): Buffer {
+  return createHmac("sha256", hmacSecret).update(`scoring-fallback-code:${shortCode}`, "utf8").digest();
+}
+
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -220,6 +237,10 @@ function opaqueSecret(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
 }
 
+function randomFallbackCode(): string {
+  return randomInt(0, 1_000_000_000_000).toString().padStart(12, "0");
+}
+
 function safeEqual(left: Buffer, right: Buffer): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
@@ -231,12 +252,21 @@ function required<T>(rows: readonly T[], message: string): T {
 }
 
 export class Phase2Runtime {
+  private readonly fallbackCodeHmacSecret: string;
+
   constructor(
     private readonly sql: PostgresJsSql,
     private readonly domain: Phase2DomainAdapter,
     private readonly now: () => Date = () => new Date(),
     private readonly scoringAccessRateLimiter: ScoringAccessRateLimiter = new NoopScoringAccessRateLimiter(),
-  ) {}
+    fallbackCodeHmacSecret?: string,
+    private readonly fallbackCodeGenerator: () => string = randomFallbackCode,
+  ) {
+    if (!fallbackCodeHmacSecret || Buffer.byteLength(fallbackCodeHmacSecret, "utf8") < 32) {
+      throw new Error("Scoring fallback-code HMAC secret must contain at least 32 bytes.");
+    }
+    this.fallbackCodeHmacSecret = fallbackCodeHmacSecret;
+  }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     if (!this.sql.begin) throw new Error("Phase 2 mutations require a transaction-capable PostgreSQL client.");
@@ -340,6 +370,64 @@ export class Phase2Runtime {
     );
   }
 
+  private async insertAccessAttempt(
+    tx: PostgresJsSql,
+    input: {
+      requestId: string;
+      credential: string;
+      ipAddress: string;
+      credentialKind: "token" | "fallback_code";
+      outcome: string;
+      competitionId?: string | null;
+      matchId?: string | null;
+      accessPassId?: string | null;
+      organisationId?: string | null;
+      cooldownUntil?: Date | null;
+    },
+  ): Promise<void> {
+    const fingerprints = this.scoringAccessRateLimiter.fingerprints(input.credential, input.ipAddress);
+    await tx.unsafe(
+      `INSERT INTO scoring_access_attempts (
+         competition_id,match_id,access_pass_id,credential_kind,outcome,
+         credential_hmac,ip_hmac,request_id,attempted_at,cooldown_until
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        input.competitionId ?? null,
+        input.matchId ?? null,
+        input.accessPassId ?? null,
+        input.credentialKind,
+        input.outcome,
+        fingerprints.credential,
+        fingerprints.ip,
+        input.requestId,
+        this.now(),
+        input.cooldownUntil ?? null,
+      ],
+    );
+    await tx.unsafe(
+      `INSERT INTO audit_events (
+         occurred_at,request_id,actor_account_id,actor_type,organisation_id,
+         action,target_type,target_id,reason,before_state,after_state,metadata
+       ) VALUES (
+         $1,$2,NULL,'access_pass',$3,$4,$5,$6,NULL,NULL,NULL,
+         ($7::jsonb #>> '{}')::jsonb
+       )`,
+      [
+        this.now(),
+        input.requestId,
+        input.organisationId ?? null,
+        `scoring_access.${input.outcome}`,
+        input.accessPassId ? "scoring_access_pass" : "scoring_access_attempt",
+        input.accessPassId ?? input.requestId,
+        JSON.stringify({
+          credential_kind: input.credentialKind,
+          match_id: input.matchId ?? null,
+          competition_id: input.competitionId ?? null,
+        }),
+      ],
+    );
+  }
+
   private async recordAccessAttempt(input: {
     requestId: string;
     credential: string;
@@ -352,48 +440,8 @@ export class Phase2Runtime {
     organisationId?: string | null;
     cooldownUntil?: Date | null;
   }): Promise<void> {
-    const fingerprints = this.scoringAccessRateLimiter.fingerprints(input.credential, input.ipAddress);
     await this.transaction(async (tx) => {
-      await tx.unsafe(
-        `INSERT INTO scoring_access_attempts (
-           competition_id,match_id,access_pass_id,credential_kind,outcome,
-           credential_hmac,ip_hmac,request_id,attempted_at,cooldown_until
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [
-          input.competitionId ?? null,
-          input.matchId ?? null,
-          input.accessPassId ?? null,
-          input.credentialKind,
-          input.outcome,
-          fingerprints.credential,
-          fingerprints.ip,
-          input.requestId,
-          this.now(),
-          input.cooldownUntil ?? null,
-        ],
-      );
-      await tx.unsafe(
-        `INSERT INTO audit_events (
-           occurred_at,request_id,actor_account_id,actor_type,organisation_id,
-           action,target_type,target_id,reason,before_state,after_state,metadata
-         ) VALUES (
-           $1,$2,NULL,'access_pass',$3,$4,$5,$6,NULL,NULL,NULL,
-           ($7::jsonb #>> '{}')::jsonb
-         )`,
-        [
-          this.now(),
-          input.requestId,
-          input.organisationId ?? null,
-          `scoring_access.${input.outcome}`,
-          input.accessPassId ? "scoring_access_pass" : "scoring_access_attempt",
-          input.accessPassId ?? input.requestId,
-          JSON.stringify({
-            credential_kind: input.credentialKind,
-            match_id: input.matchId ?? null,
-            competition_id: input.competitionId ?? null,
-          }),
-        ],
-      );
+      await this.insertAccessAttempt(tx, input);
     });
   }
 
@@ -1096,7 +1144,7 @@ export class Phase2Runtime {
       let shortCode = "";
       let pass: { id: string } | undefined;
       for (let attempt = 0; attempt < 5 && !pass; attempt += 1) {
-        shortCode = randomBytes(8).readBigUInt64BE().toString().slice(0, 12).padStart(12, "0");
+        shortCode = this.fallbackCodeGenerator();
         const rows = await tx.unsafe<{ id: string }>(
           `INSERT INTO scoring_access_passes (
              competition_id,match_id,secret_hash,short_code_hash,expires_at,created_by,
@@ -1114,7 +1162,7 @@ export class Phase2Runtime {
             competitionId,
             match.id,
             hashSecret(secret),
-            hashSecret(shortCode),
+            hashFallbackCode(shortCode, this.fallbackCodeHmacSecret),
             normalized.expiresAt,
             actor.accountId,
             normalized.role,
@@ -1218,14 +1266,29 @@ export class Phase2Runtime {
       let shortCode = "";
       let rotated = false;
       for (let attempt = 0; attempt < 5 && !rotated; attempt += 1) {
-        shortCode = randomBytes(8).readBigUInt64BE().toString().slice(0, 12).padStart(12, "0");
-        const rows = await tx.unsafe<{ id: string }>(
-          `UPDATE scoring_access_passes
-           SET short_code_hash=$3,fallback_code_rotated_at=$4
-           WHERE id=$1 AND competition_id=$2 RETURNING id`,
-          [passId, competitionId, hashSecret(shortCode), this.now()],
-        );
-        rotated = Boolean(rows[0]);
+        shortCode = this.fallbackCodeGenerator();
+        if (!tx.savepoint) throw new Error("Fallback-code rotation requires PostgreSQL savepoint support.");
+        try {
+          rotated = await tx.savepoint(async (savepoint) => {
+            const rows = await savepoint.unsafe<{ id: string }>(
+              `UPDATE scoring_access_passes
+               SET short_code_hash=$3,fallback_code_rotated_at=$4
+               WHERE id=$1 AND competition_id=$2 RETURNING id`,
+              [passId, competitionId, hashFallbackCode(shortCode, this.fallbackCodeHmacSecret), this.now()],
+            );
+            return Boolean(rows[0]);
+          });
+        } catch (error) {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code?: string }).code === "23505"
+          ) {
+            continue;
+          }
+          throw error;
+        }
       }
       if (!rotated) throw new ApiError(503, "ACCESS_CODE_UNAVAILABLE", "A unique access code could not be issued");
       await this.evidence(tx, {
@@ -1358,32 +1421,29 @@ export class Phase2Runtime {
         if (Boolean(input.token) === Boolean(input.shortCode)) {
           throw new ApiError(400, "ACCESS_SECRET_AMBIGUOUS", "Provide exactly one access token or short code");
         }
-        const digest = hashSecret(presented);
+        const digest = input.token ? hashSecret(presented) : hashFallbackCode(presented, this.fallbackCodeHmacSecret);
         const column = input.token ? "secret_hash" : "short_code_hash";
-        const candidates = await tx.unsafe<{
-          id: string;
-          competition_id: string;
-          match_id: string;
-          secret_hash: Buffer;
-          short_code_hash: Buffer | null;
-          role: "scorekeeper" | "viewer";
-          scope: ScoringPermission[] | string;
-          expires_at: Date | string;
-          revoked_at: Date | string | null;
-          organisation_id: string;
-          competition_status: string;
-        }>(
-          `SELECT p.id,p.competition_id,p.match_id,p.secret_hash,p.short_code_hash,p.role,p.scope,
+        const loadPass = (lock: boolean) =>
+          tx.unsafe<AccessPassExchangeRow>(
+            `SELECT p.id,p.competition_id,p.match_id,p.secret_hash,p.short_code_hash,p.role,p.scope,
                 p.expires_at,p.revoked_at,c.organisation_id,
                 c.status AS competition_status
-         FROM scoring_access_passes p
-         JOIN matches m ON m.id=p.match_id JOIN competitions c ON c.id=m.competition_id
-         WHERE p.${column}=$1 LIMIT 1 FOR UPDATE OF p`,
-          [digest],
-        );
-        const pass = candidates[0];
+             FROM scoring_access_passes p
+             JOIN matches m ON m.id=p.match_id JOIN competitions c ON c.id=m.competition_id
+             WHERE p.${column}=$1 LIMIT 1 ${lock ? "FOR UPDATE OF p" : ""}`,
+            [digest],
+          );
+        let pass = (await loadPass(false))[0];
         const stored = input.token ? pass?.secret_hash : pass?.short_code_hash;
         if (!pass || !stored || !safeEqual(Buffer.from(stored), digest)) {
+          throw new ApiError(403, "ACCESS_DENIED", "Access is invalid");
+        }
+        // All access mutations use the match advisory lock before mutable row
+        // locks, preventing exchange-vs-revocation lock inversion.
+        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [pass.match_id]);
+        pass = (await loadPass(true))[0];
+        const lockedStored = input.token ? pass?.secret_hash : pass?.short_code_hash;
+        if (!pass || !lockedStored || !safeEqual(Buffer.from(lockedStored), digest)) {
           throw new ApiError(403, "ACCESS_DENIED", "Access is invalid");
         }
         if (pass.competition_status === "archived") {
@@ -1408,7 +1468,6 @@ export class Phase2Runtime {
             accessContext,
           );
         }
-        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [pass.match_id]);
         const sessionSecret = opaqueSecret();
         const lease = await tx.unsafe<{ access_session_id: string; generation: number; expires_at: Date | string }>(
           `SELECT access_session_id,generation,expires_at FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
@@ -1468,6 +1527,21 @@ export class Phase2Runtime {
           after: { match_id: pass.match_id, mode, generation, expires_at: expiresAt.toISOString() },
           eventPayload: { competition_id: pass.competition_id, match_id: pass.match_id, mode },
         });
+        // External success-accounting happens before PostgreSQL commit. If Redis or
+        // attempt persistence fails, the enclosing transaction rolls the session
+        // and writer lease back rather than returning an error with a ghost writer.
+        await this.scoringAccessRateLimiter.recordSuccess(presented, ipAddress);
+        await this.insertAccessAttempt(tx, {
+          requestId,
+          credential: presented,
+          ipAddress,
+          credentialKind,
+          outcome: "accepted",
+          competitionId: pass.competition_id,
+          matchId: pass.match_id,
+          accessPassId: pass.id,
+          organisationId: pass.organisation_id,
+        });
         return {
           session_id: session.id,
           session_token: sessionSecret,
@@ -1482,18 +1556,6 @@ export class Phase2Runtime {
           competition_id: pass.competition_id,
           organisation_id: pass.organisation_id,
         };
-      });
-      await this.scoringAccessRateLimiter.recordSuccess(presented, ipAddress);
-      await this.recordAccessAttempt({
-        requestId,
-        credential: presented,
-        ipAddress,
-        credentialKind,
-        outcome: "accepted",
-        competitionId: result.competition_id,
-        matchId: result.match_id,
-        accessPassId: result.access_pass_id,
-        organisationId: result.organisation_id,
       });
       const publicResult: Record<string, unknown> = { ...result };
       delete publicResult.access_pass_id;
@@ -1545,6 +1607,7 @@ export class Phase2Runtime {
     sessionToken: string,
     generation: number | null | undefined,
     requireWriter = true,
+    lockSession = true,
   ) {
     const rows = await tx.unsafe<{
       id: string;
@@ -1573,7 +1636,7 @@ export class Phase2Runtime {
        JOIN scoring_access_passes p ON p.id=s.access_pass_id
        LEFT JOIN match_writer_leases l ON l.match_id=s.match_id
        JOIN matches m ON m.id=s.match_id JOIN competitions c ON c.id=m.competition_id
-       WHERE s.id=$1 FOR UPDATE OF s`,
+       WHERE s.id=$1 ${lockSession ? "FOR UPDATE OF s" : ""}`,
       [sessionId],
     );
     const session = rows[0];
@@ -1635,7 +1698,14 @@ export class Phase2Runtime {
     }
     try {
       return await this.transaction(async (tx) => {
-        let session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+        let session = await this.authenticateScoringSession(
+          tx,
+          auth.sessionId,
+          auth.sessionToken,
+          auth.generation,
+          true,
+          false,
+        );
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
         const permissions = jsonValue<ScoringPermission[]>(session.scope);
@@ -1737,6 +1807,7 @@ export class Phase2Runtime {
           auth.sessionToken,
           auth.generation,
           false,
+          false,
         );
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation, false);
@@ -1811,17 +1882,22 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
-      const candidate = await this.authenticateScoringSession(
+      let candidate = await this.authenticateScoringSession(
         tx,
         auth.sessionId,
         auth.sessionToken,
         auth.generation,
+        false,
         false,
       );
       if (candidate.mode !== "candidate") {
         throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
       }
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [candidate.match_id]);
+      candidate = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation, false);
+      if (candidate.mode !== "candidate") {
+        throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
+      }
       const lease = required(
         await tx.unsafe<{ access_session_id: string }>(
           `SELECT access_session_id FROM match_writer_leases
@@ -1854,11 +1930,31 @@ export class Phase2Runtime {
          WHERE id=$1`,
         [candidate.id, this.now(), input.pendingEventCount, input.pendingThroughSequence],
       );
+      const expiredRequests = await tx.unsafe<{ id: string }>(
+        `UPDATE scoring_takeover_requests SET
+           status='expired',resolved_at=$3,resolution_reason='Takeover request expired before review'
+         WHERE match_id=$1 AND requesting_session_id=$2 AND status='pending' AND expires_at<=$3
+         RETURNING id`,
+        [candidate.match_id, candidate.id, this.now()],
+      );
+      for (const expired of expiredRequests) {
+        await this.evidence(tx, {
+          requestId: `${requestId}:expired:${expired.id}`,
+          actorAccountId: null,
+          actorType: "access_pass",
+          organisationId: candidate.organisation_id,
+          action: "scoring_takeover.expired",
+          targetType: "scoring_takeover_request",
+          targetId: expired.id,
+          reason: "Takeover request expired before review",
+          eventPayload: { competition_id: candidate.competition_id, match_id: candidate.match_id },
+        });
+      }
       const insertedTakeover = await tx.unsafe<{ id: string; requested_at: Date | string }>(
         `INSERT INTO scoring_takeover_requests (
              competition_id,match_id,requesting_session_id,incumbent_session_id,status,
-             requester_pending_event_count,incumbent_pending_state,requested_at
-           ) VALUES ($1,$2,$3,$4,'pending',$5,$6,$7)
+             requester_pending_event_count,incumbent_pending_state,requested_at,expires_at
+           ) VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,$8)
            ON CONFLICT (match_id,requesting_session_id) WHERE status='pending'
            DO NOTHING
            RETURNING id,requested_at`,
@@ -1870,6 +1966,7 @@ export class Phase2Runtime {
           input.pendingEventCount,
           incumbentPendingState,
           this.now(),
+          new Date(Math.min(date(candidate.expires_at).getTime(), this.now().getTime() + 5 * 60_000)),
         ],
       );
       const takeover =
@@ -1906,19 +2003,40 @@ export class Phase2Runtime {
   }
 
   async listTakeoverRequests(actor: Phase2Actor, competitionId: string) {
-    await this.requireCompetitionAccess(this.sql, competitionId, actor);
-    return this.sql.unsafe<Record<string, unknown>>(
-      `SELECT tr.id,tr.match_id,tr.requesting_session_id,tr.incumbent_session_id,tr.status,
-              tr.requester_pending_event_count,tr.incumbent_pending_state,tr.requested_at,
-              tr.resolved_at,tr.resolution_reason,tr.override_acknowledged,
-              candidate.device_label AS requesting_device_label,
-              incumbent.device_label AS incumbent_device_label
-       FROM scoring_takeover_requests tr
-       JOIN scoring_access_sessions candidate ON candidate.id=tr.requesting_session_id
-       JOIN scoring_access_sessions incumbent ON incumbent.id=tr.incumbent_session_id
-       WHERE tr.competition_id=$1 ORDER BY tr.requested_at DESC`,
-      [competitionId],
-    );
+    return this.transaction(async (tx) => {
+      const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      const expired = await tx.unsafe<{ id: string; match_id: string }>(
+        `UPDATE scoring_takeover_requests SET
+           status='expired',resolved_at=$2,resolution_reason='Takeover request expired before review'
+         WHERE competition_id=$1 AND status='pending' AND expires_at<=$2
+         RETURNING id,match_id`,
+        [competitionId, this.now()],
+      );
+      for (const takeover of expired) {
+        await this.evidence(tx, {
+          requestId: `takeover-expiry:${takeover.id}`,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "scoring_takeover.expired",
+          targetType: "scoring_takeover_request",
+          targetId: takeover.id,
+          reason: "Takeover request expired before review",
+          eventPayload: { competition_id: competitionId, match_id: takeover.match_id },
+        });
+      }
+      return tx.unsafe<Record<string, unknown>>(
+        `SELECT tr.id,tr.match_id,tr.requesting_session_id,tr.incumbent_session_id,tr.status,
+                tr.requester_pending_event_count,tr.incumbent_pending_state,tr.requested_at,tr.expires_at,
+                tr.resolved_at,tr.resolution_reason,tr.override_acknowledged,
+                candidate.device_label AS requesting_device_label,
+                incumbent.device_label AS incumbent_device_label
+         FROM scoring_takeover_requests tr
+         JOIN scoring_access_sessions candidate ON candidate.id=tr.requesting_session_id
+         JOIN scoring_access_sessions incumbent ON incumbent.id=tr.incumbent_session_id
+         WHERE tr.competition_id=$1 ORDER BY tr.requested_at DESC`,
+        [competitionId],
+      );
+    });
   }
 
   async resolveTakeover(
@@ -1939,9 +2057,10 @@ export class Phase2Runtime {
           status: string;
           requester_pending_event_count: number;
           incumbent_pending_state: "unknown" | "none" | "present";
+          expires_at: Date | string;
         }>(
           `SELECT id,match_id,requesting_session_id,incumbent_session_id,status,
-                  requester_pending_event_count,incumbent_pending_state
+                  requester_pending_event_count,incumbent_pending_state,expires_at
            FROM scoring_takeover_requests
            WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
           [takeoverId, competitionId],
@@ -1950,6 +2069,26 @@ export class Phase2Runtime {
       );
       if (takeover.status !== "pending") {
         throw new ApiError(409, "TAKEOVER_ALREADY_RESOLVED", "Takeover request is no longer pending");
+      }
+      if (date(takeover.expires_at).getTime() <= this.now().getTime()) {
+        const expiredAt = this.now();
+        await tx.unsafe(
+          `UPDATE scoring_takeover_requests SET
+             status='expired',resolved_at=$2,resolution_reason='Takeover request expired before review'
+           WHERE id=$1`,
+          [takeover.id, expiredAt],
+        );
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "scoring_takeover.expired",
+          targetType: "scoring_takeover_request",
+          targetId: takeover.id,
+          reason: "Takeover request expired before review",
+          eventPayload: { competition_id: competitionId, match_id: takeover.match_id },
+        });
+        return { id: takeover.id, status: "expired" as const };
       }
       if (input.reason.trim().length < 3) {
         throw new ApiError(422, "TAKEOVER_REASON_REQUIRED", "A takeover decision requires a reason");
@@ -2229,65 +2368,79 @@ export class Phase2Runtime {
     input: { clientEventId: string; correctionReason: string | null },
     requestId: string,
   ) {
-    return this.transaction(async (tx) => {
-      let session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
-      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
-      session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
-      const writerGeneration = session.generation;
-      if (!writerGeneration) {
-        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
-      }
-      if (!jsonValue<ScoringPermission[]>(session.scope).includes("score:finalise")) {
-        throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session cannot finalise this match");
-      }
-      const duplicate = await tx.unsafe<{ sequence: number }>(
-        `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
-        [session.match_id, input.clientEventId],
-      );
-      if (duplicate[0]) {
-        const latest = await this.latestMatchResult(tx, session.match_id);
-        return { duplicate: true as const, sequence: duplicate[0].sequence, ...(latest ?? {}) };
-      }
-      const next = await tx.unsafe<{ sequence: number }>(
-        `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
-        [session.match_id],
-      );
-      const sequence = next[0]?.sequence ?? 1;
-      const eventContext = (
-        await tx.unsafe<{ manual_period: number | null; manual_event_seconds: number | null }>(
-          `SELECT manual_period,manual_event_seconds FROM score_events
-         WHERE match_id=$1 ORDER BY sequence DESC LIMIT 1`,
+    try {
+      return await this.transaction(async (tx) => {
+        let session = await this.authenticateScoringSession(
+          tx,
+          auth.sessionId,
+          auth.sessionToken,
+          auth.generation,
+          true,
+          false,
+        );
+        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
+        session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+        const writerGeneration = session.generation;
+        if (!writerGeneration) {
+          throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+        }
+        if (!jsonValue<ScoringPermission[]>(session.scope).includes("score:finalise")) {
+          throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session cannot finalise this match");
+        }
+        const duplicate = await tx.unsafe<{ sequence: number }>(
+          `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
+          [session.match_id, input.clientEventId],
+        );
+        if (duplicate[0]) {
+          const latest = await this.latestMatchResult(tx, session.match_id);
+          return { duplicate: true as const, sequence: duplicate[0].sequence, ...(latest ?? {}) };
+        }
+        const next = await tx.unsafe<{ sequence: number }>(
+          `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
           [session.match_id],
-        )
-      )[0];
-      await tx.unsafe(
-        `INSERT INTO score_events (
+        );
+        const sequence = next[0]?.sequence ?? 1;
+        const eventContext = (
+          await tx.unsafe<{ manual_period: number | null; manual_event_seconds: number | null }>(
+            `SELECT manual_period,manual_event_seconds FROM score_events
+         WHERE match_id=$1 ORDER BY sequence DESC LIMIT 1`,
+            [session.match_id],
+          )
+        )[0];
+        await tx.unsafe(
+          `INSERT INTO score_events (
           match_id,client_event_id,sequence,writer_generation,event_type,payload,
            actor_access_session_id,manual_period,manual_event_seconds,occurred_at
          ) VALUES ($1,$2,$3,$4,'match_finalised','{}'::jsonb,$5,$6,$7,$8)`,
-        [
-          session.match_id,
-          input.clientEventId,
-          sequence,
-          writerGeneration,
-          session.id,
-          eventContext?.manual_period ?? 1,
-          eventContext?.manual_event_seconds ?? 0,
-          this.now(),
-        ],
-      );
-      const result = await this.persistResultPublication(tx, {
-        matchId: session.match_id,
-        divisionId: session.division_id,
-        organisationId: session.organisation_id,
-        requestId,
-        actorAccountId: null,
-        actorType: "access_pass",
-        action: "result.finalised",
-        reason: null,
+          [
+            session.match_id,
+            input.clientEventId,
+            sequence,
+            writerGeneration,
+            session.id,
+            eventContext?.manual_period ?? 1,
+            eventContext?.manual_event_seconds ?? 0,
+            this.now(),
+          ],
+        );
+        const result = await this.persistResultPublication(tx, {
+          matchId: session.match_id,
+          divisionId: session.division_id,
+          organisationId: session.organisation_id,
+          requestId,
+          actorAccountId: null,
+          actorType: "access_pass",
+          action: "result.finalised",
+          reason: null,
+        });
+        return { duplicate: false as const, sequence, ...result };
       });
-      return { duplicate: false as const, sequence, ...result };
-    });
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "STALE_WRITER_GENERATION") {
+        await this.recordScoringSessionDenial(auth, requestId, "scoring_result.finalise_denied", error.code);
+      }
+      throw error;
+    }
   }
 
   private async persistedEvents(tx: PostgresJsSql, matchId: string): Promise<PersistedScoreEvent[]> {

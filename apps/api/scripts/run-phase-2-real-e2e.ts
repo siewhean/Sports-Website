@@ -268,7 +268,13 @@ function connectIsolation(isolation: Isolation): Sql {
 }
 
 async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
-  const runtime = new Phase2Runtime(sql as unknown as PostgresJsSql, phase2DomainAdapter);
+  const runtime = new Phase2Runtime(
+    sql as unknown as PostgresJsSql,
+    phase2DomainAdapter,
+    undefined,
+    undefined,
+    "phase-2-e2e-fallback-code-hmac-secret",
+  );
   const accountId = randomUUID();
   const organisationId = randomUUID();
   await sql.begin(async (transaction) => {
@@ -541,6 +547,7 @@ async function main(): Promise<void> {
       DATABASE_URL: isolation.databaseUrl,
       IDENTITY_CSRF_HMAC_SECRET: csrfSecret,
       SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: scoringAccessRateLimitSecret,
+      SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "phase-2-e2e-fallback-code-hmac-secret",
       LOG_LEVEL: "info",
     });
     const identitySql = sql as unknown as PostgresJsSql;
@@ -576,6 +583,7 @@ async function main(): Promise<void> {
         phase2DomainAdapter,
         undefined,
         new RedisScoringAccessRateLimiter(redis, scoringAccessRateLimitSecret, redisNamespace),
+        config.scoringAccess.fallbackCodeHmacSecret,
       ),
     });
     await app.listen({ host: "127.0.0.1", port: apiPort });

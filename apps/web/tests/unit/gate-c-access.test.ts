@@ -86,6 +86,8 @@ describe("Gate C access source guards", () => {
     const reveal = source.indexOf("revealDialog.current?.showModal()", rotation);
     expect(source.indexOf("shortCode: result.shortCode", rotation)).toBeGreaterThan(rotation);
     expect(reveal).toBeGreaterThan(rotation);
+    expect(source).toContain("revealReturnTarget.current = returnTarget");
+    expect(source).toContain("returnTarget?.focus()");
     expect(source).toContain("const inactive = pass.status !== gateCAccessMachine.active");
     expect(source).toContain("disabled={!canEdit || inactive}");
   });
@@ -109,7 +111,11 @@ describe("Gate C access source guards", () => {
     expect(scoringSource).toContain("refreshScoringSessionAccess(");
     expect(scoringSource).toContain("liveScorerInputRef.current?.focus()");
     expect(scoringSource).toContain("writerStatusRef.current?.focus()");
-    expect(scoringSource).toContain("setAnnouncement(nextState");
+    expect(scoringSource).toContain("writerStateRef.current = phase2Machine.expiring");
+    expect(scoringSource).toContain("void refresh(true)");
+    expect(scoringSource).toContain("setAnnouncement(");
+    expect(scoringSource).toContain("phase2Copy.leaseExpiring");
+    expect(scoringSource).toContain("setAnnouncement(scoringSessionAnnouncement(session))");
     expect(scoringSource).not.toContain('role="status"');
     expect(browserSource).not.toContain("candidatePage.reload()");
     expect(browserSource).not.toContain("incumbentPage.reload()");

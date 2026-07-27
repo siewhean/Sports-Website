@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import { ApiError } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { NoopScoringAccessRateLimiter } from "../../src/scoring-access-rate-limit.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -22,6 +23,7 @@ let client: Sql;
 let runtime: Phase2Runtime;
 let accountId: string;
 let organisationId: string;
+const fallbackCodeHmacSecret = "phase-2-runtime-fallback-hmac-secret";
 
 beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
@@ -42,7 +44,13 @@ beforeAll(async () => {
       VALUES (${organisationId},${accountId},'owner','active')
     `;
   });
-  runtime = new Phase2Runtime(client as unknown as PostgresJsSql, phase2DomainAdapter);
+  runtime = new Phase2Runtime(
+    client as unknown as PostgresJsSql,
+    phase2DomainAdapter,
+    undefined,
+    undefined,
+    fallbackCodeHmacSecret,
+  );
 });
 
 afterAll(async () => {
@@ -102,9 +110,21 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const thirdMatch = format.matches[2];
     const fourthMatch = format.matches[3];
     const fifthMatch = format.matches[4];
+    const sixthMatch = format.matches[5];
+    const seventhMatch = format.matches[6];
+    const eighthMatch = format.matches[7];
     expect(firstMatch?.homeEntryId).toBeTruthy();
     expect(firstMatch?.awayEntryId).toBeTruthy();
-    if (!firstMatch || !secondMatch || !thirdMatch || !fourthMatch || !fifthMatch) {
+    if (
+      !firstMatch ||
+      !secondMatch ||
+      !thirdMatch ||
+      !fourthMatch ||
+      !fifthMatch ||
+      !sixthMatch ||
+      !seventhMatch ||
+      !eighthMatch
+    ) {
       throw new Error("Expected generated matches");
     }
     const pass = await runtime.createAccessPass(actor, competition.id, firstMatch.id, accessExpiry, randomUUID());
@@ -113,6 +133,33 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     `;
     expect(hashes[0]?.secret_hash.toString("utf8")).not.toContain(pass.token);
     expect(pass.short_code).toMatch(/^\d{12}$/);
+    expect(hashes[0]?.short_code_hash).toEqual(
+      createHmac("sha256", fallbackCodeHmacSecret).update(`scoring-fallback-code:${pass.short_code}`, "utf8").digest(),
+    );
+    expect(hashes[0]?.short_code_hash).not.toEqual(createHash("sha256").update(pass.short_code, "utf8").digest());
+    const collisionTarget = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      firstMatch.id,
+      {
+        expiresAt: accessExpiry,
+        role: "viewer",
+        idempotencyKey: `rotation-collision-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    const generatedCollisionCodes = [pass.short_code, "987654321012"];
+    const collisionRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      undefined,
+      undefined,
+      fallbackCodeHmacSecret,
+      () => generatedCollisionCodes.shift() ?? "123456789012",
+    );
+    expect(
+      await collisionRuntime.rotateFallbackCode(actor, competition.id, collisionTarget.id, randomUUID(), randomUUID()),
+    ).toMatchObject({ short_code: "987654321012", duplicate: false });
     const idempotencyKey = `idempotent-${randomUUID()}`;
     const idempotentPass = await runtime.createAccessPass(
       actor,
@@ -176,6 +223,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       client as unknown as PostgresJsSql,
       phase2DomainAdapter,
       () => new Date(Date.now() + 120_000),
+      undefined,
+      fallbackCodeHmacSecret,
     );
     await expect(
       futureRuntime.exchangeAccess(
@@ -209,7 +258,46 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     await expect(
       runtime.exchangeAccess({ token: pass.token, expectedMatchId: secondMatch.id }, randomUUID()),
     ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_WRONG_MATCH" });
-    const writer = await runtime.exchangeAccess({ token: pass.token, expectedMatchId: firstMatch.id }, randomUUID());
+    const baseLimiter = new NoopScoringAccessRateLimiter();
+    let failSuccessAccounting = true;
+    const failureInjectingRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      undefined,
+      {
+        fingerprints: (...args) => baseLimiter.fingerprints(...args),
+        assertAllowed: () => baseLimiter.assertAllowed(),
+        recordInvalid: () => baseLimiter.recordInvalid(),
+        recordSuccess: async () => {
+          if (failSuccessAccounting) {
+            failSuccessAccounting = false;
+            throw new Error("injected Redis success-accounting failure");
+          }
+          await baseLimiter.recordSuccess();
+        },
+      },
+      fallbackCodeHmacSecret,
+    );
+    const retryableExchangeRequestId = randomUUID();
+    await expect(
+      failureInjectingRuntime.exchangeAccess(
+        { shortCode: pass.short_code, expectedMatchId: firstMatch.id, deviceId: randomUUID() },
+        retryableExchangeRequestId,
+      ),
+    ).rejects.toThrow("injected Redis success-accounting failure");
+    expect(
+      await client<{ sessions: number; leases: number; accepted_attempts: number }[]>`
+        SELECT
+          (SELECT count(*)::integer FROM scoring_access_sessions WHERE access_pass_id=${pass.id}) AS sessions,
+          (SELECT count(*)::integer FROM match_writer_leases WHERE match_id=${firstMatch.id}) AS leases,
+          (SELECT count(*)::integer FROM scoring_access_attempts
+             WHERE access_pass_id=${pass.id} AND outcome='accepted') AS accepted_attempts
+      `,
+    ).toEqual([{ sessions: 0, leases: 0, accepted_attempts: 0 }]);
+    const writer = await runtime.exchangeAccess(
+      { shortCode: pass.short_code, expectedMatchId: firstMatch.id },
+      retryableExchangeRequestId,
+    );
     await expect(runtime.exchangeAccess({ token: pass.token }, randomUUID())).rejects.toMatchObject({
       statusCode: 409,
       code: "WRITER_ACTIVE",
@@ -906,10 +994,368 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         retainedWriterLease[0]?.access_session_id === revocationWriter.session_id,
     ).toBe(true);
 
+    const [expiryWriterPass, expiryCandidatePass] = await Promise.all(
+      ["writer", "candidate"].map((label) =>
+        runtime.createAccessPass(
+          actor,
+          competition.id,
+          sixthMatch.id,
+          {
+            expiresAt: accessExpiry,
+            role: "scorekeeper",
+            idempotencyKey: `takeover-expiry-${label}-${randomUUID()}`,
+          },
+          randomUUID(),
+        ),
+      ),
+    );
+    if (!expiryWriterPass?.token || !expiryCandidatePass?.token) {
+      throw new Error("Expected takeover-expiry pass secrets");
+    }
+    const expiryWriter = await runtime.exchangeAccess(
+      { token: expiryWriterPass.token, deviceId: randomUUID(), ipAddress: "203.0.113.51" },
+      randomUUID(),
+    );
+    const expiryCandidate = await runtime.exchangeAccess(
+      { token: expiryCandidatePass.token, deviceId: randomUUID(), ipAddress: "203.0.113.52" },
+      randomUUID(),
+    );
+    await runtime.heartbeatScoringSession(
+      {
+        sessionId: expiryWriter.session_id,
+        sessionToken: expiryWriter.session_token,
+        generation: expiryWriter.generation,
+      },
+      { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    const expiringTakeover = await runtime.requestTakeover(
+      { sessionId: expiryCandidate.session_id, sessionToken: expiryCandidate.session_token, generation: null },
+      { pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    const futureTakeoverRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      () => new Date(Date.now() + 6 * 60_000),
+      undefined,
+      fallbackCodeHmacSecret,
+    );
+    expect(
+      await futureTakeoverRuntime.resolveTakeover(
+        actor,
+        competition.id,
+        expiringTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Must expire instead of approving",
+        },
+        randomUUID(),
+      ),
+    ).toEqual({ id: expiringTakeover.id, status: "expired" });
+    const takeoverQueue = await runtime.listTakeoverRequests(actor, competition.id);
+    expect(takeoverQueue.find((entry) => entry.id === expiringTakeover.id)).toMatchObject({
+      status: "expired",
+      resolution_reason: "Takeover request expired before review",
+    });
+    expect(
+      await client<{ action: string; competition_id: string | null }[]>`
+        SELECT action,metadata->>'competition_id' AS competition_id
+        FROM audit_events
+        WHERE target_id=${expiringTakeover.id} AND action='scoring_takeover.expired'
+      `,
+    ).toEqual([{ action: "scoring_takeover.expired", competition_id: competition.id }]);
+    expect(
+      await client<{ count: number }[]>`
+        SELECT count(*)::integer AS count FROM outbox_events
+        WHERE aggregate_id=${expiringTakeover.id} AND event_type='scoring_takeover.expired'
+      `,
+    ).toEqual([{ count: 1 }]);
+    await runtime.heartbeatScoringSession(
+      {
+        sessionId: expiryWriter.session_id,
+        sessionToken: expiryWriter.session_token,
+        generation: expiryWriter.generation,
+      },
+      { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    const replacementTakeover = await runtime.requestTakeover(
+      { sessionId: expiryCandidate.session_id, sessionToken: expiryCandidate.session_token, generation: null },
+      { pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    expect(replacementTakeover.id).not.toBe(expiringTakeover.id);
+    const racingOldEventId = randomUUID();
+    const racingOldRequestId = randomUUID();
+    const [heartbeatRace, eventRace, transferRace] = await Promise.allSettled([
+      runtime.heartbeatScoringSession(
+        {
+          sessionId: expiryWriter.session_id,
+          sessionToken: expiryWriter.session_token,
+          generation: expiryWriter.generation,
+        },
+        { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
+        randomUUID(),
+      ),
+      runtime.appendScoreEvent(
+        {
+          sessionId: expiryWriter.session_id,
+          sessionToken: expiryWriter.session_token,
+          generation: expiryWriter.generation,
+        },
+        {
+          clientEventId: racingOldEventId,
+          type: "match_started",
+          teamSlot: null,
+          scorer: null,
+          manualPeriod: 1,
+          manualEventSeconds: 0,
+          payload: {},
+          correctionReason: null,
+          occurredAt: new Date(),
+        },
+        racingOldRequestId,
+      ),
+      runtime.resolveTakeover(
+        actor,
+        competition.id,
+        replacementTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Concurrent transfer race",
+        },
+        randomUUID(),
+      ),
+    ]);
+    expect(transferRace.status).toBe("fulfilled");
+    if (transferRace.status !== "fulfilled" || transferRace.value.status !== "approved") {
+      throw new Error("Concurrent transfer must produce the next writer generation");
+    }
+    expect(transferRace.value).toMatchObject({ generation: 2, conflict_id: null });
+    if (heartbeatRace.status === "rejected") {
+      expect(heartbeatRace.reason).toMatchObject({ code: "STALE_WRITER_GENERATION" });
+    }
+    if (eventRace.status === "rejected") {
+      expect(eventRace.reason).toMatchObject({ code: "STALE_WRITER_GENERATION" });
+    }
+    const newWriterEvent = await runtime.appendScoreEvent(
+      {
+        sessionId: expiryCandidate.session_id,
+        sessionToken: expiryCandidate.session_token,
+        generation: transferRace.value.generation,
+      },
+      {
+        clientEventId: randomUUID(),
+        type: "match_started",
+        teamSlot: null,
+        scorer: null,
+        manualPeriod: 1,
+        manualEventSeconds: 1,
+        payload: {},
+        correctionReason: null,
+        occurredAt: new Date(),
+      },
+      randomUUID(),
+    );
+    await expect(
+      runtime.appendScoreEvent(
+        {
+          sessionId: expiryWriter.session_id,
+          sessionToken: expiryWriter.session_token,
+          generation: expiryWriter.generation,
+        },
+        {
+          clientEventId: randomUUID(),
+          type: "match_started",
+          teamSlot: null,
+          scorer: null,
+          manualPeriod: 1,
+          manualEventSeconds: 2,
+          payload: {},
+          correctionReason: null,
+          occurredAt: new Date(),
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "STALE_WRITER_GENERATION" });
+    const racedEvents = await client<{ sequence: number; writer_generation: number }[]>`
+      SELECT sequence,writer_generation FROM score_events
+      WHERE match_id=${sixthMatch.id} ORDER BY sequence
+    `;
+    expect(racedEvents.map((event) => event.sequence)).toEqual(
+      Array.from({ length: racedEvents.length }, (_, index) => index + 1),
+    );
+    expect(racedEvents.at(-1)).toEqual({
+      sequence: newWriterEvent.sequence,
+      writer_generation: transferRace.value.generation,
+    });
+    expect(
+      racedEvents.every(
+        (event, index) => index === 0 || event.writer_generation >= racedEvents[index - 1]!.writer_generation,
+      ),
+    ).toBe(true);
+    expect(
+      await client<{ generation: number; access_session_id: string }[]>`
+        SELECT generation,access_session_id FROM match_writer_leases WHERE match_id=${sixthMatch.id}
+      `,
+    ).toEqual([{ generation: 2, access_session_id: expiryCandidate.session_id }]);
+
+    const exchangeRevocationPass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      seventhMatch.id,
+      {
+        expiresAt: accessExpiry,
+        role: "scorekeeper",
+        idempotencyKey: `exchange-revoke-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    if (!exchangeRevocationPass.token) throw new Error("Expected exchange-revocation access secret");
+    const [exchangeRace, revokeRace] = await Promise.allSettled([
+      runtime.exchangeAccess(
+        {
+          token: exchangeRevocationPass.token,
+          deviceId: randomUUID(),
+          ipAddress: "203.0.113.61",
+        },
+        randomUUID(),
+      ),
+      runtime.revokeAccessPass(
+        actor,
+        competition.id,
+        exchangeRevocationPass.id,
+        randomUUID(),
+        "Concurrent exchange authorization withdrawal",
+      ),
+    ]);
+    expect(revokeRace.status).toBe("fulfilled");
+    if (exchangeRace.status === "rejected") {
+      expect(exchangeRace.reason).toMatchObject({ code: "ACCESS_REVOKED" });
+    }
+    expect(
+      await client<{ revoked: boolean; live_sessions: number; leases: number }[]>`
+        SELECT
+          revoked_at IS NOT NULL AS revoked,
+          (SELECT count(*)::integer FROM scoring_access_sessions
+             WHERE access_pass_id=${exchangeRevocationPass.id} AND revoked_at IS NULL) AS live_sessions,
+          (SELECT count(*)::integer FROM match_writer_leases WHERE match_id=${seventhMatch.id}) AS leases
+        FROM scoring_access_passes WHERE id=${exchangeRevocationPass.id}
+      `,
+    ).toEqual([{ revoked: true, live_sessions: 0, leases: 0 }]);
+
+    const [finaliseWriterPass, finaliseCandidatePass] = await Promise.all(
+      ["writer", "candidate"].map((label) =>
+        runtime.createAccessPass(
+          actor,
+          competition.id,
+          eighthMatch.id,
+          {
+            expiresAt: accessExpiry,
+            role: "scorekeeper",
+            idempotencyKey: `finalise-transfer-${label}-${randomUUID()}`,
+          },
+          randomUUID(),
+        ),
+      ),
+    );
+    if (!finaliseWriterPass?.token || !finaliseCandidatePass?.token) {
+      throw new Error("Expected finalise-transfer access secrets");
+    }
+    const finaliseWriter = await runtime.exchangeAccess(
+      { token: finaliseWriterPass.token, deviceId: randomUUID(), ipAddress: "203.0.113.71" },
+      randomUUID(),
+    );
+    const finaliseWriterAuth = {
+      sessionId: finaliseWriter.session_id,
+      sessionToken: finaliseWriter.session_token,
+      generation: finaliseWriter.generation,
+    };
+    await runtime.appendScoreEvent(
+      finaliseWriterAuth,
+      {
+        clientEventId: randomUUID(),
+        type: "match_started",
+        teamSlot: null,
+        scorer: null,
+        manualPeriod: 1,
+        manualEventSeconds: 0,
+        payload: {},
+        correctionReason: null,
+        occurredAt: new Date(),
+      },
+      randomUUID(),
+    );
+    const finaliseCandidate = await runtime.exchangeAccess(
+      { token: finaliseCandidatePass.token, deviceId: randomUUID(), ipAddress: "203.0.113.72" },
+      randomUUID(),
+    );
+    await runtime.heartbeatScoringSession(
+      finaliseWriterAuth,
+      { lastAcknowledgedSequence: 1, pendingEventCount: 0, pendingThroughSequence: 1 },
+      randomUUID(),
+    );
+    const finaliseTakeover = await runtime.requestTakeover(
+      {
+        sessionId: finaliseCandidate.session_id,
+        sessionToken: finaliseCandidate.session_token,
+        generation: null,
+      },
+      { pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    const finaliseRequestId = randomUUID();
+    const [finaliseRace, finaliseTransferRace] = await Promise.allSettled([
+      runtime.finalise(finaliseWriterAuth, randomUUID(), finaliseRequestId),
+      runtime.resolveTakeover(
+        actor,
+        competition.id,
+        finaliseTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Concurrent finalisation transfer",
+        },
+        randomUUID(),
+      ),
+    ]);
+    expect(finaliseTransferRace.status).toBe("fulfilled");
+    if (finaliseTransferRace.status !== "fulfilled" || finaliseTransferRace.value.status !== "approved") {
+      throw new Error("Finalisation race must preserve a monotonic transfer");
+    }
+    expect(finaliseTransferRace.value.generation).toBe(2);
+    if (finaliseRace.status === "rejected") {
+      expect(finaliseRace.reason).toMatchObject({ code: "STALE_WRITER_GENERATION" });
+      expect(
+        await client<{ count: number }[]>`
+          SELECT count(*)::integer AS count FROM audit_events
+          WHERE request_id=${finaliseRequestId}
+            AND action='scoring_result.finalise_denied'
+            AND metadata->>'competition_id'=${competition.id}
+        `,
+      ).toEqual([{ count: 1 }]);
+    }
+    expect(
+      await client<{ generation: number; access_session_id: string }[]>`
+        SELECT generation,access_session_id FROM match_writer_leases WHERE match_id=${eighthMatch.id}
+      `,
+    ).toEqual([{ generation: 2, access_session_id: finaliseCandidate.session_id }]);
+    const finaliseProjection = await client<{ result_count: number; finalise_event_count: number }[]>`
+      SELECT
+        (SELECT count(*)::integer FROM match_result_snapshots WHERE match_id=${eighthMatch.id}) AS result_count,
+        (SELECT count(*)::integer FROM score_events
+           WHERE match_id=${eighthMatch.id} AND event_type='match_finalised') AS finalise_event_count
+    `;
+    expect(finaliseProjection[0]?.result_count).toBe(finaliseProjection[0]?.finalise_event_count);
+    expect(finaliseProjection[0]?.result_count).toBe(finaliseRace.status === "fulfilled" ? 1 : 0);
+
     const workspace = await runtime.competitionWorkspace(actor, competition.id);
     expect(workspace).toMatchObject({
       competition: { id: competition.id, organisation_id: organisationId },
-      publication: { schedule_version: 1, result_version: 2 },
+      publication: { schedule_version: 1, result_version: finaliseRace.status === "fulfilled" ? 3 : 2 },
     });
     expect(JSON.stringify(workspace.access_passes)).not.toContain(pass.token);
     const scoringAuditMetadata = await client<

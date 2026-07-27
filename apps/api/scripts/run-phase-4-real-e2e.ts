@@ -626,7 +626,13 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     isolation = await prepareIsolation(admin);
     sql = connectIsolation(isolation);
     const identitySql = sql as unknown as PostgresJsSql;
-    const phase2 = new Phase2Runtime(identitySql, phase2DomainAdapter);
+    const phase2 = new Phase2Runtime(
+      identitySql,
+      phase2DomainAdapter,
+      undefined,
+      undefined,
+      "phase-4-e2e-fallback-code-hmac-secret",
+    );
     const phase3 = new Phase3Runtime(identitySql, phase3DomainAdapter);
     scheduleQueue = new ScheduleJobQueue({ queueName, redisUrl });
     scheduler = new SchedulerRuntime({

@@ -137,6 +137,33 @@ function sessionView(state: ApiSessionState): ScoringSessionView {
   };
 }
 
+export type ScoringWriterAvailability = "active" | "expiring" | "expired";
+
+export function scoringWriterAvailability(
+  session: Pick<ScoringSessionView, "expiresAt" | "leaseExpiresAt" | "mode" | "readOnly">,
+  now: number = Date.now(),
+): ScoringWriterAvailability {
+  const sessionExpiresAt = Date.parse(session.expiresAt);
+  if (!Number.isFinite(sessionExpiresAt) || sessionExpiresAt <= now) return "expired";
+  if (session.mode !== "writer") return "active";
+  const leaseExpiresAt = session.leaseExpiresAt ? Date.parse(session.leaseExpiresAt) : Number.NaN;
+  return session.readOnly || !Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now + 15_000 ? "expiring" : "active";
+}
+
+export function scoringSessionAnnouncement(session: ScoringSessionView, now: number = Date.now()): string {
+  if (session.mode === phase2Machine.writer) {
+    const availability = scoringWriterAvailability(session, now);
+    return availability === phase2Machine.active
+      ? phase2Copy.accessRestored
+      : availability === phase2Machine.expiring
+        ? phase2Copy.leaseExpiring
+        : phase2Copy.sessionExpired;
+  }
+  if (session.mode === phase2Machine.candidate) return phase2Copy.candidate;
+  if (session.mode === phase2Machine.transferred) return phase2Copy.transferred;
+  return phase2Copy.readOnly;
+}
+
 function appendBody(command: ScoringEventCommand): Record<string, unknown> {
   const base = {
     client_event_id: command.clientEventId,

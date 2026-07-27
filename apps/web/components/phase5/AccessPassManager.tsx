@@ -131,6 +131,7 @@ export function AccessPassManager({
   const takeoverReturnTarget = useRef<HTMLButtonElement | null>(null);
   const issueButton = useRef<HTMLButtonElement>(null);
   const revealClose = useRef<HTMLButtonElement>(null);
+  const revealReturnTarget = useRef<HTMLButtonElement | null>(null);
   const takeoverLoadFence = useRef(new LatestRequestFence());
 
   const loadTakeovers = useCallback(
@@ -190,6 +191,12 @@ export function AccessPassManager({
     };
   }, [issued]);
 
+  useEffect(() => {
+    if (!issued || !revealDialog.current?.open) return;
+    const focusFrame = window.requestAnimationFrame(() => revealClose.current?.focus());
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [issued]);
+
   const openIssue = () => {
     setAnnouncement("");
     if (!expiresAt) setExpiresAt(localExpiry());
@@ -234,8 +241,8 @@ export function AccessPassManager({
         ...current.filter((pass) => pass.id !== result.id),
       ]);
       issueDialog.current?.close();
+      revealReturnTarget.current = issueButton.current;
       revealDialog.current?.showModal();
-      window.requestAnimationFrame(() => revealClose.current?.focus());
       setAnnouncement(t("prototype.8a569cab1b79"));
     } catch {
       setAnnouncement(copy.failed);
@@ -266,7 +273,8 @@ export function AccessPassManager({
     setAnnouncement(t("prototype.0511ee34d2c7"));
   };
 
-  const rotate = async (passId: string) => {
+  const rotate = async (passId: string, returnTarget: HTMLButtonElement) => {
+    revealReturnTarget.current = returnTarget;
     setBusy(true);
     try {
       const response = await fetch(
@@ -298,13 +306,21 @@ export function AccessPassManager({
         duplicate: result.duplicate,
       });
       revealDialog.current?.showModal();
-      window.requestAnimationFrame(() => revealClose.current?.focus());
       setAnnouncement(t("prototype.b67983781ade"));
     } catch {
       setAnnouncement(copy.failed);
     } finally {
       setBusy(false);
     }
+  };
+
+  const closeReveal = () => {
+    revealDialog.current?.close();
+    setIssued(null);
+    setQrDataUrl("");
+    const returnTarget = revealReturnTarget.current?.isConnected ? revealReturnTarget.current : issueButton.current;
+    revealReturnTarget.current = null;
+    window.requestAnimationFrame(() => returnTarget?.focus());
   };
 
   const confirmRevoke = async () => {
@@ -400,7 +416,7 @@ export function AccessPassManager({
 
   return (
     <section className="p2-access p5-access">
-      <p className="sr-only" aria-live="polite" aria-atomic="true">
+      <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
       <header>
@@ -473,7 +489,7 @@ export function AccessPassManager({
                       type="button"
                       disabled={!canEdit || inactive}
                       aria-label={t("prototype.ff8f355c93c1", { match: matchLabel })}
-                      onClick={() => void rotate(pass.id)}
+                      onClick={(event) => void rotate(pass.id, event.currentTarget)}
                     >
                       {copy.rotate}
                     </button>
@@ -597,7 +613,15 @@ export function AccessPassManager({
         </form>
       </dialog>
 
-      <dialog ref={revealDialog} className="p5-access-dialog p5-access-reveal" aria-labelledby="issued-pass-title">
+      <dialog
+        ref={revealDialog}
+        className="p5-access-dialog p5-access-reveal"
+        aria-labelledby="issued-pass-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeReveal();
+        }}
+      >
         {issued ? (
           <section>
             <header>
@@ -654,17 +678,7 @@ export function AccessPassManager({
                 {copy.print}
               </button>
             </div>
-            <button
-              ref={revealClose}
-              className="p2-button p2-button--dark"
-              type="button"
-              onClick={() => {
-                revealDialog.current?.close();
-                setIssued(null);
-                setQrDataUrl("");
-                window.requestAnimationFrame(() => issueButton.current?.focus());
-              }}
-            >
+            <button ref={revealClose} className="p2-button p2-button--dark" type="button" onClick={closeReveal}>
               {copy.close}
             </button>
           </section>

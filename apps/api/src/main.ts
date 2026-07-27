@@ -51,6 +51,7 @@ const phase2Runtime = new Phase2Runtime(
     config.scoringAccess.rateLimitHmacSecret,
     `matchday:${config.environment}:scoring-access:`,
   ),
+  config.scoringAccess.fallbackCodeHmacSecret,
 );
 const phase3Runtime = new Phase3Runtime(identitySql, phase3DomainAdapter);
 const scheduleQueue = new ScheduleJobQueue({

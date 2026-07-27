@@ -136,6 +136,7 @@ CREATE TABLE scoring_takeover_requests (
   incumbent_pending_state text NOT NULL
     CHECK (incumbent_pending_state IN ('unknown','none','present')),
   requested_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL DEFAULT (now()+interval '5 minutes'),
   resolved_at timestamptz,
   resolved_by_account_id uuid REFERENCES accounts(id),
   resolution_reason text,
@@ -148,6 +149,7 @@ CREATE TABLE scoring_takeover_requests (
   FOREIGN KEY (incumbent_session_id,match_id,competition_id)
     REFERENCES scoring_access_sessions(id,match_id,competition_id) ON DELETE RESTRICT,
   CHECK (requesting_session_id<>incumbent_session_id),
+  CHECK (expires_at>requested_at),
   CHECK (
     (status='pending'
       AND resolved_at IS NULL
@@ -286,10 +288,10 @@ CREATE FUNCTION phase5_guard_access_transition_immutability() RETURNS trigger AS
 BEGIN
   IF ROW(
     OLD.competition_id,OLD.match_id,OLD.requesting_session_id,OLD.incumbent_session_id,
-    OLD.requester_pending_event_count,OLD.incumbent_pending_state,OLD.requested_at
+    OLD.requester_pending_event_count,OLD.incumbent_pending_state,OLD.requested_at,OLD.expires_at
   ) IS DISTINCT FROM ROW(
     NEW.competition_id,NEW.match_id,NEW.requesting_session_id,NEW.incumbent_session_id,
-    NEW.requester_pending_event_count,NEW.incumbent_pending_state,NEW.requested_at
+    NEW.requester_pending_event_count,NEW.incumbent_pending_state,NEW.requested_at,NEW.expires_at
   ) THEN
     RAISE EXCEPTION 'takeover request identity and pending-state evidence are immutable';
   END IF;

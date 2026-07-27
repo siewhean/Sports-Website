@@ -31,7 +31,12 @@ async function scoringContext(browser: Browser, page: Page, phone: boolean): Pro
   });
 }
 
-async function issuePass(page: Page, role: "viewer" | "scorekeeper", matchId: string): Promise<RevealedPass> {
+async function issuePass(
+  page: Page,
+  role: "viewer" | "scorekeeper",
+  matchId: string,
+  exerciseRevealControls = false,
+): Promise<RevealedPass> {
   await page.getByRole("button", { name: "Issue pass" }).click();
   const issue = page.getByRole("dialog", { name: "Create access pass" });
   await issue.getByLabel("Match").selectOption(matchId);
@@ -47,6 +52,38 @@ async function issuePass(page: Page, role: "viewer" | "scorekeeper", matchId: st
   expect(accessUrl).toMatch(/^https:\/\/localhost:3102\/score#access=[A-Za-z0-9_-]{32,}$/);
   expect(fallbackCode).toMatch(/^\d{12}$/);
   await expect(reveal.getByRole("img", { name: "Scan this QR to open scoring access" })).toBeVisible();
+  await expect(reveal.getByRole("button", { name: "Close" })).toBeFocused();
+  await assertNoWcagAOrAaViolations(page);
+  if (exerciseRevealControls) {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (value: string) => {
+            document.body.setAttribute("data-last-copied-value", value);
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await reveal.getByRole("button", { name: "Copy link" }).click();
+    await expect(page.locator("body")).toHaveAttribute("data-last-copied-value", accessUrl);
+    await reveal.getByRole("button", { name: "Copy number" }).click();
+    await expect(page.locator("body")).toHaveAttribute("data-last-copied-value", fallbackCode);
+
+    const download = page.waitForEvent("download");
+    await reveal.getByRole("button", { name: "Download QR" }).click();
+    expect((await download).suggestedFilename()).toMatch(/^matchday-.+-access\.svg$/);
+
+    await page.evaluate(() => {
+      Object.defineProperty(window, "print", {
+        configurable: true,
+        value: () => document.body.setAttribute("data-print-invoked", "true"),
+      });
+    });
+    await reveal.getByRole("button", { name: "Print" }).click();
+    await expect(page.locator("body")).toHaveAttribute("data-print-invoked", "true");
+  }
   await reveal.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("button", { name: "Issue pass" })).toBeFocused();
   return { accessUrl, fallbackCode };
@@ -68,12 +105,12 @@ async function attachSurface(page: Page, testInfo: TestInfo, name: string) {
   });
 }
 
-test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry", async ({
+test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse", async ({
   browser,
   context,
   page,
 }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const state = await seedState();
   const phone = testInfo.project.name.includes("phone");
   const [, organiserCookie] = state.organiserCookie.split("=", 2);
@@ -96,7 +133,7 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry"
   await expect(page.getByRole("heading", { name: "Match-scoped passes" })).toBeVisible();
   await assertNoWcagAOrAaViolations(page);
 
-  const viewer = await issuePass(page, "viewer", state.matchId);
+  const viewer = await issuePass(page, "viewer", state.matchId, true);
   const viewerContext = await scoringContext(browser, page, phone);
   const viewerPage = await viewerContext.newPage();
   viewerPage.on("request", (request) => requestUrls.push(request.url()));
@@ -116,16 +153,20 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry"
   await attachSurface(viewerPage, testInfo, `${testInfo.project.name}-viewer-read-only`);
 
   const viewerHistory = page.locator(".p5-access-history li").filter({ hasText: "Viewer — read only" }).first();
-  await viewerHistory.getByRole("button", { name: /Rotate fallback number/ }).click();
+  const rotateViewerPass = viewerHistory.getByRole("button", { name: /Rotate fallback number/ });
+  await rotateViewerPass.click();
   const rotatedReveal = page.getByRole("dialog", { name: "Save these access details now" });
   await expect(rotatedReveal).toBeVisible();
+  await expect(rotatedReveal.getByRole("button", { name: "Close" })).toBeFocused();
   await expect(rotatedReveal.getByText("Fallback number rotated. Save the new number now.")).toBeVisible();
   await expect(rotatedReveal.getByRole("img", { name: "Scan this QR to open scoring access" })).toHaveCount(0);
   await expect(rotatedReveal.locator("code")).toHaveCount(1);
   const rotatedCode = (await rotatedReveal.locator("code").textContent())?.trim() ?? "";
   expect(rotatedCode).toMatch(/^\d{12}$/);
   expect(rotatedCode).not.toBe(viewer.fallbackCode);
+  await assertNoWcagAOrAaViolations(page);
   await rotatedReveal.getByRole("button", { name: "Close" }).click();
+  await expect(rotateViewerPass).toBeFocused();
 
   const fallbackContext = await scoringContext(browser, page, phone);
   const fallbackPage = await fallbackContext.newPage();
@@ -146,6 +187,7 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry"
   );
   await viewerPage.reload();
   await expect(viewerPage.locator("#scoring-code-error")).toHaveText("This scoring access was revoked");
+  await expect(viewerPage.locator('[aria-live="polite"]')).toContainText("revoked");
   await assertConsoleGuard(viewerPage, testInfo);
   await assertConsoleGuard(fallbackPage, testInfo);
   await viewerContext.close();
@@ -201,13 +243,40 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry"
   await attachSurface(incumbentPage, testInfo, `${testInfo.project.name}-transferred-read-only`);
 
   await candidatePage.close();
-  await page.waitForTimeout(46_000);
+  await page.waitForTimeout(48_000);
   candidatePage = await candidateContext.newPage();
   candidatePage.on("request", (request) => requestUrls.push(request.url()));
   await openScoring(candidatePage, `${state.webOrigin}/score`);
-  await expect(candidatePage.locator(".p2-writer")).toContainText("This scoring session has expired");
+  await expect(candidatePage.locator(".p2-writer")).toContainText("Writer lease needs reconnection");
+  const leaseWarning = candidatePage.locator(".p2-score-warning");
+  await expect(leaseWarning).toContainText("Your scoring session and access pass remain valid");
+  await expect(leaseWarning).not.toContainText("issue a new pass");
+  await expect(candidatePage.getByLabel("Scorer name")).toBeDisabled();
+  await expect(candidatePage.locator('[aria-live="polite"]')).toContainText("Writer lease needs reconnection");
   await assertNoWcagAOrAaViolations(candidatePage);
-  await attachSurface(candidatePage, testInfo, `${testInfo.project.name}-lease-expired`);
+  await attachSurface(candidatePage, testInfo, `${testInfo.project.name}-lease-lapsed`);
+
+  const rateLimitedContext = await scoringContext(browser, page, phone);
+  const rateLimitedPage = await rateLimitedContext.newPage();
+  rateLimitedPage.on("request", (request) => requestUrls.push(request.url()));
+  await openScoring(rateLimitedPage, `${state.webOrigin}/score`);
+  allowConsoleFailure(
+    rateLimitedPage,
+    /^console\.error: Failed to load resource: the server responded with a status of 403 \(Forbidden\)$/,
+  );
+  allowConsoleFailure(
+    rateLimitedPage,
+    /^console\.error: Failed to load resource: the server responded with a status of 429 \(Too Many Requests\)$/,
+  );
+  const rateLimitedMessage = rateLimitedPage.locator("#scoring-code-error");
+  for (let attempt = 0; attempt < 7; attempt += 1) {
+    await rateLimitedPage.getByLabel("Scoring code").fill("000000000000");
+    await rateLimitedPage.getByRole("button", { name: "Validate access" }).click();
+    if ((await rateLimitedMessage.textContent()) === "Too many access attempts. Wait before trying again.") break;
+  }
+  await expect(rateLimitedMessage).toHaveText("Too many access attempts. Wait before trying again.");
+  await expect(rateLimitedPage.locator('[aria-live="polite"]')).toContainText("Too many access attempts");
+  await assertNoWcagAOrAaViolations(rateLimitedPage);
 
   for (const secret of [
     viewer.accessUrl.split("#access=")[1],
@@ -223,6 +292,8 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry"
   await assertConsoleGuard(page, testInfo);
   await assertConsoleGuard(incumbentPage, testInfo);
   await assertConsoleGuard(candidatePage, testInfo);
+  await assertConsoleGuard(rateLimitedPage, testInfo);
   await incumbentContext.close();
   await candidateContext.close();
+  await rateLimitedContext.close();
 });

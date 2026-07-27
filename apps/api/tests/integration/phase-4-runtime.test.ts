@@ -100,7 +100,13 @@ beforeAll(async () => {
     VALUES(${officialId},${organisationId},'competition',${competitionId},${accountId})`;
   await client`INSERT INTO ai_usage_allowances(organisation_id,actor_account_id,action,period_start,action_limit)
     VALUES(${organisationId},${accountId},'text_to_brief',current_date,10)`;
-  phase2 = new Phase2Runtime(client as unknown as PostgresJsSql, phase2DomainAdapter);
+  phase2 = new Phase2Runtime(
+    client as unknown as PostgresJsSql,
+    phase2DomainAdapter,
+    undefined,
+    undefined,
+    "phase-4-runtime-fallback-code-hmac-secret",
+  );
   runtime = new Phase4Runtime(
     client as unknown as PostgresJsSql,
     phase3,

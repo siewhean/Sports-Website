@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createScoringCommandPort, refreshScoringSessionAccess, ScoringTransportError } from "../../lib/phase2-scoring";
-import { phase2Machine, type ScoringSessionView } from "../../lib/phase2";
+import {
+  createScoringCommandPort,
+  refreshScoringSessionAccess,
+  scoringSessionAnnouncement,
+  scoringWriterAvailability,
+  ScoringTransportError,
+} from "../../lib/phase2-scoring";
+import { phase2Copy, phase2Machine, type ScoringSessionView } from "../../lib/phase2";
 import { LatestRequestFence } from "../../lib/latest-request";
 
 const matchId = "00000000-0000-4000-8000-000000000102";
@@ -61,6 +67,61 @@ afterEach(() => {
 });
 
 describe("phase 2 browser scoring transport", () => {
+  it("distinguishes a lapsed writer lease from a genuinely expired scoring session", () => {
+    const now = Date.parse("2030-01-01T00:00:00.000Z");
+
+    expect(scoringWriterAvailability(sessionView(), now)).toBe("active");
+    expect(
+      scoringWriterAvailability(
+        sessionView({
+          leaseExpiresAt: "2030-01-01T00:00:10.000Z",
+        }),
+        now,
+      ),
+    ).toBe("expiring");
+    expect(
+      scoringWriterAvailability(
+        sessionView({
+          leaseExpiresAt: "2029-12-31T23:59:59.000Z",
+          readOnly: true,
+        }),
+        now,
+      ),
+    ).toBe("expiring");
+    expect(
+      scoringWriterAvailability(
+        sessionView({
+          expiresAt: "2030-01-01T00:00:00.000Z",
+        }),
+        now,
+      ),
+    ).toBe("expired");
+  });
+
+  it("announces the effective writer, candidate, transferred and viewer states truthfully", () => {
+    const now = Date.parse("2030-01-01T00:00:00.000Z");
+    expect(scoringSessionAnnouncement(sessionView(), now)).toBe(phase2Copy.accessRestored);
+    expect(
+      scoringSessionAnnouncement(
+        sessionView({
+          leaseExpiresAt: "2029-12-31T23:59:59.000Z",
+          readOnly: true,
+        }),
+        now,
+      ),
+    ).toBe(phase2Copy.leaseExpiring);
+    expect(scoringSessionAnnouncement(sessionView({ expiresAt: "2030-01-01T00:00:00.000Z" }), now)).toBe(
+      phase2Copy.sessionExpired,
+    );
+    expect(scoringSessionAnnouncement(sessionView({ mode: "candidate", readOnly: true }), now)).toBe(
+      phase2Copy.candidate,
+    );
+    expect(scoringSessionAnnouncement(sessionView({ mode: "transferred", readOnly: true }), now)).toBe(
+      phase2Copy.transferred,
+    );
+    expect(scoringSessionAnnouncement(sessionView({ mode: "viewer", readOnly: true }), now)).toBe(phase2Copy.readOnly);
+  });
+
   it("removes the fragment before device lookup or token exchange", async () => {
     const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
     const tokenRead = source.indexOf("fragment.get(phase2Machine.access)");

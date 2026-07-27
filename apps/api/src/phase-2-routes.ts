@@ -722,7 +722,7 @@ export async function registerPhase2Routes(
             short_code: Type.Optional(Type.String({ pattern: "^[0-9]{12}$" })),
             expected_match_id: Type.Optional(Id),
             device_id: Type.String({ minLength: 32, maxLength: 256 }),
-            device_label: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+            device_label: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
           },
           { additionalProperties: false },
         ),

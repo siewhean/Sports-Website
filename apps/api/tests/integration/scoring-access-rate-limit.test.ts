@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import Fastify from "fastify";
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RedisScoringAccessRateLimiter, scoringAccessRateLimited } from "../../src/scoring-access-rate-limit.js";
@@ -55,6 +56,73 @@ describeInfra("Redis scoring access rate limiting", () => {
     expect(unrelatedCredential.remaining).toBeGreaterThan(0);
     expect((await ownedKeys()).join("\n")).not.toContain(credential);
     expect((await ownedKeys()).join("\n")).not.toContain(ip);
+  });
+
+  it("shares cooldowns and headers across two independently started API instances", async () => {
+    const applicationNamespace = `${namespace}two-api-instances:`;
+    const applicationRedis = [
+      new Redis(redisUrl, { maxRetriesPerRequest: 1 }),
+      new Redis(redisUrl, { maxRetriesPerRequest: 1 }),
+    ];
+    const applications = applicationRedis.map((connection) => {
+      const app = Fastify({ logger: false });
+      const limiter = new RedisScoringAccessRateLimiter(connection, secret, applicationNamespace);
+      app.post<{ Body: { credential: string; ip: string } }>("/exchange-invalid", async (request, reply) => {
+        let state = await limiter.assertAllowed(request.body.credential, request.body.ip);
+        if (!scoringAccessRateLimited(state)) {
+          state = await limiter.recordInvalid(request.body.credential, request.body.ip);
+        }
+        reply
+          .header("RateLimit-Limit", state.limit)
+          .header("RateLimit-Remaining", state.remaining)
+          .header("RateLimit-Reset", state.resetSeconds);
+        if (state.retryAfterSeconds) reply.header("Retry-After", state.retryAfterSeconds);
+        return reply.code(scoringAccessRateLimited(state) ? 429 : 403).send({ error: "ACCESS_DENIED" });
+      });
+      return app;
+    });
+    try {
+      const origins = await Promise.all(applications.map((app) => app.listen({ host: "127.0.0.1", port: 0 })));
+      const invoke = async (instance: number, credential: string, ip: string) =>
+        fetch(`${origins[instance]}/exchange-invalid`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ credential, ip }),
+        });
+      const pairCredential = "pair-credential-must-stay-private";
+      const venueIp = "203.0.113.77";
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const response = await invoke(attempt % 2, pairCredential, venueIp);
+        expect(response.status).toBe(403);
+        expect(response.headers.get("ratelimit-limit")).toBe("5");
+      }
+      const pairCooldown = await invoke(0, pairCredential, venueIp);
+      expect(pairCooldown.status).toBe(429);
+      expect(pairCooldown.headers.get("ratelimit-limit")).toBe("5");
+      expect(pairCooldown.headers.get("ratelimit-remaining")).toBe("0");
+      expect(pairCooldown.headers.get("retry-after")).toBe("900");
+      const neighbour = await invoke(1, "different-official-behind-same-nat", venueIp);
+      expect(neighbour.status).toBe(403);
+      expect(neighbour.headers.get("retry-after")).toBeNull();
+
+      const ipCooldownAddress = "198.51.100.77";
+      for (let attempt = 0; attempt < 19; attempt += 1) {
+        expect((await invoke(attempt % 2, `ip-credential-${attempt}`, ipCooldownAddress)).status).toBe(403);
+      }
+      const ipCooldown = await invoke(1, "ip-credential-19", ipCooldownAddress);
+      expect(ipCooldown.status).toBe(429);
+      expect(ipCooldown.headers.get("ratelimit-limit")).toBe("20");
+      expect(ipCooldown.headers.get("ratelimit-remaining")).toBe("0");
+      expect(ipCooldown.headers.get("retry-after")).toBe("900");
+      const applicationKeys = (await ownedKeys()).filter((key) => key.startsWith(applicationNamespace));
+      expect(applicationKeys.length).toBeGreaterThan(0);
+      expect(applicationKeys.join("\n")).not.toContain(pairCredential);
+      expect(applicationKeys.join("\n")).not.toContain(venueIp);
+      expect(await redis.get(guardKey)).toBe("preserve");
+    } finally {
+      await Promise.allSettled(applications.map((app) => app.close()));
+      await Promise.allSettled(applicationRedis.map((connection) => connection.quit()));
+    }
   });
 
   it("applies the twenty-invalid IP cooldown across distinct credentials", async () => {

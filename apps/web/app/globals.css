@@ -3905,6 +3905,13 @@ svg {
 }
 
 @media (max-width: 900px) {
+  body:has(.p5-access) > .consent-reopen {
+    position: static;
+    display: block;
+    width: fit-content;
+    margin: 16px 16px 20px auto;
+  }
+
   .site-header {
     grid-template-columns: 1fr auto;
   }
