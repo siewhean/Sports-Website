@@ -17,7 +17,7 @@
     "typecheck": "turbo run typecheck",
     "test": "pnpm test:unit && pnpm test:integration",
     "test:unit": "turbo run test:unit",
-    "test:integration": "turbo run test:integration",
+    "test:integration": "turbo run test:integration --concurrency=1",
     "test:e2e": "pnpm --filter @matchday/web test:e2e && pnpm test:e2e:phase4:real",
     "test:e2e:phase2:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-2-real-e2e.ts",
     "test:e2e:phase4:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
