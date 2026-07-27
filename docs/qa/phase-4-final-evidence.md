@@ -1,82 +1,69 @@
-# Phase 4 historical evidence manifest
+# Phase 4 Gate B exact-SHA evidence
 
-Status: **HISTORICAL/SUPERSEDED**
+Local Gate B validation: PASS
 
-Local validation: HISTORICAL PASS — NOT ACTIVE
+Source SHA: `4f9202e4e1c546bfef2a23bcfc7e26825c90b314`
 
-Hosted GitHub Actions: Not executed because Actions allowance is unavailable
+Branch: `fix/gate-b-local-remediation-20260724-132224`
 
-This schema-1 record is retained for audit history only. It was superseded by
-changed Gate B source and must not be used as an active release-gate verdict.
-Current certification requires a schema-v2 exact-SHA evidence bundle.
+Evidence collected: 27 July 2026, Asia/Singapore
 
-Validated source: `c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`
+The active schema-v2 record is
+[`phase-4-final-evidence.json`](./phase-4-final-evidence.json). Immutable raw
+artifacts remain outside Git under
+`artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/`.
 
-Branch: `codex/gate-b-lockfile-integrity`
+## Integrity
 
-The historical machine-readable record is
-[`phase-4-final-evidence.json`](./phase-4-final-evidence.json). Raw logs and
-browser artifacts are retained under the ignored local directory
-`artifacts/qa/gate-b-final-c87287f/`; the manifest binds them with SHA-256
-digests and contains no credentials, database contents or browser session
-material.
+- Schema-v2 manifest SHA-256:
+  `93e9c1dfc502c0290f95838fa01286edf5fd923493cb8791f3e80d9cb9e2a030`
+- Immutable evidence bundle SHA-256:
+  `fdc97255d072825e70a70e60afe069b44489f06b6ac4c9cc9d7ff086d3f70b69`
+- Independent review SHA-256:
+  `54c0a10a63adcf82bed38add6d3ccecc82ff04100053838486f27a61c697649a`
+- Final independent rehash attestation SHA-256:
+  `66f7b1b91cb6a3ba3bce09b9e05fc579a9ff13ae958f63969477e847b3e21f65`
+- Canonical immutable URI:
+  `artifact://gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/fdc97255d072825e70a70e60afe069b44489f06b6ac4c9cc9d7ff086d3f70b69`
 
-## Historical executed acceptance
+The schema-v2 writer derived the bundle digest, byte size and URI from the
+retained regular file. The validator reopened and rehashed the bundle, all 30
+canonical command logs, accessibility and visual artifacts, and the review
+document. It rejected caller-supplied digest/URI fields by construction.
 
-- Pinned Node 24.18.0 and pnpm 10.33.0; frozen installation and unchanged
-  lockfile passed.
-- Formatting, lint, TypeScript, 684 unit tests, 27 forward migrations,
-  backup/restore, and the complete infrastructure-enabled integration command
-  passed. The database package passed 54/54 tests.
-- The production dependency audit found no known vulnerabilities. OpenAPI,
-  secrets, production build, deploy manifest and 54-asset origin delivery
-  checks passed.
-- Generic E2E passed 274 tests. The embedded real matrix passed another 3/3
-  complete browser-owned organiser journeys.
-- Accessibility passed 68/68 with zero WCAG A/AA violations. Visual comparison
-  passed 13/13 with no unmatched diffs.
-- Two additional clean-isolation real Gate B runs passed 3/3 each across phone
-  Chromium, tablet WebKit and desktop Chromium. Each run created fresh database,
-  Redis and process isolation; all three database oracles passed and Redis
-  cleanup deleted 15/15 inspected queue keys.
-- The previously marginal populated-upgrade test passed five uncached runs:
-  minimum 1.07 s, median 1.09 s, maximum 1.11 s, against a narrowly scoped 15 s
-  timeout on PostgreSQL 18.4 with no concurrent load.
+## Executed evidence
+
+- Node `v24.18.0`; pnpm `10.33.0`; PostgreSQL `18.4`; Redis `8.2.7`.
+- Playwright `1.61.1`; Chromium `149.0.7827.55`; WebKit `26.5`.
+- Frozen install, unchanged lockfile, clean-output guard, format, lint,
+  typecheck and 697 unit tests passed.
+- All 27 migrations, backup/restore, API 90/90, database 54/54 and the remaining
+  infrastructure integration suites passed.
+- The populated-upgrade test passed five of five exact-SHA runs in
+  `563–627 ms` against its scoped `15,000 ms` timeout.
+- Production audit reported no known vulnerabilities. OpenAPI, secret scan,
+  production build, deployment manifest and origin delivery passed.
+- General browser matrix: 278 passed, 9 documented project-applicability skips,
+  zero failures.
+- Real organiser journey: two independent runs; each passed phone Chromium,
+  tablet WebKit and desktop Chromium against distinct disposable PostgreSQL and
+  Redis isolation.
+- Redis owned-key boundaries were `0 → 0` in both runs. Distinct namespace
+  hashes were recorded and the unrelated near-prefix TTL guard survived.
+- Accessibility: 68/68. Visual comparison: 57/57. State preservation repeat:
+  20/20 with natural exit 0.
 - `git diff --check` and `pnpm check` passed.
 
-The generic E2E matrix reports nine project-applicability omissions where a
-case deliberately declares a narrower browser or viewport matrix. Every
-browser required by those cases executed; no Gate B requirement was skipped.
-The fail-closed command ledger therefore records zero skipped required checks.
+## Evidence boundary
 
-Initial diagnostic attempts are retained, not rewritten: non-interactive pnpm
-needed `CI=1`; the clean-output preflight found ignored output from prior work;
-and the sandbox denied process or loopback operations for OpenAPI and asset
-origin checks. The unchanged canonical commands subsequently passed under the
-pinned local environment.
+Demo-backed fixtures provide stable visual regression. The real full-stack
+journey proves persistence, browser-to-BFF/API integration, database lineage,
+publication and Redis cleanup. They are complementary, not identical evidence.
 
-## Browser evidence boundary
+The retained evidence is local release-gate proof. It does not claim a hosted
+runner or production deployment.
 
-Demo-backed fixtures provide stable visual regression. The real full-stack E2E
-proves browser-owned decisions, BFF/API integration, database lineage, public
-publication and Redis cleanup. These are complementary evidence, not identical
-proof.
+## Historical records
 
-## Accepted non-blocking risks
-
-- P2 — Sticky action rails may obscure intermediate phone/tablet content.
-  Reachability and overflow checks pass. Owner: Frontend UX. Target: before the
-  Gate C browser verdict.
-- P3 — Some Phase 3 snapshot filenames overstate native-project coverage.
-  Owner: QA Automation. Target: before the Gate C visual verdict.
-- P3 — The scoped `next>sharp = 0.35.3` override remains. Production audit,
-  build and image regressions pass. Owner: Platform Dependency. Target: the next
-  stable dependency update.
-
-Do not run the active schema-v2 gate against this historical file. A new
-candidate must retain its immutable bundle and generated manifest under
-`artifacts/qa/gate-b/<HEAD SHA>/`, then run:
-
-```sh
-pnpm evidence:phase4:validate
-```
+Earlier schema-v1 manifests and verdicts are superseded. They remain available
+in Git history but are not an acceptance source for this SHA.

@@ -1,16 +1,16 @@
 # Phase 4 — Gate B traceability
 
-**Date:** 22 July 2026
+**Date:** 27 July 2026
 
-**Branch:** `agent/gate-b-organiser-journey`
-**Validated source commit:** `b2306e6dfc9d44c8d53bf756c00b1530202188e0`
-**Historical status:** Superseded local PASS for the commit above; PR #3 merged
-**Current Gate B status:** `BLOCKED` while `fix/gate-b-local-remediation-20260724-132224` awaits clean exact-SHA
-validation and a fresh independent verdict.
+**Branch:** `fix/gate-b-local-remediation-20260724-132224`
+**Validated source commit:** `4f9202e4e1c546bfef2a23bcfc7e26825c90b314`
+**Current Gate B status:** Local PASS with schema-v2 exact-SHA evidence and a
+fresh independent verdict.
 
-This file records the traceability previously established for the validated source commit above. Its verified rows are
-historical and must not be reused as evidence for changed source. Current exact commands, counts, browser limitations,
-dependency findings and release status are maintained in `docs/qa/phase-4-acceptance.md`,
+The verified rows below are supported by the current exact-SHA command ledger,
+two isolated real organiser journeys and independent review. Exact commands,
+counts, browser limitations, dependency findings and release status are
+maintained in `docs/qa/phase-4-acceptance.md`,
 `docs/qa/phase-4-local-run.md`, and `docs/qa/phase-4-verdict.md`; concept comparison is in
 `docs/qa/phase-4-fidelity-ledger.md`.
 

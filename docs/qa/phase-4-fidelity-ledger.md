@@ -1,10 +1,13 @@
 # Phase 4 — Accepted concept fidelity ledger
 
-**Date:** 22 July 2026
+**Date:** 27 July 2026
 
 **Reference:** `docs/design/PHASE_4_DESIGN_BRIEF.md`
 
-The four accepted concepts and regenerated Phase 4 browser snapshots were inspected at native/original detail. The comparison covers every category required by the design brief. Eight affected setup/format baseline images changed in the merge-readiness pass after visual inspection; the complete normal comparison subsequently passed 13/13.
+The four accepted concepts and regenerated Phase 4 browser snapshots were
+inspected at native/original detail. The comparison covers every category
+required by the design brief. The complete exact-SHA visual comparison passed
+57/57 across the configured Chromium/WebKit projects.
 
 | Concept           | Copy                                                                                  | Layout                                                                              | Typography                                                 | Palette                                                | Icon treatment                                   | Spacing / container model                                                                                 | Interaction states                                                                                                                    | Phone collapse                                                                    | Outcome                |
 | ----------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------- |
@@ -21,7 +24,11 @@ The four accepted concepts and regenerated Phase 4 browser snapshots were inspec
 - The phone move flow exposed all 18 time choices at once: it now shows six contextual choices with an accessible disclosure for the full set.
 - Assisted Setup displayed `Step2`: corrected to `Step 2 of 8`.
 
-Focused responsive/accessibility/visual evidence passed with no browser console error, page error, unapproved network failure, serious/critical accessibility finding, clipping or horizontal-overflow regression. Any claim beyond these accepted concepts—such as a live authenticated production-device comparison—remains outside this local fidelity ledger.
+Focused responsive/accessibility/visual evidence passed with no browser console
+error, page error, unapproved network failure, WCAG A/AA violation, clipping or
+horizontal-overflow regression. Any claim beyond these accepted concepts—such
+as a live authenticated production-device comparison—remains outside this
+local fidelity ledger.
 
 ## Accepted residual fidelity risks
 

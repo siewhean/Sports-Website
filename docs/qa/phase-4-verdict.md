@@ -1,86 +1,83 @@
-# Phase 4 — Independent Gate B verdict
+# Phase 4 independent Gate B verdict
 
-> **Historical verdict — superseded for the 24 July 2026 remediation.** This
-> review is an audit record for `c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`, not
-> a certification of `fix/gate-b-local-remediation-20260724-132224` or any
-> later SHA. Do not use it for the remediation release decision.
+Validated source SHA:
+`4f9202e4e1c546bfef2a23bcfc7e26825c90b314`
 
-Historical outcome: PASS (superseded)
+Branch: `fix/gate-b-local-remediation-20260724-132224`
 
-## Exact-SHA review
-
-Validated source:
-`c87287f1acad2c1f2a51e374bbe8f4ab6f58d7ee`
-
-Branch: `codex/gate-b-lockfile-integrity`
+Independent review:
 
 - P0: 0
 - P1: 0
-- P2: 1 — accepted; owner Frontend UX; target before the Gate C browser
-  verdict.
-- P3: 2 — accepted; owners QA Automation and Platform Dependency; targets
-  before the Gate C visual verdict and the next stable dependency update.
+- P2: 2
+- P3: 5
 
-The independent review inspected the current-main diff, requirements and task
-IDs, strict WCAG A/AA helper, navigation-context preservation, complete
-browser-owned organiser journey, migration DDL serialization, scoped migration
-timeouts, authorisation, tenant/object scoping, idempotency, concurrency,
-audit/outbox atomicity, browser console and network guards, screenshots, visual
-diffs, accessibility output, dependency audit, evidence hashes and residual
-risks.
+The reviewer inspected the complete diff from `main`, Redis and PostgreSQL
+isolation, migration safety, authorization, idempotency, concurrency,
+audit/outbox behavior, strict WCAG gating, interaction-state preservation,
+browser-owned organiser journey, console/network guards, dependency audit,
+visual artifacts, all command logs, the immutable bundle and schema-v2 hashes.
 
-The review verified:
+The final independent rehash reconciled every retained artifact and reran the
+validator without mismatch.
 
-- all 40 retained raw logs and 18 browser artifacts are hash-bound, with 58/58
-  SHA-256 values matching;
-- required E2E acceptance passed 277 tests, while the raw runner's nine
-  project-applicability skips are explicitly counted and justified;
-- the complete infrastructure-enabled integration suite passed separately from
-  the umbrella command's documented no-infrastructure skips;
-- two real Gate B journeys passed under distinct PostgreSQL, Redis, browser
-  storage and process isolation;
-- no source changes occurred after the validated commit;
-- the fail-closed evidence manifest and `git diff --check` pass; and
-- no blocking authorisation, idempotency, concurrency, audit/outbox,
-  accessibility, visual, console, network, migration or dependency finding
-  remains.
+## Accepted P2 findings
 
-## Accepted non-blocking findings
-
-### P2 — Sticky action rails
-
-Some fixed/sticky action rails may cover intermediate phone/tablet content.
-Current evidence confirms terminal content and controls remain reachable,
-safe-area and overflow checks pass, and no data is lost.
+### Sticky action rails
 
 - Owner: Frontend UX
-- Target: before the Gate C browser verdict
-- Gate B rationale: usability refinement without a blocked task, inaccessible
-  control or correctness failure
+- Rationale: reachability, overflow, safe-area and accessibility tests pass; no
+  content, action or Gate B data is unreachable.
+- Deadline: 2026-09-30, before the Gate C browser verdict.
 
-### P3 — Phase 3 visual baseline filenames
+### Integration-suite serialization cost
 
-Some Phase 3 filenames imply broader native-project coverage than their forced
-viewports provide.
+- Owner: Developer Experience and Database Test Infrastructure
+- Rationale: serial execution prevents cross-suite PostgreSQL migration
+  contention. The exact infrastructure run completed in 45.355 seconds and
+  the umbrella command in 60.275 seconds.
+- Deadline: 2026-09-30; replace broad serialization with equivalent per-worker
+  database/schema isolation before the Gate C release gate if the suite grows.
+
+## Accepted P3 findings
+
+### Phase 3 visual baseline filenames
 
 - Owner: QA Automation
-- Target: before the Gate C visual verdict
-- Gate B rationale: the tested viewport behavior is valid and the Phase 4
-  baseline names are accurate
+- Rationale: executed projects/viewports are explicit and images remain valid.
+- Deadline: 2026-09-30, before the Gate C visual verdict.
 
-### P3 — Scoped Sharp override
-
-The `next>sharp = 0.35.3` compatibility override remains.
+### Scoped Sharp override
 
 - Owner: Platform Dependency
-- Target: next stable dependency update
-- Gate B rationale: the production dependency audit is clean and production
-  build, image processing and rendering regressions pass
+- Rationale: the safe pinned version passes audit, build, image and visual
+  regression checks.
+- Deadline: 2026-09-30, at the next stable Next dependency review.
 
-## Evidence boundary
+### Swagger UI static-plugin override
 
-Demo-backed fixtures provide stable visual regression. Real full-stack E2E
-proves persistence and integration. They are complementary, not identical
-evidence.
+- Owner: Platform Dependency
+- Rationale: Swagger, OpenAPI, serialization, typechecking, integration and
+  audit checks pass despite the direct parent's older declared major range.
+- Deadline: 2026-09-30 or the first direct-parent release declaring support,
+  whichever comes first.
 
-Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
+### Visual evidence boundary
+
+- Owner: QA Automation
+- Rationale: demo visual fixtures and real persistence E2E prove different,
+  explicitly documented properties.
+- Deadline: 2026-09-30, before the Gate C visual verdict.
+
+### Exact-SHA Turbo cache provenance
+
+- Owner: Release Engineering
+- Rationale: content-addressed cache keys match the source inputs, while
+  critical affected paths also executed through fresh PostgreSQL/Redis and
+  browser suites.
+- Deadline: 2026-09-30; use a forced/no-cache ledger for the Gate C release
+  decision.
+
+Local Gate B validation: PASS
+
+Verdict: PASS
