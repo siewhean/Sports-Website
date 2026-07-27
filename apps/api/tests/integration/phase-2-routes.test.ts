@@ -65,6 +65,8 @@ function routeRuntime() {
       expires_at: "2026-08-01T00:00:00.000Z",
       rate_limit: { limit: 5, remaining: 5, resetSeconds: 600 },
     })),
+    listTakeoverRequests: vi.fn(async () => []),
+    expireTakeoverRequests: vi.fn(async () => ({ expired_count: 1 })),
     publicCompetition: vi.fn(async () => ({
       competition: {
         id: randomUUID(),
@@ -148,25 +150,63 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(created.statusCode).toBe(201);
     expect(runtime.createCompetition).toHaveBeenCalledOnce();
 
+    const competitionId = randomUUID();
     const workspace = await app.inject({
       method: "GET",
-      url: `/api/v1/competitions/${randomUUID()}`,
+      url: `/api/v1/competitions/${competitionId}`,
       headers: { cookie: "matchday_session=session-token" },
     });
     expect(workspace.statusCode).toBe(200);
     expect(workspace.body).not.toContain("session_token");
     expect(workspace.body).not.toContain("short_code");
     expect(workspace.body).not.toContain('"token"');
+
+    const takeoverList = await app.inject({
+      method: "GET",
+      url: `/api/v1/competitions/${competitionId}/takeover-requests`,
+      headers: { cookie: "matchday_session=session-token" },
+    });
+    expect(takeoverList.statusCode).toBe(200);
+    expect(runtime.listTakeoverRequests).toHaveBeenCalledOnce();
+    expect(runtime.expireTakeoverRequests).not.toHaveBeenCalled();
+    const expired = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/takeover-requests/expire`,
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        cookie: "matchday_session=session-token",
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    expect(expired.statusCode).toBe(200);
+    expect(expired.json()).toEqual({ expired_count: 1 });
+    expect(runtime.expireTakeoverRequests).toHaveBeenCalledOnce();
   });
 
   it("validates scoring headers, exposes access-limit headers, and leaves the public projection unauthenticated", async () => {
     const runtime = routeRuntime();
+    const retainedLogLines: string[] = [];
+    const telemetryInputs: unknown[] = [];
+    const telemetry = {
+      startRequest: vi.fn((input: unknown) => {
+        telemetryInputs.push(input);
+        return {
+          correlation: Object.freeze({ requestId: "route-test" }),
+          run: <T>(callback: () => T) => callback(),
+          reportError: vi.fn(async () => undefined),
+          finish: vi.fn(),
+        };
+      }),
+      shutdown: vi.fn(async () => undefined),
+    };
     const app = await buildApp({
       config: testConfig(),
       probes: healthyProbes,
       identityRuntime: authenticatedIdentityRuntime(),
       phase2Runtime: runtime as unknown as Phase2Runtime,
       anonymousRateLimitMax: 100,
+      telemetry,
+      loggerDestination: { write: (line: string) => retainedLogLines.push(line) },
     });
     apps.push(app);
     expect((await app.inject({ method: "GET", url: "/api/v1/scoring/session" })).statusCode).toBe(400);
@@ -183,11 +223,17 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(scoring.headers["cache-control"]).toBe("no-store, private");
     expect(scoring.json()).toMatchObject({ competition: { slug: "singapore-open" } });
 
+    const rawAccessToken = "q".repeat(43);
+    const rawDeviceId = "d".repeat(43);
+    const rawClientNetworkInput = "198.51.100.201";
+    const returnedScoringSessionToken = "s".repeat(43);
+    const rawFallbackCode = "012345678901";
     const exchange = () =>
       app.inject({
         method: "POST",
         url: "/api/v1/scoring/access/exchange",
-        payload: { token: "q".repeat(43), device_id: "d".repeat(43) },
+        headers: { "x-forwarded-for": rawClientNetworkInput },
+        payload: { token: rawAccessToken, device_id: rawDeviceId },
       });
     runtime.exchangeAccess.mockRejectedValueOnce(
       new ScoringAccessRejectedError(403, "ACCESS_DENIED", "Access is invalid", {
@@ -204,8 +250,17 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(invalidExchange.headers["retry-after"]).toBeUndefined();
     const exchanged = await exchange();
     expect(exchanged.statusCode).toBe(200);
+    expect(exchanged.headers["set-cookie"]).toBeUndefined();
     expect(exchanged.headers["ratelimit-limit"]).toBe("5");
     expect(exchanged.headers["ratelimit-remaining"]).toBe("5");
+    const fallbackExchange = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      headers: { "x-forwarded-for": rawClientNetworkInput },
+      payload: { short_code: rawFallbackCode, device_id: rawDeviceId },
+    });
+    expect(fallbackExchange.statusCode).toBe(200);
+    expect(fallbackExchange.headers["set-cookie"]).toBeUndefined();
     const tooLongDeviceLabel = await app.inject({
       method: "POST",
       url: "/api/v1/scoring/access/exchange",
@@ -222,6 +277,20 @@ describe("Phase 2 Fastify route boundaries", () => {
       expect.objectContaining({ deviceLabel: "x".repeat(80) }),
       expect.any(String),
     );
+    const retainedTransportEvidence = JSON.stringify({
+      logs: retainedLogLines,
+      telemetry: telemetryInputs,
+      cookies: [exchanged.headers["set-cookie"], fallbackExchange.headers["set-cookie"]],
+    });
+    for (const secret of [
+      rawAccessToken,
+      rawFallbackCode,
+      returnedScoringSessionToken,
+      rawDeviceId,
+      rawClientNetworkInput,
+    ]) {
+      expect(retainedTransportEvidence).not.toContain(secret);
+    }
 
     const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
     expect(publicView.statusCode).toBe(200);

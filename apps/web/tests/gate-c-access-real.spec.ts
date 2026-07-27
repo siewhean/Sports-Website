@@ -70,6 +70,20 @@ async function issuePass(
     await expect(page.locator("body")).toHaveAttribute("data-last-copied-value", accessUrl);
     await reveal.getByRole("button", { name: "Copy number" }).click();
     await expect(page.locator("body")).toHaveAttribute("data-last-copied-value", fallbackCode);
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () => Promise.reject(new DOMException("Clipboard denied", "NotAllowedError")),
+        },
+      });
+    });
+    const copyNumber = reveal.getByRole("button", { name: "Copy number" });
+    await copyNumber.click();
+    await expect(copyNumber).toBeFocused();
+    await expect(page.locator('[aria-live="polite"]')).toHaveText(
+      "The access command could not be completed. Your current view was preserved.",
+    );
 
     const download = page.waitForEvent("download");
     await reveal.getByRole("button", { name: "Download QR" }).click();
@@ -176,11 +190,26 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   await fallbackPage.getByRole("button", { name: "Validate access" }).click();
   await expect(fallbackPage.locator(".p2-writer")).toContainText("Read only");
 
-  await viewerHistory.getByRole("button", { name: /Revoke pass for/ }).click();
+  const revokeViewerPass = viewerHistory.getByRole("button", { name: /Revoke pass for/ });
+  await revokeViewerPass.click();
   const revoke = page.getByRole("dialog", { name: "Revoke this pass?" });
+  await expect(revoke.getByLabel("Reason")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(revoke).toBeHidden();
+  await expect(revokeViewerPass).toBeFocused();
+  await revokeViewerPass.click();
+  await expect(revoke.getByLabel("Reason")).toBeFocused();
+  await revoke.getByRole("button", { name: "Cancel" }).click();
+  await expect(revoke).toBeHidden();
+  await expect(revokeViewerPass).toBeFocused();
+  await revokeViewerPass.click();
+  await expect(revoke.getByLabel("Reason")).toBeFocused();
   await revoke.getByLabel("Reason").fill("Viewer access window closed");
   await revoke.getByRole("button", { name: "Revoke pass" }).click();
   await expect(viewerHistory).toContainText("Revoked");
+  await expect(viewerHistory.getByText("Revoked", { exact: true })).toBeFocused();
+  await expect(page.locator('[aria-live="polite"]')).toHaveCount(1);
+  await expect(page.locator('[aria-live="polite"]')).toHaveText("Access pass revoked.");
   allowConsoleFailure(
     viewerPage,
     /^console\.error: Failed to load resource: the server responded with a status of 403 \(Forbidden\)$/,
@@ -208,6 +237,21 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   candidatePage.on("request", (request) => requestUrls.push(request.url()));
   await openScoring(candidatePage, candidatePass.accessUrl);
   await expect(candidatePage.locator(".p2-writer")).toContainText("Waiting for takeover");
+  const pendingHeartbeatStatus = await incumbentPage.evaluate(async () => {
+    const response = await fetch("/api/scoring/session/heartbeat", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        lastAcknowledgedSequence: 0,
+        pendingEventCount: 1,
+        pendingThroughSequence: 1,
+      }),
+    });
+    return response.status;
+  });
+  expect(pendingHeartbeatStatus).toBe(200);
+  await incumbentContext.setOffline(true);
   await candidatePage.getByRole("button", { name: "Request scoring access" }).click();
   await expect(candidatePage.getByText("Takeover requested", { exact: true }).last()).toBeVisible();
 
@@ -216,21 +260,48 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
     .filter({ hasText: /scoring device/i })
     .first();
   await expect(pending).toBeVisible({ timeout: 10_000 });
+  await expect(pending).toContainText("Active device reports pending events");
   await pending.getByRole("button", { name: "Review" }).click();
   const takeover = page.getByRole("dialog", { name: "Review takeover" });
+  await expect(takeover.getByText("Transfer conflict warning", { exact: true })).toBeVisible();
+  await expect(
+    takeover.getByText(
+      "The active device may have unsynchronised events. Approval will fence that device and create a conflict record for organiser review.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  let approveRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/takeover-requests/") && request.url().endsWith("/approve")) approveRequests += 1;
+  });
+  const approveTakeover = takeover.getByRole("button", { name: "Approve and transfer" });
+  await expect(approveTakeover).toBeDisabled();
+  await takeover.getByLabel("Decision reason").fill("Approved court-side replacement");
+  await expect(approveTakeover).toBeDisabled();
+  expect(approveRequests).toBe(0);
+  await takeover.getByLabel("I understand that unsynchronised events will not be merged automatically.").check();
+  await expect(approveTakeover).toBeEnabled();
+  await takeover.getByLabel("Decision reason").fill("");
+  await expect(approveTakeover).toBeDisabled();
+  expect(approveRequests).toBe(0);
+  await takeover.getByLabel("Decision reason").fill("Approved court-side replacement");
+  await expect(approveTakeover).toBeEnabled();
   await assertNoWcagAOrAaViolations(page);
   await attachSurface(page, testInfo, `${testInfo.project.name}-takeover-review`);
-  await takeover.getByLabel("Decision reason").fill("Approved court-side replacement");
   const candidateHeartbeat = candidatePage.waitForResponse(
     (response) => response.url().endsWith("/api/scoring/session/heartbeat") && response.status() === 200,
     { timeout: 20_000 },
   );
-  await takeover.getByRole("button", { name: "Approve and transfer" }).click();
-  await expect(page.getByText("Takeover approved.", { exact: true })).toBeAttached();
+  await approveTakeover.click();
+  await expect.poll(() => approveRequests).toBe(1);
+  await expect(
+    page.getByText("Takeover approved. A transfer conflict was recorded for organiser review.", { exact: true }),
+  ).toBeAttached();
 
   await expect(candidatePage.locator(".p2-writer")).toContainText("Active scorer", { timeout: 10_000 });
   await expect(candidatePage.getByLabel("Scorer name")).toBeFocused();
   await candidateHeartbeat;
+  await incumbentContext.setOffline(false);
   await expect(incumbentPage.locator(".p2-writer")).toContainText("Scoring moved to another device", {
     timeout: 20_000,
   });

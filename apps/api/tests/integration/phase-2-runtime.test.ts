@@ -113,6 +113,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const sixthMatch = format.matches[5];
     const seventhMatch = format.matches[6];
     const eighthMatch = format.matches[7];
+    const takeoverContentionMatches = format.matches.slice(8, 14);
+    const transferFirstMatch = seventhMatch;
     expect(firstMatch?.homeEntryId).toBeTruthy();
     expect(firstMatch?.awayEntryId).toBeTruthy();
     if (
@@ -123,7 +125,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       !fifthMatch ||
       !sixthMatch ||
       !seventhMatch ||
-      !eighthMatch
+      !eighthMatch ||
+      takeoverContentionMatches.length !== 6 ||
+      !transferFirstMatch
     ) {
       throw new Error("Expected generated matches");
     }
@@ -137,6 +141,100 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       createHmac("sha256", fallbackCodeHmacSecret).update(`scoring-fallback-code:${pass.short_code}`, "utf8").digest(),
     );
     expect(hashes[0]?.short_code_hash).not.toEqual(createHash("sha256").update(pass.short_code, "utf8").digest());
+    const legacyFallbackCode = "012345678901";
+    const legacyFallbackPass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      firstMatch.id,
+      {
+        expiresAt: accessExpiry,
+        role: "viewer",
+        idempotencyKey: `legacy-fallback-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    if (!legacyFallbackPass.token) throw new Error("Expected legacy fallback token");
+    await client`
+      UPDATE scoring_access_passes
+      SET short_code_hash=NULL,fallback_code_hash_version='rotation_required'
+      WHERE id=${legacyFallbackPass.id}
+    `;
+    expect(
+      (await runtime.listAccessPasses(actor, competition.id)).find((entry) => entry.id === legacyFallbackPass.id),
+    ).toMatchObject({ fallback_code_status: "rotation_required", status: "active" });
+    await expect(
+      runtime.exchangeAccess(
+        {
+          token: legacyFallbackPass.token,
+          expectedMatchId: firstMatch.id,
+          deviceId: randomUUID(),
+          ipAddress: "192.0.2.31",
+        },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ mode: "viewer", match_id: firstMatch.id });
+    await expect(
+      runtime.exchangeAccess(
+        {
+          shortCode: legacyFallbackCode,
+          expectedMatchId: firstMatch.id,
+          deviceId: randomUUID(),
+          ipAddress: "192.0.2.32",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "ACCESS_FALLBACK_ROTATION_REQUIRED" });
+    await expect(
+      runtime.exchangeAccess(
+        {
+          shortCode: legacyFallbackCode,
+          deviceId: randomUUID(),
+          ipAddress: "192.0.2.35",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    const rotatedLegacyFallback = await runtime.rotateFallbackCode(
+      actor,
+      competition.id,
+      legacyFallbackPass.id,
+      randomUUID(),
+      randomUUID(),
+    );
+    expect(rotatedLegacyFallback).toMatchObject({ duplicate: false });
+    expect(rotatedLegacyFallback.short_code).toMatch(/^\d{12}$/);
+    if (!rotatedLegacyFallback.short_code) throw new Error("Expected rotated fallback code");
+    await expect(
+      runtime.exchangeAccess(
+        {
+          shortCode: rotatedLegacyFallback.short_code,
+          expectedMatchId: firstMatch.id,
+          deviceId: randomUUID(),
+          ipAddress: "192.0.2.33",
+        },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ mode: "viewer", match_id: firstMatch.id });
+    await expect(
+      runtime.exchangeAccess(
+        {
+          shortCode: legacyFallbackCode,
+          expectedMatchId: firstMatch.id,
+          deviceId: randomUUID(),
+          ipAddress: "192.0.2.34",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    const legacyFallbackEvidence = JSON.stringify(
+      await client`
+        SELECT action,metadata,after_state FROM audit_events WHERE target_id=${legacyFallbackPass.id}::text
+        UNION ALL
+        SELECT event_type,payload,NULL::jsonb FROM outbox_events WHERE aggregate_id=${legacyFallbackPass.id}::text
+      `,
+    );
+    expect(legacyFallbackEvidence).not.toContain(legacyFallbackCode);
+    expect(legacyFallbackEvidence).not.toContain(rotatedLegacyFallback.short_code);
     const collisionTarget = await runtime.createAccessPass(
       actor,
       competition.id,
@@ -294,8 +392,15 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
              WHERE access_pass_id=${pass.id} AND outcome='accepted') AS accepted_attempts
       `,
     ).toEqual([{ sessions: 0, leases: 0, accepted_attempts: 0 }]);
+    const writerDeviceId = randomUUID();
+    const writerClientIp = "198.51.100.202";
     const writer = await runtime.exchangeAccess(
-      { shortCode: pass.short_code, expectedMatchId: firstMatch.id },
+      {
+        shortCode: pass.short_code,
+        expectedMatchId: firstMatch.id,
+        deviceId: writerDeviceId,
+        ipAddress: writerClientIp,
+      },
       retryableExchangeRequestId,
     );
     await expect(runtime.exchangeAccess({ token: pass.token }, randomUUID())).rejects.toMatchObject({
@@ -772,6 +877,41 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     `;
     expect(heartbeatDenials[0]?.count).toBe(1);
     expect(heartbeatDenialOutbox[0]?.count).toBe(0);
+    const reacquisitionPass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      thirdMatch.id,
+      {
+        expiresAt: accessExpiry,
+        role: "scorekeeper",
+        idempotencyKey: `generation-reacquisition-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    if (!reacquisitionPass.token) throw new Error("Expected reacquisition access secret");
+    const reacquiredWriter = await runtime.exchangeAccess(
+      {
+        token: reacquisitionPass.token,
+        deviceId: randomUUID(),
+        ipAddress: "198.51.100.3",
+      },
+      randomUUID(),
+    );
+    expect(reacquiredWriter).toMatchObject({
+      mode: "writer",
+      generation: expiringWriter.generation + 1,
+    });
+    expect(
+      await client<{ generation: number; access_session_id: string }[]>`
+        SELECT generation,access_session_id FROM match_writer_leases WHERE match_id=${thirdMatch.id}
+      `,
+    ).toEqual([{ generation: expiringWriter.generation + 1, access_session_id: reacquiredWriter.session_id }]);
+    expect(
+      await client<{ generations: number[] }[]>`
+        SELECT array_agg(generation ORDER BY generation) FILTER (WHERE generation IS NOT NULL) AS generations
+        FROM scoring_access_sessions WHERE match_id=${thirdMatch.id}
+      `,
+    ).toEqual([{ generations: [expiringWriter.generation, expiringWriter.generation + 1] }]);
 
     const [unknownWriterPass, unknownCandidatePass] = await Promise.all(
       ["writer", "candidate"].map((label) =>
@@ -1041,19 +1181,23 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       undefined,
       fallbackCodeHmacSecret,
     );
+    const derivedTakeoverQueue = await futureTakeoverRuntime.listTakeoverRequests(actor, competition.id);
+    expect(derivedTakeoverQueue.find((entry) => entry.id === expiringTakeover.id)).toMatchObject({
+      status: "expired",
+    });
     expect(
-      await futureTakeoverRuntime.resolveTakeover(
-        actor,
-        competition.id,
-        expiringTakeover.id,
-        {
-          decision: "approve",
-          overrideAcknowledged: false,
-          reason: "Must expire instead of approving",
-        },
-        randomUUID(),
-      ),
-    ).toEqual({ id: expiringTakeover.id, status: "expired" });
+      await client<{ status: string; audit_count: number; outbox_count: number }[]>`
+        SELECT status,
+          (SELECT count(*)::integer FROM audit_events
+            WHERE target_id=${expiringTakeover.id} AND action='scoring_takeover.expired') audit_count,
+          (SELECT count(*)::integer FROM outbox_events
+            WHERE aggregate_id=${expiringTakeover.id} AND event_type='scoring_takeover.expired') outbox_count
+        FROM scoring_takeover_requests WHERE id=${expiringTakeover.id}
+      `,
+    ).toEqual([{ status: "pending", audit_count: 0, outbox_count: 0 }]);
+    expect(
+      (await futureTakeoverRuntime.expireTakeoverRequests(actor, competition.id, randomUUID())).expired_count,
+    ).toBeGreaterThanOrEqual(1);
     const takeoverQueue = await runtime.listTakeoverRequests(actor, competition.id);
     expect(takeoverQueue.find((entry) => entry.id === expiringTakeover.id)).toMatchObject({
       status: "expired",
@@ -1072,6 +1216,127 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         WHERE aggregate_id=${expiringTakeover.id} AND event_type='scoring_takeover.expired'
       `,
     ).toEqual([{ count: 1 }]);
+
+    let contentionNow = new Date();
+    const contentionRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      () => new Date(contentionNow),
+      undefined,
+      fallbackCodeHmacSecret,
+      undefined,
+      1,
+    );
+    for (const [index, contentionMatch] of takeoverContentionMatches.entries()) {
+      if (!contentionMatch) throw new Error("Expected takeover contention match");
+      const [contentionWriterPass, contentionCandidatePass] = await Promise.all(
+        ["writer", "candidate"].map((label) =>
+          contentionRuntime.createAccessPass(
+            actor,
+            competition.id,
+            contentionMatch.id,
+            {
+              expiresAt: accessExpiry,
+              role: "scorekeeper",
+              idempotencyKey: `expired-rerequest-${index}-${label}-${randomUUID()}`,
+            },
+            randomUUID(),
+          ),
+        ),
+      );
+      if (!contentionWriterPass?.token || !contentionCandidatePass?.token) {
+        throw new Error("Expected contention pass secrets");
+      }
+      const contentionWriter = await contentionRuntime.exchangeAccess(
+        {
+          token: contentionWriterPass.token,
+          deviceId: randomUUID(),
+          ipAddress: `203.0.113.${80 + index * 2}`,
+        },
+        randomUUID(),
+      );
+      const contentionCandidate = await contentionRuntime.exchangeAccess(
+        {
+          token: contentionCandidatePass.token,
+          deviceId: randomUUID(),
+          ipAddress: `203.0.113.${81 + index * 2}`,
+        },
+        randomUUID(),
+      );
+      await contentionRuntime.heartbeatScoringSession(
+        {
+          sessionId: contentionWriter.session_id,
+          sessionToken: contentionWriter.session_token,
+          generation: contentionWriter.generation,
+        },
+        { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
+        randomUUID(),
+      );
+      const elapsedTakeover = await contentionRuntime.requestTakeover(
+        {
+          sessionId: contentionCandidate.session_id,
+          sessionToken: contentionCandidate.session_token,
+          generation: null,
+        },
+        { pendingEventCount: 0, pendingThroughSequence: 0 },
+        randomUUID(),
+      );
+      contentionNow = new Date(contentionNow.getTime() + 2);
+      const decision = index % 2 === 0 ? "approve" : "deny";
+      const [rerequestResult, resolutionResult] = await Promise.allSettled([
+        contentionRuntime.requestTakeover(
+          {
+            sessionId: contentionCandidate.session_id,
+            sessionToken: contentionCandidate.session_token,
+            generation: null,
+          },
+          { pendingEventCount: 0, pendingThroughSequence: 0 },
+          randomUUID(),
+        ),
+        contentionRuntime.resolveTakeover(
+          actor,
+          competition.id,
+          elapsedTakeover.id,
+          {
+            decision,
+            overrideAcknowledged: false,
+            reason: `Expired ${decision} contention`,
+          },
+          randomUUID(),
+        ),
+      ]);
+      expect(rerequestResult.status).toBe("fulfilled");
+      if (rerequestResult.status !== "fulfilled") throw rerequestResult.reason;
+      expect(rerequestResult.value).toMatchObject({ status: "pending", duplicate: false });
+      if (resolutionResult.status === "fulfilled") {
+        expect(resolutionResult.value).toEqual({ id: elapsedTakeover.id, status: "expired" });
+      } else {
+        expect(resolutionResult.reason).toMatchObject({ code: "TAKEOVER_ALREADY_RESOLVED" });
+      }
+      expect(
+        await client<{ id: string; status: string }[]>`
+          SELECT id,status FROM scoring_takeover_requests
+          WHERE id IN (${elapsedTakeover.id},${rerequestResult.value.id})
+          ORDER BY requested_at,id
+        `,
+      ).toEqual([
+        { id: elapsedTakeover.id, status: "expired" },
+        { id: rerequestResult.value.id, status: "pending" },
+      ]);
+      expect(
+        await client<{ expired_audits: number; expired_outbox: number; forbidden_resolutions: number }[]>`
+          SELECT
+            (SELECT count(*)::integer FROM audit_events
+              WHERE target_id=${elapsedTakeover.id} AND action='scoring_takeover.expired') expired_audits,
+            (SELECT count(*)::integer FROM outbox_events
+              WHERE aggregate_id=${elapsedTakeover.id} AND event_type='scoring_takeover.expired') expired_outbox,
+            (SELECT count(*)::integer FROM audit_events
+              WHERE target_id=${elapsedTakeover.id}
+                AND action IN ('scoring_takeover.approved','scoring_takeover.denied')) forbidden_resolutions
+        `,
+      ).toEqual([{ expired_audits: 1, expired_outbox: 1, forbidden_resolutions: 0 }]);
+    }
+
     await runtime.heartbeatScoringSession(
       {
         sessionId: expiryWriter.session_id,
@@ -1308,8 +1573,50 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       randomUUID(),
     );
     const finaliseRequestId = randomUUID();
-    const [finaliseRace, finaliseTransferRace] = await Promise.allSettled([
-      runtime.finalise(finaliseWriterAuth, randomUUID(), finaliseRequestId),
+    const finaliseResult = await runtime.finalise(finaliseWriterAuth, randomUUID(), finaliseRequestId);
+    expect(finaliseResult).toMatchObject({ duplicate: false, result_version: 3 });
+    expect(
+      await client<{ status: string; resolution_reason: string | null }[]>`
+        SELECT status,resolution_reason FROM scoring_takeover_requests WHERE id=${finaliseTakeover.id}
+      `,
+    ).toEqual([{ status: "expired", resolution_reason: "Match finalised before takeover approval" }]);
+    const postFinalTakeoverRequestId = randomUUID();
+    await expect(
+      runtime.requestTakeover(
+        {
+          sessionId: finaliseCandidate.session_id,
+          sessionToken: finaliseCandidate.session_token,
+          generation: null,
+        },
+        { pendingEventCount: 0, pendingThroughSequence: 0 },
+        postFinalTakeoverRequestId,
+      ),
+    ).rejects.toMatchObject({ code: "MATCH_FINALISED_READ_ONLY" });
+    expect(
+      await client<{ count: number }[]>`
+        SELECT count(*)::integer AS count FROM audit_events
+        WHERE request_id=${postFinalTakeoverRequestId}
+          AND action='scoring_takeover.request_denied'
+          AND metadata->>'error_code'='MATCH_FINALISED_READ_ONLY'
+      `,
+    ).toEqual([{ count: 1 }]);
+    const finaliseProjectionBeforeRejectedMutations = await client<
+      {
+        result_count: number;
+        finalise_event_count: number;
+        score_event_count: number;
+        result_version: number;
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::integer FROM match_result_snapshots WHERE match_id=${eighthMatch.id}) AS result_count,
+        (SELECT count(*)::integer FROM score_events
+           WHERE match_id=${eighthMatch.id} AND event_type='match_finalised') AS finalise_event_count,
+        (SELECT count(*)::integer FROM score_events WHERE match_id=${eighthMatch.id}) AS score_event_count,
+        (SELECT result_version FROM competition_publications WHERE competition_id=${competition.id}) AS result_version
+    `;
+    const finalisePublicBeforeRejectedMutations = await runtime.publicCompetition("singapore-open-phase-2");
+    await expect(
       runtime.resolveTakeover(
         actor,
         competition.id,
@@ -1317,47 +1624,213 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         {
           decision: "approve",
           overrideAcknowledged: false,
-          reason: "Concurrent finalisation transfer",
+          reason: "Finalisation already won",
         },
         randomUUID(),
       ),
-    ]);
-    expect(finaliseTransferRace.status).toBe("fulfilled");
-    if (finaliseTransferRace.status !== "fulfilled" || finaliseTransferRace.value.status !== "approved") {
-      throw new Error("Finalisation race must preserve a monotonic transfer");
-    }
-    expect(finaliseTransferRace.value.generation).toBe(2);
-    if (finaliseRace.status === "rejected") {
-      expect(finaliseRace.reason).toMatchObject({ code: "STALE_WRITER_GENERATION" });
-      expect(
-        await client<{ count: number }[]>`
-          SELECT count(*)::integer AS count FROM audit_events
-          WHERE request_id=${finaliseRequestId}
-            AND action='scoring_result.finalise_denied'
-            AND metadata->>'competition_id'=${competition.id}
-        `,
-      ).toEqual([{ count: 1 }]);
-    }
+    ).rejects.toMatchObject({ code: "TAKEOVER_ALREADY_RESOLVED" });
+    await expect(
+      runtime.appendScoreEvent(
+        finaliseWriterAuth,
+        {
+          clientEventId: randomUUID(),
+          type: "incident_added",
+          teamSlot: null,
+          scorer: null,
+          manualPeriod: 1,
+          manualEventSeconds: 1,
+          payload: { note: "Must not append after finalisation" },
+          correctionReason: null,
+          occurredAt: new Date(),
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "MATCH_FINALISED_READ_ONLY" });
     expect(
       await client<{ generation: number; access_session_id: string }[]>`
         SELECT generation,access_session_id FROM match_writer_leases WHERE match_id=${eighthMatch.id}
       `,
-    ).toEqual([{ generation: 2, access_session_id: finaliseCandidate.session_id }]);
+    ).toEqual([{ generation: 1, access_session_id: finaliseWriter.session_id }]);
+    expect(
+      await client<{ mode: string }[]>`
+        SELECT mode FROM scoring_access_sessions WHERE id=${finaliseCandidate.session_id}
+      `,
+    ).toEqual([{ mode: "candidate" }]);
     const finaliseProjection = await client<{ result_count: number; finalise_event_count: number }[]>`
       SELECT
         (SELECT count(*)::integer FROM match_result_snapshots WHERE match_id=${eighthMatch.id}) AS result_count,
         (SELECT count(*)::integer FROM score_events
            WHERE match_id=${eighthMatch.id} AND event_type='match_finalised') AS finalise_event_count
     `;
-    expect(finaliseProjection[0]?.result_count).toBe(finaliseProjection[0]?.finalise_event_count);
-    expect(finaliseProjection[0]?.result_count).toBe(finaliseRace.status === "fulfilled" ? 1 : 0);
+    expect(finaliseProjection).toEqual([{ result_count: 1, finalise_event_count: 1 }]);
+    expect(
+      await client`
+        SELECT
+          (SELECT count(*)::integer FROM match_result_snapshots WHERE match_id=${eighthMatch.id}) AS result_count,
+          (SELECT count(*)::integer FROM score_events
+             WHERE match_id=${eighthMatch.id} AND event_type='match_finalised') AS finalise_event_count,
+          (SELECT count(*)::integer FROM score_events WHERE match_id=${eighthMatch.id}) AS score_event_count,
+          (SELECT result_version FROM competition_publications WHERE competition_id=${competition.id}) AS result_version
+      `,
+    ).toEqual(finaliseProjectionBeforeRejectedMutations);
+    const finalisePublicAfterRejectedMutations = await runtime.publicCompetition("singapore-open-phase-2");
+    expect(finalisePublicAfterRejectedMutations.publication).toEqual(finalisePublicBeforeRejectedMutations.publication);
+    expect(finalisePublicAfterRejectedMutations.results.find((result) => result.id === eighthMatch.id)).toEqual(
+      finalisePublicBeforeRejectedMutations.results.find((result) => result.id === eighthMatch.id),
+    );
+    expect(
+      await client<{ finalised: number; expired: number; expired_outbox: number; approved: number }[]>`
+        SELECT
+          count(*) FILTER (
+            WHERE action='result.finalised'
+              AND target_id=${eighthMatch.id}
+          )::integer AS finalised,
+          count(*) FILTER (
+            WHERE action='scoring_takeover.expired'
+              AND target_id=${finaliseTakeover.id}
+          )::integer AS expired,
+          count(*) FILTER (
+            WHERE action='scoring_takeover.approved'
+              AND target_id=${finaliseTakeover.id}
+          )::integer AS approved,
+          (SELECT count(*)::integer FROM outbox_events
+             WHERE aggregate_id=${finaliseTakeover.id}
+               AND event_type='scoring_takeover.expired') AS expired_outbox
+        FROM audit_events
+        WHERE metadata->>'competition_id'=${competition.id}
+      `,
+    ).toEqual([{ finalised: 1, expired: 1, expired_outbox: 1, approved: 0 }]);
+
+    const [transferFirstWriterPass, transferFirstCandidatePass] = await Promise.all(
+      ["writer", "candidate"].map((label) =>
+        runtime.createAccessPass(
+          actor,
+          competition.id,
+          transferFirstMatch.id,
+          {
+            expiresAt: accessExpiry,
+            role: "scorekeeper",
+            idempotencyKey: `transfer-first-${label}-${randomUUID()}`,
+          },
+          randomUUID(),
+        ),
+      ),
+    );
+    if (!transferFirstWriterPass?.token || !transferFirstCandidatePass?.token) {
+      throw new Error("Expected transfer-first access secrets");
+    }
+    const transferFirstWriter = await runtime.exchangeAccess(
+      { token: transferFirstWriterPass.token, deviceId: randomUUID(), ipAddress: "203.0.113.73" },
+      randomUUID(),
+    );
+    const transferFirstWriterAuth = {
+      sessionId: transferFirstWriter.session_id,
+      sessionToken: transferFirstWriter.session_token,
+      generation: transferFirstWriter.generation,
+    };
+    const transferFirstReplacementGeneration = (transferFirstWriter.generation ?? 0) + 1;
+    await runtime.appendScoreEvent(
+      transferFirstWriterAuth,
+      {
+        clientEventId: randomUUID(),
+        type: "match_started",
+        teamSlot: null,
+        scorer: null,
+        manualPeriod: 1,
+        manualEventSeconds: 0,
+        payload: {},
+        correctionReason: null,
+        occurredAt: new Date(),
+      },
+      randomUUID(),
+    );
+    const transferFirstCandidate = await runtime.exchangeAccess(
+      { token: transferFirstCandidatePass.token, deviceId: randomUUID(), ipAddress: "203.0.113.74" },
+      randomUUID(),
+    );
+    await runtime.heartbeatScoringSession(
+      transferFirstWriterAuth,
+      { lastAcknowledgedSequence: 1, pendingEventCount: 0, pendingThroughSequence: 1 },
+      randomUUID(),
+    );
+    const transferFirstTakeover = await runtime.requestTakeover(
+      {
+        sessionId: transferFirstCandidate.session_id,
+        sessionToken: transferFirstCandidate.session_token,
+        generation: null,
+      },
+      { pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    await expect(
+      runtime.resolveTakeover(
+        actor,
+        competition.id,
+        transferFirstTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Transfer wins before finalisation",
+        },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ status: "approved", generation: transferFirstReplacementGeneration });
+    const staleFinaliseRequestId = randomUUID();
+    await expect(runtime.finalise(transferFirstWriterAuth, randomUUID(), staleFinaliseRequestId)).rejects.toMatchObject(
+      { code: "STALE_WRITER_GENERATION" },
+    );
+    expect(
+      await client<{ generation: number; access_session_id: string }[]>`
+        SELECT generation,access_session_id
+        FROM match_writer_leases WHERE match_id=${transferFirstMatch.id}
+      `,
+    ).toEqual([
+      { generation: transferFirstReplacementGeneration, access_session_id: transferFirstCandidate.session_id },
+    ]);
+    expect(
+      await client<{ result_count: number; finalise_event_count: number; result_version: number }[]>`
+        SELECT
+          (SELECT count(*)::integer FROM match_result_snapshots
+             WHERE match_id=${transferFirstMatch.id}) AS result_count,
+          (SELECT count(*)::integer FROM score_events
+             WHERE match_id=${transferFirstMatch.id} AND event_type='match_finalised') AS finalise_event_count,
+          (SELECT result_version FROM competition_publications
+             WHERE competition_id=${competition.id}) AS result_version
+      `,
+    ).toEqual([{ result_count: 0, finalise_event_count: 0, result_version: 3 }]);
+    expect(
+      await client<{ count: number }[]>`
+        SELECT count(*)::integer AS count FROM audit_events
+        WHERE request_id=${staleFinaliseRequestId}
+          AND action='scoring_result.finalise_denied'
+          AND metadata->>'competition_id'=${competition.id}
+          AND metadata->>'error_code'='STALE_WRITER_GENERATION'
+      `,
+    ).toEqual([{ count: 1 }]);
 
     const workspace = await runtime.competitionWorkspace(actor, competition.id);
     expect(workspace).toMatchObject({
       competition: { id: competition.id, organisation_id: organisationId },
-      publication: { schedule_version: 1, result_version: finaliseRace.status === "fulfilled" ? 3 : 2 },
+      publication: { schedule_version: 1, result_version: 3 },
+    });
+    expect(workspace.access_passes.find((entry) => entry.id === legacyFallbackPass.id)).toMatchObject({
+      fallback_code_status: "available",
     });
     expect(JSON.stringify(workspace.access_passes)).not.toContain(pass.token);
+    const retainedDomainEvidence = JSON.stringify(
+      await client`
+        SELECT action,metadata,before_state,after_state,NULL::jsonb AS payload
+        FROM audit_events
+        WHERE metadata->>'competition_id'=${competition.id}
+        UNION ALL
+        SELECT event_type,NULL::jsonb,NULL::jsonb,NULL::jsonb,payload
+        FROM outbox_events
+        WHERE payload->>'competition_id'=${competition.id}
+      `,
+    );
+    for (const secret of [pass.token, pass.short_code, writer.session_token, writerDeviceId, writerClientIp]) {
+      expect(retainedDomainEvidence).not.toContain(secret);
+    }
     const scoringAuditMetadata = await client<
       { action: string; metadata: string; metadata_type: string; competition_id: string | null }[]
     >`

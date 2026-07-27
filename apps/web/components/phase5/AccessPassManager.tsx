@@ -55,6 +55,10 @@ const copy = {
   failed: t("prototype.3d7986d56035"),
   history: t("prototype.1e9e73ee4d44"),
   expired: t("prototype.424a2551d356"),
+  fallbackRotationRequired: t("prototype.37e849a46378"),
+  fallbackRotationRequiredBody: t("prototype.671d0d7c7cae"),
+  fallbackUnavailable: t("prototype.c6511e60b8ab"),
+  fallbackUnavailableBody: t("prototype.b54e0be97e8b"),
   status: t("prototype.920e413c7d41"),
 } as const;
 
@@ -118,6 +122,7 @@ export function AccessPassManager({
   const [busy, setBusy] = useState(false);
   const [revoking, setRevoking] = useState<PassSummary | null>(null);
   const [revokeReason, setRevokeReason] = useState("");
+  const [revokedFocusId, setRevokedFocusId] = useState<string | null>(null);
   const [takeovers, setTakeovers] = useState<TakeoverRequestSummary[]>([]);
   const [reviewing, setReviewing] = useState<TakeoverRequestSummary | null>(null);
   const [decisionReason, setDecisionReason] = useState("");
@@ -126,6 +131,9 @@ export function AccessPassManager({
   const issueDialog = useRef<HTMLDialogElement>(null);
   const revealDialog = useRef<HTMLDialogElement>(null);
   const revokeDialog = useRef<HTMLDialogElement>(null);
+  const revokeReasonInput = useRef<HTMLTextAreaElement>(null);
+  const revokeReturnTarget = useRef<HTMLButtonElement | null>(null);
+  const revokedStatusTargets = useRef(new Map<string, HTMLElement>());
   const takeoverDialog = useRef<HTMLDialogElement>(null);
   const takeoverReason = useRef<HTMLTextAreaElement>(null);
   const takeoverReturnTarget = useRef<HTMLButtonElement | null>(null);
@@ -197,6 +205,15 @@ export function AccessPassManager({
     return () => window.cancelAnimationFrame(focusFrame);
   }, [issued]);
 
+  useEffect(() => {
+    if (!revokedFocusId) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      revokedStatusTargets.current.get(revokedFocusId)?.focus();
+      setRevokedFocusId(null);
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [passes, revokedFocusId]);
+
   const openIssue = () => {
     setAnnouncement("");
     if (!expiresAt) setExpiresAt(localExpiry());
@@ -251,9 +268,14 @@ export function AccessPassManager({
     }
   };
 
-  const copyValue = async (value: string, message: string) => {
-    await navigator.clipboard.writeText(value);
-    setAnnouncement(message);
+  const copyValue = async (value: string, message: string, returnTarget: HTMLButtonElement) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setAnnouncement(message);
+    } catch {
+      setAnnouncement(copy.failed);
+      window.requestAnimationFrame(() => returnTarget.focus());
+    }
   };
 
   const downloadQr = async () => {
@@ -305,6 +327,11 @@ export function AccessPassManager({
         qrPath: null,
         duplicate: result.duplicate,
       });
+      setPasses((current) =>
+        current.map((candidate) =>
+          candidate.id === passId ? { ...candidate, fallbackCodeStatus: gateCAccessMachine.available } : candidate,
+        ),
+      );
       revealDialog.current?.showModal();
       setAnnouncement(t("prototype.b67983781ade"));
     } catch {
@@ -338,20 +365,49 @@ export function AccessPassManager({
       );
       const result = parseRevokedPass(await response.json().catch(() => null));
       if (!response.ok || !result) throw new Error(copy.failed);
+      const revokedPassId = revoking.id;
       setPasses((current) =>
         current.map((pass) =>
-          pass.id === revoking.id ? { ...pass, revoked: true, status: gateCAccessMachine.revoked } : pass,
+          pass.id === revokedPassId
+            ? {
+                ...pass,
+                revoked: true,
+                status: gateCAccessMachine.revoked,
+              }
+            : pass,
         ),
       );
       revokeDialog.current?.close();
       setRevoking(null);
       setRevokeReason("");
+      revokeReturnTarget.current = null;
+      setRevokedFocusId(revokedPassId);
       setAnnouncement(t("prototype.2a26a65cde7e"));
     } catch {
       setAnnouncement(copy.failed);
     } finally {
       setBusy(false);
     }
+  };
+
+  const openRevoke = (pass: PassSummary, target: HTMLButtonElement) => {
+    revokeReturnTarget.current = target;
+    setRevoking(pass);
+    setRevokeReason("");
+    revokeDialog.current?.showModal();
+    window.requestAnimationFrame(() => revokeReasonInput.current?.focus());
+  };
+
+  const closeRevoke = () => {
+    revokeDialog.current?.close();
+    setRevoking(null);
+    setRevokeReason("");
+    const returnTarget =
+      revokeReturnTarget.current?.isConnected && !revokeReturnTarget.current.disabled
+        ? revokeReturnTarget.current
+        : issueButton.current;
+    revokeReturnTarget.current = null;
+    window.requestAnimationFrame(() => returnTarget?.focus());
   };
 
   const openTakeover = (request: TakeoverRequestSummary, target: HTMLButtonElement) => {
@@ -478,29 +534,48 @@ export function AccessPassManager({
                   </span>
                   <span>
                     <strong>{copy.status}</strong>
-                    <small>{statusLabel}</small>
+                    <small
+                      ref={(element) => {
+                        if (element) revokedStatusTargets.current.set(pass.id, element);
+                        else revokedStatusTargets.current.delete(pass.id);
+                      }}
+                      tabIndex={pass.status === gateCAccessMachine.revoked ? -1 : undefined}
+                    >
+                      {statusLabel}
+                    </small>
+                    {pass.fallbackCodeStatus === gateCAccessMachine.rotationRequired ? (
+                      <small>
+                        <strong>{copy.fallbackRotationRequired}</strong>
+                        <span>{copy.fallbackRotationRequiredBody}</span>
+                      </small>
+                    ) : null}
+                    {pass.fallbackCodeStatus === gateCAccessMachine.unavailable ? (
+                      <small>
+                        <strong>{copy.fallbackUnavailable}</strong>
+                        <span>{copy.fallbackUnavailableBody}</span>
+                      </small>
+                    ) : null}
                   </span>
                   <span>
                     <Clock />
                     {copy.expires} {pass.expiresAt}
                   </span>
                   <span className="p5-access__actions">
-                    <button
-                      type="button"
-                      disabled={!canEdit || inactive}
-                      aria-label={t("prototype.ff8f355c93c1", { match: matchLabel })}
-                      onClick={(event) => void rotate(pass.id, event.currentTarget)}
-                    >
-                      {copy.rotate}
-                    </button>
+                    {pass.fallbackCodeStatus !== gateCAccessMachine.unavailable ? (
+                      <button
+                        type="button"
+                        disabled={!canEdit || inactive}
+                        aria-label={t("prototype.ff8f355c93c1", { match: matchLabel })}
+                        onClick={(event) => void rotate(pass.id, event.currentTarget)}
+                      >
+                        {copy.rotate}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       disabled={!canEdit || inactive}
                       aria-label={t("prototype.a644d789ceef", { match: matchLabel })}
-                      onClick={() => {
-                        setRevoking(pass);
-                        revokeDialog.current?.showModal();
-                      }}
+                      onClick={(event) => openRevoke(pass, event.currentTarget)}
                     >
                       {copy.revoke}
                     </button>
@@ -654,7 +729,9 @@ export function AccessPassManager({
               {issued.qrPath ? (
                 <button
                   type="button"
-                  onClick={() => void copyValue(absoluteScoringUrl(issued.qrPath!), t("prototype.2bcf8cd15d44"))}
+                  onClick={(event) =>
+                    void copyValue(absoluteScoringUrl(issued.qrPath!), t("prototype.2bcf8cd15d44"), event.currentTarget)
+                  }
                 >
                   <Copy />
                   {copy.copyLink}
@@ -662,7 +739,9 @@ export function AccessPassManager({
               ) : null}
               <button
                 type="button"
-                onClick={() => issued.shortCode && void copyValue(issued.shortCode, t("prototype.cf48948c8087"))}
+                onClick={(event) =>
+                  issued.shortCode && void copyValue(issued.shortCode, t("prototype.cf48948c8087"), event.currentTarget)
+                }
               >
                 <Copy />
                 {copy.copyCode}
@@ -685,7 +764,15 @@ export function AccessPassManager({
         ) : null}
       </dialog>
 
-      <dialog ref={revokeDialog} className="p5-access-dialog" aria-labelledby="revoke-pass-title">
+      <dialog
+        ref={revokeDialog}
+        className="p5-access-dialog"
+        aria-labelledby="revoke-pass-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeRevoke();
+        }}
+      >
         <form method={gateCAccessMachine.dialog} onSubmit={(event) => event.preventDefault()}>
           <header>
             <ShieldWarning />
@@ -696,17 +783,15 @@ export function AccessPassManager({
           </header>
           <label>
             <span>{copy.reason}</span>
-            <textarea value={revokeReason} onChange={(event) => setRevokeReason(event.target.value)} maxLength={500} />
+            <textarea
+              ref={revokeReasonInput}
+              value={revokeReason}
+              onChange={(event) => setRevokeReason(event.target.value)}
+              maxLength={500}
+            />
           </label>
           <footer>
-            <button
-              className="p2-button p2-button--secondary"
-              type="button"
-              onClick={() => {
-                revokeDialog.current?.close();
-                setRevoking(null);
-              }}
-            >
+            <button className="p2-button p2-button--secondary" type="button" onClick={closeRevoke}>
               {copy.cancel}
             </button>
             <button

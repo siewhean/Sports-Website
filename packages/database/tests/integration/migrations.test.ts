@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFile, cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -205,10 +205,30 @@ describe("foundation migrations", () => {
           id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal
         ) VALUES(${match},${competition},${division},${formatRevision},'UPGRADE-FINAL','final',1,1)`;
         const accessPass = randomUUID();
+        const revokedAccessPass = randomUUID();
+        const expiredAccessPass = randomUUID();
         const accessSession = randomUUID();
+        const legacyFallbackCode = "012345678901";
+        const revokedLegacyFallbackCode = "112345678901";
+        const expiredLegacyFallbackCode = "212345678901";
         await sql`INSERT INTO scoring_access_passes(
-          id,match_id,secret_hash,short_code_hash,expires_at,created_by
-        ) VALUES(${accessPass},${match},${Buffer.alloc(32, 1)},${Buffer.alloc(32, 2)},'2027-01-01T12:00:00Z',${account})`;
+          id,match_id,secret_hash,short_code_hash,expires_at,created_at,revoked_at,created_by
+        ) VALUES
+        (
+          ${accessPass},${match},${Buffer.alloc(32, 1)},
+          ${createHash("sha256").update(legacyFallbackCode, "utf8").digest()},
+          '2100-01-01T12:00:00Z',now(),NULL,${account}
+        ),
+        (
+          ${revokedAccessPass},${match},${Buffer.alloc(32, 4)},
+          ${createHash("sha256").update(revokedLegacyFallbackCode, "utf8").digest()},
+          '2100-01-01T12:00:00Z',now(),now(),${account}
+        ),
+        (
+          ${expiredAccessPass},${match},${Buffer.alloc(32, 5)},
+          ${createHash("sha256").update(expiredLegacyFallbackCode, "utf8").digest()},
+          '2000-01-01T12:00:00Z','1999-01-01T12:00:00Z',NULL,${account}
+        )`;
         await sql`INSERT INTO scoring_access_sessions(
           id,access_pass_id,match_id,session_token_hash,generation,issued_at,expires_at
         ) VALUES(
@@ -255,12 +275,99 @@ describe("foundation migrations", () => {
             FROM scoring_access_sessions WHERE id=${accessSession}
           `,
         ).toEqual([{ competition_id: competition, mode: "writer", generation: 7, device_hash_bytes: 32 }]);
-        expect(await sql`SELECT role,scope FROM scoring_access_passes WHERE id=${accessPass}`).toEqual([
+        expect(
+          await sql`
+            SELECT role,scope,secret_hash,short_code_hash,fallback_code_hash_version
+            FROM scoring_access_passes WHERE id=${accessPass}
+          `,
+        ).toEqual([
           {
             role: "scorekeeper",
             scope: ["score:read", "score:write", "score:reverse", "score:finalise"],
+            secret_hash: Buffer.alloc(32, 1),
+            short_code_hash: null,
+            fallback_code_hash_version: "rotation_required",
           },
         ]);
+        expect(
+          await sql`
+            SELECT id,secret_hash,short_code_hash,fallback_code_hash_version
+            FROM scoring_access_passes
+            WHERE id IN (${revokedAccessPass},${expiredAccessPass})
+            ORDER BY id
+          `,
+        ).toEqual(
+          [
+            {
+              id: revokedAccessPass,
+              secret_hash: Buffer.alloc(32, 4),
+              short_code_hash: null,
+              fallback_code_hash_version: "unavailable",
+            },
+            {
+              id: expiredAccessPass,
+              secret_hash: Buffer.alloc(32, 5),
+              short_code_hash: null,
+              fallback_code_hash_version: "unavailable",
+            },
+          ].toSorted((left, right) => left.id.localeCompare(right.id)),
+        );
+        expect(
+          await sql`
+            SELECT action,metadata->>'competition_id' competition_id,
+                   after_state->>'fallback_code_status' fallback_code_status
+            FROM audit_events
+            WHERE target_id=${accessPass}::text
+              AND action='scoring_access.fallback_rotation_required'
+          `,
+        ).toEqual([
+          {
+            action: "scoring_access.fallback_rotation_required",
+            competition_id: competition,
+            fallback_code_status: "rotation_required",
+          },
+        ]);
+        expect(
+          await sql`
+            SELECT
+              (SELECT count(*)::integer FROM audit_events
+                WHERE target_id IN (${revokedAccessPass}::text,${expiredAccessPass}::text)
+                  AND action='scoring_access.fallback_rotation_required') audit_count,
+              (SELECT count(*)::integer FROM outbox_events
+                WHERE aggregate_id IN (${revokedAccessPass}::text,${expiredAccessPass}::text)
+                  AND event_type='scoring_access.fallback_rotation_required') outbox_count
+          `,
+        ).toEqual([{ audit_count: 0, outbox_count: 0 }]);
+        expect(
+          await sql`
+            SELECT event_type,payload->>'competition_id' competition_id,
+                   payload->>'fallback_code_status' fallback_code_status
+            FROM outbox_events
+            WHERE aggregate_id=${accessPass}::text
+              AND event_type='scoring_access.fallback_rotation_required'
+          `,
+        ).toEqual([
+          {
+            event_type: "scoring_access.fallback_rotation_required",
+            competition_id: competition,
+            fallback_code_status: "rotation_required",
+          },
+        ]);
+        const fallbackRotationEvidence = JSON.stringify(
+          await sql`
+            SELECT metadata,after_state,NULL::jsonb payload
+            FROM audit_events WHERE target_id=${accessPass}::text
+            UNION ALL
+            SELECT NULL::jsonb,NULL::jsonb,payload
+            FROM outbox_events WHERE aggregate_id=${accessPass}::text
+          `,
+        );
+        expect(fallbackRotationEvidence).not.toContain(legacyFallbackCode);
+        expect(fallbackRotationEvidence).not.toContain(
+          createHash("sha256").update(legacyFallbackCode, "utf8").digest("hex"),
+        );
+        expect(fallbackRotationEvidence).not.toContain(revokedLegacyFallbackCode);
+        expect(fallbackRotationEvidence).not.toContain(expiredLegacyFallbackCode);
         expect(
           await sql`SELECT id,outcome,charged_units,failure_code FROM ai_action_ledger WHERE id=${existingLedger}`,
         ).toEqual([{ id: existingLedger, outcome: "manual_fallback", charged_units: 0, failure_code: "unknown" }]);

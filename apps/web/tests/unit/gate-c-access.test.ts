@@ -90,6 +90,34 @@ describe("Gate C access source guards", () => {
     expect(source).toContain("returnTarget?.focus()");
     expect(source).toContain("const inactive = pass.status !== gateCAccessMachine.active");
     expect(source).toContain("disabled={!canEdit || inactive}");
+    expect(source).toContain("pass.fallbackCodeStatus === gateCAccessMachine.rotationRequired");
+    expect(source).toContain("pass.fallbackCodeStatus === gateCAccessMachine.unavailable");
+    expect(source).toContain("pass.fallbackCodeStatus !== gateCAccessMachine.unavailable");
+    expect(source).toContain("fallbackCodeStatus: gateCAccessMachine.available");
+  });
+
+  it("owns revoke-dialog focus without duplicating the live announcement", async () => {
+    const source = await readFile(new URL("../../components/phase5/AccessPassManager.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("revokeReturnTarget.current = target");
+    expect(source).toContain("revokeReasonInput.current?.focus()");
+    expect(source).toContain("onCancel={(event) =>");
+    expect(source).toContain("closeRevoke()");
+    expect(source).toContain("returnTarget?.focus()");
+    expect(source).toContain("revokedStatusTargets.current.get(revokedFocusId)?.focus()");
+    expect(source.match(/aria-live="polite"/g)).toHaveLength(1);
+    expect(source.match(/setAnnouncement\(t\("prototype\.2a26a65cde7e"\)\)/g)).toHaveLength(1);
+  });
+
+  it("turns Clipboard API rejection into an accessible in-place failure", async () => {
+    const source = await readFile(new URL("../../components/phase5/AccessPassManager.tsx", import.meta.url), "utf8");
+    const copyValue = source.slice(source.indexOf("const copyValue = async"), source.indexOf("const downloadQr"));
+
+    expect(copyValue).toContain("try {");
+    expect(copyValue).toContain("await navigator.clipboard.writeText(value)");
+    expect(copyValue).toContain("catch {");
+    expect(copyValue).toContain("setAnnouncement(copy.failed)");
+    expect(copyValue).toContain("returnTarget.focus()");
   });
 
   it("renames the IndexedDB identity without fingerprinting and restores edit focus", async () => {

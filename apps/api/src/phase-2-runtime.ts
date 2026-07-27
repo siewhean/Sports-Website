@@ -261,11 +261,15 @@ export class Phase2Runtime {
     private readonly scoringAccessRateLimiter: ScoringAccessRateLimiter = new NoopScoringAccessRateLimiter(),
     fallbackCodeHmacSecret?: string,
     private readonly fallbackCodeGenerator: () => string = randomFallbackCode,
+    private readonly takeoverRequestTtlMs = 5 * 60_000,
   ) {
     if (!fallbackCodeHmacSecret || Buffer.byteLength(fallbackCodeHmacSecret, "utf8") < 32) {
       throw new Error("Scoring fallback-code HMAC secret must contain at least 32 bytes.");
     }
     this.fallbackCodeHmacSecret = fallbackCodeHmacSecret;
+    if (!Number.isInteger(takeoverRequestTtlMs) || takeoverRequestTtlMs <= 0) {
+      throw new Error("Takeover request TTL must be a positive integer.");
+    }
   }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -1148,14 +1152,14 @@ export class Phase2Runtime {
         const rows = await tx.unsafe<{ id: string }>(
           `INSERT INTO scoring_access_passes (
              competition_id,match_id,secret_hash,short_code_hash,expires_at,created_by,
-             role,scope,issuance_idempotency_key
+             role,scope,issuance_idempotency_key,fallback_code_hash_version
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,
              CASE WHEN $7='viewer'
                THEN '["score:read"]'::jsonb
                ELSE '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
              END,
-             $8
+             $8,'hmac_sha256_v1'
            )
            ON CONFLICT DO NOTHING RETURNING id`,
           [
@@ -1272,7 +1276,8 @@ export class Phase2Runtime {
           rotated = await tx.savepoint(async (savepoint) => {
             const rows = await savepoint.unsafe<{ id: string }>(
               `UPDATE scoring_access_passes
-               SET short_code_hash=$3,fallback_code_rotated_at=$4
+               SET short_code_hash=$3,fallback_code_rotated_at=$4,
+                   fallback_code_hash_version='hmac_sha256_v1'
                WHERE id=$1 AND competition_id=$2 RETURNING id`,
               [passId, competitionId, hashFallbackCode(shortCode, this.fallbackCodeHmacSecret), this.now()],
             );
@@ -1310,6 +1315,11 @@ export class Phase2Runtime {
     return this.sql.unsafe<Record<string, unknown>>(
       `SELECT p.id,p.match_id,p.role,p.scope,p.expires_at,p.created_at,p.revoked_at,
               p.fallback_code_rotated_at,p.revocation_reason,
+              CASE
+                WHEN p.fallback_code_hash_version='rotation_required' THEN 'rotation_required'
+                WHEN p.fallback_code_hash_version='unavailable' THEN 'unavailable'
+                ELSE 'available'
+              END AS fallback_code_status,
               CASE
                 WHEN p.revoked_at IS NOT NULL THEN 'revoked'
                 WHEN p.expires_at<=now() THEN 'expired'
@@ -1436,6 +1446,25 @@ export class Phase2Runtime {
         let pass = (await loadPass(false))[0];
         const stored = input.token ? pass?.secret_hash : pass?.short_code_hash;
         if (!pass || !stored || !safeEqual(Buffer.from(stored), digest)) {
+          if (!input.token && input.expectedMatchId) {
+            const rotationRequired = await tx.unsafe<{ required: boolean }>(
+              `SELECT EXISTS (
+                 SELECT 1 FROM scoring_access_passes p
+                 JOIN competitions c ON c.id=p.competition_id
+                 WHERE p.fallback_code_hash_version='rotation_required'
+                   AND p.revoked_at IS NULL AND p.expires_at>$1 AND c.status<>'archived'
+                   AND p.match_id=$2
+               ) AS required`,
+              [this.now(), input.expectedMatchId],
+            );
+            if (rotationRequired[0]?.required) {
+              throw new ApiError(
+                409,
+                "ACCESS_FALLBACK_ROTATION_REQUIRED",
+                "Legacy fallback numbers require organiser rotation before use",
+              );
+            }
+          }
           throw new ApiError(403, "ACCESS_DENIED", "Access is invalid");
         }
         // All access mutations use the match advisory lock before mutable row
@@ -1473,6 +1502,14 @@ export class Phase2Runtime {
           `SELECT access_session_id,generation,expires_at FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
           [pass.match_id],
         );
+        const historicalGeneration =
+          (
+            await tx.unsafe<{ generation: number }>(
+              `SELECT COALESCE(max(generation),0)::integer AS generation
+               FROM scoring_access_sessions WHERE match_id=$1`,
+              [pass.match_id],
+            )
+          )[0]?.generation ?? 0;
         const now = this.now();
         const expiresAt = new Date(Math.min(date(pass.expires_at).getTime(), now.getTime() + 30 * 60_000));
         const activeLease = Boolean(lease[0] && date(lease[0].expires_at).getTime() > now.getTime());
@@ -1480,7 +1517,7 @@ export class Phase2Runtime {
           throw new ApiError(409, "WRITER_ACTIVE", "Another scorekeeper currently controls this match");
         }
         const mode: ScoringSessionMode = pass.role === "viewer" ? "viewer" : activeLease ? "candidate" : "writer";
-        const generation = mode === "writer" ? (lease[0]?.generation ?? 0) + 1 : null;
+        const generation = mode === "writer" ? Math.max(lease[0]?.generation ?? 0, historicalGeneration) + 1 : null;
         const leaseExpiresAt =
           mode === "writer" ? new Date(Math.min(expiresAt.getTime(), now.getTime() + 45_000)) : null;
         const deviceId = input.deviceId ?? opaqueSecret();
@@ -1565,7 +1602,13 @@ export class Phase2Runtime {
     } catch (error) {
       if (
         error instanceof ApiError &&
-        ["ACCESS_DENIED", "ACCESS_WRONG_MATCH", "ACCESS_REVOKED", "ACCESS_EXPIRED"].includes(error.code)
+        [
+          "ACCESS_DENIED",
+          "ACCESS_WRONG_MATCH",
+          "ACCESS_REVOKED",
+          "ACCESS_EXPIRED",
+          "ACCESS_FALLBACK_ROTATION_REQUIRED",
+        ].includes(error.code)
       ) {
         const state = await this.scoringAccessRateLimiter.recordInvalid(presented, ipAddress);
         const accessContext = error instanceof ScoringAccessDeniedError ? error.accessContext : null;
@@ -1581,7 +1624,9 @@ export class Phase2Runtime {
                 ? "revoked"
                 : error.code === "ACCESS_EXPIRED"
                   ? "expired"
-                  : "invalid",
+                  : error.code === "ACCESS_FALLBACK_ROTATION_REQUIRED"
+                    ? "rotation_required"
+                    : "invalid",
           cooldownUntil: state.retryAfterSeconds
             ? new Date(this.now().getTime() + state.retryAfterSeconds * 1_000)
             : null,
@@ -1708,6 +1753,13 @@ export class Phase2Runtime {
         );
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+        const match = required(
+          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
+          "Match not found",
+        );
+        if (match.state === "final" || match.state === "corrected") {
+          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+        }
         const permissions = jsonValue<ScoringPermission[]>(session.scope);
         const writerGeneration = session.generation;
         if (!writerGeneration) {
@@ -1771,8 +1823,12 @@ export class Phase2Runtime {
         return { duplicate: false as const, sequence };
       });
     } catch (error) {
-      if (error instanceof ApiError && error.code === "STALE_WRITER_GENERATION") {
-        await this.recordStaleScoreSubmission(auth, input, requestId);
+      if (error instanceof ApiError) {
+        if (error.code === "STALE_WRITER_GENERATION") {
+          await this.recordStaleScoreSubmission(auth, input, requestId);
+        } else if (error.code === "MATCH_FINALISED_READ_ONLY") {
+          await this.recordScoringSessionDenial(auth, requestId, "scoring_event.append_denied", error.code);
+        }
       }
       throw error;
     }
@@ -1881,161 +1937,198 @@ export class Phase2Runtime {
     input: { pendingEventCount: number; pendingThroughSequence: number },
     requestId: string,
   ) {
-    return this.transaction(async (tx) => {
-      let candidate = await this.authenticateScoringSession(
-        tx,
-        auth.sessionId,
-        auth.sessionToken,
-        auth.generation,
-        false,
-        false,
-      );
-      if (candidate.mode !== "candidate") {
-        throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
-      }
-      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [candidate.match_id]);
-      candidate = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation, false);
-      if (candidate.mode !== "candidate") {
-        throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
-      }
-      const lease = required(
-        await tx.unsafe<{ access_session_id: string }>(
-          `SELECT access_session_id FROM match_writer_leases
+    try {
+      return await this.transaction(async (tx) => {
+        let candidate = await this.authenticateScoringSession(
+          tx,
+          auth.sessionId,
+          auth.sessionToken,
+          auth.generation,
+          false,
+          false,
+        );
+        if (candidate.mode !== "candidate") {
+          throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
+        }
+        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [candidate.match_id]);
+        candidate = await this.authenticateScoringSession(
+          tx,
+          auth.sessionId,
+          auth.sessionToken,
+          auth.generation,
+          false,
+        );
+        if (candidate.mode !== "candidate") {
+          throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
+        }
+        const match = required(
+          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [candidate.match_id]),
+          "Match not found",
+        );
+        if (match.state === "final" || match.state === "corrected") {
+          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+        }
+        const lease = required(
+          await tx.unsafe<{ access_session_id: string }>(
+            `SELECT access_session_id FROM match_writer_leases
            WHERE match_id=$1 AND expires_at>$2 FOR UPDATE`,
-          [candidate.match_id, this.now()],
-        ),
-        "Active writer lease not found",
-      );
-      const incumbent = required(
-        await tx.unsafe<{
-          last_heartbeat_at: Date | string | null;
-          reported_pending_event_count: number;
-        }>(
-          `SELECT last_heartbeat_at,reported_pending_event_count
+            [candidate.match_id, this.now()],
+          ),
+          "Active writer lease not found",
+        );
+        const incumbent = required(
+          await tx.unsafe<{
+            last_heartbeat_at: Date | string | null;
+            reported_pending_event_count: number;
+          }>(
+            `SELECT last_heartbeat_at,reported_pending_event_count
            FROM scoring_access_sessions WHERE id=$1 FOR UPDATE`,
-          [lease.access_session_id],
-        ),
-        "Incumbent scoring session not found",
-      );
-      const heartbeatRecent =
-        incumbent.last_heartbeat_at && date(incumbent.last_heartbeat_at).getTime() >= this.now().getTime() - 30_000;
-      const incumbentPendingState = !heartbeatRecent
-        ? "unknown"
-        : incumbent.reported_pending_event_count > 0
-          ? "present"
-          : "none";
-      await tx.unsafe(
-        `UPDATE scoring_access_sessions SET
+            [lease.access_session_id],
+          ),
+          "Incumbent scoring session not found",
+        );
+        const heartbeatRecent =
+          incumbent.last_heartbeat_at && date(incumbent.last_heartbeat_at).getTime() >= this.now().getTime() - 30_000;
+        const incumbentPendingState = !heartbeatRecent
+          ? "unknown"
+          : incumbent.reported_pending_event_count > 0
+            ? "present"
+            : "none";
+        await tx.unsafe(
+          `UPDATE scoring_access_sessions SET
            last_heartbeat_at=$2,reported_pending_event_count=$3,reported_pending_through_sequence=$4
          WHERE id=$1`,
-        [candidate.id, this.now(), input.pendingEventCount, input.pendingThroughSequence],
-      );
-      const expiredRequests = await tx.unsafe<{ id: string }>(
-        `UPDATE scoring_takeover_requests SET
+          [candidate.id, this.now(), input.pendingEventCount, input.pendingThroughSequence],
+        );
+        const expiredRequests = await tx.unsafe<{ id: string }>(
+          `UPDATE scoring_takeover_requests SET
            status='expired',resolved_at=$3,resolution_reason='Takeover request expired before review'
          WHERE match_id=$1 AND requesting_session_id=$2 AND status='pending' AND expires_at<=$3
          RETURNING id`,
-        [candidate.match_id, candidate.id, this.now()],
-      );
-      for (const expired of expiredRequests) {
-        await this.evidence(tx, {
-          requestId: `${requestId}:expired:${expired.id}`,
-          actorAccountId: null,
-          actorType: "access_pass",
-          organisationId: candidate.organisation_id,
-          action: "scoring_takeover.expired",
-          targetType: "scoring_takeover_request",
-          targetId: expired.id,
-          reason: "Takeover request expired before review",
-          eventPayload: { competition_id: candidate.competition_id, match_id: candidate.match_id },
-        });
-      }
-      const insertedTakeover = await tx.unsafe<{ id: string; requested_at: Date | string }>(
-        `INSERT INTO scoring_takeover_requests (
+          [candidate.match_id, candidate.id, this.now()],
+        );
+        for (const expired of expiredRequests) {
+          await this.evidence(tx, {
+            requestId: `${requestId}:expired:${expired.id}`,
+            actorAccountId: null,
+            actorType: "access_pass",
+            organisationId: candidate.organisation_id,
+            action: "scoring_takeover.expired",
+            targetType: "scoring_takeover_request",
+            targetId: expired.id,
+            reason: "Takeover request expired before review",
+            eventPayload: { competition_id: candidate.competition_id, match_id: candidate.match_id },
+          });
+        }
+        const insertedTakeover = await tx.unsafe<{ id: string; requested_at: Date | string }>(
+          `INSERT INTO scoring_takeover_requests (
              competition_id,match_id,requesting_session_id,incumbent_session_id,status,
              requester_pending_event_count,incumbent_pending_state,requested_at,expires_at
            ) VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,$8)
            ON CONFLICT (match_id,requesting_session_id) WHERE status='pending'
            DO NOTHING
            RETURNING id,requested_at`,
-        [
-          candidate.competition_id,
-          candidate.match_id,
-          candidate.id,
-          lease.access_session_id,
-          input.pendingEventCount,
-          incumbentPendingState,
-          this.now(),
-          new Date(Math.min(date(candidate.expires_at).getTime(), this.now().getTime() + 5 * 60_000)),
-        ],
-      );
-      const takeover =
-        insertedTakeover[0] ??
-        required(
-          await tx.unsafe<{ id: string; requested_at: Date | string }>(
-            `SELECT id,requested_at FROM scoring_takeover_requests
-             WHERE match_id=$1 AND requesting_session_id=$2 AND status='pending'`,
-            [candidate.match_id, candidate.id],
-          ),
-          "Takeover request was not created",
+          [
+            candidate.competition_id,
+            candidate.match_id,
+            candidate.id,
+            lease.access_session_id,
+            input.pendingEventCount,
+            incumbentPendingState,
+            this.now(),
+            new Date(Math.min(date(candidate.expires_at).getTime(), this.now().getTime() + this.takeoverRequestTtlMs)),
+          ],
         );
-      if (insertedTakeover[0]) {
-        await this.evidence(tx, {
-          requestId,
-          actorAccountId: null,
-          actorType: "access_pass",
-          organisationId: candidate.organisation_id,
-          action: "scoring_takeover.requested",
-          targetType: "scoring_takeover_request",
-          targetId: takeover.id,
-          after: { match_id: candidate.match_id, incumbent_pending_state: incumbentPendingState },
-          eventPayload: { competition_id: candidate.competition_id, match_id: candidate.match_id },
-        });
+        const takeover =
+          insertedTakeover[0] ??
+          required(
+            await tx.unsafe<{ id: string; requested_at: Date | string }>(
+              `SELECT id,requested_at FROM scoring_takeover_requests
+             WHERE match_id=$1 AND requesting_session_id=$2 AND status='pending'`,
+              [candidate.match_id, candidate.id],
+            ),
+            "Takeover request was not created",
+          );
+        if (insertedTakeover[0]) {
+          await this.evidence(tx, {
+            requestId,
+            actorAccountId: null,
+            actorType: "access_pass",
+            organisationId: candidate.organisation_id,
+            action: "scoring_takeover.requested",
+            targetType: "scoring_takeover_request",
+            targetId: takeover.id,
+            after: { match_id: candidate.match_id, incumbent_pending_state: incumbentPendingState },
+            eventPayload: { competition_id: candidate.competition_id, match_id: candidate.match_id },
+          });
+        }
+        return {
+          id: takeover.id,
+          status: "pending" as const,
+          incumbent_pending_state: incumbentPendingState,
+          requested_at: serializedDate(takeover.requested_at),
+          duplicate: !insertedTakeover[0],
+        };
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "MATCH_FINALISED_READ_ONLY") {
+        await this.recordScoringSessionDenial(auth, requestId, "scoring_takeover.request_denied", error.code);
       }
-      return {
-        id: takeover.id,
-        status: "pending" as const,
-        incumbent_pending_state: incumbentPendingState,
-        requested_at: serializedDate(takeover.requested_at),
-        duplicate: !insertedTakeover[0],
-      };
-    });
+      throw error;
+    }
   }
 
   async listTakeoverRequests(actor: Phase2Actor, competitionId: string) {
+    await this.requireCompetitionAccess(this.sql, competitionId, actor);
+    return this.sql.unsafe<Record<string, unknown>>(
+      `SELECT tr.id,tr.match_id,tr.requesting_session_id,tr.incumbent_session_id,
+              CASE WHEN tr.status='pending' AND tr.expires_at<=$2 THEN 'expired' ELSE tr.status END AS status,
+              tr.requester_pending_event_count,tr.incumbent_pending_state,tr.requested_at,tr.expires_at,
+              tr.resolved_at,tr.resolution_reason,tr.override_acknowledged,
+              candidate.device_label AS requesting_device_label,
+              incumbent.device_label AS incumbent_device_label
+       FROM scoring_takeover_requests tr
+       JOIN scoring_access_sessions candidate ON candidate.id=tr.requesting_session_id
+       JOIN scoring_access_sessions incumbent ON incumbent.id=tr.incumbent_session_id
+       WHERE tr.competition_id=$1 ORDER BY tr.requested_at DESC`,
+      [competitionId, this.now()],
+    );
+  }
+
+  async expireTakeoverRequests(actor: Phase2Actor, competitionId: string, requestId: string) {
     return this.transaction(async (tx) => {
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
-      const expired = await tx.unsafe<{ id: string; match_id: string }>(
-        `UPDATE scoring_takeover_requests SET
-           status='expired',resolved_at=$2,resolution_reason='Takeover request expired before review'
+      const expiredMatches = await tx.unsafe<{ match_id: string }>(
+        `SELECT DISTINCT match_id FROM scoring_takeover_requests
          WHERE competition_id=$1 AND status='pending' AND expires_at<=$2
-         RETURNING id,match_id`,
+         ORDER BY match_id`,
         [competitionId, this.now()],
       );
-      for (const takeover of expired) {
-        await this.evidence(tx, {
-          requestId: `takeover-expiry:${takeover.id}`,
-          actorAccountId: actor.accountId,
-          organisationId: competition.organisation_id,
-          action: "scoring_takeover.expired",
-          targetType: "scoring_takeover_request",
-          targetId: takeover.id,
-          reason: "Takeover request expired before review",
-          eventPayload: { competition_id: competitionId, match_id: takeover.match_id },
-        });
+      let expiredCount = 0;
+      for (const { match_id: matchId } of expiredMatches) {
+        await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [matchId]);
+        const expired = await tx.unsafe<{ id: string }>(
+          `UPDATE scoring_takeover_requests SET
+             status='expired',resolved_at=$3,resolution_reason='Takeover request expired before review'
+           WHERE competition_id=$1 AND match_id=$2 AND status='pending' AND expires_at<=$3
+           RETURNING id`,
+          [competitionId, matchId, this.now()],
+        );
+        expiredCount += expired.length;
+        for (const takeover of expired) {
+          await this.evidence(tx, {
+            requestId: `${requestId}:${takeover.id}`,
+            actorAccountId: actor.accountId,
+            organisationId: competition.organisation_id,
+            action: "scoring_takeover.expired",
+            targetType: "scoring_takeover_request",
+            targetId: takeover.id,
+            reason: "Takeover request expired before review",
+            eventPayload: { competition_id: competitionId, match_id: matchId },
+          });
+        }
       }
-      return tx.unsafe<Record<string, unknown>>(
-        `SELECT tr.id,tr.match_id,tr.requesting_session_id,tr.incumbent_session_id,tr.status,
-                tr.requester_pending_event_count,tr.incumbent_pending_state,tr.requested_at,tr.expires_at,
-                tr.resolved_at,tr.resolution_reason,tr.override_acknowledged,
-                candidate.device_label AS requesting_device_label,
-                incumbent.device_label AS incumbent_device_label
-         FROM scoring_takeover_requests tr
-         JOIN scoring_access_sessions candidate ON candidate.id=tr.requesting_session_id
-         JOIN scoring_access_sessions incumbent ON incumbent.id=tr.incumbent_session_id
-         WHERE tr.competition_id=$1 ORDER BY tr.requested_at DESC`,
-        [competitionId],
-      );
+      return { expired_count: expiredCount };
     });
   }
 
@@ -2048,6 +2141,15 @@ export class Phase2Runtime {
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      const discoveredTakeover = required(
+        await tx.unsafe<{ id: string; match_id: string }>(
+          `SELECT id,match_id FROM scoring_takeover_requests
+           WHERE id=$1 AND competition_id=$2`,
+          [takeoverId, competitionId],
+        ),
+        "Takeover request not found",
+      );
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [discoveredTakeover.match_id]);
       const takeover = required(
         await tx.unsafe<{
           id: string;
@@ -2112,7 +2214,31 @@ export class Phase2Runtime {
         });
         return { id: takeover.id, status: "denied" as const };
       }
-      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [takeover.match_id]);
+      const match = required(
+        await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [takeover.match_id]),
+        "Match not found",
+      );
+      if (match.state === "final" || match.state === "corrected") {
+        const expiredAt = this.now();
+        await tx.unsafe(
+          `UPDATE scoring_takeover_requests SET
+             status='expired',resolved_at=$2,
+             resolution_reason='Match finalised before takeover approval'
+           WHERE id=$1`,
+          [takeover.id, expiredAt],
+        );
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "scoring_takeover.expired",
+          targetType: "scoring_takeover_request",
+          targetId: takeover.id,
+          reason: "Match finalised before takeover approval",
+          eventPayload: { competition_id: competitionId, match_id: takeover.match_id },
+        });
+        return { id: takeover.id, status: "expired" as const };
+      }
       const lease = required(
         await tx.unsafe<{ generation: number; access_session_id: string; expires_at: Date | string }>(
           `SELECT generation,access_session_id,expires_at
@@ -2395,6 +2521,13 @@ export class Phase2Runtime {
           const latest = await this.latestMatchResult(tx, session.match_id);
           return { duplicate: true as const, sequence: duplicate[0].sequence, ...(latest ?? {}) };
         }
+        const match = required(
+          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
+          "Match not found",
+        );
+        if (match.state === "final" || match.state === "corrected") {
+          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+        }
         const next = await tx.unsafe<{ sequence: number }>(
           `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
           [session.match_id],
@@ -2433,10 +2566,30 @@ export class Phase2Runtime {
           action: "result.finalised",
           reason: null,
         });
+        const expiredTakeovers = await tx.unsafe<{ id: string }>(
+          `UPDATE scoring_takeover_requests SET
+             status='expired',resolved_at=$2,resolution_reason='Match finalised before takeover approval'
+           WHERE match_id=$1 AND status='pending'
+           RETURNING id`,
+          [session.match_id, this.now()],
+        );
+        for (const takeover of expiredTakeovers) {
+          await this.evidence(tx, {
+            requestId: `${requestId}:takeover:${takeover.id}`,
+            actorAccountId: null,
+            actorType: "access_pass",
+            organisationId: session.organisation_id,
+            action: "scoring_takeover.expired",
+            targetType: "scoring_takeover_request",
+            targetId: takeover.id,
+            reason: "Match finalised before takeover approval",
+            eventPayload: { competition_id: session.competition_id, match_id: session.match_id },
+          });
+        }
         return { duplicate: false as const, sequence, ...result };
       });
     } catch (error) {
-      if (error instanceof ApiError && error.code === "STALE_WRITER_GENERATION") {
+      if (error instanceof ApiError && ["STALE_WRITER_GENERATION", "MATCH_FINALISED_READ_ONLY"].includes(error.code)) {
         await this.recordScoringSessionDenial(auth, requestId, "scoring_result.finalise_denied", error.code);
       }
       throw error;
@@ -2992,6 +3145,11 @@ export class Phase2Runtime {
     const accessPasses = await this.sql.unsafe<Record<string, unknown>>(
       `SELECT p.id,p.match_id,p.role,p.scope,p.expires_at,p.created_at,p.revoked_at,
               p.fallback_code_rotated_at,p.revocation_reason,
+              CASE
+                WHEN p.fallback_code_hash_version='rotation_required' THEN 'rotation_required'
+                WHEN p.fallback_code_hash_version='unavailable' THEN 'unavailable'
+                ELSE 'available'
+              END AS fallback_code_status,
               CASE
                 WHEN p.revoked_at IS NOT NULL THEN 'revoked'
                 WHEN p.expires_at<=now() THEN 'expired'

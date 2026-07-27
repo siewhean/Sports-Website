@@ -102,6 +102,7 @@ export type BuildAppOptions = {
   authenticatedRateLimitMax?: number;
   resolveRateLimitAccountId?: (request: FastifyRequest) => Promise<string | null> | string | null;
   telemetry?: ApiTelemetry;
+  loggerDestination?: Parameters<typeof createLogger>[1];
   identityRuntime?: IdentityApiRuntime;
   closeIdentityResources?: () => Promise<void>;
   identityProviderEventClock?: Clock;
@@ -113,11 +114,14 @@ export type BuildAppOptions = {
 export async function buildApp(options: BuildAppOptions) {
   const telemetry = options.telemetry ?? createDisabledApiTelemetry();
   const requestTelemetry = new WeakMap<FastifyRequest, RequestTelemetryHandle>();
-  const logger = createLogger({
-    environment: options.config.environment,
-    level: options.config.logLevel,
-    service: "matchday-api",
-  });
+  const logger = createLogger(
+    {
+      environment: options.config.environment,
+      level: options.config.logLevel,
+      service: "matchday-api",
+    },
+    options.loggerDestination,
+  );
   const app = Fastify({
     genReqId(rawRequest) {
       const candidate = rawRequest.headers["x-request-id"];
@@ -138,8 +142,13 @@ export async function buildApp(options: BuildAppOptions) {
     request.routeOptions.url || request.url.split("?", 1)[0] || "unknown";
 
   app.addHook("onRequest", (request, _reply, done) => {
+    const traceparent = request.raw.headers.traceparent;
+    const tracestate = request.raw.headers.tracestate;
     const handle = telemetry.startRequest({
-      headers: request.raw.headers,
+      headers: {
+        ...(typeof traceparent === "string" ? { traceparent } : {}),
+        ...(typeof tracestate === "string" ? { tracestate } : {}),
+      },
       method: request.method,
       path: request.url.split("?", 1)[0] || "/",
       requestId: request.id,

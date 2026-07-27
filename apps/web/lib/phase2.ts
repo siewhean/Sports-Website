@@ -72,6 +72,7 @@ export type CompetitionView = {
     expiresAt: string;
     revoked: boolean;
     status: "active" | "expired" | "revoked";
+    fallbackCodeStatus?: "available" | "rotation_required" | "unavailable";
   }>;
   settings?: ReadonlyArray<readonly [string, string]>;
   capacityAreas?: ReadonlyArray<{ name: string; availability: string; slotCount: number | null }>;

@@ -855,6 +855,25 @@ export async function registerPhase2Routes(
     async (request) => options.runtime.listTakeoverRequests(await readActor(request), request.params.competitionId),
   );
 
+  app.post<{
+    Params: { competitionId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+  }>(
+    "/api/v1/competitions/:competitionId/takeover-requests/expire",
+    {
+      schema: {
+        description: "Explicitly transition elapsed takeover requests and record their audit/outbox evidence.",
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) =>
+      options.runtime.expireTakeoverRequests(await actor(request), request.params.competitionId, request.id),
+  );
+
   for (const decision of ["approve", "deny"] as const) {
     app.post<{
       Params: { competitionId: string; requestId: string };

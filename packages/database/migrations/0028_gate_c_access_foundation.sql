@@ -6,10 +6,17 @@ ALTER TABLE scoring_access_passes
   ADD COLUMN competition_id uuid,
   ADD COLUMN issuance_idempotency_key text,
   ADD COLUMN fallback_code_rotated_at timestamptz,
+  ADD COLUMN fallback_code_hash_version text,
   ADD COLUMN revocation_reason text;
 
 UPDATE scoring_access_passes access_pass
 SET competition_id=match.competition_id,
+    short_code_hash=NULL,
+    fallback_code_hash_version=CASE
+      WHEN access_pass.revoked_at IS NULL AND access_pass.expires_at>now()
+        THEN 'rotation_required'
+      ELSE 'unavailable'
+    END,
     scope=CASE access_pass.role
       WHEN 'viewer' THEN '["score:read"]'::jsonb
       ELSE '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
@@ -19,6 +26,8 @@ WHERE match.id=access_pass.match_id;
 
 ALTER TABLE scoring_access_passes
   ALTER COLUMN competition_id SET NOT NULL,
+  ALTER COLUMN fallback_code_hash_version SET NOT NULL,
+  ALTER COLUMN fallback_code_hash_version SET DEFAULT 'unavailable',
   ALTER COLUMN scope SET DEFAULT '["score:read","score:write","score:reverse","score:finalise"]'::jsonb,
   ADD CONSTRAINT scoring_access_passes_match_competition_fkey
     FOREIGN KEY (match_id,competition_id) REFERENCES matches(id,competition_id) ON DELETE CASCADE,
@@ -36,6 +45,13 @@ ALTER TABLE scoring_access_passes
   ADD CONSTRAINT scoring_access_passes_rotation_shape_check CHECK (
     fallback_code_rotated_at IS NULL OR short_code_hash IS NOT NULL
   ),
+  ADD CONSTRAINT scoring_access_passes_fallback_hash_version_check CHECK (
+    (fallback_code_hash_version='rotation_required' AND short_code_hash IS NULL)
+    OR
+    (fallback_code_hash_version='unavailable' AND short_code_hash IS NULL)
+    OR
+    (fallback_code_hash_version='hmac_sha256_v1' AND short_code_hash IS NOT NULL)
+  ),
   ADD CONSTRAINT scoring_access_passes_revocation_reason_shape_check CHECK (
     revocation_reason IS NULL OR length(btrim(revocation_reason)) BETWEEN 3 AND 500
   );
@@ -43,6 +59,36 @@ ALTER TABLE scoring_access_passes
 CREATE UNIQUE INDEX scoring_access_passes_issue_idempotency_unique
 ON scoring_access_passes(competition_id,issuance_idempotency_key)
 WHERE issuance_idempotency_key IS NOT NULL;
+
+INSERT INTO audit_events (
+  occurred_at,request_id,actor_account_id,actor_type,organisation_id,
+  action,target_type,target_id,reason,before_state,after_state,metadata
+)
+SELECT
+  now(),'migration:0028:fallback-rotation-required:' || access_pass.id::text,
+  NULL,'system',competition.organisation_id,
+  'scoring_access.fallback_rotation_required','scoring_access_pass',access_pass.id::text,
+  'Legacy fallback hashes were invalidated and require organiser rotation',
+  NULL,jsonb_build_object('fallback_code_status','rotation_required'),
+  jsonb_build_object('competition_id',access_pass.competition_id,'match_id',access_pass.match_id)
+FROM scoring_access_passes access_pass
+JOIN competitions competition ON competition.id=access_pass.competition_id
+WHERE access_pass.fallback_code_hash_version='rotation_required';
+
+INSERT INTO outbox_events (
+  aggregate_type,aggregate_id,event_type,payload,idempotency_key,created_at,available_at
+)
+SELECT
+  'scoring_access_pass',access_pass.id::text,'scoring_access.fallback_rotation_required',
+  jsonb_build_object(
+    'competition_id',access_pass.competition_id,
+    'match_id',access_pass.match_id,
+    'fallback_code_status','rotation_required'
+  ),
+  'migration:0028:fallback-rotation-required:' || access_pass.id::text,
+  now(),now()
+FROM scoring_access_passes access_pass
+WHERE access_pass.fallback_code_hash_version='rotation_required';
 
 ALTER TABLE scoring_access_sessions
   ADD COLUMN competition_id uuid,
@@ -231,7 +277,7 @@ CREATE TABLE scoring_access_attempts (
   access_pass_id uuid,
   credential_kind text NOT NULL CHECK (credential_kind IN ('token','fallback_code')),
   outcome text NOT NULL CHECK (outcome IN (
-    'accepted','invalid','expired','revoked','wrong_match','rate_limited'
+    'accepted','invalid','expired','revoked','wrong_match','rate_limited','rotation_required'
   )),
   credential_hmac bytea NOT NULL CHECK (octet_length(credential_hmac)=32),
   ip_hmac bytea NOT NULL CHECK (octet_length(ip_hmac)=32),

@@ -355,6 +355,12 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
       const revoked = Boolean(pass.revoked_at ?? pass.revoked);
       const expiresAt = string(pass.expires_at);
       const expired = expiresAt ? Date.parse(expiresAt) <= Date.now() : true;
+      const fallbackCodeStatus =
+        pass.fallback_code_status === "available" ||
+        pass.fallback_code_status === "rotation_required" ||
+        pass.fallback_code_status === "unavailable"
+          ? pass.fallback_code_status
+          : undefined;
       return [
         {
           id,
@@ -364,6 +370,7 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
           expiresAt: dateTime(pass.expires_at, timezone),
           revoked,
           status: revoked ? "revoked" : expired ? "expired" : "active",
+          ...(fallbackCodeStatus ? { fallbackCodeStatus } : {}),
         },
       ];
     }),

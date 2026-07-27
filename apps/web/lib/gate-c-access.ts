@@ -9,6 +9,7 @@ export const gateCAccessMachine = {
   approve: "approve",
   approved: "approved",
   active: "active",
+  available: "available",
   anchor: "a",
   contentType: "application/json",
   delete: "DELETE",
@@ -24,6 +25,7 @@ export const gateCAccessMachine = {
   present: "present",
   qrCorrectionLevel: "M",
   revoked: "revoked",
+  rotationRequired: "rotation_required",
   sameOrigin: "same-origin",
   scorekeeper: "scorekeeper",
   takeoverDecisionInvalid: "TAKEOVER_DECISION_INVALID",
@@ -31,6 +33,7 @@ export const gateCAccessMachine = {
   takeoverReasonInvalid: "TAKEOVER_REASON_INVALID",
   takeoverResponseInvalid: "TAKEOVER_RESPONSE_INVALID",
   unknown: "unknown",
+  unavailable: "unavailable",
   viewer: "viewer",
 } as const;
 
