@@ -80,9 +80,10 @@ export function PhoneScoring({
   const bootstrappedRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const writerStateRef = useRef<WriterState>(initialWriterState);
+  const pendingWriterFocusRef = useRef<"active" | "transferred" | null>(null);
   const sessionRefreshFenceRef = useRef(new LatestRequestFence());
   const mutationInFlightRef = useRef(0);
-  const matchHeadingRef = useRef<HTMLHeadingElement>(null);
+  const writerStatusRef = useRef<HTMLDivElement>(null);
   const liveScorerInputRef = useRef<HTMLInputElement>(null);
   const editDeviceButtonRef = useRef<HTMLButtonElement>(null);
   const deviceLabelInputRef = useRef<HTMLInputElement>(null);
@@ -146,12 +147,21 @@ export function PhoneScoring({
       (previousState === phase2Machine.active && nextState === phase2Machine.transferred)
     ) {
       setAnnouncement(nextState === phase2Machine.active ? phase2Copy.accessRestored : phase2Copy.transferred);
-      window.requestAnimationFrame(() => {
-        if (nextState === phase2Machine.active) liveScorerInputRef.current?.focus();
-        else matchHeadingRef.current?.focus();
-      });
+      pendingWriterFocusRef.current =
+        nextState === phase2Machine.active ? phase2Machine.active : phase2Machine.transferred;
     }
   }, []);
+
+  useEffect(() => {
+    const pendingFocus = pendingWriterFocusRef.current;
+    if (pendingFocus !== writerState) return;
+    pendingWriterFocusRef.current = null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (pendingFocus === phase2Machine.active) liveScorerInputRef.current?.focus();
+      else writerStatusRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [writerState]);
 
   const handleTransportError = useCallback((error: unknown, accessMessage: string = phase2Copy.serviceUnavailable) => {
     sessionRefreshFenceRef.current.cancel();
@@ -551,11 +561,14 @@ export function PhoneScoring({
       <header className="p2-score__header">
         <div>
           <p>{stage}</p>
-          <h1 ref={matchHeadingRef} tabIndex={-1}>
-            {matchLabel}
-          </h1>
+          <h1>{matchLabel}</h1>
         </div>
-        <div className={`p2-writer p2-writer--${writerState}`} aria-label={writerTitle}>
+        <div
+          ref={writerStatusRef}
+          className={`p2-writer p2-writer--${writerState}`}
+          aria-label={writerTitle}
+          tabIndex={-1}
+        >
           {writerState === "active" ? <CloudCheck /> : writerState === "conflict" ? <ShieldWarning /> : <LockKey />}
           <span>
             <strong>{writerTitle}</strong>

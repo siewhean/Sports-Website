@@ -108,7 +108,7 @@ describe("Gate C access source guards", () => {
 
     expect(scoringSource).toContain("refreshScoringSessionAccess(");
     expect(scoringSource).toContain("liveScorerInputRef.current?.focus()");
-    expect(scoringSource).toContain("matchHeadingRef.current?.focus()");
+    expect(scoringSource).toContain("writerStatusRef.current?.focus()");
     expect(scoringSource).toContain("setAnnouncement(nextState");
     expect(scoringSource).not.toContain('role="status"');
     expect(browserSource).not.toContain("candidatePage.reload()");

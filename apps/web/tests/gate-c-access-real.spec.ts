@@ -192,7 +192,9 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease expiry"
   await expect(incumbentPage.locator(".p2-writer")).toContainText("Scoring moved to another device", {
     timeout: 20_000,
   });
-  await expect(incumbentPage.getByRole("heading", { name: "Match 12" })).toBeFocused();
+  await expect(
+    incumbentPage.locator(".p2-writer").filter({ hasText: "Scoring moved to another device" }),
+  ).toBeFocused();
   await expect(incumbentPage.getByRole("button", { name: "Review final score" })).toHaveCount(0);
   await expect(incumbentPage.getByLabel("Scorer name")).toBeDisabled();
   await assertNoWcagAOrAaViolations(incumbentPage);
