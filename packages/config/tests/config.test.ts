@@ -3,6 +3,7 @@ import { parseConfig, safeConfigSummary } from "../src/index.js";
 
 const flowSealKey = Buffer.alloc(32, 7).toString("base64url");
 const oidcConfig = {
+  SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "scoring-access-rate-limit-secret-32",
   API_ALLOWED_ORIGINS: "https://app.matchday.example",
   IDENTITY_PROVIDER: "oidc",
   IDENTITY_OIDC_ISSUER: "https://identity.matchday.example",
@@ -28,6 +29,7 @@ describe("configuration", () => {
     expect(config.api.trustedProxies).toEqual([]);
     expect(config.telemetry).toEqual({ enabled: false, metricExportIntervalMs: 10_000 });
     expect(config.identity).toMatchObject({ sessionCookieName: "matchday_session", secureCookies: false });
+    expect(config.scoringAccess.rateLimitHmacSecret).toHaveLength(34);
   });
 
   it("requires explicit production dependencies and health protection", () => {
@@ -160,6 +162,25 @@ describe("configuration", () => {
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-secret-at-least-16");
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain(flowSealKey);
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-event-secret-at-least-32-bytes");
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(oidcConfig.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET);
+  });
+
+  it("requires and redacts a dedicated scoring access rate-limit HMAC secret outside local/test", () => {
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        ...oidcConfig,
+        SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: undefined,
+      }),
+    ).toThrow("SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET");
+    const config = parseConfig({
+      APP_ENV: "staging",
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...oidcConfig,
+    });
+    expect(safeConfigSummary(config).scoringAccess.rateLimitHmacSecretConfigured).toBe(true);
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(oidcConfig.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET);
   });
 
   it("requires a complete OIDC provider outside local/test", () => {

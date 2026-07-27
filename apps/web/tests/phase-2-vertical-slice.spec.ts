@@ -21,7 +21,7 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
     ["/organiser/competitions/singapore-open/schedule", "Schedule", "Playing-area timeline"],
     ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
-    ["/score/m12-access", "Marina Blue", "Validate access"],
+    ["/score", "Marina Blue", "Validate access"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Results"],
     ["/organiser/competitions/singapore-open/audit", "Audit log", "Finalised Match 12"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Bracket"],
@@ -37,7 +37,7 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
 });
 
 test("phone scoring validates access, confirms scorer attribution, appends a goal, and finalises", async ({ page }) => {
-  await page.goto("/score/m12-access");
+  await page.goto("/score");
   await dismissConsent(page);
 
   await page.getByLabel("Scoring code").fill("INVALID");

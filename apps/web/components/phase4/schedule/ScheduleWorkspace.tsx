@@ -109,6 +109,7 @@ export function ScheduleWorkspace({
   const [commandError, setCommandError] = useState("");
   const statusHeadingRef = useRef<HTMLHeadingElement>(null);
   const initialNoticeFocused = useRef(false);
+  const pendingErrorFocusRef = useRef<HTMLElement | null>(null);
   const selectedMatch = document.matches.find((match) => match.id === selectedMatchId) ?? null;
   const assignment = selectedMatch ? assignmentForMatch(document.currentRevision, selectedMatch.id) : null;
   const selectedLock = selectedMatch ? lockForMatch(document.locks, selectedMatch.id) : null;
@@ -133,6 +134,15 @@ export function ScheduleWorkspace({
     initialNoticeFocused.current = true;
     focusStatusHeading();
   }, [initialNotice]);
+
+  useEffect(() => {
+    if (busy !== null || !pendingErrorFocusRef.current) return;
+    const invokingControl = pendingErrorFocusRef.current;
+    pendingErrorFocusRef.current = null;
+    window.requestAnimationFrame(() => {
+      if (invokingControl.isConnected) invokingControl.focus({ preventScroll: true });
+    });
+  }, [busy]);
 
   useEffect(() => {
     if (!polledJobId || !polledJobStatus || !activeStatuses.has(polledJobStatus)) return;
@@ -200,12 +210,8 @@ export function ScheduleWorkspace({
       setCommandError(phase4ScheduleCopy.offlineBody);
       restoreInvoker = true;
     } finally {
+      if (restoreInvoker) pendingErrorFocusRef.current = invokingControl;
       setBusy(null);
-      if (restoreInvoker) {
-        window.requestAnimationFrame(() => {
-          if (invokingControl?.isConnected) invokingControl.focus({ preventScroll: true });
-        });
-      }
     }
   }
 

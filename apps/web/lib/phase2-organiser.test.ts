@@ -97,7 +97,9 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
       {
         id: "pass-1",
         match_id: matchId,
+        role: "scorekeeper",
         expires_at: "2026-08-01T02:00:00.000Z",
+        revoked_at: null,
         token: "must-not-leak",
         short_code: "must-not-leak",
       },
@@ -137,7 +139,15 @@ describe("organiser competition workspace mapping", () => {
         }),
       ]),
     );
-    expect(view.accessPasses).toEqual([expect.objectContaining({ matchId, displayCode: "••••-••" })]);
+    expect(view.accessPasses).toEqual([
+      expect.objectContaining({
+        matchId,
+        role: "scorekeeper",
+        displayCode: "••••••••••••",
+        revoked: false,
+        status: "active",
+      }),
+    ]);
     expect(view.divisions).toEqual([
       {
         id: divisionId,

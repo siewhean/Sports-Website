@@ -205,6 +205,7 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0025_phase4_schedule_concurrency_hardening.sql",
           "0026_phase4_setup_lineage_reconciliation.sql",
           "0027_phase4_schedule_stage_dependencies.sql",
+          "0028_gate_c_access_foundation.sql",
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,

@@ -1,6 +1,9 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,17 +16,24 @@ import { PostgresIdentityUnitOfWork } from "../src/identity-postgres.js";
 import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
+import { RedisScoringAccessRateLimiter } from "../src/scoring-access-rate-limit.js";
+import { Redis } from "ioredis";
 
 const apiPort = 4100;
 const webPort = 3102;
+const internalWebPort = 3103;
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
-const webOrigin = `http://localhost:${webPort}`;
+const webOrigin = `https://localhost:${webPort}`;
+const internalWebOrigin = `http://127.0.0.1:${internalWebPort}`;
 const csrfSecret = "phase-2-e2e-csrf-secret-at-least-32-bytes";
+const scoringAccessRateLimitSecret = "phase-2-e2e-scoring-access-rate-limit-secret";
 const databasePrefix = "matchday_phase2_e2e_";
 const schemaPrefix = "test_phase2_e2e_";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const migrationsDirectory = path.join(root, "packages/database/migrations");
 const adminDatabaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
+const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
+const retainedArtifactsRoot = path.join(root, "artifacts/qa/gate-c-access");
 
 type Tail = { label: string; lines: string[] };
 type RunningProcess = { child: ChildProcess; tail: Tail };
@@ -56,6 +66,16 @@ function safeIdentifier(value: string, prefix: string): string {
   return value;
 }
 
+function retainedArtifactsDirectory(): string | null {
+  const configured = process.env.PHASE2_E2E_RETAIN_DIR?.trim();
+  if (!configured) return null;
+  const resolved = path.resolve(root, configured);
+  if (resolved !== retainedArtifactsRoot && !resolved.startsWith(`${retainedArtifactsRoot}${path.sep}`)) {
+    throw new Error("PHASE2_E2E_RETAIN_DIR must stay under artifacts/qa/gate-c-access");
+  }
+  return resolved;
+}
+
 function databaseUrlFor(name: string): string {
   const url = new URL(adminDatabaseUrl);
   url.pathname = `/${name}`;
@@ -67,6 +87,69 @@ function databaseUrlFor(name: string): string {
 function appendTail(tail: Tail, chunk: Buffer | string): void {
   tail.lines.push(...String(chunk).split(/\r?\n/).filter(Boolean));
   if (tail.lines.length > 160) tail.lines.splice(0, tail.lines.length - 160);
+}
+
+async function startHttpsProxy(temp: string): Promise<https.Server> {
+  const keyPath = path.join(temp, "loopback-key.pem");
+  const certificatePath = path.join(temp, "loopback-certificate.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      keyPath,
+      "-out",
+      certificatePath,
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=DNS:localhost",
+      "-days",
+      "1",
+    ],
+    { stdio: "ignore" },
+  );
+  const server = https.createServer(
+    { key: readFileSync(keyPath), cert: readFileSync(certificatePath) },
+    (request, response) => {
+      const upstream = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: internalWebPort,
+          path: request.url,
+          method: request.method,
+          headers: {
+            ...request.headers,
+            host: `localhost:${webPort}`,
+            "x-forwarded-host": `localhost:${webPort}`,
+            "x-forwarded-proto": "https",
+          },
+        },
+        (upstreamResponse) => {
+          response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+          upstreamResponse.pipe(response);
+        },
+      );
+      upstream.on("error", (error) => response.destroy(error));
+      request.pipe(upstream);
+    },
+  );
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(webPort, "127.0.0.1", resolve);
+  });
+  return server;
+}
+
+async function stopHttpsProxy(server: https.Server | null): Promise<void> {
+  if (!server) return;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 function printTail(tail: Tail): void {
@@ -137,6 +220,17 @@ async function waitFor(url: string, label: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`${label} did not become ready: ${lastError}`);
+}
+
+async function redisKeys(redis: Redis, pattern: string): Promise<string[]> {
+  const keys: string[] = [];
+  let cursor = "0";
+  do {
+    const [next, batch] = await redis.scan(cursor, "MATCH", pattern, "COUNT", 100);
+    cursor = next;
+    keys.push(...batch);
+  } while (cursor !== "0");
+  return keys;
 }
 
 async function prepareIsolation(admin: Sql): Promise<Isolation> {
@@ -314,6 +408,62 @@ async function assertDatabaseOracle(sql: Sql, state: SeedState): Promise<void> {
   }
 }
 
+async function assertGateCAccessOracle(sql: Sql, state: SeedState): Promise<void> {
+  const counts = await sql<
+    {
+      viewer_passes: number;
+      scorekeeper_passes: number;
+      viewer_sessions: number;
+      transferred_sessions: number;
+      approved_takeovers: number;
+      access_attempts: number;
+      required_audits: number;
+      denial_outbox_events: number;
+    }[]
+  >`
+    SELECT
+      (SELECT count(*)::integer FROM scoring_access_passes
+       WHERE competition_id=${state.competitionId} AND role='viewer') AS viewer_passes,
+      (SELECT count(*)::integer FROM scoring_access_passes
+       WHERE competition_id=${state.competitionId} AND role='scorekeeper') AS scorekeeper_passes,
+      (SELECT count(*)::integer FROM scoring_access_sessions
+       WHERE competition_id=${state.competitionId} AND mode='viewer') AS viewer_sessions,
+      (SELECT count(*)::integer FROM scoring_access_sessions
+       WHERE competition_id=${state.competitionId} AND mode='transferred') AS transferred_sessions,
+      (SELECT count(*)::integer FROM scoring_takeover_requests
+       WHERE competition_id=${state.competitionId} AND status='approved') AS approved_takeovers,
+      (SELECT count(*)::integer FROM scoring_access_attempts
+       WHERE competition_id=${state.competitionId}) AS access_attempts,
+      (SELECT count(*)::integer FROM audit_events
+       WHERE action IN (
+         'scoring_access.created','scoring_access.fallback_rotated','scoring_access.revoked',
+         'scoring_takeover.requested','scoring_takeover.approved'
+       ) AND (
+         target_id IN (SELECT id::text FROM scoring_access_passes WHERE competition_id=${state.competitionId})
+         OR target_id IN (SELECT id::text FROM scoring_takeover_requests WHERE competition_id=${state.competitionId})
+       )) AS required_audits,
+      (SELECT count(*)::integer FROM outbox_events
+       WHERE event_type IN (
+         'scoring_access.invalid','scoring_access.rate_limited','scoring_session.heartbeat_expired',
+         'scoring_event.stale_submission_rejected'
+       )) AS denial_outbox_events
+  `;
+  const row = counts[0];
+  if (
+    !row ||
+    row.viewer_passes < 1 ||
+    row.scorekeeper_passes < 2 ||
+    row.viewer_sessions < 2 ||
+    row.transferred_sessions !== 1 ||
+    row.approved_takeovers !== 1 ||
+    row.access_attempts < 4 ||
+    row.required_audits < 7 ||
+    row.denial_outbox_events !== 0
+  ) {
+    throw new Error(`Gate C access database oracle failed: ${JSON.stringify(row)}`);
+  }
+}
+
 async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promise<void> {
   if (!isolation) return;
   if (isolation.kind === "database") {
@@ -331,7 +481,11 @@ async function main(): Promise<void> {
   let isolation: Isolation | null = null;
   let sql: Sql | null = null;
   let app: Awaited<ReturnType<typeof buildApp>> | null = null;
+  let redis: Redis | null = null;
+  let redisNamespace: string | null = null;
+  let redisGuardKey: string | null = null;
   let web: RunningProcess | null = null;
+  let httpsProxy: https.Server | null = null;
   let interrupted = false;
   const markInterrupted = () => {
     interrupted = true;
@@ -345,7 +499,7 @@ async function main(): Promise<void> {
     await runProcess(
       "local PostgreSQL",
       "docker",
-      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres"],
+      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
       process.env,
     );
     isolation = await prepareIsolation(admin);
@@ -361,6 +515,7 @@ async function main(): Promise<void> {
       API_ALLOWED_ORIGINS: webOrigin,
       DATABASE_URL: isolation.databaseUrl,
       IDENTITY_CSRF_HMAC_SECRET: csrfSecret,
+      SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: scoringAccessRateLimitSecret,
       LOG_LEVEL: "info",
     });
     const identitySql = sql as unknown as PostgresJsSql;
@@ -370,6 +525,14 @@ async function main(): Promise<void> {
       csrfSecret,
       systemClock,
     );
+    redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
+    redisNamespace = `matchday:test:phase2-e2e:${randomUUID()}:`;
+    redisGuardKey = `${redisNamespace.slice(0, -1)}-unrelated-guard`;
+    const dirtyOwnedKeys = await redisKeys(redis, `${redisNamespace}*`);
+    if (dirtyOwnedKeys.length > 0) {
+      throw new Error(`Refusing dirty scoring-access Redis namespace (${dirtyOwnedKeys.length} owned keys)`);
+    }
+    await redis.set(redisGuardKey, "preserve", "EX", 900);
     const databaseProbe = async () => {
       try {
         const rows = await sql?.unsafe<{ ok: number }[]>("SELECT 1 AS ok");
@@ -382,7 +545,12 @@ async function main(): Promise<void> {
       config,
       probes: { database: databaseProbe, queue: databaseProbe, redis: async () => true },
       identityRuntime: identity,
-      phase2Runtime: new Phase2Runtime(identitySql, phase2DomainAdapter),
+      phase2Runtime: new Phase2Runtime(
+        identitySql,
+        phase2DomainAdapter,
+        undefined,
+        new RedisScoringAccessRateLimiter(redis, scoringAccessRateLimitSecret, redisNamespace),
+      ),
     });
     await app.listen({ host: "127.0.0.1", port: apiPort });
     await waitFor(`${apiOrigin}/health/ready`, "Phase 2 API");
@@ -402,14 +570,25 @@ async function main(): Promise<void> {
     web = startProcess(
       "production web",
       "pnpm",
-      ["--filter", "@matchday/web", "start", "--hostname", "127.0.0.1", "--port", String(webPort)],
+      ["--filter", "@matchday/web", "start", "--hostname", "127.0.0.1", "--port", String(internalWebPort)],
       runtimeEnv,
     );
-    await waitFor(`${webOrigin}/score`, "production web");
-    const bffProbe = await fetch(`${webOrigin}/api/scoring/access/exchange`, {
+    await waitFor(`${internalWebOrigin}/score`, "production web");
+    httpsProxy = await startHttpsProxy(temp);
+    const bffProbe = await fetch(`${internalWebOrigin}/api/scoring/access/exchange`, {
       method: "POST",
-      headers: { "content-type": "application/json", origin: webOrigin, "sec-fetch-site": "same-origin" },
-      body: JSON.stringify({ token: state.probeAccessToken }),
+      headers: {
+        "content-type": "application/json",
+        origin: webOrigin,
+        "sec-fetch-site": "same-origin",
+        "x-forwarded-host": `localhost:${webPort}`,
+        "x-forwarded-proto": "https",
+      },
+      body: JSON.stringify({
+        token: state.probeAccessToken,
+        deviceId: randomUUID(),
+        deviceLabel: "Transport probe",
+      }),
       signal: AbortSignal.timeout(5_000),
     });
     const bffProbeBody = await bffProbe.text();
@@ -419,10 +598,23 @@ async function main(): Promise<void> {
     await runProcess(
       "Phase 2 real Playwright",
       "pnpm",
-      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", "playwright.real.config.ts"],
+      [
+        "--filter",
+        "@matchday/web",
+        "exec",
+        "playwright",
+        "test",
+        "--config",
+        process.env.PHASE2_E2E_PLAYWRIGHT_CONFIG ?? "playwright.real.config.ts",
+        ...(process.env.PHASE2_E2E_PROJECT ? ["--project", process.env.PHASE2_E2E_PROJECT] : []),
+      ],
       runtimeEnv,
     );
-    await assertDatabaseOracle(sql, state);
+    if (process.env.PHASE2_E2E_SKIP_PHASE2_ORACLE === "1") {
+      await assertGateCAccessOracle(sql, state);
+    } else {
+      await assertDatabaseOracle(sql, state);
+    }
     if (interrupted) throw new Error("Phase 2 E2E was interrupted");
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });
@@ -438,9 +630,26 @@ async function main(): Promise<void> {
         );
       }
     };
+    await cleanup("HTTPS proxy shutdown failed", () => stopHttpsProxy(httpsProxy));
     await cleanup("Web process shutdown failed", () => stopProcess(web));
     await cleanup("API shutdown failed", async () => {
       await app?.close();
+    });
+    await cleanup("Redis namespace cleanup failed", async () => {
+      if (!redis || !redisNamespace || !redisGuardKey) return;
+      const ownedKeys = await redisKeys(redis, `${redisNamespace}*`);
+      if (ownedKeys.length > 0) await redis.unlink(...ownedKeys);
+      const remainingOwnedKeys = await redisKeys(redis, `${redisNamespace}*`);
+      if (remainingOwnedKeys.length !== 0) {
+        throw new Error(`Redis scoring-access cleanup left ${remainingOwnedKeys.length} owned keys`);
+      }
+      if ((await redis.get(redisGuardKey)) !== "preserve") {
+        throw new Error("Redis scoring-access cleanup removed the unrelated guard key");
+      }
+      await redis.unlink(redisGuardKey);
+    });
+    await cleanup("Redis connection shutdown failed", async () => {
+      await redis?.quit();
     });
     await cleanup("Isolated connection shutdown failed", async () => {
       await sql?.end({ timeout: 2 });
@@ -448,6 +657,16 @@ async function main(): Promise<void> {
     await cleanup("Isolation cleanup failed", () => cleanupIsolation(admin, isolation));
     await cleanup("Administrative connection shutdown failed", async () => {
       await admin.end({ timeout: 2 });
+    });
+    await cleanup("Playwright artifact retention failed", async () => {
+      const retained = retainedArtifactsDirectory();
+      if (!retained) return;
+      await rm(retained, { recursive: true, force: true });
+      await mkdir(retained, { recursive: true });
+      await cp(path.join(temp, "playwright-output"), path.join(retained, "playwright-output"), {
+        recursive: true,
+        force: true,
+      });
     });
     await cleanup("Temporary artifact cleanup failed", () => rm(temp, { recursive: true, force: true }));
     process.off("SIGINT", markInterrupted);

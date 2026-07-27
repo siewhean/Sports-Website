@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
-import type { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { ScoringAccessRejectedError, type Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -47,6 +47,11 @@ function routeRuntime() {
         home: { id: randomUUID(), name: "Marina Blue" },
         away: { id: randomUUID(), name: "Harbour Gold" },
       },
+      access: {
+        mode: "writer",
+        permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+        session_expires_at: "2026-08-01T00:00:00.000Z",
+      },
       writer: { generation: 1, expires_at: "2026-08-01T00:00:00.000Z", read_only: false },
       score: { home: 1, away: 0 },
       through_sequence: 2,
@@ -58,6 +63,7 @@ function routeRuntime() {
       match_id: randomUUID(),
       generation: 1,
       expires_at: "2026-08-01T00:00:00.000Z",
+      rate_limit: { limit: 5, remaining: 5, resetSeconds: 600 },
     })),
     publicCompetition: vi.fn(async () => ({
       competition: {
@@ -153,7 +159,7 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(workspace.body).not.toContain('"token"');
   });
 
-  it("validates scoring headers, throttles access exchange, and leaves the public projection unauthenticated", async () => {
+  it("validates scoring headers, exposes access-limit headers, and leaves the public projection unauthenticated", async () => {
     const runtime = routeRuntime();
     const app = await buildApp({
       config: testConfig(),
@@ -181,12 +187,25 @@ describe("Phase 2 Fastify route boundaries", () => {
       app.inject({
         method: "POST",
         url: "/api/v1/scoring/access/exchange",
-        payload: { token: "q".repeat(43) },
+        payload: { token: "q".repeat(43), device_id: "d".repeat(43) },
       });
-    for (let attempt = 0; attempt < 5; attempt += 1) expect((await exchange()).statusCode).toBe(200);
-    const limited = await exchange();
-    expect(limited.statusCode).toBe(429);
-    expect(limited.json().error.code).toBe("RATE_LIMITED");
+    runtime.exchangeAccess.mockRejectedValueOnce(
+      new ScoringAccessRejectedError(403, "ACCESS_DENIED", "Access is invalid", {
+        limit: 5,
+        remaining: 4,
+        resetSeconds: 600,
+      }),
+    );
+    const invalidExchange = await exchange();
+    expect(invalidExchange.statusCode).toBe(403);
+    expect(invalidExchange.headers["ratelimit-limit"]).toBe("5");
+    expect(invalidExchange.headers["ratelimit-remaining"]).toBe("4");
+    expect(invalidExchange.headers["ratelimit-reset"]).toBe("600");
+    expect(invalidExchange.headers["retry-after"]).toBeUndefined();
+    const exchanged = await exchange();
+    expect(exchanged.statusCode).toBe(200);
+    expect(exchanged.headers["ratelimit-limit"]).toBe("5");
+    expect(exchanged.headers["ratelimit-remaining"]).toBe("5");
 
     const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
     expect(publicView.statusCode).toBe(200);

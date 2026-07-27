@@ -37,7 +37,7 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
     if (response.status() >= 400) failedResponses.push(`${response.status()} ${response.url()}`);
     if (response.url().includes("/api/scoring/")) scoringResponses.push(`${response.status()} ${response.url()}`);
   });
-  await page.goto(`/score/${encodeURIComponent(state.accessToken)}`);
+  await page.goto(`/score#access=${encodeURIComponent(state.accessToken)}`);
   await dismissConsent(page);
   await expect(page).toHaveURL(`${state.webOrigin}/score`);
   await expect(

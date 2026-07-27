@@ -177,20 +177,20 @@ async function createWorld(): Promise<World> {
   const passB = randomUUID();
   await sql`
     INSERT INTO scoring_access_passes (
-      id, match_id, secret_hash, short_code_hash, expires_at, created_by
+      id, competition_id, match_id, secret_hash, short_code_hash, expires_at, created_by
     ) VALUES
-      (${passA}, ${matchA}, ${randomBytes(32)}, ${randomBytes(32)}, '2026-08-01T12:00:00Z', ${accountA}),
-      (${passB}, ${matchB}, ${randomBytes(32)}, ${randomBytes(32)}, '2026-08-02T12:00:00Z', ${accountB})
+      (${passA}, ${competitionA}, ${matchA}, ${randomBytes(32)}, ${randomBytes(32)}, '2026-08-01T12:00:00Z', ${accountA}),
+      (${passB}, ${competitionB}, ${matchB}, ${randomBytes(32)}, ${randomBytes(32)}, '2026-08-02T12:00:00Z', ${accountB})
   `;
 
   const sessionA = randomUUID();
   const sessionB = randomUUID();
   await sql`
     INSERT INTO scoring_access_sessions (
-      id, access_pass_id, match_id, session_token_hash, generation, issued_at, expires_at
+      id, access_pass_id, competition_id, match_id, session_token_hash, generation, device_id_hash, issued_at, expires_at
     ) VALUES
-      (${sessionA}, ${passA}, ${matchA}, ${randomBytes(32)}, 1, '2026-08-01T08:00:00Z', '2026-08-01T09:00:00Z'),
-      (${sessionB}, ${passB}, ${matchB}, ${randomBytes(32)}, 1, '2026-08-02T08:00:00Z', '2026-08-02T09:00:00Z')
+      (${sessionA}, ${passA}, ${competitionA}, ${matchA}, ${randomBytes(32)}, 1, ${randomBytes(32)}, '2026-08-01T08:00:00Z', '2026-08-01T09:00:00Z'),
+      (${sessionB}, ${passB}, ${competitionB}, ${matchB}, ${randomBytes(32)}, 1, ${randomBytes(32)}, '2026-08-02T08:00:00Z', '2026-08-02T09:00:00Z')
   `;
 
   return {
@@ -449,6 +449,7 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
       WHERE table_schema=current_schema()
         AND table_name IN ('scoring_access_passes', 'scoring_access_sessions')
         AND (column_name LIKE '%secret%' OR column_name LIKE '%token%' OR column_name LIKE '%code%')
+        AND data_type='bytea'
       ORDER BY table_name, column_name
     `;
     expect(tokenColumns).toEqual([
@@ -474,9 +475,9 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     const world = await createWorld();
     await expect(sql`
       INSERT INTO scoring_access_sessions (
-        access_pass_id, match_id, session_token_hash, generation, issued_at, expires_at
+        access_pass_id, competition_id, match_id, session_token_hash, generation, device_id_hash, issued_at, expires_at
       ) VALUES (
-        ${world.passA}, ${world.matchB}, ${randomBytes(32)}, 2,
+        ${world.passA}, ${world.competitionB}, ${world.matchB}, ${randomBytes(32)}, 2, ${randomBytes(32)},
         '2026-08-02T09:00:00Z', '2026-08-02T10:00:00Z'
       )
     `).rejects.toThrow();
@@ -485,9 +486,10 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     `).rejects.toThrow();
     await expect(sql`
       INSERT INTO match_writer_leases (
-        match_id, access_session_id, generation, acquired_at, expires_at
+        competition_id, match_id, access_session_id, generation, acquired_at, expires_at
       ) VALUES (
-        ${world.matchB}, ${world.sessionA}, 1, '2026-08-02T08:00:00Z', '2026-08-02T08:30:00Z'
+        ${world.competitionB}, ${world.matchB}, ${world.sessionA}, 1,
+        '2026-08-02T08:00:00Z', '2026-08-02T08:30:00Z'
       )
     `).rejects.toThrow();
   });
@@ -496,26 +498,276 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     const world = await createWorld();
     await expect(sql`
       INSERT INTO match_writer_leases (
-        match_id, access_session_id, generation, acquired_at, expires_at
+        competition_id, match_id, access_session_id, generation, acquired_at, expires_at
       ) VALUES (
-        ${world.matchA}, ${world.sessionA}, 2, '2026-08-01T08:00:00Z', '2026-08-01T08:30:00Z'
+        ${world.competitionA}, ${world.matchA}, ${world.sessionA}, 2,
+        '2026-08-01T08:00:00Z', '2026-08-01T08:30:00Z'
       )
     `).rejects.toThrow();
     await expect(sql`
       INSERT INTO scoring_access_sessions (
-        access_pass_id, match_id, session_token_hash, generation, issued_at, expires_at
+        access_pass_id, competition_id, match_id, session_token_hash, generation, device_id_hash, issued_at, expires_at
       ) VALUES (
-        ${world.passA}, ${world.matchA}, ${randomBytes(32)}, 1,
+        ${world.passA}, ${world.competitionA}, ${world.matchA}, ${randomBytes(32)}, 1, ${randomBytes(32)},
         '2026-08-01T08:10:00Z', '2026-08-01T08:40:00Z'
       )
     `).rejects.toThrow();
     await sql`
       INSERT INTO match_writer_leases (
-        match_id, access_session_id, generation, acquired_at, expires_at
+        competition_id, match_id, access_session_id, generation, acquired_at, expires_at
       ) VALUES (
-        ${world.matchA}, ${world.sessionA}, 1, '2026-08-01T08:00:00Z', '2026-08-01T08:30:00Z'
+        ${world.competitionA}, ${world.matchA}, ${world.sessionA}, 1,
+        '2026-08-01T08:00:00Z', '2026-08-01T08:30:00Z'
       )
     `;
+  });
+
+  it("enforces exact role scopes while allowing multiple generation-free viewers", async () => {
+    const world = await createWorld();
+    const viewerPass = randomUUID();
+    await expect(sql`
+      INSERT INTO scoring_access_passes (
+        id, competition_id, match_id, role, scope, secret_hash, expires_at, created_by
+      ) VALUES (
+        ${viewerPass}, ${world.competitionA}, ${world.matchA}, 'viewer',
+        '["score:read","score:write"]'::jsonb, ${randomBytes(32)},
+        '2026-08-01T12:00:00Z', ${world.accountA}
+      )
+    `).rejects.toThrow();
+    await sql`
+      INSERT INTO scoring_access_passes (
+        id, competition_id, match_id, role, scope, secret_hash, expires_at, created_by
+      ) VALUES (
+        ${viewerPass}, ${world.competitionA}, ${world.matchA}, 'viewer',
+        '["score:read"]'::jsonb, ${randomBytes(32)},
+        '2026-08-01T12:00:00Z', ${world.accountA}
+      )
+    `;
+    await sql`
+      INSERT INTO scoring_access_sessions (
+        access_pass_id, competition_id, match_id, session_token_hash, mode, generation,
+        device_id_hash, issued_at, expires_at
+      ) VALUES
+        (${viewerPass}, ${world.competitionA}, ${world.matchA}, ${randomBytes(32)}, 'viewer', NULL,
+         ${randomBytes(32)}, '2026-08-01T08:00:00Z', '2026-08-01T09:00:00Z'),
+        (${viewerPass}, ${world.competitionA}, ${world.matchA}, ${randomBytes(32)}, 'viewer', NULL,
+         ${randomBytes(32)}, '2026-08-01T08:00:00Z', '2026-08-01T09:00:00Z')
+    `;
+    expect(
+      await sql`SELECT mode,generation FROM scoring_access_sessions
+        WHERE access_pass_id=${viewerPass} ORDER BY id`,
+    ).toEqual([
+      { mode: "viewer", generation: null },
+      { mode: "viewer", generation: null },
+    ]);
+    await expect(sql`
+      INSERT INTO scoring_access_sessions (
+        access_pass_id, competition_id, match_id, session_token_hash, mode, generation,
+        device_id_hash, issued_at, expires_at
+      ) VALUES (
+        ${world.passA}, ${world.competitionA}, ${world.matchA}, ${randomBytes(32)}, 'candidate', 2,
+        ${randomBytes(32)}, '2026-08-01T08:00:00Z', '2026-08-01T09:00:00Z'
+      )
+    `).rejects.toThrow();
+  });
+
+  it("keeps candidates read-only until a writer lease references a writer generation", async () => {
+    const world = await createWorld();
+    const candidate = randomUUID();
+    await sql`
+      INSERT INTO scoring_access_sessions (
+        id, access_pass_id, competition_id, match_id, session_token_hash, mode, generation,
+        device_id_hash, issued_at, expires_at
+      ) VALUES (
+        ${candidate}, ${world.passA}, ${world.competitionA}, ${world.matchA}, ${randomBytes(32)},
+        'candidate', NULL, ${randomBytes(32)}, '2026-08-01T08:00:00Z', '2026-08-01T09:00:00Z'
+      )
+    `;
+    await expect(sql`
+      INSERT INTO match_writer_leases (
+        competition_id, match_id, access_session_id, generation, acquired_at, expires_at
+      ) VALUES (
+        ${world.competitionA}, ${world.matchA}, ${candidate}, 2,
+        '2026-08-01T08:00:00Z', '2026-08-01T08:00:45Z'
+      )
+    `).rejects.toThrow();
+    await sql`
+      INSERT INTO match_writer_leases (
+        competition_id, match_id, access_session_id, generation, acquired_at, expires_at
+      ) VALUES (
+        ${world.competitionA}, ${world.matchA}, ${world.sessionA}, 1,
+        '2026-08-01T08:00:00Z', '2026-08-01T08:00:45Z'
+      )
+    `;
+    await expect(sql`
+      INSERT INTO match_writer_leases (
+        competition_id, match_id, access_session_id, generation, acquired_at, expires_at
+      ) VALUES (
+        ${world.competitionA}, ${world.matchA}, ${world.sessionA}, 1,
+        '2026-08-01T08:01:00Z', '2026-08-01T08:01:45Z'
+      )
+    `).rejects.toThrow();
+  });
+
+  it("binds takeover and transfer-conflict evidence to one match and explicit resolution", async () => {
+    const world = await createWorld();
+    const candidate = randomUUID();
+    await sql`
+      INSERT INTO scoring_access_sessions (
+        id, access_pass_id, competition_id, match_id, session_token_hash, mode, generation,
+        device_id_hash, issued_at, expires_at
+      ) VALUES (
+        ${candidate}, ${world.passA}, ${world.competitionA}, ${world.matchA}, ${randomBytes(32)},
+        'candidate', NULL, ${randomBytes(32)}, '2026-08-01T08:00:00Z', '2026-08-01T09:00:00Z'
+      )
+    `;
+    await expect(sql`
+      INSERT INTO scoring_takeover_requests (
+        competition_id, match_id, requesting_session_id, incumbent_session_id,
+        requester_pending_event_count, incumbent_pending_state
+      ) VALUES (
+        ${world.competitionA}, ${world.matchA}, ${world.sessionB}, ${world.sessionA}, 0, 'none'
+      )
+    `).rejects.toThrow();
+    const [takeover] = await sql<{ id: string }[]>`
+      INSERT INTO scoring_takeover_requests (
+        competition_id, match_id, requesting_session_id, incumbent_session_id,
+        requester_pending_event_count, incumbent_pending_state
+      ) VALUES (
+        ${world.competitionA}, ${world.matchA}, ${candidate}, ${world.sessionA}, 1, 'present'
+      ) RETURNING id
+    `;
+    await expect(sql`
+      UPDATE scoring_takeover_requests
+      SET status='approved',resolved_at='2026-08-01T08:05:00Z',
+          resolved_by_account_id=${world.accountA},resolution_reason='Unsafe pending takeover'
+      WHERE id=${takeover!.id}
+    `).rejects.toThrow();
+    await sql`
+      UPDATE scoring_takeover_requests
+      SET status='approved',resolved_at='2026-08-01T08:05:00Z',
+          resolved_by_account_id=${world.accountA},resolution_reason='Pending events acknowledged',
+          override_acknowledged=true
+      WHERE id=${takeover!.id}
+    `;
+    await sql`UPDATE scoring_access_sessions SET mode='writer',generation=2 WHERE id=${candidate}`;
+    const [conflict] = await sql<{ id: string }[]>`
+      INSERT INTO scoring_transfer_conflicts (
+        competition_id,match_id,takeover_request_id,stale_session_id,replacement_session_id,
+        stale_generation,pending_event_count,pending_through_sequence
+      ) VALUES (
+        ${world.competitionA},${world.matchA},${takeover!.id},${world.sessionA},${candidate},1,1,1
+      ) RETURNING id
+    `;
+    await expect(sql`
+      UPDATE scoring_transfer_conflicts SET pending_event_count=2 WHERE id=${conflict!.id}
+    `).rejects.toThrow(/immutable/i);
+    await sql`
+      UPDATE scoring_transfer_conflicts
+      SET status='discarded',resolved_at='2026-08-01T08:10:00Z',
+          resolved_by_account_id=${world.accountA},resolution_reason='Organiser reviewed stale event'
+      WHERE id=${conflict!.id}
+    `;
+    await expect(sql`
+      UPDATE scoring_transfer_conflicts SET resolution_reason='Changed later' WHERE id=${conflict!.id}
+    `).rejects.toThrow(/immutable/i);
+
+    const unknownCandidate = randomUUID();
+    await sql`
+      INSERT INTO scoring_access_sessions (
+        id, access_pass_id, competition_id, match_id, session_token_hash, mode, generation,
+        device_id_hash, issued_at, expires_at
+      ) VALUES (
+        ${unknownCandidate}, ${world.passA}, ${world.competitionA}, ${world.matchA}, ${randomBytes(32)},
+        'candidate', NULL, ${randomBytes(32)}, '2026-08-01T08:11:00Z', '2026-08-01T09:00:00Z'
+      )
+    `;
+    const [unknownTakeover] = await sql<{ id: string }[]>`
+      INSERT INTO scoring_takeover_requests (
+        competition_id,match_id,requesting_session_id,incumbent_session_id,
+        requester_pending_event_count,incumbent_pending_state
+      ) VALUES (
+        ${world.competitionA},${world.matchA},${unknownCandidate},${candidate},0,'unknown'
+      ) RETURNING id
+    `;
+    await sql`
+      UPDATE scoring_takeover_requests
+      SET status='approved',resolved_at='2026-08-01T08:12:00Z',
+          resolved_by_account_id=${world.accountA},resolution_reason='Unknown pending state acknowledged',
+          override_acknowledged=true
+      WHERE id=${unknownTakeover!.id}
+    `;
+    await sql`UPDATE scoring_access_sessions SET mode='transferred' WHERE id=${candidate}`;
+    await sql`UPDATE scoring_access_sessions SET mode='writer',generation=3 WHERE id=${unknownCandidate}`;
+    await sql`
+      INSERT INTO scoring_transfer_conflicts (
+        competition_id,match_id,takeover_request_id,stale_session_id,replacement_session_id,
+        stale_generation,pending_event_count,pending_through_sequence
+      ) VALUES (
+        ${world.competitionA},${world.matchA},${unknownTakeover!.id},${candidate},${unknownCandidate},2,0,0
+      )
+    `;
+  });
+
+  it("stores only fixed-length HMACs in the append-only access-attempt ledger", async () => {
+    const world = await createWorld();
+    const attempt = randomUUID();
+    await sql`
+      INSERT INTO scoring_access_attempts (
+        id,credential_kind,outcome,credential_hmac,ip_hmac,request_id
+      ) VALUES (
+        ${attempt},'fallback_code','invalid',${randomBytes(32)},${randomBytes(32)},${`attempt-${attempt}`}
+      )
+    `;
+    await expect(sql`
+      INSERT INTO scoring_access_attempts (
+        competition_id,match_id,access_pass_id,credential_kind,outcome,
+        credential_hmac,ip_hmac,request_id
+      ) VALUES (
+        ${world.competitionB},${world.matchB},${world.passA},'token','accepted',
+        ${randomBytes(32)},${randomBytes(32)},${`cross-tenant-${attempt}`}
+      )
+    `).rejects.toThrow();
+    const hashColumns = await sql`
+      SELECT column_name,data_type
+      FROM information_schema.columns
+      WHERE table_schema=${schema}
+        AND table_name='scoring_access_attempts'
+        AND column_name IN ('credential_hmac','ip_hmac')
+      ORDER BY column_name
+    `;
+    expect(hashColumns).toEqual([
+      { column_name: "credential_hmac", data_type: "bytea" },
+      { column_name: "ip_hmac", data_type: "bytea" },
+    ]);
+    await expect(sql`
+      UPDATE scoring_access_attempts SET outcome='accepted' WHERE id=${attempt}
+    `).rejects.toThrow(/append-only/i);
+    await expect(sql`DELETE FROM scoring_access_attempts WHERE id=${attempt}`).rejects.toThrow(/append-only/i);
+
+    const retainedAttempt = randomUUID();
+    await sql`
+      INSERT INTO scoring_access_attempts (
+        id,competition_id,match_id,access_pass_id,credential_kind,outcome,
+        credential_hmac,ip_hmac,request_id
+      ) VALUES (
+        ${retainedAttempt},${world.competitionA},${world.matchA},${world.passA},'token','accepted',
+        ${randomBytes(32)},${randomBytes(32)},${`retained-${retainedAttempt}`}
+      )
+    `;
+    await sql`DELETE FROM scoring_access_passes WHERE id=${world.passA}`;
+    expect(
+      await sql`
+        SELECT competition_id,match_id,access_pass_id
+        FROM scoring_access_attempts WHERE id=${retainedAttempt}
+      `,
+    ).toEqual([
+      {
+        competition_id: world.competitionA,
+        match_id: world.matchA,
+        access_pass_id: world.passA,
+      },
+    ]);
   });
 
   it("isolates result, standings, bracket, and public projection versions", async () => {

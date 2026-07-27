@@ -99,15 +99,109 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
 
     const firstMatch = format.matches[0];
     const secondMatch = format.matches[1];
+    const thirdMatch = format.matches[2];
+    const fourthMatch = format.matches[3];
     expect(firstMatch?.homeEntryId).toBeTruthy();
     expect(firstMatch?.awayEntryId).toBeTruthy();
-    if (!firstMatch || !secondMatch) throw new Error("Expected generated matches");
+    if (!firstMatch || !secondMatch || !thirdMatch || !fourthMatch) throw new Error("Expected generated matches");
     const pass = await runtime.createAccessPass(actor, competition.id, firstMatch.id, accessExpiry, randomUUID());
     const hashes = await client<{ secret_hash: Buffer; short_code_hash: Buffer }[]>`
       SELECT secret_hash,short_code_hash FROM scoring_access_passes WHERE id=${pass.id}
     `;
     expect(hashes[0]?.secret_hash.toString("utf8")).not.toContain(pass.token);
     expect(pass.short_code).toMatch(/^\d{12}$/);
+    const idempotencyKey = `idempotent-${randomUUID()}`;
+    const idempotentPass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      firstMatch.id,
+      { expiresAt: accessExpiry, role: "viewer", idempotencyKey },
+      randomUUID(),
+    );
+    const idempotentReplay = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      firstMatch.id,
+      { expiresAt: accessExpiry, role: "viewer", idempotencyKey },
+      randomUUID(),
+    );
+    expect(idempotentReplay).toMatchObject({
+      id: idempotentPass.id,
+      duplicate: true,
+      token: null,
+      short_code: null,
+      qr_path: null,
+    });
+    await expect(
+      runtime.createAccessPass(
+        actor,
+        competition.id,
+        firstMatch.id,
+        { expiresAt: accessExpiry, role: "scorekeeper", idempotencyKey },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "ACCESS_IDEMPOTENCY_CONFLICT" });
+    await runtime.revokeAccessPass(actor, competition.id, idempotentPass.id, randomUUID(), "Fixture revocation");
+    if (!idempotentPass.token) throw new Error("Expected one-time idempotent access secret");
+    await expect(
+      runtime.exchangeAccess(
+        { token: idempotentPass.token, deviceId: randomUUID(), ipAddress: "192.0.2.20" },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_REVOKED" });
+    const expiringPass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      firstMatch.id,
+      {
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        role: "viewer",
+        idempotencyKey: `expires-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    if (!expiringPass.token) throw new Error("Expected one-time expiring access secret");
+    const expiringSession = await runtime.exchangeAccess(
+      {
+        token: expiringPass.token,
+        deviceId: randomUUID(),
+        ipAddress: "192.0.2.22",
+      },
+      randomUUID(),
+    );
+    const futureRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      () => new Date(Date.now() + 120_000),
+    );
+    await expect(
+      futureRuntime.exchangeAccess(
+        { token: expiringPass.token, deviceId: randomUUID(), ipAddress: "192.0.2.21" },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_EXPIRED" });
+    await expect(
+      futureRuntime.scoringSessionState({
+        sessionId: expiringSession.session_id,
+        sessionToken: expiringSession.session_token,
+        generation: null,
+      }),
+    ).rejects.toMatchObject({ statusCode: 403, code: "SCORING_SESSION_EXPIRED" });
+    const deniedAttempts = await client<
+      {
+        outcome: string;
+        competition_id: string | null;
+        match_id: string | null;
+        access_pass_id: string | null;
+      }[]
+    >`
+      SELECT outcome,competition_id,match_id,access_pass_id
+      FROM scoring_access_attempts WHERE outcome IN ('revoked','expired') ORDER BY attempted_at
+    `;
+    expect(deniedAttempts.map((attempt) => attempt.outcome)).toEqual(["revoked", "expired"]);
+    expect(deniedAttempts.every((attempt) => attempt.competition_id === competition.id)).toBe(true);
+    expect(deniedAttempts.every((attempt) => attempt.match_id === firstMatch.id)).toBe(true);
+    expect(deniedAttempts.every((attempt) => attempt.access_pass_id !== null)).toBe(true);
 
     await expect(
       runtime.exchangeAccess({ token: pass.token, expectedMatchId: secondMatch.id }, randomUUID()),
@@ -181,6 +275,77 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       through_sequence: 2,
       writer: { generation: 1 },
     });
+    const viewerPass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      firstMatch.id,
+      { expiresAt: accessExpiry, role: "viewer", idempotencyKey: `viewer-${randomUUID()}` },
+      randomUUID(),
+    );
+    if (!viewerPass.token) throw new Error("Expected one-time viewer access secret");
+    const viewer = await runtime.exchangeAccess(
+      {
+        token: viewerPass.token,
+        deviceId: randomUUID(),
+        deviceLabel: "Read-only official",
+        ipAddress: "192.0.2.14",
+      },
+      randomUUID(),
+    );
+    expect(viewer).toMatchObject({
+      mode: "viewer",
+      generation: null,
+      permissions: ["score:read"],
+      lease_expires_at: null,
+    });
+    expect(
+      await runtime.scoringSessionState({
+        sessionId: viewer.session_id,
+        sessionToken: viewer.session_token,
+        generation: null,
+      }),
+    ).toMatchObject({ access: { mode: "viewer" }, writer: { generation: null, read_only: true } });
+    const staleSubmissionId = randomUUID();
+    const staleSubmissionRequestId = randomUUID();
+    await expect(
+      runtime.appendScoreEvent(
+        { sessionId: viewer.session_id, sessionToken: viewer.session_token, generation: null },
+        {
+          clientEventId: staleSubmissionId,
+          type: "goal_added",
+          teamSlot: "home",
+          scorer: "Viewer cannot score",
+          manualPeriod: 1,
+          manualEventSeconds: 100,
+          payload: {},
+          correctionReason: null,
+          occurredAt: new Date(),
+        },
+        staleSubmissionRequestId,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
+    const retainedStaleSubmission = await client<
+      {
+        after_state: string;
+        metadata: string;
+      }[]
+    >`
+      SELECT after_state,metadata FROM audit_events
+      WHERE request_id=${staleSubmissionRequestId}
+        AND action='scoring_event.stale_submission_rejected'
+    `;
+    expect({
+      after_state: JSON.parse(retainedStaleSubmission[0]?.after_state ?? "{}"),
+      metadata: JSON.parse(retainedStaleSubmission[0]?.metadata ?? "{}"),
+    }).toMatchObject({
+      after_state: { client_event_id: staleSubmissionId, event_type: "goal_added" },
+      metadata: { submitted_generation: null, retained_for_review: true },
+    });
+    const rejectedScoreEvent = await client<{ count: number }[]>`
+      SELECT count(*)::integer AS count FROM score_events
+      WHERE match_id=${firstMatch.id} AND client_event_id=${staleSubmissionId}
+    `;
+    expect(rejectedScoreEvent[0]?.count).toBe(0);
     const finalEventId = randomUUID();
     const final = await runtime.finalise(writerAuth, finalEventId, randomUUID());
     expect(final).toMatchObject({ home_score: 1, away_score: 0, result_version: 1 });
@@ -296,21 +461,322 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       randomUUID(),
     );
     const secondWriter = await runtime.exchangeAccess({ token: secondPass.token }, randomUUID());
-    const replacement = await runtime.transferWriter(
+    const candidatePass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      secondMatch.id,
+      {
+        expiresAt: accessExpiry,
+        role: "scorekeeper",
+        idempotencyKey: `candidate-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    if (!candidatePass.token) throw new Error("Expected one-time candidate access secret");
+    const candidate = await runtime.exchangeAccess(
+      {
+        token: candidatePass.token,
+        deviceId: randomUUID(),
+        deviceLabel: "Replacement tablet",
+        ipAddress: "203.0.113.10",
+      },
+      randomUUID(),
+    );
+    expect(candidate).toMatchObject({ mode: "candidate", generation: null, lease_expires_at: null });
+    await runtime.heartbeatScoringSession(
       {
         sessionId: secondWriter.session_id,
         sessionToken: secondWriter.session_token,
         generation: secondWriter.generation,
       },
+      { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
       randomUUID(),
     );
-    expect(replacement.generation).toBe(2);
+    const takeover = await runtime.requestTakeover(
+      { sessionId: candidate.session_id, sessionToken: candidate.session_token, generation: null },
+      { pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    expect(takeover).toMatchObject({ status: "pending", incumbent_pending_state: "none" });
+    const approved = await runtime.resolveTakeover(
+      actor,
+      competition.id,
+      takeover.id,
+      {
+        decision: "approve",
+        overrideAcknowledged: false,
+        reason: "Approved replacement tablet",
+      },
+      randomUUID(),
+    );
+    expect(approved).toMatchObject({ status: "approved", generation: 2, conflict_id: null });
+    if (approved.status !== "approved" || approved.generation === undefined) {
+      throw new Error("Expected an approved takeover generation");
+    }
+    await expect(
+      runtime.scoringSessionState({
+        sessionId: secondWriter.session_id,
+        sessionToken: secondWriter.session_token,
+        generation: secondWriter.generation,
+      }),
+    ).resolves.toMatchObject({
+      access: { mode: "transferred" },
+      writer: { generation: secondWriter.generation, expires_at: null, read_only: true },
+    });
+    await expect(
+      runtime.appendScoreEvent(
+        {
+          sessionId: candidate.session_id,
+          sessionToken: candidate.session_token,
+          generation: approved.generation,
+        },
+        {
+          clientEventId: randomUUID(),
+          type: "match_started",
+          teamSlot: null,
+          scorer: null,
+          manualPeriod: 1,
+          manualEventSeconds: 0,
+          payload: {},
+          correctionReason: null,
+          occurredAt: new Date(),
+        },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ duplicate: false, sequence: 1 });
+    await expect(
+      runtime.transferWriter(
+        {
+          sessionId: secondWriter.session_id,
+          sessionToken: secondWriter.session_token,
+          generation: secondWriter.generation,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "SELF_TRANSFER_FORBIDDEN" });
+    const transferredStaleEventId = randomUUID();
+    const transferredStaleRequestId = randomUUID();
     await expect(
       runtime.appendScoreEvent(
         {
           sessionId: secondWriter.session_id,
           sessionToken: secondWriter.session_token,
           generation: secondWriter.generation,
+        },
+        {
+          clientEventId: transferredStaleEventId,
+          type: "match_started",
+          teamSlot: null,
+          scorer: null,
+          manualPeriod: 1,
+          manualEventSeconds: 0,
+          payload: {},
+          correctionReason: null,
+          occurredAt: new Date(),
+        },
+        transferredStaleRequestId,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
+    const transferredStaleEvidence = await client<
+      {
+        after_state: string;
+        metadata: string;
+      }[]
+    >`
+      SELECT after_state,metadata FROM audit_events
+      WHERE request_id=${transferredStaleRequestId}
+        AND action='scoring_event.stale_submission_rejected'
+    `;
+    expect({
+      after_state: JSON.parse(transferredStaleEvidence[0]?.after_state ?? "{}"),
+      metadata: JSON.parse(transferredStaleEvidence[0]?.metadata ?? "{}"),
+    }).toMatchObject({
+      after_state: { client_event_id: transferredStaleEventId },
+      metadata: { submitted_generation: secondWriter.generation, retained_for_review: true },
+    });
+    const transferredStaleScoreEvent = await client<{ count: number }[]>`
+      SELECT count(*)::integer AS count FROM score_events
+      WHERE match_id=${secondMatch.id} AND client_event_id=${transferredStaleEventId}
+    `;
+    expect(transferredStaleScoreEvent[0]?.count).toBe(0);
+
+    const concurrentIssueKey = `concurrent-issue-${randomUUID()}`;
+    const concurrentIssueResults = await Promise.all(
+      [randomUUID(), randomUUID()].map((requestId) =>
+        runtime.createAccessPass(
+          actor,
+          competition.id,
+          thirdMatch.id,
+          {
+            expiresAt: accessExpiry,
+            role: "viewer",
+            idempotencyKey: concurrentIssueKey,
+          },
+          requestId,
+        ),
+      ),
+    );
+    expect(new Set(concurrentIssueResults.map((result) => result.id)).size).toBe(1);
+    expect(concurrentIssueResults.filter((result) => result.token !== null)).toHaveLength(1);
+
+    const concurrentPasses = await Promise.all(
+      ["one", "two"].map((label) =>
+        runtime.createAccessPass(
+          actor,
+          competition.id,
+          thirdMatch.id,
+          {
+            expiresAt: accessExpiry,
+            role: "scorekeeper",
+            idempotencyKey: `concurrent-${label}-${randomUUID()}`,
+          },
+          randomUUID(),
+        ),
+      ),
+    );
+    const concurrentSessions = await Promise.all(
+      concurrentPasses.map((accessPass, index) => {
+        if (!accessPass.token) throw new Error("Expected one-time concurrent access secret");
+        return runtime.exchangeAccess(
+          {
+            token: accessPass.token,
+            deviceId: randomUUID(),
+            deviceLabel: `Concurrent device ${index + 1}`,
+            ipAddress: `198.51.100.${index + 1}`,
+          },
+          randomUUID(),
+        );
+      }),
+    );
+    expect(concurrentSessions.map((session) => session.mode).sort()).toEqual(["candidate", "writer"]);
+    expect(concurrentSessions.filter((session) => session.generation !== null)).toHaveLength(1);
+    const expiringWriter = concurrentSessions.find((session) => session.mode === "writer");
+    if (!expiringWriter?.generation) throw new Error("Expected concurrent active writer");
+    await client`DELETE FROM match_writer_leases WHERE access_session_id=${expiringWriter.session_id}`;
+    const deniedHeartbeatRequestId = randomUUID();
+    await expect(
+      runtime.heartbeatScoringSession(
+        {
+          sessionId: expiringWriter.session_id,
+          sessionToken: expiringWriter.session_token,
+          generation: expiringWriter.generation,
+        },
+        { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
+        deniedHeartbeatRequestId,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
+    const heartbeatDenials = await client<{ count: number }[]>`
+      SELECT count(*)::integer AS count FROM audit_events
+      WHERE request_id=${deniedHeartbeatRequestId} AND action='scoring_session.heartbeat_denied'
+    `;
+    const heartbeatDenialOutbox = await client<{ count: number }[]>`
+      SELECT count(*)::integer AS count FROM outbox_events
+      WHERE event_type='scoring_session.heartbeat_denied'
+    `;
+    expect(heartbeatDenials[0]?.count).toBe(1);
+    expect(heartbeatDenialOutbox[0]?.count).toBe(0);
+
+    const [unknownWriterPass, unknownCandidatePass] = await Promise.all(
+      ["writer", "candidate"].map((label) =>
+        runtime.createAccessPass(
+          actor,
+          competition.id,
+          fourthMatch.id,
+          {
+            expiresAt: accessExpiry,
+            role: "scorekeeper",
+            idempotencyKey: `unknown-${label}-${randomUUID()}`,
+          },
+          randomUUID(),
+        ),
+      ),
+    );
+    if (!unknownWriterPass?.token || !unknownCandidatePass?.token) {
+      throw new Error("Expected one-time unknown-state access secrets");
+    }
+    const unknownWriter = await runtime.exchangeAccess(
+      {
+        token: unknownWriterPass.token,
+        deviceId: randomUUID(),
+        ipAddress: "203.0.113.31",
+      },
+      randomUUID(),
+    );
+    const unknownCandidate = await runtime.exchangeAccess(
+      {
+        token: unknownCandidatePass.token,
+        deviceId: randomUUID(),
+        ipAddress: "203.0.113.32",
+      },
+      randomUUID(),
+    );
+    await client`
+      UPDATE scoring_access_sessions
+      SET issued_at=now()-interval '2 minutes',last_heartbeat_at=now()-interval '2 minutes'
+      WHERE id=${unknownWriter.session_id}
+    `;
+    const unknownTakeover = await runtime.requestTakeover(
+      {
+        sessionId: unknownCandidate.session_id,
+        sessionToken: unknownCandidate.session_token,
+        generation: null,
+      },
+      { pendingEventCount: 0, pendingThroughSequence: 0 },
+      randomUUID(),
+    );
+    expect(unknownTakeover).toMatchObject({ incumbent_pending_state: "unknown", duplicate: false });
+    expect(
+      await runtime.requestTakeover(
+        {
+          sessionId: unknownCandidate.session_id,
+          sessionToken: unknownCandidate.session_token,
+          generation: null,
+        },
+        { pendingEventCount: 0, pendingThroughSequence: 0 },
+        randomUUID(),
+      ),
+    ).toMatchObject({ id: unknownTakeover.id, duplicate: true });
+    await expect(
+      runtime.resolveTakeover(
+        actor,
+        competition.id,
+        unknownTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Unsafe without acknowledgement",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED" });
+    const forcedTakeover = await runtime.resolveTakeover(
+      actor,
+      competition.id,
+      unknownTakeover.id,
+      {
+        decision: "approve",
+        overrideAcknowledged: true,
+        reason: "Old writer state is unknown and reviewed",
+      },
+      randomUUID(),
+    );
+    expect(forcedTakeover).toMatchObject({ status: "approved", generation: 2 });
+    expect(forcedTakeover.conflict_id).toMatch(/^[0-9a-f-]{36}$/);
+    if (forcedTakeover.status !== "approved" || !forcedTakeover.conflict_id) {
+      throw new Error("Expected an approved takeover conflict");
+    }
+    const conflictId = forcedTakeover.conflict_id;
+    const conflict = await client<{ pending_event_count: number; pending_through_sequence: number; status: string }[]>`
+      SELECT pending_event_count,pending_through_sequence,status
+      FROM scoring_transfer_conflicts WHERE id=${conflictId}
+    `;
+    expect(conflict[0]).toEqual({ pending_event_count: 0, pending_through_sequence: 0, status: "open" });
+    await expect(
+      runtime.appendScoreEvent(
+        {
+          sessionId: unknownWriter.session_id,
+          sessionToken: unknownWriter.session_token,
+          generation: unknownWriter.generation,
         },
         {
           clientEventId: randomUUID(),
@@ -397,6 +863,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     await expect(runtime.revokeAccessPass(actor, competition.id, pass.id, randomUUID())).resolves.toMatchObject({
       id: pass.id,
       revoked: true,
+    });
+    await expect(runtime.scoringSessionState(writerAuth)).rejects.toMatchObject({
+      statusCode: 403,
+      code: "SCORING_SESSION_REVOKED",
     });
 
     await client`DELETE FROM competitions WHERE id=${competition.id}`;

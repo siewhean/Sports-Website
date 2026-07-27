@@ -4,7 +4,9 @@ import {
   appendScoringEvent,
   exchangeScoringSession,
   finaliseScoringResult,
+  heartbeatScoringSession,
   recoverScoringSession,
+  requestScoringTakeover,
 } from "../../lib/scoring-bff.server";
 import {
   scoringSessionCookieName,
@@ -18,11 +20,33 @@ const sealKey = Buffer.alloc(32, 7).toString("base64url");
 const sessionId = "00000000-0000-4000-8000-000000000101";
 const matchId = "00000000-0000-4000-8000-000000000102";
 const eventId = "00000000-0000-4000-8000-000000000103";
+const deviceId = "00000000-0000-4000-8000-000000000104";
 const sessionToken = "server-session-secret-that-never-reaches-browser-0001";
 const accessToken = "one-time-access-secret-that-stays-in-request-body-001";
 const expiresAt = "2030-01-01T00:00:00.000Z";
 
-const auth: ScoringServerAuth = { sessionId, sessionToken, generation: 3, matchId, expiresAt };
+const auth: ScoringServerAuth = {
+  sessionId,
+  sessionToken,
+  mode: "writer",
+  permissions: ["score:read", "score:write"],
+  generation: 3,
+  matchId,
+  expiresAt,
+  leaseExpiresAt: expiresAt,
+};
+
+const exchangeBody = { token: accessToken, deviceId, deviceLabel: "Test device" };
+const exchangedSession = {
+  session_id: sessionId,
+  session_token: sessionToken,
+  match_id: matchId,
+  mode: "writer",
+  permissions: ["score:read", "score:write"],
+  generation: 3,
+  expires_at: expiresAt,
+  lease_expires_at: expiresAt,
+};
 
 function state(extra: Record<string, unknown> = {}) {
   return {
@@ -33,6 +57,11 @@ function state(extra: Record<string, unknown> = {}) {
       stage: "Group B",
       home: { id: null, name: "Marina Blue" },
       away: { id: null, name: "Harbour Gold" },
+    },
+    access: {
+      mode: "writer",
+      permissions: ["score:read", "score:write"],
+      session_expires_at: expiresAt,
     },
     writer: { generation: 3, expires_at: expiresAt, read_only: false },
     score: { home: 1, away: 0 },
@@ -127,27 +156,42 @@ describe("scoring session sealing", () => {
 });
 
 describe("scoring BFF", () => {
+  it("returns no content when recovery has no scoring cookie", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await recoverScoringSession(bffRequest("GET", "/api/scoring/session"));
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("retains a transferred writer generation for stale-event fencing without a live lease", () => {
+    const transferred = {
+      ...auth,
+      mode: "transferred" as const,
+      generation: 4,
+      leaseExpiresAt: null,
+    };
+    const sealer = new ScoringSessionSealer(sealKey);
+
+    expect(sealer.open(sealer.seal(transferred))).toEqual(transferred);
+  });
+
   it("exchanges in the request body, stores only a strict host cookie, and returns allowlisted scoring state", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
       if (url.endsWith("/access/exchange")) {
-        return json({
-          session_id: sessionId,
-          session_token: sessionToken,
-          match_id: matchId,
-          generation: 3,
-          expires_at: expiresAt,
-        });
+        return json(exchangedSession);
       }
       return json(state({ session_id: sessionId, session_token: sessionToken }));
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await exchangeScoringSession(
-      bffRequest("POST", "/api/scoring/access/exchange", { token: accessToken }),
-    );
+    const response = await exchangeScoringSession(bffRequest("POST", "/api/scoring/access/exchange", exchangeBody));
     const body = await response.text();
     const cookie = response.headers.get("set-cookie") ?? "";
 
@@ -164,7 +208,11 @@ describe("scoring BFF", () => {
     expect(cookie).not.toContain(sessionId);
     expect(cookie).not.toContain(sessionToken);
     expect(calls.every((call) => !call.url.includes(accessToken) && !call.url.includes(sessionToken))).toBe(true);
-    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ token: accessToken });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      token: accessToken,
+      device_id: deviceId,
+      device_label: "Test device",
+    });
     expect(headerValue(calls[1]?.init, "x-scoring-session-token")).toBe(sessionToken);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
@@ -172,21 +220,11 @@ describe("scoring BFF", () => {
   it("keeps the sealed session recoverable when the post-exchange state read is transiently unavailable", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        json({
-          session_id: sessionId,
-          session_token: sessionToken,
-          match_id: matchId,
-          generation: 3,
-          expires_at: expiresAt,
-        }),
-      )
+      .mockResolvedValueOnce(json(exchangedSession))
       .mockRejectedValueOnce(new Error(`upstream failed for ${sessionToken}`));
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await exchangeScoringSession(
-      bffRequest("POST", "/api/scoring/access/exchange", { token: accessToken }),
-    );
+    const response = await exchangeScoringSession(bffRequest("POST", "/api/scoring/access/exchange", exchangeBody));
 
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "unavailable" });
@@ -195,23 +233,12 @@ describe("scoring BFF", () => {
   });
 
   it("accepts a strictly parsed public origin supplied by the trusted HTTPS proxy", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        json({
-          session_id: sessionId,
-          session_token: sessionToken,
-          match_id: matchId,
-          generation: 3,
-          expires_at: expiresAt,
-        }),
-      )
-      .mockResolvedValueOnce(json(state()));
+    const fetchMock = vi.fn().mockResolvedValueOnce(json(exchangedSession)).mockResolvedValueOnce(json(state()));
     vi.stubGlobal("fetch", fetchMock);
     const request = bffRequest(
       "POST",
       "/api/scoring/access/exchange",
-      { token: accessToken },
+      exchangeBody,
       undefined,
       "https://127.0.0.1:3103",
       "http://127.0.0.1:3000",
@@ -238,7 +265,7 @@ describe("scoring BFF", () => {
       const request = bffRequest(
         "POST",
         "/api/scoring/access/exchange",
-        { token: accessToken },
+        exchangeBody,
         undefined,
         "https://matchday.test",
         "http://127.0.0.1:3000",
@@ -271,6 +298,44 @@ describe("scoring BFF", () => {
       match: { id: matchId },
       score: { home: 1, away: 0 },
     });
+  });
+
+  it("reseals an approved candidate as the authoritative writer generation during recovery", async () => {
+    const candidateAuth: ScoringServerAuth = {
+      ...auth,
+      mode: "candidate",
+      generation: null,
+      leaseExpiresAt: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          state({
+            access: {
+              mode: "writer",
+              permissions: ["score:read", "score:write"],
+              session_expires_at: expiresAt,
+            },
+            writer: { generation: 6, expires_at: expiresAt, read_only: false },
+          }),
+        ),
+      ),
+    );
+
+    const response = await recoverScoringSession(
+      bffRequest("GET", "/api/scoring/session", undefined, sealedCookie(candidateAuth)),
+    );
+    const setCookie = response.headers.get("set-cookie") ?? "";
+    const sealed = setCookie.split(";")[0]?.split("=").slice(1).join("=") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(new ScoringSessionSealer(sealKey).open(sealed)).toMatchObject({
+      mode: "writer",
+      generation: 6,
+      leaseExpiresAt: expiresAt,
+    });
+    expect(setCookie).not.toContain(sessionToken);
   });
 
   it("rejects an unsafe competition slug before it can reach a public-page link", async () => {
@@ -328,6 +393,64 @@ describe("scoring BFF", () => {
     expect(await finalResponse.json()).toEqual({ match_id: matchId, result_version: 4 });
   });
 
+  it("normalizes an empty pending queue to the acknowledged sequence before heartbeat", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      return url.endsWith("/sessions/heartbeat")
+        ? json({
+            mode: "writer",
+            generation: 3,
+            session_expires_at: expiresAt,
+            lease_expires_at: expiresAt,
+          })
+        : json(state());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await heartbeatScoringSession(
+      bffRequest(
+        "POST",
+        "/api/scoring/session/heartbeat",
+        { lastAcknowledgedSequence: 7, pendingEventCount: 0, pendingThroughSequence: null },
+        sealedCookie(),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const heartbeat = calls.find(({ url }) => url.endsWith("/sessions/heartbeat"));
+    expect(JSON.parse(String(heartbeat?.init?.body))).toEqual({
+      last_acknowledged_sequence: 7,
+      pending_event_count: 0,
+      pending_through_sequence: 7,
+    });
+  });
+
+  it("returns the runtime takeover id without exposing the scoring session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      json({
+        id: eventId,
+        status: "pending",
+        incumbent_pending_state: "none",
+        requested_at: "2026-07-27T10:00:00.000Z",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await requestScoringTakeover(
+      bffRequest(
+        "POST",
+        "/api/scoring/takeover",
+        { pendingEventCount: 0, pendingThroughSequence: null },
+        sealedCookie({ ...auth, mode: "candidate", generation: null, leaseExpiresAt: null }),
+      ),
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ status: "pending", requestId: eventId });
+  });
+
   it("clears invalid, expired, and upstream-rejected sessions while preserving conflicts", async () => {
     const expiredAuth = { ...auth, expiresAt: "2021-01-01T00:00:00.000Z" };
     const expiredSealed = new ScoringSessionSealer(sealKey, () => Date.parse("2020-01-01T00:00:00.000Z")).seal(
@@ -360,13 +483,42 @@ describe("scoring BFF", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await exchangeScoringSession(
-      bffRequest("POST", "/api/scoring/access/exchange", { token: accessToken }, sealedCookie()),
+      bffRequest("POST", "/api/scoring/access/exchange", exchangeBody, sealedCookie()),
     );
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: "access" });
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
     expect(response.headers.get("set-cookie")).not.toContain(sessionToken);
+  });
+
+  it.each([
+    ["ACCESS_EXPIRED", "expired"],
+    ["ACCESS_REVOKED", "revoked"],
+    ["ACCESS_RATE_LIMITED", "rate_limited"],
+  ])("maps the API error envelope %s to the safe browser state %s", async (code, expectedState) => {
+    const status = code === "ACCESS_RATE_LIMITED" ? 429 : 403;
+    const fetchMock = vi.fn().mockResolvedValue(
+      json(
+        {
+          error: {
+            code,
+            message: "Sensitive upstream detail is not exposed.",
+            request_id: eventId,
+          },
+        },
+        status,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await exchangeScoringSession(
+      bffRequest("POST", "/api/scoring/access/exchange", exchangeBody, sealedCookie()),
+    );
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: expectedState });
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
   it("rejects cross-origin mutations without forwarding or logging supplied secrets", async () => {
@@ -376,7 +528,7 @@ describe("scoring BFF", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await exchangeScoringSession(
-      bffRequest("POST", "/api/scoring/access/exchange", { token: accessToken }, undefined, "https://evil.test"),
+      bffRequest("POST", "/api/scoring/access/exchange", exchangeBody, undefined, "https://evil.test"),
     );
 
     expect(response.status).toBe(403);

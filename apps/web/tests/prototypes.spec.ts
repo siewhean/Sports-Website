@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
+import { dismissConsent } from "./helpers/console-guard";
 
 async function openScorekeeper(page: Page) {
-  await page.goto("/score");
+  await page.goto("/score/prototype");
+  await dismissConsent(page);
   await page.getByRole("button", { name: "Validate access" }).click();
   await page.getByRole("checkbox", { name: "I am at Match 12 and ready to score this fixture." }).check();
   await page.getByRole("button", { name: "Start scoring offline" }).click();
@@ -122,7 +124,8 @@ test("Format Designer exposes loading, empty, offline, and concurrent-edit state
 });
 
 test("Phone scoring validates access, queues events, and appends reversals", async ({ page }) => {
-  await page.goto("/score");
+  await page.goto("/score/prototype");
+  await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("WRONG");
   await page.getByRole("button", { name: "Validate access" }).click();
   await expect(page.getByText("That scoring code is not valid for this match.")).toBeVisible();
@@ -176,9 +179,10 @@ test("Offline finalisation remains pending until server acknowledgement", async 
   await expect(page.getByRole("heading", { name: "Downstream schedule conflict" })).toBeVisible();
 });
 
-for (const route of ["/setup", "/format", "/score"] as const) {
+for (const route of ["/setup", "/format", "/score/prototype"] as const) {
   test(`@a11y ${route} has no WCAG A or AA automated accessibility violations`, async ({ page }) => {
     await page.goto(route);
+    await dismissConsent(page);
     await page.locator('[data-hydrated="true"]').waitFor();
     await assertNoWcagAOrAaViolations(page);
   });
@@ -191,7 +195,7 @@ test("@a11y live scorekeeper has no WCAG A or AA automated accessibility violati
 });
 
 test("known breakpoints do not introduce page overflow", async ({ page }) => {
-  for (const route of ["/setup", "/format", "/score"] as const) {
+  for (const route of ["/setup", "/format", "/score/prototype"] as const) {
     for (const width of [360, 390, 768, 1024, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(route);

@@ -99,11 +99,13 @@ export function AccessPassManager({
   matches,
   initialPasses,
   canEdit,
+  enableRemoteTakeovers = true,
 }: {
   competitionId: string;
   matches: readonly MatchView[];
   initialPasses: readonly PassSummary[];
   canEdit: boolean;
+  enableRemoteTakeovers?: boolean;
 }) {
   const [passes, setPasses] = useState<PassSummary[]>([...initialPasses]);
   const [matchId, setMatchId] = useState(matches[0]?.id ?? "");
@@ -141,6 +143,7 @@ export function AccessPassManager({
   }, [competitionId]);
 
   useEffect(() => {
+    if (!enableRemoteTakeovers) return;
     let active = true;
     void loadTakeovers()
       .then((requests) => {
@@ -152,7 +155,7 @@ export function AccessPassManager({
     return () => {
       active = false;
     };
-  }, [loadTakeovers]);
+  }, [enableRemoteTakeovers, loadTakeovers]);
 
   useEffect(() => {
     if (!issued?.qrPath) return;

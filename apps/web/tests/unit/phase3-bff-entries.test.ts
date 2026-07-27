@@ -71,6 +71,32 @@ describe("division and entry BFF", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards the validated public origin behind an HTTPS-terminating proxy", async () => {
+    const body = { name: "Women", code: "WOMEN", entry_limit: 16, idempotency_key: idempotencyKey };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/api/v1/identity/me")) return identity();
+      expect(new Headers(init?.headers).get("origin")).toBe(origin);
+      return Response.json({ id: divisionId, competition_id: competitionId, name: "Women", team_limit: 16 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const proxied = new NextRequest(`http://127.0.0.1:3103/api/phase3/competitions/${competitionId}/divisions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "matchday_session=valid-session",
+        host: "matchday.test",
+        origin,
+        "x-forwarded-host": "matchday.test",
+        "x-forwarded-proto": "https",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const response = await createDivision(proxied, { params: Promise.resolve({ competitionId }) });
+
+    expect(response.status).toBe(200);
+  });
+
   it("creates an entry and preserves a free-plan rejection from the API", async () => {
     const body = { name: "Harbour", entry_type: "team", seed: 9, idempotency_key: idempotencyKey };
     const fetchMock = vi.fn(async (input: string | URL | Request) => {

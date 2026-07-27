@@ -118,6 +118,7 @@ describe("foundation migrations", () => {
         "0024_phase4_ai_quota_reason.sql",
         "0025_phase4_schedule_concurrency_hardening.sql",
         "0026_phase4_setup_lineage_reconciliation.sql",
+        "0028_gate_c_access_foundation.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
@@ -155,10 +156,65 @@ describe("foundation migrations", () => {
           VALUES(${competition},${account},'canoe_polo','upgrade-1',1,'{}'::jsonb,'{}'::jsonb)`;
         const division = randomUUID();
         const placeholder = randomUUID();
+        const secondPlaceholder = randomUUID();
         await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
           VALUES(${division},${competition},'Open',16)`;
         await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
-          VALUES(${placeholder},${division},'Placeholder 1',1,'placeholder','confirmed')`;
+          VALUES
+            (${placeholder},${division},'Placeholder 1',1,'placeholder','confirmed'),
+            (${secondPlaceholder},${division},'Placeholder 2',2,'placeholder','confirmed')`;
+        const formatRevision = randomUUID();
+        const match = randomUUID();
+        const definition = {
+          id: formatRevision,
+          schemaVersion: 1,
+          entryCount: 2,
+          stages: [
+            {
+              id: "final-stage",
+              label: "Final",
+              kind: "single_elimination",
+              order: 1,
+              groupIds: [],
+              groupSize: null,
+              outputRanks: 2,
+              matchIds: [match],
+            },
+          ],
+          matches: [
+            {
+              id: match,
+              stageId: "final-stage",
+              round: 1,
+              order: 1,
+              purpose: "championship",
+              home: { type: "entry_seed", seed: 1 },
+              away: { type: "entry_seed", seed: 2 },
+            },
+          ],
+          terminalMatchIds: [match],
+        };
+        const [definitionHash] = await sql<{ hash: string }[]>`
+          SELECT phase4_sha256_json(${sql.json(definition)}) hash`;
+        await sql`INSERT INTO format_revisions(
+          id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract
+        ) VALUES(
+          ${formatRevision},${competition},${division},1,${sql.json(definition)},${definitionHash!.hash},${account},'phase3'
+        )`;
+        await sql`INSERT INTO matches(
+          id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal
+        ) VALUES(${match},${competition},${division},${formatRevision},'UPGRADE-FINAL','final',1,1)`;
+        const accessPass = randomUUID();
+        const accessSession = randomUUID();
+        await sql`INSERT INTO scoring_access_passes(
+          id,match_id,secret_hash,short_code_hash,expires_at,created_by
+        ) VALUES(${accessPass},${match},${Buffer.alloc(32, 1)},${Buffer.alloc(32, 2)},'2027-01-01T12:00:00Z',${account})`;
+        await sql`INSERT INTO scoring_access_sessions(
+          id,access_pass_id,match_id,session_token_hash,generation,issued_at,expires_at
+        ) VALUES(
+          ${accessSession},${accessPass},${match},${Buffer.alloc(32, 3)},7,
+          '2027-01-01T08:00:00Z','2027-01-01T09:00:00Z'
+        )`;
         await sql`SELECT phase4_create_setup_draft(${organisation},${competition},${account},'upgrade-create','upgrade-request')`;
         const existingLedger = randomUUID();
         await sql`INSERT INTO ai_action_ledger(id,organisation_id,actor_account_id,competition_id,action,request_id,
@@ -174,8 +230,8 @@ describe("foundation migrations", () => {
             (steps#>>'{entries,divisions,0,placeholder_count}')::int placeholder_count,
             steps#>'{entries,divisions,0,entry_ids}' entry_ids
           FROM setup_drafts WHERE competition_id=${competition}`;
-        expect(beforeUpgrade).toMatchObject({ confirmed_count: 1, placeholder_count: 1 });
-        expect(beforeUpgrade?.entry_ids).toEqual([placeholder]);
+        expect(beforeUpgrade).toMatchObject({ confirmed_count: 2, placeholder_count: 2 });
+        expect(beforeUpgrade?.entry_ids.toSorted()).toEqual([placeholder, secondPlaceholder].toSorted());
         await Promise.all(forwardMigrations.map(({ migrationPath, source }) => writeFile(migrationPath, source)));
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
@@ -190,9 +246,21 @@ describe("foundation migrations", () => {
             (steps#>>'{entries,divisions,0,placeholder_count}')::int placeholder_count,
             steps#>'{entries,divisions,0,entry_ids}' entry_ids
           FROM setup_drafts WHERE competition_id=${competition}`;
-        expect(afterUpgrade).toMatchObject({ confirmed_count: 0, placeholder_count: 1 });
-        expect(afterUpgrade?.entry_ids).toEqual([placeholder]);
+        expect(afterUpgrade).toMatchObject({ confirmed_count: 0, placeholder_count: 2 });
+        expect(afterUpgrade?.entry_ids.toSorted()).toEqual([placeholder, secondPlaceholder].toSorted());
         expect(await sql`SELECT 1 FROM phase4_format_recommendation_sets`).toEqual([]);
+        expect(
+          await sql`
+            SELECT competition_id,mode,generation,octet_length(device_id_hash) device_hash_bytes
+            FROM scoring_access_sessions WHERE id=${accessSession}
+          `,
+        ).toEqual([{ competition_id: competition, mode: "writer", generation: 7, device_hash_bytes: 32 }]);
+        expect(await sql`SELECT role,scope FROM scoring_access_passes WHERE id=${accessPass}`).toEqual([
+          {
+            role: "scorekeeper",
+            scope: ["score:read", "score:write", "score:reverse", "score:finalise"],
+          },
+        ]);
         expect(
           await sql`SELECT id,outcome,charged_units,failure_code FROM ai_action_ledger WHERE id=${existingLedger}`,
         ).toEqual([{ id: existingLedger, outcome: "manual_fallback", charged_units: 0, failure_code: "unknown" }]);

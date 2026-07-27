@@ -76,6 +76,7 @@ export function OrganiserWorkspace({
   syncLabel,
   syncState,
   layoutMode = opaqueId("default"),
+  accessApiEnabled = false,
 }: {
   competition?: CompetitionView;
   section?: OrganiserSection;
@@ -88,6 +89,7 @@ export function OrganiserWorkspace({
   syncLabel?: string;
   syncState?: "saved" | "local" | "unavailable" | "offline" | "conflict" | "read-only";
   layoutMode?: "default" | "setup" | "format";
+  accessApiEnabled?: boolean;
 }) {
   const fallbackMeta = sectionMeta(competition, section);
   const meta = {
@@ -97,7 +99,9 @@ export function OrganiserWorkspace({
   const organiserBase = `/organiser/competitions/${competition.id}`;
   const content =
     state === "ready" ? (
-      (sectionContent ?? <SectionContent competition={competition} section={section} />)
+      (sectionContent ?? (
+        <SectionContent competition={competition} section={section} accessApiEnabled={accessApiEnabled} />
+      ))
     ) : (
       <SurfaceStatePanel state={state} />
     );
@@ -168,7 +172,15 @@ export function OrganiserWorkspace({
   );
 }
 
-function SectionContent({ competition, section }: { competition: CompetitionView; section: OrganiserSection }) {
+function SectionContent({
+  competition,
+  section,
+  accessApiEnabled,
+}: {
+  competition: CompetitionView;
+  section: OrganiserSection;
+  accessApiEnabled: boolean;
+}) {
   switch (section) {
     case "control-room":
       return <ControlRoom competition={competition} />;
@@ -189,7 +201,7 @@ function SectionContent({ competition, section }: { competition: CompetitionView
     case "publish":
       return <Publish competition={competition} />;
     case "access":
-      return <Access competition={competition} />;
+      return <Access competition={competition} accessApiEnabled={accessApiEnabled} />;
     case "audit":
       return <Audit competition={competition} />;
   }
@@ -464,13 +476,14 @@ function Publish({ competition }: { competition: CompetitionView }) {
   );
 }
 
-function Access({ competition }: { competition: CompetitionView }) {
+function Access({ competition, accessApiEnabled }: { competition: CompetitionView; accessApiEnabled: boolean }) {
   return (
     <AccessPassManager
       competitionId={competition.id}
       matches={competition.matches}
       initialPasses={competition.accessPasses ?? []}
       canEdit={competition.canEdit ?? false}
+      enableRemoteTakeovers={accessApiEnabled}
     />
   );
 }

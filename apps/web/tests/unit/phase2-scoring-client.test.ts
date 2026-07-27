@@ -16,7 +16,15 @@ function stateResponse(events: Array<Record<string, unknown>> = []): Response {
       home: { id: null, name: "Marina Blue" },
       away: { id: null, name: "Harbour Gold" },
     },
-    writer: { generation: 3, expires_at: "2030-01-01T00:00:00.000Z", read_only: false },
+    access: {
+      mode: "writer",
+      permissions: ["score:read", "score:write"],
+      generation: 3,
+      lease_expires_at: "2030-01-01T00:00:00.000Z",
+      expires_at: "2030-01-01T00:30:00.000Z",
+      read_only: false,
+      takeover_status: "none",
+    },
     score: { home: 0, away: 0 },
     through_sequence: 0,
     events,
@@ -29,17 +37,18 @@ afterEach(() => {
 });
 
 describe("phase 2 browser scoring transport", () => {
-  it("settles token exchange before sanitising the App Router URL", async () => {
+  it("removes the fragment before device lookup or token exchange", async () => {
     const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
-    const tokenBranch = source.indexOf("if (tokenMatch?.[1])");
-    const exchange = source.indexOf(".exchangeAccess({ token })", tokenBranch);
-    const resolution = source.indexOf(".then((session)", exchange);
-    const sanitisation = source.indexOf("window.history.replaceState", resolution);
+    const tokenRead = source.indexOf("fragment.get(phase2Machine.access)");
+    const sanitisation = source.indexOf("window.history.replaceState", tokenRead);
+    const identity = source.indexOf("getScoringDeviceIdentity()", sanitisation);
+    const exchange = source.indexOf("port.exchangeAccess({ token, device: identity })", identity);
 
-    expect(tokenBranch).toBeGreaterThan(-1);
-    expect(exchange).toBeGreaterThan(tokenBranch);
-    expect(resolution).toBeGreaterThan(exchange);
-    expect(sanitisation).toBeGreaterThan(resolution);
+    expect(tokenRead).toBeGreaterThan(-1);
+    expect(sanitisation).toBeGreaterThan(tokenRead);
+    expect(identity).toBeGreaterThan(sanitisation);
+    expect(exchange).toBeGreaterThan(identity);
+    expect(source).not.toContain("window.location.pathname.match");
   });
 
   it("appends the canonical match-start event before the UI enters live scoring", async () => {
@@ -85,7 +94,8 @@ describe("phase 2 browser scoring transport", () => {
     const port = createScoringCommandPort("api");
     const accessToken = "one-time-access-secret-that-is-never-in-a-fetch-url-01";
 
-    const session = await port.exchangeAccess({ token: accessToken });
+    const device = { id: "00000000-0000-4000-8000-000000000106", label: "Test device" };
+    const session = await port.exchangeAccess({ token: accessToken, device });
     await port.recoverSession();
     await port.appendEvent({
       clientEventId: eventId,
@@ -116,16 +126,41 @@ describe("phase 2 browser scoring transport", () => {
   it("treats absent recovery credentials as no recovered session and preserves conflict state", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(Response.json({ error: "access" }, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(Response.json({ error: "conflict" }, { status: 409 }));
     vi.stubGlobal("fetch", fetchMock);
     const port = createScoringCommandPort("api");
 
     await expect(port.recoverSession()).resolves.toBeNull();
-    await expect(port.exchangeAccess({ shortCode: "123456789012" })).rejects.toMatchObject({
+    await expect(
+      port.exchangeAccess({
+        shortCode: "123456789012",
+        device: { id: "00000000-0000-4000-8000-000000000106", label: "Test device" },
+      }),
+    ).rejects.toMatchObject({
       state: "conflict",
       message: "conflict",
     } satisfies Partial<ScoringTransportError>);
+  });
+
+  it("preserves a revoked state when a stored scoring session is rejected", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "revoked" }, { status: 403 })));
+
+    await expect(createScoringCommandPort("api").recoverSession()).rejects.toMatchObject({
+      state: "revoked",
+      message: "revoked",
+    } satisfies Partial<ScoringTransportError>);
+  });
+
+  it("keeps an authoritative read-only writer lease fenced after foreground recovery", async () => {
+    const response = stateResponse();
+    const payload = (await response.json()) as Record<string, unknown>;
+    payload.access = { ...(payload.access as Record<string, unknown>), read_only: true };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(payload)));
+
+    const session = await createScoringCommandPort("api").recoverSession();
+
+    expect(session).toMatchObject({ mode: "writer", generation: 3, readOnly: true });
   });
 
   it("removes recovered cards that have a card reversal event", async () => {
@@ -155,7 +190,10 @@ describe("phase 2 browser scoring transport", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const session = await createScoringCommandPort("api").exchangeAccess({ shortCode: "123456789012" });
+    const session = await createScoringCommandPort("api").exchangeAccess({
+      shortCode: "123456789012",
+      device: { id: "00000000-0000-4000-8000-000000000106", label: "Test device" },
+    });
 
     expect(session.events).toEqual([]);
   });

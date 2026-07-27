@@ -10,6 +10,7 @@ import { getCapacityDocument } from "@/lib/phase3-capacity.server";
 import { phase3EntriesCopy, phase3EntriesMachine, totalActiveEntries } from "@/lib/phase3-entries";
 import { phase3ResultsCopy, phase3ResultsMachine, resultVersionLabel } from "@/lib/phase3-results";
 import { getResultsDocument } from "@/lib/phase3-results.server";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 export default async function CompetitionSectionPage({
   params,
@@ -119,5 +120,7 @@ export default async function CompetitionSectionPage({
       />
     );
   }
-  return <OrganiserWorkspace competition={result.competition} section={section} />;
+  return (
+    <OrganiserWorkspace competition={result.competition} section={section} accessApiEnabled={!demoFixturesEnabled()} />
+  );
 }

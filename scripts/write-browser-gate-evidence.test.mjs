@@ -520,15 +520,17 @@ test("validator rejects dirty tracked source after evidence generation", async (
   assert.ok((await validateBrowserGateEvidence({ root, manifest: evidence })).includes("working tree is not clean"));
 });
 
-test("schema-1 final evidence documents are explicitly historical and superseded", async () => {
+test("the certified final evidence documents expose only the active schema-2 record", async () => {
   const json = JSON.parse(await readFile(path.join(REPOSITORY_ROOT, "docs/qa/phase-4-final-evidence.json"), "utf8"));
   const markdown = await readFile(path.join(REPOSITORY_ROOT, "docs/qa/phase-4-final-evidence.md"), "utf8");
-  assert.equal(json.evidence_state, "HISTORICAL_SUPERSEDED");
-  assert.notEqual(json.local_validation, "PASS");
-  assert.match(json.historical_notice, /HISTORICAL\/SUPERSEDED/u);
-  assert.match(markdown, /HISTORICAL\/SUPERSEDED/u);
-  assert.doesNotMatch(markdown, /Status:\s+\*\*FINAL\*\*/u);
-  assert.doesNotMatch(markdown, /Local validation:\s+PASS/u);
+  assert.equal(json.schema_version, 2);
+  assert.equal(json.source.commit_sha, "4f9202e4e1c546bfef2a23bcfc7e26825c90b314");
+  assert.equal(json.artifact_kind, "gate-b-browser-evidence");
+  assert.equal("evidence_state" in json, false);
+  assert.equal("historical_notice" in json, false);
+  assert.match(markdown, /Local Gate B validation:\s+PASS/u);
+  assert.match(markdown, /active schema-v2 record/u);
+  assert.doesNotMatch(markdown, /HISTORICAL\/SUPERSEDED/u);
 });
 
 test("package gate executes evidence tests and pnpm check includes that gate", async () => {

@@ -29,7 +29,7 @@ test("Phase 2 surfaces reflow at 320 CSS pixels without horizontal overflow", as
   for (const route of [
     "/organiser/competitions/singapore-open",
     "/organiser/competitions/singapore-open/schedule",
-    "/score/m12-access",
+    "/score",
     "/competitions/singapore-open",
   ] as const) {
     await page.goto(route);
