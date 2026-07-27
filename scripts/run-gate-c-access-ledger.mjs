@@ -12,6 +12,7 @@ const expectedProjects = [
   "gate-c-access-phone-webkit",
   "gate-c-access-desktop-chromium",
 ];
+export const requiredInfrastructureServices = ["postgres", "redis", "mailpit"];
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 const requiredLocalCommands = [
   { label: "node-version", command: "node", args: ["--version"] },
@@ -172,7 +173,15 @@ export async function runGateCAccessLedger() {
   const pnpmVersion = commandOutput("pnpm", ["--version"]);
   if (pnpmVersion !== "10.33.0") throw new Error(`Expected pnpm 10.33.0, received ${pnpmVersion}`);
 
-  BunlessExec("docker", ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"]);
+  BunlessExec("docker", [
+    "compose",
+    "-f",
+    "infra/local/compose.yaml",
+    "up",
+    "-d",
+    "--wait",
+    ...requiredInfrastructureServices,
+  ]);
   const postgresqlVersion = commandOutput("docker", [
     "compose",
     "-f",

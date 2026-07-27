@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { hashFilesForTest, requiredLocalCommandLabels, validateRunReceipt } from "./run-gate-c-access-ledger.mjs";
+import {
+  hashFilesForTest,
+  requiredInfrastructureServices,
+  requiredLocalCommandLabels,
+  validateRunReceipt,
+} from "./run-gate-c-access-ledger.mjs";
+
+test("Gate C access ledger starts every integration dependency", () => {
+  assert.deepEqual(requiredInfrastructureServices, ["postgres", "redis", "mailpit"]);
+});
 
 test("Gate C access ledger includes the complete local acceptance command set", () => {
   assert.deepEqual(requiredLocalCommandLabels, [
