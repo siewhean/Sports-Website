@@ -13,6 +13,48 @@ const expectedProjects = [
   "gate-c-access-desktop-chromium",
 ];
 const sha256Pattern = /^[a-f0-9]{64}$/u;
+const requiredLocalCommands = [
+  { label: "node-version", command: "node", args: ["--version"] },
+  { label: "pnpm-version", command: "pnpm", args: ["--version"] },
+  { label: "frozen-install", command: "pnpm", args: ["install", "--frozen-lockfile"] },
+  { label: "lockfile-clean", command: "git", args: ["diff", "--exit-code", "--", "pnpm-lock.yaml"] },
+  { label: "clean-outputs", command: "pnpm", args: ["ci:assert-clean-outputs"] },
+  { label: "format", command: "pnpm", args: ["format:check"], forceTurbo: true },
+  { label: "lint", command: "pnpm", args: ["lint"], forceTurbo: true },
+  { label: "typecheck", command: "pnpm", args: ["typecheck"], forceTurbo: true },
+  { label: "unit", command: "pnpm", args: ["test:unit"], forceTurbo: true },
+  { label: "migrations", command: "pnpm", args: ["db:migrate:check"] },
+  { label: "backup", command: "pnpm", args: ["backup:verify"] },
+  {
+    label: "integration",
+    command: "pnpm",
+    args: ["test:integration"],
+    forceTurbo: true,
+    infrastructure: true,
+  },
+  { label: "fixtures", command: "pnpm", args: ["validate:fixtures"] },
+  { label: "phase2", command: "pnpm", args: ["validate:phase2"] },
+  { label: "phase3", command: "pnpm", args: ["validate:phase3"] },
+  { label: "phase4", command: "pnpm", args: ["validate:phase4"] },
+  { label: "openapi", command: "pnpm", args: ["openapi:check"] },
+  { label: "audit", command: "pnpm", args: ["dependencies:audit"] },
+  { label: "secrets", command: "pnpm", args: ["secrets:scan"] },
+  { label: "build", command: "pnpm", args: ["build"], forceTurbo: true },
+  { label: "deploy-manifest", command: "pnpm", args: ["deploy:manifest"] },
+  { label: "asset-origin", command: "pnpm", args: ["asset-delivery:verify:origin"] },
+  {
+    label: "browser-install",
+    command: "pnpm",
+    args: ["--filter", "@matchday/web", "exec", "playwright", "install", "--with-deps", "chromium", "webkit"],
+  },
+  { label: "e2e", command: "pnpm", args: ["test:e2e"] },
+  { label: "a11y", command: "pnpm", args: ["test:a11y"] },
+  { label: "visual", command: "pnpm", args: ["test:visual"] },
+  { label: "diff-check", command: "git", args: ["diff", "--check"] },
+  { label: "check", command: "pnpm", args: ["check"], forceTurbo: true },
+];
+
+export const requiredLocalCommandLabels = requiredLocalCommands.map(({ label }) => label);
 
 function commandOutput(command, args) {
   return BunlessExec(command, args).trim();
@@ -191,6 +233,15 @@ export async function runGateCAccessLedger() {
   const runs = [];
   const postgresIsolationHashes = new Set();
   const redisNamespaceHashes = new Set();
+  for (const entry of requiredLocalCommands) {
+    commands.push(
+      await runLogged(entry.label, entry.command, entry.args, path.join(logsDirectory, `${entry.label}.log`), {
+        ...process.env,
+        ...(entry.forceTurbo ? { TURBO_FORCE: "true" } : {}),
+        ...(entry.infrastructure ? { RUN_INFRA_TESTS: "1" } : {}),
+      }),
+    );
+  }
   for (const runNumber of [1, 2]) {
     const runDirectory = path.join(runsDirectory, `run-${runNumber}`);
     commands.push(
@@ -242,6 +293,14 @@ export async function runGateCAccessLedger() {
   if (endingSha !== sourceSha) {
     throw new Error(`Gate C access ledger HEAD changed from ${sourceSha} to ${endingSha}`);
   }
+  commands.push(
+    await runLogged(
+      "source-clean",
+      "git",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      path.join(logsDirectory, "source-clean.log"),
+    ),
+  );
   const artifacts = await hashFiles(ledgerDirectory);
   const manifest = {
     schema_version: 1,

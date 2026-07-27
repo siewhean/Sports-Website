@@ -4,7 +4,40 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { hashFilesForTest, validateRunReceipt } from "./run-gate-c-access-ledger.mjs";
+import { hashFilesForTest, requiredLocalCommandLabels, validateRunReceipt } from "./run-gate-c-access-ledger.mjs";
+
+test("Gate C access ledger includes the complete local acceptance command set", () => {
+  assert.deepEqual(requiredLocalCommandLabels, [
+    "node-version",
+    "pnpm-version",
+    "frozen-install",
+    "lockfile-clean",
+    "clean-outputs",
+    "format",
+    "lint",
+    "typecheck",
+    "unit",
+    "migrations",
+    "backup",
+    "integration",
+    "fixtures",
+    "phase2",
+    "phase3",
+    "phase4",
+    "openapi",
+    "audit",
+    "secrets",
+    "build",
+    "deploy-manifest",
+    "asset-origin",
+    "browser-install",
+    "e2e",
+    "a11y",
+    "visual",
+    "diff-check",
+    "check",
+  ]);
+});
 
 test("Gate C access ledger hashes retained files with byte sizes", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gate-c-access-ledger-"));
