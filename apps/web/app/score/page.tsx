@@ -1,12 +1,10 @@
 import { notFound } from "next/navigation";
-import { cookies } from "next/headers";
 import { PrototypeShell } from "@/components/PrototypeShell";
 import { ScorekeeperPrototype } from "@/components/ScorekeeperPrototype";
 import { PhoneScoring } from "@/components/phase2/PhoneScoring";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { isPhase2ScoringRouteEnabled } from "@/lib/feature-flags.server";
 import { phase2Machine } from "@/lib/phase2";
-import { scoringSessionCookieName } from "@/lib/scoring-session.server";
 import { translate as t } from "@matchday/ui";
 import { SPORT_PACKS, type SportId } from "@matchday/domain";
 
@@ -18,12 +16,11 @@ export default async function ScorePage({ searchParams }: { searchParams: Promis
     const requestedSport = (await searchParams).sport;
     const demoSportId =
       demo && DEMO_SPORTS.has(requestedSport as SportId) ? (requestedSport as SportId) : phase2Machine.canoePolo;
-    const hasScoringSession = (await cookies()).has(scoringSessionCookieName);
     return (
       <div data-offline-scoring-shell="v1">
         <PhoneScoring
           mode={demo ? phase2Machine.scoringDemoMode : phase2Machine.scoringApiMode}
-          recoverOnLoad={hasScoringSession}
+          recoverOnLoad={!demo}
           demoSportId={demoSportId}
         />
       </div>
