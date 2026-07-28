@@ -1,0 +1,20 @@
+Container-side validation boundary
+==================================
+
+PASS against the synced domain and sport-pack source:
+- strict TypeScript source and test typecheck using TypeScript 5.8.3;
+- noUncheckedIndexedAccess;
+- exactOptionalPropertyTypes;
+- parser/materialisation runtime smoke;
+- cross-sport rejection smoke;
+- Prettier standalone formatting;
+- patch creation and checksum.
+
+NOT RUN HERE:
+- repository pnpm install;
+- complete @matchday/domain test suite;
+- monorepo typecheck/build;
+- API/BFF integration;
+- PostgreSQL or browser validation.
+
+All remain mandatory locally before committing.
