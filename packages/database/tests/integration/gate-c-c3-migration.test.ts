@@ -67,9 +67,14 @@ describe("Gate C C3 migration", () => {
         JOIN audit_events audit ON audit.request_id=${auditRequestId}
         WHERE outbox.idempotency_key=${outboxKey}
       `;
+      if (!before) throw new Error("Expected pre-migration history fixture");
 
       await writeFile(migrationPath, migrationSource);
-      const result = await migrateDatabase({ databaseUrl: config.databaseUrl, migrationsDirectory: copiedDirectory, schema });
+      const result = await migrateDatabase({
+        databaseUrl: config.databaseUrl,
+        migrationsDirectory: copiedDirectory,
+        schema,
+      });
       expect(result.applied).toEqual([migrationName]);
 
       const [after] = await sql<{
@@ -94,6 +99,7 @@ describe("Gate C C3 migration", () => {
         JOIN audit_events audit ON audit.request_id=${auditRequestId}
         WHERE outbox.idempotency_key=${outboxKey}
       `;
+      if (!after) throw new Error("Expected post-migration history fixture");
       expect(after).toMatchObject({
         ...before,
         payload_type: "string",
