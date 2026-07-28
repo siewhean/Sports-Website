@@ -282,6 +282,77 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     `).rejects.toThrow();
   });
 
+  it("fences scheduled participant snapshots to one competition and division and keeps them immutable", async () => {
+    const world = await createWorld();
+    const siblingDivision = randomUUID();
+    const homeEntry = randomUUID();
+    const awayEntry = randomUUID();
+    const replacementEntry = randomUUID();
+    const siblingEntry = randomUUID();
+    const otherCompetitionEntry = randomUUID();
+    await sql`
+      INSERT INTO divisions (id, competition_id, name, team_limit)
+      VALUES (${siblingDivision}, ${world.competitionA}, 'Sibling division', 8)
+    `;
+    await sql`
+      INSERT INTO division_entries (id, division_id, name, seed)
+      VALUES
+        (${homeEntry}, ${world.divisionA}, 'Home A', 1),
+        (${awayEntry}, ${world.divisionA}, 'Away A', 2),
+        (${replacementEntry}, ${world.divisionA}, 'Replacement A', 3),
+        (${siblingEntry}, ${siblingDivision}, 'Sibling A', 1),
+        (${otherCompetitionEntry}, ${world.divisionB}, 'Other competition B', 1)
+    `;
+    await sql`
+      UPDATE matches
+      SET home_entry_id=${homeEntry}, away_entry_id=${awayEntry}
+      WHERE id=${world.matchA}
+    `;
+    await sql`
+      INSERT INTO scheduled_matches (
+        schedule_revision_id, match_id, competition_id, playing_area_id, starts_at, ends_at
+      ) VALUES (
+        ${world.scheduleA}, ${world.matchA}, ${world.competitionA}, ${world.areaA},
+        '2026-08-01T08:00:00Z', '2026-08-01T08:30:00Z'
+      )
+    `;
+    expect(
+      await sql`
+        SELECT division_id,home_entry_id,away_entry_id
+        FROM scheduled_matches
+        WHERE schedule_revision_id=${world.scheduleA} AND match_id=${world.matchA}
+      `,
+    ).toEqual([
+      {
+        division_id: world.divisionA,
+        home_entry_id: homeEntry,
+        away_entry_id: awayEntry,
+      },
+    ]);
+
+    await expect(sql`
+      UPDATE scheduled_matches
+      SET home_entry_id=${replacementEntry}
+      WHERE schedule_revision_id=${world.scheduleA} AND match_id=${world.matchA}
+    `).rejects.toThrow(/participant snapshot identity is immutable/i);
+
+    await sql`ALTER TABLE scheduled_matches DISABLE TRIGGER scheduled_matches_participant_snapshot_immutable`;
+    try {
+      await expect(sql`
+        UPDATE scheduled_matches
+        SET home_entry_id=${siblingEntry}
+        WHERE schedule_revision_id=${world.scheduleA} AND match_id=${world.matchA}
+      `).rejects.toThrow(/scheduled_matches_home_entry_division_fkey|foreign key/i);
+      await expect(sql`
+        UPDATE scheduled_matches
+        SET home_entry_id=${otherCompetitionEntry}
+        WHERE schedule_revision_id=${world.scheduleA} AND match_id=${world.matchA}
+      `).rejects.toThrow(/scheduled_matches_home_entry_division_fkey|foreign key/i);
+    } finally {
+      await sql`ALTER TABLE scheduled_matches ENABLE TRIGGER scheduled_matches_participant_snapshot_immutable`;
+    }
+  });
+
   it("preserves Phase 2 seed bounds and uniqueness while accepting Phase 3 division sizes", async () => {
     const world = await createWorld();
     await sql`

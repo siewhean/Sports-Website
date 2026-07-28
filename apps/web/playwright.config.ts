@@ -10,6 +10,7 @@ export default defineConfig({
   testIgnore: [
     "**/unit/**",
     "**/gate-c-access-real.spec.ts",
+    "**/gate-c-c2-real.spec.ts",
     "**/phase-2-real-api.spec.ts",
     "**/phase-4-real-api.spec.ts",
   ],
@@ -38,7 +39,7 @@ export default defineConfig({
     {
       name: "phone-webkit",
       testMatch:
-        /phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
+        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
       use: {
         ...devices["iPhone 13"],
         baseURL: "https://127.0.0.1:3100",
@@ -48,7 +49,7 @@ export default defineConfig({
     {
       name: "phone-chromium",
       testMatch:
-        /phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
+        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
       use: { ...devices["Pixel 7"] },
     },
   ],

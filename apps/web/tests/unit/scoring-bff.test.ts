@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SPORT_PACKS } from "@matchday/domain";
 import {
   appendScoringEvent,
   exchangeScoringSession,
@@ -50,7 +51,11 @@ const exchangedSession = {
 
 function state(extra: Record<string, unknown> = {}) {
   return {
-    competition: { slug: "singapore-open" },
+    competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+    sport: {
+      pack_version: SPORT_PACKS.canoe_polo.version,
+      settings: SPORT_PACKS.canoe_polo.recommendedSettings,
+    },
     match: {
       id: matchId,
       code: "M-12",
@@ -64,7 +69,31 @@ function state(extra: Record<string, unknown> = {}) {
       session_expires_at: expiresAt,
     },
     writer: { generation: 3, expires_at: expiresAt, read_only: false },
-    score: { home: 1, away: 0 },
+    score: {
+      home: 1,
+      away: 0,
+      lifecycle: "in_progress",
+      current_segment: 1,
+      total_points: { home: 1, away: 0 },
+      segment_wins: { home: 0, away: 0 },
+      segments: [{ number: 1, home: 1, away: 0, completed: false, winner: null }],
+      actions: [
+        {
+          event_id: eventId,
+          client_event_id: eventId,
+          event_type: "goal",
+          label: "Goal",
+          side: "home",
+          participant_id: "A. Player",
+          segment_number: 1,
+          score_delta: 1,
+          occurred_at: "2026-07-28T00:00:00.000Z",
+          reversed: false,
+          reversible: true,
+        },
+      ],
+      conflicts: [],
+    },
     through_sequence: 1,
     events: [
       {
@@ -347,18 +376,52 @@ describe("scoring BFF", () => {
     expect(await response.json()).toEqual({ error: "unavailable" });
   });
 
+  it("fails closed when the API omits the authoritative sport contract", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(state({ sport: undefined }))));
+
+    const response = await recoverScoringSession(bffRequest("GET", "/api/scoring/session", undefined, sealedCookie()));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "unavailable" });
+  });
+
+  it("fails closed when the API sport-pack version differs from the local executable pack", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          state({
+            sport: {
+              pack_version: "canoe-polo-stale-v0",
+              settings: SPORT_PACKS.canoe_polo.recommendedSettings,
+            },
+          }),
+        ),
+      ),
+    );
+
+    const response = await recoverScoringSession(bffRequest("GET", "/api/scoring/session", undefined, sealedCookie()));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "unavailable" });
+  });
+
   it("proxies events and finalisation with server-side auth and allowlisted receipts", async () => {
     const fetchMock = vi
       .fn()
       .mockImplementationOnce(async (_input: string | URL | Request, init?: RequestInit) => {
         expect(headerValue(init, "x-scoring-session-token")).toBe(sessionToken);
         expect(String(init?.body)).not.toContain(sessionToken);
-        expect(JSON.parse(String(init?.body))).toMatchObject({
-          type: "goal_reversed",
-          payload: { reversal_target_event_id: eventId },
-          correction_reason: "Scorekeeper correction",
+        expect(JSON.parse(String(init?.body))).toEqual({
+          client_event_id: eventId,
+          expected_sequence: 7,
+          type: "reversal",
+          occurred_at: "2026-07-17T02:00:00.000Z",
+          team_slot: "home",
+          reversal_target_event_id: eventId,
+          reason: "Scorekeeper correction",
         });
-        return json({ sequence: 8, session_token: sessionToken });
+        return json({ sequence: 8, duplicate: false, session_token: sessionToken });
       })
       .mockImplementationOnce(async (_input: string | URL | Request, init?: RequestInit) => {
         expect(headerValue(init, "x-scoring-session-token")).toBe(sessionToken);
@@ -372,13 +435,11 @@ describe("scoring BFF", () => {
         "/api/scoring/events",
         {
           client_event_id: eventId,
-          type: "goal_reversed",
+          expected_sequence: 7,
+          type: "reversal",
           team_slot: "home",
-          scorer: "A. Player",
-          manual_period: 1,
-          manual_event_seconds: 95,
-          payload: { reversal_target_event_id: eventId },
-          correction_reason: "Scorekeeper correction",
+          reversal_target_event_id: eventId,
+          reason: "Scorekeeper correction",
           occurred_at: "2026-07-17T02:00:00.000Z",
           session_token: "browser-injected-value",
         },
@@ -386,11 +447,128 @@ describe("scoring BFF", () => {
       ),
     );
     const finalResponse = await finaliseScoringResult(
-      bffRequest("POST", "/api/scoring/finalise", { client_event_id: eventId }, sealedCookie()),
+      bffRequest("POST", "/api/scoring/finalise", { client_event_id: eventId, expected_sequence: 8 }, sealedCookie()),
     );
 
-    expect(await eventResponse.json()).toEqual({ sequence: 8 });
+    expect(await eventResponse.json()).toEqual({ sequence: 8, duplicate: false });
     expect(await finalResponse.json()).toEqual({ match_id: matchId, result_version: 4 });
+  });
+
+  it("preserves an explicit unknown participant in the canonical upstream body", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        client_event_id: eventId,
+        expected_sequence: 3,
+        type: "goal",
+        occurred_at: "2026-07-17T02:00:00.000Z",
+        team_slot: "home",
+        unknown_participant: true,
+        segment_number: 1,
+        manual_time_seconds: 95,
+      });
+      return json({ sequence: 4, duplicate: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await appendScoringEvent(
+      bffRequest(
+        "POST",
+        "/api/scoring/events",
+        {
+          client_event_id: eventId,
+          expected_sequence: 3,
+          type: "goal",
+          team_slot: "home",
+          unknown_participant: true,
+          segment_number: 1,
+          manual_time_seconds: 95,
+          occurred_at: "2026-07-17T02:00:00.000Z",
+        },
+        sealedCookie(),
+      ),
+    );
+
+    expect(await response.json()).toEqual({ sequence: 4, duplicate: false });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("omits participant_id for a canonical no-attribution action", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        client_event_id: eventId,
+        expected_sequence: 3,
+        type: "point",
+        occurred_at: "2026-07-17T02:00:00.000Z",
+        team_slot: "home",
+        segment_number: 1,
+      });
+      return json({ sequence: 4, duplicate: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await appendScoringEvent(
+      bffRequest(
+        "POST",
+        "/api/scoring/events",
+        {
+          client_event_id: eventId,
+          expected_sequence: 3,
+          type: "point",
+          team_slot: "home",
+          segment_number: 1,
+          occurred_at: "2026-07-17T02:00:00.000Z",
+        },
+        sealedCookie(),
+      ),
+    );
+
+    expect(await response.json()).toEqual({ sequence: 4, duplicate: false });
+  });
+
+  it("fails closed when the canonical append receipt omits its idempotency result", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ sequence: 4 })));
+
+    const response = await appendScoringEvent(
+      bffRequest(
+        "POST",
+        "/api/scoring/events",
+        {
+          client_event_id: eventId,
+          expected_sequence: 3,
+          type: "point",
+          team_slot: "home",
+          segment_number: 1,
+          occurred_at: "2026-07-17T02:00:00.000Z",
+        },
+        sealedCookie(),
+      ),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "unavailable" });
+  });
+
+  it("preserves a semantic 422 as an in-context invalid-state response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ error: { code: "EVENT_NOT_ALLOWED" } }, 422)));
+
+    const response = await appendScoringEvent(
+      bffRequest(
+        "POST",
+        "/api/scoring/events",
+        {
+          client_event_id: eventId,
+          expected_sequence: 3,
+          type: "game_completion",
+          team_slot: "home",
+          segment_number: 1,
+          occurred_at: "2026-07-17T02:00:00.000Z",
+        },
+        sealedCookie(),
+      ),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "invalid" });
   });
 
   it("normalizes an empty pending queue to the acknowledged sequence before heartbeat", async () => {

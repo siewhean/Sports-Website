@@ -69,7 +69,7 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
   await page.getByRole("button", { name: "Start scoring" }).click();
   await page.getByRole("button", { name: `Goal ${state.homeName}` }).click();
   const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
-  await confirmation.getByLabel("Scorer name").fill("Aisha Tan");
+  await confirmation.getByLabel("Scorer or participant name").fill("Aisha Tan");
   await confirmation.getByRole("button", { name: `Record goal for ${state.homeName}` }).click();
   await expect(page.getByLabel(`${state.homeName} 1`)).toBeVisible();
   await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");

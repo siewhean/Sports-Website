@@ -11,12 +11,14 @@ import {
 
 describe("Gate C access evidence", () => {
   it("redacts PostgreSQL and Redis identifiers with domain-separated hashes", () => {
-    const postgres = redactedIdentifierHash("postgres", "matchday_gate_c_secret");
-    const redis = redactedIdentifierHash("redis-namespace", "matchday:test:gate-c:secret:");
+    const postgres = redactedIdentifierHash("gate-c-access", "postgres", "matchday_gate_c_secret");
+    const redis = redactedIdentifierHash("gate-c-access", "redis-namespace", "matchday:test:gate-c:secret:");
+    const c2 = redactedIdentifierHash("gate-c-c2", "postgres", "matchday_gate_c_secret");
 
     expect(postgres).toMatch(/^[a-f0-9]{64}$/);
     expect(redis).toMatch(/^[a-f0-9]{64}$/);
     expect(postgres).not.toBe(redis);
+    expect(postgres).not.toBe(c2);
     expect(postgres).not.toContain("secret");
   });
 

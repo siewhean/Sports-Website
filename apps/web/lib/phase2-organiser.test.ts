@@ -78,6 +78,10 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
           stage: "group",
           area: "Court 1",
           starts_at: "2026-08-01T01:00:00.000Z",
+          state: "corrected",
+          home_score: 4,
+          away_score: 3,
+          result_version: 1,
         },
         {
           match_id: secondMatchId,
@@ -85,6 +89,10 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
           stage: "group",
           area: "Court 2",
           starts_at: "2026-08-01T01:00:00.000Z",
+          state: "in_progress",
+          home_score: 2,
+          away_score: 1,
+          result_version: 1,
         },
       ],
     },
@@ -144,10 +152,21 @@ describe("organiser competition workspace mapping", () => {
           home: "North",
           away: "South",
           area: "Court 1",
-          status: "scheduled",
+          homeScore: 4,
+          awayScore: 3,
+          status: "final",
+        }),
+        expect.objectContaining({
+          id: secondMatchId,
+          status: "live",
         }),
       ]),
     );
+    expect(view.matches.find((match) => match.id === secondMatchId)).toMatchObject({
+      homeScore: 2,
+      awayScore: 1,
+      resultVersion: 1,
+    });
     expect(view.accessPasses).toEqual([
       expect.objectContaining({
         matchId,
@@ -261,5 +280,18 @@ describe("organiser competition workspace mapping", () => {
     const missingPermission = workspace();
     delete (missingPermission as Partial<OrganiserWorkspacePayload>).permission;
     expect(isOrganiserWorkspacePayload(missingPermission)).toBe(false);
+
+    const unsupportedMatchState = workspace();
+    (unsupportedMatchState.private_schedule?.matches as Array<Record<string, unknown>>)[0]!.state = "abandoned";
+    expect(isOrganiserWorkspacePayload(unsupportedMatchState)).toBe(false);
+    expect(() => toOrganiserCompetitionView(unsupportedMatchState)).toThrow("invalid scoring state");
+
+    const incompleteFinalScore = workspace();
+    (incompleteFinalScore.private_schedule?.matches as Array<Record<string, unknown>>)[0]!.home_score = null;
+    expect(isOrganiserWorkspacePayload(incompleteFinalScore)).toBe(false);
+
+    const pendingWithRetainedResult = workspace();
+    (pendingWithRetainedResult.private_schedule?.matches as Array<Record<string, unknown>>)[1]!.state = "pending";
+    expect(isOrganiserWorkspacePayload(pendingWithRetainedResult)).toBe(false);
   });
 });

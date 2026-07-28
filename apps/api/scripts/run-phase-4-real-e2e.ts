@@ -422,7 +422,12 @@ async function assertDatabaseOracle(sql: Sql, result: BrowserJourneyResult): Pro
     typeof projection === "string"
       ? (JSON.parse(projection) as Record<string, unknown>)
       : (projection as Record<string, unknown> | undefined);
-  const schedule = Array.isArray(projectionObject?.schedule) ? projectionObject.schedule : [];
+  const divisions = Array.isArray(projectionObject?.divisions) ? projectionObject.divisions : [];
+  const schedule = divisions.flatMap((division) => {
+    if (division === null || typeof division !== "object") return [];
+    const divisionSchedule = (division as Record<string, unknown>).schedule;
+    return Array.isArray(divisionSchedule) ? divisionSchedule : [];
+  });
   const publicMoved = schedule.find(
     (candidate): candidate is Record<string, unknown> =>
       candidate !== null &&

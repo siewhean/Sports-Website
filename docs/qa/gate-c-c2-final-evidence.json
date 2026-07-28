@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "gate-c-c2-exact-sha-summary",
+  "record_status": "CURRENT_CERTIFICATION",
+  "scope": "SCR-001-020 and C2 portions of RES-011, RES-013 and RES-014 only",
+  "source_sha": "48feb8f7e33f0f8d3e6223b77813ed6c019e8179",
+  "branch": "fix/gate-c-c2-public-projection-remediation",
+  "c1_base": "f7496452b66bac7f42290420291b17ee3a4ad326",
+  "status": "PASS",
+  "current_certification_status": "PASS",
+  "full_gate_c_status": "INCOMPLETE",
+  "collected_at": {
+    "started": "2026-07-28T11:35:44.253Z",
+    "completed": "2026-07-28T11:53:09.207Z",
+    "timezone": "Asia/Singapore"
+  },
+  "environment": {
+    "operating_system": "Darwin",
+    "architecture": "arm64",
+    "node": "v24.18.0",
+    "pnpm": "10.33.0",
+    "postgresql": "18.4",
+    "redis": "8.2.7",
+    "mailpit": "1.27.4",
+    "mailpit_health": "healthy",
+    "playwright": "1.61.1",
+    "chromium": "149.0.7827.55",
+    "webkit": "26.5"
+  },
+  "ledger": {
+    "path": "artifacts/qa/gate-c-c2/48feb8f7e33f0f8d3e6223b77813ed6c019e8179/ledgers/2026-07-28T11-35-44-251Z-8a320e90-de64-45ad-bb9e-5c2c4e72d876/ledger.json",
+    "sha256": "b19f6361aad3e5b49f03bda7e968660890f63654d9ba835f59977defa22a121b",
+    "command_count": 31,
+    "successful_commands": 31,
+    "failed_commands": 0,
+    "required_skips": 0,
+    "retained_artifacts": 183,
+    "rehashed_artifacts": 183,
+    "rehash_mismatches": 0
+  },
+  "immutable_bundle": {
+    "path": "artifacts/qa/gate-c-c2/48feb8f7e33f0f8d3e6223b77813ed6c019e8179/bundles/2026-07-28T11-35-44-251Z-8a320e90-de64-45ad-bb9e-5c2c4e72d876.tar.gz",
+    "sha256": "5dad798e99c0cfb04f913a275500719fb3f6d0c93b3ed4335bfeaf939ca711c1",
+    "size_bytes": 75182939,
+    "file_mode": "0444",
+    "archive_entries": 213,
+    "symlink_entries": 0
+  },
+  "commands": [
+    { "command": "node --version", "exit_status": 0 },
+    { "command": "pnpm --version", "exit_status": 0 },
+    { "command": "pnpm install --frozen-lockfile", "exit_status": 0 },
+    { "command": "git diff --exit-code -- pnpm-lock.yaml", "exit_status": 0 },
+    { "command": "pnpm ci:assert-clean-outputs", "exit_status": 0 },
+    { "command": "pnpm format:check", "exit_status": 0 },
+    { "command": "pnpm lint", "exit_status": 0 },
+    { "command": "pnpm typecheck", "exit_status": 0 },
+    { "command": "pnpm test:unit", "exit_status": 0 },
+    { "command": "pnpm db:migrate:check", "exit_status": 0 },
+    { "command": "pnpm backup:verify", "exit_status": 0 },
+    { "command": "pnpm test:integration", "exit_status": 0 },
+    { "command": "pnpm validate:fixtures", "exit_status": 0 },
+    { "command": "pnpm validate:phase2", "exit_status": 0 },
+    { "command": "pnpm validate:phase3", "exit_status": 0 },
+    { "command": "pnpm validate:phase4", "exit_status": 0 },
+    { "command": "pnpm openapi:check", "exit_status": 0 },
+    { "command": "pnpm dependencies:audit", "exit_status": 0 },
+    { "command": "pnpm secrets:scan", "exit_status": 0 },
+    { "command": "pnpm build", "exit_status": 0 },
+    { "command": "pnpm deploy:manifest", "exit_status": 0 },
+    { "command": "pnpm asset-delivery:verify:origin", "exit_status": 0 },
+    {
+      "command": "pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit",
+      "exit_status": 0
+    },
+    { "command": "pnpm test:e2e", "exit_status": 0 },
+    { "command": "pnpm test:a11y", "exit_status": 0 },
+    { "command": "pnpm test:visual", "exit_status": 0 },
+    { "command": "git diff --check", "exit_status": 0 },
+    { "command": "pnpm check", "exit_status": 0 },
+    { "command": "pnpm test:e2e:gate-c-c2:real", "run": 1, "exit_status": 0 },
+    { "command": "pnpm test:e2e:gate-c-c2:real", "run": 2, "exit_status": 0 },
+    {
+      "command": "git status --porcelain=v1 --untracked-files=all",
+      "exit_status": 0
+    }
+  ],
+  "test_results": {
+    "unit": { "passed": 825, "failed": 0 },
+    "integration": {
+      "passed": 195,
+      "failed": 0,
+      "api": 109,
+      "database": 59,
+      "scheduler": 3
+    },
+    "generic_e2e": {
+      "passed": 319,
+      "failed": 0,
+      "skipped": 9,
+      "skip_reason": "Tests intentionally apply only to named Playwright projects; every required C2 project and required check executed."
+    },
+    "accessibility": {
+      "passed": 86,
+      "failed": 0,
+      "wcag_a_aa_violations": 0
+    },
+    "visual": { "passed": 76, "failed": 0, "c2_baselines": 15 },
+    "isolated_c2_journeys": {
+      "runs": 2,
+      "projects_per_run": 3,
+      "passed_projects": 6,
+      "failed_projects": 0,
+      "projects": ["phone Chromium", "phone WebKit", "desktop Chromium"],
+      "sports_per_project": 5,
+      "sport_journeys": 30,
+      "distinct_postgresql_identifiers": 6,
+      "distinct_redis_namespace_identifiers": 6,
+      "redis_owned_keys_initial": 0,
+      "redis_owned_keys_final": 0,
+      "unrelated_redis_guards_preserved": 6,
+      "retained_screenshots": 60
+    }
+  },
+  "security_and_runtime": {
+    "production_dependency_vulnerabilities": 0,
+    "retained_artifact_secret_findings": 0,
+    "unexpected_browser_console_errors": 0,
+    "unexpected_page_errors": 0,
+    "unexpected_failed_requests": 0,
+    "source_clean_before": true,
+    "source_clean_after": true
+  },
+  "independent_review": {
+    "reviewer": "independent-specialist-agent",
+    "p0": 0,
+    "p1": 0,
+    "p2": 2,
+    "p3": 1,
+    "verdict": "PASS",
+    "accepted_findings": [
+      {
+        "severity": "P2",
+        "owner": "Data Integrity",
+        "finding": "No deliberately malformed pre-0030 canonical-history fixture proves the provenance preflight abort path.",
+        "rationale": "The preflight and resulting constraints exist; valid populated legacy history and post-migration rejection tests pass.",
+        "deadline": "2026-08-15"
+      },
+      {
+        "severity": "P2",
+        "owner": "Data Integrity",
+        "finding": "No deliberately malformed pre-0030 result-conflict fixture proves the lifecycle-receipt preflight abort path.",
+        "rationale": "Lifecycle checks, immutable guards and post-migration invalid-state tests are executable.",
+        "deadline": "2026-08-15"
+      },
+      {
+        "severity": "P3",
+        "owner": "Data Platform",
+        "finding": "Migrations 0030 and 0031 may take production write locks while backfilling snapshots and creating constraints and indexes transactionally.",
+        "rationale": "This is a deployment-window risk rather than a local correctness failure.",
+        "deadline": "2026-08-15"
+      }
+    ]
+  },
+  "historical_reopened_record": {
+    "source_sha": "c5c85bcacc1acaa23ceca05ba905d836c8e77cfd",
+    "status": "HISTORICAL_REOPENED",
+    "reason": "A later independent audit found an unrecorded P1 public-projection defect.",
+    "ledger_sha256": "ccb6caeb8057fc1737f088e926506b77b89411cf43cdc16d0863dc2608234d31",
+    "bundle_sha256": "e8e30ffe3989ce5f8facab5658061559da3d8597c8fe802dab95c60aa39247b6"
+  },
+  "hosted_github_actions": "Hosted CI was triggered, but its jobs failed before executing any steps because of the external runner/account limitation. Hosted CI is not used as certification evidence."
+}

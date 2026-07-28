@@ -1,10 +1,27 @@
-import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import type {
   PublicCompetitionProjection,
+  PublicDivisionProjection,
   PublicMatchResult,
   PublicScheduledMatch,
   ScoringSessionState,
 } from "@matchday/contracts";
+import {
+  SPORT_PACKS,
+  STANDINGS_SPORT_PACKS,
+  assertFiveSportScoreCommandAllowed,
+  calculateStandings,
+  materialiseFiveSportScoreEvent,
+  parseFiveSportScoreCommand,
+  reduceFiveSportScoreEvents,
+  type FiveSportScoreCommand,
+  type FiveSportScoreEvent,
+  type FiveSportScoreState,
+  type SportId,
+  type SportPackSettings,
+  type StandingsEngineConfig,
+  type StandingsMatchResult,
+} from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError } from "./errors.js";
 import {
@@ -58,6 +75,58 @@ type AccessPassExchangeRow = {
   organisation_id: string;
   competition_status: string;
 };
+
+const STANDINGS_CRITERION_ALIASES: Readonly<Record<string, StandingsEngineConfig["criteria"][number]>> = {
+  points: "table_points",
+  wins: "match_wins",
+  match_wins: "match_wins",
+  game_difference: "segment_difference",
+  set_difference: "segment_difference",
+  point_difference: "score_difference",
+  goal_difference: "score_difference",
+  goals_for: "score_for",
+  points_for: "score_for",
+  set_ratio: "segment_ratio",
+  point_ratio: "score_ratio",
+  head_to_head: "head_to_head",
+  discipline: "discipline",
+  seed: "seed",
+};
+
+function effectiveStandingsConfig(sportId: SportId, settings: SportPackSettings) {
+  const base = STANDINGS_SPORT_PACKS[sportId];
+  const configuredOrder = Array.isArray(settings.standingsOrder)
+    ? settings.standingsOrder
+        .map((criterion) => STANDINGS_CRITERION_ALIASES[String(criterion)])
+        .filter((criterion): criterion is StandingsEngineConfig["criteria"][number] => Boolean(criterion))
+    : [];
+  const criteria = [...new Set(configuredOrder.length > 0 ? configuredOrder : base.criteria)];
+  const winnerScore = Number(settings.forfeitWinnerScore ?? base.forfeitScore.homeScore);
+  const loserScore = Number(settings.forfeitLoserScore ?? base.forfeitScore.awayScore);
+  const bestOf = Number(settings.bestOf ?? 0);
+  const segmentWins = Number.isSafeInteger(bestOf) && bestOf > 0 ? Math.floor(bestOf / 2) + 1 : 0;
+  const winPoints = Number(settings.pointsWin ?? base.winPoints);
+  const drawPoints = Number(settings.pointsDraw ?? base.drawPoints);
+  const lossPoints = Number(settings.pointsLoss ?? base.lossPoints);
+  const forfeitScore =
+    segmentWins > 0
+      ? {
+          homeScore: winnerScore * segmentWins,
+          awayScore: loserScore * segmentWins,
+          homeSegments: Array.from({ length: segmentWins }, () => winnerScore),
+          awaySegments: Array.from({ length: segmentWins }, () => loserScore),
+        }
+      : { homeScore: winnerScore, awayScore: loserScore };
+  return {
+    ...base,
+    version: `${base.version}:${stableHash({ criteria, forfeitScore, winPoints, drawPoints, lossPoints }).slice(0, 16)}`,
+    winPoints,
+    drawPoints,
+    lossPoints,
+    criteria,
+    forfeitScore,
+  } satisfies StandingsEngineConfig;
+}
 
 export class ScoringAccessRateLimitError extends ApiError {
   constructor(public readonly rateLimit: ScoringAccessRateLimitHeaders) {
@@ -186,17 +255,23 @@ type CompetitionRow = {
 };
 type EntryRow = { id: string; name: string; seed: number };
 type FormatRow = { id: string; definition: Record<string, unknown>; revision: number };
-type EventRow = {
+type CanonicalScoreEventRow = {
+  id: string;
   client_event_id: string;
+  aggregate_version: number;
   sequence: number;
-  event_type: PersistedScoreEvent["type"];
-  team_slot: PersistedScoreEvent["teamSlot"];
-  scorer: string | null;
-  manual_period: number | null;
-  manual_event_seconds: number | null;
-  payload: Record<string, unknown>;
-  correction_reason: string | null;
-  occurred_at: Date | string;
+  command: Record<string, unknown> | string;
+  actor_access_session_id: string | null;
+  actor_account_id: string | null;
+};
+
+type CanonicalScoringContext = {
+  competition_id: string;
+  division_id: string;
+  sport_code: SportId;
+  pack_version: string;
+  settings: SportPackSettings;
+  settings_fingerprint: string;
 };
 
 function date(value: Date | string): Date {
@@ -314,6 +389,15 @@ function isIssuanceIdempotencyViolation(signals: PostgresConstraintSignal): bool
   );
 }
 
+function isScoreWriterSessionGuardViolation(error: unknown): boolean {
+  const signals = toErrorSignals(error);
+  return (
+    signals.code === "23514" &&
+    (signals.constraintName === "canonical_score_events_writer_session_guard" ||
+      signals.message?.includes("active writer") === true)
+  );
+}
+
 function withSavepoint<T>(
   tx: PostgresJsSql,
   _name: "gate_c_access_code_attempt",
@@ -345,6 +429,29 @@ function canonicalJson(value: unknown): string {
 
 function stableHash(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+function derivedUuid(namespace: string, purpose: string): string {
+  const bytes = createHash("sha256").update(`${namespace}:${purpose}`, "utf8").digest().subarray(0, 16);
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function wireScoreCommand(command: FiveSportScoreCommand): Record<string, unknown> {
+  return {
+    client_event_id: command.clientEventId,
+    type: command.type,
+    occurred_at: command.occurredAt,
+    ...(command.side ? { team_slot: command.side } : {}),
+    ...(command.participantId !== undefined ? { participant_id: command.participantId } : {}),
+    ...(command.unknownParticipant !== undefined ? { unknown_participant: command.unknownParticipant } : {}),
+    ...(command.segmentNumber !== undefined ? { segment_number: command.segmentNumber } : {}),
+    ...(command.manualTimeSeconds !== undefined ? { manual_time_seconds: command.manualTimeSeconds } : {}),
+    ...(command.reversalTargetEventId ? { reversal_target_event_id: command.reversalTargetEventId } : {}),
+    ...(command.reason ? { reason: command.reason } : {}),
+  };
 }
 
 function opaqueSecret(bytes = 32): string {
@@ -612,7 +719,7 @@ export class Phase2Runtime {
 
   private async recordStaleScoreSubmission(
     auth: ScoringSessionAuth,
-    input: Omit<PersistedScoreEvent, "sequence">,
+    command: FiveSportScoreCommand,
     requestId: string,
   ): Promise<void> {
     const rows = await this.sql.unsafe<{
@@ -643,18 +750,8 @@ export class Phase2Runtime {
           requestId,
           session.organisation_id,
           session.match_id,
-          input.correctionReason,
-          JSON.stringify({
-            client_event_id: input.clientEventId,
-            event_type: input.type,
-            team_slot: input.teamSlot,
-            scorer: input.scorer,
-            manual_period: input.manualPeriod,
-            manual_event_seconds: input.manualEventSeconds,
-            payload: input.payload,
-            correction_reason: input.correctionReason,
-            occurred_at: input.occurredAt.toISOString(),
-          }),
+          command.reason ?? null,
+          JSON.stringify(wireScoreCommand(command)),
           JSON.stringify({
             scoring_session_id: session.id,
             competition_id: session.competition_id,
@@ -1835,33 +1932,298 @@ export class Phase2Runtime {
     return session;
   }
 
-  async appendScoreEvent(auth: ScoringSessionAuth, input: Omit<PersistedScoreEvent, "sequence">, requestId: string) {
-    if (input.type === "goal_added" && (!input.teamSlot || !input.scorer?.trim())) {
-      throw new ApiError(422, "GOAL_ATTRIBUTION_REQUIRED", "Goals require a team and scorer attribution");
+  private async canonicalScoringContext(
+    tx: PostgresJsSql,
+    matchId: string,
+    lock = false,
+  ): Promise<CanonicalScoringContext> {
+    const row = required(
+      await tx.unsafe<{
+        competition_id: string;
+        division_id: string;
+        sport_code: SportId;
+        pack_version: string;
+        division_pack_version: string | null;
+        recommended_snapshot: Record<string, unknown> | string;
+        competition_override: Record<string, unknown> | string;
+        division_override: Record<string, unknown> | string | null;
+      }>(
+        `SELECT m.competition_id,m.division_id,c.sport_code,settings.pack_version,
+                division_settings.pack_version AS division_pack_version,
+                settings.recommended_snapshot,settings.settings_override AS competition_override,
+                division_settings.settings_override AS division_override
+         FROM matches m
+         JOIN competitions c ON c.id=m.competition_id
+         JOIN competition_sport_settings settings
+           ON settings.competition_id=m.competition_id AND settings.sport_code=c.sport_code
+         LEFT JOIN division_sport_settings division_settings
+           ON division_settings.division_id=m.division_id
+          AND division_settings.competition_id=m.competition_id
+          AND division_settings.sport_code=c.sport_code
+         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m,settings" : ""}`,
+        [matchId],
+      ),
+      "Match scoring settings not found",
+    );
+    const pack = SPORT_PACKS[row.sport_code];
+    if (!pack) throw new ApiError(409, "SPORT_PACK_UNSUPPORTED", "The competition sport is not supported");
+    if (!row.pack_version || (row.division_pack_version && row.division_pack_version !== row.pack_version)) {
+      throw new ApiError(
+        409,
+        "SPORT_PACK_REFERENCE_INVALID",
+        "Competition and division scoring settings must use the same authoritative sport pack",
+      );
     }
+    const settings = Object.freeze({
+      ...pack.recommendedSettings,
+      ...jsonValue<Record<string, unknown>>(row.recommended_snapshot),
+      ...jsonValue<Record<string, unknown>>(row.competition_override),
+      ...(row.division_override ? jsonValue<Record<string, unknown>>(row.division_override) : {}),
+    }) as SportPackSettings;
+    try {
+      assertFiveSportScoreCommandAllowed(
+        row.sport_code,
+        {
+          clientEventId: "00000000-0000-4000-8000-000000000000",
+          type: "match_started",
+          occurredAt: this.now().toISOString(),
+        },
+        settings,
+      );
+    } catch (error) {
+      throw new ApiError(
+        409,
+        "SPORT_SETTINGS_INVALID",
+        error instanceof Error ? error.message : "The effective sport settings are invalid",
+      );
+    }
+    return {
+      competition_id: row.competition_id,
+      division_id: row.division_id,
+      sport_code: row.sport_code,
+      pack_version: row.pack_version,
+      settings,
+      settings_fingerprint: stableHash(settings),
+    };
+  }
+
+  private async ensureCanonicalStream(
+    tx: PostgresJsSql,
+    matchId: string,
+    context: CanonicalScoringContext,
+  ): Promise<CanonicalScoringContext> {
+    await tx.unsafe(
+      `INSERT INTO match_score_streams (
+         match_id,competition_id,division_id,sport_code,pack_version,
+         settings_snapshot,settings_fingerprint,current_version,created_at,updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,0,$8,$8)
+       ON CONFLICT (match_id) DO NOTHING`,
+      [
+        matchId,
+        context.competition_id,
+        context.division_id,
+        context.sport_code,
+        context.pack_version,
+        context.settings,
+        context.settings_fingerprint,
+        this.now(),
+      ],
+    );
+    const stream = required(
+      await tx.unsafe<{
+        competition_id: string;
+        division_id: string;
+        sport_code: SportId;
+        pack_version: string;
+        settings_snapshot: SportPackSettings | string;
+        settings_fingerprint: string;
+      }>(
+        `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint
+         FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
+        [matchId],
+      ),
+      "Match score stream not found",
+    );
     if (
-      (input.type === "goal_reversed" || input.type === "card_reversed") &&
-      (!input.correctionReason?.trim() || typeof input.payload.reversal_target_event_id !== "string")
+      stream.competition_id !== context.competition_id ||
+      stream.division_id !== context.division_id ||
+      stream.sport_code !== context.sport_code ||
+      stream.pack_version !== context.pack_version ||
+      stream.settings_fingerprint !== stableHash(jsonValue(stream.settings_snapshot)) ||
+      stream.settings_fingerprint !== context.settings_fingerprint
     ) {
-      throw new ApiError(422, "REVERSAL_INVALID", "Reversals require a target event and reason");
+      throw new ApiError(409, "SCORING_STREAM_CONTEXT_MISMATCH", "The match scoring stream context is invalid");
     }
-    if (
-      input.type === "card_added" &&
-      (!input.teamSlot ||
-        typeof input.payload.person_id !== "string" ||
-        !["green", "yellow", "red"].includes(String(input.payload.colour)))
-    ) {
-      throw new ApiError(422, "CARD_ATTRIBUTION_REQUIRED", "Cards require a team, person, and valid colour");
+    if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
+      throw new ApiError(
+        409,
+        "SPORT_PACK_VERSION_UNSUPPORTED",
+        `Score stream pack ${stream.pack_version} is not supported by reducer ${SPORT_PACKS[stream.sport_code].version}`,
+      );
     }
-    if (input.type === "timeout_added" && !input.teamSlot) {
-      throw new ApiError(422, "TIMEOUT_TEAM_REQUIRED", "Timeouts require a team");
+    return {
+      competition_id: stream.competition_id,
+      division_id: stream.division_id,
+      sport_code: stream.sport_code,
+      pack_version: stream.pack_version,
+      settings: jsonValue<SportPackSettings>(stream.settings_snapshot),
+      settings_fingerprint: stream.settings_fingerprint,
+    };
+  }
+
+  private async canonicalScoreEvents(tx: PostgresJsSql, matchId: string): Promise<FiveSportScoreEvent[]> {
+    const rows = await tx.unsafe<CanonicalScoreEventRow>(
+      `SELECT id,client_event_id,aggregate_version,sequence,command,actor_access_session_id,actor_account_id
+       FROM canonical_score_events WHERE match_id=$1 ORDER BY aggregate_version`,
+      [matchId],
+    );
+    return rows
+      .flatMap((row) => {
+        const command = parseFiveSportScoreCommand(jsonValue(row.command));
+        if (!command || command.type === "legacy_correction") return [];
+        const actorId = row.actor_access_session_id ?? row.actor_account_id;
+        if (!actorId) throw new Error("Canonical score event actor is missing");
+        return [{ row, command, actorId }];
+      })
+      .map(({ row, command, actorId }) =>
+        materialiseFiveSportScoreEvent(command, {
+          eventId: row.id,
+          matchId,
+          sequence: row.sequence,
+          actorId,
+          scoringSessionId: row.actor_access_session_id ?? actorId,
+        }),
+      );
+  }
+
+  private async canonicalScoreState(
+    tx: PostgresJsSql,
+    matchId: string,
+    options: { readOnlyLegacyProjection?: boolean } = {},
+  ): Promise<{
+    context: CanonicalScoringContext;
+    aggregateVersion: number;
+    events: FiveSportScoreEvent[];
+    state: FiveSportScoreState;
+  }> {
+    const stream = required(
+      await tx.unsafe<{
+        competition_id: string;
+        division_id: string;
+        sport_code: SportId;
+        pack_version: string;
+        settings_snapshot: SportPackSettings | string;
+        settings_fingerprint: string;
+        current_version: number;
+      }>(
+        `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,
+                settings_fingerprint,current_version
+         FROM match_score_streams WHERE match_id=$1`,
+        [matchId],
+      ),
+      "Match score stream not found",
+    );
+    const settings = jsonValue<SportPackSettings>(stream.settings_snapshot);
+    if (stableHash(settings) !== stream.settings_fingerprint) {
+      throw new ApiError(409, "SCORING_STREAM_CONTEXT_MISMATCH", "The score stream settings fingerprint is invalid");
     }
-    if (input.type === "incident_added" && !String(input.payload.note ?? "").trim()) {
-      throw new ApiError(422, "INCIDENT_NOTE_REQUIRED", "Incidents require a note");
+    if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
+      throw new ApiError(
+        409,
+        "SPORT_PACK_VERSION_UNSUPPORTED",
+        `Score stream pack ${stream.pack_version} is not supported by reducer ${SPORT_PACKS[stream.sport_code].version}`,
+      );
     }
-    if (input.type === "match_reopened" && !input.correctionReason?.trim()) {
-      throw new ApiError(422, "REOPEN_REASON_REQUIRED", "Reopening a match requires a reason");
+    const events = await this.canonicalScoreEvents(tx, matchId);
+    const hasLegacyCorrection = Boolean(
+      (
+        await tx.unsafe<{ present: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM canonical_score_events
+             WHERE match_id=$1 AND event_type='legacy_correction'
+           ) AS present`,
+          [matchId],
+        )
+      )[0]?.present,
+    );
+    if (hasLegacyCorrection && !options.readOnlyLegacyProjection) {
+      throw new ApiError(
+        409,
+        "LEGACY_CORRECTION_REQUIRES_REVIEW",
+        "This historical corrected result is readable but must be reviewed before canonical scoring can continue",
+      );
     }
+    let state: FiveSportScoreState;
+    try {
+      state = reduceFiveSportScoreEvents(stream.sport_code, events, settings);
+      if (hasLegacyCorrection) {
+        const legacy = required(
+          await tx.unsafe<{ home_score: number; away_score: number }>(
+            `SELECT home_score,away_score FROM match_result_snapshots
+             WHERE match_id=$1 ORDER BY result_version DESC LIMIT 1`,
+            [matchId],
+          ),
+          "Historical corrected result projection not found",
+        );
+        state = {
+          ...state,
+          lifecycle: "finalised",
+          currentSegment: 1,
+          winner:
+            legacy.home_score === legacy.away_score ? null : legacy.home_score > legacy.away_score ? "home" : "away",
+          exceptionalOutcome: null,
+          score: { home: legacy.home_score, away: legacy.away_score },
+          totalPoints: { home: legacy.home_score, away: legacy.away_score },
+          segmentWins: { home: 0, away: 0 },
+          segments: [
+            {
+              number: 1,
+              home: legacy.home_score,
+              away: legacy.away_score,
+              completed: true,
+              winner:
+                legacy.home_score === legacy.away_score
+                  ? null
+                  : legacy.home_score > legacy.away_score
+                    ? "home"
+                    : "away",
+              completionEventId: null,
+            },
+          ],
+          actions: [],
+          conflicts: [],
+        };
+      }
+    } catch (error) {
+      throw new ApiError(
+        409,
+        "SCORING_STREAM_INVALID",
+        error instanceof Error ? error.message : "The score stream is invalid",
+      );
+    }
+    return {
+      context: {
+        competition_id: stream.competition_id,
+        division_id: stream.division_id,
+        sport_code: stream.sport_code,
+        pack_version: stream.pack_version,
+        settings,
+        settings_fingerprint: stream.settings_fingerprint,
+      },
+      aggregateVersion: stream.current_version,
+      events,
+      state,
+    };
+  }
+
+  async appendCanonicalScoreEvent(
+    auth: ScoringSessionAuth,
+    rawCommand: unknown,
+    expectedAggregateVersion: number,
+    requestId: string,
+  ) {
+    const command = parseFiveSportScoreCommand(rawCommand);
+    if (!command) throw new ApiError(422, "SCORE_EVENT_INVALID", "Score event command is invalid");
     try {
       return await this.transaction(async (tx) => {
         let session = await this.authenticateScoringSession(
@@ -1874,6 +2236,59 @@ export class Phase2Runtime {
         );
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+        const permission: ScoringPermission = command.type === "reversal" ? "score:reverse" : "score:write";
+        if (!jsonValue<ScoringPermission[]>(session.scope).includes(permission)) {
+          throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session lacks the required permission");
+        }
+        if (command.type === "match_reopened" || command.type === "finalisation") {
+          throw new ApiError(
+            command.type === "match_reopened" ? 403 : 422,
+            command.type === "match_reopened" ? "ORGANISER_PERMISSION_REQUIRED" : "FINALISATION_ENDPOINT_REQUIRED",
+            command.type === "match_reopened" ? "Reopening is organiser-only" : "Use the result finalisation endpoint",
+          );
+        }
+        const currentContext = await this.canonicalScoringContext(tx, session.match_id, true);
+        const context = await this.ensureCanonicalStream(tx, session.match_id, currentContext);
+        const legacyCorrection = (
+          await tx.unsafe<{ present: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM canonical_score_events
+               WHERE match_id=$1 AND event_type='legacy_correction'
+             ) AS present`,
+            [session.match_id],
+          )
+        )[0]?.present;
+        if (legacyCorrection) {
+          throw new ApiError(
+            409,
+            "LEGACY_CORRECTION_REQUIRES_REVIEW",
+            "This historical corrected result is readable but cannot accept canonical score events",
+          );
+        }
+        assertFiveSportScoreCommandAllowed(context.sport_code, command, context.settings);
+        const fingerprint = stableHash(wireScoreCommand(command));
+        const duplicate = (
+          await tx.unsafe<{ id: string; aggregate_version: number; command_fingerprint: string }>(
+            `SELECT id,aggregate_version,command_fingerprint FROM canonical_score_events
+             WHERE match_id=$1 AND client_event_id=$2`,
+            [session.match_id, command.clientEventId],
+          )
+        )[0];
+        if (duplicate) {
+          if (duplicate.command_fingerprint !== fingerprint) {
+            throw new ApiError(
+              409,
+              "IDEMPOTENCY_KEY_REUSED",
+              "Client event ID was reused with different score-event content",
+            );
+          }
+          return {
+            duplicate: true as const,
+            event_id: duplicate.id,
+            sequence: duplicate.aggregate_version,
+            aggregate_version: duplicate.aggregate_version,
+          };
+        }
         const match = required(
           await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
           "Match not found",
@@ -1881,75 +2296,105 @@ export class Phase2Runtime {
         if (match.state === "final" || match.state === "corrected") {
           throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
         }
-        const permissions = jsonValue<ScoringPermission[]>(session.scope);
+        const existing = await this.canonicalScoreEvents(tx, session.match_id);
+        const stream = required(
+          await tx.unsafe<{ current_version: number }>(
+            `SELECT current_version FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
+            [session.match_id],
+          ),
+          "Match score stream not found",
+        );
+        if (stream.current_version !== expectedAggregateVersion) {
+          throw new ApiError(
+            409,
+            "SCORE_VERSION_CONFLICT",
+            `Expected aggregate version ${expectedAggregateVersion}, current version is ${stream.current_version}`,
+          );
+        }
+        const sequence = stream.current_version + 1;
+        const eventId = randomUUID();
+        const event = materialiseFiveSportScoreEvent(command, {
+          eventId,
+          matchId: session.match_id,
+          sequence: existing.length + 1,
+          actorId: session.id,
+          scoringSessionId: session.id,
+        });
+        try {
+          reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
+        } catch (error) {
+          throw new ApiError(
+            422,
+            "SCORE_EVENT_REJECTED",
+            error instanceof Error ? error.message : "Score event is invalid",
+          );
+        }
         const writerGeneration = session.generation;
         if (!writerGeneration) {
           throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
         }
-        if (input.type === "match_reopened" || input.type === "correction") {
-          throw new ApiError(403, "ORGANISER_PERMISSION_REQUIRED", "Reopening and correction are organiser-only");
-        }
-        const requiredPermission: ScoringPermission =
-          input.type === "goal_reversed" || input.type === "card_reversed" ? "score:reverse" : "score:write";
-        if (!permissions.includes(requiredPermission)) {
-          throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session lacks the required permission");
-        }
-        const duplicate = await tx.unsafe<{ sequence: number }>(
-          `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
-          [session.match_id, input.clientEventId],
-        );
-        if (duplicate[0]) return { duplicate: true as const, sequence: duplicate[0].sequence };
-        const next = await tx.unsafe<{ sequence: number }>(
-          `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
-          [session.match_id],
-        );
-        const sequence = next[0]?.sequence ?? 1;
         await tx.unsafe(
-          `INSERT INTO score_events (
-           match_id,client_event_id,sequence,writer_generation,event_type,team_slot,scorer,
-           manual_period,manual_event_seconds,payload,actor_access_session_id,correction_reason,occurred_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)`,
+          `INSERT INTO canonical_score_events (
+             id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+             command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp,
+             reversal_target_event_id,reason
+           ) VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14)`,
           [
+            eventId,
+            context.competition_id,
+            context.division_id,
             session.match_id,
-            input.clientEventId,
+            command.clientEventId,
             sequence,
-            writerGeneration,
-            input.type,
-            input.teamSlot,
-            input.scorer,
-            input.manualPeriod,
-            input.manualEventSeconds,
-            JSON.stringify(input.payload),
+            command.type,
+            wireScoreCommand(command),
+            fingerprint,
             session.id,
-            input.correctionReason,
-            input.occurredAt,
+            writerGeneration,
+            command.occurredAt,
+            command.reversalTargetEventId ?? null,
+            command.reason ?? null,
           ],
         );
+        await tx.unsafe(`UPDATE match_score_streams SET current_version=$2,updated_at=$3 WHERE match_id=$1`, [
+          session.match_id,
+          sequence,
+          this.now(),
+        ]);
         await tx.unsafe(
-          `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2)
-         WHERE competition_id=(SELECT competition_id FROM matches WHERE id=$1)`,
-          [session.match_id, this.now()],
+          `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2) WHERE competition_id=$1`,
+          [context.competition_id, this.now()],
         );
+        if (command.type === "match_started") {
+          await tx.unsafe(`UPDATE matches SET state='in_progress' WHERE id=$1 AND state IN ('pending','ready')`, [
+            session.match_id,
+          ]);
+        }
         await this.evidence(tx, {
           requestId,
           actorAccountId: null,
           actorType: "access_pass",
           organisationId: session.organisation_id,
-          action: `score.${input.type}.appended`,
+          action: "scoring_event.appended",
           targetType: "match",
           targetId: session.match_id,
-          reason: input.correctionReason,
-          after: { client_event_id: input.clientEventId, sequence, generation: writerGeneration },
+          after: { event_id: eventId, event_type: command.type, aggregate_version: sequence },
+          eventPayload: {
+            competition_id: context.competition_id,
+            match_id: session.match_id,
+            aggregate_version: sequence,
+            event_type: command.type,
+          },
         });
-        return { duplicate: false as const, sequence };
+        return { duplicate: false as const, event_id: eventId, sequence, aggregate_version: sequence };
       });
     } catch (error) {
-      if (error instanceof ApiError) {
-        if (error.code === "STALE_WRITER_GENERATION") {
-          await this.recordStaleScoreSubmission(auth, input, requestId);
-        } else if (error.code === "MATCH_FINALISED_READ_ONLY") {
-          await this.recordScoringSessionDenial(auth, requestId, "scoring_event.append_denied", error.code);
-        }
+      if (isScoreWriterSessionGuardViolation(error)) {
+        await this.recordStaleScoreSubmission(auth, command, requestId);
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+      }
+      if (error instanceof ApiError && error.code === "STALE_WRITER_GENERATION") {
+        await this.recordStaleScoreSubmission(auth, command, requestId);
       }
       throw error;
     }
@@ -2508,112 +2953,34 @@ export class Phase2Runtime {
     });
   }
 
-  async finalise(auth: ScoringSessionAuth, clientEventId: string, requestId: string) {
-    return this.publishResult(auth, { clientEventId, correctionReason: null }, requestId);
-  }
-
-  async correct(
-    actor: Phase2Actor,
-    competitionId: string,
-    matchId: string,
-    input: { clientEventId: string; reason: string; homeScore: number; awayScore: number },
-    requestId: string,
-  ) {
-    if (input.reason.trim().length < 3)
-      throw new ApiError(422, "CORRECTION_REASON_REQUIRED", "Correction reason is required");
-    return this.transaction(async (tx) => {
-      const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
-      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [matchId]);
-      const match = required(
-        await tx.unsafe<{ division_id: string }>(
-          `SELECT division_id FROM matches WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
-          [matchId, competitionId],
-        ),
-        "Match not found",
-      );
-      const latestFormat = required(
-        await tx.unsafe<{ definition: Record<string, unknown> }>(
-          `SELECT fr.definition FROM format_revisions fr JOIN matches m ON m.format_revision_id=fr.id
-           WHERE m.id=$1`,
-          [matchId],
-        ),
-        "Format not found",
-      );
-      const existingResults = await this.resultsForDivision(tx, match.division_id);
-      const stateRows = await tx.unsafe<{ id: string; state: string }>(
-        `SELECT id,state FROM matches WHERE division_id=$1`,
-        [match.division_id],
-      );
-      const downstreamStates = Object.fromEntries(
-        stateRows.map((row) => [
-          row.id,
-          row.state === "final" || row.state === "corrected"
-            ? "finalised"
-            : row.state === "in_progress"
-              ? "started"
-              : "unstarted",
-        ]),
-      ) as Record<string, "unstarted" | "started" | "finalised">;
-      const conflicts = this.domain.correctionConflicts({
-        format: latestFormat.definition,
-        results: existingResults,
-        correctedMatchId: matchId,
-        downstreamStates,
-      });
-      if (conflicts.length > 0) {
-        throw new ApiError(
-          409,
-          "CORRECTION_DOWNSTREAM_CONFLICT",
-          "A downstream result must be reopened before correction",
-        );
-      }
-      const duplicate = await tx.unsafe<{ sequence: number }>(
-        `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
-        [matchId, input.clientEventId],
-      );
-      if (duplicate[0]) {
-        const latest = await this.latestMatchResult(tx, matchId);
-        return { duplicate: true as const, sequence: duplicate[0].sequence, ...(latest ?? {}) };
-      }
-      const next = await tx.unsafe<{ sequence: number }>(
-        `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
-        [matchId],
-      );
-      const sequence = next[0]?.sequence ?? 1;
-      await tx.unsafe(
-        `INSERT INTO score_events (
-           match_id,client_event_id,sequence,writer_generation,event_type,payload,
-           actor_account_id,correction_reason,occurred_at
-         ) VALUES ($1,$2,$3,1,'correction',$4::jsonb,$5,$6,$7)`,
-        [
-          matchId,
-          input.clientEventId,
-          sequence,
-          JSON.stringify({ home_score: input.homeScore, away_score: input.awayScore }),
-          actor.accountId,
-          input.reason.trim(),
-          this.now(),
-        ],
-      );
-      const result = await this.persistResultPublication(tx, {
-        matchId,
-        divisionId: match.division_id,
-        organisationId: competition.organisation_id,
-        requestId,
-        actorAccountId: actor.accountId,
-        actorType: "account",
-        action: "result.corrected",
-        reason: input.reason.trim(),
-        forcedScore: { homeScore: input.homeScore, awayScore: input.awayScore, state: "corrected" },
-      });
-      return { duplicate: false as const, sequence, ...result };
-    });
-  }
-
-  private async publishResult(
+  async finalise(
     auth: ScoringSessionAuth,
-    input: { clientEventId: string; correctionReason: string | null },
+    clientEventId: string,
     requestId: string,
+    expectedAggregateVersion?: number,
+  ) {
+    const stream = await this.sql.unsafe<{ match_id: string }>(
+      `SELECT stream.match_id
+       FROM scoring_access_sessions session
+       JOIN match_score_streams stream ON stream.match_id=session.match_id
+       WHERE session.id=$1`,
+      [auth.sessionId],
+    );
+    if (!stream[0]) {
+      throw new ApiError(
+        409,
+        "CANONICAL_SCORE_STREAM_REQUIRED",
+        "Finalisation requires a canonical five-sport score stream",
+      );
+    }
+    return this.finaliseCanonical(auth, clientEventId, requestId, expectedAggregateVersion);
+  }
+
+  private async finaliseCanonical(
+    auth: ScoringSessionAuth,
+    clientEventId: string,
+    requestId: string,
+    expectedAggregateVersion?: number,
   ) {
     try {
       return await this.transaction(async (tx) => {
@@ -2627,20 +2994,45 @@ export class Phase2Runtime {
         );
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
-        const writerGeneration = session.generation;
-        if (!writerGeneration) {
-          throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
-        }
         if (!jsonValue<ScoringPermission[]>(session.scope).includes("score:finalise")) {
           throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session cannot finalise this match");
         }
-        const duplicate = await tx.unsafe<{ sequence: number }>(
-          `SELECT sequence FROM score_events WHERE match_id=$1 AND client_event_id=$2`,
-          [session.match_id, input.clientEventId],
-        );
-        if (duplicate[0]) {
-          const latest = await this.latestMatchResult(tx, session.match_id);
-          return { duplicate: true as const, sequence: duplicate[0].sequence, ...(latest ?? {}) };
+        const finalisationFingerprint = stableHash({
+          client_event_id: clientEventId,
+          type: "finalisation",
+          expected_aggregate_version: expectedAggregateVersion ?? null,
+        });
+        const duplicate = (
+          await tx.unsafe<{
+            id: string;
+            aggregate_version: number;
+            event_type: string;
+            command_fingerprint: string;
+          }>(
+            `SELECT id,aggregate_version,event_type,command_fingerprint FROM canonical_score_events
+             WHERE match_id=$1 AND client_event_id=$2`,
+            [session.match_id, clientEventId],
+          )
+        )[0];
+        if (duplicate) {
+          if (duplicate.event_type !== "finalisation" || duplicate.command_fingerprint !== finalisationFingerprint) {
+            throw new ApiError(
+              409,
+              "IDEMPOTENCY_KEY_REUSED",
+              "Finalisation client event ID is already used by another score event",
+            );
+          }
+          const original = await this.matchResultAtSequence(tx, session.match_id, duplicate.aggregate_version);
+          if (!original) throw new ApiError(409, "RESULT_RECEIPT_MISSING", "Finalisation receipt is unavailable");
+          return {
+            match_id: session.match_id,
+            sequence: duplicate.aggregate_version,
+            aggregate_version: duplicate.aggregate_version,
+            duplicate: true as const,
+            home_score: original.home_score,
+            away_score: original.away_score,
+            result_version: original.result_version,
+          };
         }
         const match = required(
           await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
@@ -2649,43 +3041,83 @@ export class Phase2Runtime {
         if (match.state === "final" || match.state === "corrected") {
           throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
         }
-        const next = await tx.unsafe<{ sequence: number }>(
-          `SELECT COALESCE(max(sequence),0)::integer + 1 AS sequence FROM score_events WHERE match_id=$1`,
-          [session.match_id],
-        );
-        const sequence = next[0]?.sequence ?? 1;
-        const eventContext = (
-          await tx.unsafe<{ manual_period: number | null; manual_event_seconds: number | null }>(
-            `SELECT manual_period,manual_event_seconds FROM score_events
-         WHERE match_id=$1 ORDER BY sequence DESC LIMIT 1`,
-            [session.match_id],
-          )
-        )[0];
+        const canonical = await this.canonicalScoreState(tx, session.match_id);
+        if (expectedAggregateVersion !== undefined && canonical.aggregateVersion !== expectedAggregateVersion) {
+          throw new ApiError(
+            409,
+            "SCORE_VERSION_CONFLICT",
+            `Expected aggregate version ${expectedAggregateVersion}, current version is ${canonical.aggregateVersion}`,
+          );
+        }
+        const command: FiveSportScoreCommand = {
+          clientEventId,
+          type: "finalisation",
+          occurredAt: this.now().toISOString(),
+        };
+        const eventId = randomUUID();
+        const event = materialiseFiveSportScoreEvent(command, {
+          eventId,
+          matchId: session.match_id,
+          sequence: canonical.events.length + 1,
+          actorId: session.id,
+          scoringSessionId: session.id,
+        });
+        let state: FiveSportScoreState;
+        try {
+          state = reduceFiveSportScoreEvents(
+            canonical.context.sport_code,
+            [...canonical.events, event],
+            canonical.context.settings,
+          );
+        } catch (error) {
+          throw new ApiError(
+            422,
+            "FINALISATION_INVALID",
+            error instanceof Error ? error.message : "Finalisation is invalid",
+          );
+        }
+        const aggregateVersion = canonical.aggregateVersion + 1;
+        const generation = session.generation;
+        if (!generation) throw new ApiError(409, "STALE_WRITER_GENERATION", "Writer lease is not active");
         await tx.unsafe(
-          `INSERT INTO score_events (
-          match_id,client_event_id,sequence,writer_generation,event_type,payload,
-           actor_access_session_id,manual_period,manual_event_seconds,occurred_at
-         ) VALUES ($1,$2,$3,$4,'match_finalised','{}'::jsonb,$5,$6,$7,$8)`,
+          `INSERT INTO canonical_score_events (
+             id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+             command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+           ) VALUES ($1,$2,$3,$4,$5,$6,$6,'finalisation',$7::jsonb,$8,$9,$10,$11)`,
           [
+            eventId,
+            canonical.context.competition_id,
+            canonical.context.division_id,
             session.match_id,
-            input.clientEventId,
-            sequence,
-            writerGeneration,
+            clientEventId,
+            aggregateVersion,
+            wireScoreCommand(command),
+            finalisationFingerprint,
             session.id,
-            eventContext?.manual_period ?? 1,
-            eventContext?.manual_event_seconds ?? 0,
-            this.now(),
+            generation,
+            command.occurredAt,
           ],
         );
+        await tx.unsafe(`UPDATE match_score_streams SET current_version=$2,updated_at=$3 WHERE match_id=$1`, [
+          session.match_id,
+          aggregateVersion,
+          this.now(),
+        ]);
         const result = await this.persistResultPublication(tx, {
           matchId: session.match_id,
-          divisionId: session.division_id,
+          divisionId: canonical.context.division_id,
           organisationId: session.organisation_id,
           requestId,
           actorAccountId: null,
           actorType: "access_pass",
           action: "result.finalised",
           reason: null,
+          canonical: {
+            state,
+            settings: canonical.context.settings,
+            throughAggregateVersion: aggregateVersion,
+            resultState: "final",
+          },
         });
         const expiredTakeovers = await tx.unsafe<{ id: string }>(
           `UPDATE scoring_takeover_requests SET
@@ -2707,9 +3139,23 @@ export class Phase2Runtime {
             eventPayload: { competition_id: session.competition_id, match_id: session.match_id },
           });
         }
-        return { duplicate: false as const, sequence, ...result };
+        return {
+          duplicate: false as const,
+          sequence: aggregateVersion,
+          aggregate_version: aggregateVersion,
+          ...result,
+        };
       });
     } catch (error) {
+      if (isScoreWriterSessionGuardViolation(error)) {
+        await this.recordScoringSessionDenial(
+          auth,
+          requestId,
+          "scoring_result.finalise_denied",
+          "STALE_WRITER_GENERATION",
+        );
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+      }
       if (error instanceof ApiError && ["STALE_WRITER_GENERATION", "MATCH_FINALISED_READ_ONLY"].includes(error.code)) {
         await this.recordScoringSessionDenial(auth, requestId, "scoring_result.finalise_denied", error.code);
       }
@@ -2717,28 +3163,460 @@ export class Phase2Runtime {
     }
   }
 
-  private async persistedEvents(tx: PostgresJsSql, matchId: string): Promise<PersistedScoreEvent[]> {
-    const rows = await tx.unsafe<EventRow>(
-      `SELECT client_event_id,sequence,event_type,team_slot,scorer,manual_period,
-              manual_event_seconds,payload,correction_reason,occurred_at
-       FROM score_events WHERE match_id=$1 ORDER BY sequence`,
-      [matchId],
-    );
-    return rows.map((row) => ({
-      clientEventId: row.client_event_id,
-      sequence: row.sequence,
-      type: row.event_type,
-      teamSlot: row.team_slot,
-      scorer: row.scorer,
-      manualPeriod: row.manual_period,
-      manualEventSeconds: row.manual_event_seconds,
-      payload: jsonValue(row.payload),
-      correctionReason: row.correction_reason,
-      occurredAt: date(row.occurred_at),
-    }));
+  async reopenCanonicalMatch(
+    actor: Phase2Actor,
+    competitionId: string,
+    matchId: string,
+    input: { clientEventId: string; reason: string; expectedAggregateVersion: number },
+    requestId: string,
+  ) {
+    if (input.reason.trim().length < 3) {
+      throw new ApiError(422, "REOPEN_REASON_REQUIRED", "Reopening a match requires a reason");
+    }
+    return this.transaction(async (tx) => {
+      const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [matchId]);
+      const match = required(
+        await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 AND competition_id=$2 FOR UPDATE`, [
+          matchId,
+          competitionId,
+        ]),
+        "Match not found",
+      );
+      const canonical = await this.canonicalScoreState(tx, matchId);
+      const command: FiveSportScoreCommand = {
+        clientEventId: input.clientEventId,
+        type: "match_reopened",
+        occurredAt: this.now().toISOString(),
+        reason: input.reason.trim(),
+      };
+      const fingerprint = stableHash({
+        client_event_id: input.clientEventId,
+        type: "match_reopened",
+        reason: input.reason.trim(),
+        expected_aggregate_version: input.expectedAggregateVersion,
+      });
+      const duplicate = (
+        await tx.unsafe<{ id: string; aggregate_version: number; command_fingerprint: string }>(
+          `SELECT id,aggregate_version,command_fingerprint FROM canonical_score_events
+           WHERE match_id=$1 AND client_event_id=$2`,
+          [matchId, input.clientEventId],
+        )
+      )[0];
+      if (duplicate) {
+        if (duplicate.command_fingerprint !== fingerprint) {
+          throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Reopen idempotency key was reused");
+        }
+        const originalResult = required(
+          await tx.unsafe<{ result_version: number }>(
+            `SELECT result_version FROM match_result_snapshots
+             WHERE match_id=$1 AND through_sequence < $2
+             ORDER BY through_sequence DESC LIMIT 1`,
+            [matchId, duplicate.aggregate_version],
+          ),
+          "Reopen receipt is unavailable",
+        );
+        return {
+          match_id: matchId,
+          duplicate: true as const,
+          aggregate_version: duplicate.aggregate_version,
+          through_sequence: duplicate.aggregate_version,
+          result_version: originalResult.result_version,
+          publication_version: originalResult.result_version,
+          conflicts: [],
+        };
+      }
+      if (canonical.aggregateVersion !== input.expectedAggregateVersion) {
+        throw new ApiError(
+          409,
+          "SCORE_VERSION_CONFLICT",
+          `Expected aggregate version ${input.expectedAggregateVersion}, current version is ${canonical.aggregateVersion}`,
+        );
+      }
+      if (!["final", "corrected"].includes(match.state)) {
+        throw new ApiError(409, "MATCH_NOT_FINALISED", "Only a finalised match can be reopened");
+      }
+      const eventId = randomUUID();
+      const event = materialiseFiveSportScoreEvent(command, {
+        eventId,
+        matchId,
+        sequence: canonical.events.length + 1,
+        actorId: actor.accountId,
+        scoringSessionId: actor.accountId,
+      });
+      try {
+        reduceFiveSportScoreEvents(
+          canonical.context.sport_code,
+          [...canonical.events, event],
+          canonical.context.settings,
+        );
+      } catch (error) {
+        throw new ApiError(422, "REOPEN_INVALID", error instanceof Error ? error.message : "Match cannot be reopened");
+      }
+      const aggregateVersion = canonical.aggregateVersion + 1;
+      await tx.unsafe(
+        `INSERT INTO canonical_score_events (
+           id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+           command,command_fingerprint,actor_account_id,device_timestamp,reason
+         ) VALUES ($1,$2,$3,$4,$5,$6,$6,'match_reopened',$7::jsonb,$8,$9,$10,$11)`,
+        [
+          eventId,
+          competitionId,
+          canonical.context.division_id,
+          matchId,
+          input.clientEventId,
+          aggregateVersion,
+          wireScoreCommand(command),
+          fingerprint,
+          actor.accountId,
+          command.occurredAt,
+          input.reason.trim(),
+        ],
+      );
+      await tx.unsafe(`UPDATE match_score_streams SET current_version=$2,updated_at=$3 WHERE match_id=$1`, [
+        matchId,
+        aggregateVersion,
+        this.now(),
+      ]);
+      await tx.unsafe(`UPDATE matches SET state='in_progress' WHERE id=$1`, [matchId]);
+      await this.evidence(tx, {
+        requestId,
+        actorAccountId: actor.accountId,
+        organisationId: competition.organisation_id,
+        action: "result.reopened",
+        targetType: "match",
+        targetId: matchId,
+        reason: input.reason.trim(),
+        after: { aggregate_version: aggregateVersion },
+        eventPayload: { competition_id: competitionId, match_id: matchId, aggregate_version: aggregateVersion },
+      });
+      const publication = required(
+        await tx.unsafe<{ result_version: number }>(
+          `SELECT result_version FROM competition_publications WHERE competition_id=$1`,
+          [competitionId],
+        ),
+        "Publication record not found",
+      );
+      return {
+        match_id: matchId,
+        duplicate: false as const,
+        aggregate_version: aggregateVersion,
+        through_sequence: aggregateVersion,
+        result_version: publication.result_version,
+        publication_version: publication.result_version,
+        conflicts: [],
+      };
+    });
   }
 
-  private async latestMatchResult(tx: PostgresJsSql, matchId: string) {
+  async correctCanonicalMatch(
+    actor: Phase2Actor,
+    competitionId: string,
+    matchId: string,
+    input: {
+      clientEventId: string;
+      reason: string;
+      expectedAggregateVersion: number;
+      events: readonly unknown[];
+    },
+    requestId: string,
+  ) {
+    if (input.reason.trim().length < 3) {
+      throw new ApiError(422, "CORRECTION_REASON_REQUIRED", "Correction reason is required");
+    }
+    if (input.events.length < 1 || input.events.length > 25) {
+      throw new ApiError(422, "CORRECTION_EVENTS_REQUIRED", "Correction requires between one and 25 events");
+    }
+    const parsed = input.events.map(parseFiveSportScoreCommand);
+    if (parsed.some((command) => !command)) {
+      throw new ApiError(422, "CORRECTION_EVENT_INVALID", "A correction event is invalid");
+    }
+    const commands = parsed as FiveSportScoreCommand[];
+    if (commands.some((command) => ["match_started", "match_reopened", "finalisation"].includes(command.type))) {
+      throw new ApiError(422, "CORRECTION_EVENT_INVALID", "Correction events cannot control match lifecycle");
+    }
+    const transactionFingerprint = stableHash({
+      reason: input.reason.trim(),
+      expected_aggregate_version: input.expectedAggregateVersion,
+      events: commands,
+    });
+    return this.transaction(async (tx) => {
+      const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [matchId]);
+      const duplicate = (
+        await tx.unsafe<{
+          command_fingerprint: string;
+          through_aggregate_version: number;
+          result_version: number;
+        }>(
+          `SELECT command_fingerprint,through_aggregate_version,result_version
+           FROM score_correction_transactions WHERE match_id=$1 AND client_event_id=$2`,
+          [matchId, input.clientEventId],
+        )
+      )[0];
+      if (duplicate) {
+        if (duplicate.command_fingerprint !== transactionFingerprint) {
+          throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Correction idempotency key was reused");
+        }
+        const conflicts = await tx.unsafe<Record<string, unknown>>(
+          `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,
+                  'open'::text AS status,detail,created_at,
+                  NULL::timestamptz AS acknowledged_at,
+                  NULL::uuid AS acknowledged_by_account_id,
+                  NULL::text AS acknowledgement_reason
+           FROM result_conflicts WHERE competition_id=$1 AND corrected_match_id=$2 AND result_version=$3
+           ORDER BY created_at,id`,
+          [competitionId, matchId, duplicate.result_version],
+        );
+        return {
+          match_id: matchId,
+          duplicate: true as const,
+          aggregate_version: duplicate.through_aggregate_version,
+          through_sequence: duplicate.through_aggregate_version,
+          result_version: duplicate.result_version,
+          publication_version: duplicate.result_version,
+          conflicts,
+        };
+      }
+      const match = required(
+        await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 AND competition_id=$2 FOR UPDATE`, [
+          matchId,
+          competitionId,
+        ]),
+        "Match not found",
+      );
+      const canonical = await this.canonicalScoreState(tx, matchId);
+      if (canonical.aggregateVersion !== input.expectedAggregateVersion) {
+        throw new ApiError(
+          409,
+          "SCORE_VERSION_CONFLICT",
+          `Expected aggregate version ${input.expectedAggregateVersion}, current version is ${canonical.aggregateVersion}`,
+        );
+      }
+      for (const command of commands) {
+        assertFiveSportScoreCommandAllowed(canonical.context.sport_code, command, canonical.context.settings);
+      }
+      const explicitlyReopened = match.state === "in_progress" && canonical.events.at(-1)?.type === "match_reopened";
+      if (!["final", "corrected"].includes(match.state) && !explicitlyReopened) {
+        throw new ApiError(
+          409,
+          "MATCH_NOT_CORRECTION_READY",
+          "Correction requires a finalised match or the latest organiser reopen event",
+        );
+      }
+      const reopenCommand: FiveSportScoreCommand | null = explicitlyReopened
+        ? null
+        : {
+            clientEventId: input.clientEventId,
+            type: "match_reopened",
+            occurredAt: this.now().toISOString(),
+            reason: input.reason.trim(),
+          };
+      const finaliseCommand: FiveSportScoreCommand = {
+        clientEventId: derivedUuid(input.clientEventId, "finalisation"),
+        type: "finalisation",
+        occurredAt: this.now().toISOString(),
+      };
+      const reservedClientEventIds = [
+        input.clientEventId,
+        finaliseCommand.clientEventId,
+        ...commands.map((command) => command.clientEventId),
+      ];
+      if (new Set(reservedClientEventIds).size !== reservedClientEventIds.length) {
+        throw new ApiError(
+          409,
+          "IDEMPOTENCY_KEY_REUSED",
+          "Correction envelope and child client event IDs must be distinct",
+        );
+      }
+      const colliding = await tx.unsafe<{ client_event_id: string }>(
+        `SELECT client_event_id FROM canonical_score_events
+         WHERE match_id=$1 AND client_event_id=ANY($2::uuid[]) LIMIT 1`,
+        [matchId, reservedClientEventIds],
+      );
+      if (colliding[0]) {
+        throw new ApiError(
+          409,
+          "IDEMPOTENCY_KEY_REUSED",
+          "A correction client event ID is already used by the score stream",
+        );
+      }
+      const allCommands = [...(reopenCommand ? [reopenCommand] : []), ...commands, finaliseCommand];
+      const staged: Array<{
+        id: string;
+        aggregateVersion: number;
+        command: FiveSportScoreCommand;
+        event: FiveSportScoreEvent;
+      }> = [];
+      let logicalEvents = [...canonical.events];
+      for (const command of allCommands) {
+        const id = randomUUID();
+        const event = materialiseFiveSportScoreEvent(command, {
+          eventId: id,
+          matchId,
+          sequence: logicalEvents.length + 1,
+          actorId: actor.accountId,
+          scoringSessionId: actor.accountId,
+        });
+        logicalEvents = [...logicalEvents, event];
+        staged.push({
+          id,
+          aggregateVersion: canonical.aggregateVersion + staged.length + 1,
+          command,
+          event,
+        });
+      }
+      let state: FiveSportScoreState;
+      try {
+        state = reduceFiveSportScoreEvents(canonical.context.sport_code, logicalEvents, canonical.context.settings);
+      } catch (error) {
+        throw new ApiError(422, "CORRECTION_INVALID", error instanceof Error ? error.message : "Correction is invalid");
+      }
+      for (const item of staged) {
+        await tx.unsafe(
+          `INSERT INTO canonical_score_events (
+             id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+             command,command_fingerprint,actor_account_id,device_timestamp,reversal_target_event_id,reason
+           ) VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8::jsonb,$9,$10,$11,$12,$13)`,
+          [
+            item.id,
+            competitionId,
+            canonical.context.division_id,
+            matchId,
+            item.command.clientEventId,
+            item.aggregateVersion,
+            item.command.type,
+            wireScoreCommand(item.command),
+            stableHash(wireScoreCommand(item.command)),
+            actor.accountId,
+            item.command.occurredAt,
+            item.command.reversalTargetEventId ?? null,
+            item.command.reason ?? null,
+          ],
+        );
+      }
+      const throughAggregateVersion = staged.at(-1)!.aggregateVersion;
+      await tx.unsafe(`UPDATE match_score_streams SET current_version=$2,updated_at=$3 WHERE match_id=$1`, [
+        matchId,
+        throughAggregateVersion,
+        this.now(),
+      ]);
+      const result = await this.persistResultPublication(tx, {
+        matchId,
+        divisionId: canonical.context.division_id,
+        organisationId: competition.organisation_id,
+        requestId,
+        actorAccountId: actor.accountId,
+        actorType: "account",
+        action: "result.corrected",
+        reason: input.reason.trim(),
+        canonical: {
+          state,
+          settings: canonical.context.settings,
+          throughAggregateVersion,
+          resultState: "corrected",
+        },
+      });
+      await tx.unsafe(
+        `INSERT INTO score_correction_transactions (
+           competition_id,division_id,match_id,client_event_id,command_fingerprint,reason,
+           from_aggregate_version,through_aggregate_version,result_version,actor_account_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          competitionId,
+          canonical.context.division_id,
+          matchId,
+          input.clientEventId,
+          transactionFingerprint,
+          input.reason.trim(),
+          input.expectedAggregateVersion,
+          throughAggregateVersion,
+          result.result_version,
+          actor.accountId,
+        ],
+      );
+      const conflicts = await tx.unsafe<{
+        id: string;
+        corrected_match_id: string;
+        downstream_match_id: string;
+        result_version: number;
+        reason: string;
+        status: string;
+        detail: Record<string, unknown> | string;
+        created_at: Date | string;
+        acknowledged_at: Date | string | null;
+        acknowledged_by_account_id: string | null;
+        acknowledgement_reason: string | null;
+      }>(
+        `WITH RECURSIVE descendants(id) AS (
+           SELECT dependency.match_id
+           FROM match_dependencies dependency
+           WHERE dependency.source_match_id=$1
+           UNION
+           SELECT dependency.match_id
+           FROM match_dependencies dependency
+           JOIN descendants parent ON parent.id=dependency.source_match_id
+         ), candidates AS (
+           SELECT downstream.id,
+                  CASE
+                    WHEN downstream.state IN ('final','corrected') THEN 'downstream_result_finalised'
+                    WHEN downstream.state='in_progress' THEN 'downstream_match_started'
+                    ELSE 'manual_slot_preserved'
+                  END AS reason
+           FROM descendants
+           JOIN matches downstream ON downstream.id=descendants.id
+           WHERE downstream.state IN ('in_progress','final','corrected')
+              OR EXISTS (
+                SELECT 1 FROM advancement_slots slot
+                WHERE slot.match_id=downstream.id AND slot.control='manual'
+              )
+         )
+         INSERT INTO result_conflicts (
+           competition_id,division_id,corrected_match_id,downstream_match_id,
+           result_version,reason,detail
+         )
+         SELECT $2,$3,$1,candidates.id,$4,candidates.reason,
+                jsonb_build_object(
+                  'affected_slot',NULL,
+                  'previous_entry_id',NULL,
+                  'proposed_entry_id',NULL
+                )
+         FROM candidates
+         ON CONFLICT DO NOTHING
+         RETURNING id,corrected_match_id,downstream_match_id,result_version,reason,status,detail,
+                   created_at,acknowledged_at,acknowledged_by_account_id,acknowledgement_reason`,
+        [matchId, competitionId, canonical.context.division_id, result.result_version],
+      );
+      for (const conflict of conflicts) {
+        await this.evidence(tx, {
+          requestId: `${requestId}:conflict:${conflict.id}`,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "result_conflict.created",
+          targetType: "result_conflict",
+          targetId: conflict.id,
+          reason: conflict.reason,
+          eventPayload: {
+            competition_id: competitionId,
+            corrected_match_id: matchId,
+            downstream_match_id: conflict.downstream_match_id,
+            result_version: result.result_version,
+          },
+        });
+      }
+      return {
+        match_id: matchId,
+        duplicate: false as const,
+        aggregate_version: throughAggregateVersion,
+        through_sequence: throughAggregateVersion,
+        result_version: result.result_version,
+        publication_version: result.result_version,
+        conflicts,
+      };
+    });
+  }
+
+  private async matchResultAtSequence(tx: PostgresJsSql, matchId: string, throughSequence: number) {
     const row = (
       await tx.unsafe<{
         home_score: number;
@@ -2746,8 +3624,8 @@ export class Phase2Runtime {
         result_version: number;
       }>(
         `SELECT home_score,away_score,result_version FROM match_result_snapshots
-       WHERE match_id=$1 ORDER BY result_version DESC LIMIT 1`,
-        [matchId],
+       WHERE match_id=$1 AND through_sequence=$2`,
+        [matchId, throughSequence],
       )
     )[0];
     return row
@@ -2771,10 +3649,14 @@ export class Phase2Runtime {
       actorType: "account" | "access_pass";
       action: "result.finalised" | "result.corrected";
       reason: string | null;
-      forcedScore?: { homeScore: number; awayScore: number; state: "corrected" };
+      canonical: {
+        state: FiveSportScoreState;
+        settings: SportPackSettings;
+        throughAggregateVersion: number;
+        resultState: "final" | "corrected";
+      };
     },
   ) {
-    const events = await this.persistedEvents(tx, input.matchId);
     const match = required(
       await tx.unsafe<{ competition_id: string; home_entry_id: string | null; away_entry_id: string | null }>(
         `SELECT competition_id,home_entry_id,away_entry_id FROM matches WHERE id=$1 FOR UPDATE`,
@@ -2785,27 +3667,31 @@ export class Phase2Runtime {
     if (!match.home_entry_id || !match.away_entry_id) {
       throw new ApiError(409, "MATCH_PARTICIPANTS_UNRESOLVED", "Match participants are not resolved");
     }
-    let reduced: {
+    const reduced: {
       homeScore: number;
       awayScore: number;
       state: "final" | "corrected";
       snapshot: Record<string, unknown>;
-    };
-    try {
-      reduced = input.forcedScore
-        ? { ...input.forcedScore, snapshot: { corrected: true, ...input.forcedScore } }
-        : this.domain.reduceScore(events, {
-            matchId: input.matchId,
-            homeEntryId: match.home_entry_id,
-            awayEntryId: match.away_entry_id,
-          });
-    } catch (error) {
-      throw new ApiError(
-        422,
-        "FINALISATION_INVALID",
-        error instanceof Error ? error.message : "Finalisation is invalid",
-      );
-    }
+    } = (() => {
+      const exceptionalWinner =
+        input.canonical.state.exceptionalOutcome === "walkover" ? input.canonical.state.winner : null;
+      const forfeitWinnerScore = Number(input.canonical.settings.forfeitWinnerScore ?? 0);
+      const forfeitLoserScore = Number(input.canonical.settings.forfeitLoserScore ?? 0);
+      return {
+        homeScore: exceptionalWinner
+          ? exceptionalWinner === "home"
+            ? forfeitWinnerScore
+            : forfeitLoserScore
+          : input.canonical.state.score.home,
+        awayScore: exceptionalWinner
+          ? exceptionalWinner === "away"
+            ? forfeitWinnerScore
+            : forfeitLoserScore
+          : input.canonical.state.score.away,
+        state: input.canonical.resultState,
+        snapshot: input.canonical.state as unknown as Record<string, unknown>,
+      };
+    })();
     const publication = required(
       await tx.unsafe<{ schedule_version: number; result_version: number }>(
         `SELECT schedule_version,result_version FROM competition_publications WHERE competition_id=$1 FOR UPDATE`,
@@ -2814,7 +3700,7 @@ export class Phase2Runtime {
       "Publication record not found",
     );
     const resultVersion = publication.result_version + 1;
-    const throughSequence = events.at(-1)?.sequence ?? 1;
+    const throughSequence = input.canonical.throughAggregateVersion;
     await tx.unsafe(
       `INSERT INTO match_result_snapshots (
          match_id,result_version,through_sequence,home_score,away_score,state,snapshot
@@ -2835,7 +3721,14 @@ export class Phase2Runtime {
       [match.competition_id, resultVersion, this.now()],
     );
     await tx.unsafe(
-      `UPDATE competitions SET status=CASE WHEN status='draft' THEN 'active' ELSE status END,updated_at=$2 WHERE id=$1`,
+      `UPDATE competitions SET status=CASE
+         WHEN status='draft' AND EXISTS (
+           SELECT 1 FROM competition_publications publication
+           WHERE publication.competition_id=competitions.id
+             AND publication.published_schedule_revision_id IS NOT NULL
+         ) THEN 'active'
+         ELSE status
+       END,updated_at=$2 WHERE id=$1`,
       [match.competition_id, this.now()],
     );
     await this.recalculateDivision(tx, match.competition_id, input.divisionId, resultVersion);
@@ -2867,18 +3760,103 @@ export class Phase2Runtime {
     resultVersion: number,
   ) {
     const entries = await tx.unsafe<EntryRow>(
-      `SELECT id,name,seed FROM division_entries WHERE division_id=$1 AND status='confirmed' ORDER BY seed`,
+      `SELECT id,name,seed FROM division_entries
+       WHERE division_id=$1 AND status IN ('confirmed','active')
+       ORDER BY seed,id`,
       [divisionId],
     );
+    if (entries.length === 0) {
+      throw new ApiError(409, "STANDINGS_ENTRIES_EMPTY", "Standings require at least one active division entry");
+    }
     const results = await this.resultsForDivision(tx, divisionId, resultVersion);
-    const settingsRows = await tx.unsafe<Record<string, unknown>>(
-      `SELECT period_count AS "periodCount",period_minutes AS "periodMinutes",slot_minutes AS "slotMinutes",
-              points_win AS "pointsWin",points_draw AS "pointsDraw",points_loss AS "pointsLoss",
-              tiebreak_order AS "tiebreakOrder",discipline_weights AS "disciplineWeights"
-       FROM competition_sport_settings WHERE competition_id=$1`,
-      [competitionId],
+    const effectiveSettings = required(
+      await tx.unsafe<{ settings: SportPackSettings | string }>(
+        `SELECT settings.recommended_snapshot || settings.settings_override ||
+                COALESCE(division.settings_override,'{}'::jsonb) AS settings
+         FROM competition_sport_settings settings
+         LEFT JOIN division_sport_settings division
+           ON division.competition_id=settings.competition_id AND division.division_id=$2
+         WHERE settings.competition_id=$1`,
+        [competitionId, divisionId],
+      ),
+      "Effective sport settings not found",
     );
-    const standings = this.domain.calculateStandings({ entries, results, settings: settingsRows[0] ?? {} });
+    const sport = required(
+      await tx.unsafe<{ sport_code: SportId }>(`SELECT sport_code FROM competitions WHERE id=$1`, [competitionId]),
+      "Competition not found",
+    );
+    const standingsConfig = effectiveStandingsConfig(
+      sport.sport_code,
+      jsonValue<SportPackSettings>(effectiveSettings.settings),
+    );
+    const genericResults = await tx.unsafe<{
+      match_id: string;
+      home_entry_id: string;
+      away_entry_id: string;
+      home_score: number;
+      away_score: number;
+      state: "final" | "corrected";
+      result_version: number;
+      snapshot: Record<string, unknown> | string;
+    }>(
+      `SELECT DISTINCT ON (m.id) m.id AS match_id,m.home_entry_id,m.away_entry_id,
+                snapshot.home_score,snapshot.away_score,snapshot.state,snapshot.result_version,snapshot.snapshot
+         FROM matches m
+         JOIN match_result_snapshots snapshot ON snapshot.match_id=m.id
+         WHERE m.division_id=$1 AND snapshot.result_version<=$2
+           AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
+         ORDER BY m.id,snapshot.result_version DESC`,
+      [divisionId, resultVersion],
+    );
+    const standingsResults: StandingsMatchResult[] = genericResults.map((result) => {
+      const snapshot = jsonValue<{
+        segments?: Array<{ home?: number; away?: number }>;
+        totalPoints?: { home?: number; away?: number };
+        exceptionalOutcome?: string | null;
+        winner?: "home" | "away" | null;
+      }>(result.snapshot);
+      const segments = Array.isArray(snapshot.segments) ? snapshot.segments : [];
+      const config = standingsConfig;
+      const forfeit = snapshot.exceptionalOutcome === "walkover" && Boolean(snapshot.winner);
+      const homeWonForfeit = forfeit && snapshot.winner === "home";
+      const forfeitHomeSegments = homeWonForfeit ? config.forfeitScore.homeSegments : config.forfeitScore.awaySegments;
+      const forfeitAwaySegments = homeWonForfeit ? config.forfeitScore.awaySegments : config.forfeitScore.homeSegments;
+      return {
+        matchId: result.match_id,
+        homeEntryId: result.home_entry_id,
+        awayEntryId: result.away_entry_id,
+        homeScore: forfeit
+          ? homeWonForfeit
+            ? config.forfeitScore.homeScore
+            : config.forfeitScore.awayScore
+          : Number(snapshot.totalPoints?.home ?? result.home_score),
+        awayScore: forfeit
+          ? homeWonForfeit
+            ? config.forfeitScore.awayScore
+            : config.forfeitScore.homeScore
+          : Number(snapshot.totalPoints?.away ?? result.away_score),
+        ...(!forfeit
+          ? {
+              homeSegments: segments.map((segment) => Number(segment.home ?? 0)),
+              awaySegments: segments.map((segment) => Number(segment.away ?? 0)),
+            }
+          : forfeitHomeSegments && forfeitAwaySegments
+            ? { homeSegments: forfeitHomeSegments, awaySegments: forfeitAwaySegments }
+            : {}),
+        status: forfeit ? ("forfeit" as const) : result.state,
+        ...(forfeit
+          ? {
+              forfeitLoserEntryId: snapshot.winner === "home" ? result.away_entry_id : result.home_entry_id,
+            }
+          : {}),
+        version: result.result_version,
+      };
+    });
+    const rows = calculateStandings(entries, standingsResults, standingsConfig);
+    const standings = {
+      standings: rows,
+      explanation: rows.map((row) => ({ entry_id: row.entryId, criteria: row.explanations })),
+    };
     const format = required(
       await tx.unsafe<{ definition: Record<string, unknown> }>(
         `SELECT fr.definition FROM format_revisions fr
@@ -2901,12 +3879,13 @@ export class Phase2Runtime {
     );
     await tx.unsafe(`SELECT set_config('matchday.server_results','on',true)`);
     const snapshot = required(
-      await tx.unsafe<{ id: string }>(
+      await tx.unsafe<{ id: string; row_count: number }>(
         `INSERT INTO standings_snapshots (
          competition_id,division_id,result_version,standings,explanation,calculation_input_hash,
          calculation_provenance,source_result_hash,settings_version,snapshot_fingerprint
-       ) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,'server_calculated',$6,'phase2-canoe-polo-v1',$6)
-       RETURNING id`,
+       ) VALUES ($1,$2,$3,$4::text::jsonb,$5::text::jsonb,$6,'server_calculated',$6,$7,$6)
+       RETURNING id,
+         CASE WHEN jsonb_typeof(standings)='array' THEN jsonb_array_length(standings) ELSE -1 END AS row_count`,
         [
           competitionId,
           divisionId,
@@ -2914,10 +3893,18 @@ export class Phase2Runtime {
           JSON.stringify(standings.standings),
           JSON.stringify(standings.explanation),
           provenance.source_hash,
+          standingsConfig.version,
         ],
       ),
       "Standings snapshot was not created",
     );
+    if (snapshot.row_count !== entries.length) {
+      throw new ApiError(
+        500,
+        "STANDINGS_PERSISTENCE_INVALID",
+        `Standings snapshot retained ${snapshot.row_count} of ${entries.length} active entries`,
+      );
+    }
     for (const item of resolved.matches ?? []) {
       for (const slot of ["home", "away"] as const) {
         const entryId = slot === "home" ? item.homeEntryId : item.awayEntryId;
@@ -3049,17 +4036,16 @@ export class Phase2Runtime {
       throw new ApiError(409, "COMPETITION_NOT_PUBLISHED", "Draft competitions cannot have a public projection");
     }
     const publicCompetitionStatus = competition.status;
-    const division = required(
-      await tx.unsafe<{ id: string; name: string }>(
-        `SELECT id,name FROM divisions WHERE competition_id=$1 ORDER BY created_at,id LIMIT 1`,
-        [competitionId],
-      ),
-      "Division not found",
+    const divisions = await tx.unsafe<{ id: string; name: string }>(
+      `SELECT id,name FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
+      [competitionId],
     );
+    required(divisions, "Division not found");
     const schedule =
       scheduleVersion > 0
         ? await tx.unsafe<{
             id: string;
+            division_id: string;
             code: string;
             stage: string;
             home_entry_id: string | null;
@@ -3071,14 +4057,14 @@ export class Phase2Runtime {
             area_id: string;
             area_name: string;
           }>(
-            `SELECT m.id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
+            `SELECT m.id,m.division_id,m.code,m.stage,sm.home_entry_id,sm.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
                   sm.starts_at,sm.ends_at,pa.id AS area_id,pa.name AS area_name
            FROM competition_publications cp
            JOIN scheduled_matches sm ON sm.schedule_revision_id=cp.published_schedule_revision_id
            JOIN matches m ON m.id=sm.match_id JOIN playing_areas pa ON pa.id=sm.playing_area_id
-           LEFT JOIN division_entries home ON home.id=m.home_entry_id
-           LEFT JOIN division_entries away ON away.id=m.away_entry_id
+           LEFT JOIN division_entries home ON home.id=sm.home_entry_id
+           LEFT JOIN division_entries away ON away.id=sm.away_entry_id
            WHERE cp.competition_id=$1 ORDER BY sm.starts_at,pa.sort_order,m.ordinal`,
             [competitionId],
           )
@@ -3087,6 +4073,7 @@ export class Phase2Runtime {
       resultVersion > 0
         ? await tx.unsafe<{
             id: string;
+            division_id: string;
             code: string;
             stage: string;
             home_entry_id: string;
@@ -3098,7 +4085,7 @@ export class Phase2Runtime {
             state: "final" | "corrected";
             created_at: Date | string;
           }>(
-            `SELECT DISTINCT ON (m.id) m.id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
+            `SELECT DISTINCT ON (m.id) m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
                   s.home_score,s.away_score,s.state,s.created_at
            FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
@@ -3111,41 +4098,70 @@ export class Phase2Runtime {
         : [];
     const standings =
       resultVersion > 0
-        ? await tx.unsafe<{ standings: unknown; explanation: unknown }>(
-            `SELECT standings,explanation FROM standings_snapshots
-           WHERE competition_id=$1 AND result_version <= $2 ORDER BY result_version DESC LIMIT 1`,
+        ? await tx.unsafe<{ division_id: string; standings: unknown; explanation: unknown }>(
+            `SELECT DISTINCT ON (division_id) division_id,standings,explanation
+           FROM standings_snapshots
+           WHERE competition_id=$1 AND result_version <= $2
+           ORDER BY division_id,result_version DESC`,
             [competitionId, resultVersion],
           )
         : [];
     const bracket =
       resultVersion > 0
-        ? await tx.unsafe<{ bracket: unknown; conflicts: unknown }>(
-            `SELECT bracket,conflicts FROM bracket_snapshots
-           WHERE competition_id=$1 AND result_version <= $2 ORDER BY result_version DESC LIMIT 1`,
+        ? await tx.unsafe<{ division_id: string; bracket: unknown; conflicts: unknown }>(
+            `SELECT DISTINCT ON (division_id) division_id,bracket,conflicts
+           FROM bracket_snapshots
+           WHERE competition_id=$1 AND result_version <= $2
+           ORDER BY division_id,result_version DESC`,
             [competitionId, resultVersion],
           )
         : [];
-    const publicSchedule: PublicScheduledMatch[] = schedule.map((match) => ({
-      id: match.id,
-      code: match.code,
-      stage: match.stage,
-      home: { id: match.home_entry_id, name: match.home_name ?? "TBD" },
-      away: { id: match.away_entry_id, name: match.away_name ?? "TBD" },
-      starts_at: serializedDate(match.starts_at),
-      ends_at: serializedDate(match.ends_at),
-      area: { id: match.area_id, name: match.area_name },
-    }));
-    const publicResults: PublicMatchResult[] = results.map((match) => ({
-      id: match.id,
-      code: match.code,
-      stage: match.stage,
-      home: { id: match.home_entry_id, name: match.home_name },
-      away: { id: match.away_entry_id, name: match.away_name },
-      home_score: match.home_score,
-      away_score: match.away_score,
-      state: match.state,
-      updated_at: serializedDate(match.created_at),
-    }));
+    const standingsByDivision = new Map(standings.map((snapshot) => [snapshot.division_id, snapshot]));
+    const bracketByDivision = new Map(bracket.map((snapshot) => [snapshot.division_id, snapshot]));
+    const publicDivisions: PublicDivisionProjection[] = divisions.map((division) => {
+      const publicSchedule: PublicScheduledMatch[] = schedule
+        .filter((match) => match.division_id === division.id)
+        .map((match) => ({
+          id: match.id,
+          code: match.code,
+          stage: match.stage,
+          home: { id: match.home_entry_id, name: match.home_name ?? "TBD" },
+          away: { id: match.away_entry_id, name: match.away_name ?? "TBD" },
+          starts_at: serializedDate(match.starts_at),
+          ends_at: serializedDate(match.ends_at),
+          area: { id: match.area_id, name: match.area_name },
+        }));
+      const publicResults: PublicMatchResult[] = results
+        .filter((match) => match.division_id === division.id)
+        .map((match) => ({
+          id: match.id,
+          code: match.code,
+          stage: match.stage,
+          home: { id: match.home_entry_id, name: match.home_name },
+          away: { id: match.away_entry_id, name: match.away_name },
+          home_score: match.home_score,
+          away_score: match.away_score,
+          state: match.state,
+          updated_at: serializedDate(match.created_at),
+        }));
+      const divisionStandings = standingsByDivision.get(division.id);
+      const divisionBracket = bracketByDivision.get(division.id);
+      return {
+        division,
+        schedule: publicSchedule,
+        results: publicResults,
+        standings: divisionStandings
+          ? {
+              standings: jsonValue(divisionStandings.standings),
+              explanation: jsonValue(divisionStandings.explanation),
+            }
+          : null,
+        bracket: divisionBracket
+          ? { bracket: jsonValue(divisionBracket.bracket), conflicts: jsonValue(divisionBracket.conflicts) }
+          : null,
+      };
+    });
+    const legacyDivision = required(publicDivisions, "Division projection not found");
     const projection: Omit<PublicCompetitionProjection, "last_updated_at"> = {
       competition: {
         ...competition,
@@ -3153,16 +4169,13 @@ export class Phase2Runtime {
         starts_on: serializedDate(competition.starts_on).slice(0, 10),
         ends_on: serializedDate(competition.ends_on).slice(0, 10),
       },
-      division,
+      divisions: publicDivisions,
+      division: legacyDivision.division,
       publication: { schedule_version: scheduleVersion, result_version: resultVersion },
-      schedule: publicSchedule,
-      results: publicResults,
-      standings: standings[0]
-        ? { standings: jsonValue(standings[0].standings), explanation: jsonValue(standings[0].explanation) }
-        : null,
-      bracket: bracket[0]
-        ? { bracket: jsonValue(bracket[0].bracket), conflicts: jsonValue(bracket[0].conflicts) }
-        : null,
+      schedule: legacyDivision.schedule,
+      results: legacyDivision.results,
+      standings: legacyDivision.standings,
+      bracket: legacyDivision.bracket,
     };
     await tx.unsafe(
       `INSERT INTO public_competition_projections (
@@ -3189,8 +4202,26 @@ export class Phase2Runtime {
     );
     const row = rows[0];
     if (!row) throw new ApiError(404, "PUBLIC_COMPETITION_NOT_FOUND", "Competition not found");
+    const stored = jsonValue<
+      Omit<PublicCompetitionProjection, "last_updated_at"> & {
+        divisions?: PublicDivisionProjection[];
+      }
+    >(row.projection);
+    const divisions =
+      Array.isArray(stored.divisions) && stored.divisions.length > 0
+        ? stored.divisions
+        : [
+            {
+              division: stored.division,
+              schedule: stored.schedule,
+              results: stored.results,
+              standings: stored.standings,
+              bracket: stored.bracket,
+            },
+          ];
     return {
-      ...jsonValue<Omit<PublicCompetitionProjection, "last_updated_at">>(row.projection),
+      ...stored,
+      divisions,
       last_updated_at: date(row.generated_at).toISOString(),
     };
   }
@@ -3244,11 +4275,20 @@ export class Phase2Runtime {
           `SELECT sr.id,sr.revision,sr.status,sr.warnings,sr.created_at,sr.published_at,
               COALESCE(jsonb_agg(jsonb_build_object(
                 'match_id',m.id,'code',m.code,'stage',m.stage,'area_id',pa.id,'area',pa.name,
-                'starts_at',sm.starts_at,'ends_at',sm.ends_at
+                'starts_at',sm.starts_at,'ends_at',sm.ends_at,'state',m.state,
+                'home_score',latest_result.home_score,'away_score',latest_result.away_score,
+                'result_version',latest_result.result_version
               ) ORDER BY sm.starts_at,pa.sort_order,m.ordinal) FILTER (WHERE sm.match_id IS NOT NULL),'[]'::jsonb) AS matches
        FROM schedule_revisions sr
        LEFT JOIN scheduled_matches sm ON sm.schedule_revision_id=sr.id
        LEFT JOIN matches m ON m.id=sm.match_id LEFT JOIN playing_areas pa ON pa.id=sm.playing_area_id
+       LEFT JOIN LATERAL (
+         SELECT snapshot.home_score,snapshot.away_score,snapshot.result_version
+         FROM match_result_snapshots snapshot
+         WHERE snapshot.match_id=m.id
+         ORDER BY snapshot.result_version DESC
+         LIMIT 1
+       ) latest_result ON true
        WHERE sr.competition_id=$1
        GROUP BY sr.id ORDER BY sr.revision DESC LIMIT 1`,
           [competitionId],
@@ -3314,8 +4354,9 @@ export class Phase2Runtime {
           away_entry_id: string | null;
           home_name: string | null;
           away_name: string | null;
+          sport_code: SportId;
         }>(
-          `SELECT m.id,c.slug AS competition_slug,m.code,m.stage,m.state,m.home_entry_id,m.away_entry_id,
+          `SELECT m.id,c.slug AS competition_slug,c.sport_code,m.code,m.stage,m.state,m.home_entry_id,m.away_entry_id,
                   home.name AS home_name,away.name AS away_name
            FROM matches m JOIN competitions c ON c.id=m.competition_id
            LEFT JOIN division_entries home ON home.id=m.home_entry_id
@@ -3324,7 +4365,19 @@ export class Phase2Runtime {
         ),
         "Match not found",
       );
-      const events = await this.persistedEvents(tx, session.match_id);
+      const stream = (
+        await tx.unsafe<{ match_id: string }>(`SELECT match_id FROM match_score_streams WHERE match_id=$1`, [
+          session.match_id,
+        ])
+      )[0];
+      const canonical = stream
+        ? await this.canonicalScoreState(tx, session.match_id, { readOnlyLegacyProjection: true })
+        : (() => {
+            return null;
+          })();
+      const currentContext = canonical ? canonical.context : await this.canonicalScoringContext(tx, session.match_id);
+      const canonicalState =
+        canonical?.state ?? reduceFiveSportScoreEvents(currentContext.sport_code, [], currentContext.settings);
       const writerActive =
         session.mode === "writer" &&
         session.lease_session_id === session.id &&
@@ -3334,14 +4387,21 @@ export class Phase2Runtime {
         session.mode === "writer" && session.lease_session_id === session.id && session.lease_expires_at
           ? date(session.lease_expires_at).toISOString()
           : null;
-      const reversed = new Set(
-        events
-          .filter((event) => event.type === "goal_reversed")
-          .map((event) => String(event.payload.reversal_target_event_id ?? "")),
-      );
-      const goals = events.filter((event) => event.type === "goal_added" && !reversed.has(event.clientEventId));
+      const canonicalRows = stream
+        ? await tx.unsafe<{
+            id: string;
+            client_event_id: string;
+            aggregate_version: number;
+            command: Record<string, unknown> | string;
+          }>(
+            `SELECT id,client_event_id,aggregate_version,command
+             FROM canonical_score_events WHERE match_id=$1 ORDER BY aggregate_version`,
+            [session.match_id],
+          )
+        : [];
       return {
-        competition: { slug: match.competition_slug },
+        competition: { slug: match.competition_slug, sport_code: match.sport_code },
+        sport: { pack_version: currentContext.pack_version, settings: currentContext.settings },
         match: {
           id: match.id,
           code: match.code,
@@ -3360,24 +4420,313 @@ export class Phase2Runtime {
           expires_at: writerLeaseExpiresAt,
           read_only: !writerActive,
         },
-        score: {
-          home: goals.filter((event) => event.teamSlot === "home").length,
-          away: goals.filter((event) => event.teamSlot === "away").length,
-        },
-        through_sequence: events.at(-1)?.sequence ?? 0,
-        events: events.map((event) => ({
-          client_event_id: event.clientEventId,
-          sequence: event.sequence,
-          type: event.type,
-          team_slot: event.teamSlot,
-          scorer: event.scorer,
-          manual_period: event.manualPeriod,
-          manual_event_seconds: event.manualEventSeconds,
-          payload: event.payload,
-          correction_reason: event.correctionReason,
-          occurred_at: event.occurredAt.toISOString(),
-        })),
+        score: this.serialisedCanonicalScore(canonicalState),
+        aggregate_version: canonical?.aggregateVersion ?? 0,
+        through_sequence: canonical?.aggregateVersion ?? 0,
+        events: canonicalRows.map((row) => {
+          const command = parseFiveSportScoreCommand(jsonValue(row.command));
+          return {
+            event_id: row.id,
+            client_event_id: row.client_event_id,
+            sequence: row.aggregate_version,
+            type: command?.type ?? "legacy_correction",
+            team_slot: command?.side ?? null,
+            scorer: command?.participantId ?? null,
+            manual_period: command?.segmentNumber ?? null,
+            manual_event_seconds: typeof command?.manualTimeSeconds === "number" ? command.manualTimeSeconds : null,
+            payload: {},
+            correction_reason: command?.reason ?? null,
+            occurred_at: command?.occurredAt ?? "",
+          };
+        }),
       };
+    });
+  }
+
+  private serialisedCanonicalScore(state: FiveSportScoreState) {
+    const pack = SPORT_PACKS[state.sportId];
+    return {
+      home: state.score.home,
+      away: state.score.away,
+      lifecycle: state.lifecycle,
+      current_segment: state.currentSegment,
+      total_points: state.totalPoints,
+      segment_wins: state.segmentWins,
+      segments: state.segments.map((segment) => ({
+        number: segment.number,
+        home: segment.home,
+        away: segment.away,
+        completed: segment.completed,
+        winner: segment.winner,
+      })),
+      actions: state.actions.map((action) => ({
+        event_id: action.eventId,
+        client_event_id: action.clientEventId,
+        event_type: action.eventType,
+        label: action.label,
+        side: action.side,
+        participant_id: action.participantId,
+        segment_number: action.segmentNumber,
+        score_delta: action.scoreDelta,
+        occurred_at: action.occurredAt,
+        reversed: action.reversed,
+        reversible:
+          !action.reversed &&
+          Boolean(pack.eventTypes.find((definition) => definition.id === action.eventType)?.reversable),
+      })),
+      conflicts: state.conflicts.map((conflict) => ({
+        code: conflict.code,
+        segment_number: conflict.segmentNumber,
+        target_event_id: conflict.targetEventId,
+        later_segment_numbers: [...conflict.laterSegmentNumbers],
+      })),
+    };
+  }
+
+  async matchScoringAudit(actor: Phase2Actor, competitionId: string, matchId: string) {
+    return this.transaction(async (tx) => {
+      await this.requireCompetitionAccess(tx, competitionId, actor);
+      const match = required(
+        await tx.unsafe<{
+          id: string;
+          code: string;
+          state: string;
+          home_entry_id: string | null;
+          away_entry_id: string | null;
+          home_name: string | null;
+          away_name: string | null;
+          sport_code: SportId;
+        }>(
+          `SELECT match.id,match.code,match.state,match.home_entry_id,match.away_entry_id,
+                  home.name AS home_name,away.name AS away_name,competition.sport_code
+           FROM matches match
+           JOIN competitions competition ON competition.id=match.competition_id
+           LEFT JOIN division_entries home ON home.id=match.home_entry_id
+           LEFT JOIN division_entries away ON away.id=match.away_entry_id
+           WHERE match.id=$1 AND match.competition_id=$2`,
+          [matchId, competitionId],
+        ),
+        "Match not found",
+      );
+      const canonical = await this.canonicalScoreState(tx, matchId, { readOnlyLegacyProjection: true });
+      const eventRows = await tx.unsafe<{
+        id: string;
+        client_event_id: string;
+        aggregate_version: number;
+        event_type: string;
+        command: Record<string, unknown> | string;
+        device_timestamp: Date | string;
+        server_timestamp: Date | string;
+        actor_access_session_id: string | null;
+      }>(
+        `SELECT id,client_event_id,aggregate_version,event_type,command,device_timestamp,
+                server_timestamp,actor_access_session_id
+         FROM canonical_score_events WHERE match_id=$1 ORDER BY aggregate_version`,
+        [matchId],
+      );
+      const audit = await tx.unsafe<{
+        id: string;
+        occurred_at: Date | string;
+        action: string;
+        actor_type: string;
+        reason: string | null;
+        metadata: Record<string, unknown> | string;
+      }>(
+        `SELECT id,occurred_at,action,actor_type,reason,metadata
+         FROM audit_events
+         WHERE target_type='match' AND target_id=$1
+         ORDER BY occurred_at,id`,
+        [matchId],
+      );
+      const conflicts = await tx.unsafe<Record<string, unknown>>(
+        `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,status,detail,
+                created_at,acknowledged_at,acknowledged_by_account_id,acknowledgement_reason
+         FROM result_conflicts
+         WHERE competition_id=$1 AND (corrected_match_id=$2 OR downstream_match_id=$2)
+         ORDER BY created_at,id`,
+        [competitionId, matchId],
+      );
+      const result = (
+        await tx.unsafe<{ result_version: number; created_at: Date | string }>(
+          `SELECT result_version,created_at FROM match_result_snapshots
+           WHERE match_id=$1 ORDER BY result_version DESC LIMIT 1`,
+          [matchId],
+        )
+      )[0];
+      return {
+        permission: "write" as const,
+        aggregate_version: canonical.aggregateVersion,
+        through_sequence: canonical.aggregateVersion,
+        competition: { id: competitionId, sport_code: match.sport_code },
+        sport: {
+          pack_version: canonical.context.pack_version,
+          settings: canonical.context.settings,
+        },
+        match: {
+          id: match.id,
+          code: match.code,
+          state:
+            match.state === "final"
+              ? ("finalised" as const)
+              : match.state === "pending" || match.state === "ready"
+                ? ("scheduled" as const)
+                : match.state,
+          home: { id: match.home_entry_id, name: match.home_name },
+          away: { id: match.away_entry_id, name: match.away_name },
+        },
+        score: this.serialisedCanonicalScore(canonical.state),
+        result: result
+          ? { result_version: result.result_version, updated_at: serializedDate(result.created_at) }
+          : null,
+        events: eventRows.map((row) => {
+          const command = parseFiveSportScoreCommand(jsonValue(row.command));
+          return {
+            event_id: row.id,
+            client_event_id: row.client_event_id,
+            aggregate_version: row.aggregate_version,
+            event_type: row.event_type,
+            side: command?.side ?? null,
+            participant_id: command?.participantId ?? null,
+            unknown_participant: command?.unknownParticipant ?? false,
+            segment_number: command?.segmentNumber ?? null,
+            manual_time_seconds: command?.manualTimeSeconds ?? null,
+            reversal_target_event_id: command?.reversalTargetEventId ?? null,
+            reason: command?.reason ?? null,
+            device_timestamp: serializedDate(row.device_timestamp),
+            server_timestamp: serializedDate(row.server_timestamp),
+            actor_type: row.actor_access_session_id ? ("access_pass" as const) : ("account" as const),
+          };
+        }),
+        audit: audit.map((item) => ({
+          ...item,
+          occurred_at: serializedDate(item.occurred_at),
+          metadata: jsonValue(item.metadata),
+        })),
+        conflicts,
+      };
+    });
+  }
+
+  async listResultConflicts(actor: Phase2Actor, competitionId: string, status: string | null) {
+    await this.requireCompetitionAccess(this.sql, competitionId, actor);
+    if (status && !["open", "acknowledged", "resolved"].includes(status)) {
+      throw new ApiError(422, "RESULT_CONFLICT_STATUS_INVALID", "Result conflict status is invalid");
+    }
+    return this.sql.unsafe<Record<string, unknown>>(
+      `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,status,detail,
+              created_at,acknowledged_at,acknowledged_by_account_id,acknowledgement_reason
+       FROM result_conflicts
+       WHERE competition_id=$1 AND ($2::text IS NULL OR status=$2)
+       ORDER BY created_at,id`,
+      [competitionId, status],
+    );
+  }
+
+  async acknowledgeResultConflict(
+    actor: Phase2Actor,
+    competitionId: string,
+    conflictId: string,
+    input: { clientEventId: string; reason: string; expectedRevision: number },
+    requestId: string,
+  ) {
+    if (input.reason.trim().length < 3) {
+      throw new ApiError(422, "ACKNOWLEDGEMENT_REASON_REQUIRED", "Acknowledgement reason is required");
+    }
+    const fingerprint = stableHash({
+      client_event_id: input.clientEventId,
+      reason: input.reason.trim(),
+      expected_revision: input.expectedRevision,
+    });
+    return this.transaction(async (tx) => {
+      const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,1))`, [input.clientEventId]);
+      const reusedAcknowledgement = (
+        await tx.unsafe<{ id: string }>(
+          `SELECT id FROM result_conflicts WHERE acknowledgement_client_event_id=$1 FOR UPDATE`,
+          [input.clientEventId],
+        )
+      )[0];
+      if (reusedAcknowledgement && reusedAcknowledgement.id !== conflictId) {
+        throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Acknowledgement idempotency key was reused");
+      }
+      const existing = required(
+        await tx.unsafe<{
+          status: string;
+          result_version: number;
+          acknowledgement_client_event_id: string | null;
+          acknowledgement_fingerprint: string | null;
+        }>(
+          `SELECT status,result_version,acknowledgement_client_event_id,acknowledgement_fingerprint
+           FROM result_conflicts WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
+          [conflictId, competitionId],
+        ),
+        "Result conflict not found",
+      );
+      if (existing.acknowledgement_client_event_id === input.clientEventId) {
+        if (existing.acknowledgement_fingerprint !== fingerprint) {
+          throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Acknowledgement idempotency key was reused");
+        }
+        return required(
+          await tx.unsafe<Record<string, unknown>>(
+            `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,status,detail,
+                    created_at,acknowledged_at,acknowledged_by_account_id,acknowledgement_reason,
+                    acknowledgement_client_event_id
+             FROM result_conflicts WHERE id=$1 AND competition_id=$2`,
+            [conflictId, competitionId],
+          ),
+          "Result conflict not found",
+        );
+      }
+      if (existing.acknowledgement_client_event_id) {
+        throw new ApiError(409, "RESULT_CONFLICT_ALREADY_ACKNOWLEDGED", "Conflict is already acknowledged");
+      }
+      if (existing.result_version !== input.expectedRevision) {
+        throw new ApiError(
+          409,
+          "RESULT_CONFLICT_VERSION_CONFLICT",
+          `Expected conflict revision ${input.expectedRevision}, current revision is ${existing.result_version}`,
+        );
+      }
+      if (existing.status === "resolved") {
+        throw new ApiError(409, "RESULT_CONFLICT_RESOLVED", "Resolved conflicts cannot be acknowledged again");
+      }
+      if (existing.status === "open") {
+        await tx.unsafe(
+          `UPDATE result_conflicts SET status='acknowledged',acknowledged_at=$3,
+             acknowledged_by_account_id=$4,acknowledgement_reason=$5,
+             acknowledgement_client_event_id=$6,acknowledgement_fingerprint=$7
+           WHERE id=$1 AND competition_id=$2`,
+          [
+            conflictId,
+            competitionId,
+            this.now(),
+            actor.accountId,
+            input.reason.trim(),
+            input.clientEventId,
+            fingerprint,
+          ],
+        );
+        await this.evidence(tx, {
+          requestId,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "result_conflict.acknowledged",
+          targetType: "result_conflict",
+          targetId: conflictId,
+          reason: input.reason.trim(),
+          eventPayload: { competition_id: competitionId, result_conflict_id: conflictId },
+        });
+      }
+      return required(
+        await tx.unsafe<Record<string, unknown>>(
+          `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,status,detail,
+                  created_at,acknowledged_at,acknowledged_by_account_id,acknowledgement_reason,
+                  acknowledgement_client_event_id
+           FROM result_conflicts WHERE id=$1 AND competition_id=$2`,
+          [conflictId, competitionId],
+        ),
+        "Result conflict not found",
+      );
     });
   }
 

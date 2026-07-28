@@ -3,13 +3,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
+import { SPORT_PACKS } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../../src/app.js";
 import { ApiError } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
-import { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import {
+  Phase2Runtime,
+  type PersistedScoreEvent,
+  type Phase2Actor,
+  type ScoringSessionAuth,
+} from "../../src/phase-2-runtime.js";
 import { NoopScoringAccessRateLimiter } from "../../src/scoring-access-rate-limit.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
@@ -20,6 +26,107 @@ const migrationsDirectory = path.resolve(
   "../../../../packages/database/migrations",
 );
 let client: Sql;
+
+async function appendCanonicalCanoeEvent(
+  runtime: Phase2Runtime,
+  auth: ScoringSessionAuth,
+  input: Omit<PersistedScoreEvent, "sequence">,
+  requestId: string,
+) {
+  await client`UPDATE competition_sport_settings competition_settings SET
+      pack_version=${SPORT_PACKS.canoe_polo.version},
+      recommended_snapshot=${client.json(SPORT_PACKS.canoe_polo.recommendedSettings)}
+      FROM scoring_access_sessions session
+      WHERE session.id=${auth.sessionId}
+        AND competition_settings.competition_id=session.competition_id`;
+  await client`DELETE FROM division_sport_settings division_settings
+      USING scoring_access_sessions session
+      JOIN matches match ON match.id=session.match_id
+      WHERE session.id=${auth.sessionId}
+        AND division_settings.division_id=match.division_id`;
+  const state = await runtime.scoringSessionState(auth);
+  const common = {
+    client_event_id: input.clientEventId,
+    occurred_at: input.occurredAt.toISOString(),
+    segment_number: input.manualPeriod ?? undefined,
+    manual_time_seconds: input.manualEventSeconds,
+  };
+  const command =
+    input.type === "match_started"
+      ? { ...common, type: "match_started" }
+      : input.type === "period_changed"
+        ? { ...common, type: "period_change" }
+        : input.type === "goal_added"
+          ? {
+              ...common,
+              type: "goal",
+              team_slot: input.teamSlot,
+              participant_id: input.scorer,
+            }
+          : input.type === "incident_added"
+            ? { ...common, type: "incident", reason: String(input.payload.note ?? "") }
+            : null;
+  if (!command) throw new Error(`Canonical Canoe Polo test helper does not support ${input.type}`);
+  return runtime.appendCanonicalScoreEvent(auth, command, state.through_sequence, requestId);
+}
+
+async function correctCanonicalCanoeResult(
+  runtime: Phase2Runtime,
+  actor: Phase2Actor,
+  competitionId: string,
+  matchId: string,
+  input: { clientEventId: string; reason: string; homeScore: number; awayScore: number },
+  requestId: string,
+) {
+  const audit = await runtime.matchScoringAudit(actor, competitionId, matchId);
+  const score = audit.score as { home: number; away: number; current_segment: number };
+  const events = [];
+  for (let index = score.home; index < input.homeScore; index += 1) {
+    events.push({
+      client_event_id: randomUUID(),
+      type: "goal",
+      occurred_at: new Date().toISOString(),
+      team_slot: "home",
+      participant_id: "Verified correction",
+      segment_number: score.current_segment,
+      manual_time_seconds: 0,
+    });
+  }
+  for (let index = score.away; index < input.awayScore; index += 1) {
+    events.push({
+      client_event_id: randomUUID(),
+      type: "goal",
+      occurred_at: new Date().toISOString(),
+      team_slot: "away",
+      participant_id: "Verified correction",
+      segment_number: score.current_segment,
+      manual_time_seconds: 0,
+    });
+  }
+  if (events.length === 0) {
+    events.push({
+      client_event_id: randomUUID(),
+      type: "incident",
+      occurred_at: new Date().toISOString(),
+      segment_number: score.current_segment,
+      manual_time_seconds: 0,
+      reason: "Permission preflight",
+    });
+  }
+  return runtime.correctCanonicalMatch(
+    actor,
+    competitionId,
+    matchId,
+    {
+      clientEventId: input.clientEventId,
+      reason: input.reason,
+      expectedAggregateVersion: audit.aggregate_version as number,
+      events,
+    },
+    requestId,
+  );
+}
+
 let runtime: Phase2Runtime;
 let accountId: string;
 let organisationId: string;
@@ -29,6 +136,14 @@ beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
   client = postgres(databaseUrl, { max: 4, onnotice: () => undefined, connection: { search_path: schema } });
+  const canoePoloDefinition = SPORT_PACKS.canoe_polo;
+  await client`INSERT INTO sport_pack_versions(
+    sport_code,version,schema_version,definition,definition_hash,created_at
+  ) VALUES(
+    'canoe_polo',${canoePoloDefinition.version},1,${client.json(canoePoloDefinition)},
+    encode(public.digest(phase3_canonical_jsonb(${client.json(canoePoloDefinition)}::jsonb),'sha256'),'hex'),
+    now()
+  ) ON CONFLICT (sport_code,version) DO NOTHING`;
   const accounts = await client<{ id: string }[]>`
     INSERT INTO accounts (primary_email,display_name,email_verified_at)
     VALUES ('organiser@phase2.test','Phase 2 Organiser',now()) RETURNING id
@@ -76,6 +191,12 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     );
     await runtime.updateSettings(actor, competition.id, { periodMinutes: 10 }, randomUUID());
     const division = await runtime.createDivision(actor, competition.id, { name: "Open", teamLimit: 8 }, randomUUID());
+    await client`UPDATE division_sport_settings division_settings SET
+      pack_version=competition_settings.pack_version,
+      settings_override='{}'::jsonb
+      FROM competition_sport_settings competition_settings
+      WHERE division_settings.division_id=${division.id}
+        AND competition_settings.competition_id=${competition.id}`;
     const entries = Array.from({ length: 8 }, (_, index) => ({ name: `Team ${index + 1}`, seed: index + 1 }));
     await runtime.replaceEntries(actor, competition.id, division.id, entries, randomUUID());
     await runtime.replaceCapacity(
@@ -414,7 +535,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     };
     const startId = randomUUID();
     expect(
-      await runtime.appendScoreEvent(
+      await appendCanonicalCanoeEvent(
+        runtime,
         writerAuth,
         {
           clientEventId: startId,
@@ -431,7 +553,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       ),
     ).toMatchObject({ duplicate: false, sequence: 1 });
     const goalId = randomUUID();
-    await runtime.appendScoreEvent(
+    await appendCanonicalCanoeEvent(
+      runtime,
       writerAuth,
       {
         clientEventId: goalId,
@@ -447,7 +570,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       randomUUID(),
     );
     expect(
-      await runtime.appendScoreEvent(
+      await appendCanonicalCanoeEvent(
+        runtime,
         writerAuth,
         {
           clientEventId: goalId,
@@ -504,7 +628,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const staleSubmissionId = randomUUID();
     const staleSubmissionRequestId = randomUUID();
     await expect(
-      runtime.appendScoreEvent(
+      appendCanonicalCanoeEvent(
+        runtime,
         { sessionId: viewer.session_id, sessionToken: viewer.session_token, generation: null },
         {
           clientEventId: staleSubmissionId,
@@ -537,22 +662,52 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
           ? JSON.parse(retainedStaleSubmission[0].metadata)
           : retainedStaleSubmission[0]?.metadata,
     }).toMatchObject({
-      after_state: { client_event_id: staleSubmissionId, event_type: "goal_added" },
+      after_state: { client_event_id: staleSubmissionId, type: "goal" },
       metadata: { submitted_generation: null, retained_for_review: true },
     });
     const rejectedScoreEvent = await client<{ count: number }[]>`
-      SELECT count(*)::integer AS count FROM score_events
+      SELECT count(*)::integer AS count FROM canonical_score_events
       WHERE match_id=${firstMatch.id} AND client_event_id=${staleSubmissionId}
     `;
     expect(rejectedScoreEvent[0]?.count).toBe(0);
+    await appendCanonicalCanoeEvent(
+      runtime,
+      writerAuth,
+      {
+        clientEventId: randomUUID(),
+        type: "period_changed",
+        teamSlot: null,
+        scorer: null,
+        manualPeriod: 2,
+        manualEventSeconds: 0,
+        payload: {},
+        correctionReason: null,
+        occurredAt: new Date("2026-08-01T01:10:00.000Z"),
+      },
+      randomUUID(),
+    );
     const finalEventId = randomUUID();
     const final = await runtime.finalise(writerAuth, finalEventId, randomUUID());
+    expect(Object.keys(final).sort()).toEqual(
+      ["aggregate_version", "away_score", "duplicate", "home_score", "match_id", "result_version", "sequence"].sort(),
+    );
     expect(final).toMatchObject({ home_score: 1, away_score: 0, result_version: 1 });
-    expect(await runtime.finalise(writerAuth, finalEventId, randomUUID())).toMatchObject({
+    const duplicateFinal = await runtime.finalise(writerAuth, finalEventId, randomUUID());
+    expect(Object.keys(duplicateFinal).sort()).toEqual(
+      ["aggregate_version", "away_score", "duplicate", "home_score", "match_id", "result_version", "sequence"].sort(),
+    );
+    expect(duplicateFinal).toMatchObject({
       duplicate: true,
+      aggregate_version: final.aggregate_version,
       home_score: 1,
       away_score: 0,
       result_version: 1,
+    });
+    await expect(
+      runtime.finalise(writerAuth, finalEventId, randomUUID(), final.aggregate_version),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "IDEMPOTENCY_KEY_REUSED",
     });
     const publicResult = await runtime.publicCompetition("singapore-open-phase-2");
     expect(publicResult.publication).toEqual({ schedule_version: 1, result_version: 1 });
@@ -599,8 +754,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
 
     await client`INSERT INTO match_result_snapshots
       (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
-      VALUES (${firstMatch.id},3,99,99,99,'corrected',${client.json({ future: true })})`;
-    const correction = await runtime.correct(
+      VALUES (${firstMatch.id},99,99,99,99,'corrected',${client.json({ future: true })})`;
+    const correction = await correctCanonicalCanoeResult(
+      runtime,
       actor,
       competition.id,
       firstMatch.id,
@@ -622,9 +778,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       SELECT schedule_version,result_version FROM competition_publications WHERE competition_id=${competition.id}
     `;
     expect(publicationRows[0]).toEqual({ schedule_version: 1, result_version: 2 });
-    await expect(client`UPDATE score_events SET payload='{}'::jsonb WHERE match_id=${firstMatch.id}`).rejects.toThrow(
-      "score_events are append-only",
-    );
+    await expect(
+      client`UPDATE canonical_score_events SET command='{}'::jsonb WHERE match_id=${firstMatch.id}`,
+    ).rejects.toThrow("canonical score events are append-only");
     await expect(client`
       UPDATE scheduled_matches SET starts_at=starts_at + interval '1 minute'
       WHERE schedule_revision_id=${schedule.id}
@@ -637,7 +793,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     if (!downstreamId) throw new Error("Expected a downstream knockout match");
     await client`UPDATE matches SET state='in_progress' WHERE id=${downstreamId}`;
     await expect(
-      runtime.correct(
+      correctCanonicalCanoeResult(
+        runtime,
         actor,
         competition.id,
         firstMatch.id,
@@ -649,7 +806,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 409, code: "CORRECTION_DOWNSTREAM_CONFLICT" });
+    ).resolves.toMatchObject({
+      conflicts: [expect.objectContaining({ downstream_match_id: downstreamId, status: "open" })],
+    });
     await client`UPDATE matches SET state='pending' WHERE id=${downstreamId}`;
 
     const secondPass = await runtime.createAccessPass(
@@ -723,7 +882,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       writer: { generation: secondWriter.generation, expires_at: null, read_only: true },
     });
     await expect(
-      runtime.appendScoreEvent(
+      appendCanonicalCanoeEvent(
+        runtime,
         {
           sessionId: candidate.session_id,
           sessionToken: candidate.session_token,
@@ -756,7 +916,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const transferredStaleEventId = randomUUID();
     const transferredStaleRequestId = randomUUID();
     await expect(
-      runtime.appendScoreEvent(
+      appendCanonicalCanoeEvent(
+        runtime,
         {
           sessionId: secondWriter.session_id,
           sessionToken: secondWriter.session_token,
@@ -797,7 +958,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       metadata: { submitted_generation: secondWriter.generation, retained_for_review: true },
     });
     const transferredStaleScoreEvent = await client<{ count: number }[]>`
-      SELECT count(*)::integer AS count FROM score_events
+      SELECT count(*)::integer AS count FROM canonical_score_events
       WHERE match_id=${secondMatch.id} AND client_event_id=${transferredStaleEventId}
     `;
     expect(transferredStaleScoreEvent[0]?.count).toBe(0);
@@ -1022,7 +1183,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     `;
     expect(conflict[0]).toEqual({ pending_event_count: 2, pending_through_sequence: 2, status: "open" });
     await expect(
-      runtime.appendScoreEvent(
+      appendCanonicalCanoeEvent(
+        runtime,
         {
           sessionId: unknownWriter.session_id,
           sessionToken: unknownWriter.session_token,
@@ -1364,7 +1526,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: 0 },
         randomUUID(),
       ),
-      runtime.appendScoreEvent(
+      appendCanonicalCanoeEvent(
+        runtime,
         {
           sessionId: expiryWriter.session_id,
           sessionToken: expiryWriter.session_token,
@@ -1406,7 +1569,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     if (eventRace.status === "rejected") {
       expect(eventRace.reason).toMatchObject({ code: "STALE_WRITER_GENERATION" });
     }
-    const newWriterEvent = await runtime.appendScoreEvent(
+    const newWriterEvent = await appendCanonicalCanoeEvent(
+      runtime,
       {
         sessionId: expiryCandidate.session_id,
         sessionToken: expiryCandidate.session_token,
@@ -1426,7 +1590,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       randomUUID(),
     );
     await expect(
-      runtime.appendScoreEvent(
+      appendCanonicalCanoeEvent(
+        runtime,
         {
           sessionId: expiryWriter.session_id,
           sessionToken: expiryWriter.session_token,
@@ -1447,7 +1612,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       ),
     ).rejects.toMatchObject({ code: "STALE_WRITER_GENERATION" });
     const racedEvents = await client<{ sequence: number; writer_generation: number }[]>`
-      SELECT sequence,writer_generation FROM score_events
+      SELECT sequence,writer_generation FROM canonical_score_events
       WHERE match_id=${sixthMatch.id} ORDER BY sequence
     `;
     expect(racedEvents.map((event) => event.sequence)).toEqual(
@@ -1539,7 +1704,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       sessionToken: finaliseWriter.session_token,
       generation: finaliseWriter.generation,
     };
-    await runtime.appendScoreEvent(
+    await appendCanonicalCanoeEvent(
+      runtime,
       finaliseWriterAuth,
       {
         clientEventId: randomUUID(),
@@ -1554,13 +1720,29 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       },
       randomUUID(),
     );
+    await appendCanonicalCanoeEvent(
+      runtime,
+      finaliseWriterAuth,
+      {
+        clientEventId: randomUUID(),
+        type: "period_changed",
+        teamSlot: null,
+        scorer: null,
+        manualPeriod: 2,
+        manualEventSeconds: 0,
+        payload: {},
+        correctionReason: null,
+        occurredAt: new Date(),
+      },
+      randomUUID(),
+    );
     const finaliseCandidate = await runtime.exchangeAccess(
       { token: finaliseCandidatePass.token, deviceId: randomUUID(), ipAddress: "203.0.113.72" },
       randomUUID(),
     );
     await runtime.heartbeatScoringSession(
       finaliseWriterAuth,
-      { lastAcknowledgedSequence: 1, pendingEventCount: 0, pendingThroughSequence: 1 },
+      { lastAcknowledgedSequence: 2, pendingEventCount: 0, pendingThroughSequence: 2 },
       randomUUID(),
     );
     const finaliseTakeover = await runtime.requestTakeover(
@@ -1574,7 +1756,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     );
     const finaliseRequestId = randomUUID();
     const finaliseResult = await runtime.finalise(finaliseWriterAuth, randomUUID(), finaliseRequestId);
-    expect(finaliseResult).toMatchObject({ duplicate: false, result_version: 3 });
+    expect(finaliseResult).toMatchObject({ duplicate: false, result_version: 4 });
     expect(
       await client<{ status: string; resolution_reason: string | null }[]>`
         SELECT status,resolution_reason FROM scoring_takeover_requests WHERE id=${finaliseTakeover.id}
@@ -1610,9 +1792,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     >`
       SELECT
         (SELECT count(*)::integer FROM match_result_snapshots WHERE match_id=${eighthMatch.id}) AS result_count,
-        (SELECT count(*)::integer FROM score_events
-           WHERE match_id=${eighthMatch.id} AND event_type='match_finalised') AS finalise_event_count,
-        (SELECT count(*)::integer FROM score_events WHERE match_id=${eighthMatch.id}) AS score_event_count,
+        (SELECT count(*)::integer FROM canonical_score_events
+           WHERE match_id=${eighthMatch.id} AND event_type='finalisation') AS finalise_event_count,
+        (SELECT count(*)::integer FROM canonical_score_events WHERE match_id=${eighthMatch.id}) AS score_event_count,
         (SELECT result_version FROM competition_publications WHERE competition_id=${competition.id}) AS result_version
     `;
     const finalisePublicBeforeRejectedMutations = await runtime.publicCompetition("singapore-open-phase-2");
@@ -1630,7 +1812,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       ),
     ).rejects.toMatchObject({ code: "TAKEOVER_ALREADY_RESOLVED" });
     await expect(
-      runtime.appendScoreEvent(
+      appendCanonicalCanoeEvent(
+        runtime,
         finaliseWriterAuth,
         {
           clientEventId: randomUUID(),
@@ -1659,17 +1842,17 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const finaliseProjection = await client<{ result_count: number; finalise_event_count: number }[]>`
       SELECT
         (SELECT count(*)::integer FROM match_result_snapshots WHERE match_id=${eighthMatch.id}) AS result_count,
-        (SELECT count(*)::integer FROM score_events
-           WHERE match_id=${eighthMatch.id} AND event_type='match_finalised') AS finalise_event_count
+        (SELECT count(*)::integer FROM canonical_score_events
+           WHERE match_id=${eighthMatch.id} AND event_type='finalisation') AS finalise_event_count
     `;
     expect(finaliseProjection).toEqual([{ result_count: 1, finalise_event_count: 1 }]);
     expect(
       await client`
         SELECT
           (SELECT count(*)::integer FROM match_result_snapshots WHERE match_id=${eighthMatch.id}) AS result_count,
-          (SELECT count(*)::integer FROM score_events
-             WHERE match_id=${eighthMatch.id} AND event_type='match_finalised') AS finalise_event_count,
-          (SELECT count(*)::integer FROM score_events WHERE match_id=${eighthMatch.id}) AS score_event_count,
+          (SELECT count(*)::integer FROM canonical_score_events
+             WHERE match_id=${eighthMatch.id} AND event_type='finalisation') AS finalise_event_count,
+          (SELECT count(*)::integer FROM canonical_score_events WHERE match_id=${eighthMatch.id}) AS score_event_count,
           (SELECT result_version FROM competition_publications WHERE competition_id=${competition.id}) AS result_version
       `,
     ).toEqual(finaliseProjectionBeforeRejectedMutations);
@@ -1729,7 +1912,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       generation: transferFirstWriter.generation,
     };
     const transferFirstReplacementGeneration = (transferFirstWriter.generation ?? 0) + 1;
-    await runtime.appendScoreEvent(
+    await appendCanonicalCanoeEvent(
+      runtime,
       transferFirstWriterAuth,
       {
         clientEventId: randomUUID(),
@@ -1792,12 +1976,12 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         SELECT
           (SELECT count(*)::integer FROM match_result_snapshots
              WHERE match_id=${transferFirstMatch.id}) AS result_count,
-          (SELECT count(*)::integer FROM score_events
-             WHERE match_id=${transferFirstMatch.id} AND event_type='match_finalised') AS finalise_event_count,
+          (SELECT count(*)::integer FROM canonical_score_events
+             WHERE match_id=${transferFirstMatch.id} AND event_type='finalisation') AS finalise_event_count,
           (SELECT result_version FROM competition_publications
              WHERE competition_id=${competition.id}) AS result_version
       `,
-    ).toEqual([{ result_count: 0, finalise_event_count: 0, result_version: 3 }]);
+    ).toEqual([{ result_count: 0, finalise_event_count: 0, result_version: 4 }]);
     expect(
       await client<{ count: number }[]>`
         SELECT count(*)::integer AS count FROM audit_events
@@ -1811,7 +1995,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     const workspace = await runtime.competitionWorkspace(actor, competition.id);
     expect(workspace).toMatchObject({
       competition: { id: competition.id, organisation_id: organisationId },
-      publication: { schedule_version: 1, result_version: 3 },
+      publication: { schedule_version: 1, result_version: 4 },
     });
     expect(workspace.access_passes.find((entry) => entry.id === legacyFallbackPass.id)).toMatchObject({
       fallback_code_status: "available",
@@ -1885,7 +2069,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       code: "COMPETITION_ARCHIVED",
     });
     await expect(
-      runtime.correct(
+      correctCanonicalCanoeResult(
+        runtime,
         actor,
         competition.id,
         firstMatch.id,
@@ -1903,7 +2088,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       client`UPDATE scoring_access_passes SET revoked_at=revoked_at WHERE id=${pass.id}`,
       client`UPDATE scoring_access_sessions SET revoked_at=revoked_at WHERE id=${writer.session_id}`,
       client`UPDATE match_writer_leases SET expires_at=expires_at WHERE match_id=${firstMatch.id}`,
-      client`UPDATE score_events SET payload=payload WHERE match_id=${firstMatch.id}`,
+      client`UPDATE canonical_score_events SET command=command WHERE match_id=${firstMatch.id}`,
       client`UPDATE match_result_snapshots SET snapshot=snapshot WHERE match_id=${firstMatch.id}`,
       client`UPDATE bracket_snapshots SET bracket=bracket WHERE competition_id=${competition.id}`,
       client`UPDATE public_competition_projections SET projection=projection WHERE competition_id=${competition.id}`,
@@ -1911,7 +2096,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       client`UPDATE advancement_conflicts SET reason=reason WHERE competition_id=${competition.id}`,
     ];
     for (const write of archivedWrites) {
-      await expect(write).rejects.toThrow(/archived competitions are immutable/i);
+      await expect(write).rejects.toThrow(
+        /archived competitions are immutable|canonical score events are append-only/i,
+      );
     }
 
     await client`UPDATE competitions
@@ -1926,16 +2113,12 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       code: "SCORING_SESSION_REVOKED",
     });
 
-    await client`DELETE FROM competitions WHERE id=${competition.id}`;
-    const residue = await client<{ count: number }[]>`
-      SELECT (
-        (SELECT count(*) FROM matches WHERE competition_id=${competition.id})
-        + (SELECT count(*) FROM schedule_revisions WHERE competition_id=${competition.id})
-        + (SELECT count(*) FROM score_events e JOIN matches m ON m.id=e.match_id WHERE m.competition_id=${competition.id})
-        + (SELECT count(*) FROM standings_snapshots WHERE competition_id=${competition.id})
-        + (SELECT count(*) FROM advancement_conflicts WHERE competition_id=${competition.id})
-      )::integer AS count`;
-    expect(residue[0]?.count).toBe(0);
+    await expect(client`DELETE FROM competitions WHERE id=${competition.id}`).rejects.toThrow(
+      /result_conflicts is append-only|canonical score events are append-only/i,
+    );
+    expect(await client`SELECT count(*)::integer AS count FROM competitions WHERE id=${competition.id}`).toEqual([
+      { count: 1 },
+    ]);
   }, 30_000);
 
   it("uses opaque namespaced match UUIDs and rejects non-finalisable score streams", () => {

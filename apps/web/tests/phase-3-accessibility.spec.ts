@@ -86,9 +86,10 @@ test("@a11y competition creation preserves recovery context and strict WCAG A/AA
 });
 
 test("@a11y standings evidence and advancement conflicts meet WCAG A/AA requirements", async ({ page }) => {
-  await page.goto("/organiser/competitions/singapore-open/results");
+  await page.goto("/organiser/competitions/singapore-open/results?match=M12");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { level: 1, name: "Standings and advancement" })).toBeVisible();
   await expect(page.getByText("A correction needs organiser review")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Match corrections and audit" })).toBeVisible();
   await assertNoWcagAOrAaViolations(page);
 });

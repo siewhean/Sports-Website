@@ -253,7 +253,7 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   await openScoring(viewerPage, viewer.accessUrl);
   await expect(viewerPage.locator(".p2-writer")).toContainText("Read only");
   await expect(viewerPage.getByRole("button", { name: "Review final score" })).toHaveCount(0);
-  await expect(viewerPage.getByLabel("Scorer name")).toBeDisabled();
+  await expect(viewerPage.getByRole("button", { name: /Goal / }).first()).toBeDisabled();
   await expect(viewerPage.getByLabel("Period")).toBeDisabled();
   await expect(viewerPage.getByLabel("Event time")).toBeDisabled();
 
@@ -398,7 +398,7 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   ).toBeAttached();
 
   await expect(candidatePage.locator(".p2-writer")).toContainText("Active scorer", { timeout: 10_000 });
-  await expect(candidatePage.getByLabel("Scorer name")).toBeFocused();
+  await expect(candidatePage.getByRole("group", { name: "Scoring controls" })).toBeFocused();
   await candidateHeartbeat;
   await incumbentContext.setOffline(false);
   await expect(incumbentPage.locator(".p2-writer")).toContainText("Scoring moved to another device", {
@@ -408,7 +408,7 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
     incumbentPage.locator(".p2-writer").filter({ hasText: "Scoring moved to another device" }),
   ).toBeFocused();
   await expect(incumbentPage.getByRole("button", { name: "Review final score" })).toHaveCount(0);
-  await expect(incumbentPage.getByLabel("Scorer name")).toBeDisabled();
+  await expect(incumbentPage.getByRole("button", { name: /Goal / }).first()).toBeDisabled();
   await assertNoWcagAOrAaViolations(incumbentPage);
   await attachSurface(incumbentPage, testInfo, `${testInfo.project.name}-transferred-read-only`);
 
@@ -421,7 +421,7 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   const leaseWarning = candidatePage.locator(".p2-score-warning");
   await expect(leaseWarning).toContainText("Your scoring session and access pass remain valid");
   await expect(leaseWarning).not.toContainText("issue a new pass");
-  await expect(candidatePage.getByLabel("Scorer name")).toBeDisabled();
+  await expect(candidatePage.getByRole("button", { name: /Goal / }).first()).toBeDisabled();
   await expect(candidatePage.locator('[aria-live="polite"]')).toContainText("Writer lease needs reconnection");
   await assertNoWcagAOrAaViolations(candidatePage);
   await attachSurface(candidatePage, testInfo, `${testInfo.project.name}-lease-lapsed`);

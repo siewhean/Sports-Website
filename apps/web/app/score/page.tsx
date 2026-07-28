@@ -8,15 +8,22 @@ import { isPhase2ScoringRouteEnabled } from "@/lib/feature-flags.server";
 import { phase2Machine } from "@/lib/phase2";
 import { scoringSessionCookieName } from "@/lib/scoring-session.server";
 import { translate as t } from "@matchday/ui";
+import { SPORT_PACKS, type SportId } from "@matchday/domain";
 
-export default async function ScorePage() {
+const DEMO_SPORTS = new Set<SportId>(Object.keys(SPORT_PACKS) as SportId[]);
+
+export default async function ScorePage({ searchParams }: { searchParams: Promise<{ sport?: string }> }) {
   if (await isPhase2ScoringRouteEnabled()) {
     const demo = demoFixturesEnabled();
+    const requestedSport = (await searchParams).sport;
+    const demoSportId =
+      demo && DEMO_SPORTS.has(requestedSport as SportId) ? (requestedSport as SportId) : phase2Machine.canoePolo;
     const hasScoringSession = (await cookies()).has(scoringSessionCookieName);
     return (
       <PhoneScoring
         mode={demo ? phase2Machine.scoringDemoMode : phase2Machine.scoringApiMode}
         recoverOnLoad={hasScoringSession}
+        demoSportId={demoSportId}
       />
     );
   }
