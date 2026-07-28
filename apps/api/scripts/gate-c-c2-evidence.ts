@@ -72,6 +72,11 @@ export type GateCC2SemanticReceipt = {
       reversal_target_count: number;
       reasoned_reversal_count: number;
       valid_actor_count: number;
+      standings_result_version: number;
+      standings_row_count: number;
+      standings_settings_version: string;
+      advancement_slot_count: number;
+      advancement_conflict_count: number;
       audit_actions: string[];
       outbox_event_types: string[];
     }>;
@@ -302,6 +307,11 @@ export function validateGateCC2SemanticReceipt(
       sport.reversal_target_count !== 1 ||
       sport.reasoned_reversal_count !== 1 ||
       sport.valid_actor_count !== sport.row_count ||
+      sport.standings_result_version !== 3 ||
+      sport.standings_row_count < 1 ||
+      !sport.standings_settings_version ||
+      sport.advancement_slot_count < 0 ||
+      sport.advancement_conflict_count < 0 ||
       !requiredEventTypes.every(
         (eventType) => typeof eventType === "string" && sport.event_types.includes(eventType),
       ) ||
@@ -312,7 +322,7 @@ export function validateGateCC2SemanticReceipt(
         sport.outbox_event_types.includes(eventType),
       )
     ) {
-      throw new Error(`Gate C C2 direct database oracle is incomplete for ${sportId}`);
+      throw new Error(`Gate C C2 direct database oracle is incomplete for ${sportId}: ${JSON.stringify(sport)}`);
     }
   }
   if (

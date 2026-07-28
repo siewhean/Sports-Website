@@ -103,7 +103,10 @@ export function OrganiserResultOperations({
   initialMatchId?: string;
   enableRemote: boolean;
 }) {
-  const completed = useMemo(() => matches.filter((match) => match.status === "final"), [matches]);
+  const completed = useMemo(
+    () => matches.filter((match) => match.status === "final" || (match.status === "live" && match.resultVersion)),
+    [matches],
+  );
   const [matchId, setMatchId] = useState(
     initialMatchId && completed.some((match) => match.id === initialMatchId) ? initialMatchId : "",
   );

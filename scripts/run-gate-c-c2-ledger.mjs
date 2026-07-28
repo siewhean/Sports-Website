@@ -3,6 +3,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { arch, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -334,6 +335,13 @@ export async function runGateCC2Ledger() {
   ]);
   const redisVersion = redisInfo.match(/^redis_version:([^\r\n]+)$/mu)?.[1];
   if (!redisVersion) throw new Error("Unable to determine Redis version");
+  const mailpit = JSON.parse(
+    exec("docker", ["compose", "-f", "infra/local/compose.yaml", "ps", "--format", "json", "mailpit"]),
+  );
+  const mailpitVersion = String(mailpit.Image ?? "").match(/:v?([^:]+)$/u)?.[1];
+  if (!mailpitVersion || mailpit.Health !== "healthy") {
+    throw new Error("Gate C C2 requires a versioned healthy Mailpit service");
+  }
   const playwrightVersion = exec("pnpm", ["--filter", "@matchday/web", "exec", "playwright", "--version"]).replace(
     /^Version\s+/u,
     "",
@@ -446,10 +454,14 @@ export async function runGateCC2Ledger() {
       empty_output_sha256: createHash("sha256").update("").digest("hex"),
     },
     environment: {
+      operating_system: platform(),
+      architecture: arch(),
       node_version: process.version,
       pnpm_version: pnpmVersion,
       postgresql_version: postgresqlVersion,
       redis_version: redisVersion,
+      mailpit_version: mailpitVersion,
+      mailpit_health: mailpit.Health,
       playwright_version: playwrightVersion,
       chromium_version: browserVersions.chromium,
       webkit_version: browserVersions.webkit,

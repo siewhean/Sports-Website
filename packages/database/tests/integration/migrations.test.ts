@@ -120,6 +120,7 @@ describe("foundation migrations", () => {
         "0026_phase4_setup_lineage_reconciliation.sql",
         "0028_gate_c_access_foundation.sql",
         "0029_gate_c_five_sport_scoring.sql",
+        "0030_gate_c_published_schedule_participants.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
@@ -328,6 +329,144 @@ describe("foundation migrations", () => {
           { event_type: "reversal", aggregate_version: 3 },
           { event_type: "legacy_correction", aggregate_version: 4 },
         ]);
+        expect(
+          await sql<{ indexname: string }[]>`
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname=current_schema()
+              AND indexname='canonical_score_events_one_reversal_per_target_idx'
+              AND indexdef LIKE 'CREATE UNIQUE INDEX%'
+          `,
+        ).toEqual([{ indexname: "canonical_score_events_one_reversal_per_target_idx" }]);
+        expect(
+          await sql<{ conname: string }[]>`
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid='canonical_score_events'::regclass
+              AND conname='canonical_score_events_writer_generation_fkey'
+          `,
+        ).toEqual([{ conname: "canonical_score_events_writer_generation_fkey" }]);
+
+        await sql`INSERT INTO match_writer_leases(
+          competition_id,match_id,access_session_id,generation,acquired_at,expires_at
+        ) VALUES(
+          ${competition},${match},${accessSession},7,clock_timestamp(),clock_timestamp()+interval '5 minutes'
+        )`;
+        await expect(
+          sql`INSERT INTO canonical_score_events(
+            id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+            command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+          ) VALUES(
+            ${randomUUID()},${competition},${division},${match},${randomUUID()},5,5,'incident',
+            '{}'::jsonb,${"b".repeat(64)},${accessSession},8,now()
+          )`,
+        ).rejects.toThrow(/active writer lease/i);
+
+        await expect(
+          sql`INSERT INTO canonical_score_events(
+            id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+            command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+          ) VALUES(
+            ${randomUUID()},${competition},${division},${match},${randomUUID()},5,5,'incident',
+            '{}'::jsonb,${"c".repeat(64)},${accessSession},7,now()
+          )`,
+        ).resolves.toHaveLength(0);
+
+        await sql`UPDATE match_writer_leases
+          SET acquired_at=clock_timestamp()-interval '2 minutes',
+              expires_at=clock_timestamp()-interval '1 minute'
+          WHERE match_id=${match}`;
+        await expect(
+          sql`INSERT INTO canonical_score_events(
+            id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+            command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+          ) VALUES(
+            ${randomUUID()},${competition},${division},${match},${randomUUID()},6,6,'incident',
+            '{}'::jsonb,${"d".repeat(64)},${accessSession},7,now()
+          )`,
+        ).rejects.toThrow(/active writer lease/i);
+        await sql`UPDATE match_writer_leases
+          SET acquired_at=clock_timestamp(),expires_at=clock_timestamp()+interval '5 minutes'
+          WHERE match_id=${match}`;
+
+        await sql`UPDATE scoring_access_sessions
+          SET issued_at=clock_timestamp()-interval '2 minutes',
+              expires_at=clock_timestamp()-interval '1 minute',
+              last_heartbeat_at=clock_timestamp()-interval '2 minutes'
+          WHERE id=${accessSession}`;
+        await expect(
+          sql`INSERT INTO canonical_score_events(
+            id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+            command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+          ) VALUES(
+            ${randomUUID()},${competition},${division},${match},${randomUUID()},6,6,'incident',
+            '{}'::jsonb,${"e".repeat(64)},${accessSession},7,now()
+          )`,
+        ).rejects.toThrow(/active writer scoring session/i);
+        await sql`UPDATE scoring_access_sessions
+          SET issued_at=clock_timestamp(),
+              expires_at=clock_timestamp()+interval '1 hour',
+              last_heartbeat_at=clock_timestamp()
+          WHERE id=${accessSession}`;
+
+        await sql`UPDATE scoring_access_sessions SET revoked_at=clock_timestamp() WHERE id=${accessSession}`;
+        await expect(
+          sql`INSERT INTO canonical_score_events(
+            id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+            command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+          ) VALUES(
+            ${randomUUID()},${competition},${division},${match},${randomUUID()},6,6,'incident',
+            '{}'::jsonb,${"f".repeat(64)},${accessSession},7,now()
+          )`,
+        ).rejects.toThrow(/active writer scoring session/i);
+        await sql`UPDATE scoring_access_sessions SET revoked_at=NULL WHERE id=${accessSession}`;
+
+        await sql`UPDATE scoring_access_passes SET revoked_at=clock_timestamp() WHERE id=${accessPass}`;
+        await expect(
+          sql`INSERT INTO canonical_score_events(
+            id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+            command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+          ) VALUES(
+            ${randomUUID()},${competition},${division},${match},${randomUUID()},6,6,'incident',
+            '{}'::jsonb,${"a".repeat(64)},${accessSession},7,now()
+          )`,
+        ).rejects.toThrow(/active writer scoring session/i);
+        await sql`UPDATE scoring_access_passes SET revoked_at=NULL WHERE id=${accessPass}`;
+
+        await sql`DELETE FROM match_writer_leases WHERE match_id=${match}`;
+        await sql`UPDATE scoring_access_sessions SET mode='transferred' WHERE id=${accessSession}`;
+        await expect(sql`UPDATE scoring_access_sessions SET generation=8 WHERE id=${accessSession}`).rejects.toThrow(
+          /canonical_score_events_writer_generation_fkey|foreign key/i,
+        );
+
+        await expect(
+          sql`INSERT INTO canonical_score_events(
+            id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+            command,command_fingerprint,actor_account_id,device_timestamp
+          ) VALUES(
+            ${randomUUID()},${competition},${division},${match},${randomUUID()},6,6,'incident',
+            '{}'::jsonb,${"0".repeat(64)},${account},now()
+          )`,
+        ).resolves.toHaveLength(0);
+
+        const [canonicalGoal] = await sql<{ id: string }[]>`
+          SELECT id FROM canonical_score_events
+          WHERE match_id=${match} AND event_type='goal'
+        `;
+        await sql`ALTER TABLE canonical_score_events DISABLE TRIGGER canonical_score_events_reversal_guard`;
+        try {
+          await expect(
+            sql`INSERT INTO canonical_score_events(
+              id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+              command,command_fingerprint,actor_account_id,device_timestamp,reversal_target_event_id,reason
+            ) VALUES(
+              ${randomUUID()},${competition},${division},${match},${randomUUID()},7,7,'reversal',
+              '{}'::jsonb,${"1".repeat(64)},${account},now(),${canonicalGoal!.id},'Duplicate reversal'
+            )`,
+          ).rejects.toThrow(/canonical_score_events_one_reversal_per_target_idx|duplicate key/i);
+        } finally {
+          await sql`ALTER TABLE canonical_score_events ENABLE TRIGGER canonical_score_events_reversal_guard`;
+        }
         expect(
           await sql`SELECT home_score,away_score,state,through_sequence
             FROM match_result_snapshots WHERE match_id=${match}`,

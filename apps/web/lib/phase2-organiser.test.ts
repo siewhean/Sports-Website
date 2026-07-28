@@ -162,8 +162,11 @@ describe("organiser competition workspace mapping", () => {
         }),
       ]),
     );
-    expect(view.matches.find((match) => match.id === secondMatchId)).not.toHaveProperty("homeScore");
-    expect(view.matches.find((match) => match.id === secondMatchId)).not.toHaveProperty("awayScore");
+    expect(view.matches.find((match) => match.id === secondMatchId)).toMatchObject({
+      homeScore: 2,
+      awayScore: 1,
+      resultVersion: 1,
+    });
     expect(view.accessPasses).toEqual([
       expect.objectContaining({
         matchId,

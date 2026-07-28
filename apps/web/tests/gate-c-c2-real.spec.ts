@@ -220,6 +220,7 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     await expect(page.getByRole("heading", { name: `${sport.homeName} vs ${sport.awayName}` })).toBeVisible();
     await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
     await page.getByRole("button", { name: "Start scoring" }).click();
+    await expect(page.getByRole("heading", { name: "Scoring controls" })).toBeVisible();
     observedSteps.push("match_started");
     const scorerScreenshotPath = testInfo.outputPath(`${sport.sportId}-live-scorer.png`);
     await page.screenshot({ path: scorerScreenshotPath, fullPage: true });
@@ -249,9 +250,15 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     const target = audit.events.find((event) => event.event_type === sport.action.eventType);
     if (!target) throw new Error(`Authoritative ${sport.sportId} score event is missing`);
     await page.goto(`/organiser/competitions/${sport.competitionId}/results?match=${sport.matchId}`);
+    await expect(page.getByRole("heading", { name: "Calculated tables" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "division standings table" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Advancement decisions" })).toBeVisible();
+    await expect(page.getByText("Standings could not load", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Scoring event history" })).toBeVisible();
     await reopenThroughUi(page, "C2 independent reopen proof");
     observedSteps.push("organiser_reopen");
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Scoring event history" })).toBeVisible();
     const correction = await correctThroughUi(page, sport, target.event_id);
     expect(correction.result_version).toBe(2);
     observedResultVersions.push(correction.result_version);
@@ -270,6 +277,9 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     expect(audit.result?.result_version).toBe(3);
 
     await page.goto(`/organiser/competitions/${sport.competitionId}/results?match=${sport.matchId}`);
+    await expect(page.getByRole("heading", { name: "Calculated tables" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "division standings table" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Advancement decisions" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Scoring event history" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Immutable match audit" })).toBeVisible();
     await expect(

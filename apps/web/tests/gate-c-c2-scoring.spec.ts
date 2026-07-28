@@ -30,6 +30,14 @@ async function openScoring(page: Page, sportId: string) {
 }
 
 for (const sport of sports) {
+  test(`${sport.name} shared scorer visual baseline`, async ({ page }) => {
+    await openScoring(page, sport.id);
+    await expect(page).toHaveScreenshot(`gate-c-c2-${sport.id}-active-scorer.png`, {
+      fullPage: true,
+      animations: "disabled",
+    });
+  });
+
   test(`@a11y ${sport.name} uses the shared canonical scoring shell`, async ({ page }) => {
     await openScoring(page, sport.id);
 

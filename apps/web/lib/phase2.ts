@@ -26,6 +26,7 @@ export type MatchView = {
   away: string;
   homeScore?: number;
   awayScore?: number;
+  resultVersion?: number;
   status: "scheduled" | "live" | "final";
 };
 

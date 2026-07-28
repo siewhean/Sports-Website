@@ -18,6 +18,7 @@ import {
   type FiveSportScoreState,
   type SportId,
   type SportPackSettings,
+  type StandingsEngineConfig,
   type StandingsMatchResult,
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
@@ -73,6 +74,58 @@ type AccessPassExchangeRow = {
   organisation_id: string;
   competition_status: string;
 };
+
+const STANDINGS_CRITERION_ALIASES: Readonly<Record<string, StandingsEngineConfig["criteria"][number]>> = {
+  points: "table_points",
+  wins: "match_wins",
+  match_wins: "match_wins",
+  game_difference: "segment_difference",
+  set_difference: "segment_difference",
+  point_difference: "score_difference",
+  goal_difference: "score_difference",
+  goals_for: "score_for",
+  points_for: "score_for",
+  set_ratio: "segment_ratio",
+  point_ratio: "score_ratio",
+  head_to_head: "head_to_head",
+  discipline: "discipline",
+  seed: "seed",
+};
+
+function effectiveStandingsConfig(sportId: SportId, settings: SportPackSettings) {
+  const base = STANDINGS_SPORT_PACKS[sportId];
+  const configuredOrder = Array.isArray(settings.standingsOrder)
+    ? settings.standingsOrder
+        .map((criterion) => STANDINGS_CRITERION_ALIASES[String(criterion)])
+        .filter((criterion): criterion is StandingsEngineConfig["criteria"][number] => Boolean(criterion))
+    : [];
+  const criteria = [...new Set(configuredOrder.length > 0 ? configuredOrder : base.criteria)];
+  const winnerScore = Number(settings.forfeitWinnerScore ?? base.forfeitScore.homeScore);
+  const loserScore = Number(settings.forfeitLoserScore ?? base.forfeitScore.awayScore);
+  const bestOf = Number(settings.bestOf ?? 0);
+  const segmentWins = Number.isSafeInteger(bestOf) && bestOf > 0 ? Math.floor(bestOf / 2) + 1 : 0;
+  const winPoints = Number(settings.pointsWin ?? base.winPoints);
+  const drawPoints = Number(settings.pointsDraw ?? base.drawPoints);
+  const lossPoints = Number(settings.pointsLoss ?? base.lossPoints);
+  const forfeitScore =
+    segmentWins > 0
+      ? {
+          homeScore: winnerScore * segmentWins,
+          awayScore: loserScore * segmentWins,
+          homeSegments: Array.from({ length: segmentWins }, () => winnerScore),
+          awaySegments: Array.from({ length: segmentWins }, () => loserScore),
+        }
+      : { homeScore: winnerScore, awayScore: loserScore };
+  return {
+    ...base,
+    version: `${base.version}:${stableHash({ criteria, forfeitScore, winPoints, drawPoints, lossPoints }).slice(0, 16)}`,
+    winPoints,
+    drawPoints,
+    lossPoints,
+    criteria,
+    forfeitScore,
+  } satisfies StandingsEngineConfig;
+}
 
 export class ScoringAccessRateLimitError extends ApiError {
   constructor(public readonly rateLimit: ScoringAccessRateLimitHeaders) {
@@ -332,6 +385,15 @@ function isIssuanceIdempotencyViolation(signals: PostgresConstraintSignal): bool
       detail.includes("issuance_idempotency_key") ||
       serialized.includes(issuanceIdempotencyConstraint) ||
       serialized.includes("issuance_idempotency_key"))
+  );
+}
+
+function isScoreWriterSessionGuardViolation(error: unknown): boolean {
+  const signals = toErrorSignals(error);
+  return (
+    signals.code === "23514" &&
+    (signals.constraintName === "canonical_score_events_writer_session_guard" ||
+      signals.message?.includes("active writer") === true)
   );
 }
 
@@ -2326,6 +2388,10 @@ export class Phase2Runtime {
         return { duplicate: false as const, event_id: eventId, sequence, aggregate_version: sequence };
       });
     } catch (error) {
+      if (isScoreWriterSessionGuardViolation(error)) {
+        await this.recordStaleScoreSubmission(auth, command, requestId);
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+      }
       if (error instanceof ApiError && error.code === "STALE_WRITER_GENERATION") {
         await this.recordStaleScoreSubmission(auth, command, requestId);
       }
@@ -2955,16 +3021,16 @@ export class Phase2Runtime {
               "Finalisation client event ID is already used by another score event",
             );
           }
-          const latest = await this.latestMatchResult(tx, session.match_id);
-          if (!latest) throw new ApiError(409, "RESULT_RECEIPT_MISSING", "Finalisation receipt is unavailable");
+          const original = await this.matchResultAtSequence(tx, session.match_id, duplicate.aggregate_version);
+          if (!original) throw new ApiError(409, "RESULT_RECEIPT_MISSING", "Finalisation receipt is unavailable");
           return {
             match_id: session.match_id,
             sequence: duplicate.aggregate_version,
             aggregate_version: duplicate.aggregate_version,
             duplicate: true as const,
-            home_score: latest.home_score,
-            away_score: latest.away_score,
-            result_version: latest.result_version,
+            home_score: original.home_score,
+            away_score: original.away_score,
+            result_version: original.result_version,
           };
         }
         const match = required(
@@ -3131,20 +3197,22 @@ export class Phase2Runtime {
         if (duplicate.command_fingerprint !== fingerprint) {
           throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Reopen idempotency key was reused");
         }
-        const publication = required(
+        const originalResult = required(
           await tx.unsafe<{ result_version: number }>(
-            `SELECT result_version FROM competition_publications WHERE competition_id=$1`,
-            [competitionId],
+            `SELECT result_version FROM match_result_snapshots
+             WHERE match_id=$1 AND through_sequence < $2
+             ORDER BY through_sequence DESC LIMIT 1`,
+            [matchId, duplicate.aggregate_version],
           ),
-          "Publication record not found",
+          "Reopen receipt is unavailable",
         );
         return {
           match_id: matchId,
           duplicate: true as const,
           aggregate_version: duplicate.aggregate_version,
           through_sequence: duplicate.aggregate_version,
-          result_version: publication.result_version,
-          publication_version: publication.result_version,
+          result_version: originalResult.result_version,
+          publication_version: originalResult.result_version,
           conflicts: [],
         };
       }
@@ -3281,8 +3349,11 @@ export class Phase2Runtime {
           throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Correction idempotency key was reused");
         }
         const conflicts = await tx.unsafe<Record<string, unknown>>(
-          `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,status,detail,
-                  created_at,acknowledged_at,acknowledged_by_account_id,acknowledgement_reason
+          `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,
+                  'open'::text AS status,detail,created_at,
+                  NULL::timestamptz AS acknowledged_at,
+                  NULL::uuid AS acknowledged_by_account_id,
+                  NULL::text AS acknowledgement_reason
            FROM result_conflicts WHERE competition_id=$1 AND corrected_match_id=$2 AND result_version=$3
            ORDER BY created_at,id`,
           [competitionId, matchId, duplicate.result_version],
@@ -3535,7 +3606,7 @@ export class Phase2Runtime {
     });
   }
 
-  private async latestMatchResult(tx: PostgresJsSql, matchId: string) {
+  private async matchResultAtSequence(tx: PostgresJsSql, matchId: string, throughSequence: number) {
     const row = (
       await tx.unsafe<{
         home_score: number;
@@ -3543,8 +3614,8 @@ export class Phase2Runtime {
         result_version: number;
       }>(
         `SELECT home_score,away_score,result_version FROM match_result_snapshots
-       WHERE match_id=$1 ORDER BY result_version DESC LIMIT 1`,
-        [matchId],
+       WHERE match_id=$1 AND through_sequence=$2`,
+        [matchId, throughSequence],
       )
     )[0];
     return row
@@ -3592,7 +3663,8 @@ export class Phase2Runtime {
       state: "final" | "corrected";
       snapshot: Record<string, unknown>;
     } = (() => {
-      const exceptionalWinner = input.canonical.state.exceptionalOutcome ? input.canonical.state.winner : null;
+      const exceptionalWinner =
+        input.canonical.state.exceptionalOutcome === "walkover" ? input.canonical.state.winner : null;
       const forfeitWinnerScore = Number(input.canonical.settings.forfeitWinnerScore ?? 0);
       const forfeitLoserScore = Number(input.canonical.settings.forfeitLoserScore ?? 0);
       return {
@@ -3678,98 +3750,103 @@ export class Phase2Runtime {
     resultVersion: number,
   ) {
     const entries = await tx.unsafe<EntryRow>(
-      `SELECT id,name,seed FROM division_entries WHERE division_id=$1 AND status='confirmed' ORDER BY seed`,
+      `SELECT id,name,seed FROM division_entries
+       WHERE division_id=$1 AND status IN ('confirmed','active')
+       ORDER BY seed,id`,
       [divisionId],
     );
+    if (entries.length === 0) {
+      throw new ApiError(409, "STANDINGS_ENTRIES_EMPTY", "Standings require at least one active division entry");
+    }
     const results = await this.resultsForDivision(tx, divisionId, resultVersion);
-    const settingsRows = await tx.unsafe<Record<string, unknown>>(
-      `SELECT period_count AS "periodCount",period_minutes AS "periodMinutes",slot_minutes AS "slotMinutes",
-              points_win AS "pointsWin",points_draw AS "pointsDraw",points_loss AS "pointsLoss",
-              tiebreak_order AS "tiebreakOrder",discipline_weights AS "disciplineWeights"
-       FROM competition_sport_settings WHERE competition_id=$1`,
-      [competitionId],
+    const effectiveSettings = required(
+      await tx.unsafe<{ settings: SportPackSettings | string }>(
+        `SELECT settings.recommended_snapshot || settings.settings_override ||
+                COALESCE(division.settings_override,'{}'::jsonb) AS settings
+         FROM competition_sport_settings settings
+         LEFT JOIN division_sport_settings division
+           ON division.competition_id=settings.competition_id AND division.division_id=$2
+         WHERE settings.competition_id=$1`,
+        [competitionId, divisionId],
+      ),
+      "Effective sport settings not found",
     );
     const sport = required(
       await tx.unsafe<{ sport_code: SportId }>(`SELECT sport_code FROM competitions WHERE id=$1`, [competitionId]),
       "Competition not found",
     );
-    let standings: { standings: unknown; explanation: unknown };
-    if (sport.sport_code === "canoe_polo") {
-      standings = this.domain.calculateStandings({ entries, results, settings: settingsRows[0] ?? {} });
-    } else {
-      const genericResults = await tx.unsafe<{
-        match_id: string;
-        home_entry_id: string;
-        away_entry_id: string;
-        home_score: number;
-        away_score: number;
-        state: "final" | "corrected";
-        result_version: number;
-        snapshot: Record<string, unknown> | string;
-      }>(
-        `SELECT DISTINCT ON (m.id) m.id AS match_id,m.home_entry_id,m.away_entry_id,
+    const standingsConfig = effectiveStandingsConfig(
+      sport.sport_code,
+      jsonValue<SportPackSettings>(effectiveSettings.settings),
+    );
+    const genericResults = await tx.unsafe<{
+      match_id: string;
+      home_entry_id: string;
+      away_entry_id: string;
+      home_score: number;
+      away_score: number;
+      state: "final" | "corrected";
+      result_version: number;
+      snapshot: Record<string, unknown> | string;
+    }>(
+      `SELECT DISTINCT ON (m.id) m.id AS match_id,m.home_entry_id,m.away_entry_id,
                 snapshot.home_score,snapshot.away_score,snapshot.state,snapshot.result_version,snapshot.snapshot
          FROM matches m
          JOIN match_result_snapshots snapshot ON snapshot.match_id=m.id
          WHERE m.division_id=$1 AND snapshot.result_version<=$2
            AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
          ORDER BY m.id,snapshot.result_version DESC`,
-        [divisionId, resultVersion],
-      );
-      const standingsResults: StandingsMatchResult[] = genericResults.map((result) => {
-        const snapshot = jsonValue<{
-          segments?: Array<{ home?: number; away?: number }>;
-          totalPoints?: { home?: number; away?: number };
-          exceptionalOutcome?: string | null;
-          winner?: "home" | "away" | null;
-        }>(result.snapshot);
-        const segments = Array.isArray(snapshot.segments) ? snapshot.segments : [];
-        const config = STANDINGS_SPORT_PACKS[sport.sport_code];
-        const forfeit = Boolean(snapshot.exceptionalOutcome && snapshot.winner);
-        const homeWonForfeit = forfeit && snapshot.winner === "home";
-        const forfeitHomeSegments = homeWonForfeit
-          ? config.forfeitScore.homeSegments
-          : config.forfeitScore.awaySegments;
-        const forfeitAwaySegments = homeWonForfeit
-          ? config.forfeitScore.awaySegments
-          : config.forfeitScore.homeSegments;
-        return {
-          matchId: result.match_id,
-          homeEntryId: result.home_entry_id,
-          awayEntryId: result.away_entry_id,
-          homeScore: forfeit
-            ? homeWonForfeit
-              ? config.forfeitScore.homeScore
-              : config.forfeitScore.awayScore
-            : Number(snapshot.totalPoints?.home ?? result.home_score),
-          awayScore: forfeit
-            ? homeWonForfeit
-              ? config.forfeitScore.awayScore
-              : config.forfeitScore.homeScore
-            : Number(snapshot.totalPoints?.away ?? result.away_score),
-          ...(!forfeit
-            ? {
-                homeSegments: segments.map((segment) => Number(segment.home ?? 0)),
-                awaySegments: segments.map((segment) => Number(segment.away ?? 0)),
-              }
-            : forfeitHomeSegments && forfeitAwaySegments
-              ? { homeSegments: forfeitHomeSegments, awaySegments: forfeitAwaySegments }
-              : {}),
-          status: forfeit ? ("forfeit" as const) : result.state,
-          ...(forfeit
-            ? {
-                forfeitLoserEntryId: snapshot.winner === "home" ? result.away_entry_id : result.home_entry_id,
-              }
+      [divisionId, resultVersion],
+    );
+    const standingsResults: StandingsMatchResult[] = genericResults.map((result) => {
+      const snapshot = jsonValue<{
+        segments?: Array<{ home?: number; away?: number }>;
+        totalPoints?: { home?: number; away?: number };
+        exceptionalOutcome?: string | null;
+        winner?: "home" | "away" | null;
+      }>(result.snapshot);
+      const segments = Array.isArray(snapshot.segments) ? snapshot.segments : [];
+      const config = standingsConfig;
+      const forfeit = snapshot.exceptionalOutcome === "walkover" && Boolean(snapshot.winner);
+      const homeWonForfeit = forfeit && snapshot.winner === "home";
+      const forfeitHomeSegments = homeWonForfeit ? config.forfeitScore.homeSegments : config.forfeitScore.awaySegments;
+      const forfeitAwaySegments = homeWonForfeit ? config.forfeitScore.awaySegments : config.forfeitScore.homeSegments;
+      return {
+        matchId: result.match_id,
+        homeEntryId: result.home_entry_id,
+        awayEntryId: result.away_entry_id,
+        homeScore: forfeit
+          ? homeWonForfeit
+            ? config.forfeitScore.homeScore
+            : config.forfeitScore.awayScore
+          : Number(snapshot.totalPoints?.home ?? result.home_score),
+        awayScore: forfeit
+          ? homeWonForfeit
+            ? config.forfeitScore.awayScore
+            : config.forfeitScore.homeScore
+          : Number(snapshot.totalPoints?.away ?? result.away_score),
+        ...(!forfeit
+          ? {
+              homeSegments: segments.map((segment) => Number(segment.home ?? 0)),
+              awaySegments: segments.map((segment) => Number(segment.away ?? 0)),
+            }
+          : forfeitHomeSegments && forfeitAwaySegments
+            ? { homeSegments: forfeitHomeSegments, awaySegments: forfeitAwaySegments }
             : {}),
-          version: result.result_version,
-        };
-      });
-      const rows = calculateStandings(entries, standingsResults, STANDINGS_SPORT_PACKS[sport.sport_code]);
-      standings = {
-        standings: rows,
-        explanation: rows.map((row) => ({ entry_id: row.entryId, criteria: row.explanations })),
+        status: forfeit ? ("forfeit" as const) : result.state,
+        ...(forfeit
+          ? {
+              forfeitLoserEntryId: snapshot.winner === "home" ? result.away_entry_id : result.home_entry_id,
+            }
+          : {}),
+        version: result.result_version,
       };
-    }
+    });
+    const rows = calculateStandings(entries, standingsResults, standingsConfig);
+    const standings = {
+      standings: rows,
+      explanation: rows.map((row) => ({ entry_id: row.entryId, criteria: row.explanations })),
+    };
     const format = required(
       await tx.unsafe<{ definition: Record<string, unknown> }>(
         `SELECT fr.definition FROM format_revisions fr
@@ -3792,12 +3869,13 @@ export class Phase2Runtime {
     );
     await tx.unsafe(`SELECT set_config('matchday.server_results','on',true)`);
     const snapshot = required(
-      await tx.unsafe<{ id: string }>(
+      await tx.unsafe<{ id: string; row_count: number }>(
         `INSERT INTO standings_snapshots (
          competition_id,division_id,result_version,standings,explanation,calculation_input_hash,
          calculation_provenance,source_result_hash,settings_version,snapshot_fingerprint
-       ) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,'server_calculated',$6,$7,$6)
-       RETURNING id`,
+       ) VALUES ($1,$2,$3,$4::text::jsonb,$5::text::jsonb,$6,'server_calculated',$6,$7,$6)
+       RETURNING id,
+         CASE WHEN jsonb_typeof(standings)='array' THEN jsonb_array_length(standings) ELSE -1 END AS row_count`,
         [
           competitionId,
           divisionId,
@@ -3805,11 +3883,18 @@ export class Phase2Runtime {
           JSON.stringify(standings.standings),
           JSON.stringify(standings.explanation),
           provenance.source_hash,
-          sport.sport_code === "canoe_polo" ? "phase2-canoe-polo-v1" : STANDINGS_SPORT_PACKS[sport.sport_code].version,
+          standingsConfig.version,
         ],
       ),
       "Standings snapshot was not created",
     );
+    if (snapshot.row_count !== entries.length) {
+      throw new ApiError(
+        500,
+        "STANDINGS_PERSISTENCE_INVALID",
+        `Standings snapshot retained ${snapshot.row_count} of ${entries.length} active entries`,
+      );
+    }
     for (const item of resolved.matches ?? []) {
       for (const slot of ["home", "away"] as const) {
         const entryId = slot === "home" ? item.homeEntryId : item.awayEntryId;
@@ -3963,14 +4048,14 @@ export class Phase2Runtime {
             area_id: string;
             area_name: string;
           }>(
-            `SELECT m.id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
+            `SELECT m.id,m.code,m.stage,sm.home_entry_id,sm.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
                   sm.starts_at,sm.ends_at,pa.id AS area_id,pa.name AS area_name
            FROM competition_publications cp
            JOIN scheduled_matches sm ON sm.schedule_revision_id=cp.published_schedule_revision_id
            JOIN matches m ON m.id=sm.match_id JOIN playing_areas pa ON pa.id=sm.playing_area_id
-           LEFT JOIN division_entries home ON home.id=m.home_entry_id
-           LEFT JOIN division_entries away ON away.id=m.away_entry_id
+           LEFT JOIN division_entries home ON home.id=sm.home_entry_id
+           LEFT JOIN division_entries away ON away.id=sm.away_entry_id
            WHERE cp.competition_id=$1 ORDER BY sm.starts_at,pa.sort_order,m.ordinal`,
             [competitionId],
           )
@@ -4346,7 +4431,7 @@ export class Phase2Runtime {
 
   async matchScoringAudit(actor: Phase2Actor, competitionId: string, matchId: string) {
     return this.transaction(async (tx) => {
-      const access = await this.requireCompetitionAccess(tx, competitionId, actor, false);
+      await this.requireCompetitionAccess(tx, competitionId, actor);
       const match = required(
         await tx.unsafe<{
           id: string;
@@ -4415,7 +4500,7 @@ export class Phase2Runtime {
         )
       )[0];
       return {
-        permission: access.membership_role === "viewer" ? ("read" as const) : ("write" as const),
+        permission: "write" as const,
         aggregate_version: canonical.aggregateVersion,
         through_sequence: canonical.aggregateVersion,
         competition: { id: competitionId, sport_code: match.sport_code },
@@ -4469,7 +4554,7 @@ export class Phase2Runtime {
   }
 
   async listResultConflicts(actor: Phase2Actor, competitionId: string, status: string | null) {
-    await this.requireCompetitionAccess(this.sql, competitionId, actor, false);
+    await this.requireCompetitionAccess(this.sql, competitionId, actor);
     if (status && !["open", "acknowledged", "resolved"].includes(status)) {
       throw new ApiError(422, "RESULT_CONFLICT_STATUS_INVALID", "Result conflict status is invalid");
     }

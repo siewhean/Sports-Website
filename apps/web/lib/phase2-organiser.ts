@@ -296,8 +296,9 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     const state = String(match.state);
     const status: MatchView["status"] =
       state === "final" || state === "corrected" ? "final" : state === "in_progress" ? "live" : "scheduled";
-    const homeScore = state === "final" || state === "corrected" ? nonNegativeInteger(match.home_score)! : undefined;
-    const awayScore = state === "final" || state === "corrected" ? nonNegativeInteger(match.away_score)! : undefined;
+    const homeScore = nonNegativeInteger(match.home_score);
+    const awayScore = nonNegativeInteger(match.away_score);
+    const resultVersion = nonNegativeInteger(match.result_version);
     return {
       id,
       label: string(match.code) ?? id,
@@ -306,8 +307,9 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
       area: string(match.area) ?? "—",
       home: participantLabel(formatMatch?.home, entryNames, matchCodes),
       away: participantLabel(formatMatch?.away, entryNames, matchCodes),
-      ...(homeScore === undefined ? {} : { homeScore }),
-      ...(awayScore === undefined ? {} : { awayScore }),
+      ...(homeScore === null ? {} : { homeScore }),
+      ...(awayScore === null ? {} : { awayScore }),
+      ...(resultVersion === null ? {} : { resultVersion }),
       status,
     };
   });

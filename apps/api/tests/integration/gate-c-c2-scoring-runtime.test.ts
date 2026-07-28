@@ -206,14 +206,100 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
     });
   });
 
+  it("preserves retirement play and applies frozen custom standings and walkover settings", async () => {
+    const retirement = await createScoringWorld("badminton");
+    await sql`UPDATE competition_sport_settings SET settings_override=${sql.json({
+      standingsOrder: ["point_difference", "match_wins"],
+      forfeitWinnerScore: 17,
+      forfeitLoserScore: 0,
+    })} WHERE competition_id=${retirement.competition.id}`;
+    let retirementVersion = 0;
+    for (const command of [
+      { type: "match_started" },
+      { type: "point", team_slot: "home", segment_number: 1 },
+      { type: "retirement", team_slot: "home", segment_number: 1 },
+    ]) {
+      const receipt = await runtime.appendCanonicalScoreEvent(
+        retirement.auth,
+        { client_event_id: randomUUID(), occurred_at: new Date().toISOString(), ...command },
+        retirementVersion,
+        randomUUID(),
+      );
+      retirementVersion = receipt.aggregate_version;
+    }
+    await expect(
+      runtime.finalise(retirement.auth, randomUUID(), randomUUID(), retirementVersion),
+    ).resolves.toMatchObject({ home_score: 0, away_score: 0 });
+    const [retirementStandings] = await sql<
+      {
+        settings_version: string;
+        standings: string | Array<{ entryId: string; scoreFor: number; resolvedBy: string }>;
+      }[]
+    >`
+      SELECT settings_version,standings
+      FROM standings_snapshots
+      WHERE competition_id=${retirement.competition.id}
+      ORDER BY result_version DESC LIMIT 1
+    `;
+    const retirementRows =
+      typeof retirementStandings?.standings === "string"
+        ? (JSON.parse(retirementStandings.standings) as Array<{
+            entryId: string;
+            scoreFor: number;
+            resolvedBy: string;
+          }>)
+        : retirementStandings?.standings;
+    expect(retirementStandings?.settings_version).toMatch(/^badminton-standings-v1:[a-f0-9]{16}$/);
+    expect(retirementRows?.[0]).toMatchObject({
+      scoreFor: 1,
+      resolvedBy: "score_difference",
+    });
+
+    const walkover = await createScoringWorld("badminton");
+    await sql`UPDATE competition_sport_settings SET settings_override=${sql.json({
+      standingsOrder: ["match_wins", "point_difference"],
+      forfeitWinnerScore: 17,
+      forfeitLoserScore: 0,
+    })} WHERE competition_id=${walkover.competition.id}`;
+    let walkoverVersion = 0;
+    for (const command of [{ type: "match_started" }, { type: "walkover", team_slot: "home", segment_number: 1 }]) {
+      const receipt = await runtime.appendCanonicalScoreEvent(
+        walkover.auth,
+        { client_event_id: randomUUID(), occurred_at: new Date().toISOString(), ...command },
+        walkoverVersion,
+        randomUUID(),
+      );
+      walkoverVersion = receipt.aggregate_version;
+    }
+    await expect(runtime.finalise(walkover.auth, randomUUID(), randomUUID(), walkoverVersion)).resolves.toMatchObject({
+      home_score: 17,
+      away_score: 0,
+    });
+    const [walkoverStandings] = await sql<
+      {
+        standings: string | Array<{ entryId: string; scoreFor: number }>;
+      }[]
+    >`
+      SELECT standings FROM standings_snapshots
+      WHERE competition_id=${walkover.competition.id}
+      ORDER BY result_version DESC LIMIT 1
+    `;
+    const walkoverRows =
+      typeof walkoverStandings?.standings === "string"
+        ? (JSON.parse(walkoverStandings.standings) as Array<{ entryId: string; scoreFor: number }>)
+        : walkoverStandings?.standings;
+    expect(walkoverRows?.[0]?.scoreFor).toBe(34);
+  });
+
   it("fences versions, publishes from the canonical reducer, and corrects through append-only events", async () => {
     const actor = { accountId };
+    const competitionSlug = `c2-cup-${randomUUID()}`;
     const competition = await runtime.createCompetition(
       actor,
       {
         organisationId,
         name: "C2 Cup",
-        slug: `c2-cup-${randomUUID()}`,
+        slug: competitionSlug,
         timezone: "Asia/Singapore",
         startsOn: "2027-02-01",
         endsOn: "2027-02-01",
@@ -371,8 +457,10 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       statusCode: 409,
       code: "IDEMPOTENCY_KEY_REUSED",
     });
-    const finalised = await runtime.finalise(auth, randomUUID(), randomUUID(), 3);
+    const finalisationId = randomUUID();
+    const finalised = await runtime.finalise(auth, finalisationId, randomUUID(), 3);
     expect(finalised).toMatchObject({ home_score: 1, away_score: 0, aggregate_version: 4 });
+    const publicScheduleBeforeCorrection = (await runtime.publicCompetition(competitionSlug)).schedule;
     const reopenId = randomUUID();
     const reopened = await runtime.reopenCanonicalMatch(
       actor,
@@ -562,6 +650,48 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
         randomUUID(),
       ),
     ).resolves.toMatchObject({ status: "acknowledged", acknowledgement_client_event_id: acknowledgementId });
+    await expect(runtime.finalise(auth, finalisationId, randomUUID(), 3)).resolves.toMatchObject({
+      duplicate: true,
+      aggregate_version: 4,
+      home_score: 1,
+      away_score: 0,
+      result_version: 1,
+    });
+    await expect(
+      runtime.reopenCanonicalMatch(
+        actor,
+        competition.id,
+        match.id,
+        {
+          clientEventId: reopenId,
+          reason: "Reviewing an authorised scorer correction",
+          expectedAggregateVersion: 4,
+        },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({
+      duplicate: true,
+      aggregate_version: 5,
+      result_version: 1,
+      publication_version: 1,
+    });
+    await expect(
+      runtime.correctCanonicalMatch(actor, competition.id, match.id, correctionInput, randomUUID()),
+    ).resolves.toMatchObject({
+      duplicate: true,
+      aggregate_version: 8,
+      result_version: corrected.result_version,
+      conflicts: [
+        {
+          id: conflict.id,
+          status: "open",
+          acknowledged_at: null,
+          acknowledged_by_account_id: null,
+          acknowledgement_reason: null,
+        },
+      ],
+    });
+    expect((await runtime.publicCompetition(competitionSlug)).schedule).toEqual(publicScheduleBeforeCorrection);
     await expect(
       runtime.acknowledgeResultConflict(
         actor,
@@ -612,6 +742,16 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       "finalisation",
     ]);
     expect(history.map((event) => event.aggregate_version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    const [unreversedTarget] = await sql<{ id: string }[]>`
+      SELECT id FROM canonical_score_events
+      WHERE match_id=${match.id} AND event_type='goal'
+        AND NOT EXISTS (
+          SELECT 1 FROM canonical_score_events reversal
+          WHERE reversal.match_id=${match.id}
+            AND reversal.reversal_target_event_id=canonical_score_events.id
+        )
+      ORDER BY aggregate_version DESC LIMIT 1
+    `;
     await expect(
       sql`INSERT INTO canonical_score_events(
         id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
@@ -627,6 +767,33 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
         ${"0".repeat(64)},${accountId},now()
       )`,
     ).rejects.toThrow(/check constraint|sequence/i);
+    await expect(
+      sql`INSERT INTO canonical_score_events(
+        id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+        command,command_fingerprint,actor_account_id,device_timestamp,reversal_target_event_id,reason
+      ) VALUES(
+        ${randomUUID()},${competition.id},${division.id},${match.id},${randomUUID()},99,99,'reversal',
+        ${sql.json({
+          client_event_id: randomUUID(),
+          type: "reversal",
+          occurred_at: new Date().toISOString(),
+          reversal_target_event_id: unreversedTarget!.id,
+        })},
+        ${"b".repeat(64)},${accountId},now(),${unreversedTarget!.id},NULL
+      )`,
+    ).rejects.toThrow(/reversal_reason_required|check constraint/i);
+    const wrongDivisionId = randomUUID();
+    await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
+      VALUES(${wrongDivisionId},${competition.id},'Wrong division',8)`;
+    await expect(
+      sql`INSERT INTO result_conflicts(
+        competition_id,division_id,corrected_match_id,downstream_match_id,
+        result_version,reason,detail
+      ) VALUES(
+        ${competition.id},${wrongDivisionId},${match.id},${downstreamBefore.id},
+        999,'manual_slot_preserved','{}'::jsonb
+      )`,
+    ).rejects.toThrow(/corrected_match_division_fk|foreign key/i);
     const audit = await runtime.matchScoringAudit(actor, competition.id, match.id);
     expect(audit).toMatchObject({
       aggregate_version: 8,
@@ -642,6 +809,19 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
     `;
     await expect(
       runtime.matchScoringAudit({ accountId: outsider[0]!.id }, competition.id, match.id),
+    ).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });
+    const organisationViewer = await sql<{ id: string }[]>`
+      INSERT INTO accounts(primary_email,display_name,email_verified_at)
+      VALUES(${`viewer-${randomUUID()}@example.test`},'Organisation viewer',now())
+      RETURNING id
+    `;
+    await sql`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+      VALUES(${organisationId},${organisationViewer[0]!.id},'viewer','active')`;
+    await expect(
+      runtime.matchScoringAudit({ accountId: organisationViewer[0]!.id }, competition.id, match.id),
+    ).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });
+    await expect(
+      runtime.listResultConflicts({ accountId: organisationViewer[0]!.id }, competition.id, null),
     ).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });
     const otherMatch = format.matches.find((candidate) => candidate.id !== match.id);
     if (!otherMatch) throw new Error("Expected a second match for object-scope fencing");

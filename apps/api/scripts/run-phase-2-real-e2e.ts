@@ -582,7 +582,7 @@ async function assertGateCC2DatabaseOracle(
   }
   const sports: GateCC2SemanticReceipt["database"]["sports"] = [];
   for (const sport of state.sports) {
-    const [stream, events, results, publication, correction, audit, outbox] = await Promise.all([
+    const [stream, events, results, publication, correction, standings, audit, outbox] = await Promise.all([
       sql<
         {
           sport_code: string;
@@ -652,6 +652,35 @@ async function assertGateCC2DatabaseOracle(
         FROM score_correction_transactions
         WHERE competition_id=${sport.competitionId} AND match_id=${sport.matchId}
       `,
+      sql<
+        {
+          result_version: number;
+          row_count: number;
+          settings_version: string;
+          advancement_slot_count: number;
+          advancement_conflict_count: number;
+        }[]
+      >`
+        SELECT snapshot.result_version,snapshot.settings_version,
+          CASE
+            WHEN jsonb_typeof(snapshot.standings)='array' THEN jsonb_array_length(snapshot.standings)
+            ELSE COALESCE((
+              SELECT sum(jsonb_array_length(group_value->'rows'))::integer
+              FROM jsonb_each(snapshot.standings->'groups') groups(group_id,group_value)
+            ),0)
+          END AS row_count,
+          (SELECT count(*)::integer FROM advancement_slots slot
+            WHERE slot.competition_id=${sport.competitionId}
+              AND slot.division_id=snapshot.division_id
+              AND slot.result_version<=snapshot.result_version) AS advancement_slot_count,
+          (SELECT count(*)::integer FROM advancement_conflicts conflict
+            WHERE conflict.competition_id=${sport.competitionId}
+              AND conflict.division_id=snapshot.division_id
+              AND conflict.result_version=snapshot.result_version) AS advancement_conflict_count
+        FROM standings_snapshots snapshot
+        WHERE snapshot.competition_id=${sport.competitionId}
+        ORDER BY snapshot.result_version DESC LIMIT 1
+      `,
       sql<{ action: string }[]>`
         SELECT DISTINCT action FROM audit_events
         WHERE target_type='match' AND target_id=${sport.matchId}
@@ -666,6 +695,7 @@ async function assertGateCC2DatabaseOracle(
     const canonicalResults = results.map((result) => canonicalGateCC2ResultSnapshot(result.snapshot));
     const streamRow = stream[0];
     const correctionRow = correction[0];
+    const standingsRow = standings[0];
     sports.push({
       sport_id: sport.sportId,
       event_types: events.map((event) => event.event_type),
@@ -694,6 +724,11 @@ async function assertGateCC2DatabaseOracle(
         (event) => event.event_type === "reversal" && Boolean(event.reason?.trim()),
       ).length,
       valid_actor_count: events.filter((event) => event.actor_valid).length,
+      standings_result_version: standingsRow?.result_version ?? -1,
+      standings_row_count: standingsRow?.row_count ?? -1,
+      standings_settings_version: standingsRow?.settings_version ?? "",
+      advancement_slot_count: standingsRow?.advancement_slot_count ?? -1,
+      advancement_conflict_count: standingsRow?.advancement_conflict_count ?? -1,
       audit_actions: audit.map((entry) => entry.action),
       outbox_event_types: outbox.map((entry) => entry.event_type),
     });

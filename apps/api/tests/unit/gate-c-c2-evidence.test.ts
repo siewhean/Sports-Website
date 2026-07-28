@@ -136,6 +136,11 @@ describe("Gate C C2 evidence discovery", () => {
           reversal_target_count: 1,
           reasoned_reversal_count: 1,
           valid_actor_count: 10,
+          standings_result_version: 3,
+          standings_row_count: 2,
+          standings_settings_version: "a".repeat(64),
+          advancement_slot_count: 0,
+          advancement_conflict_count: 0,
           audit_actions: ["scoring_event.appended", "result.finalised", "result.corrected", "result.reopened"],
           outbox_event_types: ["scoring_event.appended", "result.finalised", "result.corrected", "result.reopened"],
         })),
@@ -160,6 +165,10 @@ describe("Gate C C2 evidence discovery", () => {
     expect(() => validateGateCC2SemanticReceipt(receipt, gateCC2Projects[0])).toThrow(/direct database/);
 
     receipt.database.sports[0]!.distinct_client_event_count = 10;
+    receipt.database.sports[0]!.standings_row_count = 0;
+    expect(() => validateGateCC2SemanticReceipt(receipt, gateCC2Projects[0])).toThrow(/direct database/);
+
+    receipt.database.sports[0]!.standings_row_count = 2;
     receipt.database.downstream_conflicts.acknowledged = 0;
     expect(() => validateGateCC2SemanticReceipt(receipt, gateCC2Projects[0])).toThrow(/downstream conflict/);
   });
