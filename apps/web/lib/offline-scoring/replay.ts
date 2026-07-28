@@ -203,8 +203,16 @@ export class OfflineReplayController {
             this.dependencies.port.refreshAuthority
           ) {
             authorityRefreshAttempted = true;
-            const refreshed = await this.dependencies.port.refreshAuthority(authorizationId).catch(() => false);
-            if (refreshed) continue;
+            const refreshed = await this.dependencies.port.refreshAuthority(authorizationId).catch(() => null);
+            if (refreshed === "active") continue;
+            if (refreshed) {
+              const refreshError: GateCOfflineReplayError = {
+                code: refreshed,
+                category: refreshed === "authority_transferred" ? "conflict" : "permission",
+              };
+              await this.recordBlocked(queued, refreshError);
+              return { status: "blocked", acknowledged: acknowledgedCount, error: refreshError };
+            }
           }
           if (receipt.status === "blocked") {
             await this.recordBlocked(queued, receipt.error);
