@@ -1,7 +1,8 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 
 const COOKIE_VERSION = 1;
 const COOKIE_AAD = Buffer.from("matchday-offline-grant-v1", "utf8");
+const OFFLINE_KEY_CONTEXT = "matchday-offline-resume-cookie-v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SECRET_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 
@@ -25,11 +26,11 @@ export class InvalidOfflineGrantError extends Error {
 }
 
 function decodeKey(encodedKey: string): Buffer {
-  const key = Buffer.from(encodedKey, "base64url");
-  if (key.length !== 32 || key.toString("base64url") !== encodedKey) {
+  const masterKey = Buffer.from(encodedKey, "base64url");
+  if (masterKey.length !== 32 || masterKey.toString("base64url") !== encodedKey) {
     throw new Error("SCORING_SESSION_SEAL_KEY must be the base64url encoding of exactly 32 random bytes.");
   }
-  return key;
+  return createHmac("sha256", masterKey).update(OFFLINE_KEY_CONTEXT, "utf8").digest();
 }
 
 function timestamp(value: string): number | null {
