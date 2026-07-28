@@ -223,7 +223,7 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
 
     const database = await openOfflineScoringDatabase(this.factory);
     try {
-      const storeNames = [
+      const storeNames: string[] = [
         "match_packages",
         "commands",
         "acknowledgements",
@@ -231,7 +231,7 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
         "replay_state",
         "conflicts",
         "meta",
-      ] as const;
+      ];
       const initialTransaction = database.transaction(storeNames, "readonly");
       const snapshot = await readCompleteSnapshot(initialTransaction, authorizationId);
       if (!snapshot.matchPackage || !snapshot.attestation) {
