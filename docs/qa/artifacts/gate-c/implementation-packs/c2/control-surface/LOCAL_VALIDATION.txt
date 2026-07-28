@@ -1,0 +1,20 @@
+Container-side validation boundary
+==================================
+
+PASS against the synced sport packs and scorecard adapter:
+- strict TypeScript/TSX source and test typecheck using TypeScript 5.8.3;
+- noUncheckedIndexedAccess;
+- exactOptionalPropertyTypes;
+- five-sport action-model runtime smoke;
+- side-specific segment-completion and exceptional-outcome checks;
+- CSS/TypeScript Prettier standalone formatting;
+- patch creation and checksum.
+
+NOT RUN HERE:
+- repository React/Next typecheck with official @types packages;
+- repository Vitest;
+- Next production build;
+- rendered Playwright/accessibility/visual checks;
+- integration with the existing phone scorekeeper.
+
+Those checks remain mandatory locally before committing.
