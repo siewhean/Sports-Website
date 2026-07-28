@@ -1,0 +1,1 @@
+The C1 files in this directory were generated before the later local C1 recertification and C2 application. They are retained as historical handoff artifacts and must not be treated as the latest certified source.
