@@ -75,6 +75,46 @@ function replayAttempt(attempt: number): OfflineReplayAttempt {
   };
 }
 
+function replayRepository() {
+  const storedPackage = matchPackage();
+  const command = queuedCommand();
+  const acknowledgements: GateCOfflineAcknowledgement[] = [];
+  const attempts: OfflineReplayAttempt[] = [];
+  const conflicts: OfflineConflict[] = [];
+  const transition = vi.fn();
+  const repository: OfflineScoringRepository = {
+    saveMatchPackage: vi.fn(),
+    transitionMatchPackageStatus: transition,
+    getMatchPackage: vi.fn(async () => storedPackage),
+    getActiveMatchPackage: vi.fn(async () => storedPackage),
+    getRecoverableMatchPackage: vi.fn(async () => storedPackage),
+    enqueue: vi.fn(),
+    listCommands: vi.fn(async () => [command]),
+    listAcknowledgements: vi.fn(async () => acknowledgements),
+    listPendingCommands: vi.fn(async () => (acknowledgements.length ? [] : [command])),
+    appendAcknowledgement: vi.fn(async (acknowledgement) => {
+      acknowledgements.push(acknowledgement);
+    }),
+    appendReplayAttempt: vi.fn(async (attempt) => {
+      attempts.push(attempt);
+    }),
+    listReplayAttempts: vi.fn(async () => attempts),
+    appendConflict: vi.fn(async (conflict) => {
+      conflicts.push(conflict);
+    }),
+    listConflicts: vi.fn(async () => conflicts),
+    getReplayState: vi.fn(async () => null),
+    recordDiagnosticExport: vi.fn(),
+    acquireReplayLease: vi.fn(async () => 1),
+    renewReplayLease: vi.fn(async () => true),
+    releaseReplayLease: vi.fn(),
+    pruneTerminalQueue: vi.fn(async () => false),
+    discardResolvedAuthorization: vi.fn(),
+    discardAfterExport: vi.fn(),
+  };
+  return { repository, acknowledgements, attempts, conflicts, transition };
+}
+
 describe("Gate C C3 hardening", () => {
   it("invalidates export-confirmed deletion when replay evidence changes", async () => {
     const repository = new StrictIndexedDbOfflineScoringRepository(new IDBFactory());
@@ -96,44 +136,9 @@ describe("Gate C C3 hardening", () => {
   });
 
   it("refreshes an expired short lease once without marking the authority transferred", async () => {
-    const storedPackage = matchPackage();
-    const command = queuedCommand();
-    const acknowledgements: GateCOfflineAcknowledgement[] = [];
-    const attempts: OfflineReplayAttempt[] = [];
-    const conflicts: OfflineConflict[] = [];
-    const transition = vi.fn();
-    const repository: OfflineScoringRepository = {
-      saveMatchPackage: vi.fn(),
-      transitionMatchPackageStatus: transition,
-      getMatchPackage: vi.fn(async () => storedPackage),
-      getActiveMatchPackage: vi.fn(async () => storedPackage),
-      getRecoverableMatchPackage: vi.fn(async () => storedPackage),
-      enqueue: vi.fn(),
-      listCommands: vi.fn(async () => [command]),
-      listAcknowledgements: vi.fn(async () => acknowledgements),
-      listPendingCommands: vi.fn(async () => (acknowledgements.length ? [] : [command])),
-      appendAcknowledgement: vi.fn(async (acknowledgement) => {
-        acknowledgements.push(acknowledgement);
-      }),
-      appendReplayAttempt: vi.fn(async (attempt) => {
-        attempts.push(attempt);
-      }),
-      listReplayAttempts: vi.fn(async () => attempts),
-      appendConflict: vi.fn(async (conflict) => {
-        conflicts.push(conflict);
-      }),
-      listConflicts: vi.fn(async () => conflicts),
-      getReplayState: vi.fn(async () => null),
-      recordDiagnosticExport: vi.fn(),
-      acquireReplayLease: vi.fn(async () => 1),
-      renewReplayLease: vi.fn(async () => true),
-      releaseReplayLease: vi.fn(),
-      pruneTerminalQueue: vi.fn(async () => false),
-      discardResolvedAuthorization: vi.fn(),
-      discardAfterExport: vi.fn(),
-    };
+    const { repository, acknowledgements, conflicts, transition } = replayRepository();
     let submissions = 0;
-    const refreshAuthority = vi.fn(async () => true);
+    const refreshAuthority = vi.fn(async () => "active" as const);
     const controller = new OfflineReplayController({
       repository,
       lockManager: null,
@@ -174,6 +179,33 @@ describe("Gate C C3 hardening", () => {
     expect(refreshAuthority).toHaveBeenCalledTimes(1);
     expect(transition).not.toHaveBeenCalledWith(authorizationId, "transferred");
     expect(conflicts).toHaveLength(0);
+    expect(acknowledgements).toHaveLength(1);
+  });
+
+  it("persists a server-confirmed takeover as a terminal transferred package", async () => {
+    const { repository, conflicts, transition } = replayRepository();
+    const controller = new OfflineReplayController({
+      repository,
+      lockManager: null,
+      now: () => now,
+      sleep: async () => undefined,
+      isOnline: () => true,
+      port: {
+        refreshAuthority: vi.fn(async () => "authority_transferred" as const),
+        submit: vi.fn(async () => ({
+          status: "blocked" as const,
+          error: { code: "stale_writer_generation" as const, category: "conflict" as const },
+        })),
+      },
+    });
+
+    await expect(controller.replay(authorizationId)).resolves.toEqual({
+      status: "blocked",
+      acknowledged: 0,
+      error: { code: "authority_transferred", category: "conflict" },
+    });
+    expect(transition).toHaveBeenCalledWith(authorizationId, "transferred");
+    expect(conflicts).toMatchObject([{ code: "authority_transferred", local_sequence: 1 }]);
   });
 
   it("keeps append-only migrations and cached shell verification fail-closed", async () => {
