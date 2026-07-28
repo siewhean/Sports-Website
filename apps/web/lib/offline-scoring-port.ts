@@ -10,6 +10,7 @@ import type {
 import { canonicalOfflineJson } from "@matchday/domain";
 import {
   IndexedDbOfflineScoringRepository,
+  type OfflineAuthorityRefreshResult,
   type OfflineReplayPort,
   type OfflineScoringRepository,
 } from "./offline-scoring";
@@ -162,6 +163,24 @@ function authorityMetadata(value: unknown): OfflineAuthorityMetadata | null {
   return source as OfflineAuthorityMetadata;
 }
 
+function refreshOutcome(error: unknown): OfflineAuthorityRefreshResult {
+  if (!(error instanceof ScoringTransportError)) return null;
+  if (error.code === "OFFLINE_AUTHORIZATION_TRANSFERRED" || error.code === "STALE_WRITER_GENERATION") {
+    return error.code === "OFFLINE_AUTHORIZATION_TRANSFERRED" ? "authority_transferred" : null;
+  }
+  if (error.code === "OFFLINE_AUTHORIZATION_REVOKED" || error.code === "ACCESS_REVOKED") {
+    return "authority_revoked";
+  }
+  if (
+    error.code === "OFFLINE_AUTHORIZATION_EXPIRED" ||
+    error.code === "OFFLINE_RECORDING_EXPIRED" ||
+    error.code === "ACCESS_EXPIRED"
+  ) {
+    return "authority_expired";
+  }
+  return null;
+}
+
 export class ApiOfflineScoringPort implements OfflineReplayPort {
   constructor(
     private readonly deviceId: string,
@@ -204,13 +223,13 @@ export class ApiOfflineScoringPort implements OfflineReplayPort {
     };
   }
 
-  async refreshAuthority(authorizationId: string): Promise<boolean> {
+  async refreshAuthority(authorizationId: string): Promise<OfflineAuthorityRefreshResult> {
     try {
       const summary = await offlineQueueSummary(this.replayRepository(), authorizationId);
       const result = await this.establishAuthority(summary, "resume");
-      return result.offline.authorization_id === authorizationId && result.offline.status === "active";
-    } catch {
-      return false;
+      return result.offline.authorization_id === authorizationId && result.offline.status === "active" ? "active" : null;
+    } catch (error) {
+      return refreshOutcome(error);
     }
   }
 
