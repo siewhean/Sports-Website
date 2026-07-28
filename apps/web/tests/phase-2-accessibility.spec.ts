@@ -22,7 +22,7 @@ test("@a11y scorer goal-confirmation interaction has no WCAG A or AA accessibili
   await page.getByRole("button", { name: "Goal Marina Blue" }).click();
   const dialog = page.getByRole("dialog", { name: "Confirm goal" });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Scorer name").fill("Aisha Tan");
+  await dialog.getByLabel("Scorer or participant name").fill("Aisha Tan");
   await assertNoWcagAOrAaViolations(page);
 });
 

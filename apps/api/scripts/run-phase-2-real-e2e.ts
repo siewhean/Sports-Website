@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseConfig } from "@matchday/config";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
+import { SPORT_PACKS, type SportId } from "@matchday/domain";
 import { hashSessionSecret, systemClock, type PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../src/app.js";
@@ -16,6 +17,8 @@ import { PostgresIdentityUnitOfWork } from "../src/identity-postgres.js";
 import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
+import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
+import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { RedisScoringAccessRateLimiter } from "../src/scoring-access-rate-limit.js";
 import { Redis } from "ioredis";
 import {
@@ -23,7 +26,17 @@ import {
   redactedIdentifierHash,
   redisLogicalDatabase,
   retainedArtifacts,
+  type GateCEvidenceScope,
 } from "./gate-c-access-evidence.js";
+import {
+  canonicalGateCC2ScreenshotPaths,
+  canonicalGateCC2ResultSnapshot,
+  validateGateCC2BrowserReceipt,
+  validateGateCC2SemanticReceipt,
+  type GateCC2BrowserReceipt,
+  type GateCC2Project,
+  type GateCC2SemanticReceipt,
+} from "./gate-c-c2-evidence.js";
 
 const apiPort = 4100;
 const webPort = 3102;
@@ -40,7 +53,11 @@ const migrationsDirectory = path.join(root, "packages/database/migrations");
 const adminDatabaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
 const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-const retainedArtifactsRoot = path.join(root, "artifacts/qa/gate-c-access", sourceSha);
+const evidenceScope = (process.env.PHASE2_E2E_EVIDENCE_SCOPE ?? "gate-c-access") as GateCEvidenceScope;
+if (!["gate-c-access", "gate-c-c2"].includes(evidenceScope)) {
+  throw new Error(`Unsupported real-E2E evidence scope: ${evidenceScope}`);
+}
+const retainedArtifactsRoot = path.join(root, "artifacts/qa", evidenceScope, sourceSha);
 
 type Tail = { label: string; lines: string[] };
 type RunningProcess = { child: ChildProcess; tail: Tail };
@@ -64,6 +81,40 @@ type SeedState = {
   probeAccessToken: string;
   organiserCookie: string;
   csrfToken: string;
+  sports?: GateCC2SportSeed[];
+};
+
+type GateCC2SportSeed = {
+  sportId: SportId;
+  competitionId: string;
+  divisionId: string;
+  matchId: string;
+  downstreamMatchId: string | null;
+  slug: string;
+  homeName: string;
+  awayName: string;
+  accessToken: string;
+  action: {
+    eventType: string;
+    accessibleName: string;
+    participantRequired: boolean;
+    manualTimeRequired: boolean;
+  };
+};
+
+const gateCC2Actions: Readonly<Record<SportId, Omit<GateCC2SportSeed["action"], "accessibleName">>> = {
+  canoe_polo: { eventType: "goal", participantRequired: true, manualTimeRequired: true },
+  badminton: { eventType: "point", participantRequired: false, manualTimeRequired: false },
+  table_tennis: { eventType: "point", participantRequired: false, manualTimeRequired: false },
+  volleyball: { eventType: "point", participantRequired: false, manualTimeRequired: false },
+  basketball: { eventType: "three_point_score", participantRequired: false, manualTimeRequired: true },
+};
+const gateCC2SettingsOverrides: Readonly<Record<SportId, Readonly<Record<string, number>>>> = {
+  canoe_polo: { periods: 1 },
+  badminton: { bestOf: 1, regularTargetPoints: 1, winBy: 1, pointCap: 1 },
+  table_tennis: { bestOf: 1, regularTargetPoints: 1, winBy: 1, pointCap: 1 },
+  volleyball: { bestOf: 1, regularTargetPoints: 1, decidingTargetPoints: 1, winBy: 1, pointCap: 1 },
+  basketball: { periods: 1 },
 };
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -78,7 +129,7 @@ function retainedArtifactsDirectory(): string | null {
   if (!configured) return null;
   const resolved = path.resolve(root, configured);
   if (resolved !== retainedArtifactsRoot && !resolved.startsWith(`${retainedArtifactsRoot}${path.sep}`)) {
-    throw new Error("PHASE2_E2E_RETAIN_DIR must stay under artifacts/qa/gate-c-access");
+    throw new Error(`PHASE2_E2E_RETAIN_DIR must stay under artifacts/qa/${evidenceScope}/${sourceSha}`);
   }
   return resolved;
 }
@@ -291,63 +342,162 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
     `;
   });
   const actor = { accountId };
-  const competition = await runtime.createCompetition(
-    actor,
-    {
-      organisationId,
-      name: "Phase 2 Real E2E Cup",
-      slug: "phase-2-real-e2e",
-      timezone: "Asia/Singapore",
-      startsOn: "2026-08-01",
-      endsOn: "2026-08-01",
-    },
-    randomUUID(),
-  );
-  await runtime.updateSettings(actor, competition.id, { periodMinutes: 10 }, randomUUID());
-  const division = await runtime.createDivision(actor, competition.id, { name: "Open", teamLimit: 8 }, randomUUID());
-  await runtime.replaceEntries(
-    actor,
-    competition.id,
-    division.id,
-    Array.from({ length: 8 }, (_, index) => ({ name: `E2E Team ${index + 1}`, seed: index + 1 })),
-    randomUUID(),
-  );
-  await runtime.replaceCapacity(
-    actor,
-    competition.id,
-    ["Court 1", "Court 2"].map((name) => ({
-      name,
-      windows: [{ startsAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-08-01T12:00:00.000Z" }],
-    })),
-    randomUUID(),
-  );
-  const format = await runtime.generateFormat(actor, competition.id, division.id, randomUUID());
-  const schedule = await runtime.generateSchedule(actor, competition.id, format.id, randomUUID());
-  await runtime.publishSchedule(actor, competition.id, schedule.id, randomUUID());
-  const firstMatch = format.matches.find((match) => match.homeEntryId && match.awayEntryId);
-  if (!firstMatch?.homeEntryId || !firstMatch.awayEntryId) throw new Error("Canonical seed has no resolved match");
-  const participants = await sql<{ id: string; name: string }[]>`
-    SELECT id,name FROM division_entries WHERE id IN (${firstMatch.homeEntryId},${firstMatch.awayEntryId})
-  `;
-  const names = new Map(participants.map((entry) => [entry.id, entry.name]));
-  const access = await runtime.createAccessPass(
-    actor,
-    competition.id,
-    firstMatch.id,
-    new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
-    randomUUID(),
-  );
-  const probeMatch = format.matches.find(
-    (match) => match.id !== firstMatch.id && match.homeEntryId && match.awayEntryId,
-  );
-  if (!probeMatch) throw new Error("Canonical seed has no second resolved match for transport probing");
-  const probeAccess = await runtime.createAccessPass(
-    actor,
-    competition.id,
-    probeMatch.id,
-    new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
-    randomUUID(),
-  );
+  const sports: SportId[] =
+    evidenceScope === "gate-c-c2"
+      ? ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"]
+      : ["canoe_polo"];
+  for (const sportId of sports) {
+    const pack = SPORT_PACKS[sportId];
+    const hashes = await sql<{ value: string }[]>`
+      SELECT phase4_sha256_json(${sql.json(pack)}) AS value
+    `;
+    await sql`
+      INSERT INTO sport_pack_versions (
+        sport_code,version,schema_version,definition,definition_hash,status,activated_at
+      ) VALUES (
+        ${sportId},${pack.version},${pack.schemaVersion},${sql.json(pack)},${hashes[0]!.value},'active',now()
+      )
+    `;
+  }
+
+  const c2Sports: GateCC2SportSeed[] = [];
+  let probeAccessToken = "";
+  for (const [sportIndex, sportId] of sports.entries()) {
+    const pack = SPORT_PACKS[sportId];
+    const slug = evidenceScope === "gate-c-c2" ? `gate-c-c2-${sportId.replaceAll("_", "-")}` : "phase-2-real-e2e";
+    const competition = await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: evidenceScope === "gate-c-c2" ? `Gate C C2 ${pack.displayName} Cup` : "Phase 2 Real E2E Cup",
+        slug,
+        timezone: "Asia/Singapore",
+        startsOn: "2026-08-01",
+        endsOn: "2026-08-01",
+      },
+      randomUUID(),
+    );
+    await sql.begin(async (transaction) => {
+      await transaction`UPDATE competitions SET sport_code=${sportId} WHERE id=${competition.id}`;
+      await transaction`
+        UPDATE competition_sport_settings SET
+          sport_code=${sportId},
+          pack_version=${pack.version},
+          pack_schema_version=${pack.schemaVersion},
+          recommended_snapshot=${transaction.json(pack.recommendedSettings)},
+          settings_override=${transaction.json(evidenceScope === "gate-c-c2" ? gateCC2SettingsOverrides[sportId] : {})}
+        WHERE competition_id=${competition.id}
+      `;
+    });
+    const division = await runtime.createDivision(actor, competition.id, { name: "Open", teamLimit: 8 }, randomUUID());
+    await runtime.replaceEntries(
+      actor,
+      competition.id,
+      division.id,
+      Array.from({ length: 8 }, (_, index) => ({
+        name: `${pack.displayName} Team ${index + 1}`,
+        seed: index + 1,
+      })),
+      randomUUID(),
+    );
+    await runtime.replaceCapacity(
+      actor,
+      competition.id,
+      ["Court 1", "Court 2"].map((name) => ({
+        name,
+        windows: [{ startsAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-08-01T12:00:00.000Z" }],
+      })),
+      randomUUID(),
+    );
+    const format = await runtime.generateFormat(actor, competition.id, division.id, randomUUID());
+    const existingDependency =
+      evidenceScope === "gate-c-c2" && sportIndex === 0
+        ? (
+            await sql<{ source_match_id: string; downstream_match_id: string }[]>`
+              SELECT dependency.source_match_id,dependency.match_id AS downstream_match_id
+              FROM match_dependencies dependency
+              JOIN matches source ON source.id=dependency.source_match_id
+              WHERE source.format_revision_id=${format.id}
+                AND source.home_entry_id IS NOT NULL
+                AND source.away_entry_id IS NOT NULL
+              ORDER BY source.ordinal,dependency.match_id
+              LIMIT 1
+            `
+          )[0]
+        : null;
+    if (evidenceScope === "gate-c-c2" && sportIndex === 0 && !existingDependency) {
+      throw new Error("Canonical C2 format has no existing resolved-source dependency for conflict evidence");
+    }
+    const firstMatch =
+      format.matches.find((match) => match.id === existingDependency?.source_match_id) ??
+      format.matches.find((match) => match.homeEntryId && match.awayEntryId);
+    if (!firstMatch?.homeEntryId || !firstMatch.awayEntryId) {
+      throw new Error(`Canonical ${sportId} seed has no resolved match`);
+    }
+    const participants = await sql<{ id: string; name: string }[]>`
+      SELECT id,name FROM division_entries WHERE id IN (${firstMatch.homeEntryId},${firstMatch.awayEntryId})
+    `;
+    const names = new Map(participants.map((entry) => [entry.id, entry.name]));
+    const homeName = names.get(firstMatch.homeEntryId) ?? `${pack.displayName} Home`;
+    const awayName = names.get(firstMatch.awayEntryId) ?? `${pack.displayName} Away`;
+    const access = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      firstMatch.id,
+      {
+        expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+        role: "scorekeeper",
+        idempotencyKey: randomUUID(),
+      },
+      randomUUID(),
+    );
+    if (!access.token) throw new Error(`Canonical ${sportId} seed did not issue a raw one-time token`);
+    const probeMatch = format.matches.find(
+      (match) => match.id !== firstMatch.id && match.homeEntryId && match.awayEntryId,
+    );
+    if (!probeMatch) throw new Error(`Canonical ${sportId} seed has no second resolved match`);
+    if (sportIndex === 0) {
+      const probeAccess = await runtime.createAccessPass(
+        actor,
+        competition.id,
+        probeMatch.id,
+        {
+          expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+          role: "scorekeeper",
+          idempotencyKey: randomUUID(),
+        },
+        randomUUID(),
+      );
+      if (!probeAccess.token) throw new Error("Transport probe access token was not issued");
+      probeAccessToken = probeAccess.token;
+    }
+    let downstreamMatchId: string | null = null;
+    if (evidenceScope === "gate-c-c2" && sportIndex === 0) {
+      downstreamMatchId = existingDependency!.downstream_match_id;
+    }
+    const schedule = await runtime.generateSchedule(actor, competition.id, format.id, randomUUID());
+    await runtime.publishSchedule(actor, competition.id, schedule.id, randomUUID());
+    if (downstreamMatchId) await sql`UPDATE matches SET state='in_progress' WHERE id=${downstreamMatchId}`;
+    const scoreEvent = pack.eventTypes.find((event) => event.id === gateCC2Actions[sportId].eventType);
+    if (!scoreEvent) throw new Error(`C2 action is unavailable for ${sportId}`);
+    c2Sports.push({
+      sportId,
+      competitionId: competition.id,
+      divisionId: division.id,
+      matchId: firstMatch.id,
+      downstreamMatchId,
+      slug,
+      homeName,
+      awayName,
+      accessToken: access.token,
+      action: {
+        ...gateCC2Actions[sportId],
+        accessibleName: `${scoreEvent.label} ${homeName}`,
+      },
+    });
+  }
+  const primary = c2Sports[0];
+  if (!primary || !probeAccessToken) throw new Error("Canonical seed did not produce its primary aggregate");
 
   const sessionId = randomUUID();
   const sessionSecret = randomBytes(32).toString("base64url");
@@ -369,16 +519,17 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
     webOrigin,
     databaseUrl: isolation.databaseUrl,
     schema: isolation.kind === "schema" ? isolation.schema : null,
-    competitionId: competition.id,
-    divisionId: division.id,
-    matchId: firstMatch.id,
-    slug: "phase-2-real-e2e",
-    homeName: names.get(firstMatch.homeEntryId) ?? "E2E Home",
-    awayName: names.get(firstMatch.awayEntryId) ?? "E2E Away",
-    accessToken: access.token,
-    probeAccessToken: probeAccess.token,
+    competitionId: primary.competitionId,
+    divisionId: primary.divisionId,
+    matchId: primary.matchId,
+    slug: primary.slug,
+    homeName: primary.homeName,
+    awayName: primary.awayName,
+    accessToken: primary.accessToken,
+    probeAccessToken,
     organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
     csrfToken,
+    ...(evidenceScope === "gate-c-c2" ? { sports: c2Sports } : {}),
   };
 }
 
@@ -419,6 +570,235 @@ async function assertDatabaseOracle(sql: Sql, state: SeedState): Promise<void> {
   if (corrections[0]?.event_count !== 1 || corrections[0]?.audit_count !== 1) {
     throw new Error(`Correction audit oracle failed: ${JSON.stringify(corrections[0])}`);
   }
+}
+
+async function assertGateCC2DatabaseOracle(
+  sql: Sql,
+  state: SeedState,
+  browser: GateCC2BrowserReceipt,
+): Promise<GateCC2SemanticReceipt> {
+  if (!state.sports || state.sports.length !== 5) {
+    throw new Error("Gate C C2 database oracle requires five distinct seeded aggregates");
+  }
+  const sports: GateCC2SemanticReceipt["database"]["sports"] = [];
+  for (const sport of state.sports) {
+    const [stream, events, results, publication, correction, standings, audit, outbox] = await Promise.all([
+      sql<
+        {
+          sport_code: string;
+          pack_version: string;
+          settings_fingerprint: string;
+          current_version: number;
+        }[]
+      >`
+        SELECT sport_code,pack_version,settings_fingerprint,current_version
+        FROM match_score_streams WHERE match_id=${sport.matchId}
+      `,
+      sql<
+        {
+          event_type: string;
+          sequence: number;
+          aggregate_version: number;
+          client_event_id: string;
+          reversal_target_event_id: string | null;
+          reason: string | null;
+          actor_valid: boolean;
+        }[]
+      >`
+        SELECT event_type,sequence,aggregate_version,client_event_id,reversal_target_event_id,reason,
+          ((actor_access_session_id IS NOT NULL)::integer + (actor_account_id IS NOT NULL)::integer = 1) AS actor_valid
+        FROM canonical_score_events
+        WHERE competition_id=${sport.competitionId} AND match_id=${sport.matchId}
+        ORDER BY aggregate_version
+      `,
+      sql<
+        {
+          result_version: number;
+          through_sequence: number;
+          state: string;
+          home_score: number;
+          away_score: number;
+          snapshot: {
+            winner: string | null;
+            lifecycle: string;
+            segments: Array<{
+              number: number;
+              home: number;
+              away: number;
+              completed: boolean;
+              winner: string | null;
+            }>;
+          };
+        }[]
+      >`
+        SELECT result_version,through_sequence,state,home_score,away_score,snapshot FROM match_result_snapshots
+        WHERE match_id=${sport.matchId} ORDER BY result_version
+      `,
+      sql<{ result_version: number }[]>`
+        SELECT result_version FROM competition_publications WHERE competition_id=${sport.competitionId}
+      `,
+      sql<
+        {
+          count: number;
+          from_aggregate_version: number;
+          through_aggregate_version: number;
+          result_version: number;
+        }[]
+      >`
+        SELECT count(*)::integer AS count,
+          min(from_aggregate_version)::integer AS from_aggregate_version,
+          min(through_aggregate_version)::integer AS through_aggregate_version,
+          min(result_version)::integer AS result_version
+        FROM score_correction_transactions
+        WHERE competition_id=${sport.competitionId} AND match_id=${sport.matchId}
+      `,
+      sql<
+        {
+          result_version: number;
+          row_count: number;
+          settings_version: string;
+          advancement_slot_count: number;
+          advancement_conflict_count: number;
+        }[]
+      >`
+        SELECT snapshot.result_version,snapshot.settings_version,
+          CASE
+            WHEN jsonb_typeof(snapshot.standings)='array' THEN jsonb_array_length(snapshot.standings)
+            ELSE COALESCE((
+              SELECT sum(jsonb_array_length(group_value->'rows'))::integer
+              FROM jsonb_each(snapshot.standings->'groups') groups(group_id,group_value)
+            ),0)
+          END AS row_count,
+          (SELECT count(*)::integer FROM advancement_slots slot
+            WHERE slot.competition_id=${sport.competitionId}
+              AND slot.division_id=snapshot.division_id
+              AND slot.result_version<=snapshot.result_version) AS advancement_slot_count,
+          (SELECT count(*)::integer FROM advancement_conflicts conflict
+            WHERE conflict.competition_id=${sport.competitionId}
+              AND conflict.division_id=snapshot.division_id
+              AND conflict.result_version=snapshot.result_version) AS advancement_conflict_count
+        FROM standings_snapshots snapshot
+        WHERE snapshot.competition_id=${sport.competitionId}
+        ORDER BY snapshot.result_version DESC LIMIT 1
+      `,
+      sql<{ action: string }[]>`
+        SELECT DISTINCT action FROM audit_events
+        WHERE target_type='match' AND target_id=${sport.matchId}
+        ORDER BY action
+      `,
+      sql<{ event_type: string }[]>`
+        SELECT DISTINCT event_type FROM outbox_events
+        WHERE aggregate_type='match' AND aggregate_id=${sport.matchId}
+        ORDER BY event_type
+      `,
+    ]);
+    const canonicalResults = results.map((result) => canonicalGateCC2ResultSnapshot(result.snapshot));
+    const streamRow = stream[0];
+    const correctionRow = correction[0];
+    const standingsRow = standings[0];
+    sports.push({
+      sport_id: sport.sportId,
+      event_types: events.map((event) => event.event_type),
+      sequences: events.map((event) => event.sequence),
+      aggregate_versions: events.map((event) => event.aggregate_version),
+      row_count: events.length,
+      distinct_client_event_count: new Set(events.map((event) => event.client_event_id)).size,
+      result_versions: results.map((result) => result.result_version),
+      result_states: results.map((result) => result.state),
+      result_scores: results.map((result) => `${result.home_score}:${result.away_score}`),
+      result_winners: canonicalResults.map((result) => result.winner ?? ""),
+      result_lifecycles: canonicalResults.map((result) => result.lifecycle),
+      result_segment_states: canonicalResults.map((result) => result.segmentState),
+      publication_result_version: publication[0]?.result_version ?? -1,
+      correction_transactions: correctionRow?.count ?? -1,
+      correction_from_version: correctionRow?.from_aggregate_version ?? -1,
+      correction_through_version: correctionRow?.through_aggregate_version ?? -1,
+      correction_result_version: correctionRow?.result_version ?? -1,
+      result_through_sequences: results.map((result) => result.through_sequence),
+      stream_sport_code: streamRow?.sport_code ?? "",
+      stream_pack_version: streamRow?.pack_version ?? "",
+      settings_fingerprint: streamRow?.settings_fingerprint ?? "",
+      stream_current_version: streamRow?.current_version ?? -1,
+      reversal_target_count: events.filter((event) => event.reversal_target_event_id !== null).length,
+      reasoned_reversal_count: events.filter(
+        (event) => event.event_type === "reversal" && Boolean(event.reason?.trim()),
+      ).length,
+      valid_actor_count: events.filter((event) => event.actor_valid).length,
+      standings_result_version: standingsRow?.result_version ?? -1,
+      standings_row_count: standingsRow?.row_count ?? -1,
+      standings_settings_version: standingsRow?.settings_version ?? "",
+      advancement_slot_count: standingsRow?.advancement_slot_count ?? -1,
+      advancement_conflict_count: standingsRow?.advancement_conflict_count ?? -1,
+      audit_actions: audit.map((entry) => entry.action),
+      outbox_event_types: outbox.map((entry) => entry.event_type),
+    });
+  }
+  const conflicts = await sql<
+    {
+      corrected_match_id: string;
+      downstream_match_id: string;
+      result_version: number;
+      reason: string;
+      status: string;
+      acknowledged_by_account_id: string | null;
+      acknowledgement_reason: string | null;
+    }[]
+  >`
+    SELECT corrected_match_id,downstream_match_id,result_version,reason,status,
+      acknowledged_by_account_id,acknowledgement_reason
+    FROM result_conflicts
+    WHERE competition_id=ANY(${state.sports.map((sport) => sport.competitionId)}::uuid[])
+    ORDER BY created_at,id
+  `;
+  const [conflictAudit, conflictOutbox] = await Promise.all([
+    sql<{ action: string }[]>`
+      SELECT DISTINCT action FROM audit_events
+      WHERE target_type='result_conflict'
+        AND target_id IN (
+          SELECT id::text FROM result_conflicts
+          WHERE competition_id=ANY(${state.sports.map((sport) => sport.competitionId)}::uuid[])
+        )
+      ORDER BY action
+    `,
+    sql<{ event_type: string }[]>`
+      SELECT DISTINCT event_type FROM outbox_events
+      WHERE aggregate_type='result_conflict'
+        AND aggregate_id IN (
+          SELECT id::text FROM result_conflicts
+          WHERE competition_id=ANY(${state.sports.map((sport) => sport.competitionId)}::uuid[])
+        )
+      ORDER BY event_type
+    `,
+  ]);
+  const receipt: GateCC2SemanticReceipt = {
+    artifact_kind: "gate-c-c2-semantic-oracle",
+    project_name: browser.project_name,
+    browser,
+    database: {
+      sports,
+      downstream_conflicts: {
+        created: conflicts.length,
+        acknowledged: conflicts.filter((row) => row.status === "acknowledged").length,
+        corrected_match_id: conflicts[0]?.corrected_match_id ?? "",
+        downstream_match_id: conflicts[0]?.downstream_match_id ?? "",
+        result_version: conflicts[0]?.result_version ?? -1,
+        reason: conflicts[0]?.reason ?? "",
+        acknowledgement_actor_present: Boolean(conflicts[0]?.acknowledged_by_account_id),
+        acknowledgement_reason: conflicts[0]?.acknowledgement_reason ?? "",
+        audit_actions: conflictAudit.map((entry) => entry.action),
+        outbox_event_types: conflictOutbox.map((entry) => entry.event_type),
+      },
+    },
+  };
+  const sourceSport = state.sports.find((sport) => sport.sportId === "canoe_polo");
+  if (
+    !sourceSport ||
+    receipt.database.downstream_conflicts.corrected_match_id !== sourceSport.matchId ||
+    receipt.database.downstream_conflicts.downstream_match_id !== sourceSport.downstreamMatchId
+  ) {
+    throw new Error("Gate C C2 downstream conflict is not bound to the seeded source and downstream matches");
+  }
+  return validateGateCC2SemanticReceipt(receipt, browser.project_name);
 }
 
 async function assertGateCAccessOracle(sql: Sql, state: SeedState): Promise<void> {
@@ -515,6 +895,7 @@ async function main(): Promise<void> {
   let finalOwnedRedisKeyCount: number | null = null;
   let redisGuardPreserved = false;
   let playwrightPassCount: number | null = null;
+  let c2SemanticReceipt: GateCC2SemanticReceipt | null = null;
   let web: RunningProcess | null = null;
   let httpsProxy: https.Server | null = null;
   let interrupted = false;
@@ -585,6 +966,7 @@ async function main(): Promise<void> {
         new RedisScoringAccessRateLimiter(redis, scoringAccessRateLimitSecret, redisNamespace),
         config.scoringAccess.fallbackCodeHmacSecret,
       ),
+      phase3Runtime: new Phase3Runtime(identitySql, phase3DomainAdapter),
     });
     await app.listen({ host: "127.0.0.1", port: apiPort });
     await waitFor(`${apiOrigin}/health/ready`, "Phase 2 API");
@@ -597,6 +979,9 @@ async function main(): Promise<void> {
       PHASE2_E2E_STATE_FILE: stateFile,
       PHASE2_E2E_OUTPUT_DIR: path.join(temp, "playwright-output"),
       GATE_C_ACCESS_PLAYWRIGHT_JSON: path.join(temp, "playwright-output", "results.json"),
+      GATE_C_C2_PLAYWRIGHT_JSON: path.join(temp, "playwright-output", "results.json"),
+      GATE_C_C2_BROWSER_RECEIPT: path.join(temp, "playwright-output", "c2-browser-receipt.json"),
+      GATE_C_C2_SEMANTIC_RECEIPT: path.join(temp, "playwright-output", "c2-semantic-receipt.json"),
       SCORING_SESSION_SEAL_KEY: Buffer.alloc(32, 23).toString("base64url"),
     };
     delete runtimeEnv.MATCHDAY_PHASE2_DATA_MODE;
@@ -649,7 +1034,16 @@ async function main(): Promise<void> {
       const report = JSON.parse(readFileSync(runtimeEnv.GATE_C_ACCESS_PLAYWRIGHT_JSON!, "utf8")) as unknown;
       playwrightPassCount = passedPlaywrightTestCount(report, process.env.PHASE2_E2E_PROJECT);
     }
-    if (process.env.PHASE2_E2E_SKIP_PHASE2_ORACLE === "1") {
+    if (evidenceScope === "gate-c-c2") {
+      const browserReceipt = validateGateCC2BrowserReceipt(
+        JSON.parse(readFileSync(runtimeEnv.GATE_C_C2_BROWSER_RECEIPT!, "utf8")) as unknown,
+        process.env.PHASE2_E2E_PROJECT as GateCC2Project,
+      );
+      c2SemanticReceipt = await assertGateCC2DatabaseOracle(sql, state, browserReceipt);
+      await writeFile(runtimeEnv.GATE_C_C2_SEMANTIC_RECEIPT!, `${JSON.stringify(c2SemanticReceipt, null, 2)}\n`, {
+        flag: "wx",
+      });
+    } else if (process.env.PHASE2_E2E_SKIP_PHASE2_ORACLE === "1") {
       await assertGateCAccessOracle(sql, state);
     } else {
       await assertDatabaseOracle(sql, state);
@@ -730,31 +1124,40 @@ async function main(): Promise<void> {
       initialOwnedRedisKeyCount !== 0 ||
       finalOwnedRedisKeyCount !== 0 ||
       !redisGuardPreserved ||
-      !playwrightPassCount
+      !playwrightPassCount ||
+      (evidenceScope === "gate-c-c2" && !c2SemanticReceipt)
     ) {
       throw new Error("Gate C access run did not produce complete isolation evidence");
     }
     const retained = await retainedArtifacts(retainedDirectory);
     const databaseIdentifier = isolation.kind === "database" ? isolation.databaseName : isolation.schema;
+    const retainedScreenshotPaths = retained
+      .filter((artifact) => artifact.path.endsWith(".png"))
+      .map((artifact) => artifact.path);
     const record = {
       schema_version: 1,
+      artifact_kind: `${evidenceScope}-project-evidence`,
       source_sha: sourceSha,
       project_name: process.env.PHASE2_E2E_PROJECT,
       pass_count: playwrightPassCount,
       started_at: startedAt.toISOString(),
       duration_ms: Number(process.hrtime.bigint() - startedAtNanoseconds) / 1_000_000,
+      ...(c2SemanticReceipt ? { semantic_oracle: c2SemanticReceipt } : {}),
       postgresql: {
         isolation_kind: isolation.kind,
-        identifier_sha256: redactedIdentifierHash("postgres", databaseIdentifier),
+        identifier_sha256: redactedIdentifierHash(evidenceScope, "postgres", databaseIdentifier),
       },
       redis: {
         logical_database: redisLogicalDatabase(redisUrl),
-        namespace_sha256: redactedIdentifierHash("redis-namespace", redisNamespace),
+        namespace_sha256: redactedIdentifierHash(evidenceScope, "redis-namespace", redisNamespace),
         initial_owned_key_count: initialOwnedRedisKeyCount,
         final_owned_key_count: finalOwnedRedisKeyCount,
         unrelated_guard_preserved: redisGuardPreserved,
       },
-      screenshot_paths: retained.filter((artifact) => artifact.path.endsWith(".png")).map((artifact) => artifact.path),
+      screenshot_paths:
+        evidenceScope === "gate-c-c2"
+          ? canonicalGateCC2ScreenshotPaths(retainedScreenshotPaths)
+          : retainedScreenshotPaths,
       result_paths: retained.filter((artifact) => artifact.path.endsWith(".json")).map((artifact) => artifact.path),
       artifacts: retained,
     };

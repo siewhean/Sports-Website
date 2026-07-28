@@ -31,9 +31,15 @@ export type RetainedArtifact = {
   size_bytes: number;
 };
 
-export function redactedIdentifierHash(kind: "postgres" | "redis-namespace", value: string): string {
+export type GateCEvidenceScope = "gate-c-access" | "gate-c-c2";
+
+export function redactedIdentifierHash(
+  scope: GateCEvidenceScope,
+  kind: "postgres" | "redis-namespace",
+  value: string,
+): string {
   if (!value) throw new Error(`${kind} identifier is required`);
-  return createHash("sha256").update(`matchday:gate-c-access:${kind}:${value}`, "utf8").digest("hex");
+  return createHash("sha256").update(`matchday:${scope}:${kind}:${value}`, "utf8").digest("hex");
 }
 
 export function redisLogicalDatabase(redisUrl: string): number {

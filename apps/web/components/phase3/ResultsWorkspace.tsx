@@ -24,6 +24,8 @@ import {
   type ResultsSurfaceState,
   type StandingsRow,
 } from "@/lib/phase3-results";
+import type { MatchView } from "@/lib/phase2";
+import { OrganiserResultOperations } from "@/components/phase5/OrganiserResultOperations";
 import styles from "./ResultsWorkspace.module.css";
 
 const stateCopy: Record<
@@ -45,7 +47,17 @@ function entryName(rows: readonly StandingsRow[], entryId: string | null): strin
   return rows.find((row) => row.entryId === entryId)?.entryName ?? shortHash(entryId);
 }
 
-export function ResultsWorkspace({ document }: { document: ResultsDocument }) {
+export function ResultsWorkspace({
+  document,
+  matches,
+  initialMatchId,
+  enableRemoteOperations,
+}: {
+  document: ResultsDocument;
+  matches: readonly MatchView[];
+  initialMatchId?: string;
+  enableRemoteOperations: boolean;
+}) {
   const [snapshot, setSnapshot] = useState(document.snapshot);
   const [advancement, setAdvancement] = useState(document.advancement);
   const [state, setState] = useState(document.state);
@@ -55,6 +67,14 @@ export function ResultsWorkspace({ document }: { document: ResultsDocument }) {
   const groups = snapshot ? Object.entries(snapshot.groups) : [];
   const allRows = groups.flatMap(([, group]) => group.rows);
   const stale = Boolean(snapshot && document.currentResultVersion > snapshot.resultVersion);
+  const resultOperations = (
+    <OrganiserResultOperations
+      competitionId={document.competitionId}
+      matches={matches}
+      initialMatchId={initialMatchId}
+      enableRemote={enableRemoteOperations}
+    />
+  );
 
   async function recalculate() {
     if (!document.canRecalculate || busy) return;
@@ -95,17 +115,29 @@ export function ResultsWorkspace({ document }: { document: ResultsDocument }) {
   }
 
   if (state === "loading") return <ResultsSkeleton />;
-  if (state !== "ready" && state !== "read-only" && (!snapshot || state === "permission")) {
+  if (state === "permission") {
     const copy = stateCopy[state as keyof typeof stateCopy] ?? stateCopy.error;
     return <ResultsState state={state} title={copy.title} body={copy.body} />;
   }
+  if (state !== "ready" && state !== "read-only" && !snapshot) {
+    const copy = stateCopy[state as keyof typeof stateCopy] ?? stateCopy.error;
+    return (
+      <>
+        <ResultsState state={state} title={copy.title} body={copy.body} />
+        {resultOperations}
+      </>
+    );
+  }
   if (!snapshot)
     return (
-      <ResultsState
-        state={phase3ResultsMachine.empty}
-        title={phase3ResultsCopy.noStandings}
-        body={phase3ResultsCopy.noStandingsBody}
-      />
+      <>
+        <ResultsState
+          state={phase3ResultsMachine.empty}
+          title={phase3ResultsCopy.noStandings}
+          body={phase3ResultsCopy.noStandingsBody}
+        />
+        {resultOperations}
+      </>
     );
 
   const sportName = sportNameFromConfig(snapshot.configVersion);
@@ -310,6 +342,7 @@ export function ResultsWorkspace({ document }: { document: ResultsDocument }) {
             </div>
           )}
         </section>
+        {resultOperations}
       </section>
 
       <aside className={styles.rail} aria-label={phase3ResultsCopy.provenance}>

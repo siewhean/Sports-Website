@@ -1602,6 +1602,51 @@ body:has(.p2-score-receipt) {
   padding: 26px clamp(16px, 4vw, 30px);
 }
 
+.p2-event-controls > div[tabindex="-1"] {
+  min-width: 0;
+  margin-top: 24px;
+}
+
+.p2-event-controls > div[tabindex="-1"]:focus-visible,
+.p2-final-review:focus-visible {
+  outline: 3px solid var(--signal);
+  outline-offset: 4px;
+}
+
+.p2-segment-score,
+.p2-final-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.p2-segment-score > div,
+.p2-final-summary > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #454b46;
+  border-radius: 9px;
+}
+
+.p2-segment-score dt,
+.p2-final-summary dt {
+  color: #aeb3ae;
+  overflow-wrap: anywhere;
+}
+
+.p2-segment-score dd,
+.p2-final-summary dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.p2-segment-score dd {
+  font-family: var(--font-mono);
+  font-size: 1.8rem;
+}
+
 .p2-event-context {
   display: grid;
   gap: 16px;
@@ -1942,6 +1987,10 @@ body:has(.p2-score-receipt) {
   border-bottom: 1px solid #303531;
 }
 
+.p2-event-log li > button {
+  min-height: 48px;
+}
+
 .p2-event-log time,
 .p2-event-log small,
 .p2-event-log li > span:last-child {
@@ -1955,8 +2004,7 @@ body:has(.p2-score-receipt) {
 }
 
 .p2-score-final {
-  position: sticky;
-  bottom: 12px;
+  position: static;
   width: calc(100% - clamp(32px, 8vw, 60px));
   margin: 12px clamp(16px, 4vw, 30px) 0;
   box-shadow: 0 16px 42px rgb(0 0 0 / 28%);
@@ -2819,6 +2867,17 @@ body:has(.p2-score-receipt) {
 
   .p2-scoreboard > div > strong {
     font-size: 4rem;
+  }
+
+  .p2-segment-score,
+  .p2-final-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .p2-event-log li {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    padding-block: 12px;
   }
 
   .p2-goal-controls {

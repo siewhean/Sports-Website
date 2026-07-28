@@ -17,7 +17,7 @@ export default async function CompetitionSectionPage({
   searchParams,
 }: {
   params: Promise<{ id: string; section: string }>;
-  searchParams: Promise<{ state?: string }>;
+  searchParams: Promise<{ state?: string; match?: string }>;
 }) {
   const { id, section } = await params;
   const query = await searchParams;
@@ -116,7 +116,14 @@ export default async function CompetitionSectionPage({
                   ? phase3ResultsMachine.saved
                   : phase3ResultsMachine.unavailable
         }
-        sectionContent={<ResultsWorkspace document={results} />}
+        sectionContent={
+          <ResultsWorkspace
+            document={results}
+            matches={result.competition.matches}
+            initialMatchId={query.match}
+            enableRemoteOperations={!demoFixturesEnabled()}
+          />
+        }
       />
     );
   }

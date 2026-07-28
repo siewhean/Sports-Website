@@ -1,3 +1,5 @@
+import type { SportId, SportPackSettings } from "@matchday/domain";
+
 export type SurfaceState =
   "ready" | "loading" | "empty" | "error" | "offline" | "conflict" | "read-only" | "permission";
 
@@ -24,6 +26,7 @@ export type MatchView = {
   away: string;
   homeScore?: number;
   awayScore?: number;
+  resultVersion?: number;
   status: "scheduled" | "live" | "final";
 };
 
@@ -90,12 +93,21 @@ export type CompetitionReadPort = {
 
 export type ScoringEventCommand = {
   clientEventId: string;
+  expectedSequence: number;
   matchId: string;
   eventType: string;
+  canonical: true;
   team?: "home" | "away";
   scorer: string;
   period: number;
   manualTime: string;
+  participantId?: string | null;
+  unknownParticipant?: boolean;
+  segmentNumber?: number;
+  manualTimeSeconds?: number | null;
+  reversalTargetEventId?: string;
+  reason?: string;
+  occurredAt?: string;
 };
 
 export type ScoringAppendReceipt = {
@@ -112,8 +124,45 @@ export type ScoringAccessInput =
 
 export type ScoringAccessMode = "writer" | "candidate" | "viewer" | "transferred";
 
+export type ScoringCanonicalActionView = {
+  eventId: string;
+  clientEventId: string;
+  eventType: string;
+  label: string;
+  side: "home" | "away" | null;
+  participantId: string | null;
+  segmentNumber: number;
+  scoreDelta: number;
+  occurredAt: string;
+  reversed: boolean;
+  reversible: boolean;
+};
+
+export type ScoringSegmentView = {
+  number: number;
+  home: number;
+  away: number;
+  completed: boolean;
+  winner: "home" | "away" | null;
+};
+
+export type ScoringScoreStateView = {
+  home: number;
+  away: number;
+  lifecycle: "not_started" | "in_progress" | "finalised";
+  currentSegment: number;
+  totalPoints: Readonly<Record<"home" | "away", number>>;
+  segmentWins: Readonly<Record<"home" | "away", number>>;
+  segments: ScoringSegmentView[];
+  actions: ScoringCanonicalActionView[];
+  conflicts: ReadonlyArray<{ code: string; segmentNumber: number; targetEventId: string }>;
+};
+
 export type ScoringSessionView = {
   competitionSlug: string;
+  sportId: SportId;
+  sportPackVersion: string;
+  sportSettings: SportPackSettings;
   matchId: string;
   matchLabel: string;
   stage: string;
@@ -121,6 +170,7 @@ export type ScoringSessionView = {
   away: string;
   homeScore: number;
   awayScore: number;
+  scoreState: ScoringScoreStateView;
   events: ScoringEventCommand[];
   throughSequence: number;
   mode: ScoringAccessMode;
@@ -134,6 +184,7 @@ export type ScoringSessionView = {
 
 export type FinalizeResultCommand = {
   matchId: string;
+  expectedSequence: number;
   homeScore: number;
   awayScore: number;
   scorer: string;
@@ -308,6 +359,7 @@ export const phase2Copy = {
   finalReviewBody: "Confirm this score to publish the result and refresh the public competition view.",
   serviceUnavailable:
     "Scoring access could not be verified. Check the code or try again when the service is available.",
+  semanticRejected: "This action is not valid for the current match state. Review the details and try again.",
   eventLog: "Match events",
   noEvents: "No events recorded",
   scorer: "Scorer",
@@ -374,6 +426,39 @@ export const phase2Copy = {
   cancel: "Cancel",
   recordGoalFor: "Record goal for",
   goalSheetScorerHint: "This name is attached to the goal event and audit record.",
+  scoreControlsTitle: "Scoring controls",
+  scoreControlsReadOnly: "Only the active scoring device can record match events.",
+  scoreControlsPending: "Saving the match event…",
+  manualTimeOnly: "Enter event times manually. No live match clock is running.",
+  scoreGroup: "Score",
+  segmentGroup: "Segment",
+  operationalGroup: "Match actions",
+  exceptionalGroup: "Exceptional result",
+  participantLabel: "Scorer or participant name",
+  participantRequired: "Enter the participant or player before recording this event.",
+  participantHint: "Required only when this sport action needs participant attribution.",
+  unknownParticipant: "Scorer is currently unknown",
+  unknownParticipantHint: "This creates an explicit cleanup item; it does not silently omit attribution.",
+  segmentLabel: "Segment",
+  actionDialogBody: "Review the event details before appending this canonical match event.",
+  recordEvent: "Record event",
+  eventRecorded: "Match event recorded.",
+  recentCanonicalEvents: "Recent canonical events",
+  reverseEvent: "Reverse event",
+  reversalTitle: "Reverse recorded event",
+  reversalBody: "The original event remains in the audit timeline. Add a reason for this reversal.",
+  reversalReason: "Reversal reason",
+  reversalReasonHint: "Enter at least 3 characters.",
+  confirmReversal: "Confirm reversal",
+  eventReversed: "Match event reversed.",
+  reversed: "Reversed",
+  finalisationSummary: "Finalisation summary",
+  matchLifecycle: "Match state",
+  currentSegment: "Current segment",
+  segmentWins: "Segments won",
+  totalPoints: "Total points",
+  recordedActions: "Recorded actions",
+  noLiveClock: "No live clock",
 } as const;
 
 export const phase2Machine = {
@@ -402,6 +487,11 @@ export const phase2Machine = {
   timeout: "timeout",
   incident: "incident",
   matchStarted: "match_started",
+  overtime: "overtime",
+  reversal: "reversal",
+  notStarted: "not_started" as const,
+  canoePolo: "canoe_polo" as const,
+  scrollNearest: "nearest" as const,
   matchTwelveId: "M12",
   singaporeOpenSlug: "singapore-open",
   scoringApiMode: "api" as const,

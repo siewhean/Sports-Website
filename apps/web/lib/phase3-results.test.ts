@@ -189,6 +189,27 @@ describe("Phase 3 results boundary", () => {
     expect(parseStandingsSnapshot({ ...snapshot(), injected: true }, competitionId, divisionId)).toBeNull();
   });
 
+  it("adapts the persisted configurable five-sport standings rows into the shared results surface", () => {
+    const standingsRow = row();
+    const parsed = parseStandingsSnapshot(
+      {
+        ...snapshot(),
+        standings: [standingsRow],
+        explanation: [{ entry_id: standingsRow.entryId, criteria: standingsRow.explanations }],
+        advancement_slots: [],
+        advancement_conflicts: [],
+      },
+      competitionId,
+      divisionId,
+    );
+
+    expect(parsed).toMatchObject({
+      configVersion: "basketball-standings-v1",
+      groupCount: 1,
+      groups: { division: { rows: [{ entryId, tablePoints: 6 }] } },
+    });
+  });
+
   it("accepts only server recalculation receipts without arbitrary standings fields", () => {
     const parsed = parseRecalculationResponse(
       {

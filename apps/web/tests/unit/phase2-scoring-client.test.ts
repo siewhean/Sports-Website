@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  canonicalSegmentNumber,
   createScoringCommandPort,
   refreshScoringSessionAccess,
   scoringSessionAnnouncement,
@@ -9,6 +10,7 @@ import {
 } from "../../lib/phase2-scoring";
 import { phase2Copy, phase2Machine, type ScoringSessionView } from "../../lib/phase2";
 import { LatestRequestFence } from "../../lib/latest-request";
+import { SPORT_PACKS } from "@matchday/domain";
 
 const matchId = "00000000-0000-4000-8000-000000000102";
 const eventId = "00000000-0000-4000-8000-000000000103";
@@ -16,6 +18,9 @@ const eventId = "00000000-0000-4000-8000-000000000103";
 function sessionView(overrides: Partial<ScoringSessionView> = {}): ScoringSessionView {
   return {
     competitionSlug: "singapore-open",
+    sportId: "canoe_polo",
+    sportPackVersion: SPORT_PACKS.canoe_polo.version,
+    sportSettings: SPORT_PACKS.canoe_polo.recommendedSettings,
     matchId,
     matchLabel: "Match 12",
     stage: "Group B",
@@ -23,6 +28,17 @@ function sessionView(overrides: Partial<ScoringSessionView> = {}): ScoringSessio
     away: "Harbour Gold",
     homeScore: 0,
     awayScore: 0,
+    scoreState: {
+      home: 0,
+      away: 0,
+      lifecycle: "in_progress",
+      currentSegment: 1,
+      totalPoints: { home: 0, away: 0 },
+      segmentWins: { home: 0, away: 0 },
+      segments: [{ number: 1, home: 0, away: 0, completed: false, winner: null }],
+      actions: [],
+      conflicts: [],
+    },
     events: [],
     throughSequence: 0,
     mode: "writer",
@@ -36,9 +52,16 @@ function sessionView(overrides: Partial<ScoringSessionView> = {}): ScoringSessio
   };
 }
 
-function stateResponse(events: Array<Record<string, unknown>> = []): Response {
+function stateResponse(
+  events: Array<Record<string, unknown>> = [],
+  packVersion: string = SPORT_PACKS.canoe_polo.version,
+): Response {
   return Response.json({
-    competition: { slug: "singapore-open" },
+    competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+    sport: {
+      pack_version: packVersion,
+      settings: SPORT_PACKS.canoe_polo.recommendedSettings,
+    },
     match: {
       id: matchId,
       code: "M-12",
@@ -55,7 +78,17 @@ function stateResponse(events: Array<Record<string, unknown>> = []): Response {
       read_only: false,
       takeover_status: "none",
     },
-    score: { home: 0, away: 0 },
+    score: {
+      home: 0,
+      away: 0,
+      lifecycle: "in_progress",
+      current_segment: 1,
+      total_points: { home: 0, away: 0 },
+      segment_wins: { home: 0, away: 0 },
+      segments: [{ number: 1, home: 0, away: 0, completed: false, winner: null }],
+      actions: [],
+      conflicts: [],
+    },
     through_sequence: 0,
     events,
   });
@@ -67,6 +100,11 @@ afterEach(() => {
 });
 
 describe("phase 2 browser scoring transport", () => {
+  it("submits Basketball overtime against the next authoritative segment", () => {
+    expect(canonicalSegmentNumber(phase2Machine.overtime, 4, 4)).toBe(5);
+    expect(canonicalSegmentNumber("three_point_score", 4, 4)).toBe(4);
+  });
+
   it("distinguishes a lapsed writer lease from a genuinely expired scoring session", () => {
     const now = Date.parse("2030-01-01T00:00:00.000Z");
 
@@ -136,14 +174,24 @@ describe("phase 2 browser scoring transport", () => {
     expect(source).not.toContain("window.location.pathname.match");
   });
 
+  it("fails closed when the authoritative sport-pack version differs from the local executable pack", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stateResponse([], "canoe-polo-stale-v0")));
+
+    await expect(createScoringCommandPort("api").recoverSession()).rejects.toMatchObject({
+      state: "unavailable",
+    });
+  });
+
   it("appends the canonical match-start event before the UI enters live scoring", async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ sequence: 1 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await createScoringCommandPort("api").appendEvent({
       clientEventId: eventId,
+      expectedSequence: 0,
       matchId,
       eventType: phase2Machine.matchStarted,
+      canonical: true,
       scorer: "",
       period: 1,
       manualTime: "00:00",
@@ -153,10 +201,8 @@ describe("phase 2 browser scoring transport", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/scoring/events");
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       client_event_id: eventId,
+      expected_sequence: 0,
       type: phase2Machine.matchStarted,
-      manual_period: 1,
-      manual_event_seconds: 0,
-      payload: {},
     });
 
     const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
@@ -184,14 +230,22 @@ describe("phase 2 browser scoring transport", () => {
     await port.recoverSession();
     await port.appendEvent({
       clientEventId: eventId,
+      expectedSequence: session.throughSequence,
       matchId,
       eventType: phase2Machine.goal,
+      canonical: true,
       team: "home",
       scorer: "A. Player",
       period: 1,
       manualTime: "01:35",
     });
-    const receipt = await port.finalizeResult({ matchId, homeScore: 1, awayScore: 0, scorer: "A. Player" });
+    const receipt = await port.finalizeResult({
+      matchId,
+      expectedSequence: session.throughSequence + 1,
+      homeScore: 1,
+      awayScore: 0,
+      scorer: "A. Player",
+    });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/scoring/access/exchange",
@@ -204,8 +258,96 @@ describe("phase 2 browser scoring transport", () => {
       fetchMock.mock.calls.every(([, init]) => new Headers(init?.headers).get("x-scoring-session-token") === null),
     ).toBe(true);
     expect(fetchMock.mock.calls.every(([, init]) => init?.credentials === "same-origin")).toBe(true);
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
+      expected_sequence: session.throughSequence,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
+      expected_sequence: session.throughSequence + 1,
+    });
     expect(session.competitionSlug).toBe("singapore-open");
     expect(receipt.receiptId).toBe(`${matchId}:v2`);
+  });
+
+  it("maps a canonical five-sport action and reasoned reversal without legacy aliases", async () => {
+    const fetchMock = vi
+      .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+      .mockImplementation(async () => Response.json({ sequence: 9 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const port = createScoringCommandPort("api");
+
+    await port.appendEvent({
+      clientEventId: eventId,
+      expectedSequence: 8,
+      matchId,
+      eventType: "three_point_score",
+      canonical: true,
+      team: "away",
+      scorer: "Player 14",
+      participantId: "Player 14",
+      period: 4,
+      segmentNumber: 4,
+      manualTime: "00:42",
+      manualTimeSeconds: 42,
+      occurredAt: "2026-07-28T00:00:00.000Z",
+    });
+    await port.appendEvent({
+      clientEventId: "00000000-0000-4000-8000-000000000104",
+      expectedSequence: 9,
+      matchId,
+      eventType: "reversal",
+      canonical: true,
+      scorer: "",
+      period: 4,
+      manualTime: "00:42",
+      reversalTargetEventId: eventId,
+      reason: "Wrong team",
+      occurredAt: "2026-07-28T00:00:02.000Z",
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      client_event_id: eventId,
+      expected_sequence: 8,
+      type: "three_point_score",
+      occurred_at: "2026-07-28T00:00:00.000Z",
+      team_slot: "away",
+      participant_id: "Player 14",
+      segment_number: 4,
+      manual_time_seconds: 42,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      expected_sequence: 9,
+      type: "reversal",
+      reversal_target_event_id: eventId,
+      reason: "Wrong team",
+    });
+  });
+
+  it("omits participant_id for a canonical action that has no attribution", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ sequence: 6 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createScoringCommandPort("api").appendEvent({
+      clientEventId: eventId,
+      expectedSequence: 5,
+      matchId,
+      eventType: "point",
+      canonical: true,
+      team: "home",
+      scorer: "",
+      period: 1,
+      segmentNumber: 1,
+      manualTime: "00:00",
+      occurredAt: "2026-07-28T00:00:00.000Z",
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      client_event_id: eventId,
+      expected_sequence: 5,
+      type: "point",
+      occurred_at: "2026-07-28T00:00:00.000Z",
+      team_slot: "home",
+      segment_number: 1,
+    });
   });
 
   it("treats absent recovery credentials as no recovered session and preserves conflict state", async () => {
@@ -358,5 +500,24 @@ describe("phase 2 browser scoring transport", () => {
     });
 
     expect(session.events).toEqual([]);
+  });
+
+  it("classifies semantic rejection separately so the scorer can retain interaction context", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "invalid" }, { status: 422 })));
+
+    await expect(
+      createScoringCommandPort("api").appendEvent({
+        clientEventId: eventId,
+        expectedSequence: 4,
+        matchId,
+        eventType: "game_completion",
+        canonical: true,
+        team: "home",
+        scorer: "",
+        period: 1,
+        segmentNumber: 1,
+        manualTime: "00:00",
+      }),
+    ).rejects.toMatchObject({ state: "invalid" });
   });
 });
