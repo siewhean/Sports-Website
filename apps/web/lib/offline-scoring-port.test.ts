@@ -1,9 +1,11 @@
-import type { GateCOfflineQueuedCommand } from "@matchday/contracts";
-import { describe, expect, it, vi } from "vitest";
+import type { GateCOfflineMatchPackage, GateCOfflineQueuedCommand } from "@matchday/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiOfflineScoringPort } from "./offline-scoring-port";
+import type { OfflineScoringRepository } from "./offline-scoring";
 
+const authorizationId = "10000000-0000-4000-8000-000000000001";
 const queued: GateCOfflineQueuedCommand = {
-  authorization_id: "10000000-0000-4000-8000-000000000001",
+  authorization_id: authorizationId,
   match_id: "20000000-0000-4000-8000-000000000002",
   local_sequence: 1,
   writer_generation: 5,
@@ -21,7 +23,46 @@ const queued: GateCOfflineQueuedCommand = {
   },
 };
 
+function offlinePackage(): GateCOfflineMatchPackage {
+  return {
+    schema_version: 1,
+    authorization_id: authorizationId,
+    competition_id: "60000000-0000-4000-8000-000000000006",
+    competition_slug: "offline-port-test",
+    match_id: queued.match_id,
+    match_code: "M1",
+    match_stage: "Group",
+    writer_generation: queued.writer_generation,
+    sport_code: "canoe_polo",
+    sport_pack_version: "canoe-polo-v1",
+    settings: {},
+    participants: [
+      { id: "home", name: "Home", side: "home" },
+      { id: "away", name: "Away", side: "away" },
+    ],
+    authoritative_events: [],
+    last_acknowledged_sequence: 0,
+    last_acknowledged_aggregate_version: 0,
+    authorized_at: "2026-07-28T00:00:00.000Z",
+    recording_expires_at: "2026-07-28T04:00:00.000Z",
+    replay_expires_at: "2026-07-28T04:15:00.000Z",
+    pass_expires_at: "2026-07-28T05:00:00.000Z",
+    status: "active",
+  };
+}
+
+function summaryRepository(): OfflineScoringRepository {
+  return {
+    getMatchPackage: vi.fn(async () => offlinePackage()),
+    listCommands: vi.fn(async () => [queued]),
+    listAcknowledgements: vi.fn(async () => []),
+    listPendingCommands: vi.fn(async () => [queued]),
+  } as unknown as OfflineScoringRepository;
+}
+
 describe("offline scoring API port", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("maps the stable recording-expired code to the terminal expired authority state", async () => {
     vi.stubGlobal(
       "fetch",
@@ -33,15 +74,35 @@ describe("offline scoring API port", () => {
       ),
     );
 
-    const result = await new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v4").submit(
-      queued,
-      queued.command,
-    );
+    const result = await new ApiOfflineScoringPort(
+      "50000000-0000-4000-8000-000000000005",
+      1,
+      "gate-c-c3-v4",
+    ).submit(queued, queued.command);
 
     expect(result).toEqual({
       status: "blocked",
       error: { code: "authority_expired", category: "conflict" },
     });
-    vi.unstubAllGlobals();
+  });
+
+  it("maps a confirmed takeover during refresh to a terminal transferred outcome", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "conflict", code: "OFFLINE_AUTHORIZATION_TRANSFERRED" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const port = new ApiOfflineScoringPort(
+      "50000000-0000-4000-8000-000000000005",
+      1,
+      "gate-c-c3-v4",
+      summaryRepository(),
+    );
+    await expect(port.refreshAuthority(authorizationId)).resolves.toBe("authority_transferred");
   });
 });
