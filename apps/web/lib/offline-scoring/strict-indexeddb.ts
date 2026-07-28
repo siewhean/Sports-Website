@@ -18,18 +18,20 @@ import type {
   OfflineScoringRepository,
 } from "./types";
 
+const COMPLETE_STORE_NAMES = [
+  "match_packages",
+  "commands",
+  "acknowledgements",
+  "replay_attempts",
+  "replay_state",
+  "conflicts",
+  "meta",
+];
+
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("Offline scoring storage request failed."));
-  });
-}
-
-function transactionResult(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error("Offline scoring storage transaction failed."));
-    transaction.onabort = () => reject(transaction.error ?? new Error("Offline scoring storage transaction aborted."));
   });
 }
 
@@ -49,48 +51,88 @@ type CompleteSnapshot = {
   attestation: ExportAttestation | undefined;
 };
 
-async function readCompleteSnapshot(transaction: IDBTransaction, authorizationId: string): Promise<CompleteSnapshot> {
-  const [matchPackage, commands, acknowledgements, replayAttempts, replayState, conflicts, attestation] =
-    await Promise.all([
-      requestResult<GateCOfflineMatchPackage | undefined>(
-        transaction.objectStore("match_packages").get(authorizationId),
-      ),
-      requestResult<GateCOfflineQueuedCommand[]>(
-        transaction.objectStore("commands").index("authorization_id").getAll(authorizationId),
-      ),
-      requestResult<GateCOfflineAcknowledgement[]>(
-        transaction.objectStore("acknowledgements").index("authorization_id").getAll(authorizationId),
-      ),
-      requestResult<OfflineReplayAttempt[]>(
-        transaction.objectStore("replay_attempts").index("authorization_id").getAll(authorizationId),
-      ),
-      requestResult<OfflineReplayState | undefined>(transaction.objectStore("replay_state").get(authorizationId)),
-      requestResult<OfflineConflict[]>(
-        transaction.objectStore("conflicts").index("authorization_id").getAll(authorizationId),
-      ),
-      requestResult<ExportAttestation | undefined>(
-        transaction.objectStore("meta").get(`diagnostic_export:${authorizationId}`),
-      ),
-    ]);
-  return { matchPackage, commands, acknowledgements, replayAttempts, replayState, conflicts, attestation };
+function snapshotRequests(transaction: IDBTransaction, authorizationId: string) {
+  return [
+    transaction.objectStore("match_packages").get(authorizationId),
+    transaction.objectStore("commands").index("authorization_id").getAll(authorizationId),
+    transaction.objectStore("acknowledgements").index("authorization_id").getAll(authorizationId),
+    transaction.objectStore("replay_attempts").index("authorization_id").getAll(authorizationId),
+    transaction.objectStore("replay_state").get(authorizationId),
+    transaction.objectStore("conflicts").index("authorization_id").getAll(authorizationId),
+    transaction.objectStore("meta").get(`diagnostic_export:${authorizationId}`),
+  ] as const;
 }
 
-async function deleteByAuthorization(
+function completeSnapshot(results: readonly unknown[]): CompleteSnapshot {
+  return {
+    matchPackage: results[0] as GateCOfflineMatchPackage | undefined,
+    commands: results[1] as GateCOfflineQueuedCommand[],
+    acknowledgements: results[2] as GateCOfflineAcknowledgement[],
+    replayAttempts: results[3] as OfflineReplayAttempt[],
+    replayState: results[4] as OfflineReplayState | undefined,
+    conflicts: results[5] as OfflineConflict[],
+    attestation: results[6] as ExportAttestation | undefined,
+  };
+}
+
+async function readCompleteSnapshot(transaction: IDBTransaction, authorizationId: string): Promise<CompleteSnapshot> {
+  return completeSnapshot(await Promise.all(snapshotRequests(transaction, authorizationId).map(requestResult)));
+}
+
+function queueDeleteByAuthorization(
   transaction: IDBTransaction,
   storeName: "commands" | "acknowledgements" | "replay_attempts" | "conflicts",
   authorizationId: string,
-): Promise<void> {
+): void {
   const store = transaction.objectStore(storeName);
-  const index = store.index("authorization_id");
-  await new Promise<void>((resolve, reject) => {
-    const cursorRequest = index.openKeyCursor(authorizationId);
-    cursorRequest.onerror = () => reject(cursorRequest.error ?? new Error("Offline data cleanup failed."));
-    cursorRequest.onsuccess = () => {
-      const cursor = cursorRequest.result;
-      if (!cursor) return resolve();
-      store.delete(cursor.primaryKey);
-      cursor.continue();
-    };
+  const cursorRequest = store.index("authorization_id").openKeyCursor(authorizationId);
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result;
+    if (!cursor) return;
+    store.delete(cursor.primaryKey);
+    cursor.continue();
+  };
+}
+
+function deleteCompleteSnapshotIfUnchanged(
+  database: IDBDatabase,
+  authorizationId: string,
+  expectedSnapshot: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(COMPLETE_STORE_NAMES, "readwrite");
+    const requests = snapshotRequests(transaction, authorizationId);
+    const results: unknown[] = new Array(requests.length);
+    let remaining = requests.length;
+    let rejection: Error | null = null;
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error("Offline scoring storage transaction failed."));
+    transaction.onabort = () =>
+      reject(rejection ?? transaction.error ?? new Error("Offline scoring storage transaction aborted."));
+
+    requests.forEach((request, index) => {
+      request.onerror = () => {
+        rejection = request.error ?? new Error("Offline scoring storage request failed.");
+      };
+      request.onsuccess = () => {
+        results[index] = request.result;
+        remaining -= 1;
+        if (remaining !== 0) return;
+        const currentSnapshot = canonicalOfflineJson(completeSnapshot(results));
+        if (currentSnapshot !== expectedSnapshot) {
+          rejection = new Error("Offline work changed after export; create and confirm a new diagnostic export.");
+          transaction.abort();
+          return;
+        }
+        transaction.objectStore("match_packages").delete(authorizationId);
+        transaction.objectStore("replay_state").delete(authorizationId);
+        transaction.objectStore("meta").delete(`diagnostic_export:${authorizationId}`);
+        for (const storeName of ["commands", "acknowledgements", "replay_attempts", "conflicts"] as const) {
+          queueDeleteByAuthorization(transaction, storeName, authorizationId);
+        }
+      };
+    });
   });
 }
 
@@ -223,16 +265,7 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
 
     const database = await openOfflineScoringDatabase(this.factory);
     try {
-      const storeNames: string[] = [
-        "match_packages",
-        "commands",
-        "acknowledgements",
-        "replay_attempts",
-        "replay_state",
-        "conflicts",
-        "meta",
-      ];
-      const initialTransaction = database.transaction(storeNames, "readonly");
+      const initialTransaction = database.transaction(COMPLETE_STORE_NAMES, "readonly");
       const snapshot = await readCompleteSnapshot(initialTransaction, authorizationId);
       if (!snapshot.matchPackage || !snapshot.attestation) {
         throw new Error("Offline work changed after export; create and confirm a new diagnostic export.");
@@ -253,21 +286,7 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
       ) {
         throw new Error("Offline work changed after export; create and confirm a new diagnostic export.");
       }
-      const snapshotFingerprint = canonicalOfflineJson(snapshot);
-
-      const deletionTransaction = database.transaction(storeNames, "readwrite");
-      const current = await readCompleteSnapshot(deletionTransaction, authorizationId);
-      if (canonicalOfflineJson(current) !== snapshotFingerprint) {
-        deletionTransaction.abort();
-        throw new Error("Offline work changed after export; create and confirm a new diagnostic export.");
-      }
-      deletionTransaction.objectStore("match_packages").delete(authorizationId);
-      deletionTransaction.objectStore("replay_state").delete(authorizationId);
-      deletionTransaction.objectStore("meta").delete(`diagnostic_export:${authorizationId}`);
-      for (const storeName of ["commands", "acknowledgements", "replay_attempts", "conflicts"] as const) {
-        await deleteByAuthorization(deletionTransaction, storeName, authorizationId);
-      }
-      await transactionResult(deletionTransaction);
+      await deleteCompleteSnapshotIfUnchanged(database, authorizationId, canonicalOfflineJson(snapshot));
     } finally {
       database.close();
     }
