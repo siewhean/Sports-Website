@@ -224,10 +224,29 @@ export class ApiOfflineScoringPort implements OfflineReplayPort {
   }
 
   async refreshAuthority(authorizationId: string): Promise<OfflineAuthorityRefreshResult> {
+    const repository = this.replayRepository();
     try {
-      const summary = await offlineQueueSummary(this.replayRepository(), authorizationId);
+      const summary = await offlineQueueSummary(repository, authorizationId);
       const result = await this.establishAuthority(summary, "resume");
-      return result.offline.authorization_id === authorizationId && result.offline.status === "active" ? "active" : null;
+      const matchPackage = await repository.getMatchPackage(authorizationId);
+      if (
+        !matchPackage ||
+        result.offline.authorization_id !== authorizationId ||
+        result.offline.match_id !== matchPackage.match_id ||
+        result.offline.competition_id !== matchPackage.competition_id ||
+        result.offline.generation !== matchPackage.writer_generation ||
+        result.offline.status !== "active"
+      ) {
+        return null;
+      }
+      await repository.saveMatchPackage({
+        ...matchPackage,
+        recording_expires_at: result.offline.recording_expires_at,
+        replay_expires_at: result.offline.replay_expires_at,
+        pass_expires_at: result.offline.pass_expires_at,
+        status: "active",
+      });
+      return "active";
     } catch (error) {
       return refreshOutcome(error);
     }
