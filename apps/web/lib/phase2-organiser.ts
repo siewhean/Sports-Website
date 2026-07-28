@@ -37,6 +37,10 @@ function number(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function nonNegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+
 function records(value: unknown): WorkspaceRecord[] {
   return Array.isArray(value) ? value.flatMap((item) => (record(item) ? [item as WorkspaceRecord] : [])) : [];
 }
@@ -61,6 +65,37 @@ function validWorkspaceDivision(value: unknown): boolean {
   });
 }
 
+function validPrivateScheduleMatch(value: unknown): boolean {
+  const match = record(value);
+  if (!match || !["pending", "ready", "in_progress", "final", "corrected"].includes(String(match.state))) {
+    return false;
+  }
+  if (match.state === "final" || match.state === "corrected") {
+    return (
+      nonNegativeInteger(match.home_score) !== null &&
+      nonNegativeInteger(match.away_score) !== null &&
+      nonNegativeInteger(match.result_version) !== null &&
+      Number(match.result_version) >= 1
+    );
+  }
+  const hasNoResult = match.home_score === null && match.away_score === null && match.result_version === null;
+  const hasRetainedResult =
+    match.state === "in_progress" &&
+    nonNegativeInteger(match.home_score) !== null &&
+    nonNegativeInteger(match.away_score) !== null &&
+    nonNegativeInteger(match.result_version) !== null &&
+    Number(match.result_version) >= 1;
+  return hasNoResult || hasRetainedResult;
+}
+
+function validPrivateSchedule(value: unknown): boolean {
+  if (value === null) return true;
+  const schedule = record(value);
+  return Boolean(
+    schedule && Array.isArray(schedule.matches) && schedule.matches.every((match) => validPrivateScheduleMatch(match)),
+  );
+}
+
 export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserWorkspacePayload {
   const payload = record(value);
   const competition = record(payload?.competition);
@@ -78,6 +113,7 @@ export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserW
     payload.divisions.every(validWorkspaceDivision) &&
     Array.isArray(payload.capacity) &&
     Array.isArray(payload.access_passes) &&
+    validPrivateSchedule(payload.private_schedule) &&
     (payload.permission === "read" || payload.permission === "write") &&
     typeof payload.read_only === "boolean",
   );
@@ -254,6 +290,14 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
   const matches: MatchView[] = schedule.map((match) => {
     const id = string(match.match_id) ?? string(match.id) ?? "unknown-match";
     const formatMatch = formatById.get(id);
+    if (!validPrivateScheduleMatch(match)) {
+      throw new Error(`Private schedule match ${id} has an invalid scoring state`);
+    }
+    const state = String(match.state);
+    const status: MatchView["status"] =
+      state === "final" || state === "corrected" ? "final" : state === "in_progress" ? "live" : "scheduled";
+    const homeScore = state === "final" || state === "corrected" ? nonNegativeInteger(match.home_score)! : undefined;
+    const awayScore = state === "final" || state === "corrected" ? nonNegativeInteger(match.away_score)! : undefined;
     return {
       id,
       label: string(match.code) ?? id,
@@ -262,7 +306,9 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
       area: string(match.area) ?? "—",
       home: participantLabel(formatMatch?.home, entryNames, matchCodes),
       away: participantLabel(formatMatch?.away, entryNames, matchCodes),
-      status: "scheduled",
+      ...(homeScore === undefined ? {} : { homeScore }),
+      ...(awayScore === undefined ? {} : { awayScore }),
+      status,
     };
   });
   const areas = [
