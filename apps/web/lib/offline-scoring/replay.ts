@@ -153,6 +153,7 @@ export class OfflineReplayController {
         }
 
         let commandAcknowledged = false;
+        let authorityRefreshAttempted = false;
         for (let attempt = 1; attempt <= RETRY_DELAYS_MS.length + 1; attempt += 1) {
           if (attempt > 1) {
             const retryLeaseRenewed = await this.dependencies.repository.renewReplayLease(
@@ -195,6 +196,16 @@ export class OfflineReplayController {
             commandAcknowledged = true;
             break;
           }
+          if (
+            receipt.status === "blocked" &&
+            receipt.error.code === "stale_writer_generation" &&
+            !authorityRefreshAttempted &&
+            this.dependencies.port.refreshAuthority
+          ) {
+            authorityRefreshAttempted = true;
+            const refreshed = await this.dependencies.port.refreshAuthority(authorizationId).catch(() => false);
+            if (refreshed) continue;
+          }
           if (receipt.status === "blocked") {
             await this.recordBlocked(queued, receipt.error);
             return { status: "blocked", acknowledged: acknowledgedCount, error: receipt.error };
@@ -227,7 +238,7 @@ export class OfflineReplayController {
     const terminalStatus =
       error.code === "authority_revoked"
         ? "revoked"
-        : error.code === "authority_transferred" || error.code === "stale_writer_generation"
+        : error.code === "authority_transferred"
           ? "transferred"
           : error.code === "authority_expired" || error.code === "pass_expired"
             ? "expired"
