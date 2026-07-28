@@ -1,0 +1,1 @@
+This branch exists solely to archive downloadable Gate C handoff artifacts. It should not be merged into application source without an explicit repository-owner decision.
