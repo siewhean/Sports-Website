@@ -243,10 +243,12 @@ export class OfflineReplayController {
     if (error.code === "network_unavailable" || error.code === "rate_limited" || error.code === "server_unavailable") {
       return;
     }
+    const legacyPortCannotRefreshStaleAuthority =
+      error.code === "stale_writer_generation" && !this.dependencies.port.refreshAuthority;
     const terminalStatus =
       error.code === "authority_revoked"
         ? "revoked"
-        : error.code === "authority_transferred"
+        : error.code === "authority_transferred" || legacyPortCannotRefreshStaleAuthority
           ? "transferred"
           : error.code === "authority_expired" || error.code === "pass_expired"
             ? "expired"
