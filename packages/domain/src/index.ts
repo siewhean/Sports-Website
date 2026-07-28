@@ -27,3 +27,5 @@ export * from "./results.js";
 export * from "./publication.js";
 export * from "./sport-packs.js";
 export * as competitionDomain from "./competition.js";
+
+export * from "./five-sport-scoring.js";
