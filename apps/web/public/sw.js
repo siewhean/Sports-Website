@@ -2,6 +2,7 @@ const FOUNDATION_CACHE_NAME = "matchday-foundation-v3";
 const SCORING_CACHE_PREFIX = "matchday-scoring-shell-";
 const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v4`;
 const SCORING_SHELL_PATH = "/score";
+const SCORING_SHELL_MARKER = 'data-offline-scoring-shell="v1"';
 const WORKER_VERSION = "gate-c-c3-v4";
 const UPDATE_PROTOCOL_VERSION = 1;
 const CLIENT_SAFETY_TIMEOUT_MS = 5_000;
@@ -44,6 +45,31 @@ function offlineResponse() {
       "Content-Language": "en",
       "Content-Type": "text/html; charset=utf-8",
       "Retry-After": "30",
+    },
+  });
+}
+
+async function verifiedScoringShellResponse(response) {
+  if (!response.ok || response.headers.has("set-cookie")) return null;
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.includes("text/html")) return null;
+  const document = await response.text();
+  if (!document.includes(SCORING_SHELL_MARKER)) return null;
+  if (
+    /#access=|__Secure-matchday-offline-grant|__Secure-matchday-scoring|x-scoring-session-token|authorization\s*[:=]/iu.test(
+      document,
+    )
+  ) {
+    return null;
+  }
+  return new Response(document, {
+    status: 200,
+    headers: {
+      "Cache-Control": "public, max-age=0, must-revalidate",
+      "Content-Language": response.headers.get("content-language") ?? "en",
+      "Content-Type": "text/html; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+      "X-Matchday-Offline-Shell": "v1",
     },
   });
 }
@@ -282,8 +308,9 @@ self.addEventListener("message", (event) => {
     caches
       .open(SCORING_CACHE_NAME)
       .then(async (cache) => {
-        const shell = await fetch(SCORING_SHELL_PATH, { credentials: "same-origin", cache: "no-store" });
-        if (!shell.ok) throw new Error("The offline scoring shell could not be prepared.");
+        const networkShell = await fetch(SCORING_SHELL_PATH, { credentials: "same-origin", cache: "no-store" });
+        const shell = await verifiedScoringShellResponse(networkShell);
+        if (!shell) throw new Error("The offline scoring shell failed its privacy verification.");
         await cache.put(SCORING_SHELL_PATH, shell);
         await Promise.all(
           assets.map(async (asset) => {
