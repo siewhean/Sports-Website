@@ -96,13 +96,15 @@
 
 .action {
   min-width: 0;
-  min-height: 44px;
+  min-height: 48px;
   display: grid;
   place-content: center;
   gap: 0.2rem;
   padding: 0.7rem 0.8rem;
   border: 1px solid currentColor;
   border-radius: 0.65rem;
+  background: #1b1f1c;
+  color: inherit;
   font: inherit;
   text-align: center;
   overflow-wrap: anywhere;

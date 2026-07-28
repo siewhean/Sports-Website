@@ -27,7 +27,7 @@ export type FiveSportScoreControlsProps = Readonly<{
   readOnly: boolean;
   pending: boolean;
   statusMessage?: string | null;
-  onActivate: (action: ScoreControlAction) => void;
+  onActivate: (action: ScoreControlAction, trigger: HTMLButtonElement) => void;
 }>;
 
 export function FiveSportScoreControls({
@@ -62,15 +62,15 @@ export function FiveSportScoreControls({
       <dl className={styles.scoreboard}>
         <div>
           <dt>{homeLabel}</dt>
-          <dd aria-live="polite">{score.home}</dd>
+          <dd>{score.home}</dd>
         </div>
         <div>
           <dt>{awayLabel}</dt>
-          <dd aria-live="polite">{score.away}</dd>
+          <dd>{score.away}</dd>
         </div>
       </dl>
 
-      <div id={statusId} className={styles.status} role="status" aria-live="polite" aria-atomic="true">
+      <div id={statusId} className={styles.status}>
         {pending ? copy.pendingNotice : readOnly ? copy.readOnlyNotice : (statusMessage ?? "")}
       </div>
 
@@ -90,7 +90,7 @@ export function FiveSportScoreControls({
                     data-control-id={action.control.id}
                     data-control-kind={action.group}
                     data-side={action.side ?? "global"}
-                    onClick={() => onActivate(action)}
+                    onClick={(event) => onActivate(action, event.currentTarget)}
                   >
                     <span>{action.control.label}</span>
                     {target ? <strong>{target}</strong> : null}

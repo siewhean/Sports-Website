@@ -1,4 +1,4 @@
-import { parseFiveSportScoreCommand } from "@matchday/domain";
+import { SPORT_PACKS, parseFiveSportScoreCommand, validateSportSettings, type SportId } from "@matchday/domain";
 import {
   expiredScoringSessionCookie,
   InvalidScoringSessionError,
@@ -10,19 +10,7 @@ import {
 import { isScoringAccessToken } from "./scoring-access";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const EVENT_TYPES = new Set([
-  "match_started",
-  "period_changed",
-  "goal_added",
-  "goal_reversed",
-  "card_added",
-  "card_reversed",
-  "timeout_added",
-  "incident_added",
-  "match_reopened",
-]);
-
-type SafeError = "access" | "conflict" | "expired" | "rate_limited" | "revoked" | "unavailable";
+type SafeError = "access" | "conflict" | "expired" | "invalid" | "rate_limited" | "revoked" | "unavailable";
 
 function jsonResponse(payload: unknown, status: number, cookie?: string): Response {
   const headers = new Headers({
@@ -45,9 +33,11 @@ function safeError(status: number, clearCookie = false, explicitState?: SafeErro
         ? "expired"
         : status === 429
           ? "rate_limited"
-          : [400, 401, 403].includes(status)
-            ? "access"
-            : "unavailable");
+          : status === 422
+            ? "invalid"
+            : [400, 401, 403].includes(status)
+              ? "access"
+              : "unavailable");
   const response = jsonResponse({ error: state }, status, clearCookie ? expiredScoringSessionCookie() : undefined);
   for (const name of ["ratelimit-limit", "ratelimit-remaining", "ratelimit-reset", "retry-after"]) {
     const value = sourceHeaders?.get(name);
@@ -191,6 +181,122 @@ function eventPayload(value: unknown): Record<string, unknown> {
   return result;
 }
 
+const SPORT_IDS = new Set<unknown>(Object.keys(SPORT_PACKS));
+
+function safeInteger(value: unknown, minimum = 0): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= minimum;
+}
+
+function scorePair(value: unknown): { home: number; away: number } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  return safeInteger(source.home) && safeInteger(source.away)
+    ? { home: Number(source.home), away: Number(source.away) }
+    : null;
+}
+
+function canonicalScoreState(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const pair = scorePair(source);
+  const totalPoints = scorePair(source.total_points);
+  const segmentWins = scorePair(source.segment_wins);
+  if (
+    !pair ||
+    !["not_started", "in_progress", "finalised"].includes(String(source.lifecycle ?? "")) ||
+    !safeInteger(source.current_segment, 1) ||
+    !totalPoints ||
+    !segmentWins ||
+    !Array.isArray(source.segments) ||
+    !Array.isArray(source.actions) ||
+    !Array.isArray(source.conflicts)
+  ) {
+    return null;
+  }
+  const segments: Array<Record<string, unknown>> = [];
+  for (const raw of source.segments) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const segment = raw as Record<string, unknown>;
+    if (
+      !safeInteger(segment.number, 1) ||
+      !safeInteger(segment.home) ||
+      !safeInteger(segment.away) ||
+      typeof segment.completed !== "boolean" ||
+      (segment.winner !== null && segment.winner !== "home" && segment.winner !== "away")
+    ) {
+      return null;
+    }
+    segments.push({
+      number: segment.number,
+      home: segment.home,
+      away: segment.away,
+      completed: segment.completed,
+      winner: segment.winner,
+    });
+  }
+  const actions: Array<Record<string, unknown>> = [];
+  for (const raw of source.actions) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const action = raw as Record<string, unknown>;
+    if (
+      !UUID_PATTERN.test(String(action.event_id ?? "")) ||
+      !UUID_PATTERN.test(String(action.client_event_id ?? "")) ||
+      typeof action.event_type !== "string" ||
+      typeof action.label !== "string" ||
+      (action.side !== null && action.side !== "home" && action.side !== "away") ||
+      (action.participant_id !== null && typeof action.participant_id !== "string") ||
+      !safeInteger(action.segment_number, 1) ||
+      !safeInteger(action.score_delta) ||
+      typeof action.occurred_at !== "string" ||
+      !Number.isFinite(Date.parse(action.occurred_at)) ||
+      typeof action.reversed !== "boolean" ||
+      typeof action.reversible !== "boolean"
+    ) {
+      return null;
+    }
+    actions.push({
+      event_id: action.event_id,
+      client_event_id: action.client_event_id,
+      event_type: action.event_type,
+      label: action.label,
+      side: action.side,
+      participant_id: action.participant_id,
+      segment_number: action.segment_number,
+      score_delta: action.score_delta,
+      occurred_at: action.occurred_at,
+      reversed: action.reversed,
+      reversible: action.reversible,
+    });
+  }
+  const conflicts: Array<Record<string, unknown>> = [];
+  for (const raw of source.conflicts) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const conflict = raw as Record<string, unknown>;
+    if (
+      typeof conflict.code !== "string" ||
+      !safeInteger(conflict.segment_number, 1) ||
+      !UUID_PATTERN.test(String(conflict.target_event_id ?? ""))
+    ) {
+      return null;
+    }
+    conflicts.push({
+      code: conflict.code,
+      segment_number: conflict.segment_number,
+      target_event_id: conflict.target_event_id,
+    });
+  }
+  return {
+    ...pair,
+    lifecycle: source.lifecycle,
+    current_segment: source.current_segment,
+    total_points: totalPoints,
+    segment_wins: segmentWins,
+    segments,
+    actions,
+    conflicts,
+  };
+}
+
 function scoringState(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
   const source = value as Record<string, unknown>;
@@ -199,12 +305,21 @@ function scoringState(value: unknown): Record<string, unknown> | null {
   const access = source.access as Record<string, unknown> | null;
   const writer = source.writer as Record<string, unknown> | null;
   const score = source.score as Record<string, unknown> | null;
+  const sport = source.sport as Record<string, unknown> | null;
   const home = match?.home as Record<string, unknown> | null;
   const away = match?.away as Record<string, unknown> | null;
   if (
     !competition ||
     typeof competition.slug !== "string" ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(competition.slug) ||
+    !SPORT_IDS.has(competition.sport_code) ||
+    !sport ||
+    typeof sport.pack_version !== "string" ||
+    sport.pack_version !== SPORT_PACKS[competition.sport_code as SportId].version ||
+    !sport.settings ||
+    typeof sport.settings !== "object" ||
+    Array.isArray(sport.settings) ||
+    validateSportSettings(SPORT_PACKS[competition.sport_code as SportId], sport.settings).length > 0 ||
     !match ||
     !access ||
     !writer ||
@@ -226,8 +341,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     typeof writer.read_only !== "boolean" ||
     typeof access.session_expires_at !== "string" ||
     !["none", "pending", "approved", "denied"].includes(String(source.takeover_status ?? "none")) ||
-    !Number.isSafeInteger(score.home) ||
-    !Number.isSafeInteger(score.away) ||
+    !canonicalScoreState(score) ||
     !Number.isSafeInteger(source.through_sequence) ||
     !Array.isArray(source.events)
   ) {
@@ -260,7 +374,8 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     });
   }
   return {
-    competition: { slug: competition.slug },
+    competition: { slug: competition.slug, sport_code: competition.sport_code },
+    sport: { pack_version: sport.pack_version, settings: sport.settings },
     match: {
       id: match.id,
       code: match.code,
@@ -277,7 +392,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
       read_only: writer.read_only,
       takeover_status: source.takeover_status ?? "none",
     },
-    score: { home: score.home, away: score.away },
+    score: canonicalScoreState(score),
     through_sequence: source.through_sequence,
     events,
   };
@@ -373,71 +488,20 @@ function exchangedAuth(value: unknown): ScoringServerAuth | null {
 function appendInput(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
-
-  const fiveSportCommand = parseFiveSportScoreCommand(input);
-  if (fiveSportCommand) {
-    const correctionReason =
-      typeof input.correction_reason === "string" ? input.correction_reason : fiveSportCommand.reason;
-    const needsCorrectionReason =
-      fiveSportCommand.type === "goal_reversed" ||
-      fiveSportCommand.type === "card_reversed" ||
-      fiveSportCommand.type === "match_reopened" ||
-      fiveSportCommand.type === "reversal";
-    if (needsCorrectionReason && (typeof correctionReason !== "string" || correctionReason.trim().length < 3)) {
-      return null;
-    }
-    return {
-      client_event_id: fiveSportCommand.clientEventId,
-      type: fiveSportCommand.type,
-      ...(fiveSportCommand.side ? { team_slot: fiveSportCommand.side } : {}),
-      ...(fiveSportCommand.participantId ? { scorer: fiveSportCommand.participantId } : {}),
-      manual_period:
-        fiveSportCommand.segmentNumber ?? (typeof input.manual_period === "number" ? input.manual_period : 1),
-      manual_event_seconds:
-        fiveSportCommand.manualTimeSeconds ??
-        (typeof input.manual_event_seconds === "number" ? input.manual_event_seconds : 0),
-      payload: eventPayload(input.payload),
-      ...(typeof correctionReason === "string" ? { correction_reason: correctionReason } : {}),
-      occurred_at: fiveSportCommand.occurredAt,
-      ...(fiveSportCommand.reversalTargetEventId
-        ? { reversal_target_event_id: fiveSportCommand.reversalTargetEventId }
-        : {}),
-      ...(fiveSportCommand.reason ? { reason: fiveSportCommand.reason } : {}),
-    };
-  }
-
-  const correctionReason = input.correction_reason;
-  const needsCorrectionReason =
-    input.type === "goal_reversed" || input.type === "card_reversed" || input.type === "match_reopened";
-  if (
-    !UUID_PATTERN.test(String(input.client_event_id ?? "")) ||
-    typeof input.type !== "string" ||
-    !EVENT_TYPES.has(input.type) ||
-    (input.team_slot !== undefined && input.team_slot !== "home" && input.team_slot !== "away") ||
-    (input.scorer !== undefined &&
-      (typeof input.scorer !== "string" || input.scorer.length < 1 || input.scorer.length > 120)) ||
-    (input.manual_period !== 1 && input.manual_period !== 2) ||
-    !Number.isInteger(input.manual_event_seconds) ||
-    Number(input.manual_event_seconds) < 0 ||
-    Number(input.manual_event_seconds) > 3_599 ||
-    (correctionReason !== undefined &&
-      (typeof correctionReason !== "string" || correctionReason.trim().length < 3 || correctionReason.length > 500)) ||
-    (needsCorrectionReason && typeof correctionReason !== "string") ||
-    typeof input.occurred_at !== "string" ||
-    !Number.isFinite(Date.parse(input.occurred_at))
-  ) {
-    return null;
-  }
+  const command = parseFiveSportScoreCommand(input);
+  if (!command || !safeInteger(input.expected_sequence)) return null;
   return {
-    client_event_id: input.client_event_id,
-    type: input.type,
-    ...(input.team_slot ? { team_slot: input.team_slot } : {}),
-    ...(input.scorer ? { scorer: input.scorer } : {}),
-    manual_period: input.manual_period,
-    manual_event_seconds: input.manual_event_seconds,
-    payload: eventPayload(input.payload),
-    ...(typeof correctionReason === "string" ? { correction_reason: correctionReason } : {}),
-    occurred_at: input.occurred_at,
+    client_event_id: command.clientEventId,
+    expected_sequence: input.expected_sequence,
+    type: command.type,
+    occurred_at: command.occurredAt,
+    ...(command.side ? { team_slot: command.side } : {}),
+    ...(typeof command.participantId === "string" ? { participant_id: command.participantId } : {}),
+    ...(command.unknownParticipant !== undefined ? { unknown_participant: command.unknownParticipant } : {}),
+    ...(command.segmentNumber !== undefined ? { segment_number: command.segmentNumber } : {}),
+    ...(command.manualTimeSeconds !== undefined ? { manual_time_seconds: command.manualTimeSeconds } : {}),
+    ...(command.reversalTargetEventId ? { reversal_target_event_id: command.reversalTargetEventId } : {}),
+    ...(command.reason ? { reason: command.reason } : {}),
   };
 }
 
@@ -675,8 +739,12 @@ export async function appendScoringEvent(request: Request): Promise<Response> {
   if (!upstream) return safeError(503);
   if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));
   const payload = await readJson(upstream);
-  const sequence = payload && typeof payload === "object" ? (payload as Record<string, unknown>).sequence : null;
-  return Number.isSafeInteger(sequence) ? jsonResponse({ sequence }, 200) : safeError(503);
+  const source = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const sequence = source?.sequence;
+  const duplicate = source?.duplicate;
+  return Number.isSafeInteger(sequence) && typeof duplicate === "boolean"
+    ? jsonResponse({ sequence, duplicate }, 200)
+    : safeError(503);
 }
 
 export async function finaliseScoringResult(request: Request): Promise<Response> {
@@ -691,11 +759,15 @@ export async function finaliseScoringResult(request: Request): Promise<Response>
   }
   const clientEventId =
     body && typeof body === "object" ? (body as Record<string, unknown>).client_event_id : undefined;
-  if (typeof clientEventId !== "string" || !UUID_PATTERN.test(clientEventId)) return safeError(400);
+  const expectedSequence =
+    body && typeof body === "object" ? (body as Record<string, unknown>).expected_sequence : undefined;
+  if (typeof clientEventId !== "string" || !UUID_PATTERN.test(clientEventId) || !safeInteger(expectedSequence)) {
+    return safeError(400);
+  }
   const upstream = await upstreamFetch(new URL("/api/v1/scoring/finalise", authenticated.baseUrl), {
     method: "POST",
     headers: authHeaders(authenticated.auth),
-    body: JSON.stringify({ client_event_id: clientEventId }),
+    body: JSON.stringify({ client_event_id: clientEventId, expected_sequence: expectedSequence }),
   });
   if (!upstream) return safeError(503);
   if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));

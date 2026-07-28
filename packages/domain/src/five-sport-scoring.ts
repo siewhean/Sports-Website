@@ -36,6 +36,7 @@ export type AppliedSportAction = Readonly<{
   participantId: string | null;
   segmentNumber: number;
   scoreDelta: number;
+  manualTimeSeconds: number | null;
   occurredAt: string;
   reversed: boolean;
 }>;
@@ -92,6 +93,7 @@ type MutableAction = {
   participantId: string | null;
   segmentNumber: number;
   scoreDelta: number;
+  manualTimeSeconds: number | null;
   occurredAt: string;
   reversed: boolean;
 };
@@ -124,6 +126,7 @@ const NON_REVERSIBLE_TYPES = new Set([
   "set_completion",
   ...SEGMENT_TRANSITION_TYPES,
 ]);
+const MANUAL_TIME_EXCLUDED_TYPES = new Set(NON_REVERSIBLE_TYPES);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -153,6 +156,26 @@ function nullableIntegerSetting(settings: SportPackSettings, key: string, fallba
 function booleanSetting(settings: SportPackSettings, key: string, fallback: boolean): boolean {
   const value = settings[key];
   return typeof value === "boolean" ? value : fallback;
+}
+
+function eventEnabled(pack: SportPack, type: string, settings: SportPackSettings): boolean {
+  if (pack.sportId === "canoe_polo") {
+    if (["green_card", "yellow_card", "red_card"].includes(type)) {
+      return booleanSetting(settings, "cardsEnabled", true);
+    }
+    if (type === "timeout") return booleanSetting(settings, "timeoutsEnabled", true);
+    if (type === "incident") return booleanSetting(settings, "incidentsEnabled", true);
+  }
+  if ((pack.sportId === "badminton" || pack.sportId === "table_tennis") && type === "server_change") {
+    return booleanSetting(settings, "serverIndicatorEnabled", false);
+  }
+  return true;
+}
+
+function eventRequiresManualTime(pack: SportPack, type: string, settings: SportPackSettings): boolean {
+  if (!booleanSetting(settings, "manualEventTime", false)) return false;
+  if (!matchEvent(pack, type)) return false;
+  return !MANUAL_TIME_EXCLUDED_TYPES.has(type);
 }
 
 function mergedSettings(pack: SportPack, overrides?: SportPackSettings): SportPackSettings {
@@ -288,6 +311,9 @@ function assertParticipantAttribution(
   event: FiveSportScoreEvent,
   participantAttribution: "required" | "optional" | "none",
 ): void {
+  if (event.participantId?.trim() && event.unknownParticipant === true) {
+    throw new Error("Participant attribution and unknown participant are mutually exclusive");
+  }
   if (participantAttribution !== "required") return;
   if (event.participantId?.trim()) return;
   const unknownCanoePoloScorer =
@@ -339,6 +365,10 @@ function transitionSegment(
       throw new Error("Overtime is not enabled for this sport configuration");
     }
     if (next <= regulation) throw new Error("Overtime must follow regulation periods");
+    const currentScore = totals(state);
+    if (currentScore.home !== currentScore.away) {
+      throw new Error("Basketball overtime requires a tied score");
+    }
   } else if (pack.matchStructure.kind === "timed_periods" && next > regulation) {
     throw new Error(`Segment ${next} exceeds the configured regulation-period limit`);
   } else if (pack.matchStructure.kind === "best_of_segments") {
@@ -393,6 +423,7 @@ function recordAction(
     participantId: event.participantId ?? null,
     segmentNumber,
     scoreDelta: definition.scoreDelta,
+    manualTimeSeconds: event.manualTimeSeconds ?? null,
     occurredAt: event.occurredAt,
     reversed: false,
   });
@@ -406,12 +437,39 @@ function applySportAction(
 ): void {
   const definition = matchEvent(pack, event.type);
   if (!definition) throw new Error(`Event type ${event.type} is not supported by ${pack.displayName}`);
+  if (!eventEnabled(pack, event.type, settings)) {
+    throw new Error(`Event type ${event.type} is disabled by the effective ${pack.displayName} settings`);
+  }
+  if (pack.matchStructure.kind === "best_of_segments") {
+    const wins = segmentWinTotals(state);
+    const required = segmentsToWin(pack, settings);
+    if (wins.home >= required || wins.away >= required) {
+      throw new Error("The match has already been clinched; only reversal or finalisation is allowed");
+    }
+  }
   if (definition.requiresSide && !event.side) throw new Error(`${event.type} requires a side`);
   assertParticipantAttribution(pack, settings, event, definition.participantAttribution);
+  if (
+    eventRequiresManualTime(pack, event.type, settings) &&
+    (event.manualTimeSeconds === undefined || event.manualTimeSeconds === null)
+  ) {
+    throw new Error(`${event.type} requires manual event time`);
+  }
 
   if (SEGMENT_COMPLETION_TYPES.has(event.type)) {
     const number = event.segmentNumber ?? state.currentSegment;
     completeSegment(state, pack, settings, event);
+    // Re-completion resolves the conflict only when every affected later
+    // segment has first been explicitly unwound. Retained later play may have
+    // become semantically excessive after the corrected winner, so it cannot
+    // be accepted merely because the earlier segment was completed again.
+    state.conflicts = state.conflicts.filter((conflict) => {
+      if (conflict.code !== "segment_reopened_after_reversal" || conflict.segmentNumber !== number) return true;
+      return !conflict.laterSegmentNumbers.every((laterNumber) => {
+        const later = segment(state, laterNumber);
+        return !later.completed && later.home === 0 && later.away === 0;
+      });
+    });
     recordAction(state, definition, event, number);
     return;
   }
@@ -481,12 +539,14 @@ function reverseAction(
         current.completionEventId = null;
         state.currentSegment = current.number;
         state.winner = null;
-        state.conflicts.push({
-          code: "segment_reopened_after_reversal",
-          segmentNumber: current.number,
-          targetEventId: target.eventId,
-          laterSegmentNumbers: later,
-        });
+        if (later.length > 0) {
+          state.conflicts.push({
+            code: "segment_reopened_after_reversal",
+            segmentNumber: current.number,
+            targetEventId: target.eventId,
+            laterSegmentNumbers: later,
+          });
+        }
       }
     }
   }
@@ -507,6 +567,10 @@ function finaliseMatch(state: MutableState, pack: SportPack, settings: SportPack
     }
     state.winner = wins.home > wins.away ? "home" : "away";
   } else {
+    const regulation = integerSetting(settings, "periods", pack.matchStructure.regulationSegments);
+    if (state.currentSegment < regulation) {
+      throw new Error(`${pack.displayName} cannot be finalised before regulation segment ${regulation}`);
+    }
     const points = totals(state);
     if (!pack.scoreStructure.drawAllowed && points.home === points.away) {
       throw new Error(`${pack.displayName} cannot be finalised as a draw`);
@@ -532,8 +596,7 @@ function reopenMatch(state: MutableState, event: FiveSportScoreEvent): void {
   if (state.lifecycle !== "finalised") throw new Error("Only a finalised match can be reopened");
   if (!event.reason?.trim()) throw new Error("Reopening a match requires a reason");
   state.lifecycle = "in_progress";
-  state.winner = null;
-  state.exceptionalOutcome = null;
+  if (!state.exceptionalOutcome) state.winner = null;
 }
 
 function snapshot(state: MutableState, pack: SportPack): FiveSportScoreState {
@@ -604,7 +667,12 @@ export function reduceFiveSportScoreEvents(
     if (state.lifecycle === "finalised" && event.type !== "match_reopened") {
       throw new Error("Finalised match must be reopened before further events");
     }
-    if (state.exceptionalOutcome && event.type !== "finalisation" && event.type !== "reversal") {
+    if (
+      state.exceptionalOutcome &&
+      event.type !== "finalisation" &&
+      event.type !== "reversal" &&
+      event.type !== "match_reopened"
+    ) {
       throw new Error("Exceptional outcome must be finalised or reversed before further events");
     }
 

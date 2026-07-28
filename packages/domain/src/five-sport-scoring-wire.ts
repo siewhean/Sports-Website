@@ -13,6 +13,17 @@ const SYSTEM_EVENT_TYPES = new Set(["match_started", "match_reopened"]);
 const SEGMENT_COMPLETION_TYPES = new Set(["game_completion", "set_completion"]);
 const EXCEPTIONAL_OUTCOME_TYPES = new Set(["retirement", "walkover"]);
 const REASON_REQUIRED_TYPES = new Set(["match_reopened", "reversal"]);
+const MANUAL_TIME_EXCLUDED_TYPES = new Set([
+  "match_started",
+  "match_reopened",
+  "finalisation",
+  "reversal",
+  "game_completion",
+  "set_completion",
+  "period_change",
+  "deciding_set",
+  "overtime",
+]);
 
 export type FiveSportScoreCommand = Readonly<{
   clientEventId: string;
@@ -167,6 +178,19 @@ export function assertFiveSportScoreCommandAllowed(
       command.unknownParticipant === true &&
       booleanSetting(settings, "allowUnknownScorer", false);
     if (!allowedUnknownScorer) throw new Error(`${command.type} requires participant attribution`);
+  }
+
+  if (command.participantId && command.unknownParticipant === true) {
+    throw new Error("Participant attribution and unknown participant are mutually exclusive");
+  }
+
+  if (
+    definition &&
+    booleanSetting(settings, "manualEventTime", false) &&
+    !MANUAL_TIME_EXCLUDED_TYPES.has(command.type) &&
+    (command.manualTimeSeconds === undefined || command.manualTimeSeconds === null)
+  ) {
+    throw new Error(`${command.type} requires manual event time`);
   }
 
   if (command.unknownParticipant === true && !(sportId === "canoe_polo" && command.type === "goal")) {
