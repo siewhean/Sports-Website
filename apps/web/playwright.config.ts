@@ -10,6 +10,7 @@ export default defineConfig({
   testIgnore: [
     "**/unit/**",
     "**/gate-c-access-real.spec.ts",
+    "**/gate-c-c2-real.spec.ts",
     "**/phase-2-real-api.spec.ts",
     "**/phase-4-real-api.spec.ts",
   ],

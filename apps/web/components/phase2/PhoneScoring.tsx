@@ -1029,6 +1029,11 @@ export function PhoneScoring({
                             ? away
                             : phase2Copy.incident}
                       </small>
+                      {action.participantId ? (
+                        <small>
+                          {phase2Copy.scorer}: {action.participantId}
+                        </small>
+                      ) : null}
                     </span>
                     {action.reversible && !action.reversed && !locked ? (
                       <button

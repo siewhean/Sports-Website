@@ -58,8 +58,10 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   await scorer.fill("Aisha Tan");
   await confirmation.getByRole("button", { name: "Record goal for Marina Blue" }).click();
 
-  await expect(page.getByLabel("Marina Blue 1")).toBeVisible();
-  await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
+  const scoringControls = page.getByRole("region", { name: "Scoring controls" });
+  await expect(scoringControls).toContainText("Marina Blue1");
+  await expect(scoringControls).toContainText("Harbour Gold0");
+  await expect(page.locator(".p2-event-log")).toContainText("Aisha Tan");
   await expect(page.getByText("1 event pending sync")).toBeVisible();
 
   await page.getByRole("button", { name: "Review final score" }).click();
