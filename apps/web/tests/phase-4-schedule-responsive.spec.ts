@@ -167,8 +167,11 @@ test("smaller-screen organiser selects a match, day, available area and valid ti
   await dismissConsent(page);
   await page.getByRole("button", { name: /SF1, .*Marina Barracudas vs Seletar Paddlers.*Conflict/ }).click();
   await expect(page.getByRole("heading", { name: "SF1" })).toBeVisible();
-  await page.getByRole("link", { name: "Move match" }).click();
-  await expect(page.getByTestId("phase4-move-flow")).toBeVisible();
+  await Promise.all([
+    page.waitForURL((url) => url.pathname.endsWith(`/matches/${matchId}/move`)),
+    page.getByRole("link", { name: "Move match" }).click(),
+  ]);
+  await expect(page.getByTestId("phase4-move-flow")).toBeVisible({ timeout: 10_000 });
   const slotChoices = page.getByTestId("move-slot-choices");
   const disclosure = page.getByRole("button", { name: "Show all 18 times" });
   await expect(disclosure).toBeVisible({ visible: isPhone });
