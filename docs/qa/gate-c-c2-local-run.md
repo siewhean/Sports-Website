@@ -5,15 +5,17 @@ Local Gate C C2 validation: PASS
 Validated scope: `SCR-001–020` and the C2 portions of `RES-011`, `RES-013`,
 and `RES-014` only. Full Gate C remains incomplete.
 
-Source SHA: `c5c85bcacc1acaa23ceca05ba905d836c8e77cfd`
+Source SHA: `48feb8f7e33f0f8d3e6223b77813ed6c019e8179`
 
-Branch: `fix/gate-c-c2-preparation`
+Branch: `fix/gate-c-c2-public-projection-remediation`
 
 C1 base: `f7496452b66bac7f42290420291b17ee3a4ad326`
 
 Evidence collected: 28 July 2026, Asia/Singapore
 
-Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
+Hosted CI was triggered, but its jobs failed before executing any steps because
+of the external runner/account limitation. Hosted CI is not used as
+certification evidence.
 
 ## Environment
 
@@ -30,14 +32,14 @@ Hosted GitHub Actions: Not executed because Actions allowance is unavailable.
 ## Immutable evidence
 
 - Ledger:
-  `artifacts/qa/gate-c-c2/c5c85bcacc1acaa23ceca05ba905d836c8e77cfd/ledgers/2026-07-28T09-54-10-351Z-456c0aca-f231-4b2f-a2d1-4275c42b5d68/ledger.json`
+  `artifacts/qa/gate-c-c2/48feb8f7e33f0f8d3e6223b77813ed6c019e8179/ledgers/2026-07-28T11-35-44-251Z-8a320e90-de64-45ad-bb9e-5c2c4e72d876/ledger.json`
 - Ledger SHA-256:
-  `ccb6caeb8057fc1737f088e926506b77b89411cf43cdc16d0863dc2608234d31`
+  `b19f6361aad3e5b49f03bda7e968660890f63654d9ba835f59977defa22a121b`
 - Read-only bundle:
-  `artifacts/qa/gate-c-c2/c5c85bcacc1acaa23ceca05ba905d836c8e77cfd/bundles/2026-07-28T09-54-10-351Z-456c0aca-f231-4b2f-a2d1-4275c42b5d68.tar.gz`
+  `artifacts/qa/gate-c-c2/48feb8f7e33f0f8d3e6223b77813ed6c019e8179/bundles/2026-07-28T11-35-44-251Z-8a320e90-de64-45ad-bb9e-5c2c4e72d876.tar.gz`
 - Bundle SHA-256:
-  `e8e30ffe3989ce5f8facab5658061559da3d8597c8fe802dab95c60aa39247b6`
-- Bundle size: `81,559,302` bytes; mode `0444`; 213 entries; zero
+  `5dad798e99c0cfb04f913a275500719fb3f6d0c93b3ed4335bfeaf939ca711c1`
+- Bundle size: `75,182,939` bytes; mode `0444`; 213 entries; zero
   symlinks.
 - All 183 retained artifacts were reopened with matching SHA-256 and byte
   size.
@@ -53,9 +55,9 @@ duration, output and artifact hash for:
 
 - pinned toolchain versions, frozen install, unchanged lockfile and clean-output
   guard;
-- format, lint, typecheck and 823 unit tests;
-- all 30 forward migrations, backup/restore and 192 real-infrastructure
-  integration tests, including API 107/107, database 58/58 and scheduler 3/3;
+- format, lint, typecheck and 825 unit tests;
+- all 31 forward migrations, backup/restore and 195 real-infrastructure
+  integration tests, including API 109/109, database 59/59 and scheduler 3/3;
 - fixture, Phase 2, Phase 3, Phase 4 and OpenAPI validation;
 - production dependency audit, secret scan, production build, deployment
   manifest and origin-delivery verification;
@@ -93,7 +95,11 @@ zero findings.
 `RUN_INFRA_TESTS=1`, so conditional infrastructure cases are skipped inside the
 umbrella command. These are not acceptance skips: the separately required
 real-infrastructure command executed the complete PostgreSQL and Redis matrix
-and passed all 192 tests.
+and passed all 195 tests.
+
+The earlier exact-SHA record for `c5c85bcacc1acaa23ceca05ba905d836c8e77cfd`
+is retained in the machine-readable summary as historical and reopened. It is
+not current certification evidence.
 
 ## Evidence boundary
 

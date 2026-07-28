@@ -1,15 +1,17 @@
 {
   "schema_version": 1,
   "artifact_kind": "gate-c-c2-exact-sha-summary",
+  "record_status": "CURRENT_CERTIFICATION",
   "scope": "SCR-001-020 and C2 portions of RES-011, RES-013 and RES-014 only",
-  "source_sha": "c5c85bcacc1acaa23ceca05ba905d836c8e77cfd",
-  "branch": "fix/gate-c-c2-preparation",
+  "source_sha": "48feb8f7e33f0f8d3e6223b77813ed6c019e8179",
+  "branch": "fix/gate-c-c2-public-projection-remediation",
   "c1_base": "f7496452b66bac7f42290420291b17ee3a4ad326",
   "status": "PASS",
+  "current_certification_status": "PASS",
   "full_gate_c_status": "INCOMPLETE",
   "collected_at": {
-    "started": "2026-07-28T09:54:10.354Z",
-    "completed": "2026-07-28T10:15:21.261Z",
+    "started": "2026-07-28T11:35:44.253Z",
+    "completed": "2026-07-28T11:53:09.207Z",
     "timezone": "Asia/Singapore"
   },
   "environment": {
@@ -26,8 +28,8 @@
     "webkit": "26.5"
   },
   "ledger": {
-    "path": "artifacts/qa/gate-c-c2/c5c85bcacc1acaa23ceca05ba905d836c8e77cfd/ledgers/2026-07-28T09-54-10-351Z-456c0aca-f231-4b2f-a2d1-4275c42b5d68/ledger.json",
-    "sha256": "ccb6caeb8057fc1737f088e926506b77b89411cf43cdc16d0863dc2608234d31",
+    "path": "artifacts/qa/gate-c-c2/48feb8f7e33f0f8d3e6223b77813ed6c019e8179/ledgers/2026-07-28T11-35-44-251Z-8a320e90-de64-45ad-bb9e-5c2c4e72d876/ledger.json",
+    "sha256": "b19f6361aad3e5b49f03bda7e968660890f63654d9ba835f59977defa22a121b",
     "command_count": 31,
     "successful_commands": 31,
     "failed_commands": 0,
@@ -37,9 +39,9 @@
     "rehash_mismatches": 0
   },
   "immutable_bundle": {
-    "path": "artifacts/qa/gate-c-c2/c5c85bcacc1acaa23ceca05ba905d836c8e77cfd/bundles/2026-07-28T09-54-10-351Z-456c0aca-f231-4b2f-a2d1-4275c42b5d68.tar.gz",
-    "sha256": "e8e30ffe3989ce5f8facab5658061559da3d8597c8fe802dab95c60aa39247b6",
-    "size_bytes": 81559302,
+    "path": "artifacts/qa/gate-c-c2/48feb8f7e33f0f8d3e6223b77813ed6c019e8179/bundles/2026-07-28T11-35-44-251Z-8a320e90-de64-45ad-bb9e-5c2c4e72d876.tar.gz",
+    "sha256": "5dad798e99c0cfb04f913a275500719fb3f6d0c93b3ed4335bfeaf939ca711c1",
+    "size_bytes": 75182939,
     "file_mode": "0444",
     "archive_entries": 213,
     "symlink_entries": 0
@@ -84,12 +86,12 @@
     }
   ],
   "test_results": {
-    "unit": { "passed": 823, "failed": 0 },
+    "unit": { "passed": 825, "failed": 0 },
     "integration": {
-      "passed": 192,
+      "passed": 195,
       "failed": 0,
-      "api": 107,
-      "database": 58,
+      "api": 109,
+      "database": 59,
       "scheduler": 3
     },
     "generic_e2e": {
@@ -133,7 +135,7 @@
     "reviewer": "independent-specialist-agent",
     "p0": 0,
     "p1": 0,
-    "p2": 3,
+    "p2": 2,
     "p3": 1,
     "verdict": "PASS",
     "accepted_findings": [
@@ -152,20 +154,20 @@
         "deadline": "2026-08-15"
       },
       {
-        "severity": "P2",
-        "owner": "Scoring Platform",
-        "finding": "Finalisation does not map the narrow lease-expiry race from PostgreSQL 23514 to the normal stale-writer denial response and audit.",
-        "rationale": "The transaction rejects the event and result atomically, so no stale append or state corruption is possible; takeover races remain advisory-lock serialized.",
-        "deadline": "2026-08-15"
-      },
-      {
         "severity": "P3",
         "owner": "Data Platform",
-        "finding": "Migration 0030 may take production write locks while backfilling snapshots and creating constraints and indexes transactionally.",
+        "finding": "Migrations 0030 and 0031 may take production write locks while backfilling snapshots and creating constraints and indexes transactionally.",
         "rationale": "This is a deployment-window risk rather than a local correctness failure.",
         "deadline": "2026-08-15"
       }
     ]
   },
-  "hosted_github_actions": "Not executed because Actions allowance is unavailable"
+  "historical_reopened_record": {
+    "source_sha": "c5c85bcacc1acaa23ceca05ba905d836c8e77cfd",
+    "status": "HISTORICAL_REOPENED",
+    "reason": "A later independent audit found an unrecorded P1 public-projection defect.",
+    "ledger_sha256": "ccb6caeb8057fc1737f088e926506b77b89411cf43cdc16d0863dc2608234d31",
+    "bundle_sha256": "e8e30ffe3989ce5f8facab5658061559da3d8597c8fe802dab95c60aa39247b6"
+  },
+  "hosted_github_actions": "Hosted CI was triggered, but its jobs failed before executing any steps because of the external runner/account limitation. Hosted CI is not used as certification evidence."
 }
