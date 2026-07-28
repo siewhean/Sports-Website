@@ -28,6 +28,14 @@ export type PublicMatchResult = {
   updated_at: string;
 };
 
+export type PublicDivisionProjection = {
+  division: { id: string; name: string };
+  schedule: PublicScheduledMatch[];
+  results: PublicMatchResult[];
+  standings: Record<string, unknown> | null;
+  bracket: Record<string, unknown> | null;
+};
+
 export type PublicCompetitionProjection = {
   competition: {
     id: string;
@@ -39,11 +47,17 @@ export type PublicCompetitionProjection = {
     ends_on: string;
     status: "active" | "completed" | "archived";
   };
+  divisions: PublicDivisionProjection[];
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   division: { id: string; name: string };
   publication: { schedule_version: number; result_version: number };
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   schedule: PublicScheduledMatch[];
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   results: PublicMatchResult[];
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   standings: Record<string, unknown> | null;
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   bracket: Record<string, unknown> | null;
   last_updated_at: string;
 };

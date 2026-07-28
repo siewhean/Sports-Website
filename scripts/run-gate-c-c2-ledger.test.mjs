@@ -8,6 +8,7 @@ import {
   validateC2DiscoveryOutput,
   validateC2RunReceipt,
   validateC2ScreenshotPaths,
+  validateSemanticReceipt,
 } from "./run-gate-c-c2-ledger.mjs";
 
 const projects = ["gate-c-c2-phone-chromium", "gate-c-c2-phone-webkit", "gate-c-c2-desktop-chromium"];
@@ -60,4 +61,52 @@ test("Gate C C2 ledger requires each exact scorer and organiser screenshot once"
   assert.throws(() => validateC2ScreenshotPaths(paths.slice(1)), /found 0/);
   assert.throws(() => validateC2ScreenshotPaths([...paths, paths[0]]), /found 2/);
   assert.throws(() => validateC2ScreenshotPaths(["playwright/unrelated.png"]), /found 0/);
+});
+
+test("Gate C C2 ledger rejects crossed or missing multi-division evidence", () => {
+  const receipt = {
+    artifact_kind: "gate-c-c2-semantic-oracle",
+    project_name: projects[0],
+    browser: {
+      artifact_kind: "gate-c-c2-browser-oracle",
+      project_name: projects[0],
+      sports: Array.from({ length: 5 }, () => ({})),
+      multi_division: {
+        competition_id: "competition",
+        primary_division_id: "open",
+        secondary_division_id: "women",
+        primary_result_versions: [1, 3, 4],
+        secondary_result_versions: [2],
+        public_packages_visible: true,
+        cross_division_names_absent: true,
+      },
+    },
+    database: {
+      sports: Array.from({ length: 5 }, () => ({})),
+      downstream_conflicts: {
+        created: 1,
+        acknowledged: 1,
+        corrected_match_id: "source",
+        downstream_match_id: "downstream",
+        result_version: 2,
+        reason: "downstream_match_started",
+        acknowledgement_actor_present: true,
+        acknowledgement_reason: "Reviewed against the corrected official result",
+        audit_actions: ["result_conflict.created", "result_conflict.acknowledged"],
+        outbox_event_types: ["result_conflict.created", "result_conflict.acknowledged"],
+      },
+      multi_division: {
+        competition_id: "competition",
+        division_ids: ["open", "women"],
+        global_result_versions: [1, 2, 3, 4],
+        primary_result_versions: [1, 3, 4],
+        secondary_result_versions: [2],
+        public_division_count: 2,
+        cross_division_reference_count: 1,
+      },
+    },
+  };
+  assert.throws(() => validateSemanticReceipt(receipt, projects[0]), /semantic oracle is invalid/);
+  delete receipt.browser.multi_division;
+  assert.throws(() => validateSemanticReceipt(receipt, projects[0]), /semantic oracle is invalid/);
 });

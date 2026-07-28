@@ -74,6 +74,13 @@ const PublicResultSchema = Type.Object({
   state: Type.Union([Type.Literal("final"), Type.Literal("corrected")]),
   updated_at: Type.String({ format: "date-time" }),
 });
+const PublicDivisionSchema = Type.Object({
+  division: Type.Object({ id: Id, name: Type.String() }),
+  schedule: Type.Array(PublicScheduleSchema),
+  results: Type.Array(PublicResultSchema),
+  standings: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
+  bracket: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
+});
 const PublicCompetitionSchema = Type.Object({
   competition: Type.Object({
     id: Id,
@@ -91,6 +98,7 @@ const PublicCompetitionSchema = Type.Object({
     ends_on: Type.String({ format: "date" }),
     status: Type.Union([Type.Literal("active"), Type.Literal("completed"), Type.Literal("archived")]),
   }),
+  divisions: Type.Array(PublicDivisionSchema, { minItems: 1 }),
   division: Type.Object({ id: Id, name: Type.String() }),
   publication: Type.Object({
     schedule_version: Type.Integer({ minimum: 0 }),

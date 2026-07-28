@@ -1,7 +1,7 @@
 import "server-only";
 
 import { cache } from "react";
-import type { PublicCompetitionProjection } from "@matchday/contracts";
+import type { PublicCompetitionProjection, PublicDivisionProjection } from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { isPublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
 import {
@@ -9,6 +9,7 @@ import {
   type CompetitionReadPort,
   type CompetitionView,
   type MatchView,
+  type PublicDivisionView,
   type StandingView,
 } from "@/lib/phase2";
 
@@ -98,8 +99,12 @@ function standingsView(value: Record<string, unknown> | null): StandingView[] {
   });
 }
 
-function toCompetitionView(projection: PublicCompetitionProjection): CompetitionView {
-  const { competition, division, publication, schedule, results } = projection;
+function toDivisionView(
+  projection: Pick<PublicCompetitionProjection, "competition">,
+  divisionProjection: PublicDivisionProjection,
+): PublicDivisionView {
+  const { competition } = projection;
+  const { division, schedule, results } = divisionProjection;
   const resultsById = new Map(results.map((result) => [result.id, result]));
   const scheduledIds = new Set(schedule.map((match) => match.id));
   const matches: MatchView[] = [
@@ -134,7 +139,7 @@ function toCompetitionView(projection: PublicCompetitionProjection): Competition
   ];
   const teams = [...new Set(matches.flatMap((match) => [match.home, match.away]).filter((name) => name !== "TBD"))];
   const areas = [...new Set(schedule.map((match) => match.area.name))];
-  const bracketEnvelope = projection.bracket?.bracket;
+  const bracketEnvelope = divisionProjection.bracket?.bracket;
   const bracketMatches =
     bracketEnvelope &&
     typeof bracketEnvelope === "object" &&
@@ -144,21 +149,11 @@ function toCompetitionView(projection: PublicCompetitionProjection): Competition
   const matchesById = new Map(matches.map((match) => [match.id, match]));
 
   return {
-    id: competition.id,
-    slug: competition.slug,
-    name: competition.name,
-    sport: publicSportName(competition.sport_code),
-    venue: areas.join(" · ") || division.name,
-    timezone: competition.timezone,
-    dateLabel: dateRange(competition.starts_on, competition.ends_on, competition.timezone),
-    publicationRevision: `sch_${publication.schedule_version} · res_${publication.result_version}`,
-    publishedAt: dateTime(projection.last_updated_at, competition.timezone),
-    lastUpdated: dateTime(projection.last_updated_at, competition.timezone),
     division: { id: division.id, name: division.name, teamCount: teams.length, matchCount: matches.length },
     teams,
     areas,
     matches,
-    standings: standingsView(projection.standings),
+    standings: standingsView(divisionProjection.standings),
     bracket: bracketMatches.map((row) => {
       const match = typeof row.matchId === "string" ? matchesById.get(row.matchId) : undefined;
       return {
@@ -171,6 +166,27 @@ function toCompetitionView(projection: PublicCompetitionProjection): Competition
         state: match ? (match.status === "final" ? "Final" : `${match.time} · ${match.area}`) : "TBD",
       };
     }),
+  };
+}
+
+export function toCompetitionView(projection: PublicCompetitionProjection): CompetitionView {
+  const { competition, publication } = projection;
+  const publicDivisions = projection.divisions.map((division) => toDivisionView(projection, division));
+  const primary = publicDivisions[0];
+  if (!primary) throw new Error("Public competition projection requires at least one division");
+  return {
+    id: competition.id,
+    slug: competition.slug,
+    name: competition.name,
+    sport: publicSportName(competition.sport_code),
+    venue: [...new Set(publicDivisions.flatMap((division) => division.areas))].join(" · ") || primary.division.name,
+    timezone: competition.timezone,
+    dateLabel: dateRange(competition.starts_on, competition.ends_on, competition.timezone),
+    publicationRevision: `sch_${publication.schedule_version} · res_${publication.result_version}`,
+    publishedAt: dateTime(projection.last_updated_at, competition.timezone),
+    lastUpdated: dateTime(projection.last_updated_at, competition.timezone),
+    ...primary,
+    publicDivisions,
     audit: [],
   };
 }

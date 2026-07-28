@@ -97,7 +97,16 @@ function routeRuntime() {
         ends_on: "2026-08-01",
         status: "active",
       },
-      division: { id: randomUUID(), name: "Open" },
+      divisions: [
+        {
+          division: { id: "00000000-0000-4000-8000-000000000301", name: "Open" },
+          schedule: [],
+          results: [],
+          standings: null,
+          bracket: null,
+        },
+      ],
+      division: { id: "00000000-0000-4000-8000-000000000301", name: "Open" },
       publication: { schedule_version: 1, result_version: 2 },
       schedule: [],
       results: [],
@@ -320,6 +329,7 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(publicView.headers["cache-control"]).toContain("public");
     expect(publicView.json()).toMatchObject({
       competition: { name: "Singapore Open", status: "active" },
+      divisions: [{ division: { name: "Open" }, schedule: [], results: [] }],
       division: { name: "Open" },
       publication: { schedule_version: 1, result_version: 2 },
     });

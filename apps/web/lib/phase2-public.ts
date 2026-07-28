@@ -1,4 +1,4 @@
-import type { PublicCompetitionProjection } from "@matchday/contracts";
+import type { PublicCompetitionProjection, PublicDivisionProjection } from "@matchday/contracts";
 
 export const publicSportNames = {
   canoe_polo: "Canoe Polo",
@@ -7,6 +7,20 @@ export const publicSportNames = {
   volleyball: "Volleyball",
   basketball: "Basketball",
 } as const;
+
+function isPublicDivisionProjection(value: unknown): value is PublicDivisionProjection {
+  if (!value || typeof value !== "object") return false;
+  const division = value as Partial<PublicDivisionProjection>;
+  return Boolean(
+    division.division &&
+    typeof division.division.id === "string" &&
+    typeof division.division.name === "string" &&
+    Array.isArray(division.schedule) &&
+    Array.isArray(division.results) &&
+    (division.standings === null || (typeof division.standings === "object" && !Array.isArray(division.standings))) &&
+    (division.bracket === null || (typeof division.bracket === "object" && !Array.isArray(division.bracket))),
+  );
+}
 
 export function isPublicCompetitionProjection(value: unknown): value is PublicCompetitionProjection {
   if (!value || typeof value !== "object") return false;
@@ -18,6 +32,9 @@ export function isPublicCompetitionProjection(value: unknown): value is PublicCo
     typeof projection.competition.slug === "string" &&
     typeof projection.competition.sport_code === "string" &&
     projection.competition.sport_code in publicSportNames &&
+    Array.isArray(projection.divisions) &&
+    projection.divisions.length > 0 &&
+    projection.divisions.every(isPublicDivisionProjection) &&
     projection.division &&
     typeof projection.division.id === "string" &&
     Array.isArray(projection.schedule) &&

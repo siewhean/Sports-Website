@@ -94,6 +94,13 @@ type GateCC2SportSeed = {
   homeName: string;
   awayName: string;
   accessToken: string;
+  secondaryDivision?: {
+    divisionId: string;
+    matchId: string;
+    homeName: string;
+    awayName: string;
+    accessToken: string;
+  };
   action: {
     eventType: string;
     accessibleName: string;
@@ -480,6 +487,54 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
     if (downstreamMatchId) await sql`UPDATE matches SET state='in_progress' WHERE id=${downstreamMatchId}`;
     const scoreEvent = pack.eventTypes.find((event) => event.id === gateCC2Actions[sportId].eventType);
     if (!scoreEvent) throw new Error(`C2 action is unavailable for ${sportId}`);
+    let secondaryDivision: GateCC2SportSeed["secondaryDivision"];
+    if (evidenceScope === "gate-c-c2" && sportId === "badminton") {
+      const [secondary] = await sql<{ id: string }[]>`
+        INSERT INTO divisions(competition_id,name,team_limit)
+        VALUES(${competition.id},'Women',8)
+        RETURNING id
+      `;
+      if (!secondary) throw new Error("C2 multi-division seed did not create its second division");
+      await runtime.replaceEntries(
+        actor,
+        competition.id,
+        secondary.id,
+        Array.from({ length: 8 }, (_, index) => ({
+          name: `${pack.displayName} Women ${index + 1}`,
+          seed: index + 1,
+        })),
+        randomUUID(),
+      );
+      const secondaryFormat = await runtime.generateFormat(actor, competition.id, secondary.id, randomUUID());
+      const secondaryMatch = secondaryFormat.matches.find((match) => match.homeEntryId && match.awayEntryId);
+      if (!secondaryMatch?.homeEntryId || !secondaryMatch.awayEntryId) {
+        throw new Error("C2 multi-division seed has no resolved second-division match");
+      }
+      const secondaryParticipants = await sql<{ id: string; name: string }[]>`
+        SELECT id,name FROM division_entries
+        WHERE id IN (${secondaryMatch.homeEntryId},${secondaryMatch.awayEntryId})
+      `;
+      const secondaryNames = new Map(secondaryParticipants.map((entry) => [entry.id, entry.name]));
+      const secondaryAccess = await runtime.createAccessPass(
+        actor,
+        competition.id,
+        secondaryMatch.id,
+        {
+          expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+          role: "scorekeeper",
+          idempotencyKey: randomUUID(),
+        },
+        randomUUID(),
+      );
+      if (!secondaryAccess.token) throw new Error("C2 multi-division access token was not issued");
+      secondaryDivision = {
+        divisionId: secondary.id,
+        matchId: secondaryMatch.id,
+        homeName: secondaryNames.get(secondaryMatch.homeEntryId) ?? "Badminton Women Home",
+        awayName: secondaryNames.get(secondaryMatch.awayEntryId) ?? "Badminton Women Away",
+        accessToken: secondaryAccess.token,
+      };
+    }
     c2Sports.push({
       sportId,
       competitionId: competition.id,
@@ -490,6 +545,7 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
       homeName,
       awayName,
       accessToken: access.token,
+      ...(secondaryDivision ? { secondaryDivision } : {}),
       action: {
         ...gateCC2Actions[sportId],
         accessibleName: `${scoreEvent.label} ${homeName}`,
@@ -770,6 +826,78 @@ async function assertGateCC2DatabaseOracle(
       ORDER BY event_type
     `,
   ]);
+  const multiDivisionSport = state.sports.find((sport) => sport.secondaryDivision);
+  if (!multiDivisionSport?.secondaryDivision) {
+    throw new Error("Gate C C2 database oracle requires the two-division seed");
+  }
+  const [projectionRow] = await sql<{ projection: unknown }[]>`
+    SELECT projection FROM public_competition_projections projection
+    JOIN competition_publications publication
+      ON publication.competition_id=projection.competition_id
+     AND publication.schedule_version=projection.schedule_version
+     AND publication.result_version=projection.result_version
+    WHERE projection.competition_id=${multiDivisionSport.competitionId}
+  `;
+  const publicProjection =
+    typeof projectionRow?.projection === "string"
+      ? (JSON.parse(projectionRow.projection) as Record<string, unknown>)
+      : (projectionRow?.projection as Record<string, unknown> | undefined);
+  const divisionPackages = Array.isArray(publicProjection?.divisions)
+    ? (publicProjection.divisions as Array<Record<string, unknown>>)
+    : [];
+  const [matchRows, entryRows, resultRows] = await Promise.all([
+    sql<{ id: string; division_id: string }[]>`
+      SELECT id,division_id FROM matches WHERE competition_id=${multiDivisionSport.competitionId}
+    `,
+    sql<{ id: string; division_id: string }[]>`
+      SELECT entry.id,entry.division_id FROM division_entries entry
+      JOIN divisions division ON division.id=entry.division_id
+      WHERE division.competition_id=${multiDivisionSport.competitionId}
+    `,
+    sql<{ match_id: string; result_version: number; division_id: string }[]>`
+      SELECT snapshot.match_id,snapshot.result_version,match.division_id
+      FROM match_result_snapshots snapshot
+      JOIN matches match ON match.id=snapshot.match_id
+      WHERE match.competition_id=${multiDivisionSport.competitionId}
+      ORDER BY snapshot.result_version
+    `,
+  ]);
+  const matchDivisions = new Map(matchRows.map((row) => [row.id, row.division_id]));
+  const entryDivisions = new Map(entryRows.map((row) => [row.id, row.division_id]));
+  const nestedReferences = (value: unknown): string[] => {
+    if (!value || typeof value !== "object") return [];
+    if (Array.isArray(value)) return value.flatMap(nestedReferences);
+    return Object.entries(value).flatMap(([key, item]) => [
+      ...([
+        "id",
+        "entryId",
+        "entry_id",
+        "matchId",
+        "match_id",
+        "homeEntryId",
+        "awayEntryId",
+        "home_entry_id",
+        "away_entry_id",
+      ].includes(key) && typeof item === "string"
+        ? [item]
+        : []),
+      ...nestedReferences(item),
+    ]);
+  };
+  let crossDivisionReferenceCount = 0;
+  for (const divisionPackage of divisionPackages) {
+    const division = divisionPackage.division as Record<string, unknown> | undefined;
+    const divisionId = typeof division?.id === "string" ? division.id : "";
+    for (const reference of nestedReferences({
+      schedule: divisionPackage.schedule,
+      results: divisionPackage.results,
+      standings: divisionPackage.standings,
+      bracket: divisionPackage.bracket,
+    })) {
+      const referencedDivision = matchDivisions.get(reference) ?? entryDivisions.get(reference);
+      if (referencedDivision && referencedDivision !== divisionId) crossDivisionReferenceCount += 1;
+    }
+  }
   const receipt: GateCC2SemanticReceipt = {
     artifact_kind: "gate-c-c2-semantic-oracle",
     project_name: browser.project_name,
@@ -787,6 +915,19 @@ async function assertGateCC2DatabaseOracle(
         acknowledgement_reason: conflicts[0]?.acknowledgement_reason ?? "",
         audit_actions: conflictAudit.map((entry) => entry.action),
         outbox_event_types: conflictOutbox.map((entry) => entry.event_type),
+      },
+      multi_division: {
+        competition_id: multiDivisionSport.competitionId,
+        division_ids: [multiDivisionSport.divisionId, multiDivisionSport.secondaryDivision.divisionId],
+        global_result_versions: resultRows.map((row) => row.result_version),
+        primary_result_versions: resultRows
+          .filter((row) => row.division_id === multiDivisionSport.divisionId)
+          .map((row) => row.result_version),
+        secondary_result_versions: resultRows
+          .filter((row) => row.division_id === multiDivisionSport.secondaryDivision!.divisionId)
+          .map((row) => row.result_version),
+        public_division_count: divisionPackages.length,
+        cross_division_reference_count: crossDivisionReferenceCount,
       },
     },
   };

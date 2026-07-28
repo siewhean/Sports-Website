@@ -41,6 +41,15 @@ export type StandingView = {
   points: number;
 };
 
+export type PublicDivisionView = {
+  division: { id: string; name: string; teamCount: number; matchCount: number };
+  teams: string[];
+  areas: string[];
+  matches: MatchView[];
+  standings: StandingView[];
+  bracket: Array<{ round: string; fixture: string; score: string; state: string }>;
+};
+
 export type CompetitionView = {
   id: string;
   slug: string;
@@ -54,6 +63,7 @@ export type CompetitionView = {
   publishedAt: string;
   lastUpdated: string;
   division: { id: string; name: string; teamCount: number; matchCount: number };
+  publicDivisions?: PublicDivisionView[];
   divisions?: ReadonlyArray<{
     id: string;
     name: string;

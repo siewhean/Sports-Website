@@ -61,9 +61,11 @@ function validSegmentState(value, sportId, winner) {
   }
 }
 
-function validateSemanticReceipt(receipt, expectedProject) {
+export function validateSemanticReceipt(receipt, expectedProject) {
   const browserSports = receipt?.browser?.sports;
   const databaseSports = receipt?.database?.sports;
+  const browserMultiDivision = receipt?.browser?.multi_division;
+  const databaseMultiDivision = receipt?.database?.multi_division;
   if (
     receipt?.artifact_kind !== "gate-c-c2-semantic-oracle" ||
     receipt?.project_name !== expectedProject ||
@@ -89,19 +91,36 @@ function validateSemanticReceipt(receipt, expectedProject) {
     ) ||
     !["result_conflict.created", "result_conflict.acknowledged"].every((eventType) =>
       receipt?.database?.downstream_conflicts?.outbox_event_types?.includes(eventType),
-    )
+    ) ||
+    !browserMultiDivision?.competition_id ||
+    browserMultiDivision.primary_division_id === browserMultiDivision.secondary_division_id ||
+    browserMultiDivision.primary_result_versions?.join(",") !== "1,3,4" ||
+    browserMultiDivision.secondary_result_versions?.join(",") !== "2" ||
+    browserMultiDivision.public_packages_visible !== true ||
+    browserMultiDivision.cross_division_names_absent !== true ||
+    databaseMultiDivision?.competition_id !== browserMultiDivision.competition_id ||
+    databaseMultiDivision?.division_ids?.join(",") !==
+      [browserMultiDivision.primary_division_id, browserMultiDivision.secondary_division_id].join(",") ||
+    databaseMultiDivision?.global_result_versions?.join(",") !== "1,2,3,4" ||
+    databaseMultiDivision?.primary_result_versions?.join(",") !== "1,3,4" ||
+    databaseMultiDivision?.secondary_result_versions?.join(",") !== "2" ||
+    databaseMultiDivision?.public_division_count !== 2 ||
+    databaseMultiDivision?.cross_division_reference_count !== 0
   ) {
     throw new Error(`Gate C C2 semantic oracle is invalid for ${expectedProject}`);
   }
   for (const [index, sportId] of sports.entries()) {
     const browser = browserSports[index];
     const database = databaseSports[index];
+    const expectedResultVersions = sportId === "badminton" ? "1,3,4" : "1,2,3";
+    const expectedPublicationVersion = sportId === "badminton" ? 4 : 3;
+    const expectedCorrectionVersion = sportId === "badminton" ? 3 : 2;
     const expectedSequence = Array.from({ length: database?.row_count ?? 0 }, (_, eventIndex) => eventIndex + 1);
     if (
       browser?.sport_id !== sportId ||
       browser?.action_event_type !== actionEventTypes[sportId] ||
       browser?.steps?.join(",") !== browserSteps.join(",") ||
-      browser?.observed_result_versions?.join(",") !== "1,2,3" ||
+      browser?.observed_result_versions?.join(",") !== expectedResultVersions ||
       !Number.isSafeInteger(browser?.observed_audit_event_count) ||
       browser.observed_audit_event_count < 1 ||
       !browser?.displayed_result?.includes(`0–${sportId === "basketball" ? 3 : 1}`) ||
@@ -110,7 +129,7 @@ function validateSemanticReceipt(receipt, expectedProject) {
       database?.distinct_client_event_count !== database?.row_count ||
       database?.sequences?.join(",") !== expectedSequence.join(",") ||
       database?.aggregate_versions?.join(",") !== expectedSequence.join(",") ||
-      database?.result_versions?.join(",") !== "1,2,3" ||
+      database?.result_versions?.join(",") !== expectedResultVersions ||
       database?.result_states?.join(",") !== "final,corrected,final" ||
       database?.result_scores?.join(",") !==
         [
@@ -123,11 +142,11 @@ function validateSemanticReceipt(receipt, expectedProject) {
       !validSegmentState(database?.result_segment_states?.[0], sportId, "home") ||
       !validSegmentState(database?.result_segment_states?.[1], sportId, "away") ||
       !validSegmentState(database?.result_segment_states?.[2], sportId, "away") ||
-      database?.publication_result_version !== 3 ||
+      database?.publication_result_version !== expectedPublicationVersion ||
       database?.correction_transactions !== 1 ||
       database?.correction_from_version < 1 ||
       database?.correction_through_version <= database?.correction_from_version ||
-      database?.correction_result_version !== 2 ||
+      database?.correction_result_version !== expectedCorrectionVersion ||
       database?.result_through_sequences?.join(",") !==
         [database?.correction_from_version - 1, database?.correction_through_version, database?.row_count].join(",") ||
       database?.stream_sport_code !== sportId ||

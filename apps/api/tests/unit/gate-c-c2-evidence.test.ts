@@ -78,11 +78,20 @@ describe("Gate C C2 evidence discovery", () => {
         sport_id,
         action_event_type: actions[index]!,
         steps: [...gateCC2BrowserSteps],
-        observed_result_versions: [1, 2, 3],
+        observed_result_versions: sport_id === "badminton" ? [1, 3, 4] : [1, 2, 3],
         observed_audit_event_count: 8,
         displayed_result: `Home 0–${sport_id === "basketball" ? 3 : 1} Away`,
       })),
       conflict_review: { sport_id: "canoe_polo", status: "acknowledged" as const },
+      multi_division: {
+        competition_id: "badminton-competition",
+        primary_division_id: "open-division",
+        secondary_division_id: "women-division",
+        primary_result_versions: [1, 3, 4],
+        secondary_result_versions: [2],
+        public_packages_visible: true,
+        cross_division_names_absent: true,
+      },
     };
     const receipt = {
       artifact_kind: "gate-c-c2-semantic-oracle" as const,
@@ -103,7 +112,7 @@ describe("Gate C C2 evidence discovery", () => {
           aggregate_versions: Array.from({ length: 10 }, (_, eventIndex) => eventIndex + 1),
           row_count: 10,
           distinct_client_event_count: 10,
-          result_versions: [1, 2, 3],
+          result_versions: sport_id === "badminton" ? [1, 3, 4] : [1, 2, 3],
           result_states: ["final", "corrected", "final"],
           result_scores: [
             `${sport_id === "basketball" ? 3 : 1}:0`,
@@ -123,11 +132,11 @@ describe("Gate C C2 evidence discovery", () => {
               },
             ]),
           ),
-          publication_result_version: 3,
+          publication_result_version: sport_id === "badminton" ? 4 : 3,
           correction_transactions: 1,
           correction_from_version: 4,
           correction_through_version: 8,
-          correction_result_version: 2,
+          correction_result_version: sport_id === "badminton" ? 3 : 2,
           result_through_sequences: [3, 8, 10],
           stream_sport_code: sport_id,
           stream_pack_version: "0.1.0-draft.1",
@@ -136,7 +145,7 @@ describe("Gate C C2 evidence discovery", () => {
           reversal_target_count: 1,
           reasoned_reversal_count: 1,
           valid_actor_count: 10,
-          standings_result_version: 3,
+          standings_result_version: sport_id === "badminton" ? 4 : 3,
           standings_row_count: 2,
           standings_settings_version: "a".repeat(64),
           advancement_slot_count: 0,
@@ -156,6 +165,15 @@ describe("Gate C C2 evidence discovery", () => {
           audit_actions: ["result_conflict.created", "result_conflict.acknowledged"],
           outbox_event_types: ["result_conflict.created", "result_conflict.acknowledged"],
         },
+        multi_division: {
+          competition_id: "badminton-competition",
+          division_ids: ["open-division", "women-division"],
+          global_result_versions: [1, 2, 3, 4],
+          primary_result_versions: [1, 3, 4],
+          secondary_result_versions: [2],
+          public_division_count: 2,
+          cross_division_reference_count: 0,
+        },
       },
     };
     expect(validateGateCC2BrowserReceipt(browser, gateCC2Projects[0])).toEqual(browser);
@@ -171,5 +189,13 @@ describe("Gate C C2 evidence discovery", () => {
     receipt.database.sports[0]!.standings_row_count = 2;
     receipt.database.downstream_conflicts.acknowledged = 0;
     expect(() => validateGateCC2SemanticReceipt(receipt, gateCC2Projects[0])).toThrow(/downstream conflict/);
+
+    receipt.database.downstream_conflicts.acknowledged = 1;
+    receipt.database.multi_division.cross_division_reference_count = 1;
+    expect(() => validateGateCC2SemanticReceipt(receipt, gateCC2Projects[0])).toThrow(/two-division/);
+
+    receipt.database.multi_division.cross_division_reference_count = 0;
+    const missingMultiDivision = { ...browser, multi_division: undefined };
+    expect(() => validateGateCC2BrowserReceipt(missingMultiDivision, gateCC2Projects[0])).toThrow(/two-division/);
   });
 });

@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import type {
   PublicCompetitionProjection,
+  PublicDivisionProjection,
   PublicMatchResult,
   PublicScheduledMatch,
   ScoringSessionState,
@@ -2235,13 +2236,6 @@ export class Phase2Runtime {
         );
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
-        const match = required(
-          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
-          "Match not found",
-        );
-        if (match.state === "final" || match.state === "corrected") {
-          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
-        }
         const permission: ScoringPermission = command.type === "reversal" ? "score:reverse" : "score:write";
         if (!jsonValue<ScoringPermission[]>(session.scope).includes(permission)) {
           throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session lacks the required permission");
@@ -2294,6 +2288,13 @@ export class Phase2Runtime {
             sequence: duplicate.aggregate_version,
             aggregate_version: duplicate.aggregate_version,
           };
+        }
+        const match = required(
+          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
+          "Match not found",
+        );
+        if (match.state === "final" || match.state === "corrected") {
+          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
         }
         const existing = await this.canonicalScoreEvents(tx, session.match_id);
         const stream = required(
@@ -3146,6 +3147,15 @@ export class Phase2Runtime {
         };
       });
     } catch (error) {
+      if (isScoreWriterSessionGuardViolation(error)) {
+        await this.recordScoringSessionDenial(
+          auth,
+          requestId,
+          "scoring_result.finalise_denied",
+          "STALE_WRITER_GENERATION",
+        );
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+      }
       if (error instanceof ApiError && ["STALE_WRITER_GENERATION", "MATCH_FINALISED_READ_ONLY"].includes(error.code)) {
         await this.recordScoringSessionDenial(auth, requestId, "scoring_result.finalise_denied", error.code);
       }
@@ -4026,17 +4036,16 @@ export class Phase2Runtime {
       throw new ApiError(409, "COMPETITION_NOT_PUBLISHED", "Draft competitions cannot have a public projection");
     }
     const publicCompetitionStatus = competition.status;
-    const division = required(
-      await tx.unsafe<{ id: string; name: string }>(
-        `SELECT id,name FROM divisions WHERE competition_id=$1 ORDER BY created_at,id LIMIT 1`,
-        [competitionId],
-      ),
-      "Division not found",
+    const divisions = await tx.unsafe<{ id: string; name: string }>(
+      `SELECT id,name FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
+      [competitionId],
     );
+    required(divisions, "Division not found");
     const schedule =
       scheduleVersion > 0
         ? await tx.unsafe<{
             id: string;
+            division_id: string;
             code: string;
             stage: string;
             home_entry_id: string | null;
@@ -4048,7 +4057,7 @@ export class Phase2Runtime {
             area_id: string;
             area_name: string;
           }>(
-            `SELECT m.id,m.code,m.stage,sm.home_entry_id,sm.away_entry_id,
+            `SELECT m.id,m.division_id,m.code,m.stage,sm.home_entry_id,sm.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
                   sm.starts_at,sm.ends_at,pa.id AS area_id,pa.name AS area_name
            FROM competition_publications cp
@@ -4064,6 +4073,7 @@ export class Phase2Runtime {
       resultVersion > 0
         ? await tx.unsafe<{
             id: string;
+            division_id: string;
             code: string;
             stage: string;
             home_entry_id: string;
@@ -4075,7 +4085,7 @@ export class Phase2Runtime {
             state: "final" | "corrected";
             created_at: Date | string;
           }>(
-            `SELECT DISTINCT ON (m.id) m.id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
+            `SELECT DISTINCT ON (m.id) m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
                   s.home_score,s.away_score,s.state,s.created_at
            FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
@@ -4088,41 +4098,70 @@ export class Phase2Runtime {
         : [];
     const standings =
       resultVersion > 0
-        ? await tx.unsafe<{ standings: unknown; explanation: unknown }>(
-            `SELECT standings,explanation FROM standings_snapshots
-           WHERE competition_id=$1 AND result_version <= $2 ORDER BY result_version DESC LIMIT 1`,
+        ? await tx.unsafe<{ division_id: string; standings: unknown; explanation: unknown }>(
+            `SELECT DISTINCT ON (division_id) division_id,standings,explanation
+           FROM standings_snapshots
+           WHERE competition_id=$1 AND result_version <= $2
+           ORDER BY division_id,result_version DESC`,
             [competitionId, resultVersion],
           )
         : [];
     const bracket =
       resultVersion > 0
-        ? await tx.unsafe<{ bracket: unknown; conflicts: unknown }>(
-            `SELECT bracket,conflicts FROM bracket_snapshots
-           WHERE competition_id=$1 AND result_version <= $2 ORDER BY result_version DESC LIMIT 1`,
+        ? await tx.unsafe<{ division_id: string; bracket: unknown; conflicts: unknown }>(
+            `SELECT DISTINCT ON (division_id) division_id,bracket,conflicts
+           FROM bracket_snapshots
+           WHERE competition_id=$1 AND result_version <= $2
+           ORDER BY division_id,result_version DESC`,
             [competitionId, resultVersion],
           )
         : [];
-    const publicSchedule: PublicScheduledMatch[] = schedule.map((match) => ({
-      id: match.id,
-      code: match.code,
-      stage: match.stage,
-      home: { id: match.home_entry_id, name: match.home_name ?? "TBD" },
-      away: { id: match.away_entry_id, name: match.away_name ?? "TBD" },
-      starts_at: serializedDate(match.starts_at),
-      ends_at: serializedDate(match.ends_at),
-      area: { id: match.area_id, name: match.area_name },
-    }));
-    const publicResults: PublicMatchResult[] = results.map((match) => ({
-      id: match.id,
-      code: match.code,
-      stage: match.stage,
-      home: { id: match.home_entry_id, name: match.home_name },
-      away: { id: match.away_entry_id, name: match.away_name },
-      home_score: match.home_score,
-      away_score: match.away_score,
-      state: match.state,
-      updated_at: serializedDate(match.created_at),
-    }));
+    const standingsByDivision = new Map(standings.map((snapshot) => [snapshot.division_id, snapshot]));
+    const bracketByDivision = new Map(bracket.map((snapshot) => [snapshot.division_id, snapshot]));
+    const publicDivisions: PublicDivisionProjection[] = divisions.map((division) => {
+      const publicSchedule: PublicScheduledMatch[] = schedule
+        .filter((match) => match.division_id === division.id)
+        .map((match) => ({
+          id: match.id,
+          code: match.code,
+          stage: match.stage,
+          home: { id: match.home_entry_id, name: match.home_name ?? "TBD" },
+          away: { id: match.away_entry_id, name: match.away_name ?? "TBD" },
+          starts_at: serializedDate(match.starts_at),
+          ends_at: serializedDate(match.ends_at),
+          area: { id: match.area_id, name: match.area_name },
+        }));
+      const publicResults: PublicMatchResult[] = results
+        .filter((match) => match.division_id === division.id)
+        .map((match) => ({
+          id: match.id,
+          code: match.code,
+          stage: match.stage,
+          home: { id: match.home_entry_id, name: match.home_name },
+          away: { id: match.away_entry_id, name: match.away_name },
+          home_score: match.home_score,
+          away_score: match.away_score,
+          state: match.state,
+          updated_at: serializedDate(match.created_at),
+        }));
+      const divisionStandings = standingsByDivision.get(division.id);
+      const divisionBracket = bracketByDivision.get(division.id);
+      return {
+        division,
+        schedule: publicSchedule,
+        results: publicResults,
+        standings: divisionStandings
+          ? {
+              standings: jsonValue(divisionStandings.standings),
+              explanation: jsonValue(divisionStandings.explanation),
+            }
+          : null,
+        bracket: divisionBracket
+          ? { bracket: jsonValue(divisionBracket.bracket), conflicts: jsonValue(divisionBracket.conflicts) }
+          : null,
+      };
+    });
+    const legacyDivision = required(publicDivisions, "Division projection not found");
     const projection: Omit<PublicCompetitionProjection, "last_updated_at"> = {
       competition: {
         ...competition,
@@ -4130,16 +4169,13 @@ export class Phase2Runtime {
         starts_on: serializedDate(competition.starts_on).slice(0, 10),
         ends_on: serializedDate(competition.ends_on).slice(0, 10),
       },
-      division,
+      divisions: publicDivisions,
+      division: legacyDivision.division,
       publication: { schedule_version: scheduleVersion, result_version: resultVersion },
-      schedule: publicSchedule,
-      results: publicResults,
-      standings: standings[0]
-        ? { standings: jsonValue(standings[0].standings), explanation: jsonValue(standings[0].explanation) }
-        : null,
-      bracket: bracket[0]
-        ? { bracket: jsonValue(bracket[0].bracket), conflicts: jsonValue(bracket[0].conflicts) }
-        : null,
+      schedule: legacyDivision.schedule,
+      results: legacyDivision.results,
+      standings: legacyDivision.standings,
+      bracket: legacyDivision.bracket,
     };
     await tx.unsafe(
       `INSERT INTO public_competition_projections (
@@ -4166,8 +4202,26 @@ export class Phase2Runtime {
     );
     const row = rows[0];
     if (!row) throw new ApiError(404, "PUBLIC_COMPETITION_NOT_FOUND", "Competition not found");
+    const stored = jsonValue<
+      Omit<PublicCompetitionProjection, "last_updated_at"> & {
+        divisions?: PublicDivisionProjection[];
+      }
+    >(row.projection);
+    const divisions =
+      Array.isArray(stored.divisions) && stored.divisions.length > 0
+        ? stored.divisions
+        : [
+            {
+              division: stored.division,
+              schedule: stored.schedule,
+              results: stored.results,
+              standings: stored.standings,
+              bracket: stored.bracket,
+            },
+          ];
     return {
-      ...jsonValue<Omit<PublicCompetitionProjection, "last_updated_at">>(row.projection),
+      ...stored,
+      divisions,
       last_updated_at: date(row.generated_at).toISOString(),
     };
   }

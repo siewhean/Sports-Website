@@ -39,6 +39,15 @@ export type GateCC2BrowserReceipt = {
     sport_id: string;
     status: "acknowledged";
   };
+  multi_division: {
+    competition_id: string;
+    primary_division_id: string;
+    secondary_division_id: string;
+    primary_result_versions: number[];
+    secondary_result_versions: number[];
+    public_packages_visible: boolean;
+    cross_division_names_absent: boolean;
+  };
 };
 
 export type GateCC2SemanticReceipt = {
@@ -91,6 +100,15 @@ export type GateCC2SemanticReceipt = {
       acknowledgement_reason: string;
       audit_actions: string[];
       outbox_event_types: string[];
+    };
+    multi_division: {
+      competition_id: string;
+      division_ids: string[];
+      global_result_versions: number[];
+      primary_result_versions: number[];
+      secondary_result_versions: number[];
+      public_division_count: number;
+      cross_division_reference_count: number;
     };
   };
 };
@@ -223,7 +241,7 @@ export function validateGateCC2BrowserReceipt(
       sport.sport_id !== gateCC2Sports[index] ||
       typeof sport.action_event_type !== "string" ||
       !sameArray(sport.steps, gateCC2BrowserSteps) ||
-      !sameArray(sport.observed_result_versions, [1, 2, 3]) ||
+      !sameArray(sport.observed_result_versions, sport.sport_id === "badminton" ? [1, 3, 4] : [1, 2, 3]) ||
       !Number.isSafeInteger(sport.observed_audit_event_count) ||
       sport.observed_audit_event_count < 1 ||
       typeof sport.displayed_result !== "string" ||
@@ -234,6 +252,17 @@ export function validateGateCC2BrowserReceipt(
   }
   if (candidate.conflict_review?.sport_id !== "canoe_polo" || candidate.conflict_review.status !== "acknowledged") {
     throw new Error("Gate C C2 browser oracle does not prove downstream conflict review");
+  }
+  if (
+    !candidate.multi_division ||
+    !candidate.multi_division.competition_id ||
+    candidate.multi_division.primary_division_id === candidate.multi_division.secondary_division_id ||
+    !sameArray(candidate.multi_division.primary_result_versions, [1, 3, 4]) ||
+    !sameArray(candidate.multi_division.secondary_result_versions, [2]) ||
+    !candidate.multi_division.public_packages_visible ||
+    !candidate.multi_division.cross_division_names_absent
+  ) {
+    throw new Error("Gate C C2 browser oracle does not prove two-division public isolation");
   }
   return candidate as GateCC2BrowserReceipt;
 }
@@ -276,7 +305,7 @@ export function validateGateCC2SemanticReceipt(
       sport.distinct_client_event_count !== sport.row_count ||
       !sameArray(sport.sequences, sequential) ||
       !sameArray(sport.aggregate_versions, sequential) ||
-      !sameArray(sport.result_versions, [1, 2, 3]) ||
+      !sameArray(sport.result_versions, sportId === "badminton" ? [1, 3, 4] : [1, 2, 3]) ||
       !sameArray(sport.result_states, ["final", "corrected", "final"]) ||
       !sameArray(sport.result_scores, [
         `${sportId === "basketball" ? 3 : 1}:0`,
@@ -290,11 +319,11 @@ export function validateGateCC2SemanticReceipt(
       !validSegmentState(sport.result_segment_states[1] ?? "", sportId, "away") ||
       !validSegmentState(sport.result_segment_states[2] ?? "", sportId, "away") ||
       !browser.sports[index]?.displayed_result.includes(`0–${sportId === "basketball" ? 3 : 1}`) ||
-      sport.publication_result_version !== 3 ||
+      sport.publication_result_version !== (sportId === "badminton" ? 4 : 3) ||
       sport.correction_transactions !== 1 ||
       sport.correction_from_version < 1 ||
       sport.correction_through_version <= sport.correction_from_version ||
-      sport.correction_result_version !== 2 ||
+      sport.correction_result_version !== (sportId === "badminton" ? 3 : 2) ||
       !sameArray(sport.result_through_sequences, [
         sport.correction_from_version - 1,
         sport.correction_through_version,
@@ -307,7 +336,7 @@ export function validateGateCC2SemanticReceipt(
       sport.reversal_target_count !== 1 ||
       sport.reasoned_reversal_count !== 1 ||
       sport.valid_actor_count !== sport.row_count ||
-      sport.standings_result_version !== 3 ||
+      sport.standings_result_version !== (sportId === "badminton" ? 4 : 3) ||
       sport.standings_row_count < 1 ||
       !sport.standings_settings_version ||
       sport.advancement_slot_count < 0 ||
@@ -343,6 +372,20 @@ export function validateGateCC2SemanticReceipt(
     )
   ) {
     throw new Error("Gate C C2 direct database oracle does not prove the retained downstream conflict");
+  }
+  if (
+    database.multi_division.competition_id !== browser.multi_division.competition_id ||
+    !sameArray(database.multi_division.division_ids, [
+      browser.multi_division.primary_division_id,
+      browser.multi_division.secondary_division_id,
+    ]) ||
+    !sameArray(database.multi_division.global_result_versions, [1, 2, 3, 4]) ||
+    !sameArray(database.multi_division.primary_result_versions, [1, 3, 4]) ||
+    !sameArray(database.multi_division.secondary_result_versions, [2]) ||
+    database.multi_division.public_division_count !== 2 ||
+    database.multi_division.cross_division_reference_count !== 0
+  ) {
+    throw new Error("Gate C C2 direct database oracle does not prove two-division public isolation");
   }
   return candidate as GateCC2SemanticReceipt;
 }

@@ -121,6 +121,7 @@ describe("foundation migrations", () => {
         "0028_gate_c_access_foundation.sql",
         "0029_gate_c_five_sport_scoring.sql",
         "0030_gate_c_published_schedule_participants.sql",
+        "0031_gate_c_participant_snapshot_fencing.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
@@ -134,7 +135,14 @@ describe("foundation migrations", () => {
         migrationsDirectory: copiedDirectory,
         schema: populatedSchema,
       });
-      const sql = postgres(config.databaseUrl, { max: 1, connection: { search_path: populatedSchema } });
+      // This fixture intentionally applies and rolls back DDL through a second
+      // connection. Avoid retaining prepared plans across those relation OID
+      // changes so the post-upgrade assertions exercise the migrated schema.
+      const sql = postgres(config.databaseUrl, {
+        max: 1,
+        prepare: false,
+        connection: { search_path: populatedSchema },
+      });
       try {
         const account = randomUUID();
         const organisation = randomUUID();
@@ -157,8 +165,10 @@ describe("foundation migrations", () => {
           pack_schema_version,recommended_snapshot,settings_override)
           VALUES(${competition},${account},'canoe_polo','upgrade-1',1,'{}'::jsonb,'{}'::jsonb)`;
         const division = randomUUID();
+        const siblingDivision = randomUUID();
         const placeholder = randomUUID();
         const secondPlaceholder = randomUUID();
+        const siblingEntry = randomUUID();
         await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
           VALUES(${division},${competition},'Open',16)`;
         await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
@@ -204,8 +214,28 @@ describe("foundation migrations", () => {
           ${formatRevision},${competition},${division},1,${sql.json(definition)},${definitionHash!.hash},${account},'phase3'
         )`;
         await sql`INSERT INTO matches(
-          id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal
-        ) VALUES(${match},${competition},${division},${formatRevision},'UPGRADE-FINAL','final',1,1)`;
+          id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,
+          home_entry_id,away_entry_id
+        ) VALUES(
+          ${match},${competition},${division},${formatRevision},'UPGRADE-FINAL','final',1,1,
+          ${placeholder},${secondPlaceholder}
+        )`;
+        const playingArea = randomUUID();
+        const scheduleRevision = randomUUID();
+        await sql`INSERT INTO playing_areas(id,competition_id,name,slot_minutes)
+          VALUES(${playingArea},${competition},'Upgrade court',30)`;
+        await sql`INSERT INTO schedule_revisions(
+          id,competition_id,format_revision_id,revision,input_hash,created_by
+        ) VALUES(
+          ${scheduleRevision},${competition},${formatRevision},1,
+          ${createHash("sha256").update(scheduleRevision).digest("hex")},${account}
+        )`;
+        await sql`INSERT INTO scheduled_matches(
+          schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at
+        ) VALUES(
+          ${scheduleRevision},${match},${competition},${playingArea},
+          '2027-01-01T08:00:00Z','2027-01-01T08:30:00Z'
+        )`;
         const accessPass = randomUUID();
         const revokedAccessPass = randomUUID();
         const expiredAccessPass = randomUUID();
@@ -281,13 +311,41 @@ describe("foundation migrations", () => {
           FROM setup_drafts WHERE competition_id=${competition}`;
         expect(beforeUpgrade).toMatchObject({ confirmed_count: 2, placeholder_count: 2 });
         expect(beforeUpgrade?.entry_ids.toSorted()).toEqual([placeholder, secondPlaceholder].toSorted());
-        await Promise.all(forwardMigrations.map(({ migrationPath, source }) => writeFile(migrationPath, source)));
+        await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
+          VALUES(${siblingDivision},${competition},'Masters',16)`;
+        await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
+          VALUES(${siblingEntry},${siblingDivision},'Sibling division entry',1,'placeholder','confirmed')`;
+        const participantFenceMigration = forwardMigrations.at(-1);
+        if (!participantFenceMigration) throw new Error("Expected participant-fencing migration");
+        await Promise.all(
+          forwardMigrations.slice(0, -1).map(({ migrationPath, source }) => writeFile(migrationPath, source)),
+        );
+        const upgradedBeforeParticipantFence = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -1));
+        await sql`UPDATE scheduled_matches
+          SET home_entry_id=${siblingEntry}
+          WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
+        await writeFile(participantFenceMigration.migrationPath, participantFenceMigration.source);
+        await expect(
+          migrateDatabase({
+            databaseUrl: config.databaseUrl,
+            migrationsDirectory: copiedDirectory,
+            schema: populatedSchema,
+          }),
+        ).rejects.toThrow(/participant snapshots must belong to the authoritative match division and competition/i);
+        await sql`UPDATE scheduled_matches
+          SET home_entry_id=${placeholder}
+          WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
         const upgraded = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgraded.applied).toEqual(forwardMigrationNames);
+        expect(upgraded.applied).toEqual(["0031_gate_c_participant_snapshot_fencing.sql"]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
@@ -297,6 +355,19 @@ describe("foundation migrations", () => {
           FROM setup_drafts WHERE competition_id=${competition}`;
         expect(afterUpgrade).toMatchObject({ confirmed_count: 0, placeholder_count: 2 });
         expect(afterUpgrade?.entry_ids.toSorted()).toEqual([placeholder, secondPlaceholder].toSorted());
+        expect(
+          await sql`
+            SELECT division_id,home_entry_id,away_entry_id
+            FROM scheduled_matches
+            WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}
+          `,
+        ).toEqual([
+          {
+            division_id: division,
+            home_entry_id: placeholder,
+            away_entry_id: secondPlaceholder,
+          },
+        ]);
         expect(await sql`SELECT 1 FROM phase4_format_recommendation_sets`).toEqual([]);
         expect(
           await sql`
@@ -331,11 +402,13 @@ describe("foundation migrations", () => {
         ]);
         expect(
           await sql<{ indexname: string }[]>`
-            SELECT indexname
-            FROM pg_indexes
-            WHERE schemaname=current_schema()
-              AND indexname='canonical_score_events_one_reversal_per_target_idx'
-              AND indexdef LIKE 'CREATE UNIQUE INDEX%'
+            SELECT index_class.relname AS indexname
+            FROM pg_class index_class
+            JOIN pg_namespace namespace ON namespace.oid=index_class.relnamespace
+            JOIN pg_index index_metadata ON index_metadata.indexrelid=index_class.oid
+            WHERE namespace.nspname=current_schema()
+              AND index_class.relname='canonical_score_events_one_reversal_per_target_idx'
+              AND index_metadata.indisunique
           `,
         ).toEqual([{ indexname: "canonical_score_events_one_reversal_per_target_idx" }]);
         expect(

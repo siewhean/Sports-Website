@@ -167,6 +167,7 @@ describe("Phase 2 OpenAPI contract", () => {
     expect(publicSchema?.required).toEqual(
       expect.arrayContaining([
         "competition",
+        "divisions",
         "division",
         "publication",
         "schedule",
@@ -178,5 +179,6 @@ describe("Phase 2 OpenAPI contract", () => {
     );
     expect(publicSchema?.properties).toHaveProperty("schedule");
     expect(publicSchema?.properties).toHaveProperty("results");
+    expect(publicSchema?.properties).toHaveProperty("divisions");
   });
 });

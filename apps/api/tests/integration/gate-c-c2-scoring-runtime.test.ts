@@ -140,6 +140,63 @@ async function createScoringWorld(sportId: SportId) {
   };
 }
 
+async function finaliseBadmintonWalkover(matchId: string) {
+  const pass = await runtime.createAccessPass(
+    { accountId },
+    (
+      await sql<{ competition_id: string }[]>`
+        SELECT competition_id FROM matches WHERE id=${matchId}
+      `
+    )[0]!.competition_id,
+    matchId,
+    {
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      role: "scorekeeper",
+      idempotencyKey: `two-division-${randomUUID()}`,
+    },
+    randomUUID(),
+  );
+  if (!pass.token) throw new Error("Expected one-time access token");
+  const writer = await runtime.exchangeAccess(
+    { token: pass.token, deviceId: randomUUID(), ipAddress: "192.0.2.42" },
+    randomUUID(),
+  );
+  if (!writer.generation) throw new Error("Expected writer generation");
+  const auth = {
+    sessionId: writer.session_id,
+    sessionToken: writer.session_token,
+    generation: writer.generation,
+  };
+  await runtime.appendCanonicalScoreEvent(
+    auth,
+    { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString() },
+    0,
+    randomUUID(),
+  );
+  await runtime.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "walkover",
+      occurred_at: new Date().toISOString(),
+      team_slot: "home",
+      segment_number: 1,
+    },
+    1,
+    randomUUID(),
+  );
+  return runtime.finalise(auth, randomUUID(), randomUUID(), 2);
+}
+
+function nestedValues(value: unknown, keys: ReadonlySet<string>): string[] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.flatMap((item) => nestedValues(item, keys));
+  return Object.entries(value).flatMap(([key, item]) => [
+    ...(keys.has(key) && typeof item === "string" ? [item] : []),
+    ...nestedValues(item, keys),
+  ]);
+}
+
 describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
   it.each([
     ["badminton", 21, 0],
@@ -204,6 +261,148 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       current_version: version + 1,
       event_count: version + 1,
     });
+  });
+
+  it("keeps schedules, alternating results, standings, and brackets inside each public division package", async () => {
+    const actor = { accountId };
+    const slug = `two-division-c2-${randomUUID()}`;
+    const competition = await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Two division C2 Cup",
+        slug,
+        timezone: "Asia/Singapore",
+        startsOn: "2027-04-01",
+        endsOn: "2027-04-01",
+      },
+      randomUUID(),
+    );
+    await sql`UPDATE competitions SET sport_code='badminton' WHERE id=${competition.id}`;
+    await sql`UPDATE competition_sport_settings SET
+      sport_code='badminton',pack_version=${SPORT_PACKS.badminton.version},
+      recommended_snapshot=${sql.json(SPORT_PACKS.badminton.recommendedSettings)},settings_override='{}'::jsonb
+      WHERE competition_id=${competition.id}`;
+    const open = await runtime.createDivision(actor, competition.id, { name: "Open", teamLimit: 8 }, randomUUID());
+    const [women] = await sql<{ id: string; name: string; team_limit: number }[]>`
+      INSERT INTO divisions(competition_id,name,team_limit)
+      VALUES(${competition.id},'Women',8)
+      RETURNING id,name,team_limit
+    `;
+    if (!women) throw new Error("Expected the second division fixture");
+    const openEntryResponse = await runtime.replaceEntries(
+      actor,
+      competition.id,
+      open.id,
+      Array.from({ length: 8 }, (_, index) => ({ name: `Open ${index + 1}`, seed: index + 1 })),
+      randomUUID(),
+    );
+    const womenEntryResponse = await runtime.replaceEntries(
+      actor,
+      competition.id,
+      women.id,
+      Array.from({ length: 8 }, (_, index) => ({ name: `Women ${index + 1}`, seed: index + 1 })),
+      randomUUID(),
+    );
+    await runtime.replaceCapacity(
+      actor,
+      competition.id,
+      [
+        {
+          name: "Court 1",
+          windows: [{ startsAt: "2027-04-01T00:00:00.000Z", endsAt: "2027-04-01T12:00:00.000Z" }],
+        },
+      ],
+      randomUUID(),
+    );
+    const openFormat = await runtime.generateFormat(actor, competition.id, open.id, randomUUID());
+    const womenFormat = await runtime.generateFormat(actor, competition.id, women.id, randomUUID());
+    const schedule = await runtime.generateSchedule(actor, competition.id, openFormat.id, randomUUID());
+    const [lastAssignment] = await sql<{ playing_area_id: string; ends_at: Date }[]>`
+      SELECT playing_area_id,ends_at FROM scheduled_matches
+      WHERE schedule_revision_id=${schedule.id}
+      ORDER BY ends_at DESC LIMIT 1
+    `;
+    if (!lastAssignment) throw new Error("Expected the Open division schedule");
+    for (const [index, match] of womenFormat.matches.entries()) {
+      const startsAt = new Date(lastAssignment.ends_at.getTime() + index * 30 * 60_000);
+      const endsAt = new Date(startsAt.getTime() + 30 * 60_000);
+      await sql`INSERT INTO scheduled_matches(
+        schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at
+      ) VALUES(
+        ${schedule.id},${match.id},${competition.id},${lastAssignment.playing_area_id},${startsAt},${endsAt}
+      )`;
+    }
+    const publishedAt = new Date();
+    await sql`UPDATE schedule_revisions
+      SET status='published',published_at=${publishedAt}
+      WHERE id=${schedule.id}`;
+    await sql`UPDATE competition_publications
+      SET published_schedule_revision_id=${schedule.id},schedule_version=1,
+          schedule_published_at=${publishedAt},updated_at=${publishedAt}
+      WHERE competition_id=${competition.id}`;
+    await sql`UPDATE competitions SET status='active',updated_at=${publishedAt} WHERE id=${competition.id}`;
+    await runtime.writePublicProjection(sql as unknown as PostgresJsSql, competition.id, 1, 0);
+
+    const openFirst = openFormat.matches[0];
+    const openSecond = openFormat.matches[1];
+    const womenFirst = womenFormat.matches[0];
+    if (!openFirst || !openSecond || !womenFirst) throw new Error("Expected first-round matches in both divisions");
+    await expect(finaliseBadmintonWalkover(openFirst.id)).resolves.toMatchObject({ result_version: 1 });
+    await expect(finaliseBadmintonWalkover(womenFirst.id)).resolves.toMatchObject({ result_version: 2 });
+    await expect(finaliseBadmintonWalkover(openSecond.id)).resolves.toMatchObject({ result_version: 3 });
+
+    const publicCompetition = await runtime.publicCompetition(slug);
+    expect(publicCompetition.publication).toEqual({ schedule_version: 1, result_version: 3 });
+    expect(publicCompetition.divisions.map((item) => item.division)).toEqual([
+      { id: open.id, name: "Open" },
+      { id: women.id, name: "Women" },
+    ]);
+
+    const packages = new Map(publicCompetition.divisions.map((item) => [item.division.id, item]));
+    const assertDivisionPackage = (
+      divisionId: string,
+      ownMatchIds: ReadonlySet<string>,
+      foreignMatchIds: ReadonlySet<string>,
+      ownEntryIds: ReadonlySet<string>,
+      foreignEntryIds: ReadonlySet<string>,
+      expectedResultIds: readonly string[],
+    ) => {
+      const item = packages.get(divisionId);
+      if (!item) throw new Error(`Missing public division package ${divisionId}`);
+      expect(item.schedule.map((match) => match.id).sort()).toEqual([...ownMatchIds].sort());
+      expect(item.results.map((match) => match.id).sort()).toEqual([...expectedResultIds].sort());
+      for (const match of [...item.schedule, ...item.results]) {
+        expect(foreignMatchIds.has(match.id)).toBe(false);
+        for (const participant of [match.home, match.away]) {
+          if (participant.id) {
+            expect(ownEntryIds.has(participant.id)).toBe(true);
+            expect(foreignEntryIds.has(participant.id)).toBe(false);
+          }
+        }
+      }
+      const standingEntryIds = nestedValues(item.standings, new Set(["entryId", "entry_id"]));
+      expect(new Set(standingEntryIds)).toEqual(ownEntryIds);
+      expect(standingEntryIds.some((id) => foreignEntryIds.has(id))).toBe(false);
+      const bracketReferences = nestedValues(
+        item.bracket,
+        new Set(["matchId", "match_id", "homeEntryId", "awayEntryId", "home_entry_id", "away_entry_id"]),
+      );
+      expect(bracketReferences.some((id) => foreignMatchIds.has(id) || foreignEntryIds.has(id))).toBe(false);
+    };
+
+    const openMatchIds = new Set(openFormat.matches.map((match) => match.id));
+    const womenMatchIds = new Set(womenFormat.matches.map((match) => match.id));
+    const openEntryIds = new Set(openEntryResponse.entries.map((entry) => entry.id));
+    const womenEntryIds = new Set(womenEntryResponse.entries.map((entry) => entry.id));
+    assertDivisionPackage(open.id, openMatchIds, womenMatchIds, openEntryIds, womenEntryIds, [
+      openFirst.id,
+      openSecond.id,
+    ]);
+    assertDivisionPackage(women.id, womenMatchIds, openMatchIds, womenEntryIds, openEntryIds, [womenFirst.id]);
+    expect(publicCompetition.division).toEqual({ id: open.id, name: "Open" });
+    expect(publicCompetition.schedule).toEqual(packages.get(open.id)?.schedule);
+    expect(publicCompetition.results).toEqual(packages.get(open.id)?.results);
   });
 
   it("preserves retirement play and applies frozen custom standings and walkover settings", async () => {
@@ -380,23 +579,17 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       ),
     ).resolves.toMatchObject({ duplicate: false, aggregate_version: 1 });
     const concurrentGoalIds = [randomUUID(), randomUUID()];
+    const concurrentGoalCommands = concurrentGoalIds.map((clientEventId, index) => ({
+      client_event_id: clientEventId,
+      type: "goal" as const,
+      occurred_at: new Date().toISOString(),
+      team_slot: "home" as const,
+      participant_id: `Player ${index + 1}`,
+      segment_number: 1,
+      manual_time_seconds: 25,
+    }));
     const concurrentGoals = await Promise.allSettled(
-      concurrentGoalIds.map((clientEventId, index) =>
-        runtime.appendCanonicalScoreEvent(
-          auth,
-          {
-            client_event_id: clientEventId,
-            type: "goal",
-            occurred_at: new Date().toISOString(),
-            team_slot: "home",
-            participant_id: `Player ${index + 1}`,
-            segment_number: 1,
-            manual_time_seconds: 25,
-          },
-          1,
-          randomUUID(),
-        ),
-      ),
+      concurrentGoalCommands.map((command) => runtime.appendCanonicalScoreEvent(auth, command, 1, randomUUID())),
     );
     const fulfilledGoal = concurrentGoals.find(
       (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof runtime.appendCanonicalScoreEvent>>> =>
@@ -460,6 +653,30 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
     const finalisationId = randomUUID();
     const finalised = await runtime.finalise(auth, finalisationId, randomUUID(), 3);
     expect(finalised).toMatchObject({ home_score: 1, away_score: 0, aggregate_version: 4 });
+    await expect(
+      runtime.appendCanonicalScoreEvent(
+        auth,
+        concurrentGoalCommands[concurrentGoals.indexOf(fulfilledGoal)]!,
+        1,
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({
+      duplicate: true,
+      event_id: goal.event_id,
+      sequence: goal.sequence,
+      aggregate_version: goal.aggregate_version,
+    });
+    await expect(
+      runtime.appendCanonicalScoreEvent(
+        auth,
+        {
+          ...concurrentGoalCommands[concurrentGoals.indexOf(fulfilledGoal)]!,
+          participant_id: "Changed after finalisation",
+        },
+        1,
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "IDEMPOTENCY_KEY_REUSED" });
     const publicScheduleBeforeCorrection = (await runtime.publicCompetition(competitionSlug)).schedule;
     const reopenId = randomUUID();
     const reopened = await runtime.reopenCanonicalMatch(
@@ -944,5 +1161,61 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: "SPORT_PACK_VERSION_UNSUPPORTED" });
     expect(await sql`SELECT match_id FROM match_score_streams WHERE match_id=${world.match.id}`).toEqual([]);
+  });
+
+  it("maps a database-time lease expiry during finalisation to a stable conflict", async () => {
+    const world = await createScoringWorld("basketball");
+    let version = 0;
+    const append = async (command: Record<string, unknown>) => {
+      const receipt = await runtime.appendCanonicalScoreEvent(
+        world.auth,
+        {
+          client_event_id: randomUUID(),
+          occurred_at: new Date().toISOString(),
+          ...command,
+        },
+        version,
+        randomUUID(),
+      );
+      version = receipt.aggregate_version;
+    };
+    await append({ type: "match_started" });
+    await append({
+      type: "three_point_score",
+      team_slot: "home",
+      participant_id: "Player 3",
+      segment_number: 1,
+      manual_time_seconds: 25,
+    });
+    for (const segment of [2, 3, 4]) {
+      await append({ type: "period_change", segment_number: segment, manual_time_seconds: 0 });
+    }
+    await sql`UPDATE match_writer_leases
+      SET acquired_at=clock_timestamp() - interval '2 seconds',
+          expires_at=clock_timestamp() - interval '1 second'
+      WHERE access_session_id=${world.auth.sessionId}`;
+    const databaseRaceRuntime = new Phase2Runtime(
+      sql as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      () => new Date("2000-01-01T00:00:00.000Z"),
+      undefined,
+      fallbackSecret,
+    );
+    const requestId = randomUUID();
+    await expect(databaseRaceRuntime.finalise(world.auth, randomUUID(), requestId, version)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "STALE_WRITER_GENERATION",
+    });
+    expect(
+      await sql`SELECT action,metadata->>'error_code' error_code
+        FROM audit_events WHERE request_id=${requestId}`,
+    ).toEqual([{ action: "scoring_result.finalise_denied", error_code: "STALE_WRITER_GENERATION" }]);
+    expect(
+      await sql`SELECT count(*)::integer count FROM canonical_score_events
+        WHERE match_id=${world.match.id} AND event_type='match_finalised'`,
+    ).toEqual([{ count: 0 }]);
+    expect(
+      await sql`SELECT count(*)::integer count FROM match_result_snapshots WHERE match_id=${world.match.id}`,
+    ).toEqual([{ count: 0 }]);
   });
 });

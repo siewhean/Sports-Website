@@ -13,6 +13,13 @@ type SportSeed = {
   homeName: string;
   awayName: string;
   accessToken: string;
+  secondaryDivision?: {
+    divisionId: string;
+    matchId: string;
+    homeName: string;
+    awayName: string;
+    accessToken: string;
+  };
   action: {
     eventType: string;
     accessibleName: string;
@@ -208,6 +215,17 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
   ]);
   await installConsoleGuard(page);
   const browserSports = [];
+  let multiDivisionBrowserOracle:
+    | {
+        competition_id: string;
+        primary_division_id: string;
+        secondary_division_id: string;
+        primary_result_versions: number[];
+        secondary_result_versions: number[];
+        public_packages_visible: boolean;
+        cross_division_names_absent: boolean;
+      }
+    | undefined;
   let conflictReviewed = false;
 
   for (const sport of seed.sports) {
@@ -244,6 +262,40 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     expect(firstFinal.result_version).toBe(1);
     observedResultVersions.push(firstFinal.result_version);
     observedSteps.push("finalised");
+    if (sport.secondaryDivision) {
+      const browser = page.context().browser();
+      if (!browser) throw new Error("C2 multi-division scorer requires a browser context");
+      const secondaryContext = await browser.newContext({
+        baseURL: seed.webOrigin,
+        ignoreHTTPSErrors: true,
+      });
+      const secondaryPage = await secondaryContext.newPage();
+      await installConsoleGuard(secondaryPage);
+      const secondarySport: SportSeed = {
+        ...sport,
+        divisionId: sport.secondaryDivision.divisionId,
+        matchId: sport.secondaryDivision.matchId,
+        homeName: sport.secondaryDivision.homeName,
+        awayName: sport.secondaryDivision.awayName,
+        accessToken: sport.secondaryDivision.accessToken,
+        secondaryDivision: undefined,
+        action: {
+          ...sport.action,
+          accessibleName: sport.action.accessibleName.replace(sport.homeName, sport.secondaryDivision.homeName),
+        },
+      };
+      await secondaryPage.goto(`/score#access=${encodeURIComponent(secondarySport.accessToken)}`);
+      await dismissConsent(secondaryPage);
+      await expect(secondaryPage).toHaveURL(`${seed.webOrigin}/score`);
+      await secondaryPage.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
+      await secondaryPage.getByRole("button", { name: "Start scoring" }).click();
+      await recordUiAction(secondaryPage, secondarySport);
+      await completeSport(secondaryPage, secondarySport, 2);
+      const secondaryFinal = await finaliseThroughUi(secondaryPage);
+      expect(secondaryFinal.result_version).toBe(2);
+      await assertConsoleGuard(secondaryPage, testInfo);
+      await secondaryContext.close();
+    }
 
     const auditPath = `/api/gate-c/competitions/${sport.competitionId}/matches/${sport.matchId}/scoring-audit`;
     let audit = await sameOriginJson<AuditDocument>(page, auditPath);
@@ -260,7 +312,7 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     await page.reload();
     await expect(page.getByRole("heading", { name: "Scoring event history" })).toBeVisible();
     const correction = await correctThroughUi(page, sport, target.event_id);
-    expect(correction.result_version).toBe(2);
+    expect(correction.result_version).toBe(sport.secondaryDivision ? 3 : 2);
     observedResultVersions.push(correction.result_version);
     observedSteps.push("organiser_correction");
     audit = await sameOriginJson<AuditDocument>(page, auditPath);
@@ -270,11 +322,11 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     await page.goto("/score");
     await expect(page.getByRole("button", { name: "Review final score" })).toBeVisible();
     const finalAfterReopen = await finaliseThroughUi(page);
-    expect(finalAfterReopen.result_version).toBe(3);
+    expect(finalAfterReopen.result_version).toBe(sport.secondaryDivision ? 4 : 3);
     observedResultVersions.push(finalAfterReopen.result_version);
     observedSteps.push("refinalised");
     audit = await sameOriginJson<AuditDocument>(page, auditPath);
-    expect(audit.result?.result_version).toBe(3);
+    expect(audit.result?.result_version).toBe(sport.secondaryDivision ? 4 : 3);
 
     await page.goto(`/organiser/competitions/${sport.competitionId}/results?match=${sport.matchId}`);
     await expect(page.getByRole("heading", { name: "Calculated tables" })).toBeVisible();
@@ -288,6 +340,26 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
       }),
     ).toBeVisible();
     observedSteps.push("audit_review");
+    if (sport.secondaryDivision) {
+      await page.goto(`/competitions/${sport.slug}`);
+      const primarySections = page.locator(`[data-division-id="${sport.divisionId}"]`);
+      const secondarySections = page.locator(`[data-division-id="${sport.secondaryDivision.divisionId}"]`);
+      await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Women", exact: true })).toBeVisible();
+      await expect(primarySections.filter({ hasText: sport.homeName }).first()).toBeVisible();
+      await expect(secondarySections.filter({ hasText: sport.secondaryDivision.homeName }).first()).toBeVisible();
+      await expect(primarySections.filter({ hasText: sport.secondaryDivision.homeName })).toHaveCount(0);
+      await expect(secondarySections.filter({ hasText: sport.homeName })).toHaveCount(0);
+      multiDivisionBrowserOracle = {
+        competition_id: sport.competitionId,
+        primary_division_id: sport.divisionId,
+        secondary_division_id: sport.secondaryDivision.divisionId,
+        primary_result_versions: observedResultVersions,
+        secondary_result_versions: [2],
+        public_packages_visible: true,
+        cross_division_names_absent: true,
+      };
+    }
     if (sport.downstreamMatchId) {
       const conflictSection = page.getByRole("heading", { name: "Critical downstream conflicts" }).locator("..");
       await expect(conflictSection).toContainText(sport.downstreamMatchId);
@@ -323,6 +395,7 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
         project_name: testInfo.project.name,
         sports: browserSports,
         conflict_review: { sport_id: "canoe_polo", status: "acknowledged" },
+        multi_division: multiDivisionBrowserOracle,
       },
       null,
       2,
