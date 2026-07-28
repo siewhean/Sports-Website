@@ -51,13 +51,17 @@ function offlinePackage(): GateCOfflineMatchPackage {
   };
 }
 
-function summaryRepository(): OfflineScoringRepository {
-  return {
-    getMatchPackage: vi.fn(async () => offlinePackage()),
+function summaryRepository() {
+  const matchPackage = offlinePackage();
+  const saveMatchPackage = vi.fn(async () => undefined);
+  const repository = {
+    getMatchPackage: vi.fn(async () => matchPackage),
+    saveMatchPackage,
     listCommands: vi.fn(async () => [queued]),
     listAcknowledgements: vi.fn(async () => []),
     listPendingCommands: vi.fn(async () => [queued]),
   } as unknown as OfflineScoringRepository;
+  return { repository, saveMatchPackage, matchPackage };
 }
 
 describe("offline scoring API port", () => {
@@ -97,12 +101,51 @@ describe("offline scoring API port", () => {
       ),
     );
 
+    const { repository } = summaryRepository();
     const port = new ApiOfflineScoringPort(
       "50000000-0000-4000-8000-000000000005",
       1,
       "gate-c-c3-v4",
-      summaryRepository(),
+      repository,
     );
     await expect(port.refreshAuthority(authorizationId)).resolves.toBe("authority_transferred");
+  });
+
+  it("persists renewed recording replay and pass windows after a successful refresh", async () => {
+    const renewed = {
+      authorization_id: authorizationId,
+      competition_id: offlinePackage().competition_id,
+      match_id: queued.match_id,
+      generation: queued.writer_generation,
+      recording_expires_at: "2026-07-28T04:30:00.000Z",
+      replay_expires_at: "2026-07-28T04:45:00.000Z",
+      pass_expires_at: "2026-07-28T05:00:00.000Z",
+      status: "active",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ offline: renewed, session: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const { repository, saveMatchPackage, matchPackage } = summaryRepository();
+    const port = new ApiOfflineScoringPort(
+      "50000000-0000-4000-8000-000000000005",
+      1,
+      "gate-c-c3-v4",
+      repository,
+    );
+    await expect(port.refreshAuthority(authorizationId)).resolves.toBe("active");
+    expect(saveMatchPackage).toHaveBeenCalledWith({
+      ...matchPackage,
+      recording_expires_at: renewed.recording_expires_at,
+      replay_expires_at: renewed.replay_expires_at,
+      pass_expires_at: renewed.pass_expires_at,
+      status: "active",
+    });
   });
 });
