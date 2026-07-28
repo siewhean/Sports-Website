@@ -1399,9 +1399,10 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     );
     const firstPublic = await phase2.publicCompetition("gate-b-complete-journey");
     expect(firstPublic.publication.schedule_version).toBe(1);
-    expect(firstPublic.schedule.find((match) => match.id === movable.match_id)?.starts_at).toBe(
-      new Date(movable.start_epoch_ms).toISOString(),
-    );
+    expect(
+      firstPublic.divisions.flatMap((division) => division.schedule).find((match) => match.id === movable.match_id)
+        ?.starts_at,
+    ).toBe(new Date(movable.start_epoch_ms).toISOString());
     expect((await phase2.publicCompetition("gate-b-complete-journey")).publication.schedule_version).toBe(1);
     expect(
       required(
@@ -1438,9 +1439,10 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     );
     const secondPublic = await phase2.publicCompetition("gate-b-complete-journey");
     expect(secondPublic.publication.schedule_version).toBe(2);
-    expect(secondPublic.schedule.find((match) => match.id === movable.match_id)?.starts_at).toBe(
-      new Date(validTarget.start_epoch_ms).toISOString(),
-    );
+    expect(
+      secondPublic.divisions.flatMap((division) => division.schedule).find((match) => match.id === movable.match_id)
+        ?.starts_at,
+    ).toBe(new Date(validTarget.start_epoch_ms).toISOString());
     expect(
       await client<{ id: string; status: string }[]>`
         SELECT id,status FROM schedule_revisions WHERE id IN (${accepted.id},${repaired.id}) ORDER BY revision`,
