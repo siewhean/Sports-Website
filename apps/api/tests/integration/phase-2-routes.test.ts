@@ -38,7 +38,11 @@ function routeRuntime() {
       access_passes: [{ id: randomUUID(), expires_at: "2026-08-01T00:00:00.000Z", revoked_at: null }],
     })),
     scoringSessionState: vi.fn(async () => ({
-      competition: { slug: "singapore-open" },
+      competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+      sport: {
+        pack_version: "phase2-canoe-polo-v1",
+        settings: { period_count: 2, period_duration_minutes: 10 },
+      },
       match: {
         id: randomUUID(),
         code: "group-A-r1-m1",
@@ -54,6 +58,7 @@ function routeRuntime() {
       },
       writer: { generation: 1, expires_at: "2026-08-01T00:00:00.000Z", read_only: false },
       score: { home: 1, away: 0 },
+      aggregate_version: 2,
       through_sequence: 2,
       events: [],
     })),
@@ -221,7 +226,11 @@ describe("Phase 2 Fastify route boundaries", () => {
     });
     expect(scoring.statusCode).toBe(200);
     expect(scoring.headers["cache-control"]).toBe("no-store, private");
-    expect(scoring.json()).toMatchObject({ competition: { slug: "singapore-open" } });
+    expect(scoring.json()).toMatchObject({
+      competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+      sport: { pack_version: "phase2-canoe-polo-v1" },
+      aggregate_version: 2,
+    });
 
     const rawAccessToken = "q".repeat(43);
     const rawDeviceId = "d".repeat(43);
