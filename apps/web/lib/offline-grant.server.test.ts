@@ -5,6 +5,7 @@ import {
   OfflineGrantSealer,
   offlineGrantCookie,
 } from "./offline-grant.server";
+import { InvalidScoringSessionError, ScoringSessionSealer } from "./scoring-session.server";
 
 const KEY = Buffer.alloc(32, 7).toString("base64url");
 const NOW = Date.parse("2026-07-28T00:00:00.000Z");
@@ -21,6 +22,25 @@ describe("offline grant cookie", () => {
     const sealed = sealer.seal(CREDENTIAL);
     expect(sealer.open(sealed)).toEqual(CREDENTIAL);
     expect(() => sealer.open(`${sealed.slice(0, -1)}x`)).toThrow(InvalidOfflineGrantError);
+  });
+
+  it("derives a protocol-specific key that cannot open scoring-session ciphertext", () => {
+    const sessionSealer = new ScoringSessionSealer(KEY, () => NOW);
+    const offlineSealer = new OfflineGrantSealer(KEY, () => NOW);
+    const session = sessionSealer.seal({
+      sessionId: "00000000-0000-4000-8000-000000000011",
+      sessionToken: "s".repeat(43),
+      mode: "writer",
+      permissions: ["score:read", "score:write"],
+      generation: 1,
+      matchId: CREDENTIAL.matchId,
+      expiresAt: "2026-07-28T00:30:00.000Z",
+      leaseExpiresAt: "2026-07-28T00:00:45.000Z",
+    });
+    const offline = offlineSealer.seal(CREDENTIAL);
+
+    expect(() => offlineSealer.open(session)).toThrow(InvalidOfflineGrantError);
+    expect(() => sessionSealer.open(offline)).toThrow(InvalidScoringSessionError);
   });
 
   it("uses the __Secure prefix with the narrow offline BFF path", () => {
