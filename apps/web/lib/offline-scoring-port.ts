@@ -167,8 +167,12 @@ export class ApiOfflineScoringPort implements OfflineReplayPort {
     private readonly deviceId: string,
     private readonly indexeddbSchemaVersion: number,
     private readonly serviceWorkerVersion: string,
-    private readonly repository: OfflineScoringRepository = new IndexedDbOfflineScoringRepository(),
+    private readonly repository?: OfflineScoringRepository,
   ) {}
+
+  private replayRepository(): OfflineScoringRepository {
+    return this.repository ?? new IndexedDbOfflineScoringRepository();
+  }
 
   async establishAuthority(
     summary: GateCOfflineQueueSummary,
@@ -202,7 +206,7 @@ export class ApiOfflineScoringPort implements OfflineReplayPort {
 
   async refreshAuthority(authorizationId: string): Promise<boolean> {
     try {
-      const summary = await offlineQueueSummary(this.repository, authorizationId);
+      const summary = await offlineQueueSummary(this.replayRepository(), authorizationId);
       const result = await this.establishAuthority(summary, "resume");
       return result.offline.authorization_id === authorizationId && result.offline.status === "active";
     } catch {
