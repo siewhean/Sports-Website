@@ -7,12 +7,13 @@ import type {
   GateCOfflineQueuedCommand,
 } from "@matchday/contracts";
 import { canonicalOfflineJson } from "@matchday/domain";
-import type { OfflineConflict, OfflineScoringRepository } from "./types";
+import type { OfflineConflict, OfflineReplayAttempt, OfflineReplayState, OfflineScoringRepository } from "./types";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SERVICE_WORKER_VERSION = "gate-c-c3-v4";
 
 export type OfflineDiagnosticDocument = Readonly<{
-  export_version: 1;
+  export_version: 2;
   generated_at: string;
   authorization: {
     authorization_id: string;
@@ -21,7 +22,12 @@ export type OfflineDiagnosticDocument = Readonly<{
     sport_code: string;
     sport_pack_version: string;
     writer_generation: number;
-    schema_version: number;
+    indexeddb_schema_version: number;
+    service_worker_version: string;
+    settings_fingerprint: string;
+    queue_fingerprint: string;
+    last_server_confirmed_sequence: number;
+    last_server_confirmed_aggregate_version: number;
     authorized_at: string;
     recording_expires_at: string;
     replay_expires_at: string;
@@ -31,9 +37,12 @@ export type OfflineDiagnosticDocument = Readonly<{
     local_sequence: number;
     writer_generation: number;
     enqueued_at: string;
+    command_fingerprint: string;
     command: GateCOfflineCanonicalCommand;
   }>[];
   acknowledgements: readonly GateCOfflineAcknowledgement[];
+  replay_attempts: readonly Omit<OfflineReplayAttempt, "id">[];
+  replay_state: Omit<OfflineReplayState, "owner_id"> | null;
   conflicts: readonly Omit<OfflineConflict, "id">[];
 }>;
 
@@ -73,11 +82,22 @@ export async function buildOfflineDiagnosticDocument(
   matchPackage: GateCOfflineMatchPackage,
   commands: readonly GateCOfflineQueuedCommand[],
   acknowledgements: readonly GateCOfflineAcknowledgement[],
+  replayAttempts: readonly OfflineReplayAttempt[],
   conflicts: readonly OfflineConflict[],
   generatedAt: string,
+  replayState: OfflineReplayState | null = null,
 ): Promise<OfflineDiagnosticDocument> {
+  const sortedCommands = commands.toSorted((left, right) => left.local_sequence - right.local_sequence);
+  const sortedAcknowledgements = acknowledgements.toSorted(
+    (left, right) => left.local_sequence - right.local_sequence,
+  );
+  const queueFingerprint = await sha256(canonicalOfflineJson({
+    commands: sortedCommands,
+    acknowledgements: sortedAcknowledgements,
+  }));
+  const settingsFingerprint = await sha256(canonicalOfflineJson(matchPackage.settings));
   return {
-    export_version: 1,
+    export_version: 2,
     generated_at: generatedAt,
     authorization: {
       authorization_id: matchPackage.authorization_id,
@@ -86,25 +106,42 @@ export async function buildOfflineDiagnosticDocument(
       sport_code: matchPackage.sport_code,
       sport_pack_version: matchPackage.sport_pack_version,
       writer_generation: matchPackage.writer_generation,
-      schema_version: matchPackage.schema_version,
+      indexeddb_schema_version: matchPackage.schema_version,
+      service_worker_version: SERVICE_WORKER_VERSION,
+      settings_fingerprint: settingsFingerprint,
+      queue_fingerprint: queueFingerprint,
+      last_server_confirmed_sequence: matchPackage.last_acknowledged_sequence,
+      last_server_confirmed_aggregate_version: matchPackage.last_acknowledged_aggregate_version,
       authorized_at: matchPackage.authorized_at,
       recording_expires_at: matchPackage.recording_expires_at,
       replay_expires_at: matchPackage.replay_expires_at,
       status: matchPackage.status,
     },
     canonical_commands: await Promise.all(
-      commands
-        .toSorted((left, right) => left.local_sequence - right.local_sequence)
-        .map(async ({ local_sequence, writer_generation, enqueued_at, command }) => ({
-          local_sequence,
-          writer_generation,
-          enqueued_at,
-          command: await sanitizedCommand(command),
-        })),
+      sortedCommands.map(async ({ local_sequence, writer_generation, enqueued_at, command }) => ({
+        local_sequence,
+        writer_generation,
+        enqueued_at,
+        command_fingerprint: await sha256(canonicalOfflineJson(command)),
+        command: await sanitizedCommand(command),
+      })),
     ),
-    acknowledgements: acknowledgements
-      .toSorted((left, right) => left.local_sequence - right.local_sequence)
-      .map(({ ...acknowledgement }) => acknowledgement),
+    acknowledgements: sortedAcknowledgements.map(({ ...acknowledgement }) => acknowledgement),
+    replay_attempts: replayAttempts
+      .toSorted((left, right) =>
+        left.local_sequence === right.local_sequence
+          ? left.attempt - right.attempt
+          : left.local_sequence - right.local_sequence,
+      )
+      .map(({ id: _id, ...attempt }) => attempt),
+    replay_state: replayState
+      ? {
+          authorization_id: replayState.authorization_id,
+          epoch: replayState.epoch,
+          lease_expires_at: replayState.lease_expires_at,
+          updated_at: replayState.updated_at,
+        }
+      : null,
     conflicts: conflicts
       .toSorted((left, right) => left.local_sequence - right.local_sequence)
       .map(
@@ -124,19 +161,23 @@ export async function createOfflineDiagnosticExport(
   authorizationId: string,
   now: number = Date.now(),
 ): Promise<{ document: OfflineDiagnosticDocument; json: string; sha256: string }> {
-  const [matchPackage, commands, acknowledgements, conflicts] = await Promise.all([
+  const [matchPackage, commands, acknowledgements, replayAttempts, conflicts, replayState] = await Promise.all([
     repository.getMatchPackage(authorizationId),
     repository.listCommands(authorizationId),
     repository.listAcknowledgements(authorizationId),
+    repository.listReplayAttempts(authorizationId),
     repository.listConflicts(authorizationId),
+    repository.getReplayState?.(authorizationId) ?? Promise.resolve(null),
   ]);
   if (!matchPackage) throw new Error("Offline match authorization is unavailable.");
   const document = await buildOfflineDiagnosticDocument(
     matchPackage,
     commands,
     acknowledgements,
+    replayAttempts,
     conflicts,
     new Date(now).toISOString(),
+    replayState,
   );
   const json = canonicalOfflineJson(document);
   const checksum = await sha256(json);
