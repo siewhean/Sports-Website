@@ -1,0 +1,1 @@
+The C2 archives preserve the original source-preparation handoff. Subsequent local commits applied and adjusted these packs; consult the implementation branch history for the current source of truth.
