@@ -1,60 +1,11 @@
 -- Gate C3 durable offline scoring authority.
 -- Resume verifiers are stored only as fixed-length hashes. An active authority
 -- reserves its writer generation after the short writer lease has elapsed.
-
--- Earlier Phase2Runtime evidence writes passed JSON.stringify output through
--- postgres-js into jsonb casts, which can retain object payloads and audit
--- states as JSONB strings. Repair only values whose inner text parses as a
--- JSON object. Per-row exception handling leaves arbitrary strings and
--- non-object JSON values untouched.
-ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update;
-
-DO $$
-DECLARE
-  candidate record;
-  parsed jsonb;
-BEGIN
-  FOR candidate IN
-    SELECT id,payload #>> '{}' AS inner_value
-    FROM outbox_events
-    WHERE jsonb_typeof(payload)='string'
-  LOOP
-    BEGIN
-      parsed := candidate.inner_value::jsonb;
-    EXCEPTION WHEN invalid_text_representation THEN
-      CONTINUE;
-    END;
-    IF jsonb_typeof(parsed)='object' THEN
-      UPDATE outbox_events SET payload=parsed WHERE id=candidate.id;
-    END IF;
-  END LOOP;
-
-  FOR candidate IN
-    SELECT id,'before_state' AS column_name,before_state #>> '{}' AS inner_value
-    FROM audit_events
-    WHERE jsonb_typeof(before_state)='string'
-    UNION ALL
-    SELECT id,'after_state' AS column_name,after_state #>> '{}' AS inner_value
-    FROM audit_events
-    WHERE jsonb_typeof(after_state)='string'
-  LOOP
-    BEGIN
-      parsed := candidate.inner_value::jsonb;
-    EXCEPTION WHEN invalid_text_representation THEN
-      CONTINUE;
-    END;
-    IF jsonb_typeof(parsed)='object' THEN
-      IF candidate.column_name='before_state' THEN
-        UPDATE audit_events SET before_state=parsed WHERE id=candidate.id;
-      ELSE
-        UPDATE audit_events SET after_state=parsed WHERE id=candidate.id;
-      END IF;
-    END IF;
-  END LOOP;
-END;
-$$;
-
-ALTER TABLE audit_events ENABLE TRIGGER audit_events_no_update;
+--
+-- Historical audit and outbox values are intentionally left byte-for-byte
+-- unchanged. Legacy JSONB strings are normalised only at read boundaries so
+-- this migration never disables append-only guards or rewrites retained
+-- evidence.
 
 ALTER TABLE scoring_access_sessions
   ADD COLUMN reported_pending_local_sequence integer NOT NULL DEFAULT 0,
