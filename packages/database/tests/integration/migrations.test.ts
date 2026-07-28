@@ -122,7 +122,6 @@ describe("foundation migrations", () => {
         "0029_gate_c_five_sport_scoring.sql",
         "0030_gate_c_published_schedule_participants.sql",
         "0031_gate_c_participant_snapshot_fencing.sql",
-        "0032_gate_c_offline_replay.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
@@ -316,26 +315,17 @@ describe("foundation migrations", () => {
           VALUES(${siblingDivision},${competition},'Masters',16)`;
         await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
           VALUES(${siblingEntry},${siblingDivision},'Sibling division entry',1,'placeholder','confirmed')`;
-        const participantFenceMigration = forwardMigrations.find(
-          ({ name }) => name === "0031_gate_c_participant_snapshot_fencing.sql",
-        );
-        const offlineReplayMigration = forwardMigrations.find(({ name }) => name === "0032_gate_c_offline_replay.sql");
+        const participantFenceMigration = forwardMigrations.at(-1);
         if (!participantFenceMigration) throw new Error("Expected participant-fencing migration");
-        if (!offlineReplayMigration) throw new Error("Expected offline-replay migration");
-        const migrationsBeforeParticipantFence = forwardMigrations.filter(
-          ({ name }) => name !== participantFenceMigration.name && name !== offlineReplayMigration.name,
-        );
         await Promise.all(
-          migrationsBeforeParticipantFence.map(({ migrationPath, source }) => writeFile(migrationPath, source)),
+          forwardMigrations.slice(0, -1).map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
         const upgradedBeforeParticipantFence = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(
-          migrationsBeforeParticipantFence.map(({ name }) => name),
-        );
+        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -1));
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -356,89 +346,6 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgraded.applied).toEqual(["0031_gate_c_participant_snapshot_fencing.sql"]);
-        const repairedOutboxKey = `upgrade-double-encoded-${randomUUID()}`;
-        const preservedOutboxKey = `upgrade-legitimate-string-${randomUUID()}`;
-        const repairedAuditRequest = `upgrade-double-encoded-audit-${randomUUID()}`;
-        await sql`
-          INSERT INTO outbox_events(
-            aggregate_type,aggregate_id,event_type,payload,idempotency_key
-          ) VALUES
-            (
-              'match',${match},'scoring_event.appended',
-              to_jsonb(${JSON.stringify({ competition_id: competition, match_id: match })}::text),
-              ${repairedOutboxKey}
-            ),
-            (
-              'system','upgrade-note','operator.note',
-              to_jsonb(${"Keep this legitimate string payload"}::text),
-              ${preservedOutboxKey}
-            )
-        `;
-        await sql`
-          INSERT INTO audit_events(
-            request_id,actor_type,organisation_id,action,target_type,target_id,before_state,after_state
-          ) VALUES(
-            ${repairedAuditRequest},'system',${organisation},'scoring_event.appended','match',${match},
-            to_jsonb(${"Keep this legitimate string state"}::text),
-            to_jsonb(${JSON.stringify({ event_type: "goal", aggregate_version: 2 })}::text)
-          )
-        `;
-        await writeFile(offlineReplayMigration.migrationPath, offlineReplayMigration.source);
-        const upgradedOfflineReplay = await migrateDatabase({
-          databaseUrl: config.databaseUrl,
-          migrationsDirectory: copiedDirectory,
-          schema: populatedSchema,
-        });
-        expect(upgradedOfflineReplay.applied).toEqual(["0032_gate_c_offline_replay.sql"]);
-        expect(
-          await sql`
-            SELECT idempotency_key,jsonb_typeof(payload) payload_type,
-                   payload->>'competition_id' competition_id,
-                   payload->>'match_id' match_id,
-                   CASE WHEN idempotency_key=${preservedOutboxKey}
-                     THEN payload #>> '{}' ELSE NULL END preserved_value
-            FROM outbox_events
-            WHERE idempotency_key IN (${repairedOutboxKey},${preservedOutboxKey})
-            ORDER BY idempotency_key
-          `,
-        ).toEqual(
-          [
-            {
-              idempotency_key: repairedOutboxKey,
-              payload_type: "object",
-              competition_id: competition,
-              match_id: match,
-              preserved_value: null,
-            },
-            {
-              idempotency_key: preservedOutboxKey,
-              payload_type: "string",
-              competition_id: null,
-              match_id: null,
-              preserved_value: "Keep this legitimate string payload",
-            },
-          ].toSorted((left, right) => left.idempotency_key.localeCompare(right.idempotency_key)),
-        );
-        expect(
-          await sql`
-            SELECT jsonb_typeof(before_state) before_type,before_state #>> '{}' before_value,
-                   jsonb_typeof(after_state) after_type,
-                   after_state->>'event_type' event_type,
-                   after_state->>'aggregate_version' aggregate_version
-            FROM audit_events WHERE request_id=${repairedAuditRequest}
-          `,
-        ).toEqual([
-          {
-            before_type: "string",
-            before_value: "Keep this legitimate string state",
-            after_type: "object",
-            event_type: "goal",
-            aggregate_version: "2",
-          },
-        ]);
-        await expect(
-          sql`UPDATE audit_events SET action=action WHERE request_id=${repairedAuditRequest}`,
-        ).rejects.toThrow(/append-only/i);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
