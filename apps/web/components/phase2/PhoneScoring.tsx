@@ -12,6 +12,7 @@ import {
   UserCircle,
   Warning,
 } from "@phosphor-icons/react";
+import { gateCOfflineQueueLimit, gateCOfflineQueueWarningCount } from "@matchday/contracts";
 import type { SportId } from "@matchday/domain";
 import { translate as t } from "@matchday/ui";
 import { phase2Copy, phase2Machine, type ScoringEventCommand, type ScoringSessionView } from "@/lib/phase2";
@@ -20,16 +21,63 @@ import { buildFiveSportScorecardDefinition } from "@/lib/five-sport-scorecard";
 import type { ScoreControlAction } from "@/lib/five-sport-score-control-actions";
 import { getScoringDeviceIdentity, renameScoringDevice } from "@/lib/scoring-device";
 import {
+  IndexedDbOfflineScoringRepository,
+  OfflineReplayController,
+  createOfflineDiagnosticExport,
+  type OfflineScoringRepository,
+} from "@/lib/offline-scoring";
+import {
+  enqueueOfflineEvent,
+  enqueueOfflineFinalisation,
+  OfflineReconnectSingleFlight,
+  reconcileOfflineReplayRecovery,
+  recoverOfflineScoringSession,
+  saveOfflineMatchPackage,
+} from "@/lib/offline-scoring-coordinator";
+import { ApiOfflineScoringPort, emptyOfflineQueueSummary, offlineQueueSummary } from "@/lib/offline-scoring-port";
+import {
+  assertScoringWorkerTransitionAllowed,
+  guardScoringWorkerTransport,
+  isScoringWorkerSafetyFrozen,
+  prepareOfflineScoringShell,
+  runScoringWorkerTransition,
+  scoringWorkerFreezeAllowedOfflineMethods,
+  ScoringWorkerSafetyFrozenError,
+  scoringWorkerVersion,
+} from "@/lib/scoring-service-worker";
+import {
   canonicalSegmentNumber,
   createScoringCommandPort,
+  recoveredOfflineState,
   refreshScoringSessionAccess,
+  scoringMutationIsLocked,
   scoringSessionAnnouncement,
   scoringWriterAvailability,
   ScoringTransportError,
+  terminalOfflineQueueState,
 } from "@/lib/phase2-scoring";
 import { LatestRequestFence } from "@/lib/latest-request";
 
 type ScoringPhase = "access" | "confirm" | "live" | "review" | "receipt";
+type OfflineState =
+  | "online"
+  | "preparing"
+  | "offline-ready"
+  | "offline-recording"
+  | "pending-sync"
+  | "reconnecting"
+  | "replaying"
+  | "pending-finalisation"
+  | "conflict"
+  | "expired"
+  | "revoked"
+  | "read-only"
+  | "storage-error";
+type OfflineResources = {
+  repository: OfflineScoringRepository;
+  port: ApiOfflineScoringPort;
+  replay: OfflineReplayController;
+};
 type WriterState =
   | "active"
   | "candidate"
@@ -91,7 +139,10 @@ export function PhoneScoring({
   recoverOnLoad = true,
   demoSportId = phase2Machine.canoePolo,
 }: PhoneScoringProps) {
-  const port = useMemo(() => createScoringCommandPort(mode, demoSportId), [demoSportId, mode]);
+  const port = useMemo(
+    () => guardScoringWorkerTransport(createScoringCommandPort(mode, demoSportId)),
+    [demoSportId, mode],
+  );
   const [phase, setPhase] = useState<ScoringPhase>(phase2Machine.access);
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState("");
@@ -108,6 +159,13 @@ export function PhoneScoring({
   const [scoreState, setScoreState] = useState<ScoringSessionView["scoreState"]>(initialScoreState);
   const [writerState, setWriterState] = useState<WriterState>(initialWriterState);
   const [pendingSync, setPendingSync] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [offlineState, setOfflineState] = useState<OfflineState>(phase2Machine.offlineOnline);
+  const [offlineAuthorizationId, setOfflineAuthorizationId] = useState<string | null>(null);
+  const [offlineRecordingExpiresAt, setOfflineRecordingExpiresAt] = useState<string | null>(null);
+  const [offlineReplayExpiresAt, setOfflineReplayExpiresAt] = useState<string | null>(null);
+  const [diagnosticExportSha, setDiagnosticExportSha] = useState<string | null>(null);
+  const [replayRequest, setReplayRequest] = useState(0);
   const [throughSequence, setThroughSequence] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const [interactionError, setInteractionError] = useState("");
@@ -132,6 +190,8 @@ export function PhoneScoring({
   const [actionPending, setActionPending] = useState(false);
   const [reversedFocusId, setReversedFocusId] = useState<string | null>(null);
   const actionDialogRef = useRef<HTMLDialogElement>(null);
+  const signOutDialogRef = useRef<HTMLDialogElement>(null);
+  const endSessionButtonRef = useRef<HTMLButtonElement>(null);
   const actionReturnTargetRef = useRef<HTMLButtonElement | null>(null);
   const scorerInputRef = useRef<HTMLInputElement>(null);
   const actionDialogTitleRef = useRef<HTMLHeadingElement>(null);
@@ -148,11 +208,22 @@ export function PhoneScoring({
   const interactionErrorRef = useRef<HTMLElement>(null);
   const editDeviceButtonRef = useRef<HTMLButtonElement>(null);
   const deviceLabelInputRef = useRef<HTMLInputElement>(null);
+  const offlineResourcesRef = useRef<OfflineResources | null>(null);
+  const offlineReconnectRef = useRef(new OfflineReconnectSingleFlight());
+  const offlineReplayAbortRef = useRef<AbortController | null>(null);
+  const componentMountedRef = useRef(false);
+  const offlineStatusRef = useRef<HTMLElement>(null);
 
   const definition = scorecardDefinition;
   const manualTimeEnabled = definition.fields.some((field) => field.id === "manual_event_time" && field.enabled);
   const score = { home: scoreState.home, away: scoreState.away };
-  const locked = writerState !== "active";
+  const locked = scoringMutationIsLocked({
+    writerState,
+    offlineState,
+    hasOfflineAuthorization: offlineAuthorizationId !== null,
+    pendingCount,
+    queueLimit: gateCOfflineQueueLimit,
+  });
   const writerTitle =
     writerState === phase2Machine.active
       ? phase2Copy.writerActive
@@ -176,6 +247,7 @@ export function PhoneScoring({
 
   const applySession = useCallback((session: ScoringSessionView | null) => {
     if (!session) return;
+    assertScoringWorkerTransitionAllowed();
     const previousState = writerStateRef.current;
     setCompetitionSlug(session.competitionSlug);
     setScorecardDefinition(buildFiveSportScorecardDefinition(session.sportId, session.sportSettings));
@@ -223,6 +295,98 @@ export function PhoneScoring({
             : phase2Machine.transferred;
     }
   }, []);
+
+  const offlineResources = useCallback(async (): Promise<OfflineResources> => {
+    if (offlineResourcesRef.current) return offlineResourcesRef.current;
+    const device = await getScoringDeviceIdentity();
+    const repository = new IndexedDbOfflineScoringRepository();
+    const offlinePort = guardScoringWorkerTransport(new ApiOfflineScoringPort(device.id, 1, scoringWorkerVersion), {
+      allowDuringFreeze: scoringWorkerFreezeAllowedOfflineMethods,
+    });
+    const resources = {
+      repository,
+      port: offlinePort,
+      replay: new OfflineReplayController({ repository, port: offlinePort }),
+    };
+    offlineResourcesRef.current = resources;
+    return resources;
+  }, []);
+
+  const applyOfflineProjection = useCallback(
+    (session: ScoringSessionView, authorizationId: string, count: number, state: OfflineState) => {
+      applySession(session);
+      setOfflineAuthorizationId(authorizationId);
+      setPendingCount(count);
+      setPendingSync(count > 0);
+      setOfflineState(state);
+      setPhase("live");
+    },
+    [applySession],
+  );
+
+  const prepareOfflineAuthority = useCallback(
+    (session: ScoringSessionView) =>
+      runScoringWorkerTransition(async () => {
+        if (mode !== phase2Machine.scoringApiMode || session.mode !== "writer" || session.readOnly) return;
+        setOfflineState(phase2Machine.offlinePreparing);
+        const resources = await offlineResources();
+        const summary = await emptyOfflineQueueSummary(session.matchId, session.throughSequence);
+        const result = await resources.port.establishAuthority(summary, phase2Machine.offlinePrepareIntent);
+        const authoritative = result.session ?? session;
+        const matchPackage = await saveOfflineMatchPackage(resources.repository, authoritative, result.offline);
+        await prepareOfflineScoringShell();
+        setOfflineAuthorizationId(matchPackage.authorization_id);
+        setOfflineRecordingExpiresAt(matchPackage.recording_expires_at);
+        setOfflineReplayExpiresAt(matchPackage.replay_expires_at);
+        setPendingCount(0);
+        setPendingSync(false);
+        setOfflineState(phase2Machine.offlineReady);
+        setAnnouncement(phase2Copy.offlinePreparedAnnouncement);
+      }),
+    [mode, offlineResources],
+  );
+
+  const recoverStoredOfflineSession = useCallback(async () => {
+    assertScoringWorkerTransitionAllowed();
+    try {
+      const resources = await offlineResources();
+      const recovered = await recoverOfflineScoringSession(resources.repository);
+      if (!recovered) return false;
+      const recoveredState: OfflineState = recoveredOfflineState({
+        status: recovered.matchPackage.status,
+        recordingExpiresAt: recovered.matchPackage.recording_expires_at,
+        replayExpiresAt: recovered.matchPackage.replay_expires_at,
+        passExpiresAt: recovered.matchPackage.pass_expires_at,
+        pendingCount: recovered.pendingCount,
+      });
+      applyOfflineProjection(
+        recovered.session,
+        recovered.matchPackage.authorization_id,
+        recovered.pendingCount,
+        recoveredState,
+      );
+      setOfflineRecordingExpiresAt(recovered.matchPackage.recording_expires_at);
+      setOfflineReplayExpiresAt(recovered.matchPackage.replay_expires_at);
+      setAnnouncement(
+        recoveredState === phase2Machine.readOnly
+          ? phase2Copy.transferredBody
+          : recoveredState === phase2Machine.revoked
+            ? phase2Copy.sessionRevoked
+            : recoveredState === phase2Machine.expired
+              ? phase2Copy.offlineExpiredTitle
+              : recovered.pendingCount > 0
+                ? phase2Copy.offlinePendingAnnouncement(recovered.pendingCount)
+                : phase2Copy.offlineRestoredAnnouncement,
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof ScoringWorkerSafetyFrozenError) return false;
+      setOfflineState(phase2Machine.offlineStorageError);
+      setAnnouncement(phase2Copy.offlineStorageRecoveryError);
+      window.requestAnimationFrame(() => offlineStatusRef.current?.focus({ preventScroll: true }));
+      return true;
+    }
+  }, [applyOfflineProjection, offlineResources]);
 
   useEffect(() => {
     const pendingFocus = pendingWriterFocusRef.current;
@@ -319,9 +483,14 @@ export function PhoneScoring({
         applySession(session);
         setPhase("live");
       })
-      .catch((error: unknown) => handleTransportError(error))
+      .catch(async (error: unknown) => {
+        if ((error instanceof ScoringTransportError && error.state === "unavailable") || !navigator.onLine) {
+          if (await recoverStoredOfflineSession()) return;
+        }
+        handleTransportError(error);
+      })
       .finally(() => setAccessChecking(false));
-  }, [applySession, handleTransportError, port, recoverOnLoad]);
+  }, [applySession, handleTransportError, port, recoverOnLoad, recoverStoredOfflineSession]);
 
   useEffect(() => {
     if (phase !== "live" && phase !== "review") return;
@@ -352,6 +521,12 @@ export function PhoneScoring({
           },
         );
       } catch (error) {
+        if (
+          ((error instanceof ScoringTransportError && error.state === "unavailable") || !navigator.onLine) &&
+          (await recoverStoredOfflineSession())
+        ) {
+          return;
+        }
         handleTransportError(error);
       }
     };
@@ -370,6 +545,7 @@ export function PhoneScoring({
     scheduleRefresh();
     const visibility = () => {
       if (document.visibilityState !== "visible") return;
+      if (isScoringWorkerSafetyFrozen()) return;
       if (writerStateRef.current === phase2Machine.active) {
         writerStateRef.current = phase2Machine.expiring;
         setWriterState(phase2Machine.expiring);
@@ -385,7 +561,7 @@ export function PhoneScoring({
       window.clearTimeout(refreshTimer);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [applySession, handleTransportError, pendingSync, phase, port, throughSequence]);
+  }, [applySession, handleTransportError, pendingSync, phase, port, recoverStoredOfflineSession, throughSequence]);
 
   useEffect(() => {
     if ((!pendingAction && !reversalTarget) || !actionDialogRef.current) return;
@@ -416,6 +592,124 @@ export function PhoneScoring({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [reversedFocusId, scoreState.actions]);
+
+  useEffect(() => {
+    componentMountedRef.current = true;
+    return () => {
+      componentMountedRef.current = false;
+      offlineReplayAbortRef.current?.abort();
+      offlineReplayAbortRef.current = null;
+    };
+  }, []);
+
+  const reconnectAndReplay = useCallback(() => {
+    if (!offlineAuthorizationId || mode !== phase2Machine.scoringApiMode) return Promise.resolve();
+    return offlineReconnectRef.current.run(async () => {
+      if (isScoringWorkerSafetyFrozen()) return;
+      const replayAbort = new AbortController();
+      offlineReplayAbortRef.current = replayAbort;
+      try {
+        if (!componentMountedRef.current) return;
+        setOfflineState(phase2Machine.offlineReconnecting);
+        setAnnouncement(phase2Copy.offlineReconnectAnnouncement);
+        const resources = await offlineResources();
+        const summary = await offlineQueueSummary(resources.repository, offlineAuthorizationId);
+        const authority = await resources.port.establishAuthority(summary);
+        if (!componentMountedRef.current) return;
+        if (authority.session) applySession(authority.session);
+        setOfflineState(phase2Machine.offlineReplaying);
+        setAnnouncement(phase2Copy.offlineReplayAnnouncement(summary.pending_count));
+        const result = await resources.replay.replay(offlineAuthorizationId, replayAbort.signal);
+        if (!componentMountedRef.current) return;
+        const remaining = await resources.repository.listPendingCommands(offlineAuthorizationId);
+        setPendingCount(remaining.length);
+        setPendingSync(remaining.length > 0);
+        if (result.status === "blocked") {
+          const state: OfflineState =
+            result.error?.code === "authority_expired" || result.error?.code === "pass_expired"
+              ? phase2Machine.expired
+              : result.error?.code === "authority_revoked"
+                ? phase2Machine.revoked
+                : phase2Machine.conflict;
+          setOfflineState(state);
+          setAnnouncement(phase2Copy.offlineReplayStopped);
+          return;
+        }
+        if (result.status !== "complete") {
+          setOfflineState(
+            result.status === "offline" ? phase2Machine.offlinePendingSync : phase2Machine.offlineReconnecting,
+          );
+          return;
+        }
+        const authoritative = await port.recoverSession();
+        if (!authoritative) throw new Error(phase2Copy.offlineAuthoritativeUnavailable);
+        if (!componentMountedRef.current) return;
+        applySession(authoritative);
+        const replayFinalReceipt = await reconcileOfflineReplayRecovery(
+          resources.repository,
+          authoritative,
+          authority.offline,
+        );
+        if (!componentMountedRef.current) return;
+        setOfflineState(phase2Machine.offlineReady);
+        setAnnouncement(phase2Copy.offlineReplayComplete);
+        if (replayFinalReceipt) {
+          setFinalReceipt(replayFinalReceipt);
+          setPhase("receipt");
+        }
+      } catch (error) {
+        if (!componentMountedRef.current) return;
+        if (replayAbort.signal.aborted) return;
+        if (error instanceof ScoringWorkerSafetyFrozenError) return;
+        if (error instanceof ScoringTransportError) {
+          setOfflineState(
+            error.code === "OFFLINE_AUTHORIZATION_REVOKED"
+              ? phase2Machine.revoked
+              : error.code === "OFFLINE_AUTHORIZATION_EXPIRED"
+                ? phase2Machine.expired
+                : error.code === "OFFLINE_AUTHORIZATION_TRANSFERRED" || error.code === "STALE_WRITER_GENERATION"
+                  ? phase2Machine.conflict
+                  : phase2Machine.offlinePendingSync,
+          );
+        } else {
+          setOfflineState(phase2Machine.offlinePendingSync);
+        }
+        setAnnouncement(phase2Copy.offlineReplayDeferred);
+      } finally {
+        if (offlineReplayAbortRef.current === replayAbort) offlineReplayAbortRef.current = null;
+      }
+    });
+  }, [applySession, mode, offlineAuthorizationId, offlineResources, port]);
+
+  useEffect(() => {
+    if (!offlineAuthorizationId || mode !== phase2Machine.scoringApiMode) return;
+    let subscribed = true;
+    const offline = () => {
+      if (!subscribed) return;
+      if (isScoringWorkerSafetyFrozen()) return;
+      void recoverStoredOfflineSession();
+    };
+    const online = () => {
+      if (!subscribed) return;
+      void reconnectAndReplay();
+    };
+    window.addEventListener("offline", offline);
+    window.addEventListener("online", online);
+    if (navigator.onLine && pendingCount > 0) void online();
+    return () => {
+      subscribed = false;
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("online", online);
+    };
+  }, [
+    applySession,
+    mode,
+    offlineAuthorizationId,
+    pendingCount,
+    reconnectAndReplay,
+    recoverStoredOfflineSession,
+    replayRequest,
+  ]);
 
   const validate = async () => {
     setAccessChecking(true);
@@ -460,6 +754,111 @@ export function PhoneScoring({
     }
   };
 
+  const prepareOfflineForCurrentMatch = async () => {
+    try {
+      const session = await port.recoverSession();
+      if (!session) throw new Error(phase2Copy.offlineAuthoritativeUnavailable);
+      applySession(session);
+      await prepareOfflineAuthority(session);
+    } catch (error) {
+      if (error instanceof ScoringWorkerSafetyFrozenError) return;
+      if (error instanceof ScoringTransportError) handleTransportError(error);
+      else {
+        setOfflineState(phase2Machine.offlineStorageError);
+        setAnnouncement(phase2Copy.offlinePreparationError);
+      }
+    }
+  };
+
+  const exportOfflineDiagnostics = async (): Promise<string | null> => {
+    if (!offlineAuthorizationId) return null;
+    try {
+      const resources = await offlineResources();
+      const exported = await createOfflineDiagnosticExport(resources.repository, offlineAuthorizationId);
+      const url = URL.createObjectURL(new Blob([`${exported.json}\n`], { type: "application/json" }));
+      const link = document.createElement(phase2Machine.anchorElement);
+      link.href = url;
+      link.download = `matchday-offline-${matchId}-${exported.sha256.slice(0, 12)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setDiagnosticExportSha(exported.sha256);
+      setAnnouncement(phase2Copy.offlineDiagnosticSuccess(exported.sha256));
+      return exported.sha256;
+    } catch {
+      setOfflineState(phase2Machine.offlineStorageError);
+      setAnnouncement(phase2Copy.offlineDiagnosticError);
+      return null;
+    }
+  };
+
+  const completeScoringSignOut = async (discardExportedWork: boolean) => {
+    if (!offlineAuthorizationId) return;
+    try {
+      offlineReplayAbortRef.current?.abort();
+      await offlineReconnectRef.current.waitForIdle().catch(() => undefined);
+      const resources = await offlineResources();
+      await resources.port.revokeAuthority();
+      if (discardExportedWork) {
+        if (!diagnosticExportSha) throw new Error(phase2Copy.offlineExportBeforeDiscard);
+        await resources.repository.discardAfterExport(offlineAuthorizationId, diagnosticExportSha, diagnosticExportSha);
+      } else {
+        await resources.repository.discardResolvedAuthorization(offlineAuthorizationId);
+      }
+      signOutDialogRef.current?.close();
+      offlineResourcesRef.current = null;
+      sessionActiveRef.current = false;
+      setOfflineAuthorizationId(null);
+      setOfflineRecordingExpiresAt(null);
+      setOfflineReplayExpiresAt(null);
+      setDiagnosticExportSha(null);
+      setPendingCount(0);
+      setPendingSync(false);
+      setOfflineState(phase2Machine.offlineOnline);
+      writerStateRef.current = phase2Machine.checking;
+      setWriterState(phase2Machine.checking);
+      setPhase("access");
+      setAnnouncement(phase2Copy.offlineEndComplete);
+    } catch {
+      setAnnouncement(phase2Copy.offlineEndError);
+    }
+  };
+
+  const cancelScoringSignOut = () => {
+    signOutDialogRef.current?.close();
+    window.requestAnimationFrame(() => endSessionButtonRef.current?.focus({ preventScroll: true }));
+  };
+
+  const handleOfflineQueueFailure = (error: unknown, fallback: string) => {
+    if (error instanceof ScoringWorkerSafetyFrozenError) return;
+    const detail = error instanceof Error ? error.message : "";
+    const terminalState = terminalOfflineQueueState(detail);
+    if (terminalState) {
+      if (actionDialogRef.current?.open) actionDialogRef.current.close();
+      setPendingAction(null);
+      setReversalTarget(null);
+      setReversalReason("");
+      setUnknownParticipant(false);
+      setScorerError("");
+      setOfflineState(terminalState);
+      setAnnouncement(
+        terminalState === phase2Machine.expired
+          ? phase2Copy.offlineExpiredTitle
+          : terminalState === phase2Machine.revoked
+            ? phase2Copy.offlineRevokedTitle
+            : phase2Copy.offlineReadOnlyTitle,
+      );
+      window.requestAnimationFrame(() => offlineStatusRef.current?.focus({ preventScroll: true }));
+      return;
+    }
+    if (detail.includes(phase2Machine.offlineQueueFullCode) || detail.includes(phase2Machine.offlineCommandLimitCode)) {
+      setOfflineState(phase2Machine.offlinePendingSync);
+      setAnnouncement(phase2Copy.offlineQueueFull);
+      return;
+    }
+    setOfflineState(phase2Machine.offlineStorageError);
+    setAnnouncement(fallback);
+  };
+
   const requestTakeover = async () => {
     mutationInFlightRef.current += 1;
     sessionRefreshFenceRef.current.cancel();
@@ -496,7 +895,8 @@ export function PhoneScoring({
         manualTime: "00:00",
       });
       setPendingSync(receipt.syncState === "pending");
-      applySession(await port.recoverSession());
+      const session = await port.recoverSession();
+      applySession(session);
       setPhase("live");
     } catch (error) {
       handleTransportError(error);
@@ -538,6 +938,39 @@ export function PhoneScoring({
     setPendingAction(null);
     setReversalTarget(action);
   };
+
+  const queueOfflineEvent = (command: ScoringEventCommand, successMessage: string) =>
+    runScoringWorkerTransition(async () => {
+      const resources = await offlineResources();
+      const matchPackage = await resources.repository.getActiveMatchPackage();
+      if (!matchPackage || matchPackage.match_id !== command.matchId) {
+        throw new Error(phase2Copy.offlineMatchUnauthorized);
+      }
+      const session = await enqueueOfflineEvent(resources.repository, matchPackage, command);
+      setDiagnosticExportSha(null);
+      const pending = await resources.repository.listPendingCommands(matchPackage.authorization_id);
+      applyOfflineProjection(session, matchPackage.authorization_id, pending.length, phase2Machine.offlinePendingSync);
+      setAnnouncement(phase2Copy.offlineRecordedAnnouncement(successMessage, pending.length));
+    });
+
+  const queueOfflineFinalisation = (command: Parameters<typeof enqueueOfflineFinalisation>[2]) =>
+    runScoringWorkerTransition(async () => {
+      const resources = await offlineResources();
+      const matchPackage = await resources.repository.getActiveMatchPackage();
+      if (!matchPackage || matchPackage.match_id !== command.matchId) {
+        throw new Error(phase2Copy.offlineMatchUnauthorized);
+      }
+      const session = await enqueueOfflineFinalisation(resources.repository, matchPackage, command);
+      setDiagnosticExportSha(null);
+      const pending = await resources.repository.listPendingCommands(matchPackage.authorization_id);
+      applyOfflineProjection(
+        session,
+        matchPackage.authorization_id,
+        pending.length,
+        phase2Machine.offlinePendingFinalisation,
+      );
+      setAnnouncement(phase2Copy.offlinePendingFinalisation);
+    });
 
   const recordAction = async () => {
     if (!pendingAction) return;
@@ -581,13 +1014,23 @@ export function PhoneScoring({
     setActionPending(true);
     setAnnouncement(phase2Copy.scoreControlsPending);
     try {
+      if (!navigator.onLine) throw new ScoringTransportError(phase2Machine.unavailable);
       const receipt = await port.appendEvent(command);
       setPendingSync(receipt.syncState === "pending");
       applySession(await port.recoverSession());
       setAnnouncement(phase2Copy.eventRecorded);
       closeActionDialog();
     } catch (error) {
-      handleTransportError(error);
+      if (error instanceof ScoringTransportError && error.state === "unavailable" && offlineAuthorizationId) {
+        try {
+          await queueOfflineEvent(command, phase2Copy.eventRecorded);
+          closeActionDialog();
+        } catch (offlineError) {
+          handleOfflineQueueFailure(offlineError, phase2Copy.offlineEventStorageError);
+        }
+      } else {
+        handleTransportError(error);
+      }
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
@@ -608,8 +1051,16 @@ export function PhoneScoring({
     sessionRefreshFenceRef.current.cancel();
     setActionPending(true);
     setAnnouncement(phase2Copy.scoreControlsPending);
+    let reversalCommand: ScoringEventCommand | null = null;
     try {
-      const receipt = await port.appendEvent({
+      const resources = await offlineResources();
+      const pendingCommands = offlineAuthorizationId
+        ? await resources.repository.listPendingCommands(offlineAuthorizationId)
+        : [];
+      const targetIsLocal = pendingCommands.some(
+        ({ command }) => command.client_event_id === reversalTarget.clientEventId,
+      );
+      reversalCommand = {
         clientEventId: crypto.randomUUID(),
         expectedSequence: throughSequence,
         matchId,
@@ -619,10 +1070,14 @@ export function PhoneScoring({
         period: reversalTarget.segmentNumber,
         segmentNumber: reversalTarget.segmentNumber,
         manualTime: eventTime,
-        reversalTargetEventId: reversalTarget.eventId,
+        ...(targetIsLocal
+          ? { reversalTargetClientEventId: reversalTarget.clientEventId }
+          : { reversalTargetEventId: reversalTarget.eventId }),
         reason,
         occurredAt: new Date().toISOString(),
-      });
+      };
+      if (!navigator.onLine) throw new ScoringTransportError(phase2Machine.unavailable);
+      const receipt = await port.appendEvent(reversalCommand);
       setPendingSync(receipt.syncState === "pending");
       applySession(await port.recoverSession());
       setAnnouncement(phase2Copy.eventReversed);
@@ -631,7 +1086,17 @@ export function PhoneScoring({
       closeActionDialog();
       setReversedFocusId(targetId);
     } catch (error) {
-      handleTransportError(error);
+      if (error instanceof ScoringTransportError && error.state === "unavailable" && offlineAuthorizationId) {
+        try {
+          if (!reversalCommand) throw new Error(phase2Copy.offlineReversalUnavailable);
+          await queueOfflineEvent(reversalCommand, phase2Copy.eventReversed);
+          closeActionDialog();
+        } catch (offlineError) {
+          handleOfflineQueueFailure(offlineError, phase2Copy.offlineReversalStorageError);
+        }
+      } else {
+        handleTransportError(error);
+      }
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
@@ -644,18 +1109,30 @@ export function PhoneScoring({
     setInteractionError("");
     sessionRefreshFenceRef.current.cancel();
     setAnnouncement(phase2Copy.scoreControlsPending);
+    const command = {
+      clientEventId: crypto.randomUUID(),
+      matchId,
+      expectedSequence: throughSequence,
+      homeScore: score.home,
+      awayScore: score.away,
+      scorer: scorer.trim(),
+      occurredAt: new Date().toISOString(),
+    };
     try {
-      const receipt = await port.finalizeResult({
-        matchId,
-        expectedSequence: throughSequence,
-        homeScore: score.home,
-        awayScore: score.away,
-        scorer: scorer.trim(),
-      });
+      if (!navigator.onLine) throw new ScoringTransportError(phase2Machine.unavailable);
+      const receipt = await port.finalizeResult(command);
       setFinalReceipt(receipt);
       setPhase("receipt");
     } catch (error) {
-      handleTransportError(error);
+      if (error instanceof ScoringTransportError && error.state === "unavailable" && offlineAuthorizationId) {
+        try {
+          await queueOfflineFinalisation(command);
+        } catch (offlineError) {
+          handleOfflineQueueFailure(offlineError, phase2Copy.offlineFinalisationStorageError);
+        }
+      } else {
+        handleTransportError(error);
+      }
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
@@ -664,7 +1141,13 @@ export function PhoneScoring({
 
   if (phase === "access" || phase === "confirm") {
     return (
-      <main className="p2-score-access" id="score-main">
+      <main
+        className="p2-score-access"
+        id="score-main"
+        data-scoring-phase={phase}
+        data-writer-state={writerState}
+        data-offline-state={offlineState}
+      >
         <p className="visually-hidden" aria-live="polite" aria-atomic="true">
           {announcement}
         </p>
@@ -672,6 +1155,21 @@ export function PhoneScoring({
           <span className="p2-score-brand">{phase2Copy.brand}</span>
           <span>{phase2Copy.scoringAccess}</span>
         </header>
+        {offlineState === phase2Machine.offlineStorageError ? (
+          <section
+            ref={offlineStatusRef}
+            className="p2-score-warning"
+            data-offline-state={offlineState}
+            aria-labelledby="offline-access-storage-title"
+            tabIndex={-1}
+          >
+            <Warning aria-hidden="true" />
+            <div>
+              <strong id="offline-access-storage-title">{phase2Copy.offlineStorageErrorTitle}</strong>
+              <p>{phase2Copy.offlineStorageRecoveryError}</p>
+            </div>
+          </section>
+        ) : null}
         <section>
           <p className="p2-eyebrow">
             {matchLabel} · {stage}
@@ -738,7 +1236,13 @@ export function PhoneScoring({
 
   if (phase === "receipt") {
     return (
-      <main className="p2-score-receipt" id="score-main">
+      <main
+        className="p2-score-receipt"
+        id="score-main"
+        data-scoring-phase={phase}
+        data-writer-state={writerState}
+        data-offline-state={offlineState}
+      >
         <span aria-hidden="true">
           <Check />
         </span>
@@ -757,7 +1261,11 @@ export function PhoneScoring({
             : `${phase2Copy.finalReceipt}: ${finalReceipt?.receiptId ?? "—"} · ${phase2Copy.publishedLabel} ${finalReceipt?.publishedAt ?? "—"}`}
         </p>
         {competitionSlug ? (
-          <Link className="p2-score-primary" href={`/competitions/${encodeURIComponent(competitionSlug)}`}>
+          <Link
+            className="p2-score-primary"
+            href={`/competitions/${encodeURIComponent(competitionSlug)}`}
+            prefetch={false}
+          >
             {phase2Copy.openPublic}
             <ArrowRight />
           </Link>
@@ -767,7 +1275,13 @@ export function PhoneScoring({
   }
 
   return (
-    <main className="p2-score" id="score-main" data-writer-state={writerState}>
+    <main
+      className="p2-score"
+      id="score-main"
+      data-scoring-phase={phase}
+      data-writer-state={writerState}
+      data-offline-state={offlineState}
+    >
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
@@ -789,6 +1303,152 @@ export function PhoneScoring({
           </span>
         </div>
       </header>
+      {!offlineAuthorizationId &&
+      offlineState === phase2Machine.offlineOnline &&
+      mode === phase2Machine.scoringApiMode &&
+      writerState === phase2Machine.active ? (
+        <section className="p2-score-warning" aria-labelledby="offline-preparation-title">
+          <CloudCheck aria-hidden="true" />
+          <div>
+            <strong id="offline-preparation-title">{phase2Copy.offlinePreparationTitle}</strong>
+            <p>{phase2Copy.offlinePreparationBody}</p>
+            <button className="p2-score-secondary" type="button" onClick={() => void prepareOfflineForCurrentMatch()}>
+              {phase2Copy.offlinePrepareAction}
+            </button>
+          </div>
+        </section>
+      ) : null}
+      {offlineAuthorizationId ||
+      offlineState === phase2Machine.offlinePreparing ||
+      offlineState === phase2Machine.offlineStorageError ? (
+        <section
+          ref={offlineStatusRef}
+          className="p2-score-warning"
+          data-offline-state={offlineState}
+          aria-labelledby="offline-state-title"
+          tabIndex={-1}
+        >
+          {offlineState === "offline-ready" || offlineState === "online" ? (
+            <CloudCheck aria-hidden="true" />
+          ) : (
+            <Warning aria-hidden="true" />
+          )}
+          <div>
+            <strong id="offline-state-title">
+              {pendingCount >= gateCOfflineQueueLimit
+                ? phase2Copy.offlineQueueFull
+                : pendingCount >= gateCOfflineQueueWarningCount
+                  ? phase2Copy.offlineQueueWarning
+                  : offlineState === phase2Machine.offlineReady
+                    ? phase2Copy.offlineReadyTitle
+                    : offlineState === phase2Machine.offlineRecording
+                      ? phase2Copy.offlineRecordingTitle
+                      : offlineState === phase2Machine.offlinePendingFinalisation
+                        ? phase2Copy.offlinePendingFinalisation
+                        : offlineState === phase2Machine.offlineReplaying
+                          ? phase2Copy.offlineReplayingTitle
+                          : offlineState === phase2Machine.offlineReconnecting
+                            ? phase2Copy.offlineConfirmingTitle
+                            : offlineState === phase2Machine.conflict
+                              ? phase2Copy.offlineConflictTitle
+                              : offlineState === phase2Machine.expired
+                                ? phase2Copy.offlineExpiredTitle
+                                : offlineState === phase2Machine.revoked
+                                  ? phase2Copy.offlineRevokedTitle
+                                  : offlineState === phase2Machine.readOnly
+                                    ? phase2Copy.offlineReadOnlyTitle
+                                    : offlineState === phase2Machine.offlineStorageError
+                                      ? phase2Copy.offlineStorageErrorTitle
+                                      : offlineState === phase2Machine.offlinePreparing
+                                        ? phase2Copy.offlinePreparingTitle
+                                        : phase2Copy.offlinePendingTitle}
+            </strong>
+            <p>
+              {phase2Copy.offlinePendingCount(pendingCount)}
+              {offlineRecordingExpiresAt
+                ? ` ${phase2Copy.offlineRecordingEnds(new Date(offlineRecordingExpiresAt).toLocaleString())}`
+                : ""}
+              {offlineReplayExpiresAt
+                ? ` ${phase2Copy.offlineReplayEnds(new Date(offlineReplayExpiresAt).toLocaleString())}`
+                : ""}
+            </p>
+            {pendingCount >= gateCOfflineQueueWarningCount ? (
+              <p>{phase2Copy.offlineQueueGuidance(gateCOfflineQueueLimit)}</p>
+            ) : null}
+            {offlineAuthorizationId && pendingCount === 0 ? <p>{phase2Copy.offlineAllSynced}</p> : null}
+            {offlineAuthorizationId ? <p>{phase2Copy.offlineLastConfirmed(throughSequence - pendingCount)}</p> : null}
+            {offlineAuthorizationId && pendingCount > 0 && typeof navigator !== "undefined" && navigator.onLine ? (
+              <button
+                className="p2-score-secondary"
+                type="button"
+                onClick={() => setReplayRequest((value) => value + 1)}
+              >
+                {phase2Copy.offlineSyncNow}
+              </button>
+            ) : null}
+            {offlineAuthorizationId ? (
+              <>
+                <button className="p2-score-secondary" type="button" onClick={() => void exportOfflineDiagnostics()}>
+                  {phase2Copy.offlineDiagnosticAction}
+                </button>
+                <button
+                  ref={endSessionButtonRef}
+                  className="p2-score-secondary"
+                  type="button"
+                  onClick={() =>
+                    pendingCount > 0 ? signOutDialogRef.current?.showModal() : void completeScoringSignOut(false)
+                  }
+                >
+                  {phase2Copy.offlineEndSession}
+                </button>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+      {offlineAuthorizationId && pendingCount > 0 ? (
+        <dialog
+          ref={signOutDialogRef}
+          className="p2-goal-sheet"
+          aria-labelledby="offline-signout-title"
+          aria-describedby="offline-signout-description"
+          onCancel={(event) => {
+            event.preventDefault();
+            cancelScoringSignOut();
+          }}
+        >
+          <header>
+            <h2 id="offline-signout-title">{phase2Copy.offlineEndSessionTitle}</h2>
+            <p id="offline-signout-description">{phase2Copy.offlineEndSessionBody}</p>
+          </header>
+          <footer>
+            <button className="p2-score-secondary" type="button" onClick={cancelScoringSignOut}>
+              {phase2Copy.cancel}
+            </button>
+            <button
+              className="p2-score-secondary"
+              type="button"
+              onClick={() => {
+                signOutDialogRef.current?.close();
+                setReplayRequest((value) => value + 1);
+              }}
+            >
+              {phase2Copy.offlineReconnectAndSync}
+            </button>
+            <button className="p2-score-secondary" type="button" onClick={() => void exportOfflineDiagnostics()}>
+              {phase2Copy.offlineExportBeforeDiscard}
+            </button>
+            <button
+              className="p2-score-primary"
+              type="button"
+              disabled={!diagnosticExportSha}
+              onClick={() => void completeScoringSignOut(true)}
+            >
+              {phase2Copy.offlineDiscardAndEnd}
+            </button>
+          </footer>
+        </dialog>
+      ) : null}
       {interactionError ? (
         <section ref={interactionErrorRef} className="p2-score-warning" tabIndex={-1}>
           <Warning aria-hidden="true" />

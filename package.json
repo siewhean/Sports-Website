@@ -26,6 +26,9 @@
     "test:e2e:gate-c-c2:real": "pnpm --filter @matchday/api exec tsx scripts/run-gate-c-c2-e2e.ts",
     "evidence:gate-c-c2:run": "node scripts/run-gate-c-c2-ledger.mjs",
     "test:evidence:gate-c-c2": "node --test scripts/run-gate-c-c2-ledger.test.mjs",
+    "test:e2e:gate-c-c3:real": "pnpm --filter @matchday/api exec tsx scripts/run-gate-c-c3-e2e.ts",
+    "evidence:gate-c-c3:run": "node scripts/run-gate-c-c3-ledger.mjs",
+    "test:evidence:gate-c-c3": "node --test scripts/run-gate-c-c3-ledger.test.mjs",
     "test:e2e:phase4:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
     "test:a11y": "pnpm --filter @matchday/web test:a11y",
     "test:visual": "pnpm --filter @matchday/web test:visual",
@@ -46,7 +49,7 @@
     "openapi:check": "pnpm --filter @matchday/api openapi:check",
     "dependencies:audit": "pnpm audit --prod --audit-level moderate",
     "secrets:scan": "bash scripts/scan-secrets.sh",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:evidence:phase4 && pnpm test:evidence:gate-c-access && pnpm test:evidence:gate-c-c2 && pnpm test && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm dependencies:audit && pnpm secrets:scan && pnpm build && pnpm deploy:manifest && pnpm asset-delivery:verify:origin",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:evidence:phase4 && pnpm test:evidence:gate-c-access && pnpm test:evidence:gate-c-c2 && pnpm test:evidence:gate-c-c3 && pnpm test && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm dependencies:audit && pnpm secrets:scan && pnpm build && pnpm deploy:manifest && pnpm asset-delivery:verify:origin",
     "setup:workspace": "node scripts/setup-workspace.mjs"
   },
   "pnpm": {

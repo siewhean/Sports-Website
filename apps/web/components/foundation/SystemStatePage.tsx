@@ -34,7 +34,7 @@ export function SystemStatePage({
   return (
     <main className="system-state" id="main-content">
       <header>
-        <BrandLink />
+        <BrandLink prefetch={false} />
       </header>
       <section aria-labelledby="system-state-title">
         <div className="system-state__icon" aria-hidden="true">
@@ -45,7 +45,9 @@ export function SystemStatePage({
         <p>{body}</p>
         {detail ? <p className="system-state__detail">{detail}</p> : null}
         {actionHref ? (
-          <ActionLink href={actionHref}>{actionLabel}</ActionLink>
+          <ActionLink href={actionHref} prefetch={false}>
+            {actionLabel}
+          </ActionLink>
         ) : (
           <button className="foundation-action foundation-action--dark" type="button" onClick={action}>
             <span>{actionLabel}</span>

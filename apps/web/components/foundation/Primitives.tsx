@@ -2,11 +2,12 @@ import Link from "next/link";
 import { ArrowRight, Trophy } from "@phosphor-icons/react/dist/ssr";
 import { messages, opaqueId } from "@matchday/ui";
 
-export function BrandLink({ inverse = false }: { inverse?: boolean }) {
+export function BrandLink({ inverse = false, prefetch }: { inverse?: boolean; prefetch?: boolean }) {
   return (
     <Link
       className={`foundation-brand${inverse ? " foundation-brand--inverse" : ""}`}
       href="/"
+      prefetch={prefetch}
       aria-label={messages.brand.homeLabel}
     >
       <span className="foundation-brand__mark" aria-hidden="true">
@@ -21,9 +22,10 @@ export function ActionLink({
   href,
   children,
   tone = opaqueId("dark"),
-}: Readonly<{ href: string; children: React.ReactNode; tone?: "dark" | "light" | "signal" }>) {
+  prefetch,
+}: Readonly<{ href: string; children: React.ReactNode; tone?: "dark" | "light" | "signal"; prefetch?: boolean }>) {
   return (
-    <Link className={`foundation-action foundation-action--${tone}`} href={href}>
+    <Link className={`foundation-action foundation-action--${tone}`} href={href} prefetch={prefetch}>
       <span>{children}</span>
       <span className="foundation-action__icon" aria-hidden="true">
         <ArrowRight />

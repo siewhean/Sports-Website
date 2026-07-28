@@ -73,6 +73,7 @@ function routeRuntime() {
           },
           aggregate_version: 2,
           through_sequence: 2,
+          canonical_events: [],
           events: [],
         }) satisfies ScoringSessionState,
     ),
@@ -83,6 +84,43 @@ function routeRuntime() {
       generation: 1,
       expires_at: "2026-08-01T00:00:00.000Z",
       rate_limit: { limit: 5, remaining: 5, resetSeconds: 600 },
+    })),
+    issueOfflineAuthorization: vi.fn(async () => ({
+      authorization_id: randomUUID(),
+      resume_secret: "r".repeat(43),
+      recording_expires_at: "2026-08-01T04:00:00.000Z",
+      replay_expires_at: "2026-08-01T04:15:00.000Z",
+      pass_expires_at: "2026-08-01T05:00:00.000Z",
+      generation: 1,
+      match_id: randomUUID(),
+      competition_id: randomUUID(),
+    })),
+    resumeOfflineAuthorization: vi.fn(async () => ({
+      session: {
+        session_id: randomUUID(),
+        session_token: "s".repeat(43),
+        match_id: randomUUID(),
+        mode: "writer",
+        permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+        generation: 1,
+        expires_at: "2026-08-01T00:30:00.000Z",
+        lease_expires_at: "2026-08-01T00:00:45.000Z",
+      },
+      offline: {
+        authorization_id: randomUUID(),
+        resume_secret: "n".repeat(43),
+        recording_expires_at: "2026-08-01T04:00:00.000Z",
+        replay_expires_at: "2026-08-01T04:15:00.000Z",
+        pass_expires_at: "2026-08-01T05:00:00.000Z",
+        generation: 1,
+        match_id: randomUUID(),
+        competition_id: randomUUID(),
+      },
+    })),
+    revokeOfflineAuthorization: vi.fn(async () => ({
+      authorization_id: randomUUID(),
+      status: "revoked",
+      duplicate: false,
     })),
     listTakeoverRequests: vi.fn(async () => []),
     expireTakeoverRequests: vi.fn(async () => ({ expired_count: 1 })),
@@ -307,6 +345,76 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(maximumDeviceLabel.statusCode).toBe(200);
     expect(runtime.exchangeAccess).toHaveBeenLastCalledWith(
       expect.objectContaining({ deviceLabel: "x".repeat(80) }),
+      expect.any(String),
+    );
+    const scoringHeaders = {
+      "x-scoring-session-id": randomUUID(),
+      "x-scoring-session-token": "t".repeat(43),
+      "x-writer-generation": "1",
+    };
+    const offlineSummary = {
+      device_id: rawDeviceId,
+      last_acknowledged_sequence: 2,
+      pending_event_count: 1,
+      pending_through_sequence: 3,
+      last_reported_local_sequence: 1,
+      queue_fingerprint: "a".repeat(64),
+      indexeddb_schema_version: 1,
+      service_worker_version: "gate-c-c3-v4",
+    };
+    const issuedOffline = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/offline-authorizations",
+      headers: scoringHeaders,
+      payload: offlineSummary,
+    });
+    expect(issuedOffline.statusCode).toBe(200);
+    expect(runtime.issueOfflineAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: 1 }),
+      expect.objectContaining({
+        deviceId: rawDeviceId,
+        pendingEventCount: 1,
+        queueFingerprint: "a".repeat(64),
+      }),
+      expect.any(String),
+    );
+    const renewedOffline = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/offline-authorizations",
+      headers: scoringHeaders,
+      payload: { ...offlineSummary, resume_secret: "r".repeat(43) },
+    });
+    expect(renewedOffline.statusCode).toBe(200);
+    expect(runtime.issueOfflineAuthorization).toHaveBeenLastCalledWith(
+      expect.objectContaining({ generation: 1 }),
+      expect.objectContaining({ resumeSecret: "r".repeat(43) }),
+      expect.any(String),
+    );
+    const authorizationId = randomUUID();
+    const resumedOffline = await app.inject({
+      method: "POST",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}/resume`,
+      payload: { ...offlineSummary, resume_secret: "r".repeat(43) },
+    });
+    expect(resumedOffline.statusCode).toBe(200);
+    expect(runtime.resumeOfflineAuthorization).toHaveBeenCalledWith(
+      authorizationId,
+      expect.objectContaining({
+        resumeSecret: "r".repeat(43),
+        deviceId: rawDeviceId,
+        pendingEventCount: 1,
+      }),
+      expect.any(String),
+    );
+    const revokedOffline = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}`,
+      payload: { resume_secret: "n".repeat(43), device_id: rawDeviceId },
+    });
+    expect(revokedOffline.statusCode).toBe(200);
+    expect(runtime.revokeOfflineAuthorization).toHaveBeenCalledWith(
+      authorizationId,
+      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId },
       expect.any(String),
     );
     const retainedTransportEvidence = JSON.stringify({

@@ -1,6 +1,7 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
-type GuardState = { failures: string[]; allowed: RegExp[] };
+type AllowedFailure = { pattern: RegExp; remaining: number | null };
+type GuardState = { failures: string[]; allowed: AllowedFailure[] };
 
 const guards = new WeakMap<Page, GuardState>();
 
@@ -124,14 +125,24 @@ export function installConsoleGuard(page: Page) {
 }
 
 export function allowConsoleFailure(page: Page, pattern: RegExp) {
-  guards.get(page)?.allowed.push(pattern);
+  guards.get(page)?.allowed.push({ pattern, remaining: null });
+}
+
+export function allowConsoleFailureCount(page: Page, pattern: RegExp, maximumCount: number) {
+  if (!Number.isSafeInteger(maximumCount) || maximumCount < 1) {
+    throw new Error("Console failure allowance count must be a positive integer.");
+  }
+  guards.get(page)?.allowed.push({ pattern, remaining: maximumCount });
 }
 
 export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
   const state = guards.get(page);
-  const failures = (state?.failures ?? []).filter(
-    (failure) => !(state?.allowed ?? []).some((pattern) => pattern.test(failure)),
-  );
+  const failures = (state?.failures ?? []).filter((failure) => {
+    const allowance = (state?.allowed ?? []).find(({ pattern, remaining }) => remaining !== 0 && pattern.test(failure));
+    if (!allowance) return true;
+    if (allowance.remaining !== null) allowance.remaining -= 1;
+    return false;
+  });
   await testInfo.attach("browser-runtime-health", {
     body: failures.length
       ? failures.join("\n")

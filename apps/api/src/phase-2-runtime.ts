@@ -5,6 +5,7 @@ import type {
   PublicMatchResult,
   PublicScheduledMatch,
   ScoringSessionState,
+  GateCOfflineCanonicalCommand,
 } from "@matchday/contracts";
 import {
   SPORT_PACKS,
@@ -74,6 +75,34 @@ type AccessPassExchangeRow = {
   revoked_at: Date | string | null;
   organisation_id: string;
   competition_status: string;
+};
+type OfflineQueueSummary = {
+  lastAcknowledgedSequence: number;
+  pendingEventCount: number;
+  pendingThroughSequence: number;
+  lastReportedLocalSequence: number;
+  queueFingerprint: string | null;
+  indexeddbSchemaVersion: number;
+  serviceWorkerVersion: string;
+};
+type OfflineAuthorizationRow = {
+  id: string;
+  competition_id: string;
+  match_id: string;
+  access_pass_id: string;
+  access_session_id: string;
+  writer_generation: number;
+  resume_secret_hash: Buffer;
+  device_id_hash: Buffer;
+  status: "active" | "expired" | "revoked" | "transferred" | "completed";
+  recording_expires_at: Date | string;
+  replay_expires_at: Date | string;
+  pass_expires_at: Date | string;
+  pass_revoked_at: Date | string | null;
+  scope: ScoringPermission[] | string;
+  session_mode: ScoringSessionMode;
+  session_generation: number | null;
+  organisation_id: string;
 };
 
 const STANDINGS_CRITERION_ALIASES: Readonly<Record<string, StandingsEngineConfig["criteria"][number]>> = {
@@ -454,6 +483,34 @@ function wireScoreCommand(command: FiveSportScoreCommand): Record<string, unknow
   };
 }
 
+function wireOfflineScoreCommand(
+  command: FiveSportScoreCommand,
+  expectedSequence: number,
+): GateCOfflineCanonicalCommand {
+  if (command.type === "finalisation") {
+    return {
+      kind: "finalisation",
+      client_event_id: command.clientEventId,
+      expected_sequence: expectedSequence,
+      occurred_at: command.occurredAt,
+    };
+  }
+  return {
+    kind: "event",
+    client_event_id: command.clientEventId,
+    expected_sequence: expectedSequence,
+    type: command.type,
+    occurred_at: command.occurredAt,
+    ...(command.side ? { team_slot: command.side } : {}),
+    ...(command.participantId !== undefined ? { participant_id: command.participantId } : {}),
+    ...(command.unknownParticipant !== undefined ? { unknown_participant: command.unknownParticipant } : {}),
+    ...(command.segmentNumber !== undefined ? { segment_number: command.segmentNumber } : {}),
+    ...(command.manualTimeSeconds !== undefined ? { manual_time_seconds: command.manualTimeSeconds } : {}),
+    ...(command.reversalTargetEventId ? { reversal_target_event_id: command.reversalTargetEventId } : {}),
+    ...(command.reason ? { reason: command.reason } : {}),
+  };
+}
+
 function opaqueSecret(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
 }
@@ -562,7 +619,9 @@ export class Phase2Runtime {
          occurred_at, request_id, actor_account_id, actor_type, organisation_id,
          action, target_type, target_id, reason, before_state, after_state, metadata
        ) VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,
+         CASE WHEN $10::jsonb IS NULL THEN NULL ELSE ($10::jsonb #>> '{}')::jsonb END,
+         CASE WHEN $11::jsonb IS NULL THEN NULL ELSE ($11::jsonb #>> '{}')::jsonb END,
          ($12::jsonb #>> '{}')::jsonb
        )`,
       [
@@ -583,7 +642,7 @@ export class Phase2Runtime {
     await tx.unsafe(
       `INSERT INTO outbox_events (
          aggregate_type, aggregate_id, event_type, payload, idempotency_key, created_at, available_at
-       ) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$6)`,
+       ) VALUES ($1,$2,$3,($4::jsonb #>> '{}')::jsonb,$5,$6,$6)`,
       [
         input.targetType,
         input.targetId,
@@ -591,6 +650,42 @@ export class Phase2Runtime {
         JSON.stringify(input.eventPayload ?? { target_id: input.targetId }),
         `${input.requestId}:${input.action}:${input.targetId}`,
         occurredAt,
+      ],
+    );
+  }
+
+  private async auditOnly(
+    tx: PostgresJsSql,
+    input: {
+      requestId: string;
+      organisationId: string;
+      action: string;
+      targetType: string;
+      targetId: string;
+      competitionId: string;
+      matchId: string;
+      after?: unknown;
+    },
+  ): Promise<void> {
+    await tx.unsafe(
+      `INSERT INTO audit_events (
+         occurred_at,request_id,actor_account_id,actor_type,organisation_id,
+         action,target_type,target_id,reason,before_state,after_state,metadata
+       ) VALUES (
+         $1,$2,NULL,'access_pass',$3,$4,$5,$6,NULL,NULL,
+         CASE WHEN $7::jsonb IS NULL THEN NULL ELSE ($7::jsonb #>> '{}')::jsonb END,
+         jsonb_build_object('competition_id',$8::text,'match_id',$9::text)
+       )`,
+      [
+        this.now(),
+        input.requestId,
+        input.organisationId,
+        input.action,
+        input.targetType,
+        input.targetId,
+        input.after === undefined ? null : JSON.stringify(input.after),
+        input.competitionId,
+        input.matchId,
       ],
     );
   }
@@ -744,7 +839,9 @@ export class Phase2Runtime {
            occurred_at,request_id,actor_account_id,actor_type,organisation_id,
            action,target_type,target_id,reason,before_state,after_state,metadata
          ) VALUES ($1,$2,NULL,'access_pass',$3,'scoring_event.stale_submission_rejected',
-                   'match',$4,$5,NULL,$6::jsonb,($7::jsonb #>> '{}')::jsonb)`,
+                   'match',$4,$5,NULL,
+                   CASE WHEN $6::jsonb IS NULL THEN NULL ELSE ($6::jsonb #>> '{}')::jsonb END,
+                   ($7::jsonb #>> '{}')::jsonb)`,
         [
           this.now(),
           requestId,
@@ -1304,6 +1401,9 @@ export class Phase2Runtime {
         typeof input === "string"
           ? { expiresAt: input, role: "scorekeeper" as const, idempotencyKey: requestId }
           : input;
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+        `scoring-access-pass:${competitionId}:${normalized.idempotencyKey}`,
+      ]);
       const permissions: ScoringPermission[] =
         normalized.role === "viewer"
           ? ["score:read"]
@@ -1574,6 +1674,25 @@ export class Phase2Runtime {
         [passId, competitionId, actor.accountId, this.now(), reason],
       );
       required(rows, "Active access pass not found");
+      const revokedAuthorizations = await tx.unsafe<{ id: string }>(
+        `UPDATE scoring_offline_authorizations SET
+           status='revoked',revoked_at=$2,transition_reason=COALESCE($3,'Access pass revoked')
+         WHERE access_pass_id=$1 AND status='active'
+         RETURNING id`,
+        [passId, this.now(), reason],
+      );
+      for (const authorization of revokedAuthorizations) {
+        await this.evidence(tx, {
+          requestId: `${requestId}:offline:${authorization.id}`,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "scoring_offline_authorization.revoked",
+          targetType: "scoring_offline_authorization",
+          targetId: authorization.id,
+          reason: reason ?? "Access pass revoked",
+          eventPayload: { competition_id: competitionId, match_id: accessPass.match_id },
+        });
+      }
       await tx.unsafe(
         `UPDATE scoring_access_sessions SET revoked_at=$2
          WHERE access_pass_id=$1 AND revoked_at IS NULL`,
@@ -1596,6 +1715,509 @@ export class Phase2Runtime {
         eventPayload: { competition_id: competitionId },
       });
       return { id: passId, revoked: true as const };
+    });
+  }
+
+  private validateOfflineQueueSummary(input: OfflineQueueSummary): void {
+    if (
+      !Number.isSafeInteger(input.lastAcknowledgedSequence) ||
+      input.lastAcknowledgedSequence < 0 ||
+      !Number.isSafeInteger(input.pendingEventCount) ||
+      input.pendingEventCount < 0 ||
+      !Number.isSafeInteger(input.pendingThroughSequence) ||
+      input.pendingThroughSequence < input.lastAcknowledgedSequence ||
+      !Number.isSafeInteger(input.lastReportedLocalSequence) ||
+      input.lastReportedLocalSequence < 0 ||
+      input.indexeddbSchemaVersion !== 1 ||
+      input.serviceWorkerVersion !== "gate-c-c3-v4" ||
+      (input.queueFingerprint !== null && !/^[0-9a-f]{64}$/.test(input.queueFingerprint))
+    ) {
+      throw new ApiError(422, "OFFLINE_QUEUE_SUMMARY_INVALID", "Offline queue summary is invalid");
+    }
+    if (input.pendingThroughSequence !== input.lastAcknowledgedSequence + input.pendingEventCount) {
+      throw new ApiError(
+        422,
+        "OFFLINE_QUEUE_SUMMARY_INVALID",
+        "Offline pending sequence range must exactly follow the last acknowledged sequence",
+      );
+    }
+    if (input.lastReportedLocalSequence < input.pendingEventCount) {
+      throw new ApiError(
+        422,
+        "OFFLINE_QUEUE_SUMMARY_INVALID",
+        "Reported local sequence cannot be smaller than the pending command count",
+      );
+    }
+    if (input.pendingEventCount > 0 && input.queueFingerprint === null) {
+      throw new ApiError(422, "OFFLINE_QUEUE_SUMMARY_INVALID", "Pending offline work requires a queue fingerprint");
+    }
+  }
+
+  async issueOfflineAuthorization(
+    auth: ScoringSessionAuth,
+    input: OfflineQueueSummary & { deviceId: string; resumeSecret?: string },
+    requestId: string,
+  ) {
+    this.validateOfflineQueueSummary(input);
+    return this.transaction(async (tx) => {
+      let session = await this.authenticateScoringSession(
+        tx,
+        auth.sessionId,
+        auth.sessionToken,
+        auth.generation,
+        true,
+        false,
+      );
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
+      session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+      const deviceHash = hashSecret(input.deviceId);
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [deviceHash.toString("hex")]);
+      const storedDeviceHash = (
+        await tx.unsafe<{ device_id_hash: Buffer }>(`SELECT device_id_hash FROM scoring_access_sessions WHERE id=$1`, [
+          session.id,
+        ])
+      )[0]?.device_id_hash;
+      if (!storedDeviceHash || !safeEqual(Buffer.from(storedDeviceHash), deviceHash)) {
+        throw new ApiError(403, "OFFLINE_DEVICE_MISMATCH", "Offline authority belongs to another device");
+      }
+      const profileAuthorization = (
+        await tx.unsafe<{ id: string; match_id: string }>(
+          `SELECT id,match_id FROM scoring_offline_authorizations
+           WHERE device_id_hash=$1 AND status='active' FOR UPDATE`,
+          [deviceHash],
+        )
+      )[0];
+      if (profileAuthorization && profileAuthorization.match_id !== session.match_id) {
+        throw new ApiError(
+          409,
+          "OFFLINE_PROFILE_AUTHORIZATION_ACTIVE",
+          "This scoring profile already has unresolved offline authority for another match",
+        );
+      }
+      const now = this.now();
+      if (date(session.pass_expires_at).getTime() <= now.getTime()) {
+        throw new ApiError(403, "ACCESS_EXPIRED", "Access has expired");
+      }
+      const stream = required(
+        await tx.unsafe<{ current_version: number; match_state: string }>(
+          `SELECT stream.current_version,match.state AS match_state
+           FROM match_score_streams stream
+           JOIN matches match ON match.id=stream.match_id
+           WHERE stream.match_id=$1`,
+          [session.match_id],
+        ),
+        "Match score stream not found",
+      );
+      if (stream.match_state === "final" || stream.match_state === "corrected") {
+        throw new ApiError(
+          409,
+          "MATCH_FINALISED_READ_ONLY",
+          "Finalised matches cannot issue or renew offline scoring authority",
+        );
+      }
+      if (stream.current_version !== input.lastAcknowledgedSequence) {
+        throw new ApiError(
+          409,
+          "OFFLINE_AUTHORITY_STATE_UNCONFIRMED",
+          "Offline authority requires the latest authoritative score version",
+        );
+      }
+      const expired = await tx.unsafe<{ id: string }>(
+        `UPDATE scoring_offline_authorizations SET
+           status='expired',revoked_at=$2,transition_reason='Offline replay window expired'
+         WHERE match_id=$1 AND status='active' AND replay_expires_at<=$2
+         RETURNING id`,
+        [session.match_id, now],
+      );
+      for (const authorization of expired) {
+        await this.evidence(tx, {
+          requestId: `${requestId}:expired:${authorization.id}`,
+          actorAccountId: null,
+          actorType: "access_pass",
+          organisationId: session.organisation_id,
+          action: "scoring_offline_authorization.expired",
+          targetType: "scoring_offline_authorization",
+          targetId: authorization.id,
+          reason: "Offline replay window expired",
+          eventPayload: { competition_id: session.competition_id, match_id: session.match_id },
+        });
+      }
+      const active = (
+        await tx.unsafe<OfflineAuthorizationRow>(
+          `SELECT a.*,p.expires_at AS pass_expires_at,p.scope,
+                  p.revoked_at AS pass_revoked_at,s.mode AS session_mode,
+                  s.generation AS session_generation,c.organisation_id
+           FROM scoring_offline_authorizations a
+           JOIN scoring_access_passes p ON p.id=a.access_pass_id
+           JOIN scoring_access_sessions s ON s.id=a.access_session_id
+           JOIN competitions c ON c.id=a.competition_id
+           WHERE a.match_id=$1 AND a.status='active'
+           FOR UPDATE OF a`,
+          [session.match_id],
+        )
+      )[0];
+      if (active && active.access_session_id !== session.id) {
+        throw new ApiError(
+          409,
+          "OFFLINE_AUTHORIZATION_ACTIVE",
+          "Another scoring profile retains offline authority for this match",
+        );
+      }
+      const generation = session.generation;
+      if (!generation) throw new ApiError(409, "STALE_WRITER_GENERATION", "Writer generation is unavailable");
+      const recordingExpiresAt = new Date(
+        Math.min(date(session.pass_expires_at).getTime(), now.getTime() + 4 * 60 * 60_000),
+      );
+      const replayExpiresAt = new Date(
+        Math.min(date(session.pass_expires_at).getTime(), recordingExpiresAt.getTime() + 15 * 60_000),
+      );
+      if (
+        active &&
+        (!input.resumeSecret || !safeEqual(Buffer.from(active.resume_secret_hash), hashSecret(input.resumeSecret)))
+      ) {
+        throw new ApiError(
+          403,
+          "OFFLINE_AUTHORIZATION_DENIED",
+          "Renewing offline authority requires its existing resume credential",
+        );
+      }
+      const resumeSecret = active ? input.resumeSecret! : opaqueSecret();
+      const authorization = active
+        ? required(
+            await tx.unsafe<{ id: string }>(
+              `UPDATE scoring_offline_authorizations SET
+                 last_authority_at=$2,recording_expires_at=$3,replay_expires_at=$4,
+                 last_reported_pending_count=$5,last_reported_local_sequence=$6,
+                 last_reported_queue_fingerprint=$7,indexeddb_schema_version=$8,
+                 service_worker_version=$9
+               WHERE id=$1 RETURNING id`,
+              [
+                active.id,
+                now,
+                recordingExpiresAt,
+                replayExpiresAt,
+                input.pendingEventCount,
+                input.lastReportedLocalSequence,
+                input.queueFingerprint,
+                input.indexeddbSchemaVersion,
+                input.serviceWorkerVersion,
+              ],
+            ),
+            "Offline authorization was not renewed",
+          )
+        : required(
+            await tx.unsafe<{ id: string }>(
+              `INSERT INTO scoring_offline_authorizations (
+                 competition_id,match_id,access_pass_id,access_session_id,writer_generation,
+                 resume_secret_hash,device_id_hash,issued_at,last_authority_at,
+                 recording_expires_at,replay_expires_at,last_reported_pending_count,
+                 last_reported_local_sequence,last_reported_queue_fingerprint,
+                 indexeddb_schema_version,service_worker_version
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10,$11,$12,$13,$14,$15)
+               RETURNING id`,
+              [
+                session.competition_id,
+                session.match_id,
+                session.access_pass_id,
+                session.id,
+                generation,
+                hashSecret(resumeSecret),
+                deviceHash,
+                now,
+                recordingExpiresAt,
+                replayExpiresAt,
+                input.pendingEventCount,
+                input.lastReportedLocalSequence,
+                input.queueFingerprint,
+                input.indexeddbSchemaVersion,
+                input.serviceWorkerVersion,
+              ],
+            ),
+            "Offline authorization was not issued",
+          );
+      await tx.unsafe(
+        `UPDATE scoring_access_sessions SET
+           last_acknowledged_sequence=$2,reported_pending_event_count=$3,
+           reported_pending_through_sequence=$4,reported_pending_local_sequence=$5,
+           reported_queue_fingerprint=$6
+         WHERE id=$1`,
+        [
+          session.id,
+          input.lastAcknowledgedSequence,
+          input.pendingEventCount,
+          input.pendingThroughSequence,
+          input.lastReportedLocalSequence,
+          input.queueFingerprint,
+        ],
+      );
+      await this.evidence(tx, {
+        requestId,
+        actorAccountId: null,
+        actorType: "access_pass",
+        organisationId: session.organisation_id,
+        action: active ? "scoring_offline_authorization.renewed" : "scoring_offline_authorization.issued",
+        targetType: "scoring_offline_authorization",
+        targetId: authorization.id,
+        after: {
+          generation,
+          recording_expires_at: recordingExpiresAt.toISOString(),
+          replay_expires_at: replayExpiresAt.toISOString(),
+        },
+        eventPayload: { competition_id: session.competition_id, match_id: session.match_id, generation },
+      });
+      return {
+        authorization_id: authorization.id,
+        resume_secret: resumeSecret,
+        recording_expires_at: recordingExpiresAt.toISOString(),
+        replay_expires_at: replayExpiresAt.toISOString(),
+        pass_expires_at: serializedDate(session.pass_expires_at),
+        generation,
+        match_id: session.match_id,
+        competition_id: session.competition_id,
+      };
+    });
+  }
+
+  private async loadOfflineAuthorization(
+    tx: PostgresJsSql,
+    authorizationId: string,
+    resumeSecret: string,
+    deviceId: string,
+  ): Promise<OfflineAuthorizationRow> {
+    const authorization = (
+      await tx.unsafe<OfflineAuthorizationRow>(
+        `SELECT a.*,p.expires_at AS pass_expires_at,p.scope,
+                p.revoked_at AS pass_revoked_at,s.mode AS session_mode,
+                s.generation AS session_generation,c.organisation_id
+         FROM scoring_offline_authorizations a
+         JOIN scoring_access_passes p ON p.id=a.access_pass_id
+         JOIN scoring_access_sessions s ON s.id=a.access_session_id
+         JOIN competitions c ON c.id=a.competition_id
+         WHERE a.id=$1`,
+        [authorizationId],
+      )
+    )[0];
+    const suppliedResumeHash = hashSecret(resumeSecret);
+    if (
+      !authorization ||
+      !safeEqual(Buffer.from(authorization.resume_secret_hash), suppliedResumeHash) ||
+      !safeEqual(Buffer.from(authorization.device_id_hash), hashSecret(deviceId))
+    ) {
+      throw new ApiError(403, "OFFLINE_AUTHORIZATION_DENIED", "Offline authorization is invalid");
+    }
+    return authorization;
+  }
+
+  async resumeOfflineAuthorization(
+    authorizationId: string,
+    input: OfflineQueueSummary & { resumeSecret: string; deviceId: string },
+    requestId: string,
+  ) {
+    this.validateOfflineQueueSummary(input);
+    const result = await this.transaction(async (tx) => {
+      let authorization = await this.loadOfflineAuthorization(tx, authorizationId, input.resumeSecret, input.deviceId);
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [authorization.match_id]);
+      authorization = await this.loadOfflineAuthorization(tx, authorizationId, input.resumeSecret, input.deviceId);
+      const now = this.now();
+      if (authorization.status === "transferred" || authorization.session_mode === "transferred") {
+        throw new ApiError(409, "OFFLINE_AUTHORIZATION_TRANSFERRED", "Offline writer authority was transferred");
+      }
+      if (authorization.status === "revoked" || authorization.pass_revoked_at) {
+        throw new ApiError(403, "OFFLINE_AUTHORIZATION_REVOKED", "Offline authorization was revoked");
+      }
+      if (
+        authorization.status !== "active" ||
+        date(authorization.replay_expires_at).getTime() <= now.getTime() ||
+        date(authorization.pass_expires_at).getTime() <= now.getTime()
+      ) {
+        if (authorization.status === "active") {
+          await tx.unsafe(
+            `UPDATE scoring_offline_authorizations SET
+               status='expired',revoked_at=$2,transition_reason='Offline replay window expired'
+             WHERE id=$1`,
+            [authorization.id, now],
+          );
+          await this.evidence(tx, {
+            requestId,
+            actorAccountId: null,
+            actorType: "access_pass",
+            organisationId: authorization.organisation_id,
+            action: "scoring_offline_authorization.expired",
+            targetType: "scoring_offline_authorization",
+            targetId: authorization.id,
+            reason: "Offline replay window expired",
+            eventPayload: {
+              competition_id: authorization.competition_id,
+              match_id: authorization.match_id,
+            },
+          });
+        }
+        return { denied: "OFFLINE_AUTHORIZATION_EXPIRED" as const };
+      }
+      if (
+        authorization.session_generation !== authorization.writer_generation ||
+        authorization.session_mode !== "writer"
+      ) {
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "Offline writer generation is stale");
+      }
+      const lease = (
+        await tx.unsafe<{ access_session_id: string; generation: number }>(
+          `SELECT access_session_id,generation FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
+          [authorization.match_id],
+        )
+      )[0];
+      if (
+        lease &&
+        (lease.generation > authorization.writer_generation ||
+          (lease.generation === authorization.writer_generation &&
+            lease.access_session_id !== authorization.access_session_id))
+      ) {
+        throw new ApiError(409, "STALE_WRITER_GENERATION", "Offline writer generation is stale");
+      }
+      const sessionSecret = opaqueSecret();
+      const sessionExpiresAt = new Date(
+        Math.min(
+          date(authorization.pass_expires_at).getTime(),
+          date(authorization.replay_expires_at).getTime(),
+          now.getTime() + 30 * 60_000,
+        ),
+      );
+      const leaseExpiresAt = new Date(Math.min(sessionExpiresAt.getTime(), now.getTime() + 45_000));
+      await tx.unsafe(
+        `UPDATE scoring_access_sessions SET
+           session_token_hash=$2,expires_at=$3,last_heartbeat_at=$4,
+           last_acknowledged_sequence=$5,reported_pending_event_count=$6,
+           reported_pending_through_sequence=$7,reported_pending_local_sequence=$8,
+           reported_queue_fingerprint=$9
+         WHERE id=$1`,
+        [
+          authorization.access_session_id,
+          hashSecret(sessionSecret),
+          sessionExpiresAt,
+          now,
+          input.lastAcknowledgedSequence,
+          input.pendingEventCount,
+          input.pendingThroughSequence,
+          input.lastReportedLocalSequence,
+          input.queueFingerprint,
+        ],
+      );
+      await tx.unsafe(
+        `INSERT INTO match_writer_leases (
+           competition_id,match_id,access_session_id,generation,acquired_at,expires_at
+         ) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (match_id) DO UPDATE SET
+           competition_id=EXCLUDED.competition_id,access_session_id=EXCLUDED.access_session_id,
+           generation=EXCLUDED.generation,acquired_at=EXCLUDED.acquired_at,expires_at=EXCLUDED.expires_at`,
+        [
+          authorization.competition_id,
+          authorization.match_id,
+          authorization.access_session_id,
+          authorization.writer_generation,
+          now,
+          leaseExpiresAt,
+        ],
+      );
+      await tx.unsafe(
+        `UPDATE scoring_offline_authorizations SET
+           last_authority_at=$2,last_reported_pending_count=$3,
+           last_reported_local_sequence=$4,last_reported_queue_fingerprint=$5,
+           indexeddb_schema_version=$6,service_worker_version=$7
+         WHERE id=$1`,
+        [
+          authorization.id,
+          now,
+          input.pendingEventCount,
+          input.lastReportedLocalSequence,
+          input.queueFingerprint,
+          input.indexeddbSchemaVersion,
+          input.serviceWorkerVersion,
+        ],
+      );
+      await this.auditOnly(tx, {
+        requestId,
+        organisationId: authorization.organisation_id,
+        action: "scoring_offline_authorization.resumed",
+        targetType: "scoring_offline_authorization",
+        targetId: authorization.id,
+        competitionId: authorization.competition_id,
+        matchId: authorization.match_id,
+        after: { generation: authorization.writer_generation, pending_event_count: input.pendingEventCount },
+      });
+      return {
+        session: {
+          session_id: authorization.access_session_id,
+          session_token: sessionSecret,
+          match_id: authorization.match_id,
+          mode: "writer" as const,
+          permissions: jsonValue<ScoringPermission[]>(authorization.scope),
+          generation: authorization.writer_generation,
+          expires_at: sessionExpiresAt.toISOString(),
+          lease_expires_at: leaseExpiresAt.toISOString(),
+        },
+        offline: {
+          authorization_id: authorization.id,
+          resume_secret: input.resumeSecret,
+          recording_expires_at: serializedDate(authorization.recording_expires_at),
+          replay_expires_at: serializedDate(authorization.replay_expires_at),
+          pass_expires_at: serializedDate(authorization.pass_expires_at),
+          generation: authorization.writer_generation,
+          match_id: authorization.match_id,
+          competition_id: authorization.competition_id,
+        },
+      };
+    });
+    if ("denied" in result) {
+      throw new ApiError(403, result.denied, "Offline replay window has expired");
+    }
+    return result;
+  }
+
+  async revokeOfflineAuthorization(
+    authorizationId: string,
+    input: { resumeSecret: string; deviceId: string },
+    requestId: string,
+  ) {
+    return this.transaction(async (tx) => {
+      let authorization = await this.loadOfflineAuthorization(tx, authorizationId, input.resumeSecret, input.deviceId);
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [authorization.match_id]);
+      authorization = await this.loadOfflineAuthorization(tx, authorizationId, input.resumeSecret, input.deviceId);
+      if (authorization.status !== "active") {
+        return { authorization_id: authorization.id, status: authorization.status, duplicate: true as const };
+      }
+      const now = this.now();
+      await tx.unsafe(
+        `UPDATE scoring_offline_authorizations SET
+           status='revoked',revoked_at=$2,transition_reason='Scorer ended offline access'
+         WHERE id=$1`,
+        [authorization.id, now],
+      );
+      await tx.unsafe(
+        `UPDATE scoring_access_sessions
+         SET revoked_at=COALESCE(revoked_at,$2)
+         WHERE id=$1`,
+        [authorization.access_session_id, now],
+      );
+      await tx.unsafe(
+        `DELETE FROM match_writer_leases
+         WHERE match_id=$1 AND access_session_id=$2 AND generation=$3`,
+        [authorization.match_id, authorization.access_session_id, authorization.writer_generation],
+      );
+      await this.evidence(tx, {
+        requestId,
+        actorAccountId: null,
+        actorType: "access_pass",
+        organisationId: authorization.organisation_id,
+        action: "scoring_offline_authorization.revoked",
+        targetType: "scoring_offline_authorization",
+        targetId: authorization.id,
+        reason: "Scorer ended offline access",
+        eventPayload: {
+          competition_id: authorization.competition_id,
+          match_id: authorization.match_id,
+        },
+      });
+      return { authorization_id: authorization.id, status: "revoked" as const, duplicate: false as const };
     });
   }
 
@@ -1720,6 +2342,36 @@ export class Phase2Runtime {
           `SELECT access_session_id,generation,expires_at FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
           [pass.match_id],
         );
+        const now = this.now();
+        const expiredAuthorizations = await tx.unsafe<{ id: string }>(
+          `UPDATE scoring_offline_authorizations SET
+             status='expired',revoked_at=$2,transition_reason='Offline replay window expired'
+           WHERE match_id=$1 AND status='active' AND replay_expires_at<=$2
+           RETURNING id`,
+          [pass.match_id, now],
+        );
+        for (const authorization of expiredAuthorizations) {
+          await this.evidence(tx, {
+            requestId: `${requestId}:offline-expired:${authorization.id}`,
+            actorAccountId: null,
+            actorType: "access_pass",
+            organisationId: pass.organisation_id,
+            action: "scoring_offline_authorization.expired",
+            targetType: "scoring_offline_authorization",
+            targetId: authorization.id,
+            reason: "Offline replay window expired",
+            eventPayload: { competition_id: pass.competition_id, match_id: pass.match_id },
+          });
+        }
+        const reservedWriter = (
+          await tx.unsafe<{ access_session_id: string; writer_generation: number }>(
+            `SELECT access_session_id,writer_generation
+             FROM scoring_offline_authorizations
+             WHERE match_id=$1 AND status='active' AND replay_expires_at>$2
+             FOR UPDATE`,
+            [pass.match_id, now],
+          )
+        )[0];
         const historicalGeneration =
           (
             await tx.unsafe<{ generation: number }>(
@@ -1728,13 +2380,13 @@ export class Phase2Runtime {
               [pass.match_id],
             )
           )[0]?.generation ?? 0;
-        const now = this.now();
         const expiresAt = new Date(Math.min(date(pass.expires_at).getTime(), now.getTime() + 30 * 60_000));
         const activeLease = Boolean(lease[0] && date(lease[0].expires_at).getTime() > now.getTime());
-        if (!input.deviceId && activeLease) {
+        const writerReserved = activeLease || Boolean(reservedWriter);
+        if (!input.deviceId && writerReserved) {
           throw new ApiError(409, "WRITER_ACTIVE", "Another scorekeeper currently controls this match");
         }
-        const mode: ScoringSessionMode = pass.role === "viewer" ? "viewer" : activeLease ? "candidate" : "writer";
+        const mode: ScoringSessionMode = pass.role === "viewer" ? "viewer" : writerReserved ? "candidate" : "writer";
         const generation = mode === "writer" ? Math.max(lease[0]?.generation ?? 0, historicalGeneration) + 1 : null;
         const leaseExpiresAt =
           mode === "writer" ? new Date(Math.min(expiresAt.getTime(), now.getTime() + 45_000)) : null;
@@ -2007,6 +2659,42 @@ export class Phase2Runtime {
     };
   }
 
+  private async assertOfflineRecordingTimestamp(
+    tx: PostgresJsSql,
+    sessionId: string,
+    generation: number,
+    occurredAt: string,
+  ): Promise<void> {
+    const authorization = (
+      await tx.unsafe<{
+        issued_at: Date | string;
+        recording_expires_at: Date | string;
+        replay_expires_at: Date | string;
+      }>(
+        `SELECT issued_at,recording_expires_at,replay_expires_at
+         FROM scoring_offline_authorizations
+         WHERE access_session_id=$1 AND writer_generation=$2 AND status='active'`,
+        [sessionId, generation],
+      )
+    )[0];
+    if (!authorization) return;
+    if (date(authorization.replay_expires_at).getTime() <= this.now().getTime()) {
+      throw new ApiError(403, "OFFLINE_AUTHORIZATION_EXPIRED", "Offline replay window has expired");
+    }
+    const deviceTimestamp = new Date(occurredAt);
+    if (
+      !Number.isFinite(deviceTimestamp.getTime()) ||
+      deviceTimestamp.getTime() < date(authorization.issued_at).getTime() ||
+      deviceTimestamp.getTime() >= date(authorization.recording_expires_at).getTime()
+    ) {
+      throw new ApiError(
+        409,
+        "OFFLINE_RECORDING_EXPIRED",
+        "The command timestamp is outside the authorised offline recording window",
+      );
+    }
+  }
+
   private async ensureCanonicalStream(
     tx: PostgresJsSql,
     matchId: string,
@@ -2268,8 +2956,13 @@ export class Phase2Runtime {
         assertFiveSportScoreCommandAllowed(context.sport_code, command, context.settings);
         const fingerprint = stableHash(wireScoreCommand(command));
         const duplicate = (
-          await tx.unsafe<{ id: string; aggregate_version: number; command_fingerprint: string }>(
-            `SELECT id,aggregate_version,command_fingerprint FROM canonical_score_events
+          await tx.unsafe<{
+            id: string;
+            aggregate_version: number;
+            command_fingerprint: string;
+            server_timestamp: Date | string;
+          }>(
+            `SELECT id,aggregate_version,command_fingerprint,server_timestamp FROM canonical_score_events
              WHERE match_id=$1 AND client_event_id=$2`,
             [session.match_id, command.clientEventId],
           )
@@ -2283,10 +2976,14 @@ export class Phase2Runtime {
             );
           }
           return {
+            client_event_id: command.clientEventId,
             duplicate: true as const,
             event_id: duplicate.id,
+            command_fingerprint: duplicate.command_fingerprint,
+            outcome: "duplicate" as const,
             sequence: duplicate.aggregate_version,
             aggregate_version: duplicate.aggregate_version,
+            server_received_at: serializedDate(duplicate.server_timestamp),
           };
         }
         const match = required(
@@ -2333,12 +3030,14 @@ export class Phase2Runtime {
         if (!writerGeneration) {
           throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
         }
+        await this.assertOfflineRecordingTimestamp(tx, session.id, writerGeneration, command.occurredAt);
+        const serverReceivedAt = this.now();
         await tx.unsafe(
           `INSERT INTO canonical_score_events (
              id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
              command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp,
-             reversal_target_event_id,reason
-           ) VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14)`,
+             server_timestamp,reversal_target_event_id,reason
+           ) VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8::jsonb,$9,$10,$11,$12,$15,$13,$14)`,
           [
             eventId,
             context.competition_id,
@@ -2354,6 +3053,7 @@ export class Phase2Runtime {
             command.occurredAt,
             command.reversalTargetEventId ?? null,
             command.reason ?? null,
+            serverReceivedAt,
           ],
         );
         await tx.unsafe(`UPDATE match_score_streams SET current_version=$2,updated_at=$3 WHERE match_id=$1`, [
@@ -2386,7 +3086,16 @@ export class Phase2Runtime {
             event_type: command.type,
           },
         });
-        return { duplicate: false as const, event_id: eventId, sequence, aggregate_version: sequence };
+        return {
+          client_event_id: command.clientEventId,
+          duplicate: false as const,
+          event_id: eventId,
+          command_fingerprint: fingerprint,
+          outcome: "accepted" as const,
+          sequence,
+          aggregate_version: sequence,
+          server_received_at: serverReceivedAt.toISOString(),
+        };
       });
     } catch (error) {
       if (isScoreWriterSessionGuardViolation(error)) {
@@ -2537,10 +3246,32 @@ export class Phase2Runtime {
         const lease = required(
           await tx.unsafe<{ access_session_id: string }>(
             `SELECT access_session_id FROM match_writer_leases
-           WHERE match_id=$1 AND expires_at>$2 FOR UPDATE`,
+           WHERE match_id=$1 AND (
+             expires_at>$2
+             OR EXISTS (
+               SELECT 1 FROM scoring_offline_authorizations a
+               WHERE a.match_id=match_writer_leases.match_id
+                 AND a.access_session_id=match_writer_leases.access_session_id
+                 AND a.writer_generation=match_writer_leases.generation
+                 AND a.status='active'
+                 AND a.replay_expires_at>$2
+             )
+           ) FOR UPDATE`,
             [candidate.match_id, this.now()],
           ),
           "Active writer lease not found",
+        );
+        const offlineReserved = Boolean(
+          (
+            await tx.unsafe<{ reserved: boolean }>(
+              `SELECT EXISTS (
+                 SELECT 1 FROM scoring_offline_authorizations
+                 WHERE match_id=$1 AND access_session_id=$2
+                   AND status='active' AND replay_expires_at>$3
+               ) AS reserved`,
+              [candidate.match_id, lease.access_session_id, this.now()],
+            )
+          )[0]?.reserved,
         );
         const incumbent = required(
           await tx.unsafe<{
@@ -2555,11 +3286,13 @@ export class Phase2Runtime {
         );
         const heartbeatRecent =
           incumbent.last_heartbeat_at && date(incumbent.last_heartbeat_at).getTime() >= this.now().getTime() - 30_000;
-        const incumbentPendingState = !heartbeatRecent
+        const incumbentPendingState = offlineReserved
           ? "unknown"
-          : incumbent.reported_pending_event_count > 0
-            ? "present"
-            : "none";
+          : !heartbeatRecent
+            ? "unknown"
+            : incumbent.reported_pending_event_count > 0
+              ? "present"
+              : "none";
         await tx.unsafe(
           `UPDATE scoring_access_sessions SET
            last_heartbeat_at=$2,reported_pending_event_count=$3,reported_pending_through_sequence=$4
@@ -2817,7 +3550,21 @@ export class Phase2Runtime {
         throw new ApiError(409, "TAKEOVER_STALE", "The active writer changed before approval");
       }
       const now = this.now();
-      if (date(lease.expires_at).getTime() <= now.getTime()) {
+      const activeOfflineAuthorization = (
+        await tx.unsafe<{
+          id: string;
+          last_reported_pending_count: number;
+          last_reported_local_sequence: number;
+        }>(
+          `SELECT id,last_reported_pending_count,last_reported_local_sequence
+           FROM scoring_offline_authorizations
+           WHERE match_id=$1 AND access_session_id=$2 AND writer_generation=$3
+             AND status='active' AND replay_expires_at>$4
+           FOR UPDATE`,
+          [takeover.match_id, takeover.incumbent_session_id, lease.generation, now],
+        )
+      )[0];
+      if (date(lease.expires_at).getTime() <= now.getTime() && !activeOfflineAuthorization) {
         throw new ApiError(409, "TAKEOVER_STALE", "The incumbent writer lease expired before approval");
       }
       const candidate = required(
@@ -2867,11 +3614,13 @@ export class Phase2Runtime {
       );
       const heartbeatRecent =
         incumbent.last_heartbeat_at && date(incumbent.last_heartbeat_at).getTime() >= now.getTime() - 30_000;
-      const authoritativePendingState: "unknown" | "none" | "present" = !heartbeatRecent
+      const authoritativePendingState: "unknown" | "none" | "present" = activeOfflineAuthorization
         ? "unknown"
-        : incumbent.reported_pending_event_count > 0
-          ? "present"
-          : "none";
+        : !heartbeatRecent
+          ? "unknown"
+          : incumbent.reported_pending_event_count > 0
+            ? "present"
+            : "none";
       if (authoritativePendingState !== "none" && !input.overrideAcknowledged) {
         throw new ApiError(
           409,
@@ -2881,6 +3630,14 @@ export class Phase2Runtime {
       }
       const generation = lease.generation + 1;
       const leaseExpiresAt = new Date(Math.min(date(candidate.expires_at).getTime(), now.getTime() + 45_000));
+      if (activeOfflineAuthorization) {
+        await tx.unsafe(
+          `UPDATE scoring_offline_authorizations SET
+             status='transferred',revoked_at=$2,transition_reason=$3
+           WHERE id=$1`,
+          [activeOfflineAuthorization.id, now, input.reason.trim()],
+        );
+      }
       await tx.unsafe(
         `UPDATE scoring_access_sessions SET mode='transferred',transferred_to_session_id=$2 WHERE id=$1`,
         [takeover.incumbent_session_id, takeover.requesting_session_id],
@@ -2910,8 +3667,7 @@ export class Phase2Runtime {
                competition_id,match_id,takeover_request_id,stale_session_id,replacement_session_id,
                stale_generation,pending_event_count,pending_through_sequence,status,created_at
              )
-             SELECT $1,$2,$3,$4,$5,$6,reported_pending_event_count,
-                    reported_pending_through_sequence,'open',$7
+             SELECT $1,$2,$3,$4,$5,$6,$8,$9,'open',$7
              FROM scoring_access_sessions WHERE id=$4 RETURNING id`,
             [
               competitionId,
@@ -2921,6 +3677,8 @@ export class Phase2Runtime {
               takeover.requesting_session_id,
               lease.generation,
               now,
+              activeOfflineAuthorization?.last_reported_pending_count ?? incumbent.reported_pending_event_count,
+              activeOfflineAuthorization?.last_reported_local_sequence ?? incumbent.reported_pending_through_sequence,
             ],
           ),
           "Transfer conflict was not created",
@@ -2943,6 +3701,19 @@ export class Phase2Runtime {
         },
         eventPayload: { competition_id: competitionId, match_id: takeover.match_id, generation },
       });
+      if (activeOfflineAuthorization) {
+        await this.evidence(tx, {
+          requestId: `${requestId}:offline:${activeOfflineAuthorization.id}`,
+          actorAccountId: actor.accountId,
+          organisationId: competition.organisation_id,
+          action: "scoring_offline_authorization.transferred",
+          targetType: "scoring_offline_authorization",
+          targetId: activeOfflineAuthorization.id,
+          reason: input.reason.trim(),
+          after: { replacement_generation: generation, conflict_id: conflictId },
+          eventPayload: { competition_id: competitionId, match_id: takeover.match_id, generation },
+        });
+      }
       return {
         id: takeover.id,
         status: "approved" as const,
@@ -2958,6 +3729,7 @@ export class Phase2Runtime {
     clientEventId: string,
     requestId: string,
     expectedAggregateVersion?: number,
+    occurredAt?: string,
   ) {
     const stream = await this.sql.unsafe<{ match_id: string }>(
       `SELECT stream.match_id
@@ -2973,7 +3745,7 @@ export class Phase2Runtime {
         "Finalisation requires a canonical five-sport score stream",
       );
     }
-    return this.finaliseCanonical(auth, clientEventId, requestId, expectedAggregateVersion);
+    return this.finaliseCanonical(auth, clientEventId, requestId, expectedAggregateVersion, occurredAt);
   }
 
   private async finaliseCanonical(
@@ -2981,6 +3753,7 @@ export class Phase2Runtime {
     clientEventId: string,
     requestId: string,
     expectedAggregateVersion?: number,
+    occurredAt?: string,
   ) {
     try {
       return await this.transaction(async (tx) => {
@@ -3001,6 +3774,7 @@ export class Phase2Runtime {
           client_event_id: clientEventId,
           type: "finalisation",
           expected_aggregate_version: expectedAggregateVersion ?? null,
+          ...(occurredAt ? { occurred_at: occurredAt } : {}),
         });
         const duplicate = (
           await tx.unsafe<{
@@ -3008,8 +3782,10 @@ export class Phase2Runtime {
             aggregate_version: number;
             event_type: string;
             command_fingerprint: string;
+            server_timestamp: Date | string;
           }>(
-            `SELECT id,aggregate_version,event_type,command_fingerprint FROM canonical_score_events
+            `SELECT id,aggregate_version,event_type,command_fingerprint,server_timestamp
+             FROM canonical_score_events
              WHERE match_id=$1 AND client_event_id=$2`,
             [session.match_id, clientEventId],
           )
@@ -3026,12 +3802,19 @@ export class Phase2Runtime {
           if (!original) throw new ApiError(409, "RESULT_RECEIPT_MISSING", "Finalisation receipt is unavailable");
           return {
             match_id: session.match_id,
+            client_event_id: clientEventId,
+            event_id: duplicate.id,
+            command_fingerprint: duplicate.command_fingerprint,
+            outcome: "duplicate" as const,
             sequence: duplicate.aggregate_version,
             aggregate_version: duplicate.aggregate_version,
             duplicate: true as const,
             home_score: original.home_score,
             away_score: original.away_score,
             result_version: original.result_version,
+            publication_version: original.result_version,
+            published_at: original.published_at,
+            server_received_at: serializedDate(duplicate.server_timestamp),
           };
         }
         const match = required(
@@ -3052,7 +3835,7 @@ export class Phase2Runtime {
         const command: FiveSportScoreCommand = {
           clientEventId,
           type: "finalisation",
-          occurredAt: this.now().toISOString(),
+          occurredAt: occurredAt ?? this.now().toISOString(),
         };
         const eventId = randomUUID();
         const event = materialiseFiveSportScoreEvent(command, {
@@ -3079,11 +3862,13 @@ export class Phase2Runtime {
         const aggregateVersion = canonical.aggregateVersion + 1;
         const generation = session.generation;
         if (!generation) throw new ApiError(409, "STALE_WRITER_GENERATION", "Writer lease is not active");
+        await this.assertOfflineRecordingTimestamp(tx, session.id, generation, command.occurredAt);
+        const serverReceivedAt = this.now();
         await tx.unsafe(
           `INSERT INTO canonical_score_events (
              id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
-             command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
-           ) VALUES ($1,$2,$3,$4,$5,$6,$6,'finalisation',$7::jsonb,$8,$9,$10,$11)`,
+             command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp,server_timestamp
+           ) VALUES ($1,$2,$3,$4,$5,$6,$6,'finalisation',$7::jsonb,$8,$9,$10,$11,$12)`,
           [
             eventId,
             canonical.context.competition_id,
@@ -3096,6 +3881,7 @@ export class Phase2Runtime {
             session.id,
             generation,
             command.occurredAt,
+            serverReceivedAt,
           ],
         );
         await tx.unsafe(`UPDATE match_score_streams SET current_version=$2,updated_at=$3 WHERE match_id=$1`, [
@@ -3140,9 +3926,14 @@ export class Phase2Runtime {
           });
         }
         return {
+          client_event_id: clientEventId,
+          event_id: eventId,
+          command_fingerprint: finalisationFingerprint,
+          outcome: "accepted" as const,
           duplicate: false as const,
           sequence: aggregateVersion,
           aggregate_version: aggregateVersion,
+          server_received_at: serverReceivedAt.toISOString(),
           ...result,
         };
       });
@@ -3622,8 +4413,9 @@ export class Phase2Runtime {
         home_score: number;
         away_score: number;
         result_version: number;
+        created_at: Date | string;
       }>(
-        `SELECT home_score,away_score,result_version FROM match_result_snapshots
+        `SELECT home_score,away_score,result_version,created_at FROM match_result_snapshots
        WHERE match_id=$1 AND through_sequence=$2`,
         [matchId, throughSequence],
       )
@@ -3634,6 +4426,7 @@ export class Phase2Runtime {
           home_score: row.home_score,
           away_score: row.away_score,
           result_version: row.result_version,
+          published_at: serializedDate(row.created_at),
         }
       : null;
   }
@@ -3701,6 +4494,7 @@ export class Phase2Runtime {
     );
     const resultVersion = publication.result_version + 1;
     const throughSequence = input.canonical.throughAggregateVersion;
+    const publishedAt = this.now();
     await tx.unsafe(
       `INSERT INTO match_result_snapshots (
          match_id,result_version,through_sequence,home_score,away_score,state,snapshot
@@ -3718,7 +4512,7 @@ export class Phase2Runtime {
     await tx.unsafe(`UPDATE matches SET state=$2 WHERE id=$1`, [input.matchId, reduced.state]);
     await tx.unsafe(
       `UPDATE competition_publications SET result_version=$2,results_published_at=$3,updated_at=$3 WHERE competition_id=$1`,
-      [match.competition_id, resultVersion, this.now()],
+      [match.competition_id, resultVersion, publishedAt],
     );
     await tx.unsafe(
       `UPDATE competitions SET status=CASE
@@ -3750,6 +4544,8 @@ export class Phase2Runtime {
       home_score: reduced.homeScore,
       away_score: reduced.awayScore,
       result_version: resultVersion,
+      publication_version: resultVersion,
+      published_at: publishedAt.toISOString(),
     };
   }
 
@@ -4423,6 +5219,21 @@ export class Phase2Runtime {
         score: this.serialisedCanonicalScore(canonicalState),
         aggregate_version: canonical?.aggregateVersion ?? 0,
         through_sequence: canonical?.aggregateVersion ?? 0,
+        canonical_events: canonicalRows.map((row) => {
+          const command = parseFiveSportScoreCommand(jsonValue(row.command));
+          if (!command) {
+            throw new ApiError(
+              409,
+              "SCORING_STREAM_COMMAND_INVALID",
+              "The canonical score stream contains an invalid command",
+            );
+          }
+          return {
+            event_id: row.id,
+            sequence: row.aggregate_version,
+            command: wireOfflineScoreCommand(command, row.aggregate_version - 1),
+          };
+        }),
         events: canonicalRows.map((row) => {
           const command = parseFiveSportScoreCommand(jsonValue(row.command));
           return {

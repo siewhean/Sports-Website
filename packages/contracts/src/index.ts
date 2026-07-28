@@ -141,3 +141,22 @@ export type {
   Phase4SetupPatchRequest,
   Phase4SetupPatchResponse,
 } from "./phase-4-setup-patch.js";
+export {
+  gateCOfflineQueueLimit,
+  gateCOfflineQueueWarningCount,
+  gateCOfflineRecordingDurationMs,
+  gateCOfflineReplayGraceMs,
+  gateCOfflineSchemaVersion,
+  type GateCOfflineAcknowledgement,
+  type GateCOfflineAuthorizationStatus,
+  type GateCOfflineCanonicalCommand,
+  type GateCOfflineCanonicalEventCommand,
+  type GateCOfflineConflictCode,
+  type GateCOfflineFinalisationCommand,
+  type GateCOfflineMatchPackage,
+  type GateCOfflineParticipant,
+  type GateCOfflineQueuedCommand,
+  type GateCOfflineQueueSummary,
+  type GateCOfflineReplayError,
+  type GateCOfflineReplayReceipt,
+} from "./gate-c-offline.js";
