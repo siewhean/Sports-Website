@@ -1,0 +1,143 @@
+.surface {
+  min-width: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.header > div,
+.header h2,
+.header p,
+.clockNotice {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.header h2,
+.header p,
+.clockNotice,
+.status {
+  margin: 0;
+}
+
+.clockNotice {
+  max-width: 24rem;
+  text-align: end;
+}
+
+.scoreboard {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.scoreboard > div {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.875rem;
+  border: 1px solid currentColor;
+  border-radius: 0.75rem;
+}
+
+.scoreboard dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.scoreboard dd {
+  margin: 0;
+  font-size: clamp(1.75rem, 8vw, 3rem);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.status {
+  min-height: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.groups {
+  min-width: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.group {
+  min-width: 0;
+  margin: 0;
+  padding: 0.875rem;
+  border: 1px solid currentColor;
+  border-radius: 0.75rem;
+}
+
+.group legend {
+  max-width: 100%;
+  padding-inline: 0.35rem;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.actions {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 0.625rem;
+}
+
+.action {
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  place-content: center;
+  gap: 0.2rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid currentColor;
+  border-radius: 0.65rem;
+  font: inherit;
+  text-align: center;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.action:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 3px;
+}
+
+.action strong {
+  font-size: 0.85em;
+}
+
+@media (max-width: 30rem) {
+  .header {
+    display: grid;
+  }
+
+  .clockNotice {
+    max-width: none;
+    text-align: start;
+  }
+
+  .scoreboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
