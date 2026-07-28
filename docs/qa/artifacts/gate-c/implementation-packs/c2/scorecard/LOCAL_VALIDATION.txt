@@ -1,0 +1,25 @@
+Container-side validation boundary
+==================================
+
+Validated against the synced sport-pack source, not the user's unmounted Mac checkout.
+
+PASS:
+- strict TypeScript source + test typecheck using TypeScript 5.8.3;
+- noUncheckedIndexedAccess;
+- exactOptionalPropertyTypes;
+- runtime smoke for all five sports;
+- Canoe Polo optional-control settings;
+- Badminton/Table Tennis best-of definitions;
+- Volleyball deciding-target definition;
+- Basketball 1/2/3-point definition;
+- Prettier standalone formatting;
+- patch creation and checksum.
+
+NOT RUN HERE:
+- repository pnpm install;
+- @matchday/web typecheck with the entire monorepo;
+- Vitest under the repository configuration;
+- Next production build;
+- browser or accessibility validation.
+
+Those checks remain mandatory before committing locally.
