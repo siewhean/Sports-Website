@@ -20,11 +20,13 @@ export default async function ScorePage({ searchParams }: { searchParams: Promis
       demo && DEMO_SPORTS.has(requestedSport as SportId) ? (requestedSport as SportId) : phase2Machine.canoePolo;
     const hasScoringSession = (await cookies()).has(scoringSessionCookieName);
     return (
-      <PhoneScoring
-        mode={demo ? phase2Machine.scoringDemoMode : phase2Machine.scoringApiMode}
-        recoverOnLoad={hasScoringSession}
-        demoSportId={demoSportId}
-      />
+      <div data-offline-scoring-shell="v1">
+        <PhoneScoring
+          mode={demo ? phase2Machine.scoringDemoMode : phase2Machine.scoringApiMode}
+          recoverOnLoad={hasScoringSession}
+          demoSportId={demoSportId}
+        />
+      </div>
     );
   }
   if (!demoFixturesEnabled()) notFound();
