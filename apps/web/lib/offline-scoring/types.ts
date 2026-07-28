@@ -41,6 +41,13 @@ export type OfflineConflict = Readonly<{
   acknowledged_at?: string;
 }>;
 
+export type OfflineAuthorityRefreshResult =
+  | "active"
+  | "authority_transferred"
+  | "authority_revoked"
+  | "authority_expired"
+  | null;
+
 export type OfflineScoringRepository = {
   saveMatchPackage(matchPackage: GateCOfflineMatchPackage): Promise<void>;
   transitionMatchPackageStatus(
@@ -86,5 +93,5 @@ export type OfflineReplayPort = {
     resolvedCommand: GateCOfflineQueuedCommand["command"],
     signal?: AbortSignal,
   ): Promise<GateCOfflineReplayReceipt>;
-  refreshAuthority?(authorizationId: string): Promise<boolean>;
+  refreshAuthority?(authorizationId: string): Promise<OfflineAuthorityRefreshResult>;
 };
