@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalGateCC2ScreenshotPaths,
   canonicalGateCC2ResultSnapshot,
   gateCC2Projects,
   gateCC2BrowserSteps,
@@ -55,6 +56,15 @@ describe("Gate C C2 evidence discovery", () => {
     expect(() => validateGateCC2ScreenshotPaths(paths.slice(1))).toThrow(/found 0/);
     expect(() => validateGateCC2ScreenshotPaths([...paths, paths[0]!])).toThrow(/found 2/);
     expect(() => validateGateCC2ScreenshotPaths(["playwright/unrelated.png"])).toThrow(/found 0/);
+  });
+
+  it("records canonical screenshots without Playwright attachment copies", () => {
+    const canonical = gateCC2ScreenshotStems.map((stem) => `playwright/result/${stem}.png`);
+    const attachments = gateCC2ScreenshotStems.map(
+      (stem) => `playwright/result/attachments/${stem}-${"a".repeat(40)}.png`,
+    );
+    expect(canonicalGateCC2ScreenshotPaths([...canonical, ...attachments])).toEqual(canonical);
+    expect(() => canonicalGateCC2ScreenshotPaths([...canonical, canonical[0]!])).toThrow(/found 2/);
   });
 
   it("requires exact five-sport browser and direct database semantics", () => {

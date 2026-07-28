@@ -29,6 +29,7 @@ import {
   type GateCEvidenceScope,
 } from "./gate-c-access-evidence.js";
 import {
+  canonicalGateCC2ScreenshotPaths,
   canonicalGateCC2ResultSnapshot,
   validateGateCC2BrowserReceipt,
   validateGateCC2SemanticReceipt,
@@ -1095,6 +1096,9 @@ async function main(): Promise<void> {
     }
     const retained = await retainedArtifacts(retainedDirectory);
     const databaseIdentifier = isolation.kind === "database" ? isolation.databaseName : isolation.schema;
+    const retainedScreenshotPaths = retained
+      .filter((artifact) => artifact.path.endsWith(".png"))
+      .map((artifact) => artifact.path);
     const record = {
       schema_version: 1,
       artifact_kind: `${evidenceScope}-project-evidence`,
@@ -1115,7 +1119,10 @@ async function main(): Promise<void> {
         final_owned_key_count: finalOwnedRedisKeyCount,
         unrelated_guard_preserved: redisGuardPreserved,
       },
-      screenshot_paths: retained.filter((artifact) => artifact.path.endsWith(".png")).map((artifact) => artifact.path),
+      screenshot_paths:
+        evidenceScope === "gate-c-c2"
+          ? canonicalGateCC2ScreenshotPaths(retainedScreenshotPaths)
+          : retainedScreenshotPaths,
       result_paths: retained.filter((artifact) => artifact.path.endsWith(".json")).map((artifact) => artifact.path),
       artifacts: retained,
     };
