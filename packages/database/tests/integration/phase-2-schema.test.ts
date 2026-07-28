@@ -841,6 +841,106 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     ]);
   });
 
+  it("binds hash-only offline authority to one writer generation and monotonic terminal transitions", async () => {
+    const world = await createWorld();
+    const [session] = await sql<{ device_id_hash: Buffer }[]>`
+      SELECT device_id_hash FROM scoring_access_sessions WHERE id=${world.sessionA}
+    `;
+    const authorization = randomUUID();
+    await expect(sql`
+      INSERT INTO scoring_offline_authorizations (
+        competition_id,match_id,access_pass_id,access_session_id,writer_generation,
+        resume_secret_hash,device_id_hash,issued_at,last_authority_at,
+        recording_expires_at,replay_expires_at
+      ) VALUES (
+        ${world.competitionA},${world.matchA},${world.passA},${world.sessionA},1,
+        ${Buffer.from("plaintext")},${session!.device_id_hash},
+        '2026-08-01T08:00:00Z','2026-08-01T08:00:00Z',
+        '2026-08-01T08:30:00Z','2026-08-01T08:45:00Z'
+      )
+    `).rejects.toThrow();
+    await sql`
+      INSERT INTO scoring_offline_authorizations (
+        id,competition_id,match_id,access_pass_id,access_session_id,writer_generation,
+        resume_secret_hash,device_id_hash,issued_at,last_authority_at,
+        recording_expires_at,replay_expires_at
+      ) VALUES (
+        ${authorization},${world.competitionA},${world.matchA},${world.passA},${world.sessionA},1,
+        ${randomBytes(32)},${session!.device_id_hash},
+        '2026-08-01T08:00:00Z','2026-08-01T08:00:00Z',
+        '2026-08-01T08:30:00Z','2026-08-01T08:45:00Z'
+      )
+    `;
+    await expect(sql`
+      INSERT INTO scoring_offline_authorizations (
+        competition_id,match_id,access_pass_id,access_session_id,writer_generation,
+        resume_secret_hash,device_id_hash,issued_at,last_authority_at,
+        recording_expires_at,replay_expires_at
+      ) VALUES (
+        ${world.competitionA},${world.matchA},${world.passA},${world.sessionA},1,
+        ${randomBytes(32)},${session!.device_id_hash},
+        '2026-08-01T08:00:00Z','2026-08-01T08:00:00Z',
+        '2026-08-01T12:00:00.001Z','2026-08-01T12:15:00.001Z'
+      )
+    `).rejects.toThrow();
+    await expect(sql`
+      INSERT INTO scoring_offline_authorizations (
+        competition_id,match_id,access_pass_id,access_session_id,writer_generation,
+        resume_secret_hash,device_id_hash,issued_at,last_authority_at,
+        recording_expires_at,replay_expires_at
+      ) VALUES (
+        ${world.competitionB},${world.matchB},${world.passA},${world.sessionA},1,
+        ${randomBytes(32)},${session!.device_id_hash},
+        '2026-08-01T08:00:00Z','2026-08-01T08:00:00Z',
+        '2026-08-01T08:30:00Z','2026-08-01T08:45:00Z'
+      )
+    `).rejects.toThrow();
+    await expect(sql`
+      INSERT INTO scoring_offline_authorizations (
+        competition_id,match_id,access_pass_id,access_session_id,writer_generation,
+        resume_secret_hash,device_id_hash,issued_at,last_authority_at,
+        recording_expires_at,replay_expires_at
+      ) VALUES (
+        ${world.competitionA},${world.matchA},${world.passA},${world.sessionA},1,
+        ${randomBytes(32)},${session!.device_id_hash},
+        '2026-08-01T08:00:00Z','2026-08-01T08:00:00Z',
+        '2026-08-01T08:31:00Z','2026-08-01T08:46:00Z'
+      )
+    `).rejects.toThrow();
+    await expect(sql`
+      INSERT INTO scoring_offline_authorizations (
+        competition_id,match_id,access_pass_id,access_session_id,writer_generation,
+        resume_secret_hash,device_id_hash,issued_at,last_authority_at,
+        recording_expires_at,replay_expires_at
+      ) VALUES (
+        ${world.competitionB},${world.matchB},${world.passB},${world.sessionB},1,
+        ${randomBytes(32)},${session!.device_id_hash},
+        '2026-08-02T08:00:00Z','2026-08-02T08:00:00Z',
+        '2026-08-02T08:30:00Z','2026-08-02T08:45:00Z'
+      )
+    `).rejects.toThrow();
+    await expect(sql`
+      UPDATE scoring_offline_authorizations
+      SET writer_generation=2 WHERE id=${authorization}
+    `).rejects.toThrow(/immutable/i);
+    await sql`
+      UPDATE scoring_offline_authorizations
+      SET status='transferred',revoked_at='2026-08-01T08:10:00Z',
+          transition_reason='Organiser approved device transfer'
+      WHERE id=${authorization}
+    `;
+    await expect(sql`
+      UPDATE scoring_offline_authorizations
+      SET transition_reason='Changed after transfer' WHERE id=${authorization}
+    `).rejects.toThrow(/terminal/i);
+    expect(
+      await sql`
+        SELECT status,octet_length(resume_secret_hash)::integer AS hash_bytes
+        FROM scoring_offline_authorizations WHERE id=${authorization}
+      `,
+    ).toEqual([{ status: "transferred", hash_bytes: 32 }]);
+  });
+
   it("isolates result, standings, bracket, and public projection versions", async () => {
     const world = await createWorld();
     await sql`

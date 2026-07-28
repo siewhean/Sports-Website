@@ -1,4 +1,5 @@
 import type { Phase3SportCode } from "./phase-3.js";
+import type { GateCOfflineCanonicalCommand } from "./gate-c-offline.js";
 
 export type PublicParticipant = {
   id: string | null;
@@ -74,12 +75,19 @@ export type ResultMutationReceipt = {
 
 export type ScoringFinalisationReceipt = {
   match_id: string;
+  client_event_id: string;
+  event_id: string;
+  command_fingerprint: string;
+  outcome: "accepted" | "duplicate";
   sequence: number;
   aggregate_version: number;
   duplicate: boolean;
   home_score: number;
   away_score: number;
   result_version: number;
+  publication_version: number;
+  published_at: string;
+  server_received_at: string;
 };
 
 export type ScoringSessionState = {
@@ -147,5 +155,10 @@ export type ScoringSessionState = {
     payload: Record<string, unknown>;
     correction_reason: string | null;
     occurred_at: string;
+  }>;
+  canonical_events: Array<{
+    event_id: string;
+    sequence: number;
+    command: GateCOfflineCanonicalCommand;
   }>;
 };

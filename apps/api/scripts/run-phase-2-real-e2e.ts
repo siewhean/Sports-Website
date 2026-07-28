@@ -1,6 +1,6 @@
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { access, cp, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -37,6 +37,14 @@ import {
   type GateCC2Project,
   type GateCC2SemanticReceipt,
 } from "./gate-c-c2-evidence.js";
+import {
+  gateCC3Projects,
+  createGateCC3ControllableClock,
+  gateCC3Scenarios,
+  verifyGateCC3SafeArtifactTree,
+  type GateCC3Project,
+  type GateCC3Scenario,
+} from "./gate-c-c3-evidence.js";
 
 const apiPort = 4100;
 const webPort = 3102;
@@ -54,8 +62,20 @@ const adminDatabaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchd
 const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
 const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const evidenceScope = (process.env.PHASE2_E2E_EVIDENCE_SCOPE ?? "gate-c-access") as GateCEvidenceScope;
-if (!["gate-c-access", "gate-c-c2"].includes(evidenceScope)) {
+if (!["gate-c-access", "gate-c-c2", "gate-c-c3"].includes(evidenceScope)) {
   throw new Error(`Unsupported real-E2E evidence scope: ${evidenceScope}`);
+}
+if (evidenceScope === "gate-c-c3" && !gateCC3Projects.includes(process.env.PHASE2_E2E_PROJECT as GateCC3Project)) {
+  throw new Error("Gate C C3 real E2E requires one exact configured browser project");
+}
+if (
+  evidenceScope === "gate-c-c3" &&
+  (!process.env.PHASE2_E2E_PERSISTENT_PROFILE ||
+    !path.isAbsolute(process.env.PHASE2_E2E_PERSISTENT_PROFILE) ||
+    !process.env.PHASE2_E2E_PERSISTENT_PROFILE.startsWith(`${tmpdir()}${path.sep}`) ||
+    path.basename(process.env.PHASE2_E2E_PERSISTENT_PROFILE) !== process.env.PHASE2_E2E_PROJECT)
+) {
+  throw new Error("Gate C C3 real E2E requires a unique absolute persistent profile for its selected project");
 }
 const retainedArtifactsRoot = path.join(root, "artifacts/qa", evidenceScope, sourceSha);
 
@@ -81,7 +101,21 @@ type SeedState = {
   probeAccessToken: string;
   organiserCookie: string;
   csrfToken: string;
+  c3Aggregates?: C3ScenarioSeed[];
+  c3ControlToken?: string;
   sports?: GateCC2SportSeed[];
+};
+
+type C3ScenarioSeed = {
+  competitionId: string;
+  matchId: string;
+  slug: string;
+  homeName: string;
+  awayName: string;
+  accessPassId: string;
+  accessToken: string;
+  candidateAccessPassId?: string;
+  candidateAccessToken?: string;
 };
 
 type GateCC2SportSeed = {
@@ -94,6 +128,7 @@ type GateCC2SportSeed = {
   homeName: string;
   awayName: string;
   accessToken: string;
+  accessPassId: string;
   secondaryDivision?: {
     divisionId: string;
     matchId: string;
@@ -154,7 +189,10 @@ function appendTail(tail: Tail, chunk: Buffer | string): void {
   if (tail.lines.length > 160) tail.lines.splice(0, tail.lines.length - 160);
 }
 
-async function startHttpsProxy(temp: string): Promise<https.Server> {
+async function startHttpsProxy(
+  temp: string,
+  gateCC3ClockControl?: { token: string; setNow(value: string): void; reset(): void },
+): Promise<https.Server> {
   const keyPath = path.join(temp, "loopback-key.pem");
   const certificatePath = path.join(temp, "loopback-certificate.pem");
   execFileSync(
@@ -181,6 +219,69 @@ async function startHttpsProxy(temp: string): Promise<https.Server> {
   const server = https.createServer(
     { key: readFileSync(keyPath), cert: readFileSync(certificatePath) },
     (request, response) => {
+      if (gateCC3ClockControl && request.method === "GET" && request.url === "/sw.js?gate-c-c3-update=1") {
+        const workerRequest = http.get(
+          {
+            hostname: "127.0.0.1",
+            port: internalWebPort,
+            path: "/sw.js",
+            headers: { host: `localhost:${webPort}`, "x-forwarded-proto": "https" },
+          },
+          (workerResponse) => {
+            const chunks: Buffer[] = [];
+            workerResponse.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+            workerResponse.on("end", () => {
+              if (workerResponse.statusCode !== 200) {
+                response.writeHead(workerResponse.statusCode ?? 502).end();
+                return;
+              }
+              const updatedWorker = Buffer.concat(chunks)
+                .toString("utf8")
+                .replace(
+                  "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v4`;",
+                  "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;",
+                )
+                .replace('const WORKER_VERSION = "gate-c-c3-v4";', 'const WORKER_VERSION = "gate-c-c3-v5";');
+              response.writeHead(200, {
+                "cache-control": "no-store",
+                "content-type": "text/javascript; charset=utf-8",
+                "service-worker-allowed": "/",
+              });
+              response.end(updatedWorker);
+            });
+          },
+        );
+        workerRequest.on("error", (error) => response.destroy(error));
+        return;
+      }
+      if (request.url === "/_e2e/gate-c-c3/clock") {
+        if (
+          !gateCC3ClockControl ||
+          request.method !== "POST" ||
+          request.socket.remoteAddress !== "127.0.0.1" ||
+          request.headers["x-matchday-e2e-control"] !== gateCC3ClockControl.token
+        ) {
+          response.writeHead(404).end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk) => {
+          if (chunks.reduce((sum, item) => sum + item.byteLength, 0) < 1_024) chunks.push(Buffer.from(chunk));
+        });
+        request.on("end", () => {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { now?: string; reset?: boolean };
+            if (body.reset === true && body.now === undefined) gateCC3ClockControl.reset();
+            else if (body.reset === undefined && body.now && Number.isFinite(Date.parse(body.now)))
+              gateCC3ClockControl.setNow(body.now);
+            else throw new Error("invalid");
+            response.writeHead(204).end();
+          } catch {
+            response.writeHead(400).end();
+          }
+        });
+        return;
+      }
       const upstream = http.request(
         {
           hostname: "127.0.0.1",
@@ -325,11 +426,11 @@ function connectIsolation(isolation: Isolation): Sql {
     : postgres(isolation.databaseUrl, { max: 10, onnotice: () => undefined });
 }
 
-async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
+async function seed(sql: Sql, isolation: Isolation, now: () => Date = () => new Date()): Promise<SeedState> {
   const runtime = new Phase2Runtime(
     sql as unknown as PostgresJsSql,
     phase2DomainAdapter,
-    undefined,
+    now,
     undefined,
     "phase-2-e2e-fallback-code-hmac-secret",
   );
@@ -352,8 +453,10 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
   const sports: SportId[] =
     evidenceScope === "gate-c-c2"
       ? ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"]
-      : ["canoe_polo"];
-  for (const sportId of sports) {
+      : evidenceScope === "gate-c-c3"
+        ? Array.from({ length: 8 }, () => "canoe_polo" as const)
+        : ["canoe_polo"];
+  for (const sportId of new Set(sports)) {
     const pack = SPORT_PACKS[sportId];
     const hashes = await sql<{ value: string }[]>`
       SELECT phase4_sha256_json(${sql.json(pack)}) AS value
@@ -371,12 +474,22 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
   let probeAccessToken = "";
   for (const [sportIndex, sportId] of sports.entries()) {
     const pack = SPORT_PACKS[sportId];
-    const slug = evidenceScope === "gate-c-c2" ? `gate-c-c2-${sportId.replaceAll("_", "-")}` : "phase-2-real-e2e";
+    const slug =
+      evidenceScope === "gate-c-c2"
+        ? `gate-c-c2-${sportId.replaceAll("_", "-")}`
+        : evidenceScope === "gate-c-c3"
+          ? `gate-c-c3-${sportIndex + 1}`
+          : "phase-2-real-e2e";
     const competition = await runtime.createCompetition(
       actor,
       {
         organisationId,
-        name: evidenceScope === "gate-c-c2" ? `Gate C C2 ${pack.displayName} Cup` : "Phase 2 Real E2E Cup",
+        name:
+          evidenceScope === "gate-c-c2"
+            ? `Gate C C2 ${pack.displayName} Cup`
+            : evidenceScope === "gate-c-c3"
+              ? `Gate C C3 ${pack.displayName} Scenario ${sportIndex + 1}`
+              : "Phase 2 Real E2E Cup",
         slug,
         timezone: "Asia/Singapore",
         startsOn: "2026-08-01",
@@ -452,7 +565,7 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
       competition.id,
       firstMatch.id,
       {
-        expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+        expiresAt: new Date(now().getTime() + (evidenceScope === "gate-c-c3" ? 6 : 2) * 60 * 60_000).toISOString(),
         role: "scorekeeper",
         idempotencyKey: randomUUID(),
       },
@@ -545,6 +658,7 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
       homeName,
       awayName,
       accessToken: access.token,
+      accessPassId: access.id,
       ...(secondaryDivision ? { secondaryDivision } : {}),
       action: {
         ...gateCC2Actions[sportId],
@@ -554,17 +668,51 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
   }
   const primary = c2Sports[0];
   if (!primary || !probeAccessToken) throw new Error("Canonical seed did not produce its primary aggregate");
+  const c3Aggregates: C3ScenarioSeed[] = [];
+  if (evidenceScope === "gate-c-c3") {
+    c3Aggregates.push(
+      ...c2Sports.map(
+        ({ competitionId, matchId, slug, homeName, awayName, accessPassId, accessToken }): C3ScenarioSeed => ({
+          competitionId,
+          matchId,
+          slug,
+          homeName,
+          awayName,
+          accessPassId,
+          accessToken,
+        }),
+      ),
+    );
+    const candidate = await runtime.createAccessPass(
+      actor,
+      c3Aggregates[6]!.competitionId,
+      c3Aggregates[6]!.matchId,
+      {
+        expiresAt: new Date(now().getTime() + 6 * 60 * 60_000).toISOString(),
+        role: "scorekeeper",
+        idempotencyKey: randomUUID(),
+      },
+      randomUUID(),
+    );
+    if (!candidate.token) throw new Error("Gate C C3 seed did not issue the takeover candidate token");
+    c3Aggregates[6] = {
+      ...c3Aggregates[6]!,
+      candidateAccessPassId: candidate.id,
+      candidateAccessToken: candidate.token,
+    };
+  }
 
   const sessionId = randomUUID();
   const sessionSecret = randomBytes(32).toString("base64url");
-  const now = new Date();
-  const idleExpiresAt = new Date(now.getTime() + 30 * 60_000);
-  const absoluteExpiresAt = new Date(now.getTime() + 12 * 60 * 60_000);
+  const sessionNow = now();
+  const idleExpiresAt = new Date(sessionNow.getTime() + 30 * 60_000);
+  const absoluteExpiresAt = new Date(sessionNow.getTime() + 12 * 60 * 60_000);
   await sql`
     INSERT INTO identity_sessions (
       id,account_id,secret_hash,created_at,last_seen_at,idle_expires_at,absolute_expires_at
     ) VALUES (
-      ${sessionId},${accountId},${hashSessionSecret(sessionSecret)},${now},${now},${idleExpiresAt},${absoluteExpiresAt}
+      ${sessionId},${accountId},${hashSessionSecret(sessionSecret)},${sessionNow},${sessionNow},
+      ${idleExpiresAt},${absoluteExpiresAt}
     )
   `;
   const csrfToken = createHmac("sha256", csrfSecret)
@@ -585,6 +733,7 @@ async function seed(sql: Sql, isolation: Isolation): Promise<SeedState> {
     probeAccessToken,
     organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
     csrfToken,
+    ...(evidenceScope === "gate-c-c3" ? { c3Aggregates } : {}),
     ...(evidenceScope === "gate-c-c2" ? { sports: c2Sports } : {}),
   };
 }
@@ -625,6 +774,149 @@ async function assertDatabaseOracle(sql: Sql, state: SeedState): Promise<void> {
   }
   if (corrections[0]?.event_count !== 1 || corrections[0]?.audit_count !== 1) {
     throw new Error(`Correction audit oracle failed: ${JSON.stringify(corrections[0])}`);
+  }
+}
+
+async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<void> {
+  if (!state.c3Aggregates || state.c3Aggregates.length !== 8) {
+    throw new Error("Gate C C3 database oracle requires eight isolated scenario aggregates");
+  }
+  const expectedEventTypes = [
+    ["match_started", "goal", "reversal"],
+    ["match_started", "incident"],
+    ["match_started", "incident"],
+    ["match_started"],
+    ["match_started"],
+    ["match_started"],
+    ["match_started", "period_change", "goal", "finalisation"],
+    ["match_started"],
+  ];
+  for (const [index, aggregate] of state.c3Aggregates.entries()) {
+    const [authorizations, events, stream, resultSnapshots, audits, outbox] = await Promise.all([
+      sql<
+        {
+          writer_generation: number;
+          resume_hash_length: number;
+          device_hash_length: number;
+          status: string;
+          indexeddb_schema_version: number;
+          service_worker_version: string;
+          recording_window_seconds: number;
+          replay_grace_seconds: number;
+        }[]
+      >`
+        SELECT writer_generation,
+          octet_length(resume_secret_hash)::integer AS resume_hash_length,
+          octet_length(device_id_hash)::integer AS device_hash_length,
+          status,indexeddb_schema_version,service_worker_version,
+          extract(epoch FROM recording_expires_at-issued_at)::integer AS recording_window_seconds,
+          extract(epoch FROM replay_expires_at-recording_expires_at)::integer AS replay_grace_seconds
+        FROM scoring_offline_authorizations
+        WHERE competition_id=${aggregate.competitionId} AND match_id=${aggregate.matchId}
+        ORDER BY issued_at
+      `,
+      sql<
+        {
+          event_id: string;
+          event_type: string;
+          sequence: number;
+          aggregate_version: number;
+          client_event_id: string;
+          command_fingerprint: string;
+          actor_valid: boolean;
+          writer_generation: number;
+          reversal_target_event_id: string | null;
+          reason: string | null;
+        }[]
+      >`
+        SELECT id AS event_id,event_type,sequence,aggregate_version,client_event_id,command_fingerprint,
+          writer_generation,
+          ((actor_access_session_id IS NOT NULL)::integer + (actor_account_id IS NOT NULL)::integer = 1)
+            AS actor_valid,
+          reversal_target_event_id,reason
+        FROM canonical_score_events
+        WHERE competition_id=${aggregate.competitionId} AND match_id=${aggregate.matchId}
+        ORDER BY sequence
+      `,
+      sql<{ current_version: number }[]>`
+        SELECT current_version FROM match_score_streams
+        WHERE competition_id=${aggregate.competitionId} AND match_id=${aggregate.matchId}
+      `,
+      sql<{ count: number }[]>`
+        SELECT count(*)::integer AS count
+        FROM match_result_snapshots AS snapshot
+        INNER JOIN matches AS match ON match.id=snapshot.match_id
+        WHERE match.competition_id=${aggregate.competitionId}
+          AND snapshot.match_id=${aggregate.matchId}
+      `,
+      sql<{ action: string }[]>`
+        SELECT action FROM audit_events
+        WHERE metadata->>'competition_id'=${aggregate.competitionId}
+          AND target_type='match' AND target_id=${aggregate.matchId}
+      `,
+      sql<{ event_type: string; competition_id: string | null; match_id: string | null }[]>`
+        SELECT event_type,
+          payload->>'competition_id' AS competition_id,
+          payload->>'match_id' AS match_id
+        FROM outbox_events
+        WHERE aggregate_type='match' AND aggregate_id=${aggregate.matchId}
+      `,
+    ]);
+    const expected = expectedEventTypes[index]!;
+    const expectedScoringEventEvidenceCount = expected.filter((eventType) => eventType !== "finalisation").length;
+    const expectedResultFinalisedEvidenceCount = expected.includes("finalisation") ? 1 : 0;
+    const contiguous = events.every(
+      (event, eventIndex) => event.sequence === eventIndex + 1 && event.aggregate_version === eventIndex + 1,
+    );
+    const eventIdsAreUnique =
+      new Set(events.map(({ client_event_id: clientEventId }) => clientEventId)).size === events.length;
+    const authorityRowsAreSafe = authorizations.every(
+      (authorization) =>
+        authorization.writer_generation > 0 &&
+        authorization.resume_hash_length === 32 &&
+        authorization.device_hash_length === 32 &&
+        authorization.indexeddb_schema_version === 1 &&
+        authorization.service_worker_version === "gate-c-c3-v4" &&
+        authorization.recording_window_seconds >= 1 &&
+        authorization.recording_window_seconds <= 4 * 60 * 60 &&
+        authorization.replay_grace_seconds >= 0 &&
+        authorization.replay_grace_seconds <= 15 * 60,
+    );
+    const eventAuthorityIsExact = events.every(
+      (event) => event.actor_valid && event.writer_generation > 0 && /^[a-f0-9]{64}$/u.test(event.command_fingerprint),
+    );
+    const outboxLineageIsExact = outbox.every(
+      (event) => event.competition_id === aggregate.competitionId && event.match_id === aggregate.matchId,
+    );
+    if (
+      authorizations.length < 1 ||
+      !authorityRowsAreSafe ||
+      events.map(({ event_type: eventType }) => eventType).join(",") !== expected.join(",") ||
+      !contiguous ||
+      !eventIdsAreUnique ||
+      !eventAuthorityIsExact ||
+      !outboxLineageIsExact ||
+      stream[0]?.current_version !== expected.length ||
+      resultSnapshots[0]?.count !== (index === 6 ? 1 : 0) ||
+      audits.filter(({ action }) => action === "scoring_event.appended").length !== expectedScoringEventEvidenceCount ||
+      outbox.filter(({ event_type: eventType }) => eventType === "scoring_event.appended").length !==
+        expectedScoringEventEvidenceCount ||
+      audits.filter(({ action }) => action === "result.finalised").length !== expectedResultFinalisedEvidenceCount ||
+      outbox.filter(({ event_type: eventType }) => eventType === "result.finalised").length !==
+        expectedResultFinalisedEvidenceCount ||
+      (index === 0 && (events[2]?.reversal_target_event_id !== events[1]?.event_id || !events[2]?.reason?.trim()))
+    ) {
+      throw new Error(
+        `Gate C C3 aggregate ${index + 1} database oracle failed: ${JSON.stringify({
+          authorizations,
+          events,
+          stream,
+          resultSnapshots,
+          audits,
+          outbox,
+        })}`,
+      );
+    }
   }
 }
 
@@ -1014,6 +1306,11 @@ async function main(): Promise<void> {
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase2-e2e-"));
   const stateFile = path.join(temp, "state.json");
   const retainedDirectory = retainedArtifactsDirectory();
+  const gateCC3Clock = createGateCC3ControllableClock();
+  const gateCC3Now = gateCC3Clock.now;
+  const gateCC3ControlToken = randomBytes(32).toString("base64url");
+  const c3ScenarioDirectory =
+    evidenceScope === "gate-c-c3" ? path.join(retainedDirectory ?? path.join(temp, "c3-retained"), "scenarios") : null;
   if (retainedDirectory) {
     await mkdir(retainedArtifactsRoot, { recursive: true });
     if ((await realpath(retainedArtifactsRoot)) !== retainedArtifactsRoot) {
@@ -1025,6 +1322,7 @@ async function main(): Promise<void> {
       throw new Error("Gate C access retained directory escaped its exact-SHA root");
     }
   }
+  if (c3ScenarioDirectory) await mkdir(c3ScenarioDirectory, { recursive: true });
   const admin = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
   let isolation: Isolation | null = null;
   let sql: Sql | null = null;
@@ -1057,7 +1355,8 @@ async function main(): Promise<void> {
     );
     isolation = await prepareIsolation(admin);
     sql = connectIsolation(isolation);
-    const state = await seed(sql, isolation);
+    const state = await seed(sql, isolation, evidenceScope === "gate-c-c3" ? gateCC3Now : undefined);
+    if (evidenceScope === "gate-c-c3") state.c3ControlToken = gateCC3ControlToken;
     await writeFile(stateFile, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
     const config = parseConfig({
@@ -1103,7 +1402,7 @@ async function main(): Promise<void> {
       phase2Runtime: new Phase2Runtime(
         identitySql,
         phase2DomainAdapter,
-        undefined,
+        evidenceScope === "gate-c-c3" ? gateCC3Now : undefined,
         new RedisScoringAccessRateLimiter(redis, scoringAccessRateLimitSecret, redisNamespace),
         config.scoringAccess.fallbackCodeHmacSecret,
       ),
@@ -1121,8 +1420,11 @@ async function main(): Promise<void> {
       PHASE2_E2E_OUTPUT_DIR: path.join(temp, "playwright-output"),
       GATE_C_ACCESS_PLAYWRIGHT_JSON: path.join(temp, "playwright-output", "results.json"),
       GATE_C_C2_PLAYWRIGHT_JSON: path.join(temp, "playwright-output", "results.json"),
+      GATE_C_C3_PLAYWRIGHT_JSON: path.join(temp, "playwright-output", "results.json"),
       GATE_C_C2_BROWSER_RECEIPT: path.join(temp, "playwright-output", "c2-browser-receipt.json"),
       GATE_C_C2_SEMANTIC_RECEIPT: path.join(temp, "playwright-output", "c2-semantic-receipt.json"),
+      ...(c3ScenarioDirectory ? { GATE_C_C3_SCENARIO_DIRECTORY: c3ScenarioDirectory } : {}),
+      ...(evidenceScope === "gate-c-c3" ? { GATE_C_C3_SOURCE_SHA: sourceSha } : {}),
       SCORING_SESSION_SEAL_KEY: Buffer.alloc(32, 23).toString("base64url"),
     };
     delete runtimeEnv.MATCHDAY_PHASE2_DATA_MODE;
@@ -1135,7 +1437,18 @@ async function main(): Promise<void> {
       runtimeEnv,
     );
     await waitFor(`${internalWebOrigin}/score`, "production web");
-    httpsProxy = await startHttpsProxy(temp);
+    httpsProxy = await startHttpsProxy(
+      temp,
+      evidenceScope === "gate-c-c3"
+        ? {
+            token: gateCC3ControlToken,
+            setNow(value) {
+              gateCC3Clock.set(value);
+            },
+            reset: gateCC3Clock.reset,
+          }
+        : undefined,
+    );
     const bffProbe = await fetch(`${internalWebOrigin}/api/scoring/access/exchange`, {
       method: "POST",
       headers: {
@@ -1172,7 +1485,13 @@ async function main(): Promise<void> {
       runtimeEnv,
     );
     if (process.env.PHASE2_E2E_PROJECT) {
-      const report = JSON.parse(readFileSync(runtimeEnv.GATE_C_ACCESS_PLAYWRIGHT_JSON!, "utf8")) as unknown;
+      const reportPath =
+        evidenceScope === "gate-c-c3"
+          ? runtimeEnv.GATE_C_C3_PLAYWRIGHT_JSON
+          : evidenceScope === "gate-c-c2"
+            ? runtimeEnv.GATE_C_C2_PLAYWRIGHT_JSON
+            : runtimeEnv.GATE_C_ACCESS_PLAYWRIGHT_JSON;
+      const report = JSON.parse(readFileSync(reportPath!, "utf8")) as unknown;
       playwrightPassCount = passedPlaywrightTestCount(report, process.env.PHASE2_E2E_PROJECT);
     }
     if (evidenceScope === "gate-c-c2") {
@@ -1184,6 +1503,8 @@ async function main(): Promise<void> {
       await writeFile(runtimeEnv.GATE_C_C2_SEMANTIC_RECEIPT!, `${JSON.stringify(c2SemanticReceipt, null, 2)}\n`, {
         flag: "wx",
       });
+    } else if (evidenceScope === "gate-c-c3") {
+      await assertGateCC3DatabaseOracle(sql, state);
     } else if (process.env.PHASE2_E2E_SKIP_PHASE2_ORACLE === "1") {
       await assertGateCAccessOracle(sql, state);
     } else {
@@ -1242,6 +1563,9 @@ async function main(): Promise<void> {
       } catch {
         return;
       }
+      if (evidenceScope === "gate-c-c3") {
+        await verifyGateCC3SafeArtifactTree(outputDirectory);
+      }
       await cp(outputDirectory, path.join(retainedDirectory, "playwright-output"), {
         recursive: true,
         force: false,
@@ -1275,12 +1599,51 @@ async function main(): Promise<void> {
     const retainedScreenshotPaths = retained
       .filter((artifact) => artifact.path.endsWith(".png"))
       .map((artifact) => artifact.path);
+    const c3ScenarioReceipts =
+      evidenceScope === "gate-c-c3"
+        ? (
+            await Promise.all(
+              retained
+                .filter((artifact) => /^scenarios\/[^/]+\.json$/u.test(artifact.path))
+                .map(async (artifact) => {
+                  const document = JSON.parse(await readFile(path.join(retainedDirectory, artifact.path), "utf8")) as {
+                    scenario?: string;
+                    status?: string;
+                  };
+                  if (
+                    !gateCC3Scenarios.includes(document.scenario as GateCC3Scenario) ||
+                    document.status !== "passed"
+                  ) {
+                    throw new Error(`Gate C C3 scenario file is invalid: ${artifact.path}`);
+                  }
+                  return {
+                    scenario: document.scenario as GateCC3Scenario,
+                    status: "passed" as const,
+                    receipt_sha256: artifact.sha256,
+                  };
+                }),
+            )
+          ).sort((left, right) => gateCC3Scenarios.indexOf(left.scenario) - gateCC3Scenarios.indexOf(right.scenario))
+        : [];
     const record = {
       schema_version: 1,
       artifact_kind: `${evidenceScope}-project-evidence`,
       source_sha: sourceSha,
       project_name: process.env.PHASE2_E2E_PROJECT,
       pass_count: playwrightPassCount,
+      ...(evidenceScope === "gate-c-c3"
+        ? {
+            failed_count: 0,
+            skipped_count: 0,
+            browser_profile_sha256: createHash("sha256")
+              .update(`matchday:gate-c-c3:browser-profile:${process.env.PHASE2_E2E_PERSISTENT_PROFILE ?? ""}`)
+              .digest("hex"),
+            browser_version: process.env.GATE_C_C3_BROWSER_VERSION ?? "",
+            indexeddb_schema_version: 1,
+            service_worker_version: "gate-c-c3-v4",
+            scenarios: c3ScenarioReceipts,
+          }
+        : {}),
       started_at: startedAt.toISOString(),
       duration_ms: Number(process.hrtime.bigint() - startedAtNanoseconds) / 1_000_000,
       ...(c2SemanticReceipt ? { semantic_oracle: c2SemanticReceipt } : {}),
@@ -1300,7 +1663,7 @@ async function main(): Promise<void> {
           ? canonicalGateCC2ScreenshotPaths(retainedScreenshotPaths)
           : retainedScreenshotPaths,
       result_paths: retained.filter((artifact) => artifact.path.endsWith(".json")).map((artifact) => artifact.path),
-      artifacts: retained,
+      ...(evidenceScope === "gate-c-c3" ? { artifact_hashes: retained } : { artifacts: retained }),
     };
     await writeFile(path.join(retainedDirectory, "project-evidence.json"), `${JSON.stringify(record, null, 2)}\n`, {
       flag: "wx",

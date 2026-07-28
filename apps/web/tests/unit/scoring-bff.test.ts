@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SPORT_PACKS } from "@matchday/domain";
 import {
   appendScoringEvent,
+  establishOfflineScoringAuthority,
   exchangeScoringSession,
   finaliseScoringResult,
   heartbeatScoringSession,
   recoverScoringSession,
   requestScoringTakeover,
+  revokeOfflineScoringAuthority,
 } from "../../lib/scoring-bff.server";
+import { OfflineGrantSealer, offlineGrantCookieName } from "../../lib/offline-grant.server";
 import {
   scoringSessionCookieName,
   ScoringSessionSealer,
@@ -21,7 +24,14 @@ const sealKey = Buffer.alloc(32, 7).toString("base64url");
 const sessionId = "00000000-0000-4000-8000-000000000101";
 const matchId = "00000000-0000-4000-8000-000000000102";
 const eventId = "00000000-0000-4000-8000-000000000103";
+const finalEventId = "00000000-0000-4000-8000-000000000104";
+const receivedAt = "2026-07-17T02:00:01.000Z";
 const deviceId = "00000000-0000-4000-8000-000000000104";
+const offlineAuthorizationId = "00000000-0000-4000-8000-000000000105";
+const competitionId = "00000000-0000-4000-8000-000000000106";
+const offlineResumeSecret = "r".repeat(43);
+const offlineRecordingExpiresAt = "2030-01-01T04:00:00.000Z";
+const offlineReplayExpiresAt = "2030-01-01T04:15:00.000Z";
 const sessionToken = "server-session-secret-that-never-reaches-browser-0001";
 const accessToken = "one-time-access-secret-that-stays-in-request-body-001";
 const expiresAt = "2030-01-01T00:00:00.000Z";
@@ -118,7 +128,7 @@ function json(payload: unknown, status = 200): Response {
 }
 
 function bffRequest(
-  method: "GET" | "POST",
+  method: "DELETE" | "GET" | "POST",
   path: string,
   body?: unknown,
   cookie?: string,
@@ -126,7 +136,7 @@ function bffRequest(
   requestOrigin = webOrigin,
 ): Request {
   const headers = new Headers();
-  if (method === "POST") {
+  if (method === "POST" || method === "DELETE") {
     headers.set("content-type", "application/json");
     headers.set("origin", origin);
     headers.set("sec-fetch-site", "same-origin");
@@ -142,6 +152,27 @@ function bffRequest(
 function sealedCookie(value: ScoringServerAuth = auth): string {
   return `${scoringSessionCookieName}=${new ScoringSessionSealer(sealKey).seal(value)}`;
 }
+
+function sealedOfflineCookie(): string {
+  const sealed = new OfflineGrantSealer(sealKey).seal({
+    authorizationId: offlineAuthorizationId,
+    resumeSecret: offlineResumeSecret,
+    matchId,
+    replayExpiresAt: offlineReplayExpiresAt,
+  });
+  return `${offlineGrantCookieName}=${sealed}`;
+}
+
+const offlineAuthorityBody = {
+  deviceId,
+  lastAcknowledgedSequence: 1,
+  pendingEventCount: 0,
+  pendingThroughSequence: 1,
+  lastReportedLocalSequence: 0,
+  queueFingerprint: "c".repeat(64),
+  indexeddbSchemaVersion: 1,
+  serviceWorkerVersion: "gate-c-c3-v4",
+};
 
 function headerValue(init: RequestInit | undefined, name: string): string | null {
   return new Headers(init?.headers).get(name);
@@ -406,6 +437,55 @@ describe("scoring BFF", () => {
     expect(await response.json()).toEqual({ error: "unavailable" });
   });
 
+  it("recovers a finalised session with its canonical offline finalisation command", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          state({
+            score: {
+              ...state().score,
+              lifecycle: "finalised",
+              current_segment: 2,
+            },
+            through_sequence: 1,
+            canonical_events: [
+              {
+                event_id: finalEventId,
+                sequence: 1,
+                command: {
+                  kind: "finalisation",
+                  client_event_id: finalEventId,
+                  expected_sequence: 0,
+                  occurred_at: receivedAt,
+                },
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const response = await recoverScoringSession(bffRequest("GET", "/api/scoring/session", undefined, sealedCookie()));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      score: { lifecycle: "finalised" },
+      canonical_events: [
+        {
+          event_id: finalEventId,
+          sequence: 1,
+          command: {
+            kind: "finalisation",
+            client_event_id: finalEventId,
+            expected_sequence: 0,
+            occurred_at: receivedAt,
+          },
+        },
+      ],
+    });
+  });
+
   it("proxies events and finalisation with server-side auth and allowlisted receipts", async () => {
     const fetchMock = vi
       .fn()
@@ -421,11 +501,33 @@ describe("scoring BFF", () => {
           reversal_target_event_id: eventId,
           reason: "Scorekeeper correction",
         });
-        return json({ sequence: 8, duplicate: false, session_token: sessionToken });
+        return json({
+          client_event_id: eventId,
+          event_id: eventId,
+          command_fingerprint: "a".repeat(64),
+          sequence: 8,
+          aggregate_version: 8,
+          duplicate: false,
+          server_received_at: receivedAt,
+          session_token: sessionToken,
+        });
       })
       .mockImplementationOnce(async (_input: string | URL | Request, init?: RequestInit) => {
         expect(headerValue(init, "x-scoring-session-token")).toBe(sessionToken);
-        return json({ match_id: matchId, result_version: 4, session_token: sessionToken });
+        return json({
+          client_event_id: finalEventId,
+          event_id: finalEventId,
+          command_fingerprint: "b".repeat(64),
+          duplicate: false,
+          match_id: matchId,
+          sequence: 9,
+          aggregate_version: 9,
+          result_version: 4,
+          publication_version: 4,
+          server_received_at: receivedAt,
+          published_at: receivedAt,
+          session_token: sessionToken,
+        });
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -447,11 +549,27 @@ describe("scoring BFF", () => {
       ),
     );
     const finalResponse = await finaliseScoringResult(
-      bffRequest("POST", "/api/scoring/finalise", { client_event_id: eventId, expected_sequence: 8 }, sealedCookie()),
+      bffRequest(
+        "POST",
+        "/api/scoring/finalise",
+        { client_event_id: finalEventId, expected_sequence: 8 },
+        sealedCookie(),
+      ),
     );
 
-    expect(await eventResponse.json()).toEqual({ sequence: 8, duplicate: false });
-    expect(await finalResponse.json()).toEqual({ match_id: matchId, result_version: 4 });
+    expect(await eventResponse.json()).toMatchObject({
+      client_event_id: eventId,
+      event_id: eventId,
+      sequence: 8,
+      aggregate_version: 8,
+      duplicate: false,
+    });
+    expect(await finalResponse.json()).toMatchObject({
+      client_event_id: finalEventId,
+      match_id: matchId,
+      result_version: 4,
+      publication_version: 4,
+    });
   });
 
   it("preserves an explicit unknown participant in the canonical upstream body", async () => {
@@ -466,7 +584,15 @@ describe("scoring BFF", () => {
         segment_number: 1,
         manual_time_seconds: 95,
       });
-      return json({ sequence: 4, duplicate: false });
+      return json({
+        client_event_id: eventId,
+        event_id: eventId,
+        command_fingerprint: "a".repeat(64),
+        sequence: 4,
+        aggregate_version: 4,
+        duplicate: false,
+        server_received_at: receivedAt,
+      });
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -488,7 +614,7 @@ describe("scoring BFF", () => {
       ),
     );
 
-    expect(await response.json()).toEqual({ sequence: 4, duplicate: false });
+    expect(await response.json()).toMatchObject({ sequence: 4, aggregate_version: 4, duplicate: false });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -502,7 +628,15 @@ describe("scoring BFF", () => {
         team_slot: "home",
         segment_number: 1,
       });
-      return json({ sequence: 4, duplicate: false });
+      return json({
+        client_event_id: eventId,
+        event_id: eventId,
+        command_fingerprint: "a".repeat(64),
+        sequence: 4,
+        aggregate_version: 4,
+        duplicate: false,
+        server_received_at: receivedAt,
+      });
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -522,7 +656,7 @@ describe("scoring BFF", () => {
       ),
     );
 
-    expect(await response.json()).toEqual({ sequence: 4, duplicate: false });
+    expect(await response.json()).toMatchObject({ sequence: 4, aggregate_version: 4, duplicate: false });
   });
 
   it("fails closed when the canonical append receipt omits its idempotency result", async () => {
@@ -569,6 +703,42 @@ describe("scoring BFF", () => {
 
     expect(response.status).toBe(422);
     expect(await response.json()).toEqual({ error: "invalid" });
+  });
+
+  it("preserves offline recording expiry without exposing upstream detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            error: {
+              code: "OFFLINE_RECORDING_EXPIRED",
+              message: "Sensitive upstream detail is not exposed.",
+            },
+          },
+          409,
+        ),
+      ),
+    );
+
+    const response = await appendScoringEvent(
+      bffRequest(
+        "POST",
+        "/api/scoring/events",
+        {
+          client_event_id: eventId,
+          expected_sequence: 3,
+          type: "point",
+          team_slot: "home",
+          segment_number: 1,
+          occurred_at: "2026-07-17T02:00:00.000Z",
+        },
+        sealedCookie(),
+      ),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "conflict", code: "OFFLINE_RECORDING_EXPIRED" });
   });
 
   it("normalizes an empty pending queue to the acknowledged sequence before heartbeat", async () => {
@@ -695,7 +865,169 @@ describe("scoring BFF", () => {
     );
 
     expect(response.status).toBe(status);
-    expect(await response.json()).toEqual({ error: expectedState });
+    expect(await response.json()).toEqual({ error: expectedState, code });
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+
+  it("issues offline authority without exposing the raw resume secret to browser code", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(headerValue(init, "x-scoring-session-token")).toBe(sessionToken);
+      expect(String(init?.body)).not.toContain(offlineResumeSecret);
+      return json({
+        authorization_id: offlineAuthorizationId,
+        resume_secret: offlineResumeSecret,
+        competition_id: competitionId,
+        match_id: matchId,
+        generation: 3,
+        recording_expires_at: offlineRecordingExpiresAt,
+        replay_expires_at: offlineReplayExpiresAt,
+        pass_expires_at: expiresAt,
+        status: "active",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await establishOfflineScoringAuthority(
+      bffRequest(
+        "POST",
+        "/api/scoring/offline/authority",
+        { ...offlineAuthorityBody, intent: "prepare" },
+        sealedCookie(),
+      ),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("set-cookie")).toContain(`${offlineGrantCookieName}=`);
+    expect(response.headers.get("set-cookie")).toContain("Path=/api/scoring/offline");
+    expect(JSON.stringify(payload)).not.toContain(offlineResumeSecret);
+    expect(payload).toEqual({
+      offline: {
+        authorization_id: offlineAuthorizationId,
+        competition_id: competitionId,
+        match_id: matchId,
+        generation: 3,
+        recording_expires_at: offlineRecordingExpiresAt,
+        replay_expires_at: offlineReplayExpiresAt,
+        pass_expires_at: expiresAt,
+        status: "active",
+      },
+    });
+  });
+
+  it("resumes an expired ordinary session from the sealed grant and rotates both cookies", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async (_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body.resume_secret).toBe(offlineResumeSecret);
+        return json({
+          session: exchangedSession,
+          offline: {
+            authorization_id: offlineAuthorizationId,
+            resume_secret: "s".repeat(43),
+            competition_id: competitionId,
+            match_id: matchId,
+            generation: 3,
+            recording_expires_at: offlineRecordingExpiresAt,
+            replay_expires_at: offlineReplayExpiresAt,
+            pass_expires_at: expiresAt,
+            status: "active",
+          },
+        });
+      })
+      .mockResolvedValueOnce(json(state()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await establishOfflineScoringAuthority(
+      bffRequest(
+        "POST",
+        "/api/scoring/offline/authority",
+        { ...offlineAuthorityBody, intent: "resume" },
+        sealedOfflineCookie(),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      session: { through_sequence: 1 },
+      offline: { authorization_id: offlineAuthorizationId },
+    });
+    expect(response.headers.get("set-cookie")).toContain(scoringSessionCookieName);
+    expect(response.headers.get("set-cookie")).toContain(offlineGrantCookieName);
+    expect(response.headers.get("set-cookie")).not.toContain(offlineResumeSecret);
+  });
+
+  it.each([
+    ["missing", sealedCookie()],
+    ["invalid", `${sealedCookie()}; ${offlineGrantCookieName}=not-a-valid-sealed-grant`],
+  ])("rejects resume with a %s offline grant instead of issuing new authority", async (_label, cookie) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await establishOfflineScoringAuthority(
+      bffRequest("POST", "/api/scoring/offline/authority", { ...offlineAuthorityBody, intent: "resume" }, cookie),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "access" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("renews recording authority through the authenticated writer instead of treating preparation as resume", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      expect(String(input)).toContain("/api/v1/scoring/offline-authorizations");
+      expect(String(input)).not.toContain(`/${offlineAuthorizationId}/resume`);
+      expect(headerValue(init, "x-scoring-session-token")).toBe(sessionToken);
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        resume_secret: offlineResumeSecret,
+      });
+      return json({
+        authorization_id: offlineAuthorizationId,
+        resume_secret: offlineResumeSecret,
+        competition_id: competitionId,
+        match_id: matchId,
+        generation: 3,
+        recording_expires_at: offlineRecordingExpiresAt,
+        replay_expires_at: offlineReplayExpiresAt,
+        pass_expires_at: expiresAt,
+        status: "active",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await establishOfflineScoringAuthority(
+      bffRequest(
+        "POST",
+        "/api/scoring/offline/authority",
+        { ...offlineAuthorityBody, intent: "prepare" },
+        `${sealedCookie()}; ${sealedOfflineCookie()}`,
+      ),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("set-cookie")).toContain(offlineGrantCookieName);
+  });
+
+  it("revokes the server grant and expires the path-scoped cookie", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.method).toBe("DELETE");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        resume_secret: offlineResumeSecret,
+        device_id: deviceId,
+      });
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await revokeOfflineScoringAuthority(
+      bffRequest("DELETE", "/api/scoring/offline/authority", { deviceId }, sealedOfflineCookie()),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true });
+    expect(response.headers.get("set-cookie")).toContain(`${offlineGrantCookieName}=`);
+    expect(response.headers.get("set-cookie")).toContain(`${scoringSessionCookieName}=`);
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
@@ -720,11 +1052,17 @@ describe("scoring BFF", () => {
 describe("browser scoring transport source", () => {
   it("contains no browser credential persistence or direct/public API credential transport", async () => {
     const source = await readFile(new URL("../../lib/phase2-scoring.ts", import.meta.url), "utf8");
+    const directFetches = source.match(/\bfetch\(/g) ?? [];
+    const scoringEndpoints = [...source.matchAll(/\bscoringFetch\(\s*["']([^"']+)["']/g)].map((match) => match[1]);
 
     expect(source).not.toContain("sessionStorage");
     expect(source).not.toContain("NEXT_PUBLIC_MATCHDAY_API_BASE_URL");
     expect(source).not.toContain("x-scoring-session-token");
     expect(source).not.toContain("session_token");
-    expect(source).toContain('fetch("/api/scoring/');
+    expect(directFetches).toHaveLength(1);
+    expect(source).toContain("return await fetch(input, init);");
+    expect(scoringEndpoints.length).toBeGreaterThan(0);
+    expect(source.match(/\bscoringFetch\(/g)).toHaveLength(scoringEndpoints.length + 1);
+    expect(scoringEndpoints.every((endpoint) => endpoint?.startsWith("/api/scoring/"))).toBe(true);
   });
 });

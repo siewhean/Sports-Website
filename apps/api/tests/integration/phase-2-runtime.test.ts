@@ -553,7 +553,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       ),
     ).toMatchObject({ duplicate: false, sequence: 1 });
     const goalId = randomUUID();
-    await appendCanonicalCanoeEvent(
+    const goalRequestId = randomUUID();
+    const goalReceipt = await appendCanonicalCanoeEvent(
       runtime,
       writerAuth,
       {
@@ -567,8 +568,71 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         correctionReason: null,
         occurredAt: new Date("2026-08-01T01:01:32.000Z"),
       },
-      randomUUID(),
+      goalRequestId,
     );
+    expect(goalReceipt).toMatchObject({ duplicate: false, sequence: 2 });
+    expect(
+      await client<
+        {
+          audit_count: number;
+          audit_metadata_type: string;
+          audit_competition_id: string;
+          audit_after_state_type: string;
+          audit_after_event_type: string;
+          audit_before_state_is_null: boolean;
+          outbox_count: number;
+          outbox_payload_type: string;
+          outbox_competition_id: string;
+          outbox_match_id: string;
+        }[]
+      >`
+        SELECT
+          (SELECT count(*)::integer FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended'
+               AND target_type='match'
+               AND target_id=${firstMatch.id}) AS audit_count,
+          (SELECT jsonb_typeof(metadata) FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_metadata_type,
+          (SELECT metadata->>'competition_id' FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_competition_id,
+          (SELECT jsonb_typeof(after_state) FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_after_state_type,
+          (SELECT after_state->>'event_type' FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_after_event_type,
+          (SELECT before_state IS NULL FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_before_state_is_null,
+          (SELECT count(*)::integer FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}
+               AND event_type='scoring_event.appended'
+               AND aggregate_type='match'
+               AND aggregate_id=${firstMatch.id}) AS outbox_count,
+          (SELECT jsonb_typeof(payload) FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_payload_type,
+          (SELECT payload->>'competition_id' FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_competition_id,
+          (SELECT payload->>'match_id' FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_match_id
+      `,
+    ).toEqual([
+      {
+        audit_count: 1,
+        audit_metadata_type: "object",
+        audit_competition_id: competition.id,
+        audit_after_state_type: "object",
+        audit_after_event_type: "goal",
+        audit_before_state_is_null: true,
+        outbox_count: 1,
+        outbox_payload_type: "object",
+        outbox_competition_id: competition.id,
+        outbox_match_id: firstMatch.id,
+      },
+    ]);
     expect(
       await appendCanonicalCanoeEvent(
         runtime,
@@ -594,7 +658,290 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       score: { home: 1, away: 0 },
       through_sequence: 2,
       writer: { generation: 1 },
+      canonical_events: [
+        {
+          event_id: expect.any(String),
+          sequence: 1,
+          command: {
+            kind: "event",
+            client_event_id: startId,
+            expected_sequence: 0,
+            type: "match_started",
+          },
+        },
+        {
+          event_id: expect.any(String),
+          sequence: 2,
+          command: {
+            kind: "event",
+            client_event_id: goalId,
+            expected_sequence: 1,
+            type: "goal",
+          },
+        },
+      ],
     });
+    let offlineAuthority = await runtime.issueOfflineAuthorization(
+      writerAuth,
+      {
+        deviceId: writerDeviceId,
+        lastAcknowledgedSequence: state.through_sequence,
+        pendingEventCount: 0,
+        pendingThroughSequence: state.through_sequence,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v4",
+      },
+      randomUUID(),
+    );
+    expect(offlineAuthority).toMatchObject({
+      generation: writer.generation,
+      match_id: firstMatch.id,
+    });
+    await expect(
+      runtime.issueOfflineAuthorization(
+        writerAuth,
+        {
+          deviceId: writerDeviceId,
+          resumeSecret: offlineAuthority.resume_secret,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 1,
+          pendingThroughSequence: state.through_sequence,
+          lastReportedLocalSequence: 1,
+          queueFingerprint: "a".repeat(64),
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_QUEUE_SUMMARY_INVALID" });
+    await expect(
+      runtime.issueOfflineAuthorization(
+        writerAuth,
+        {
+          deviceId: writerDeviceId,
+          resumeSecret: offlineAuthority.resume_secret,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 2,
+          pendingThroughSequence: state.through_sequence + 2,
+          lastReportedLocalSequence: 1,
+          queueFingerprint: "b".repeat(64),
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_QUEUE_SUMMARY_INVALID" });
+    const storedOfflineSecret = await client<{ resume_secret_hash: Buffer; hash_bytes: number }[]>`
+      SELECT resume_secret_hash,octet_length(resume_secret_hash)::integer AS hash_bytes
+      FROM scoring_offline_authorizations WHERE id=${offlineAuthority.authorization_id}
+    `;
+    expect(storedOfflineSecret).toMatchObject([{ hash_bytes: 32 }]);
+    expect(storedOfflineSecret[0]?.resume_secret_hash.toString("utf8")).not.toContain(offlineAuthority.resume_secret);
+    const expiredAuthorizationId = offlineAuthority.authorization_id;
+    const expiryRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      () => new Date(new Date(offlineAuthority.replay_expires_at).getTime() + 1),
+      undefined,
+      fallbackCodeHmacSecret,
+    );
+    await expect(
+      expiryRuntime.resumeOfflineAuthorization(
+        offlineAuthority.authorization_id,
+        {
+          resumeSecret: offlineAuthority.resume_secret,
+          deviceId: writerDeviceId,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 0,
+          pendingThroughSequence: state.through_sequence,
+          lastReportedLocalSequence: 0,
+          queueFingerprint: null,
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_AUTHORIZATION_EXPIRED" });
+    expect(
+      await client`
+        SELECT
+          (SELECT status FROM scoring_offline_authorizations
+           WHERE id=${expiredAuthorizationId}) AS status,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${expiredAuthorizationId}
+             AND action='scoring_offline_authorization.expired') AS expired_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${expiredAuthorizationId}
+             AND event_type='scoring_offline_authorization.expired') AS expired_outbox
+      `,
+    ).toEqual([{ status: "expired", expired_audits: 1, expired_outbox: 1 }]);
+    offlineAuthority = await runtime.issueOfflineAuthorization(
+      writerAuth,
+      {
+        deviceId: writerDeviceId,
+        lastAcknowledgedSequence: state.through_sequence,
+        pendingEventCount: 0,
+        pendingThroughSequence: state.through_sequence,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v4",
+      },
+      randomUUID(),
+    );
+    expect(offlineAuthority.authorization_id).not.toBe(expiredAuthorizationId);
+    await expect(
+      runtime.issueOfflineAuthorization(
+        writerAuth,
+        {
+          deviceId: writerDeviceId,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 0,
+          pendingThroughSequence: state.through_sequence,
+          lastReportedLocalSequence: 0,
+          queueFingerprint: null,
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_AUTHORIZATION_DENIED" });
+    const renewedOffline = await runtime.issueOfflineAuthorization(
+      writerAuth,
+      {
+        deviceId: writerDeviceId,
+        resumeSecret: offlineAuthority.resume_secret,
+        lastAcknowledgedSequence: state.through_sequence,
+        pendingEventCount: 0,
+        pendingThroughSequence: state.through_sequence,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v4",
+      },
+      randomUUID(),
+    );
+    expect(renewedOffline).toMatchObject({
+      authorization_id: offlineAuthority.authorization_id,
+      resume_secret: offlineAuthority.resume_secret,
+    });
+    await client`UPDATE match_writer_leases SET expires_at=acquired_at+interval '1 millisecond'
+      WHERE match_id=${firstMatch.id}`;
+    const reservedCandidate = await runtime.exchangeAccess(
+      {
+        token: pass.token,
+        expectedMatchId: firstMatch.id,
+        deviceId: randomUUID(),
+        ipAddress: "198.51.100.203",
+      },
+      randomUUID(),
+    );
+    expect(reservedCandidate).toMatchObject({ mode: "candidate", generation: null });
+    const reservedTakeover = await runtime.requestTakeover(
+      {
+        sessionId: reservedCandidate.session_id,
+        sessionToken: reservedCandidate.session_token,
+        generation: null,
+      },
+      { pendingEventCount: 0, pendingThroughSequence: state.through_sequence },
+      randomUUID(),
+    );
+    expect(reservedTakeover).toMatchObject({ status: "pending", incumbent_pending_state: "unknown" });
+    await expect(
+      runtime.resolveTakeover(
+        actor,
+        competition.id,
+        reservedTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Attempt without pending work acknowledgement",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({
+      code: "TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED",
+    });
+    const resumeInput = {
+      resumeSecret: offlineAuthority.resume_secret,
+      deviceId: writerDeviceId,
+      lastAcknowledgedSequence: state.through_sequence,
+      pendingEventCount: 0,
+      pendingThroughSequence: state.through_sequence,
+      lastReportedLocalSequence: 0,
+      queueFingerprint: null,
+      indexeddbSchemaVersion: 1,
+      serviceWorkerVersion: "gate-c-c3-v4",
+    } as const;
+    const resumedOffline = await runtime.resumeOfflineAuthorization(
+      offlineAuthority.authorization_id,
+      resumeInput,
+      randomUUID(),
+    );
+    expect(resumedOffline).toMatchObject({
+      session: { session_id: writer.session_id, generation: writer.generation },
+      offline: { authorization_id: offlineAuthority.authorization_id, generation: writer.generation },
+    });
+    expect(resumedOffline.offline.resume_secret).toBe(offlineAuthority.resume_secret);
+    const lostResponseRecovery = await runtime.resumeOfflineAuthorization(
+      offlineAuthority.authorization_id,
+      resumeInput,
+      randomUUID(),
+    );
+    expect(lostResponseRecovery.offline.resume_secret).toBe(offlineAuthority.resume_secret);
+    const secondApiRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      undefined,
+      undefined,
+      fallbackCodeHmacSecret,
+    );
+    const concurrentResumes = await Promise.all([
+      runtime.resumeOfflineAuthorization(offlineAuthority.authorization_id, resumeInput, randomUUID()),
+      secondApiRuntime.resumeOfflineAuthorization(offlineAuthority.authorization_id, resumeInput, randomUUID()),
+    ]);
+    expect(new Set(concurrentResumes.map((result) => result.offline.resume_secret))).toEqual(
+      new Set([offlineAuthority.resume_secret]),
+    );
+    const repeatedRecovery = await runtime.resumeOfflineAuthorization(
+      offlineAuthority.authorization_id,
+      resumeInput,
+      randomUUID(),
+    );
+    expect(repeatedRecovery.offline.resume_secret).toBe(offlineAuthority.resume_secret);
+    writerAuth.sessionToken = repeatedRecovery.session.session_token;
+    await expect(
+      runtime.appendCanonicalScoreEvent(
+        writerAuth,
+        {
+          client_event_id: randomUUID(),
+          type: "incident",
+          occurred_at: "2000-01-01T00:00:00.000Z",
+          segment_number: 1,
+          manual_time_seconds: 0,
+          reason: "Must be rejected before the authority window",
+        },
+        state.through_sequence,
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_RECORDING_EXPIRED" });
+    await expect(
+      runtime.appendCanonicalScoreEvent(
+        writerAuth,
+        {
+          client_event_id: randomUUID(),
+          type: "incident",
+          occurred_at: offlineAuthority.recording_expires_at,
+          segment_number: 1,
+          manual_time_seconds: 0,
+          reason: "Must be rejected at the recording boundary",
+        },
+        state.through_sequence,
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_RECORDING_EXPIRED" });
     const viewerPass = await runtime.createAccessPass(
       actor,
       competition.id,
@@ -647,7 +994,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
     const retainedStaleSubmission = await client<
       {
-        after_state: string;
+        after_state: string | Record<string, unknown>;
         metadata: string | Record<string, unknown>;
       }[]
     >`
@@ -656,7 +1003,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         AND action='scoring_event.stale_submission_rejected'
     `;
     expect({
-      after_state: JSON.parse(retainedStaleSubmission[0]?.after_state ?? "{}"),
+      after_state:
+        typeof retainedStaleSubmission[0]?.after_state === "string"
+          ? JSON.parse(retainedStaleSubmission[0].after_state)
+          : retainedStaleSubmission[0]?.after_state,
       metadata:
         typeof retainedStaleSubmission[0]?.metadata === "string"
           ? JSON.parse(retainedStaleSubmission[0].metadata)
@@ -682,19 +1032,49 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         manualEventSeconds: 0,
         payload: {},
         correctionReason: null,
-        occurredAt: new Date("2026-08-01T01:10:00.000Z"),
+        occurredAt: new Date(),
       },
       randomUUID(),
     );
     const finalEventId = randomUUID();
     const final = await runtime.finalise(writerAuth, finalEventId, randomUUID());
     expect(Object.keys(final).sort()).toEqual(
-      ["aggregate_version", "away_score", "duplicate", "home_score", "match_id", "result_version", "sequence"].sort(),
+      [
+        "aggregate_version",
+        "away_score",
+        "client_event_id",
+        "command_fingerprint",
+        "duplicate",
+        "event_id",
+        "home_score",
+        "match_id",
+        "outcome",
+        "publication_version",
+        "published_at",
+        "result_version",
+        "sequence",
+        "server_received_at",
+      ].sort(),
     );
     expect(final).toMatchObject({ home_score: 1, away_score: 0, result_version: 1 });
     const duplicateFinal = await runtime.finalise(writerAuth, finalEventId, randomUUID());
     expect(Object.keys(duplicateFinal).sort()).toEqual(
-      ["aggregate_version", "away_score", "duplicate", "home_score", "match_id", "result_version", "sequence"].sort(),
+      [
+        "aggregate_version",
+        "away_score",
+        "client_event_id",
+        "command_fingerprint",
+        "duplicate",
+        "event_id",
+        "home_score",
+        "match_id",
+        "outcome",
+        "publication_version",
+        "published_at",
+        "result_version",
+        "sequence",
+        "server_received_at",
+      ].sort(),
     );
     expect(duplicateFinal).toMatchObject({
       duplicate: true,
@@ -1902,8 +2282,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     if (!transferFirstWriterPass?.token || !transferFirstCandidatePass?.token) {
       throw new Error("Expected transfer-first access secrets");
     }
+    const transferFirstDeviceId = randomUUID();
     const transferFirstWriter = await runtime.exchangeAccess(
-      { token: transferFirstWriterPass.token, deviceId: randomUUID(), ipAddress: "203.0.113.73" },
+      { token: transferFirstWriterPass.token, deviceId: transferFirstDeviceId, ipAddress: "203.0.113.73" },
       randomUUID(),
     );
     const transferFirstWriterAuth = {
@@ -1937,6 +2318,20 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       { lastAcknowledgedSequence: 1, pendingEventCount: 0, pendingThroughSequence: 1 },
       randomUUID(),
     );
+    const transferFirstOffline = await runtime.issueOfflineAuthorization(
+      transferFirstWriterAuth,
+      {
+        deviceId: transferFirstDeviceId,
+        lastAcknowledgedSequence: 1,
+        pendingEventCount: 0,
+        pendingThroughSequence: 1,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v4",
+      },
+      randomUUID(),
+    );
     const transferFirstTakeover = await runtime.requestTakeover(
       {
         sessionId: transferFirstCandidate.session_id,
@@ -1946,19 +2341,59 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       { pendingEventCount: 0, pendingThroughSequence: 0 },
       randomUUID(),
     );
-    await expect(
+    expect(transferFirstTakeover).toMatchObject({ incumbent_pending_state: "unknown" });
+    const resumeTakeoverRace = await Promise.allSettled([
       runtime.resolveTakeover(
         actor,
         competition.id,
         transferFirstTakeover.id,
         {
           decision: "approve",
-          overrideAcknowledged: false,
-          reason: "Transfer wins before finalisation",
+          overrideAcknowledged: true,
+          reason: "Offline state acknowledged before transfer wins",
         },
         randomUUID(),
       ),
-    ).resolves.toMatchObject({ status: "approved", generation: transferFirstReplacementGeneration });
+      runtime.resumeOfflineAuthorization(
+        transferFirstOffline.authorization_id,
+        {
+          resumeSecret: transferFirstOffline.resume_secret,
+          deviceId: transferFirstDeviceId,
+          lastAcknowledgedSequence: 1,
+          pendingEventCount: 0,
+          pendingThroughSequence: 1,
+          lastReportedLocalSequence: 0,
+          queueFingerprint: null,
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ]);
+    expect(resumeTakeoverRace[0]).toMatchObject({
+      status: "fulfilled",
+      value: { status: "approved", generation: transferFirstReplacementGeneration },
+    });
+    if (resumeTakeoverRace[1].status === "rejected") {
+      expect(resumeTakeoverRace[1].reason).toMatchObject({
+        code: expect.stringMatching(/OFFLINE_AUTHORIZATION_(TRANSFERRED|DENIED)/),
+      });
+    } else {
+      transferFirstWriterAuth.sessionToken = resumeTakeoverRace[1].value.session.session_token;
+    }
+    expect(
+      await client`
+        SELECT
+          (SELECT status FROM scoring_offline_authorizations
+           WHERE id=${transferFirstOffline.authorization_id}) AS authorization_status,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${transferFirstOffline.authorization_id}
+             AND action='scoring_offline_authorization.transferred') AS transferred_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${transferFirstOffline.authorization_id}
+             AND event_type='scoring_offline_authorization.transferred') AS transferred_outbox
+      `,
+    ).toEqual([{ authorization_status: "transferred", transferred_audits: 1, transferred_outbox: 1 }]);
     const staleFinaliseRequestId = randomUUID();
     await expect(runtime.finalise(transferFirstWriterAuth, randomUUID(), staleFinaliseRequestId)).rejects.toMatchObject(
       { code: "STALE_WRITER_GENERATION" },
@@ -2104,10 +2539,69 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     await client`UPDATE competitions
       SET status=archived_from_status,archived_from_status=NULL
       WHERE id=${competition.id}`;
-    await expect(runtime.revokeAccessPass(actor, competition.id, pass.id, randomUUID())).resolves.toMatchObject({
-      id: pass.id,
-      revoked: true,
-    });
+    const revokeResumeRace = await Promise.allSettled([
+      runtime.revokeAccessPass(actor, competition.id, pass.id, randomUUID()),
+      secondApiRuntime.resumeOfflineAuthorization(offlineAuthority.authorization_id, resumeInput, randomUUID()),
+    ]);
+    expect(revokeResumeRace[0]).toMatchObject({ status: "fulfilled", value: { id: pass.id, revoked: true } });
+    if (revokeResumeRace[1].status === "rejected") {
+      expect(revokeResumeRace[1].reason).toMatchObject({
+        code: expect.stringMatching(/OFFLINE_AUTHORIZATION_(REVOKED|DENIED)/),
+      });
+    } else {
+      writerAuth.sessionToken = revokeResumeRace[1].value.session.session_token;
+    }
+    expect(
+      await client`SELECT status FROM scoring_offline_authorizations
+        WHERE id=${offlineAuthority.authorization_id}`,
+    ).toEqual([{ status: "revoked" }]);
+    expect(
+      await client`
+        SELECT
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.issued') AS issued_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.issued') AS issued_outbox,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.renewed') AS renewed_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.renewed') AS renewed_outbox,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.resumed') AS resumed_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.resumed') AS resumed_outbox,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.revoked') AS revoked_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.revoked') AS revoked_outbox
+      `,
+    ).toEqual([
+      {
+        issued_audits: 1,
+        issued_outbox: 1,
+        renewed_audits: 1,
+        renewed_outbox: 1,
+        resumed_audits: revokeResumeRace[1].status === "fulfilled" ? 6 : 5,
+        resumed_outbox: 0,
+        revoked_audits: 1,
+        revoked_outbox: 1,
+      },
+    ]);
+    await expect(
+      runtime.revokeOfflineAuthorization(
+        offlineAuthority.authorization_id,
+        { resumeSecret: offlineAuthority.resume_secret, deviceId: writerDeviceId },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ status: "revoked", duplicate: true });
     await expect(runtime.scoringSessionState(writerAuth)).rejects.toMatchObject({
       statusCode: 403,
       code: "SCORING_SESSION_REVOKED",

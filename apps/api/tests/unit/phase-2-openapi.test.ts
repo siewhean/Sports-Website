@@ -18,6 +18,9 @@ describe("Phase 2 OpenAPI contract", () => {
       "/api/v1/competitions/{competitionId}/schedule-revisions/{revisionId}/publish",
       "/api/v1/competitions/{competitionId}/matches/{matchId}/access-passes",
       "/api/v1/scoring/access/exchange",
+      "/api/v1/scoring/offline-authorizations",
+      "/api/v1/scoring/offline-authorizations/{authorizationId}/resume",
+      "/api/v1/scoring/offline-authorizations/{authorizationId}",
       "/api/v1/scoring/session",
       "/api/v1/scoring/sessions/transfer",
       "/api/v1/scoring/events",
@@ -76,12 +79,19 @@ describe("Phase 2 OpenAPI contract", () => {
     const scoringFinalisationSchema = scoringFinalisation.responses?.["200"]?.content?.["application/json"]?.schema;
     const scoringFinalisationReceiptKeys = [
       "match_id",
+      "client_event_id",
+      "event_id",
+      "command_fingerprint",
+      "outcome",
       "sequence",
       "aggregate_version",
       "duplicate",
       "home_score",
       "away_score",
       "result_version",
+      "publication_version",
+      "published_at",
+      "server_received_at",
     ];
     expect(scoringFinalisationSchema?.required).toEqual(scoringFinalisationReceiptKeys);
     expect(Object.keys(scoringFinalisationSchema?.properties ?? {})).toEqual(scoringFinalisationReceiptKeys);

@@ -40,12 +40,19 @@ const ResultMutationReceiptSchema = Type.Object(
 const ScoringFinalisationReceiptSchema = Type.Object(
   {
     match_id: Id,
+    client_event_id: Id,
+    event_id: Id,
+    command_fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+    outcome: Type.Union([Type.Literal("accepted"), Type.Literal("duplicate")]),
     sequence: Type.Integer({ minimum: 1 }),
     aggregate_version: Type.Integer({ minimum: 1 }),
     duplicate: Type.Boolean(),
     home_score: Type.Integer({ minimum: 0 }),
     away_score: Type.Integer({ minimum: 0 }),
     result_version: Type.Integer({ minimum: 1 }),
+    publication_version: Type.Integer({ minimum: 1 }),
+    published_at: Type.String({ format: "date-time" }),
+    server_received_at: Type.String({ format: "date-time" }),
   },
   { additionalProperties: false },
 );
@@ -164,6 +171,13 @@ const ScoringSessionStateSchema = Type.Object({
   score: GenericSuccess,
   aggregate_version: Type.Integer({ minimum: 0 }),
   through_sequence: Type.Integer({ minimum: 0 }),
+  canonical_events: Type.Array(
+    Type.Object({
+      event_id: Id,
+      sequence: Type.Integer({ minimum: 1 }),
+      command: Type.Record(Type.String(), Type.Any()),
+    }),
+  ),
   events: Type.Array(
     Type.Object({
       client_event_id: Id,
@@ -917,6 +931,146 @@ export async function registerPhase2Routes(
     },
   );
 
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: {
+      device_id: string;
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+      last_reported_local_sequence: number;
+      queue_fingerprint?: string | null;
+      indexeddb_schema_version: number;
+      service_worker_version: string;
+      resume_secret?: string;
+    };
+  }>(
+    "/api/v1/scoring/offline-authorizations",
+    {
+      schema: {
+        description:
+          "Issue or renew generation-bound offline scoring authority after confirming authoritative server state.",
+        headers: ScoringHeaders,
+        security: [{ scoringSession: [] }],
+        body: Type.Object(
+          {
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+            pending_event_count: Type.Integer({ minimum: 0 }),
+            pending_through_sequence: Type.Integer({ minimum: 0 }),
+            last_reported_local_sequence: Type.Integer({ minimum: 0 }),
+            queue_fingerprint: Type.Optional(Type.Union([Type.String({ pattern: "^[0-9a-f]{64}$" }), Type.Null()])),
+            indexeddb_schema_version: Type.Literal(1),
+            service_worker_version: Type.Literal("gate-c-c3-v4"),
+            resume_secret: Type.Optional(Type.String({ minLength: 32, maxLength: 256 })),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.issueOfflineAuthorization(
+        scoringAuth(request.headers),
+        {
+          deviceId: request.body.device_id,
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+          lastReportedLocalSequence: request.body.last_reported_local_sequence,
+          queueFingerprint: request.body.queue_fingerprint ?? null,
+          indexeddbSchemaVersion: request.body.indexeddb_schema_version,
+          serviceWorkerVersion: request.body.service_worker_version,
+          ...(request.body.resume_secret ? { resumeSecret: request.body.resume_secret } : {}),
+        },
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Params: { authorizationId: string };
+    Body: {
+      resume_secret: string;
+      device_id: string;
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+      last_reported_local_sequence: number;
+      queue_fingerprint?: string | null;
+      indexeddb_schema_version: number;
+      service_worker_version: string;
+    };
+  }>(
+    "/api/v1/scoring/offline-authorizations/:authorizationId/resume",
+    {
+      schema: {
+        description: "Resume the same offline writer generation and rotate the ordinary short-lived scoring session.",
+        params: Type.Object({ authorizationId: Id }),
+        body: Type.Object(
+          {
+            resume_secret: Type.String({ minLength: 32, maxLength: 256 }),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+            pending_event_count: Type.Integer({ minimum: 0 }),
+            pending_through_sequence: Type.Integer({ minimum: 0 }),
+            last_reported_local_sequence: Type.Integer({ minimum: 0 }),
+            queue_fingerprint: Type.Optional(Type.Union([Type.String({ pattern: "^[0-9a-f]{64}$" }), Type.Null()])),
+            indexeddb_schema_version: Type.Literal(1),
+            service_worker_version: Type.Literal("gate-c-c3-v4"),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.resumeOfflineAuthorization(
+        request.params.authorizationId,
+        {
+          resumeSecret: request.body.resume_secret,
+          deviceId: request.body.device_id,
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+          lastReportedLocalSequence: request.body.last_reported_local_sequence,
+          queueFingerprint: request.body.queue_fingerprint ?? null,
+          indexeddbSchemaVersion: request.body.indexeddb_schema_version,
+          serviceWorkerVersion: request.body.service_worker_version,
+        },
+        request.id,
+      ),
+  );
+
+  app.delete<{
+    Params: { authorizationId: string };
+    Body: { resume_secret: string; device_id: string };
+  }>(
+    "/api/v1/scoring/offline-authorizations/:authorizationId",
+    {
+      schema: {
+        description: "Revoke a generation-bound offline authorization and relinquish its matching writer lease.",
+        params: Type.Object({ authorizationId: Id }),
+        body: Type.Object(
+          {
+            resume_secret: Type.String({ minLength: 32, maxLength: 256 }),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.revokeOfflineAuthorization(
+        request.params.authorizationId,
+        { resumeSecret: request.body.resume_secret, deviceId: request.body.device_id },
+        request.id,
+      ),
+  );
+
   app.post<{ Headers: ScoringHeaderValues }>(
     "/api/v1/scoring/sessions/transfer",
     {
@@ -1162,7 +1316,10 @@ export async function registerPhase2Routes(
     },
   );
 
-  app.post<{ Headers: ScoringHeaderValues; Body: { client_event_id: string; expected_sequence: number } }>(
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: { client_event_id: string; expected_sequence: number; occurred_at?: string };
+  }>(
     "/api/v1/scoring/finalise",
     {
       schema: {
@@ -1173,6 +1330,7 @@ export async function registerPhase2Routes(
         body: Type.Object({
           client_event_id: Id,
           expected_sequence: Type.Integer({ minimum: 0 }),
+          occurred_at: Type.Optional(Type.String({ format: "date-time" })),
         }),
         response: {
           200: ScoringFinalisationReceiptSchema,
@@ -1189,6 +1347,7 @@ export async function registerPhase2Routes(
         request.body.client_event_id,
         request.id,
         request.body.expected_sequence,
+        request.body.occurred_at,
       ),
   );
 
