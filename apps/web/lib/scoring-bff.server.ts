@@ -1,3 +1,4 @@
+import { parseFiveSportScoreCommand } from "@matchday/domain";
 import {
   expiredScoringSessionCookie,
   InvalidScoringSessionError,
@@ -372,6 +373,39 @@ function exchangedAuth(value: unknown): ScoringServerAuth | null {
 function appendInput(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
+
+  const fiveSportCommand = parseFiveSportScoreCommand(input);
+  if (fiveSportCommand) {
+    const correctionReason =
+      typeof input.correction_reason === "string" ? input.correction_reason : fiveSportCommand.reason;
+    const needsCorrectionReason =
+      fiveSportCommand.type === "goal_reversed" ||
+      fiveSportCommand.type === "card_reversed" ||
+      fiveSportCommand.type === "match_reopened" ||
+      fiveSportCommand.type === "reversal";
+    if (needsCorrectionReason && (typeof correctionReason !== "string" || correctionReason.trim().length < 3)) {
+      return null;
+    }
+    return {
+      client_event_id: fiveSportCommand.clientEventId,
+      type: fiveSportCommand.type,
+      ...(fiveSportCommand.side ? { team_slot: fiveSportCommand.side } : {}),
+      ...(fiveSportCommand.participantId ? { scorer: fiveSportCommand.participantId } : {}),
+      manual_period:
+        fiveSportCommand.segmentNumber ?? (typeof input.manual_period === "number" ? input.manual_period : 1),
+      manual_event_seconds:
+        fiveSportCommand.manualTimeSeconds ??
+        (typeof input.manual_event_seconds === "number" ? input.manual_event_seconds : 0),
+      payload: eventPayload(input.payload),
+      ...(typeof correctionReason === "string" ? { correction_reason: correctionReason } : {}),
+      occurred_at: fiveSportCommand.occurredAt,
+      ...(fiveSportCommand.reversalTargetEventId
+        ? { reversal_target_event_id: fiveSportCommand.reversalTargetEventId }
+        : {}),
+      ...(fiveSportCommand.reason ? { reason: fiveSportCommand.reason } : {}),
+    };
+  }
+
   const correctionReason = input.correction_reason;
   const needsCorrectionReason =
     input.type === "goal_reversed" || input.type === "card_reversed" || input.type === "match_reopened";
