@@ -8,7 +8,11 @@ import type {
   GateCOfflineReplayReceipt,
 } from "@matchday/contracts";
 import { canonicalOfflineJson } from "@matchday/domain";
-import type { OfflineReplayPort, OfflineScoringRepository } from "./offline-scoring";
+import {
+  IndexedDbOfflineScoringRepository,
+  type OfflineReplayPort,
+  type OfflineScoringRepository,
+} from "./offline-scoring";
 import { scoringSessionView, ScoringTransportError, type ApiSessionState } from "./phase2-scoring";
 import type { ScoringSessionView } from "./phase2";
 
@@ -163,6 +167,7 @@ export class ApiOfflineScoringPort implements OfflineReplayPort {
     private readonly deviceId: string,
     private readonly indexeddbSchemaVersion: number,
     private readonly serviceWorkerVersion: string,
+    private readonly repository: OfflineScoringRepository = new IndexedDbOfflineScoringRepository(),
   ) {}
 
   async establishAuthority(
@@ -193,6 +198,16 @@ export class ApiOfflineScoringPort implements OfflineReplayPort {
       offline,
       session: payload.session ? scoringSessionView(payload.session as ApiSessionState) : null,
     };
+  }
+
+  async refreshAuthority(authorizationId: string): Promise<boolean> {
+    try {
+      const summary = await offlineQueueSummary(this.repository, authorizationId);
+      const result = await this.establishAuthority(summary, "resume");
+      return result.offline.authorization_id === authorizationId && result.offline.status === "active";
+    } catch {
+      return false;
+    }
   }
 
   async revokeAuthority(): Promise<void> {
