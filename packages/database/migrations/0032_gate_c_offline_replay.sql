@@ -134,10 +134,10 @@ CREATE FUNCTION phase5_guard_offline_authorization_transition() RETURNS trigger 
 BEGIN
   IF ROW(
     OLD.competition_id,OLD.match_id,OLD.access_pass_id,OLD.access_session_id,
-    OLD.writer_generation,OLD.device_id_hash,OLD.issued_at
+    OLD.writer_generation,OLD.resume_secret_hash,OLD.device_id_hash,OLD.issued_at
   ) IS DISTINCT FROM ROW(
     NEW.competition_id,NEW.match_id,NEW.access_pass_id,NEW.access_session_id,
-    NEW.writer_generation,NEW.device_id_hash,NEW.issued_at
+    NEW.writer_generation,NEW.resume_secret_hash,NEW.device_id_hash,NEW.issued_at
   ) THEN
     RAISE EXCEPTION 'offline authorization identity is immutable';
   END IF;
