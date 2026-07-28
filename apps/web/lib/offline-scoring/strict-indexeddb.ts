@@ -101,26 +101,104 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
     this.raw = new RawIndexedDbOfflineScoringRepository(factory);
   }
 
-  saveMatchPackage = this.raw.saveMatchPackage.bind(this.raw);
-  transitionMatchPackageStatus = this.raw.transitionMatchPackageStatus.bind(this.raw);
-  getMatchPackage = this.raw.getMatchPackage.bind(this.raw);
-  getActiveMatchPackage = this.raw.getActiveMatchPackage.bind(this.raw);
-  getRecoverableMatchPackage = this.raw.getRecoverableMatchPackage.bind(this.raw);
-  enqueue = this.raw.enqueue.bind(this.raw);
-  listCommands = this.raw.listCommands.bind(this.raw);
-  listAcknowledgements = this.raw.listAcknowledgements.bind(this.raw);
-  listPendingCommands = this.raw.listPendingCommands.bind(this.raw);
-  appendAcknowledgement = this.raw.appendAcknowledgement.bind(this.raw);
-  appendReplayAttempt = this.raw.appendReplayAttempt.bind(this.raw);
-  listReplayAttempts = this.raw.listReplayAttempts.bind(this.raw);
-  appendConflict = this.raw.appendConflict.bind(this.raw);
-  listConflicts = this.raw.listConflicts.bind(this.raw);
-  recordDiagnosticExport = this.raw.recordDiagnosticExport.bind(this.raw);
-  acquireReplayLease = this.raw.acquireReplayLease.bind(this.raw);
-  renewReplayLease = this.raw.renewReplayLease.bind(this.raw);
-  releaseReplayLease = this.raw.releaseReplayLease.bind(this.raw);
-  pruneTerminalQueue = this.raw.pruneTerminalQueue.bind(this.raw);
-  discardResolvedAuthorization = this.raw.discardResolvedAuthorization.bind(this.raw);
+  saveMatchPackage(matchPackage: GateCOfflineMatchPackage): Promise<void> {
+    return this.raw.saveMatchPackage(matchPackage);
+  }
+
+  transitionMatchPackageStatus(
+    authorizationId: string,
+    status: Exclude<GateCOfflineMatchPackage["status"], "active">,
+  ): Promise<void> {
+    return this.raw.transitionMatchPackageStatus(authorizationId, status);
+  }
+
+  getMatchPackage(authorizationId: string): Promise<GateCOfflineMatchPackage | null> {
+    return this.raw.getMatchPackage(authorizationId);
+  }
+
+  getActiveMatchPackage(): Promise<GateCOfflineMatchPackage | null> {
+    return this.raw.getActiveMatchPackage();
+  }
+
+  getRecoverableMatchPackage(): Promise<GateCOfflineMatchPackage | null> {
+    return this.raw.getRecoverableMatchPackage();
+  }
+
+  enqueue(command: GateCOfflineQueuedCommand, now?: number): Promise<void> {
+    return this.raw.enqueue(command, now);
+  }
+
+  listCommands(authorizationId: string): Promise<GateCOfflineQueuedCommand[]> {
+    return this.raw.listCommands(authorizationId);
+  }
+
+  listAcknowledgements(authorizationId: string): Promise<GateCOfflineAcknowledgement[]> {
+    return this.raw.listAcknowledgements(authorizationId);
+  }
+
+  listPendingCommands(authorizationId: string): Promise<GateCOfflineQueuedCommand[]> {
+    return this.raw.listPendingCommands(authorizationId);
+  }
+
+  appendAcknowledgement(acknowledgement: GateCOfflineAcknowledgement): Promise<void> {
+    return this.raw.appendAcknowledgement(acknowledgement);
+  }
+
+  appendReplayAttempt(attempt: OfflineReplayAttempt): Promise<void> {
+    return this.raw.appendReplayAttempt(attempt);
+  }
+
+  listReplayAttempts(authorizationId: string): Promise<OfflineReplayAttempt[]> {
+    return this.raw.listReplayAttempts(authorizationId);
+  }
+
+  appendConflict(conflict: OfflineConflict): Promise<void> {
+    return this.raw.appendConflict(conflict);
+  }
+
+  listConflicts(authorizationId: string): Promise<OfflineConflict[]> {
+    return this.raw.listConflicts(authorizationId);
+  }
+
+  recordDiagnosticExport(
+    authorizationId: string,
+    sha256: string,
+    canonicalJson: string,
+    recordedAt: string,
+  ): Promise<void> {
+    return this.raw.recordDiagnosticExport(authorizationId, sha256, canonicalJson, recordedAt);
+  }
+
+  acquireReplayLease(
+    authorizationId: string,
+    ownerId: string,
+    now: number,
+    ttlMs: number,
+  ): Promise<number | null> {
+    return this.raw.acquireReplayLease(authorizationId, ownerId, now, ttlMs);
+  }
+
+  renewReplayLease(
+    authorizationId: string,
+    ownerId: string,
+    epoch: number,
+    now: number,
+    ttlMs: number,
+  ): Promise<boolean> {
+    return this.raw.renewReplayLease(authorizationId, ownerId, epoch, now, ttlMs);
+  }
+
+  releaseReplayLease(authorizationId: string, ownerId: string, epoch: number): Promise<void> {
+    return this.raw.releaseReplayLease(authorizationId, ownerId, epoch);
+  }
+
+  pruneTerminalQueue(authorizationId: string, now: number): Promise<boolean> {
+    return this.raw.pruneTerminalQueue(authorizationId, now);
+  }
+
+  discardResolvedAuthorization(authorizationId: string): Promise<void> {
+    return this.raw.discardResolvedAuthorization(authorizationId);
+  }
 
   async getReplayState(authorizationId: string): Promise<OfflineReplayState | null> {
     const database = await openOfflineScoringDatabase(this.factory);
