@@ -78,23 +78,50 @@ async function sanitizedCommand(command: GateCOfflineCanonicalCommand): Promise<
   };
 }
 
-export async function buildOfflineDiagnosticDocument(
+/** @deprecated Use the replay-attempt-aware overload for production export and deletion. */
+export function buildOfflineDiagnosticDocument(
+  matchPackage: GateCOfflineMatchPackage,
+  commands: readonly GateCOfflineQueuedCommand[],
+  acknowledgements: readonly GateCOfflineAcknowledgement[],
+  conflicts: readonly OfflineConflict[],
+  generatedAt: string,
+): Promise<OfflineDiagnosticDocument>;
+export function buildOfflineDiagnosticDocument(
   matchPackage: GateCOfflineMatchPackage,
   commands: readonly GateCOfflineQueuedCommand[],
   acknowledgements: readonly GateCOfflineAcknowledgement[],
   replayAttempts: readonly OfflineReplayAttempt[],
   conflicts: readonly OfflineConflict[],
   generatedAt: string,
-  replayState: OfflineReplayState | null = null,
+  replayState?: OfflineReplayState | null,
+): Promise<OfflineDiagnosticDocument>;
+export async function buildOfflineDiagnosticDocument(
+  matchPackage: GateCOfflineMatchPackage,
+  commands: readonly GateCOfflineQueuedCommand[],
+  acknowledgements: readonly GateCOfflineAcknowledgement[],
+  replayAttemptsOrConflicts: readonly OfflineReplayAttempt[] | readonly OfflineConflict[],
+  conflictsOrGeneratedAt: readonly OfflineConflict[] | string,
+  generatedAtOrReplayState?: string | OfflineReplayState | null,
+  optionalReplayState: OfflineReplayState | null = null,
 ): Promise<OfflineDiagnosticDocument> {
+  const legacyCall = typeof conflictsOrGeneratedAt === "string";
+  const replayAttempts = legacyCall ? [] : (replayAttemptsOrConflicts as readonly OfflineReplayAttempt[]);
+  const conflicts = legacyCall
+    ? (replayAttemptsOrConflicts as readonly OfflineConflict[])
+    : conflictsOrGeneratedAt;
+  const generatedAt = legacyCall ? conflictsOrGeneratedAt : generatedAtOrReplayState;
+  const replayState = legacyCall ? null : optionalReplayState;
+  if (typeof generatedAt !== "string" || !Array.isArray(conflicts)) {
+    throw new Error("Offline diagnostic export arguments are invalid.");
+  }
+
   const sortedCommands = commands.toSorted((left, right) => left.local_sequence - right.local_sequence);
   const sortedAcknowledgements = acknowledgements.toSorted(
     (left, right) => left.local_sequence - right.local_sequence,
   );
-  const queueFingerprint = await sha256(canonicalOfflineJson({
-    commands: sortedCommands,
-    acknowledgements: sortedAcknowledgements,
-  }));
+  const queueFingerprint = await sha256(
+    canonicalOfflineJson({ commands: sortedCommands, acknowledgements: sortedAcknowledgements }),
+  );
   const settingsFingerprint = await sha256(canonicalOfflineJson(matchPackage.settings));
   return {
     export_version: 2,
