@@ -1,0 +1,1 @@
+Gate C handoff artifacts are archived on this branch for download and review. Do not treat this branch as application-source certification.
