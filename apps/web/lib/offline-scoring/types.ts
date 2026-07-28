@@ -59,6 +59,7 @@ export type OfflineScoringRepository = {
   listReplayAttempts(authorizationId: string): Promise<OfflineReplayAttempt[]>;
   appendConflict(conflict: OfflineConflict): Promise<void>;
   listConflicts(authorizationId: string): Promise<OfflineConflict[]>;
+  getReplayState?(authorizationId: string): Promise<OfflineReplayState | null>;
   recordDiagnosticExport(
     authorizationId: string,
     sha256: string,
@@ -85,4 +86,5 @@ export type OfflineReplayPort = {
     resolvedCommand: GateCOfflineQueuedCommand["command"],
     signal?: AbortSignal,
   ): Promise<GateCOfflineReplayReceipt>;
+  refreshAuthority?(authorizationId: string): Promise<boolean>;
 };
