@@ -157,7 +157,7 @@ export function canonicalGateCC2ScreenshotPaths(paths: unknown): readonly string
   if (!Array.isArray(paths) || !paths.every((item): item is string => typeof item === "string")) {
     throw new Error("Gate C C2 screenshot receipt is missing");
   }
-  const canonical = paths.filter((item) => !item.replaceAll("\\", "/").split("/").includes("attachments"));
+  const canonical = paths.filter((item) => item.replaceAll("\\", "/").split("/").includes("attachments"));
   return validateGateCC2ScreenshotPaths(canonical);
 }
 

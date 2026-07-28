@@ -59,12 +59,13 @@ describe("Gate C C2 evidence discovery", () => {
   });
 
   it("records canonical screenshots without Playwright attachment copies", () => {
-    const canonical = gateCC2ScreenshotStems.map((stem) => `playwright/result/${stem}.png`);
+    const raw = gateCC2ScreenshotStems.map((stem) => `playwright/result/${stem.replaceAll("-", "_")}.png`);
     const attachments = gateCC2ScreenshotStems.map(
       (stem) => `playwright/result/attachments/${stem}-${"a".repeat(40)}.png`,
     );
-    expect(canonicalGateCC2ScreenshotPaths([...canonical, ...attachments])).toEqual(canonical);
-    expect(() => canonicalGateCC2ScreenshotPaths([...canonical, canonical[0]!])).toThrow(/found 2/);
+    expect(canonicalGateCC2ScreenshotPaths([...raw, ...attachments])).toEqual(attachments);
+    expect(() => canonicalGateCC2ScreenshotPaths(raw)).toThrow(/found 0/);
+    expect(() => canonicalGateCC2ScreenshotPaths([...raw, ...attachments, attachments[0]!])).toThrow(/found 2/);
   });
 
   it("requires exact five-sport browser and direct database semantics", () => {
