@@ -9,12 +9,7 @@ import type {
 import { createOfflineDiagnosticExport } from "./offline-scoring/export";
 import { OfflineReplayController } from "./offline-scoring/replay";
 import { StrictIndexedDbOfflineScoringRepository } from "./offline-scoring/strict-indexeddb";
-import type {
-  OfflineConflict,
-  OfflineReplayAttempt,
-  OfflineReplayState,
-  OfflineScoringRepository,
-} from "./offline-scoring/types";
+import type { OfflineConflict, OfflineReplayAttempt, OfflineScoringRepository } from "./offline-scoring/types";
 
 const authorizationId = "00000000-0000-4000-8000-000000000101";
 const matchId = "00000000-0000-4000-8000-000000000102";
@@ -117,10 +112,16 @@ describe("Gate C C3 hardening", () => {
       listCommands: vi.fn(async () => [command]),
       listAcknowledgements: vi.fn(async () => acknowledgements),
       listPendingCommands: vi.fn(async () => (acknowledgements.length ? [] : [command])),
-      appendAcknowledgement: vi.fn(async (acknowledgement) => acknowledgements.push(acknowledgement)),
-      appendReplayAttempt: vi.fn(async (attempt) => attempts.push(attempt)),
+      appendAcknowledgement: vi.fn(async (acknowledgement) => {
+        acknowledgements.push(acknowledgement);
+      }),
+      appendReplayAttempt: vi.fn(async (attempt) => {
+        attempts.push(attempt);
+      }),
       listReplayAttempts: vi.fn(async () => attempts),
-      appendConflict: vi.fn(async (conflict) => conflicts.push(conflict)),
+      appendConflict: vi.fn(async (conflict) => {
+        conflicts.push(conflict);
+      }),
       listConflicts: vi.fn(async () => conflicts),
       getReplayState: vi.fn(async () => null),
       recordDiagnosticExport: vi.fn(),
