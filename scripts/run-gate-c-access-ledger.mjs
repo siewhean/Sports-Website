@@ -14,7 +14,7 @@ const expectedProjects = [
 ];
 export const requiredInfrastructureServices = ["postgres", "redis", "mailpit"];
 const sha256Pattern = /^[a-f0-9]{64}$/u;
-const requiredLocalCommands = [
+export const requiredLocalCommands = [
   { label: "node-version", command: "node", args: ["--version"] },
   { label: "pnpm-version", command: "pnpm", args: ["--version"] },
   { label: "frozen-install", command: "pnpm", args: ["install", "--frozen-lockfile"] },

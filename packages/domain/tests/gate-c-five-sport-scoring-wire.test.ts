@@ -49,7 +49,7 @@ describe("Gate C five-sport scoring wire contract", () => {
   });
 
   it("enforces sport ownership and effective settings", () => {
-    const timeout = parseFiveSportScoreCommand(request({ type: "timeout" }));
+    const timeout = parseFiveSportScoreCommand(request({ type: "timeout", manual_time_seconds: 30 }));
     expect(timeout).not.toBeNull();
     expect(() => assertFiveSportScoreCommandAllowed("canoe_polo", timeout!)).not.toThrow();
     expect(() => assertFiveSportScoreCommandAllowed("canoe_polo", timeout!, { timeoutsEnabled: false })).toThrow(
@@ -68,7 +68,7 @@ describe("Gate C five-sport scoring wire contract", () => {
     expect(() =>
       assertFiveSportScoreCommandAllowed(
         "canoe_polo",
-        requestCommand("goal", { side: "home", unknownParticipant: true }),
+        requestCommand("goal", { side: "home", unknownParticipant: true, manualTimeSeconds: 30 }),
         { allowUnknownScorer: true },
       ),
     ).not.toThrow();
@@ -78,9 +78,22 @@ describe("Gate C five-sport scoring wire contract", () => {
         requestCommand("one_point_score", {
           side: "home",
           unknownParticipant: true,
+          manualTimeSeconds: 30,
         }),
       ),
     ).toThrow(/only supported for Canoe Polo goals/);
+    expect(() =>
+      assertFiveSportScoreCommandAllowed(
+        "canoe_polo",
+        requestCommand("goal", {
+          side: "home",
+          participantId: "player-7",
+          unknownParticipant: true,
+          manualTimeSeconds: 30,
+        }),
+        { allowUnknownScorer: true },
+      ),
+    ).toThrow(/mutually exclusive/);
   });
 
   it("requires explicit reasons and targets for correction lifecycle commands", () => {
@@ -132,6 +145,31 @@ describe("Gate C five-sport scoring wire contract", () => {
       segmentNumber: 4,
       manualTimeSeconds: 42,
     });
+  });
+
+  it("requires non-null manual event time for actions when effective settings enable it", () => {
+    expect(() =>
+      assertFiveSportScoreCommandAllowed(
+        "canoe_polo",
+        requestCommand("goal", { side: "home", participantId: "player-1" }),
+      ),
+    ).toThrow(/requires manual event time/);
+    expect(() =>
+      assertFiveSportScoreCommandAllowed(
+        "basketball",
+        requestCommand("one_point_score", { side: "home", manualTimeSeconds: null }),
+      ),
+    ).toThrow(/requires manual event time/);
+    expect(() =>
+      assertFiveSportScoreCommandAllowed(
+        "canoe_polo",
+        requestCommand("goal", {
+          side: "home",
+          participantId: "player-1",
+          manualTimeSeconds: 30,
+        }),
+      ),
+    ).not.toThrow();
   });
 });
 

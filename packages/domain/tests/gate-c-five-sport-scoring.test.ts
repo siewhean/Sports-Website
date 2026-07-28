@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { reduceFiveSportScoreEvents, type FiveSportScoreEvent, type MatchSide, type SportId } from "../src/index.js";
 
+const MANUAL_TIME_EVENT_TYPES = new Set([
+  "goal",
+  "green_card",
+  "yellow_card",
+  "red_card",
+  "timeout",
+  "incident",
+  "one_point_score",
+  "two_point_score",
+  "three_point_score",
+  "team_foul",
+  "player_foul",
+]);
+
 function event(
   sequence: number,
   input: Partial<FiveSportScoreEvent> & Pick<FiveSportScoreEvent, "type">,
@@ -13,6 +27,7 @@ function event(
     actorId: "official-1",
     scoringSessionId: "session-1",
     occurredAt: new Date(Date.UTC(2026, 7, 1, 1, 0, sequence)).toISOString(),
+    ...(MANUAL_TIME_EVENT_TYPES.has(input.type) ? { manualTimeSeconds: 30 } : {}),
     ...input,
   };
 }
@@ -80,6 +95,7 @@ describe("Gate C five-sport deterministic scoring", () => {
     expect(state.score).toEqual({ home: 1, away: 1 });
     expect(state.lifecycle).toBe("finalised");
     expect(state.winner).toBeNull();
+    expect(state.actions[0]).toMatchObject({ eventType: "goal", manualTimeSeconds: 30 });
 
     expect(() =>
       reduceFiveSportScoreEvents("canoe_polo", [start(), event(2, { type: "goal", side: "home", segmentNumber: 1 })]),
@@ -90,7 +106,8 @@ describe("Gate C five-sport deterministic scoring", () => {
     const stream = [
       start(),
       event(2, { type: "goal", side: "home", unknownParticipant: true, segmentNumber: 1 }),
-      event(3, { type: "finalisation" }),
+      event(3, { type: "period_change", segmentNumber: 2 }),
+      event(4, { type: "finalisation" }),
     ];
     expect(() => reduceFiveSportScoreEvents("canoe_polo", stream)).toThrow(/participant attribution/);
     expect(
@@ -99,6 +116,25 @@ describe("Gate C five-sport deterministic scoring", () => {
         scorerRequired: true,
       }).lifecycle,
     ).toBe("finalised");
+  });
+
+  it("rejects ambiguous known-and-unknown participant attribution in the authoritative stream", () => {
+    expect(() =>
+      reduceFiveSportScoreEvents(
+        "canoe_polo",
+        [
+          start(),
+          event(2, {
+            type: "goal",
+            side: "home",
+            participantId: "player-7",
+            unknownParticipant: true,
+            segmentNumber: 1,
+          }),
+        ],
+        { allowUnknownScorer: true },
+      ),
+    ).toThrow(/mutually exclusive/);
   });
 
   it("applies Badminton win-by and cap rules across a best-of-three match", () => {
@@ -178,20 +214,20 @@ describe("Gate C five-sport deterministic scoring", () => {
   });
 
   it("uses 1, 2, and 3 point Basketball events and rejects a regulation draw", () => {
-    const tied = [
+    const tiedRegulation = [
       start(),
       event(2, { type: "one_point_score", side: "home", segmentNumber: 1 }),
       event(3, { type: "two_point_score", side: "home", segmentNumber: 1 }),
       event(4, { type: "three_point_score", side: "away", segmentNumber: 1 }),
-    ];
-    expect(() => reduceFiveSportScoreEvents("basketball", [...tied, event(5, { type: "finalisation" })])).toThrow(
-      /cannot be finalised as a draw/,
-    );
-    const state = reduceFiveSportScoreEvents("basketball", [
-      ...tied,
       event(5, { type: "period_change", segmentNumber: 2 }),
       event(6, { type: "period_change", segmentNumber: 3 }),
       event(7, { type: "period_change", segmentNumber: 4 }),
+    ];
+    expect(() =>
+      reduceFiveSportScoreEvents("basketball", [...tiedRegulation, event(8, { type: "finalisation" })]),
+    ).toThrow(/cannot be finalised as a draw/);
+    const state = reduceFiveSportScoreEvents("basketball", [
+      ...tiedRegulation,
       event(8, { type: "overtime", segmentNumber: 5 }),
       event(9, { type: "one_point_score", side: "home", segmentNumber: 5 }),
       event(10, { type: "finalisation" }),
@@ -201,15 +237,16 @@ describe("Gate C five-sport deterministic scoring", () => {
   });
 
   it("treats an identical repeated finalisation as idempotent", () => {
-    const finalisation = event(3, { type: "finalisation" });
+    const finalisation = event(4, { type: "finalisation" });
     const state = reduceFiveSportScoreEvents("canoe_polo", [
       start(),
       event(2, { type: "goal", side: "home", participantId: "player-1", segmentNumber: 1 }),
+      event(3, { type: "period_change", segmentNumber: 2 }),
       finalisation,
       finalisation,
     ]);
     expect(state.lifecycle).toBe("finalised");
-    expect(state.appliedEventIds).toHaveLength(3);
+    expect(state.appliedEventIds).toHaveLength(4);
   });
 
   it("enforces participant attribution for sport-pack events and reverses zero-delta actions", () => {
@@ -281,6 +318,113 @@ describe("Gate C five-sport deterministic scoring", () => {
     expect(() => reduceFiveSportScoreEvents("badminton", [...stream, event(26, { type: "finalisation" })])).toThrow(
       /conflicts must be resolved/,
     );
+    expect(() =>
+      reduceFiveSportScoreEvents("badminton", [
+        ...stream,
+        event(26, { type: "point", side: "home", segmentNumber: 1 }),
+        event(27, { type: "game_completion", side: "home", segmentNumber: 1 }),
+        event(28, { type: "finalisation" }),
+      ]),
+    ).toThrow(/conflicts must be resolved/);
+  });
+
+  it.each(["badminton", "table_tennis", "volleyball"] as const)(
+    "atomically replaces the latest completed %s segment winner without retaining a false conflict",
+    (sportId) => {
+      const completionType = sportId === "volleyball" ? "set_completion" : "game_completion";
+      const regularTarget = sportId === "badminton" ? 21 : sportId === "table_tennis" ? 11 : 25;
+      const decidingTarget = sportId === "volleyball" ? 15 : regularTarget;
+      const segmentCount = sportId === "table_tennis" ? 5 : 3;
+      const stream: FiveSportScoreEvent[] = [start()];
+      let sequence = 2;
+      const latestSegmentPointIds: string[] = [];
+      for (let point = 0; point < regularTarget; point += 1) {
+        const scored = event(sequence++, { type: "point", side: "home", segmentNumber: 1 });
+        stream.push(scored);
+      }
+      stream.push(event(sequence++, { type: completionType, side: "home", segmentNumber: 1 }));
+      for (let segmentNumber = 2; segmentNumber <= segmentCount; segmentNumber += 1) {
+        const side = segmentNumber % 2 === 0 ? "away" : "home";
+        const target = segmentNumber === 3 ? decidingTarget : regularTarget;
+        for (let point = 0; point < target; point += 1) {
+          const scored = event(sequence++, { type: "point", side, segmentNumber });
+          if (segmentNumber === segmentCount) latestSegmentPointIds.push(scored.eventId);
+          stream.push(scored);
+        }
+        stream.push(event(sequence++, { type: completionType, side, segmentNumber }));
+      }
+      stream.push(
+        event(sequence++, { type: "finalisation" }),
+        event(sequence++, { type: "match_reopened", reason: "Correct the first segment winner" }),
+      );
+      for (const targetEventId of latestSegmentPointIds) {
+        stream.push(
+          event(sequence++, {
+            type: "reversal",
+            reversalTargetEventId: targetEventId,
+            reason: "Point awarded to the wrong side",
+          }),
+        );
+      }
+      const replacementTarget = segmentCount === 3 ? decidingTarget : regularTarget;
+      for (let point = 0; point < replacementTarget; point += 1) {
+        stream.push(event(sequence++, { type: "point", side: "away", segmentNumber: segmentCount }));
+      }
+      stream.push(
+        event(sequence++, { type: completionType, side: "away", segmentNumber: segmentCount }),
+        event(sequence++, { type: "finalisation" }),
+      );
+      const corrected = reduceFiveSportScoreEvents(sportId, stream);
+      expect(corrected.lifecycle).toBe("finalised");
+      expect(corrected.winner).toBe("away");
+      expect(corrected.conflicts).toEqual([]);
+    },
+  );
+
+  it("allows an earlier Badminton winner correction after affected later play is explicitly unwound", () => {
+    const stream: FiveSportScoreEvent[] = [start()];
+    const pointIds = new Map<number, string[]>();
+    let sequence = 2;
+    for (const [segmentNumber, side] of [
+      [1, "home"],
+      [2, "away"],
+      [3, "home"],
+    ] as const) {
+      const ids: string[] = [];
+      for (let point = 0; point < 21; point += 1) {
+        const scored = event(sequence++, { type: "point", side, segmentNumber });
+        ids.push(scored.eventId);
+        stream.push(scored);
+      }
+      pointIds.set(segmentNumber, ids);
+      stream.push(event(sequence++, { type: "game_completion", side, segmentNumber }));
+    }
+    stream.push(
+      event(sequence++, { type: "finalisation" }),
+      event(sequence++, { type: "match_reopened", reason: "Correct the first game winner" }),
+    );
+    for (const segmentNumber of [3, 2, 1]) {
+      for (const targetEventId of pointIds.get(segmentNumber) ?? []) {
+        stream.push(
+          event(sequence++, {
+            type: "reversal",
+            reversalTargetEventId: targetEventId,
+            reason: "Unwind affected play before rebuilding",
+          }),
+        );
+      }
+    }
+    for (const segmentNumber of [1, 2]) {
+      for (let point = 0; point < 21; point += 1) {
+        stream.push(event(sequence++, { type: "point", side: "away", segmentNumber }));
+      }
+      stream.push(event(sequence++, { type: "game_completion", side: "away", segmentNumber }));
+    }
+    stream.push(event(sequence++, { type: "finalisation" }));
+
+    const corrected = reduceFiveSportScoreEvents("badminton", stream);
+    expect(corrected).toMatchObject({ lifecycle: "finalised", winner: "away", conflicts: [] });
+    expect(corrected.segmentWins).toEqual({ home: 0, away: 2 });
   });
 
   it("preserves completed play and requires explicit finalisation after retirement", () => {
@@ -305,18 +449,19 @@ describe("Gate C five-sport deterministic scoring", () => {
     const finalised = [
       start(),
       event(2, { type: "goal", side: "home", participantId: "player-1", segmentNumber: 1 }),
-      event(3, { type: "finalisation" }),
+      event(3, { type: "period_change", segmentNumber: 2 }),
+      event(4, { type: "finalisation" }),
     ];
     expect(() =>
       reduceFiveSportScoreEvents("canoe_polo", [
         ...finalised,
-        event(4, { type: "goal", side: "away", participantId: "player-2", segmentNumber: 1 }),
+        event(5, { type: "goal", side: "away", participantId: "player-2", segmentNumber: 2 }),
       ]),
     ).toThrow(/must be reopened/);
     const reopened = reduceFiveSportScoreEvents("canoe_polo", [
       ...finalised,
-      event(4, { type: "match_reopened", reason: "Confirmed scoring correction" }),
-      event(5, { type: "reversal", reversalTargetEventId: "event-2", reason: "Goal entered for wrong side" }),
+      event(5, { type: "match_reopened", reason: "Confirmed scoring correction" }),
+      event(6, { type: "reversal", reversalTargetEventId: "event-2", reason: "Goal entered for wrong side" }),
     ]);
     expect(reopened.lifecycle).toBe("in_progress");
     expect(reopened.totalPoints).toEqual({ home: 0, away: 0 });
@@ -408,5 +553,149 @@ describe("Gate C five-sport deterministic scoring", () => {
         event(2, { type: "team_foul", side: "home", segmentNumber: 4 }),
       ]),
     ).toThrow(/current segment/);
+  });
+
+  it("requires timed sports to reach the configured regulation segment before finalisation", () => {
+    expect(() =>
+      reduceFiveSportScoreEvents("canoe_polo", [
+        start(),
+        event(2, { type: "goal", side: "home", participantId: "player-1", segmentNumber: 1 }),
+        event(3, { type: "finalisation" }),
+      ]),
+    ).toThrow(/regulation segment 2/);
+
+    expect(() =>
+      reduceFiveSportScoreEvents("basketball", [
+        start(),
+        event(2, { type: "one_point_score", side: "home", segmentNumber: 1 }),
+        event(3, { type: "finalisation" }),
+      ]),
+    ).toThrow(/regulation segment 4/);
+  });
+
+  it("allows Basketball overtime only from a tied regulation or overtime score", () => {
+    expect(() =>
+      reduceFiveSportScoreEvents("basketball", [
+        start(),
+        event(2, { type: "one_point_score", side: "home", segmentNumber: 1 }),
+        event(3, { type: "period_change", segmentNumber: 2 }),
+        event(4, { type: "period_change", segmentNumber: 3 }),
+        event(5, { type: "period_change", segmentNumber: 4 }),
+        event(6, { type: "overtime", segmentNumber: 5 }),
+      ]),
+    ).toThrow(/requires a tied score/);
+  });
+
+  it("requires manual event time when enabled for Canoe Polo and Basketball actions", () => {
+    const { manualTimeSeconds, ...goalWithoutManualTime } = event(2, {
+      type: "goal",
+      side: "home",
+      participantId: "player-1",
+      segmentNumber: 1,
+    });
+    expect(manualTimeSeconds).toBe(30);
+    expect(() => reduceFiveSportScoreEvents("canoe_polo", [start(), goalWithoutManualTime])).toThrow(
+      /requires manual event time/,
+    );
+
+    expect(() =>
+      reduceFiveSportScoreEvents("basketball", [
+        start(),
+        event(2, {
+          type: "one_point_score",
+          side: "home",
+          segmentNumber: 1,
+          manualTimeSeconds: null,
+        }),
+      ]),
+    ).toThrow(/requires manual event time/);
+  });
+
+  it("rejects settings-disabled events when rebuilding the authoritative stream", () => {
+    expect(() =>
+      reduceFiveSportScoreEvents(
+        "canoe_polo",
+        [start(), event(2, { type: "timeout", side: "home", segmentNumber: 1 })],
+        { timeoutsEnabled: false },
+      ),
+    ).toThrow(/disabled by the effective Canoe Polo settings/);
+  });
+
+  it("repairs and refinalises a reversed winning point when no later segment exists", () => {
+    const stream: FiveSportScoreEvent[] = [start()];
+    stream.push(...points("badminton", 2, 21, "home", 1));
+    stream.push(event(23, { type: "game_completion", side: "home", segmentNumber: 1 }));
+    stream.push(...points("badminton", 24, 21, "home", 2));
+    stream.push(
+      event(45, { type: "game_completion", side: "home", segmentNumber: 2 }),
+      event(46, { type: "finalisation" }),
+      event(47, { type: "match_reopened", reason: "Correct duplicated point" }),
+      event(48, { type: "reversal", reversalTargetEventId: "event-44", reason: "Point entered twice" }),
+      event(49, { type: "point", side: "home", segmentNumber: 2 }),
+      event(50, { type: "game_completion", side: "home", segmentNumber: 2 }),
+      event(51, { type: "finalisation" }),
+    );
+
+    const state = reduceFiveSportScoreEvents("badminton", stream);
+    expect(state.lifecycle).toBe("finalised");
+    expect(state.score).toEqual({ home: 2, away: 0 });
+    expect(state.conflicts).toEqual([]);
+    expect(state.actions.find((action) => action.eventId === "event-44")).toMatchObject({ reversed: true });
+  });
+
+  it("rejects operational and exceptional actions after a best-of match is clinched", () => {
+    const clinched: FiveSportScoreEvent[] = [start()];
+    clinched.push(...points("badminton", 2, 21, "home", 1));
+    clinched.push(event(23, { type: "game_completion", side: "home", segmentNumber: 1 }));
+    clinched.push(...points("badminton", 24, 21, "home", 2));
+    clinched.push(event(45, { type: "game_completion", side: "home", segmentNumber: 2 }));
+
+    expect(() =>
+      reduceFiveSportScoreEvents("badminton", [
+        ...clinched,
+        event(46, { type: "retirement", side: "away", segmentNumber: 2 }),
+      ]),
+    ).toThrow(/already been clinched/);
+    expect(() =>
+      reduceFiveSportScoreEvents(
+        "badminton",
+        [...clinched, event(46, { type: "server_change", side: "home", segmentNumber: 2 })],
+        { serverIndicatorEnabled: true },
+      ),
+    ).toThrow(/already been clinched/);
+  });
+
+  it("keeps an exceptional outcome active across reopen until an explicit reversal", () => {
+    const finalised = [
+      start(),
+      event(2, { type: "retirement", side: "home", segmentNumber: 1 }),
+      event(3, { type: "finalisation" }),
+      event(4, { type: "match_reopened", reason: "Review retirement report" }),
+    ];
+    const reopened = reduceFiveSportScoreEvents("badminton", finalised);
+    expect(reopened).toMatchObject({
+      lifecycle: "in_progress",
+      exceptionalOutcome: "retirement",
+      winner: "home",
+    });
+    expect(() =>
+      reduceFiveSportScoreEvents("badminton", [
+        ...finalised,
+        event(5, { type: "point", side: "away", segmentNumber: 1 }),
+      ]),
+    ).toThrow(/must be finalised or reversed/);
+
+    const corrected = reduceFiveSportScoreEvents("badminton", [
+      ...finalised,
+      event(5, {
+        type: "reversal",
+        reversalTargetEventId: "event-2",
+        reason: "Retirement report was attached to the wrong match",
+      }),
+      event(6, { type: "point", side: "away", segmentNumber: 1 }),
+    ]);
+    expect(corrected.exceptionalOutcome).toBeNull();
+    expect(corrected.winner).toBeNull();
+    expect(corrected.totalPoints).toEqual({ home: 0, away: 1 });
   });
 });

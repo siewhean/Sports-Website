@@ -137,7 +137,7 @@ describe("Gate C access source guards", () => {
     const browserSource = await readFile(new URL("../gate-c-access-real.spec.ts", import.meta.url), "utf8");
 
     expect(scoringSource).toContain("refreshScoringSessionAccess(");
-    expect(scoringSource).toContain("liveScorerInputRef.current?.focus()");
+    expect(scoringSource).toContain("scoreControlsRef.current?.focus()");
     expect(scoringSource).toContain("writerStatusRef.current?.focus()");
     expect(scoringSource).toContain("writerStateRef.current = phase2Machine.expiring");
     expect(scoringSource).toContain("void refresh(true)");
@@ -155,7 +155,8 @@ describe("Gate C access source guards", () => {
     for (const [handler, mutation] of [
       ["const requestTakeover = async () =>", "await port.requestTakeover"],
       ["const startScoring = async () =>", "await port.appendEvent"],
-      ["const record = async", "await port.appendEvent"],
+      ["const recordAction = async", "await port.appendEvent"],
+      ["const reverseAction = async", "await port.appendEvent"],
       ["const finalize = async () =>", "await port.finalizeResult"],
     ] as const) {
       const handlerIndex = source.indexOf(handler);
@@ -165,8 +166,8 @@ describe("Gate C access source guards", () => {
       expect(invalidationIndex).toBeGreaterThan(handlerIndex);
       expect(mutationIndex).toBeGreaterThan(invalidationIndex);
     }
-    expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(4);
-    expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(4);
+    expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(5);
+    expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(5);
   });
 });
 

@@ -53,7 +53,7 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
   await expect(confirmation).toBeVisible();
   await expect(confirmation.getByText("Marina Blue", { exact: true })).toBeVisible();
-  const scorer = confirmation.getByLabel("Scorer name");
+  const scorer = confirmation.getByLabel("Scorer or participant name");
   await expect(scorer).toBeFocused();
   await scorer.fill("Aisha Tan");
   await confirmation.getByRole("button", { name: "Record goal for Marina Blue" }).click();
