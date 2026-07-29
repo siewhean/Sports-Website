@@ -1204,8 +1204,10 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   const discardAfterReplacement = signOutDialog.getByRole("button", {
     name: "Discard exported work and end scoring",
   });
-  await expect(discardAfterReplacement).toBeEnabled();
-  if (testInfo.project.name.endsWith("-chromium")) {
+  const allChangesSynced = page.getByText("All changes are synced.").first();
+  await expect(discardAfterReplacement.or(allChangesSynced).first()).toBeVisible();
+  const discardIsReady = await discardAfterReplacement.isEnabled().catch(() => false);
+  if (discardIsReady && testInfo.project.name.endsWith("-chromium")) {
     allowConsoleFailureCount(
       page,
       new RegExp(
@@ -1219,20 +1221,22 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   // Dispatch immediately once enabled. Chromium can begin an automatic retry
   // between Playwright's actionability stability frames; that retry must not
   // erase the scorer's already-authorised discard decision.
-  const discardDispatched = await page.evaluate(() => {
-    const button = [...document.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === "Discard exported work and end scoring",
-    );
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    button.click();
-    return true;
-  });
+  const discardDispatched =
+    discardIsReady &&
+    (await page.evaluate(() => {
+      const button = [...document.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent?.trim() === "Discard exported work and end scoring",
+      );
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    }));
   if (!discardDispatched) {
     // If the held request's retry completed in the same task turn, the queue is
     // no longer unresolved and the dialog correctly closes. Finish through the
     // ordinary clean sign-out path rather than treating that valid resolution
     // as a failed discard.
-    await expect(page.getByText("All changes are synced.")).toBeVisible();
+    await expect(allChangesSynced).toBeVisible();
     await setBrowserConnectivity(testInfo, seed, secondContext, page, true);
     await page.getByRole("button", { name: "End scoring session" }).click();
   } else {
