@@ -1,6 +1,7 @@
 import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
+import { MessageChannel } from "node:worker_threads";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,13 +27,28 @@ async function workerMessageHarness(
     fetch?: ReturnType<typeof vi.fn>;
     indexedDB?: IDBFactory;
     openCache?: ReturnType<typeof vi.fn>;
+    activationAck?: "accepted" | "invalid" | "none";
   } = {},
 ) {
   const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
   const handlers = new Map<string, (event: Record<string, unknown>) => void>();
   const active = { postMessage: vi.fn(), scriptURL: "https://matchday.test/sw.js", state: "activated" };
   const waiting = {
-    postMessage: vi.fn(),
+    postMessage: vi.fn(
+      (message: { requestId?: string }, transfer?: Array<{ postMessage: (message: unknown) => void }>) => {
+        const replyPort = transfer?.[0];
+        if (!replyPort || options.activationAck === "none") return;
+        replyPort.postMessage(
+          options.activationAck === "invalid"
+            ? { type: "MATCHDAY_SCORING_WORKER_ACTIVATION_ACCEPTED", requestId: "wrong-request", protocolVersion: 1 }
+            : {
+                type: "MATCHDAY_SCORING_WORKER_ACTIVATION_ACCEPTED",
+                requestId: message.requestId,
+                protocolVersion: 1,
+              },
+        );
+      },
+    ),
     scriptURL: "https://matchday.test/sw.js?gate-c-c3-update=1",
     state: "installed",
   };
@@ -66,6 +82,7 @@ async function workerMessageHarness(
     crypto: options.crypto ?? webcrypto,
     fetch: options.fetch ?? vi.fn(),
     indexedDB: options.indexedDB,
+    MessageChannel,
     Promise,
     self: serviceWorkerGlobal,
     setTimeout,
@@ -75,6 +92,50 @@ async function workerMessageHarness(
   const fetchEvent = handlers.get("fetch");
   if (!fetchEvent) throw new Error("The scoring worker did not install a fetch handler.");
   return { active, clients, fetchEvent, message, skipWaiting, waiting };
+}
+
+async function completeSafeActivationQuorum(
+  harness: Awaited<ReturnType<typeof workerMessageHarness>>,
+  requestId: string,
+): Promise<void> {
+  let activationCheck: Promise<unknown> | undefined;
+  harness.message({
+    data: {
+      type: "MATCHDAY_REQUEST_SCORING_WORKER_ACTIVATION",
+      requestId,
+      protocolVersion: 1,
+    },
+    source: harness.clients[0],
+    waitUntil: (promise: Promise<unknown>) => {
+      activationCheck = promise;
+    },
+  });
+  await activationCheck;
+  const epochs = [3, 5];
+  for (const round of [1, 2]) {
+    for (const [index, client] of harness.clients.entries()) {
+      let evaluation: Promise<unknown> | undefined;
+      harness.message({
+        data: {
+          type: "MATCHDAY_SCORING_WORKER_SAFE_STATE",
+          requestId,
+          protocolVersion: 1,
+          epoch: epochs[index],
+          stable: round === 2,
+          frozen: round === 2,
+          safe: true,
+          activeScoring: false,
+          transitionInFlight: false,
+          unresolvedQueue: false,
+        },
+        source: client,
+        waitUntil: (promise: Promise<unknown>) => {
+          evaluation = promise;
+        },
+      });
+      await evaluation;
+    }
+  }
 }
 
 function immutableAssetResponse(status = 200): Response {
@@ -1084,6 +1145,47 @@ describe("Gate C3 scoring service worker", () => {
         requestId: "request-safe",
         checkedClientIds: ["client-a", "client-b"],
       }),
+      expect.anything(),
+    );
+    expect(harness.clients[0].postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "MATCHDAY_SCORING_WORKER_ACTIVATION_RESULT",
+        requestId: "request-safe",
+        status: "committing",
+      }),
+    );
+  });
+
+  it("blocks activation when the waiting worker returns an invalid acknowledgement", async () => {
+    const harness = await workerMessageHarness({ activationAck: "invalid" });
+
+    await completeSafeActivationQuorum(harness, "request-invalid-ack");
+
+    expect(harness.skipWaiting).not.toHaveBeenCalled();
+    expect(harness.clients[0].postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ status: "committing" }));
+    expect(harness.clients[0].postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "MATCHDAY_SCORING_WORKER_ACTIVATION_RESULT",
+        requestId: "request-invalid-ack",
+        status: "blocked",
+      }),
+    );
+  });
+
+  it("does not report committing while a waiting-worker acknowledgement is missing", async () => {
+    const harness = await workerMessageHarness({ activationAck: "none" });
+    const completion = completeSafeActivationQuorum(harness, "request-missing-ack");
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.clients[0].postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ status: "committing" }));
+
+    await completion;
+    expect(harness.clients[0].postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "MATCHDAY_SCORING_WORKER_ACTIVATION_RESULT",
+        requestId: "request-missing-ack",
+        status: "blocked",
+      }),
     );
   });
 
@@ -1158,6 +1260,7 @@ describe("Gate C3 scoring service worker", () => {
       },
       source: harness.clients[0],
     });
+    let invalidation: Promise<unknown> | undefined;
     harness.message({
       data: {
         type: "MATCHDAY_SCORING_WORKER_SAFETY_INVALIDATED",
@@ -1165,7 +1268,11 @@ describe("Gate C3 scoring service worker", () => {
         epoch: 2,
       },
       source: harness.clients[0],
+      waitUntil: (promise: Promise<unknown>) => {
+        invalidation = promise;
+      },
     });
+    await invalidation;
     expect(harness.waiting.postMessage).not.toHaveBeenCalled();
     expect(harness.clients[0].postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1208,6 +1315,7 @@ describe("Gate C3 scoring service worker", () => {
     });
     expect(harness.skipWaiting).not.toHaveBeenCalled();
 
+    const firefoxReplyPort = { postMessage: vi.fn(), close: vi.fn() };
     harness.message({
       data: {
         type: "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED",
@@ -1215,15 +1323,22 @@ describe("Gate C3 scoring service worker", () => {
         protocolVersion: 1,
         checkedClientIds: ["client-a", "client-b"],
       },
-      source: { scriptURL: harness.active.scriptURL, state: harness.active.state },
+      source: { scriptURL: harness.active.scriptURL, state: "redundant" },
+      ports: [firefoxReplyPort],
       waitUntil: (promise: Promise<unknown>) => {
         directActivation = promise;
       },
     });
     await directActivation;
     expect(harness.skipWaiting).toHaveBeenCalledOnce();
+    expect(firefoxReplyPort.postMessage).toHaveBeenCalledWith({
+      type: "MATCHDAY_SCORING_WORKER_ACTIVATION_ACCEPTED",
+      requestId: "firefox-wrapper",
+      protocolVersion: 1,
+    });
 
     harness.skipWaiting.mockClear();
+    const activeReplyPort = { postMessage: vi.fn(), close: vi.fn() };
     harness.message({
       data: {
         type: "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED",
@@ -1232,12 +1347,18 @@ describe("Gate C3 scoring service worker", () => {
         checkedClientIds: ["client-a", "client-b"],
       },
       source: harness.active,
+      ports: [activeReplyPort],
       waitUntil: (promise: Promise<unknown>) => {
         directActivation = promise;
       },
     });
     await directActivation;
     expect(harness.skipWaiting).toHaveBeenCalledOnce();
+    expect(activeReplyPort.postMessage).toHaveBeenCalledWith({
+      type: "MATCHDAY_SCORING_WORKER_ACTIVATION_ACCEPTED",
+      requestId: "approved",
+      protocolVersion: 1,
+    });
   });
 
   it("prevents a programmatic scorer transition from starting after the final client freeze", async () => {

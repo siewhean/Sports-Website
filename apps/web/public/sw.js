@@ -14,6 +14,7 @@ const UPDATE_PROTOCOL_VERSION = 1;
 const PREPARATION_PROTOCOL_VERSION = 1;
 const PREPARATION_CAPABILITIES = Object.freeze(["offline-scoring-shell-cache-v1"]);
 const CLIENT_SAFETY_TIMEOUT_MS = 5_000;
+const ACTIVATION_ACK_TIMEOUT_MS = 2_000;
 const PUBLIC_DOCUMENT_PATHS = new Set(["/", "/competitions/singapore-open"]);
 const pendingActivationChecks = new Map();
 const OFFLINE_DOCUMENT = `<!doctype html>
@@ -454,7 +455,7 @@ function activationApprovalComesFromActiveWorker(source) {
     active === null ||
     typeof source?.scriptURL !== "string" ||
     typeof active.scriptURL !== "string" ||
-    source.state !== "activated"
+    active.state !== "activated"
   ) {
     return false;
   }
@@ -465,7 +466,37 @@ function activationApprovalComesFromActiveWorker(source) {
   }
 }
 
-function finishActivationCheck(requestId, status) {
+async function requestWaitingWorkerActivation(check, waiting) {
+  const channel = new MessageChannel();
+  const acknowledged = new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      channel.port1.close();
+      resolve(false);
+    }, ACTIVATION_ACK_TIMEOUT_MS);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timeout);
+      channel.port1.close();
+      const reply = event.data;
+      resolve(
+        reply?.type === "MATCHDAY_SCORING_WORKER_ACTIVATION_ACCEPTED" &&
+          reply.requestId === check.requestId &&
+          reply.protocolVersion === UPDATE_PROTOCOL_VERSION,
+      );
+    };
+  });
+  waiting.postMessage(
+    {
+      type: "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED",
+      requestId: check.requestId,
+      checkedClientIds: [...check.expectedClientIds],
+      protocolVersion: UPDATE_PROTOCOL_VERSION,
+    },
+    [channel.port2],
+  );
+  return acknowledged;
+}
+
+async function finishActivationCheck(requestId, status) {
   const check = pendingActivationChecks.get(requestId);
   if (!check) return;
   clearTimeout(check.timeout);
@@ -490,13 +521,8 @@ function finishActivationCheck(requestId, status) {
     notifyClients("no-update");
     return;
   }
-  waiting.postMessage({
-    type: "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED",
-    requestId,
-    checkedClientIds: [...check.expectedClientIds],
-    protocolVersion: UPDATE_PROTOCOL_VERSION,
-  });
-  notifyClients("committing");
+  const accepted = await requestWaitingWorkerActivation(check, waiting);
+  notifyClients(accepted ? "committing" : "blocked");
 }
 
 function sameClientSet(left, right) {
@@ -530,7 +556,7 @@ async function evaluateActivationRound(requestId) {
     check.responses.clear();
     check.round = 1;
     check.evaluating = false;
-    if (clients.length === 0) finishActivationCheck(requestId, "blocked");
+    if (clients.length === 0) await finishActivationCheck(requestId, "blocked");
     else requestClientSafetyRound(check, clients);
     return;
   }
@@ -544,8 +570,7 @@ async function evaluateActivationRound(requestId) {
       (check.round === 1 || (response.stable === true && response.frozen === true)),
   );
   if (!everyClientSafe) {
-    finishActivationCheck(requestId, "blocked");
-    return;
+    return finishActivationCheck(requestId, "blocked");
   }
   if (check.round === 1) {
     check.expectedEpochs = new Map(
@@ -557,7 +582,7 @@ async function evaluateActivationRound(requestId) {
     requestClientSafetyRound(check, clients);
     return;
   }
-  finishActivationCheck(requestId, "ready");
+  return finishActivationCheck(requestId, "ready");
 }
 
 async function beginActivationCheck(event, requestId) {
@@ -580,7 +605,7 @@ async function beginActivationCheck(event, requestId) {
     round: 1,
     evaluating: false,
     requester: event.source,
-    timeout: setTimeout(() => finishActivationCheck(requestId, "blocked"), CLIENT_SAFETY_TIMEOUT_MS),
+    timeout: setTimeout(() => void finishActivationCheck(requestId, "blocked"), CLIENT_SAFETY_TIMEOUT_MS),
   };
   pendingActivationChecks.set(requestId, check);
   requestClientSafetyRound(check, clients);
@@ -602,12 +627,24 @@ self.addEventListener("message", (event) => {
     activationApprovalComesFromActiveWorker(event.source) &&
     typeof message.requestId === "string" &&
     Array.isArray(message.checkedClientIds) &&
+    event.ports?.length === 1 &&
     message.protocolVersion === UPDATE_PROTOCOL_VERSION
   ) {
     // The active worker already established a stable, frozen two-round quorum.
     // A waiting worker cannot enumerate clients controlled by the active worker,
     // so it must not attempt a third client round here.
-    event.waitUntil(self.skipWaiting());
+    const replyPort = event.ports[0];
+    event.waitUntil(
+      (async () => {
+        await self.skipWaiting();
+        replyPort.postMessage({
+          type: "MATCHDAY_SCORING_WORKER_ACTIVATION_ACCEPTED",
+          requestId: message.requestId,
+          protocolVersion: UPDATE_PROTOCOL_VERSION,
+        });
+        replyPort.close();
+      })(),
+    );
     return;
   }
   if (
@@ -649,7 +686,7 @@ self.addEventListener("message", (event) => {
     const sourceId = event.source && "id" in event.source ? event.source.id : "";
     if (!sourceId) return;
     for (const [requestId, check] of pendingActivationChecks.entries()) {
-      if (check.expectedClientIds.has(sourceId)) finishActivationCheck(requestId, "blocked");
+      if (check.expectedClientIds.has(sourceId)) event.waitUntil(finishActivationCheck(requestId, "blocked"));
     }
     return;
   }
