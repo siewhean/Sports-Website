@@ -756,31 +756,30 @@ async function recordGlobalEvent(page: Page, accessibleName: string): Promise<vo
 }
 
 async function organiserRequest(
-  testInfo: TestInfo,
-  profileRoot: string,
+  _testInfo: TestInfo,
+  _profileRoot: string,
   seed: GateCC3State,
   pathname: string,
   init?: { method?: "GET" | "POST" | "DELETE"; body?: unknown },
 ): Promise<{ status: number; body: unknown }> {
-  const context = await launch(testInfo, path.join(profileRoot, `organiser-${crypto.randomUUID()}`), false);
   const [name, value] = seed.organiserCookie.split("=", 2);
   if (!name || !value) throw new Error("Gate C C3 organiser cookie is malformed");
-  await context.addCookies([{ name, value, url: seed.webOrigin, secure: true, sameSite: "Strict" }]);
-  const page = context.pages()[0] ?? (await context.newPage());
-  await page.goto(seed.webOrigin);
-  const result = await page.evaluate(
-    async ({ requestPath, requestInit }) => {
-      const response = await fetch(requestPath, {
-        method: requestInit.method ?? "GET",
-        headers: requestInit.body === undefined ? undefined : { "content-type": "application/json" },
-        body: requestInit.body === undefined ? undefined : JSON.stringify(requestInit.body),
-      });
-      return { status: response.status, body: await response.json().catch(() => null) };
-    },
-    { requestPath: pathname, requestInit: init ?? {} },
-  );
-  await context.close();
-  return result;
+  const request = await playwrightRequest.newContext({
+    baseURL: seed.webOrigin,
+    ignoreHTTPSErrors: true,
+    extraHTTPHeaders: { cookie: `${name}=${value}` },
+  });
+  try {
+    const method = init?.method ?? "GET";
+    const response = await request.fetch(pathname, {
+      method,
+      ...(method === "GET" ? {} : { headers: { origin: seed.webOrigin } }),
+      ...(init?.body === undefined ? {} : { data: init.body }),
+    });
+    return { status: response.status(), body: await response.json().catch(() => null) };
+  } finally {
+    await request.dispose();
+  }
 }
 
 async function offlineTiming(page: Page): Promise<{ recordingExpiresAt: string; replayExpiresAt: string }> {
@@ -1883,6 +1882,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     `/api/gate-c/competitions/${aggregate.competitionId}/takeover-requests`,
   );
   expect(takeoverList.status).toBe(200);
+  await expectScoringSessionCookie(candidate.context, seed.webOrigin, "organiser takeover-list read");
   const takeoverId = (
     takeoverList.body as { takeover_requests?: Array<{ id?: string; status?: string }> }
   ).takeover_requests?.find(({ status }) => status === "pending")?.id;
