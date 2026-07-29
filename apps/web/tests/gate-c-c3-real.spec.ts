@@ -1875,6 +1875,9 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     retained_command_count: 1,
   });
 
+  // The candidate must first observe the authoritative transfer before a
+  // refresh can prove that the promoted writer session is recoverable.
+  await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
   await refreshPageForProject(candidate.page, testInfo);
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
   await prepareOffline(candidate.page);
