@@ -1594,7 +1594,25 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   await discardClick;
   await expect(page.getByRole("button", { name: "Validate access" })).toBeVisible();
 
-  await expect(updateStatus).toHaveAttribute("data-state", "activated", { timeout: 15_000 });
+  try {
+    await expect(updateStatus).toHaveAttribute("data-state", "activated", { timeout: 15_000 });
+  } catch (error) {
+    const diagnostics = {
+      scorer: await offlineQueueDiagnostics(page),
+      peer: await safePeer.evaluate(() => ({
+        rootPresent: document.querySelector("#score-main") !== null,
+        scoringPhase: document.querySelector("#score-main")?.getAttribute("data-scoring-phase") ?? null,
+        writerState: document.querySelector("#score-main")?.getAttribute("data-writer-state") ?? null,
+        offlineState: document.querySelector("[data-offline-state]")?.getAttribute("data-offline-state") ?? null,
+        workerSafetyFrozen: document.documentElement.dataset.scoringWorkerSafetyFreeze === "true",
+        workerUpdateState:
+          document.querySelector('[data-testid="scoring-worker-update-state"]')?.getAttribute("data-state") ?? null,
+      })),
+      activeVersion: await workerVersion(page),
+      waitingVersion: await waitingWorkerVersion(page).catch(() => null),
+    };
+    throw new Error(`Scoring worker activation remained blocked: ${JSON.stringify(diagnostics)}`, { cause: error });
+  }
   expect(await workerVersion(page)).toBe("gate-c-c3-v6");
   expect(await page.evaluate(() => document.documentElement.dataset.c3WorkerDocumentIdentity)).toBe(documentIdentity);
 
