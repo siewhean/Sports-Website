@@ -399,13 +399,14 @@ self.addEventListener("fetch", (event) => {
     const url = new URL(request.url);
     if (url.pathname === SCORING_SHELL_PATH) {
       event.respondWith(
-        caches.open(SCORING_CACHE_NAME).then(async (cache) => {
+        fetch(request).catch(async () => {
+          const cache = await caches.open(SCORING_CACHE_NAME);
           const shellRequest = new Request(new URL(SCORING_SHELL_PATH, self.location.origin).href, {
             credentials: "same-origin",
           });
           const cached = await cache.match(shellRequest, { ignoreVary: true });
           if (cached) return cached;
-          return fetch(request).catch(() => offlineResponse());
+          return offlineResponse();
         }),
       );
       return;

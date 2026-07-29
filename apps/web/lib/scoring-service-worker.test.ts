@@ -58,7 +58,9 @@ async function workerMessageHarness(
   });
   const message = handlers.get("message");
   if (!message) throw new Error("The scoring worker did not install a message handler.");
-  return { active, clients, message, skipWaiting, waiting };
+  const fetchEvent = handlers.get("fetch");
+  if (!fetchEvent) throw new Error("The scoring worker did not install a fetch handler.");
+  return { active, clients, fetchEvent, message, skipWaiting, waiting };
 }
 
 describe("Gate C3 scoring service worker", () => {
@@ -90,7 +92,7 @@ describe("Gate C3 scoring service worker", () => {
     expect(source).toContain("message.protocolVersion !== PREPARATION_PROTOCOL_VERSION");
     expect(source).toContain("requiredCapabilities.some");
     expect(source).toContain("cache.match(shellRequest, { ignoreVary: true })");
-    expect(source).toMatch(/if \(cached\) return cached;[\s\S]*return fetch\(request\)\.catch/);
+    expect(source).toMatch(/fetch\(request\)\.catch\(async \(\) => {[\s\S]*cache\.match\(shellRequest/);
     expect(source).not.toMatch(/addEventListener\(["']sync["']/);
     expect(source).not.toContain("SyncManager");
   });
@@ -440,6 +442,56 @@ describe("Gate C3 scoring service worker", () => {
         error: "Error: The offline scoring shell failed its privacy verification.",
       }),
     );
+  });
+
+  it("uses the live scoring document while online instead of masking connectivity with the cached shell", async () => {
+    const live = new Response("live", { status: 200 });
+    const cache = { match: vi.fn().mockResolvedValue(new Response("cached", { status: 200 })) };
+    const networkFetch = vi.fn().mockResolvedValue(live);
+    const harness = await workerMessageHarness({
+      fetch: networkFetch,
+      openCache: vi.fn().mockResolvedValue(cache),
+    });
+    const request = {
+      destination: "document",
+      method: "GET",
+      url: "https://matchday.test/score",
+    };
+    let response: Promise<Response> | undefined;
+    harness.fetchEvent({
+      request,
+      respondWith: (promise: Promise<Response>) => {
+        response = promise;
+      },
+    });
+    await expect(response).resolves.toBe(live);
+    expect(networkFetch).toHaveBeenCalledWith(request);
+    expect(cache.match).not.toHaveBeenCalled();
+  });
+
+  it("attempts the scoring navigation network request before recovering the retained shell offline", async () => {
+    const cached = new Response("cached", { status: 200 });
+    const cache = { match: vi.fn().mockResolvedValue(cached) };
+    const networkFetch = vi.fn().mockRejectedValue(new TypeError("network unavailable"));
+    const harness = await workerMessageHarness({
+      fetch: networkFetch,
+      openCache: vi.fn().mockResolvedValue(cache),
+    });
+    const request = {
+      destination: "document",
+      method: "GET",
+      url: "https://matchday.test/score",
+    };
+    let response: Promise<Response> | undefined;
+    harness.fetchEvent({
+      request,
+      respondWith: (promise: Promise<Response>) => {
+        response = promise;
+      },
+    });
+    await expect(response).resolves.toBe(cached);
+    expect(networkFetch).toHaveBeenCalledWith(request);
+    expect(cache.match).toHaveBeenCalledWith(expect.any(Request), { ignoreVary: true });
   });
 
   it("provides a deliberate recovery path for an incompatible active worker without forcing navigation", async () => {

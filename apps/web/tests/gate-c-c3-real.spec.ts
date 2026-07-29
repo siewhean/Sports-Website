@@ -632,19 +632,32 @@ async function reloadOfflineDocument(
     });
   });
   await page.reload({ waitUntil: "domcontentloaded" });
-  const reloadProof = await page.evaluate(() => ({
-    navigationType: (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type,
-    transientDocumentMarkerPresent: Object.prototype.hasOwnProperty.call(window, "__matchdayC3PreReloadDocument"),
-    serviceWorkerControlled: navigator.serviceWorker.controller !== null,
-    browserReportsOffline: navigator.onLine === false,
-  }));
+  await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "offline-recording");
+  const reloadProof = await page.evaluate(async () => {
+    const transportProbe = await fetch("/__matchday-offline-transport-probe", { cache: "no-store" }).then(
+      (response) => ({ blocked: false, status: response.status }),
+      (error: unknown) => ({
+        blocked: true,
+        errorName: error instanceof Error ? error.name : typeof error,
+      }),
+    );
+    return {
+      navigationType: (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type,
+      transientDocumentMarkerPresent: Object.prototype.hasOwnProperty.call(window, "__matchdayC3PreReloadDocument"),
+      serviceWorkerControlled: navigator.serviceWorker.controller !== null,
+      browserReportsOffline: navigator.onLine === false,
+      offlineUiState: document.querySelector("#score-main")?.getAttribute("data-offline-state") ?? null,
+      transportProbe,
+    };
+  });
   const navigationType = reloadProof.navigationType;
   if (testInfo.project.name.endsWith("-chromium")) expect(navigationType).toBe("reload");
   else expect(["reload", "navigate"]).toContain(navigationType);
   expect(reloadProof).toMatchObject({
     transientDocumentMarkerPresent: false,
     serviceWorkerControlled: true,
-    browserReportsOffline: true,
+    offlineUiState: "pending-sync",
+    transportProbe: { blocked: true, errorName: "TypeError" },
   });
   if (navigationType !== "reload" && navigationType !== "navigate") {
     throw new Error(`Unexpected offline reload navigation type: ${String(navigationType)}`);
@@ -691,6 +704,21 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     local_reversal_count: 1,
   });
 
+  const originPattern = new URL(seed.webOrigin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  networkGuard.expectFailedRequest("GET", "/__matchday-offline-transport-probe");
+  allowConsoleFailureCount(
+    page,
+    new RegExp(
+      `^requestfailed: GET ${originPattern}/__matchday-offline-transport-probe \\((?:net::ERR_INTERNET_DISCONNECTED|Load failed)\\)$`,
+      "u",
+    ),
+    1,
+  );
+  allowConsoleFailureCount(
+    page,
+    /^console\.error: Failed to load resource: (?:net::ERR_INTERNET_DISCONNECTED|The Internet connection appears to be offline\.)$/u,
+    1,
+  );
   const refreshNavigationType = await reloadOfflineDocument(page, testInfo, [
     seed.accessToken,
     seed.organiserCookie,
