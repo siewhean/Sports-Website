@@ -562,11 +562,12 @@ export class Phase2Runtime {
     }
     const session = (
       await this.sql.unsafe<{
+        access_pass_id: string;
         session_token_hash: Buffer;
         expires_at: Date | string;
         revoked_at: Date | string | null;
       }>(
-        `SELECT session_token_hash,expires_at,revoked_at
+        `SELECT access_pass_id,session_token_hash,expires_at,revoked_at
          FROM scoring_access_sessions
          WHERE id=$1`,
         [sessionId],
@@ -580,7 +581,7 @@ export class Phase2Runtime {
     ) {
       return null;
     }
-    return sessionId;
+    return session.access_pass_id;
   }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {

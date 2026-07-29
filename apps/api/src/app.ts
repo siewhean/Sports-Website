@@ -111,6 +111,16 @@ export type BuildAppOptions = {
   phase4Runtime?: Phase4Runtime;
 };
 
+const scoringSessionAuthorisedRateLimitRoutes = new Set([
+  "GET /api/v1/scoring/session",
+  "POST /api/v1/scoring/events",
+  "POST /api/v1/scoring/finalise",
+  "POST /api/v1/scoring/offline-authorizations",
+  "POST /api/v1/scoring/sessions/heartbeat",
+  "POST /api/v1/scoring/sessions/transfer",
+  "POST /api/v1/scoring/takeover-requests",
+]);
+
 export async function buildApp(options: BuildAppOptions) {
   const telemetry = options.telemetry ?? createDisabledApiTelemetry();
   const requestTelemetry = new WeakMap<FastifyRequest, RequestTelemetryHandle>();
@@ -252,14 +262,18 @@ export async function buildApp(options: BuildAppOptions) {
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);
       if (accountId) return `account:${accountId}`;
-      const scoringSessionId = await options.phase2Runtime?.scoringSessionRateLimitSubject(
-        request.headers["x-scoring-session-id"],
-        request.headers["x-scoring-session-token"],
-      );
-      return scoringSessionId ? `scoring-session:${scoringSessionId}` : `ip:${request.ip}`;
+      const route = `${request.method} ${request.routeOptions.url}`;
+      if (scoringSessionAuthorisedRateLimitRoutes.has(route)) {
+        const scoringAccessPassId = await options.phase2Runtime?.scoringSessionRateLimitSubject(
+          request.headers["x-scoring-session-id"],
+          request.headers["x-scoring-session-token"],
+        );
+        if (scoringAccessPassId) return `scoring-access-pass:${scoringAccessPassId}`;
+      }
+      return `ip:${request.ip}`;
     },
     max: async (_request, key) =>
-      key.startsWith("account:") || key.startsWith("scoring-session:")
+      key.startsWith("account:") || key.startsWith("scoring-access-pass:")
         ? (options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000)
         : (options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100),
     ...(options.rateLimitRedis ? { redis: options.rateLimitRedis } : {}),

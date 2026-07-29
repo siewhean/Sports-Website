@@ -166,18 +166,22 @@ describe("Phase 2 Fastify route boundaries", () => {
   it("gives only validated scoring sessions independent authenticated rate-limit budgets", async () => {
     const runtime = routeRuntime();
     const firstToken = "a".repeat(43);
+    const rotatedFirstToken = "c".repeat(43);
     const secondToken = "b".repeat(43);
     const firstSession = randomUUID();
+    const rotatedFirstSession = randomUUID();
     const secondSession = randomUUID();
+    const firstAccessPass = randomUUID();
+    const secondAccessPass = randomUUID();
     const validSessions = new Map([
-      [firstToken, firstSession],
-      [secondToken, secondSession],
+      [firstToken, { sessionId: firstSession, subject: firstAccessPass }],
+      [rotatedFirstToken, { sessionId: rotatedFirstSession, subject: firstAccessPass }],
+      [secondToken, { sessionId: secondSession, subject: secondAccessPass }],
     ]);
-    runtime.scoringSessionRateLimitSubject.mockImplementation(async (sessionId, sessionToken) =>
-      typeof sessionId === "string" && typeof sessionToken === "string" && validSessions.get(sessionToken) === sessionId
-        ? sessionId
-        : null,
-    );
+    runtime.scoringSessionRateLimitSubject.mockImplementation(async (sessionId, sessionToken) => {
+      const expected = typeof sessionToken === "string" ? validSessions.get(sessionToken) : null;
+      return typeof sessionId === "string" && expected?.sessionId === sessionId ? expected.subject : null;
+    });
     const app = await buildApp({
       config: testConfig(),
       probes: healthyProbes,
@@ -187,22 +191,22 @@ describe("Phase 2 Fastify route boundaries", () => {
       authenticatedRateLimitMax: 2,
     });
     apps.push(app);
-    const request = (sessionId: string, sessionToken: string) =>
+    const request = (sessionId: string, sessionToken: string, url = "/api/v1/scoring/session") =>
       app.inject({
         method: "GET",
-        url: "/api/v1/scoring/session",
+        url,
         headers: {
           "x-scoring-session-id": sessionId,
           "x-scoring-session-token": sessionToken,
         },
       });
     expect((await request(firstSession, firstToken)).statusCode).toBe(200);
-    expect((await request(firstSession, firstToken)).statusCode).toBe(200);
+    expect((await request(rotatedFirstSession, rotatedFirstToken)).statusCode).toBe(200);
     expect((await request(firstSession, firstToken)).statusCode).toBe(429);
     expect((await request(secondSession, secondToken)).statusCode).toBe(200);
     expect((await request(secondSession, secondToken)).statusCode).toBe(200);
 
-    expect((await request(randomUUID(), "x".repeat(43))).statusCode).toBe(200);
+    expect((await request(firstSession, firstToken, "/api/v1/status")).statusCode).toBe(200);
     expect((await request(randomUUID(), "y".repeat(43))).statusCode).toBe(200);
     expect((await request(randomUUID(), "z".repeat(43))).statusCode).toBe(429);
   });

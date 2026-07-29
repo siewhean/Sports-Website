@@ -440,7 +440,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     );
     await expect(
       runtime.scoringSessionRateLimitSubject(expiringSession.session_id, expiringSession.session_token),
-    ).resolves.toBe(expiringSession.session_id);
+    ).resolves.toBe(expiringPass.id);
     await expect(
       runtime.scoringSessionRateLimitSubject(expiringSession.session_id, "wrong".repeat(10)),
     ).resolves.toBeNull();
