@@ -1215,8 +1215,22 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   }
   const validateAccess = page.getByRole("button", { name: "Validate access" });
   if (!(await validateAccess.isVisible().catch(() => false))) {
-    const endScoring = page.getByRole("button", { name: "End scoring session" });
-    if (await endScoring.isVisible().catch(() => false)) await endScoring.click();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const endScoring = page.getByRole("button", { name: "End scoring session" });
+      const endScoringVisible = await endScoring.isVisible().catch(() => false);
+      if (!endScoringVisible) {
+        await expect(endScoring.or(validateAccess)).toBeVisible({ timeout: 1500 });
+        break;
+      }
+      try {
+        await endScoring.click({ timeout: 1500 });
+      } catch {
+        await page.waitForTimeout(250);
+        if (await validateAccess.isVisible().catch(() => false)) break;
+      }
+      if (await validateAccess.isVisible().catch(() => false)) break;
+      await page.waitForTimeout(250);
+    }
   }
   await expect(validateAccess).toBeVisible();
   await writeScenarioReceipt("sign_out_with_unresolved_queue", testInfo, observedAt, {
