@@ -22,6 +22,6 @@ describe("offline scoring principal marker", () => {
 
     expect(() => retainScoringPrincipalCookie(principal, "2026-07-28T04:15:00.000Z")).not.toThrow();
     expect(documentStub.cookie).toContain(`matchday_scoring_principal=${principal}`);
-    expect(documentStub.cookie).toContain("Expires=Fri, 28 Aug 2026 00:00:00 GMT");
+    expect(documentStub.cookie).toContain("Expires=Thu, 02 Sep 2027 00:00:00 GMT");
   });
 });

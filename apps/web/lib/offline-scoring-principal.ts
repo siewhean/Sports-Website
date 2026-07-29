@@ -2,7 +2,10 @@
 
 const SCORING_PRINCIPAL_COOKIE = "matchday_scoring_principal";
 const PRINCIPAL_PATTERN = /^[0-9a-f]{64}$/;
-const OFFLINE_PRINCIPAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+// Modern browsers cap persistent cookies at 400 days. Renew the non-secret
+// principal binding on every successful recovery so unresolved queues do not
+// become inaccessible at the 30-day terminal-queue pruning boundary.
+const OFFLINE_PRINCIPAL_RETENTION_MS = 400 * 24 * 60 * 60 * 1_000;
 
 export function readScoringPrincipalCookie(cookieHeader: string = document.cookie): string | null {
   const encoded = cookieHeader
