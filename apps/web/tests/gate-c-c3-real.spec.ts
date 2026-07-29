@@ -12,6 +12,7 @@ import {
   type BrowserContext,
   type BrowserType,
   type Page,
+  type Response,
   type TestInfo,
 } from "@playwright/test";
 import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
@@ -1296,6 +1297,18 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   const allChangesSynced = page.getByText("All changes are synced.").first();
   await expect(discardAfterReplacement.or(allChangesSynced).first()).toBeVisible();
   const discardIsReady = await discardAfterReplacement.isEnabled().catch(() => false);
+  const revokedAuthorityResumeResponses: number[] = [];
+  const observeRevokedAuthorityResume = (response: Response) => {
+    const request = response.request();
+    if (
+      request.method() === "POST" &&
+      new URL(response.url()).pathname === "/api/scoring/offline/authority" &&
+      response.status() === 403
+    ) {
+      revokedAuthorityResumeResponses.push(response.status());
+    }
+  };
+  if (testInfo.project.name.endsWith("-webkit")) page.on("response", observeRevokedAuthorityResume);
   if (discardIsReady && (testInfo.project.name.endsWith("-chromium") || testInfo.project.name.endsWith("-webkit"))) {
     const offlineDeleteError = testInfo.project.name.endsWith("-webkit")
       ? "The network connection was lost."
@@ -1359,6 +1372,21 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     }
   }
   await expect(validateAccess).toBeVisible();
+  if (testInfo.project.name.endsWith("-webkit")) {
+    page.off("response", observeRevokedAuthorityResume);
+    expect(revokedAuthorityResumeResponses.length).toBeLessThanOrEqual(1);
+    if (revokedAuthorityResumeResponses.length === 1) {
+      // WebKit can render the observed resume denial for the now-revoked
+      // authority as a URL-blind console error. Pair one allowance with the
+      // exact BFF response above and clear it at this lifecycle boundary.
+      allowConsoleFailureCount(
+        page,
+        /^console\.error: Failed to load resource: the server responded with a status of 403 \(Forbidden\)$/u,
+        1,
+      );
+    }
+    await assertConsoleGuardCheckpoint(page, testInfo, "signout-revoked-authority");
+  }
   if (testInfo.project.name.endsWith("-firefox")) {
     const retainedPrincipalCookies = (await secondContext.cookies(`${seed.webOrigin}/score`)).filter(
       (cookie) => cookie.name === "matchday_scoring_principal",
