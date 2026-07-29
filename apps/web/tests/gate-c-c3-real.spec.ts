@@ -1195,6 +1195,9 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     name: "Discard exported work and end scoring",
   });
   await expect(discardAfterReplacement).toBeEnabled();
+  if (testInfo.project.name.endsWith("-chromium")) {
+    networkGuard.expectFailedRequest("DELETE", "/api/scoring/offline/authority");
+  }
   // Dispatch immediately once enabled. Chromium can begin an automatic retry
   // between Playwright's actionability stability frames; that retry must not
   // erase the scorer's already-authorised discard decision.
