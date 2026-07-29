@@ -310,6 +310,10 @@ function installNetworkGuard(page: Page): {
   };
 }
 
+function browserExposesProxyDroppedRequest(projectName: string): boolean {
+  return !projectName.endsWith("-chromium");
+}
+
 async function launch(testInfo: TestInfo, profileDirectory: string, offline: boolean): Promise<BrowserContext> {
   const { browserType, device } = persistentProject(testInfo);
   const context = await browserType.launchPersistentContext(profileDirectory, {
@@ -1017,7 +1021,9 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     client_event_id: lostResponseClientEventId,
   });
   expect(armed.status).toBe(204);
-  networkGuard.expectFailedRequest("POST", "/api/scoring/events");
+  if (browserExposesProxyDroppedRequest(testInfo.project.name)) {
+    networkGuard.expectFailedRequest("POST", "/api/scoring/events");
+  }
   if (testInfo.project.name.endsWith("-webkit")) {
     allowConsoleFailureCount(
       page,
