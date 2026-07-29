@@ -1144,6 +1144,7 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
     )
     .toBe(0);
 
+  allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin);
   await context.setOffline(true);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByText(/1 command pending/u)).toBeVisible();
