@@ -14,6 +14,7 @@ const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.
 const migrationName = "0032_gate_c_offline_replay.sql";
 const laterMigrationName = "0033_gate_c_repair_public_truth_exports.sql";
 const latestMigrationName = "0034_gate_c_repair_revision_fencing.sql";
+const finalMigrationName = "0035_gate_c_repair_lineage_fencing.sql";
 
 beforeAll(async () => dropTestSchema(config.databaseUrl, schema));
 afterAll(async () => dropTestSchema(config.databaseUrl, schema));
@@ -25,10 +26,12 @@ describe("Gate C C3 migration", () => {
     const migrationPath = path.join(copiedDirectory, migrationName);
     const laterMigrationPath = path.join(copiedDirectory, laterMigrationName);
     const latestMigrationPath = path.join(copiedDirectory, latestMigrationName);
+    const finalMigrationPath = path.join(copiedDirectory, finalMigrationName);
     const migrationSource = await readFile(migrationPath, "utf8");
     await rm(migrationPath);
     await rm(laterMigrationPath);
     await rm(latestMigrationPath);
+    await rm(finalMigrationPath);
 
     await migrateDatabase({ databaseUrl: config.databaseUrl, migrationsDirectory: copiedDirectory, schema });
     const sql = postgres(config.databaseUrl, {

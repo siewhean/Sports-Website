@@ -28,11 +28,13 @@ describe("Gate C C4 repair persistence migration", () => {
       const organisationId = randomUUID();
       const competitionId = randomUUID();
       const divisionId = randomUUID();
+      const siblingDivisionId = randomUUID();
       const otherCompetitionId = randomUUID();
       const formatRevisionId = randomUUID();
       const matchId = randomUUID();
       const correctionTransactionId = randomUUID();
       const repairCaseId = randomUUID();
+      const scheduleRevisionId = randomUUID();
       const fingerprint = "f".repeat(64);
       const firstEntryId = randomUUID();
       const secondEntryId = randomUUID();
@@ -52,6 +54,8 @@ describe("Gate C C4 repair persistence migration", () => {
           'Asia/Singapore','2027-01-01','2027-01-01','organiser_pro')`;
       await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
         VALUES(${divisionId},${competitionId},'Open',16)`;
+      await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
+        VALUES(${siblingDivisionId},${competitionId},'Reserve',16)`;
       await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status) VALUES
         (${firstEntryId},${divisionId},'First entry',1,'placeholder','confirmed'),
         (${secondEntryId},${divisionId},'Second entry',2,'placeholder','confirmed')`;
@@ -170,7 +174,10 @@ describe("Gate C C4 repair persistence migration", () => {
       );
       expect(
         await sql<{ proname: string }[]>`
-          SELECT proname FROM pg_proc WHERE proname='gate_c_append_schedule_repair_revision'
+          SELECT proc.proname
+          FROM pg_proc proc
+          JOIN pg_namespace namespace ON namespace.oid=proc.pronamespace
+          WHERE proc.proname='gate_c_append_schedule_repair_revision' AND namespace.nspname=current_schema()
         `,
       ).toEqual([{ proname: "gate_c_append_schedule_repair_revision" }]);
       expect(
@@ -198,6 +205,35 @@ describe("Gate C C4 repair persistence migration", () => {
         `;
       const [firstRevision] = await appendRevision(null);
       expect(firstRevision?.revision).toBe(1);
+      await sql`INSERT INTO schedule_revisions(
+        id,competition_id,format_revision_id,revision,input_hash,created_by
+      ) VALUES(${scheduleRevisionId},${competitionId},${formatRevisionId},1,${"9".repeat(64)},${accountId})`;
+      const [sourcedProjection] = await sql<{ id: string }[]>`
+        INSERT INTO public_projection_versions(
+          competition_id,division_id,schedule_version,result_version,projection_version,source_repair_revision_id,
+          projection,projection_fingerprint,etag,generated_at,source_updated_at
+        ) VALUES(
+          ${competitionId},${divisionId},2,2,2,${firstRevision!.id},${sql.json({ division: "Open", repaired: true })},
+          ${"c".repeat(64)},'"c4-open-v2"','2027-01-01T02:00:00Z','2027-01-01T01:00:00Z'
+        ) RETURNING id
+      `;
+      const [publicationReceipt] = await sql<{ id: string }[]>`
+        INSERT INTO schedule_repair_publication_receipts(
+          competition_id,repair_case_id,repair_revision_id,request_fingerprint,idempotency_key,schedule_revision_id,
+          schedule_version,result_version,analysis_fingerprint,response,published_by_account_id
+        ) VALUES(
+          ${competitionId},${repairCaseId},${firstRevision!.id},${fingerprint},${`c4-${repairCaseId}`},${scheduleRevisionId},
+          2,2,${fingerprint},${sql.json({})},${accountId}
+        ) RETURNING id
+      `;
+      await expect(
+        sql`INSERT INTO schedule_repair_publication_projection_versions(
+          publication_receipt_id,competition_id,division_id,public_projection_version_id
+        ) VALUES(${publicationReceipt!.id},${competitionId},${divisionId},${projection!.id})`,
+      ).rejects.toThrow(/receipt repair revision/i);
+      await sql`INSERT INTO schedule_repair_publication_projection_versions(
+        publication_receipt_id,competition_id,division_id,public_projection_version_id
+      ) VALUES(${publicationReceipt!.id},${competitionId},${divisionId},${sourcedProjection!.id})`;
       const [action] = await sql<{ id: string }[]>`
         INSERT INTO schedule_repair_actions(
           repair_revision_id,repair_case_id,competition_id,ordinal,match_id,division_id,slot,
@@ -232,6 +268,25 @@ describe("Gate C C4 repair persistence migration", () => {
           1,0,0,${fingerprint},${accountId}
         )`,
       ).rejects.toThrow(/contiguous/i);
+      await expect(
+        sql`INSERT INTO schedule_repair_revisions(
+          repair_case_id,competition_id,revision,parent_revision_id,status,
+          source_result_version,source_schedule_version,source_projection_version,
+          analysis_fingerprint,created_by_account_id
+        ) VALUES(
+          ${repairCaseId},${competitionId},2,${firstRevision!.id},'draft',
+          2,0,0,${fingerprint},${accountId}
+        )`,
+      ).rejects.toThrow(/immutable repair case/i);
+      await expect(
+        sql`INSERT INTO public_projection_versions(
+          competition_id,division_id,schedule_version,result_version,projection_version,
+          source_repair_revision_id,projection,projection_fingerprint,etag,generated_at,source_updated_at
+        ) VALUES(
+          ${competitionId},${siblingDivisionId},1,2,1,${firstRevision!.id},${sql.json({ division: "Reserve" })},
+          ${"b".repeat(64)},'"c4-reserve-v1"','2027-01-01T01:00:00Z','2027-01-01T01:00:00Z'
+        )`,
+      ).rejects.toThrow(/same competition and division/i);
 
       const concurrentSql = postgres(config.databaseUrl, {
         max: 1,

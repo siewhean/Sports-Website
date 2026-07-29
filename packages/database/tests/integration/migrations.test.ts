@@ -125,11 +125,13 @@ describe("foundation migrations", () => {
         "0032_gate_c_offline_replay.sql",
         "0033_gate_c_repair_public_truth_exports.sql",
         "0034_gate_c_repair_revision_fencing.sql",
+        "0035_gate_c_repair_lineage_fencing.sql",
       ] as const;
       const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
       const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
       const repairPersistenceMigrationName = "0033_gate_c_repair_public_truth_exports.sql";
       const repairRevisionFencingMigrationName = "0034_gate_c_repair_revision_fencing.sql";
+      const repairLineageFencingMigrationName = "0035_gate_c_repair_lineage_fencing.sql";
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
           const migrationPath = path.join(copiedDirectory, name);
@@ -337,7 +339,8 @@ describe("foundation migrations", () => {
                 name !== participantFenceMigrationName &&
                 name !== offlineReplayMigrationName &&
                 name !== repairPersistenceMigrationName &&
-                name !== repairRevisionFencingMigrationName,
+                name !== repairRevisionFencingMigrationName &&
+                name !== repairLineageFencingMigrationName,
             )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
@@ -346,7 +349,7 @@ describe("foundation migrations", () => {
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -4));
+        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -5));
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -406,6 +409,16 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithRepairRevisionFencing.applied).toEqual([repairRevisionFencingMigrationName]);
+        const repairLineageFencingMigration = forwardMigrations.find(
+          ({ name }) => name === repairLineageFencingMigrationName,
+        )!;
+        await writeFile(repairLineageFencingMigration.migrationPath, repairLineageFencingMigration.source);
+        const upgradedWithRepairLineageFencing = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithRepairLineageFencing.applied).toEqual([repairLineageFencingMigrationName]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT

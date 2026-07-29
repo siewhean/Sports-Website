@@ -3,6 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Local runtime credentials belong in ignored `.env` files. Before excluding
+# those files from the directory scan, make a tracked credential file a hard
+# failure so an accidental force-add cannot be hidden by the allowlist.
+tracked_env_files="$(git -C "$ROOT_DIR" ls-files -- ':**/.env' '.env')"
+if [[ -n "$tracked_env_files" ]]; then
+  printf '%s\n' "Tracked runtime .env files are forbidden:" >&2
+  printf '%s\n' "$tracked_env_files" >&2
+  exit 1
+fi
+
 if command -v gitleaks >/dev/null 2>&1; then
   exec gitleaks dir "$ROOT_DIR" --config "$ROOT_DIR/.gitleaks.toml" --redact --no-banner
 fi

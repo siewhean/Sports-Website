@@ -10,6 +10,7 @@ paths = [
   '''(^|/)dist/''',
   '''(^|/)playwright-report/''',
   '''(^|/)test-results/''',
+  '''(^|/)\.env$''',
   '''sports_competition_platform_implementation_plan\.md$'''
 ]
 regexes = [
