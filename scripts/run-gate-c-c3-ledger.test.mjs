@@ -187,6 +187,8 @@ test("Gate C C3 browser harness cannot re-enable automatic credential-bearing ca
   assert.doesNotMatch(journey, /page\.goto\([^)]*#access=/u);
   assert.doesNotMatch(journey, /sessionRecoveryMaximum|authorityRecoveryMaximum/u);
   assert.match(journey, /allowFailedRequest\("GET", "\/api\/scoring\/session", "net::ERR_INTERNET_DISCONNECTED", 1\)/u);
+  assert.match(journey, /allowColdOfflineRestartProbes\(page, networkGuard, seed\.webOrigin\)/u);
+  assert.doesNotMatch(journey, /net::ERR_INTERNET_DISCONNECTED", [2-9]\d*\)/u);
   assert.match(runner, /PLAYWRIGHT_NO_COPY_PROMPT:\s*"1"/u);
 });
 

@@ -472,6 +472,26 @@ async function enterOfflineRecording(
   await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "offline-recording");
 }
 
+function allowColdOfflineRestartProbes(
+  page: Page,
+  networkGuard: ReturnType<typeof installNetworkGuard>,
+  origin: string,
+): void {
+  const originPattern = new URL(origin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  for (const [method, pathname] of [
+    ["GET", "/api/scoring/session"],
+    ["POST", "/api/scoring/offline/authority"],
+  ] as const) {
+    networkGuard.allowFailedRequest(method, pathname, "net::ERR_INTERNET_DISCONNECTED", 1);
+    allowConsoleFailureCount(
+      page,
+      new RegExp(`^requestfailed: ${method} ${originPattern}${pathname} \\(net::ERR_INTERNET_DISCONNECTED\\)$`, "u"),
+      1,
+    );
+  }
+  allowConsoleFailureCount(page, /^console\.error: Failed to load resource: net::ERR_INTERNET_DISCONNECTED$/u, 2);
+}
+
 async function recordGlobalEvent(page: Page, accessibleName: string): Promise<void> {
   await page.getByRole("button", { name: accessibleName, exact: true }).click();
   await page
@@ -691,6 +711,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   page = secondContext.pages()[0] ?? (await secondContext.newPage());
   await installConsoleGuard(page);
   networkGuard = installNetworkGuard(page);
+  allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin);
   const restartOriginPattern = new URL(seed.webOrigin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   allowConsoleFailureCount(
     page,
