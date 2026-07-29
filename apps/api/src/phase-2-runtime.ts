@@ -550,6 +550,39 @@ export class Phase2Runtime {
     }
   }
 
+  async scoringSessionRateLimitSubject(sessionId: unknown, sessionToken: unknown): Promise<string | null> {
+    if (
+      typeof sessionId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(sessionId) ||
+      typeof sessionToken !== "string" ||
+      sessionToken.length < 32 ||
+      sessionToken.length > 256
+    ) {
+      return null;
+    }
+    const session = (
+      await this.sql.unsafe<{
+        session_token_hash: Buffer;
+        expires_at: Date | string;
+        revoked_at: Date | string | null;
+      }>(
+        `SELECT session_token_hash,expires_at,revoked_at
+         FROM scoring_access_sessions
+         WHERE id=$1`,
+        [sessionId],
+      )
+    )[0];
+    if (
+      !session ||
+      session.revoked_at ||
+      date(session.expires_at).getTime() <= this.now().getTime() ||
+      !safeEqual(Buffer.from(session.session_token_hash), hashSecret(sessionToken))
+    ) {
+      return null;
+    }
+    return sessionId;
+  }
+
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     if (!this.sql.begin) throw new Error("Phase 2 mutations require a transaction-capable PostgreSQL client.");
     return this.sql.begin(operation);

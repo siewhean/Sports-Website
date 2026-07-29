@@ -33,6 +33,11 @@ function authenticatedIdentityRuntime(): IdentityApiRuntime {
 
 function routeRuntime() {
   return {
+    scoringSessionRateLimitSubject: vi.fn(async (sessionId: unknown, sessionToken: unknown): Promise<string | null> => {
+      void sessionId;
+      void sessionToken;
+      return null;
+    }),
     createCompetition: vi.fn(async () => ({ id: randomUUID(), status: "draft", sport_code: "canoe_polo" })),
     competitionWorkspace: vi.fn(async () => ({
       competition: { id: randomUUID(), name: "Singapore Open" },
@@ -158,6 +163,50 @@ function routeRuntime() {
 }
 
 describe("Phase 2 Fastify route boundaries", () => {
+  it("gives only validated scoring sessions independent authenticated rate-limit budgets", async () => {
+    const runtime = routeRuntime();
+    const firstToken = "a".repeat(43);
+    const secondToken = "b".repeat(43);
+    const firstSession = randomUUID();
+    const secondSession = randomUUID();
+    const validSessions = new Map([
+      [firstToken, firstSession],
+      [secondToken, secondSession],
+    ]);
+    runtime.scoringSessionRateLimitSubject.mockImplementation(async (sessionId, sessionToken) =>
+      typeof sessionId === "string" && typeof sessionToken === "string" && validSessions.get(sessionToken) === sessionId
+        ? sessionId
+        : null,
+    );
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: authenticatedIdentityRuntime(),
+      phase2Runtime: runtime as unknown as Phase2Runtime,
+      anonymousRateLimitMax: 2,
+      authenticatedRateLimitMax: 2,
+    });
+    apps.push(app);
+    const request = (sessionId: string, sessionToken: string) =>
+      app.inject({
+        method: "GET",
+        url: "/api/v1/scoring/session",
+        headers: {
+          "x-scoring-session-id": sessionId,
+          "x-scoring-session-token": sessionToken,
+        },
+      });
+    expect((await request(firstSession, firstToken)).statusCode).toBe(200);
+    expect((await request(firstSession, firstToken)).statusCode).toBe(200);
+    expect((await request(firstSession, firstToken)).statusCode).toBe(429);
+    expect((await request(secondSession, secondToken)).statusCode).toBe(200);
+    expect((await request(secondSession, secondToken)).statusCode).toBe(200);
+
+    expect((await request(randomUUID(), "x".repeat(43))).statusCode).toBe(200);
+    expect((await request(randomUUID(), "y".repeat(43))).statusCode).toBe(200);
+    expect((await request(randomUUID(), "z".repeat(43))).statusCode).toBe(429);
+  });
+
   it("enforces organiser origin, session and CSRF before mutation and excludes access secrets from reads", async () => {
     const runtime = routeRuntime();
     const app = await buildApp({

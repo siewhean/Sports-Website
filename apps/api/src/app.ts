@@ -251,10 +251,15 @@ export async function buildApp(options: BuildAppOptions) {
       const accountId = options.resolveRateLimitAccountId
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);
-      return accountId ? `account:${accountId}` : `ip:${request.ip}`;
+      if (accountId) return `account:${accountId}`;
+      const scoringSessionId = await options.phase2Runtime?.scoringSessionRateLimitSubject(
+        request.headers["x-scoring-session-id"],
+        request.headers["x-scoring-session-token"],
+      );
+      return scoringSessionId ? `scoring-session:${scoringSessionId}` : `ip:${request.ip}`;
     },
     max: async (_request, key) =>
-      key.startsWith("account:")
+      key.startsWith("account:") || key.startsWith("scoring-session:")
         ? (options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000)
         : (options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100),
     ...(options.rateLimitRedis ? { redis: options.rateLimitRedis } : {}),

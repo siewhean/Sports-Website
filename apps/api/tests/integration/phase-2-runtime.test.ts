@@ -438,6 +438,15 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       },
       randomUUID(),
     );
+    await expect(
+      runtime.scoringSessionRateLimitSubject(expiringSession.session_id, expiringSession.session_token),
+    ).resolves.toBe(expiringSession.session_id);
+    await expect(
+      runtime.scoringSessionRateLimitSubject(expiringSession.session_id, "wrong".repeat(10)),
+    ).resolves.toBeNull();
+    await expect(
+      runtime.scoringSessionRateLimitSubject("not-a-uuid", expiringSession.session_token),
+    ).resolves.toBeNull();
     const futureRuntime = new Phase2Runtime(
       client as unknown as PostgresJsSql,
       phase2DomainAdapter,
@@ -458,6 +467,15 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         generation: null,
       }),
     ).rejects.toMatchObject({ statusCode: 403, code: "SCORING_SESSION_EXPIRED" });
+    await expect(
+      futureRuntime.scoringSessionRateLimitSubject(expiringSession.session_id, expiringSession.session_token),
+    ).resolves.toBeNull();
+    await client`
+      UPDATE scoring_access_sessions SET revoked_at=now() WHERE id=${expiringSession.session_id}
+    `;
+    await expect(
+      runtime.scoringSessionRateLimitSubject(expiringSession.session_id, expiringSession.session_token),
+    ).resolves.toBeNull();
     const deniedAttempts = await client<
       {
         outcome: string;
