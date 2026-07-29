@@ -1153,7 +1153,11 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     mode: "hold_request",
   });
   expect(heldArm.status).toBe(204);
-  networkGuard.expectFailedRequest("POST", "/api/scoring/events");
+  if (browserExposesProxyDroppedRequest(testInfo.project.name)) {
+    networkGuard.expectFailedRequest("POST", "/api/scoring/events");
+  } else {
+    networkGuard.allowFailedRequest("POST", "/api/scoring/events", "net::ERR_ABORTED", 1);
+  }
   if (testInfo.project.name.endsWith("-webkit")) {
     allowConsoleFailureCount(
       page,
@@ -1820,7 +1824,11 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
       1,
     );
   }
-  networkGuard.expectFailedRequest("POST", "/api/scoring/events");
+  if (browserExposesProxyDroppedRequest(testInfo.project.name)) {
+    networkGuard.expectFailedRequest("POST", "/api/scoring/events");
+  } else {
+    networkGuard.allowFailedRequest("POST", "/api/scoring/events", "net::ERR_ABORTED", 1);
+  }
   await setBrowserConnectivity(testInfo, seed, context, page, true);
   await expect
     .poll(async () => {
