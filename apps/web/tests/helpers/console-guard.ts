@@ -135,7 +135,7 @@ export function allowConsoleFailureCount(page: Page, pattern: RegExp, maximumCou
   guards.get(page)?.allowed.push({ pattern, remaining: maximumCount });
 }
 
-export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
+async function assertAndClearConsoleGuard(page: Page, testInfo: TestInfo, attachmentName: string) {
   const state = guards.get(page);
   const failures = (state?.failures ?? []).filter((failure) => {
     const allowance = (state?.allowed ?? []).find(({ pattern, remaining }) => remaining !== 0 && pattern.test(failure));
@@ -143,13 +143,25 @@ export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
     if (allowance.remaining !== null) allowance.remaining -= 1;
     return false;
   });
-  await testInfo.attach("browser-runtime-health", {
+  await testInfo.attach(attachmentName, {
     body: failures.length
       ? failures.join("\n")
       : "No console warnings, console errors, page errors, or failed requests.",
     contentType: "text/plain",
   });
+  if (state) {
+    state.failures.length = 0;
+    state.allowed.length = 0;
+  }
   expect(failures, "unexpected browser runtime failures").toEqual([]);
+}
+
+export async function assertConsoleGuardCheckpoint(page: Page, testInfo: TestInfo, checkpoint: string) {
+  await assertAndClearConsoleGuard(page, testInfo, `browser-runtime-health-${checkpoint}`);
+}
+
+export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
+  await assertAndClearConsoleGuard(page, testInfo, "browser-runtime-health");
 }
 
 export async function dismissConsent(page: Page) {

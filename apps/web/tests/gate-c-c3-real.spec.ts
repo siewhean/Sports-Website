@@ -18,6 +18,7 @@ import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
 import {
   allowConsoleFailureCount,
   assertConsoleGuard,
+  assertConsoleGuardCheckpoint,
   dismissConsent,
   installConsoleGuard,
 } from "./helpers/console-guard";
@@ -311,7 +312,38 @@ function installNetworkGuard(page: Page): {
 }
 
 function browserExposesProxyDroppedRequest(projectName: string): boolean {
-  return !projectName.endsWith("-chromium");
+  return projectName.endsWith("-webkit");
+}
+
+function allowFirefoxStrictDynamicWarnings(
+  page: Page,
+  projectName: string,
+  maximumCount: number,
+  pathname: "/score" | "/maintenance" = "/score",
+): void {
+  if (!projectName.endsWith("-firefox")) return;
+  const escapedPathname = pathname === "/score" ? "score" : "maintenance";
+  allowConsoleFailureCount(
+    page,
+    new RegExp(
+      `^console\\.warning: \\[JavaScript Warning: "Content-Security-Policy: Ignoring “'self'” within script-src: ‘strict-dynamic’ specified" \\{file: "https:\\/\\/localhost:\\d+\\/${escapedPathname}" line: 0\\}\\]$`,
+      "u",
+    ),
+    maximumCount,
+  );
+}
+
+async function refreshPageForProject(
+  page: Page,
+  testInfo: TestInfo,
+  waitUntil: "load" | "domcontentloaded" = "load",
+): Promise<void> {
+  if (testInfo.project.name.endsWith("-firefox")) {
+    allowFirefoxStrictDynamicWarnings(page, testInfo.project.name, 2);
+    await page.goto(page.url(), { waitUntil });
+    return;
+  }
+  await page.reload({ waitUntil });
 }
 
 function browserNeedsPersistedConnectivityHint(browserOrProjectName: string): boolean {
@@ -455,11 +487,14 @@ async function openAggregate(
   const context = await launch(testInfo, profileDirectory, false);
   const page = context.pages()[0] ?? (await context.newPage());
   await installConsoleGuard(page);
+  allowFirefoxStrictDynamicWarnings(page, testInfo.project.name, 2);
   const networkGuard = installNetworkGuard(page);
   await enterScoringAccess(page, seed.webOrigin, aggregate.accessToken);
   await dismissConsent(page);
   await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
+  await expect(page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
+  await assertConsoleGuardCheckpoint(page, testInfo, "initial-score-navigation");
   return { context, page, networkGuard };
 }
 
@@ -472,10 +507,12 @@ async function openCandidateAggregate(
   const context = await launch(testInfo, profileDirectory, false);
   const page = context.pages()[0] ?? (await context.newPage());
   await installConsoleGuard(page);
+  allowFirefoxStrictDynamicWarnings(page, testInfo.project.name, 2);
   const networkGuard = installNetworkGuard(page);
   await enterScoringAccess(page, seed.webOrigin, aggregate.accessToken);
   await dismissConsent(page);
   await expect(page.getByRole("button", { name: "Request scoring access" })).toBeVisible();
+  await assertConsoleGuardCheckpoint(page, testInfo, "initial-candidate-navigation");
   return { context, page, networkGuard };
 }
 
@@ -895,19 +932,22 @@ async function reloadOfflineDocument(
       value: true,
     });
   });
-  try {
-    const offlineDocumentResponse = await page.reload({ waitUntil: "domcontentloaded" });
-    expect(offlineDocumentResponse?.status()).toBe(200);
-  } catch (error) {
-    if (
-      !testInfo.project.name.endsWith("-webkit") ||
-      !(error instanceof Error) ||
-      !error.message.includes("WebKit encountered an internal error")
-    ) {
-      throw error;
-    }
+  if (testInfo.project.name.endsWith("-firefox")) {
     await page.goto(page.url(), { waitUntil: "domcontentloaded" });
-  }
+  } else
+    try {
+      const offlineDocumentResponse = await page.reload({ waitUntil: "domcontentloaded" });
+      expect(offlineDocumentResponse?.status()).toBe(200);
+    } catch (error) {
+      if (
+        !testInfo.project.name.endsWith("-webkit") ||
+        !(error instanceof Error) ||
+        !error.message.includes("WebKit encountered an internal error")
+      ) {
+        throw error;
+      }
+      await page.goto(page.url(), { waitUntil: "domcontentloaded" });
+    }
   await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "pending-sync");
   const reloadProof = await page.evaluate(async () => {
     const transportProbe = await fetch("/__matchday-offline-transport-probe", { cache: "no-store" }).then(
@@ -993,12 +1033,15 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
       `^requestfailed: GET ${originPattern}/__matchday-offline-transport-probe \\(${
         testInfo.project.name.endsWith("-webkit")
           ? "The network connection was lost\\."
-          : "net::ERR_INTERNET_DISCONNECTED"
+          : testInfo.project.name.endsWith("-firefox")
+            ? "NS_ERROR_OFFLINE"
+            : "net::ERR_INTERNET_DISCONNECTED"
       }\\)$`,
       "u",
     ),
     1,
   );
+  allowFirefoxStrictDynamicWarnings(page, testInfo.project.name, 2);
   allowConsoleFailureCount(
     page,
     testInfo.project.name.endsWith("-webkit")
@@ -1015,7 +1058,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   await expect(page.getByText(/2 commands pending/u)).toBeVisible();
   await writeScenarioReceipt("page_refresh", testInfo, observedAt, {
     recovered_command_count: 2,
-    refresh_mechanism: "browser-reload",
+    refresh_mechanism: refreshNavigationType === "reload" ? "browser-reload" : "same-url-navigation",
     performance_navigation_type: refreshNavigationType,
   });
   networkGuard.assertClean();
@@ -1025,6 +1068,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   const secondContext = await launch(testInfo, primaryProfileDirectory, true);
   page = secondContext.pages()[0] ?? (await secondContext.newPage());
   await installConsoleGuard(page);
+  allowFirefoxStrictDynamicWarnings(page, testInfo.project.name, 1);
   networkGuard = installNetworkGuard(page);
   allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin, testInfo.project.name.endsWith("-webkit"));
   await page.goto(`${seed.webOrigin}/score`);
@@ -1200,7 +1244,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   expect(heldArm.status).toBe(204);
   if (browserExposesProxyDroppedRequest(testInfo.project.name)) {
     networkGuard.expectFailedRequest("POST", "/api/scoring/events");
-  } else {
+  } else if (testInfo.project.name.endsWith("-chromium")) {
     networkGuard.allowFailedRequest("POST", "/api/scoring/events", "net::ERR_ABORTED", 1);
   }
   if (testInfo.project.name.endsWith("-webkit")) {
@@ -1485,7 +1529,7 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
 
   allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin, testInfo.project.name.endsWith("-webkit"));
   await setBrowserConnectivity(testInfo, seed, context, page, false);
-  await page.reload({ waitUntil: "domcontentloaded" });
+  await refreshPageForProject(page, testInfo, "domcontentloaded");
   await expect(page.getByText(/1 command pending/u)).toBeVisible();
   await setBrowserConnectivity(testInfo, seed, context, page, true);
   await page.getByRole("button", { name: "Sync now" }).click();
@@ -1630,7 +1674,7 @@ test("Gate C C3 renders replay expiry and retains the unresolved queue", async (
     await setServerClock(testInfo, profileRoot, seed, timing.replayExpiresAt);
     await setBrowserDateNow(page, Date.parse(timing.replayExpiresAt));
     allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin, testInfo.project.name.endsWith("-webkit"));
-    await page.reload();
+    await refreshPageForProject(page, testInfo);
     await expect(page.getByRole("region", { name: "Offline authority expired" })).toBeVisible();
     await expect(page.getByText(/1 command pending/u)).toBeVisible();
     const revoked = await organiserRequest(
@@ -1695,7 +1739,7 @@ test("Gate C C3 surfaces corrupt local storage without submitting it", async ({}
         };
       }),
   );
-  await page.reload();
+  await refreshPageForProject(page, testInfo);
   await expect(page.getByText("Offline storage error", { exact: true })).toBeVisible();
   await writeScenarioReceipt("storage_corruption", testInfo, new Date().toISOString(), {
     conflict_code: "offline_queue_integrity",
@@ -1780,7 +1824,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     retained_command_count: 1,
   });
 
-  await candidate.page.reload();
+  await refreshPageForProject(candidate.page, testInfo);
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
   await prepareOffline(candidate.page);
   await enterOfflineRecording(testInfo, seed, candidate.context, candidate.page, candidate.networkGuard);
@@ -1833,6 +1877,7 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
 
   const safePeer = await context.newPage();
   await installConsoleGuard(safePeer);
+  allowFirefoxStrictDynamicWarnings(safePeer, testInfo.project.name, 1, "/maintenance");
   const safePeerNetworkGuard = installNetworkGuard(safePeer);
   await safePeer.goto(`${seed.webOrigin}/maintenance`);
   await expect(safePeer.getByRole("heading", { name: "MATCHDAY is in scheduled maintenance" })).toBeVisible();
@@ -1878,6 +1923,12 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
       new RegExp(`^requestfailed: POST ${workerOriginPattern}/api/scoring/events \\(cancelled\\)$`, "u"),
       1,
     );
+  } else if (testInfo.project.name.endsWith("-firefox")) {
+    allowConsoleFailureCount(
+      page,
+      new RegExp(`^requestfailed: POST ${workerOriginPattern}/api/scoring/events \\(NS_BINDING_ABORTED\\)$`, "u"),
+      1,
+    );
   } else if (testInfo.project.name.endsWith("-chromium")) {
     allowConsoleFailureCount(
       page,
@@ -1887,7 +1938,9 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   }
   if (browserExposesProxyDroppedRequest(testInfo.project.name)) {
     networkGuard.expectFailedRequest("POST", "/api/scoring/events");
-  } else {
+  } else if (testInfo.project.name.endsWith("-firefox")) {
+    networkGuard.allowFailedRequest("POST", "/api/scoring/events", "NS_BINDING_ABORTED", 1);
+  } else if (testInfo.project.name.endsWith("-chromium")) {
     networkGuard.allowFailedRequest("POST", "/api/scoring/events", "net::ERR_ABORTED", 1);
   }
   await setBrowserConnectivity(testInfo, seed, context, page, true);
