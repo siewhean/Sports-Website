@@ -324,6 +324,10 @@ export function calculateAffectedMatchClosure(input: AffectedMatchClosureInput):
         dependencyPath,
       });
 
+      if (classification.action !== "automatic_update" && classification.action !== "no_change") {
+        continue;
+      }
+
       const existingPath = bestPathByMatch.get(match.matchId);
       if (
         !existingPath ||

@@ -167,6 +167,30 @@ describe("Gate C C4 affected-match repair closure", () => {
     ).toThrow(/requires a proposed winner and loser outcome/);
   });
 
+  it("does not infer automatic descendants through a protected match", () => {
+    const result = calculateAffectedMatchClosure(
+      baseInput({
+        matches: [
+          match("semi-1"),
+          match("started-final", { state: "in_progress", homeEntryId: "team-a" }),
+          match("future-placement", { homeEntryId: "team-a" }),
+        ],
+        dependencies: [
+          { sourceMatchId: "semi-1", downstreamMatchId: "started-final", slot: "home", outcome: "winner" },
+          { sourceMatchId: "started-final", downstreamMatchId: "future-placement", slot: "home", outcome: "winner" },
+        ],
+        proposedOutcomes: [
+          { matchId: "semi-1", winnerEntryId: "team-b", loserEntryId: "team-a" },
+          { matchId: "started-final", winnerEntryId: "team-c", loserEntryId: "team-b" },
+        ],
+      }),
+    );
+
+    expect(result.actions.map(({ matchId, action }) => [matchId, action])).toEqual([
+      ["started-final", "protected_started_match"],
+    ]);
+  });
+
   it("rejects invalid runtime enum values instead of classifying them as safe automatic updates", () => {
     expect(() =>
       calculateAffectedMatchClosure(
