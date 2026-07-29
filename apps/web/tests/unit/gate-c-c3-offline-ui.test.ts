@@ -85,12 +85,20 @@ describe("Gate C3 offline scoring UI contract", () => {
   it("does not overlap periodic recovery with offline recording or ordered replay", async () => {
     const source = await readFile(scoringSource, "utf8");
 
-    expect(source).toMatch(/!navigator\.onLine \|\|\s*offlineReplayAbortRef\.current/u);
     expect(source).toMatch(
-      /if \(!navigator\.onLine\) \{\s*void device\.then\(\(\) => recoverStoredOfflineSession\(\)\)\.finally\(\(\) => setAccessChecking\(false\)\)/u,
+      /!transportOnlineRef\.current \|\|\s*!navigator\.onLine \|\|\s*offlineReplayAbortRef\.current/u,
     );
     expect(source).toMatch(
-      /if \(!navigator\.onLine\) \{\s*setOfflineState\(phase2Machine\.offlinePendingSync\);\s*return Promise\.resolve\(\)/u,
+      /if \(!transportOnlineRef\.current \|\| !navigator\.onLine\) \{\s*void device\.then\(\(\) => recoverStoredOfflineSession\(\)\)\.finally\(\(\) => setAccessChecking\(false\)\)/u,
+    );
+    expect(source).toMatch(
+      /if \(!transportOnlineRef\.current \|\| !navigator\.onLine\) \{\s*setOfflineState\(phase2Machine\.offlinePendingSync\);\s*return Promise\.resolve\(\)/u,
+    );
+    expect(source).toMatch(
+      /const offline = \(\) => \{\s*if \(!subscribed\) return;\s*transportOnlineRef\.current = false/u,
+    );
+    expect(source).toMatch(
+      /const online = \(\) => \{\s*if \(!subscribed\) return;\s*transportOnlineRef\.current = true/u,
     );
   });
 });

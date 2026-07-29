@@ -166,6 +166,7 @@ export function PhoneScoring({
   const [pendingSync, setPendingSync] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [offlineState, setOfflineState] = useState<OfflineState>(phase2Machine.offlineOnline);
+  const transportOnlineRef = useRef(true);
   const [offlineAuthorizationId, setOfflineAuthorizationId] = useState<string | null>(null);
   const [offlineRecordingExpiresAt, setOfflineRecordingExpiresAt] = useState<string | null>(null);
   const [offlineReplayExpiresAt, setOfflineReplayExpiresAt] = useState<string | null>(null);
@@ -479,6 +480,7 @@ export function PhoneScoring({
   useEffect(() => {
     if (bootstrappedRef.current) return;
     bootstrappedRef.current = true;
+    transportOnlineRef.current = navigator.onLine;
     const fragment = new URLSearchParams(window.location.hash.slice(1));
     const token = fragment.get(phase2Machine.access);
     if (window.location.hash) {
@@ -507,7 +509,7 @@ export function PhoneScoring({
       void device.finally(() => setAccessChecking(false));
       return;
     }
-    if (!navigator.onLine) {
+    if (!transportOnlineRef.current || !navigator.onLine) {
       void device.then(() => recoverStoredOfflineSession()).finally(() => setAccessChecking(false));
       return;
     }
@@ -538,6 +540,7 @@ export function PhoneScoring({
         !sessionActiveRef.current ||
         document.visibilityState !== "visible" ||
         mutationInFlightRef.current > 0 ||
+        !transportOnlineRef.current ||
         !navigator.onLine ||
         offlineReplayAbortRef.current
       ) {
@@ -648,7 +651,7 @@ export function PhoneScoring({
 
   const reconnectAndReplay = useCallback(() => {
     if (!offlineAuthorizationId || mode !== phase2Machine.scoringApiMode) return Promise.resolve();
-    if (!navigator.onLine) {
+    if (!transportOnlineRef.current || !navigator.onLine) {
       setOfflineState(phase2Machine.offlinePendingSync);
       return Promise.resolve();
     }
@@ -734,11 +737,13 @@ export function PhoneScoring({
     let subscribed = true;
     const offline = () => {
       if (!subscribed) return;
+      transportOnlineRef.current = false;
       if (isScoringWorkerSafetyFrozen()) return;
       void recoverStoredOfflineSession();
     };
     const online = () => {
       if (!subscribed) return;
+      transportOnlineRef.current = true;
       void reconnectAndReplay();
     };
     window.addEventListener("offline", offline);
