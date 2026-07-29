@@ -94,7 +94,7 @@ function stableJson(value: unknown): string {
       .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
       .join(",")}}`;
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? "null";
 }
 
 function validatePositiveVersion(value: number, label: string): void {
@@ -106,7 +106,9 @@ function validateInput(input: AffectedMatchClosureInput): {
   outcomes: ReadonlyMap<string, RepairOutcomeSnapshot>;
   outgoing: ReadonlyMap<string, readonly RepairDependency[]>;
 } {
-  if (!input.competitionId || !input.correctedMatchId) throw new Error("Repair analysis requires stable competition and match IDs");
+  if (!input.competitionId || !input.correctedMatchId) {
+    throw new Error("Repair analysis requires stable competition and match IDs");
+  }
   validatePositiveVersion(input.sourceResultVersion, "Source result version");
   validatePositiveVersion(input.sourceScheduleVersion, "Source schedule version");
 
@@ -152,7 +154,9 @@ function validateInput(input: AffectedMatchClosureInput): {
     dependencies.push(dependency);
     outgoing.set(dependency.sourceMatchId, dependencies);
   }
-  for (const dependencies of outgoing.values()) dependencies.sort((left, right) => dependencyKey(left).localeCompare(dependencyKey(right)));
+  for (const dependencies of outgoing.values()) {
+    dependencies.sort((left, right) => dependencyKey(left).localeCompare(dependencyKey(right)));
+  }
 
   if ((outgoing.get(input.correctedMatchId)?.length ?? 0) > 0 && !outcomes.has(input.correctedMatchId)) {
     throw new Error("Corrected match requires a proposed winner and loser outcome");
@@ -169,10 +173,14 @@ function assertReachableGraphIsAcyclic(
   const visited = new Set<string>();
 
   const visit = (matchId: string, path: readonly string[]): void => {
-    if (visiting.has(matchId)) throw new Error(`Repair dependency cycle detected: ${[...path, matchId].join(" -> ")}`);
+    if (visiting.has(matchId)) {
+      throw new Error(`Repair dependency cycle detected: ${[...path, matchId].join(" -> ")}`);
+    }
     if (visited.has(matchId)) return;
     visiting.add(matchId);
-    for (const dependency of outgoing.get(matchId) ?? []) visit(dependency.downstreamMatchId, [...path, matchId]);
+    for (const dependency of outgoing.get(matchId) ?? []) {
+      visit(dependency.downstreamMatchId, [...path, matchId]);
+    }
     visiting.delete(matchId);
     visited.add(matchId);
   };
