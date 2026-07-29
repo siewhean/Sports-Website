@@ -554,6 +554,19 @@ function refreshAuthFromState(auth: ScoringServerAuth, state: Record<string, unk
   };
 }
 
+function sameScoringAuthState(left: ScoringServerAuth, right: ScoringServerAuth): boolean {
+  const leftPermissions = [...left.permissions].sort();
+  const rightPermissions = [...right.permissions].sort();
+  return (
+    left.mode === right.mode &&
+    left.generation === right.generation &&
+    left.expiresAt === right.expiresAt &&
+    left.leaseExpiresAt === right.leaseExpiresAt &&
+    leftPermissions.length === rightPermissions.length &&
+    leftPermissions.every((permission, index) => permission === rightPermissions[index])
+  );
+}
+
 function exchangeInput(
   value: unknown,
 ): { token?: string; short_code?: string; device_id: string; device_label?: string } | null {
@@ -741,7 +754,10 @@ export async function recoverScoringSession(request: Request): Promise<Response>
   const refreshedAuth = refreshAuthFromState(authenticated.auth, state);
   if (!refreshedAuth) return safeError(503, true);
   try {
-    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+    const refreshedCookie = sameScoringAuthState(authenticated.auth, refreshedAuth)
+      ? undefined
+      : scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt);
+    return jsonResponse(state, 200, refreshedCookie);
   } catch {
     return safeError(503, true);
   }
@@ -819,8 +835,14 @@ export async function heartbeatScoringSession(request: Request): Promise<Respons
   const state = scoringState(await readJson(stateResponse));
   const sessionSealer = sealer();
   if (!state || !sessionSealer) return safeError(503);
+  const authoritativeAuth = refreshAuthFromState(refreshedAuth, state);
+  if (!authoritativeAuth) return safeError(503, true);
   try {
-    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+    return jsonResponse(
+      state,
+      200,
+      scoringSessionCookie(sessionSealer.seal(authoritativeAuth), authoritativeAuth.expiresAt),
+    );
   } catch {
     return safeError(503, true);
   }

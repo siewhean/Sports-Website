@@ -115,6 +115,13 @@ describe("Gate C3 offline scoring UI contract", () => {
     expect(source).toMatch(
       /const online = \(\) => \{\s*if \(!subscribed\) return;\s*transportOnlineRef\.current = true/u,
     );
+    const periodicRefresh = source.slice(
+      source.indexOf("refreshScoringSessionAccess("),
+      source.indexOf("let active = true;", source.indexOf("refreshScoringSessionAccess(")),
+    );
+    expect(periodicRefresh).toMatch(
+      /catch \(error\) \{\s*if \(error instanceof ScoringWorkerSafetyFrozenError\) return;\s*await handleTransportError\(error\)/u,
+    );
   });
 
   it("does not rotate authority again when a trailing reconnect sees a drained queue", async () => {

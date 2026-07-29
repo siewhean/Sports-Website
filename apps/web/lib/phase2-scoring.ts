@@ -493,12 +493,14 @@ export async function refreshScoringSessionAccess(
     pendingEventCount: number;
     pendingThroughSequence: number | null;
   },
-  recoverAuthoritatively: boolean,
+  recoveryMode: "none" | "promotion" | "renewal",
   signal?: AbortSignal,
 ): Promise<ScoringSessionView | null> {
-  if (recoverAuthoritatively) {
+  if (recoveryMode !== "none") {
     const recovered = await port.recoverSession(signal);
-    if (!recovered || recovered.mode !== "writer" || recovered.readOnly) return recovered;
+    if (recoveryMode === "promotion" || !recovered || recovered.mode !== "writer" || recovered.readOnly) {
+      return recovered;
+    }
   }
   return port.heartbeat(input, signal);
 }

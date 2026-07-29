@@ -519,9 +519,8 @@ describe("phase 2 browser scoring transport", () => {
     expect(session).toMatchObject({ mode: "writer", generation: 3, readOnly: true });
   });
 
-  it("recovers a promoted candidate before heartbeat can use the new writer generation", async () => {
+  it("returns a promoted candidate recovery before a heartbeat can depend on its rotated cookie", async () => {
     const recovered = sessionView({ generation: 6 });
-    const heartbeaten = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:50.000Z" });
     const calls: string[] = [];
     const port = {
       recoverSession: vi.fn(async () => {
@@ -530,7 +529,7 @@ describe("phase 2 browser scoring transport", () => {
       }),
       heartbeat: vi.fn(async () => {
         calls.push("heartbeat");
-        return heartbeaten;
+        return recovered;
       }),
     };
 
@@ -541,11 +540,11 @@ describe("phase 2 browser scoring transport", () => {
         pendingEventCount: 0,
         pendingThroughSequence: null,
       },
-      true,
+      "promotion",
     );
 
-    expect(calls).toEqual(["recover", "heartbeat"]);
-    expect(session).toEqual(heartbeaten);
+    expect(calls).toEqual(["recover"]);
+    expect(session).toEqual(recovered);
   });
 
   it("does not heartbeat a candidate until authoritative recovery promotes it", async () => {
@@ -568,11 +567,62 @@ describe("phase 2 browser scoring transport", () => {
         pendingEventCount: 0,
         pendingThroughSequence: null,
       },
-      true,
+      "promotion",
     );
 
     expect(session).toEqual(candidate);
     expect(port.heartbeat).not.toHaveBeenCalled();
+  });
+
+  it("heartbeats an existing writer when no authoritative promotion recovery is required", async () => {
+    const heartbeaten = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:50.000Z" });
+    const port = {
+      recoverSession: vi.fn(async () => heartbeaten),
+      heartbeat: vi.fn(async () => heartbeaten),
+    };
+
+    const session = await refreshScoringSessionAccess(
+      port,
+      {
+        lastAcknowledgedSequence: 4,
+        pendingEventCount: 0,
+        pendingThroughSequence: null,
+      },
+      "none",
+    );
+
+    expect(session).toEqual(heartbeaten);
+    expect(port.recoverSession).not.toHaveBeenCalled();
+    expect(port.heartbeat).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers and then heartbeats an expiring writer to renew the authoritative lease", async () => {
+    const recovered = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:05.000Z" });
+    const heartbeaten = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:50.000Z" });
+    const calls: string[] = [];
+    const port = {
+      recoverSession: vi.fn(async () => {
+        calls.push("recover");
+        return recovered;
+      }),
+      heartbeat: vi.fn(async () => {
+        calls.push("heartbeat");
+        return heartbeaten;
+      }),
+    };
+
+    const session = await refreshScoringSessionAccess(
+      port,
+      {
+        lastAcknowledgedSequence: 4,
+        pendingEventCount: 0,
+        pendingThroughSequence: null,
+      },
+      "renewal",
+    );
+
+    expect(calls).toEqual(["recover", "heartbeat"]);
+    expect(session).toEqual(heartbeaten);
   });
 
   it("does not apply a pre-event refresh after a newer scoring append succeeds", async () => {

@@ -591,10 +591,12 @@ export function PhoneScoring({
         return;
       }
       try {
-        const recoverAuthoritatively =
-          forceAuthoritative ||
-          writerStateRef.current === phase2Machine.candidate ||
-          writerStateRef.current === phase2Machine.expiring;
+        const recoveryMode =
+          writerStateRef.current === phase2Machine.candidate
+            ? phase2Machine.refreshPromotion
+            : forceAuthoritative || writerStateRef.current === phase2Machine.expiring
+              ? phase2Machine.refreshRenewal
+              : phase2Machine.refreshNone;
         await sessionRefreshFence.run(
           (signal) =>
             refreshScoringSessionAccess(
@@ -604,12 +606,13 @@ export function PhoneScoring({
                 pendingEventCount: pendingSync ? 1 : 0,
                 pendingThroughSequence: pendingSync ? throughSequence : null,
               },
-              recoverAuthoritatively,
+              recoveryMode,
               signal,
             ),
           applySession,
         );
       } catch (error) {
+        if (error instanceof ScoringWorkerSafetyFrozenError) return;
         await handleTransportError(error);
       }
     };

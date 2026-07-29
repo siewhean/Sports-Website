@@ -401,6 +401,67 @@ describe("scoring BFF", () => {
     expect(setCookie).not.toContain(sessionToken);
   });
 
+  it("does not reseal an unchanged candidate recovery that could overwrite a newer writer cookie", async () => {
+    const candidateAuth: ScoringServerAuth = {
+      ...auth,
+      mode: "candidate",
+      generation: null,
+      leaseExpiresAt: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          state({
+            access: {
+              principal_id: offlinePrincipalId,
+              mode: "candidate",
+              permissions: ["score:read", "score:write"],
+              session_expires_at: expiresAt,
+            },
+            writer: { generation: null, expires_at: null, read_only: true },
+          }),
+        ),
+      ),
+    );
+
+    const response = await recoverScoringSession(
+      bffRequest("GET", "/api/scoring/session", undefined, sealedCookie(candidateAuth)),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("reseals recovery when authoritative session expiry changes", async () => {
+    const renewedExpiry = "2030-01-01T00:15:00.000Z";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          state({
+            access: {
+              principal_id: offlinePrincipalId,
+              mode: "writer",
+              permissions: ["score:write", "score:read"],
+              session_expires_at: renewedExpiry,
+            },
+          }),
+        ),
+      ),
+    );
+
+    const response = await recoverScoringSession(bffRequest("GET", "/api/scoring/session", undefined, sealedCookie()));
+    const setCookie = response.headers.get("set-cookie") ?? "";
+    const sealed = setCookie.split(";")[0]?.split("=").slice(1).join("=") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(new ScoringSessionSealer(sealKey).open(sealed)).toMatchObject({
+      expiresAt: renewedExpiry,
+      permissions: ["score:write", "score:read"],
+    });
+  });
+
   it("rejects an unsafe competition slug before it can reach a public-page link", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(state({ competition: { slug: "../organiser" } }))));
 
@@ -775,6 +836,102 @@ describe("scoring BFF", () => {
       last_acknowledged_sequence: 7,
       pending_event_count: 0,
       pending_through_sequence: 7,
+    });
+  });
+
+  it("reseals heartbeat from the final authoritative state when takeover wins the request race", async () => {
+    const candidateAuth: ScoringServerAuth = {
+      ...auth,
+      mode: "candidate",
+      generation: null,
+      leaseExpiresAt: null,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        json({
+          mode: "candidate",
+          generation: null,
+          session_expires_at: expiresAt,
+          lease_expires_at: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        json(
+          state({
+            access: {
+              principal_id: offlinePrincipalId,
+              mode: "writer",
+              permissions: ["score:read", "score:write"],
+              session_expires_at: expiresAt,
+            },
+            writer: { generation: 6, expires_at: expiresAt, read_only: false },
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await heartbeatScoringSession(
+      bffRequest(
+        "POST",
+        "/api/scoring/session/heartbeat",
+        { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: null },
+        sealedCookie(candidateAuth),
+      ),
+    );
+    const setCookie = response.headers.get("set-cookie") ?? "";
+    const sealed = setCookie.split(";")[0]?.split("=").slice(1).join("=") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(new ScoringSessionSealer(sealKey).open(sealed)).toMatchObject({
+      mode: "writer",
+      generation: 6,
+      leaseExpiresAt: expiresAt,
+    });
+  });
+
+  it("reseals heartbeat as transferred when the final authoritative state fences the writer", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        json({
+          mode: "writer",
+          generation: 3,
+          session_expires_at: expiresAt,
+          lease_expires_at: expiresAt,
+        }),
+      )
+      .mockResolvedValueOnce(
+        json(
+          state({
+            access: {
+              principal_id: offlinePrincipalId,
+              mode: "transferred",
+              permissions: ["score:read", "score:write"],
+              session_expires_at: expiresAt,
+            },
+            writer: { generation: 3, expires_at: null, read_only: true },
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await heartbeatScoringSession(
+      bffRequest(
+        "POST",
+        "/api/scoring/session/heartbeat",
+        { lastAcknowledgedSequence: 0, pendingEventCount: 0, pendingThroughSequence: null },
+        sealedCookie(),
+      ),
+    );
+    const setCookie = response.headers.get("set-cookie") ?? "";
+    const sealed = setCookie.split(";")[0]?.split("=").slice(1).join("=") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(new ScoringSessionSealer(sealKey).open(sealed)).toMatchObject({
+      mode: "transferred",
+      generation: 3,
+      leaseExpiresAt: null,
     });
   });
 
