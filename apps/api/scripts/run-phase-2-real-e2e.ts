@@ -1424,7 +1424,15 @@ async function main(): Promise<void> {
       GATE_C_C2_BROWSER_RECEIPT: path.join(temp, "playwright-output", "c2-browser-receipt.json"),
       GATE_C_C2_SEMANTIC_RECEIPT: path.join(temp, "playwright-output", "c2-semantic-receipt.json"),
       ...(c3ScenarioDirectory ? { GATE_C_C3_SCENARIO_DIRECTORY: c3ScenarioDirectory } : {}),
-      ...(evidenceScope === "gate-c-c3" ? { GATE_C_C3_SOURCE_SHA: sourceSha } : {}),
+      ...(evidenceScope === "gate-c-c3"
+        ? {
+            GATE_C_C3_SOURCE_SHA: sourceSha,
+            // Playwright's automatic AI error context can snapshot the one-time
+            // access fragment from navigation history. C3 retains only explicit
+            // post-exchange, secret-scanned evidence.
+            PLAYWRIGHT_NO_COPY_PROMPT: "1",
+          }
+        : {}),
       SCORING_SESSION_SEAL_KEY: Buffer.alloc(32, 23).toString("base64url"),
     };
     delete runtimeEnv.MATCHDAY_PHASE2_DATA_MODE;

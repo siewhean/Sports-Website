@@ -179,11 +179,13 @@ test("Gate C C3 discovery requires all five projects and an exact total", () => 
 test("Gate C C3 browser harness cannot re-enable automatic credential-bearing captures", async () => {
   const config = await readFile("apps/web/playwright.gate-c-c3.config.ts", "utf8");
   const journey = await readFile("apps/web/tests/gate-c-c3-real.spec.ts", "utf8");
+  const runner = await readFile("apps/api/scripts/run-phase-2-real-e2e.ts", "utf8");
   assert.match(config, /trace:\s*"off"/u);
   assert.match(config, /screenshot:\s*"off"/u);
   assert.match(config, /video:\s*"off"/u);
   assert.doesNotMatch(config, /retain-on-failure|only-on-failure/u);
   assert.doesNotMatch(journey, /page\.goto\([^)]*#access=/u);
+  assert.match(runner, /PLAYWRIGHT_NO_COPY_PROMPT:\s*"1"/u);
 });
 
 test("Gate C C3 run receipt rejects wrong SHA, skips, and incomplete project matrices", () => {

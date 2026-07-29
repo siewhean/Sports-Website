@@ -530,7 +530,13 @@ export function PhoneScoring({
     if (phase !== "live" && phase !== "review") return;
     const sessionRefreshFence = sessionRefreshFenceRef.current;
     const refresh = async (forceAuthoritative = false) => {
-      if (!sessionActiveRef.current || document.visibilityState !== "visible" || mutationInFlightRef.current > 0) {
+      if (
+        !sessionActiveRef.current ||
+        document.visibilityState !== "visible" ||
+        mutationInFlightRef.current > 0 ||
+        !navigator.onLine ||
+        offlineReplayAbortRef.current
+      ) {
         return;
       }
       try {

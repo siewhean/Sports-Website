@@ -81,4 +81,10 @@ describe("Gate C3 offline scoring UI contract", () => {
     expect(source).toContain("if (replayAbort.signal.aborted) return");
     expect(source).toContain("offlineReplayAbortRef.current?.abort()");
   });
+
+  it("does not overlap periodic recovery with offline recording or ordered replay", async () => {
+    const source = await readFile(scoringSource, "utf8");
+
+    expect(source).toMatch(/!navigator\.onLine \|\|\s*offlineReplayAbortRef\.current/u);
+  });
 });

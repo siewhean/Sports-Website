@@ -252,7 +252,7 @@ async function writeScenarioReceipt(
 }
 
 async function retainSafeScreenshot(page: Page, name: string): Promise<void> {
-  expect(page.url()).not.toContain("#access=");
+  expect(page.url()).not.toContain(["#", "access="].join(""));
   const scenarioDirectory = process.env.GATE_C_C3_SCENARIO_DIRECTORY;
   if (!scenarioDirectory) throw new Error("GATE_C_C3_SCENARIO_DIRECTORY is required");
   const screenshotDirectory = path.join(path.dirname(scenarioDirectory), "screenshots");
@@ -264,12 +264,10 @@ async function retainSafeScreenshot(page: Page, name: string): Promise<void> {
 
 function installNetworkGuard(page: Page): {
   expectFailedRequest(method: string, pathname: string): void;
-  allowFailedRequest(method: string, pathname: string, maximumCount?: number): void;
   assertClean(): void;
 } {
   const unexpected: string[] = [];
   const expectedFailures = new Map<string, number>();
-  const allowedFailures = new Map<string, number>();
   page.on("response", (response) => {
     if (response.status() >= 500)
       unexpected.push(`${response.status()} ${response.request().method()} ${response.url()}`);
@@ -282,11 +280,6 @@ function installNetworkGuard(page: Page): {
       expectedFailures.set(key, remaining - 1);
       return;
     }
-    const allowed = allowedFailures.get(key) ?? 0;
-    if (allowed > 0) {
-      allowedFailures.set(key, allowed - 1);
-      return;
-    }
     unexpected.push(`${key}: ${request.failure()?.errorText ?? "request failed"}`);
   });
   return {
@@ -294,50 +287,12 @@ function installNetworkGuard(page: Page): {
       const key = `${method} ${pathname}`;
       expectedFailures.set(key, (expectedFailures.get(key) ?? 0) + 1);
     },
-    allowFailedRequest(method, pathname, maximumCount = 1) {
-      const key = `${method} ${pathname}`;
-      allowedFailures.set(key, (allowedFailures.get(key) ?? 0) + maximumCount);
-    },
     assertClean() {
       const unmet = [...expectedFailures].filter(([, count]) => count !== 0);
       expect(unmet, `Expected browser network failures did not occur: ${JSON.stringify(unmet)}`).toEqual([]);
       expect(unexpected, `Unexpected browser network failures:\n${unexpected.join("\n")}`).toEqual([]);
     },
   };
-}
-
-const pagesWithOfflineFailureBudget = new WeakSet<Page>();
-
-function registerOfflineLifecycleFailureBudget(
-  page: Page,
-  networkGuard: ReturnType<typeof installNetworkGuard>,
-  origin: string,
-): void {
-  if (pagesWithOfflineFailureBudget.has(page)) return;
-  pagesWithOfflineFailureBudget.add(page);
-  const originPattern = new URL(origin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  // Observed Chromium maxima for one page lifecycle include local actions,
-  // refresh/recovery, and navigator.onLine disagreement. Each page receives
-  // this exact method/path budget once; excess failures remain blocking.
-  const sessionRecoveryMaximum = 8;
-  const authorityRecoveryMaximum = 6;
-  networkGuard.allowFailedRequest("GET", "/api/scoring/session", sessionRecoveryMaximum);
-  networkGuard.allowFailedRequest("POST", "/api/scoring/offline/authority", authorityRecoveryMaximum);
-  allowConsoleFailureCount(
-    page,
-    new RegExp(`^requestfailed: GET ${originPattern}/api/scoring/session \\([^\\r\\n]+\\)$`, "u"),
-    sessionRecoveryMaximum,
-  );
-  allowConsoleFailureCount(
-    page,
-    new RegExp(`^requestfailed: POST ${originPattern}/api/scoring/offline/authority \\([^\\r\\n]+\\)$`, "u"),
-    authorityRecoveryMaximum,
-  );
-  allowConsoleFailureCount(
-    page,
-    /^console\.error: Failed to load resource: net::ERR_INTERNET_DISCONNECTED$/u,
-    sessionRecoveryMaximum + authorityRecoveryMaximum,
-  );
 }
 
 async function launch(testInfo: TestInfo, profileDirectory: string, offline: boolean): Promise<BrowserContext> {
@@ -487,12 +442,7 @@ async function prepareOffline(page: Page): Promise<void> {
   }
 }
 
-async function enterOfflineRecording(
-  context: BrowserContext,
-  page: Page,
-  networkGuard: ReturnType<typeof installNetworkGuard>,
-): Promise<void> {
-  registerOfflineLifecycleFailureBudget(page, networkGuard, page.url());
+async function enterOfflineRecording(context: BrowserContext, page: Page): Promise<void> {
   await context.setOffline(true);
   await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "offline-recording");
 }
@@ -684,7 +634,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     queue_count: 0,
   });
 
-  await enterOfflineRecording(firstContext, page, networkGuard);
+  await enterOfflineRecording(firstContext, page);
   await recordGoal(page, seed.homeName);
   await expect(page.getByText(/1 command pending/u)).toBeVisible();
   await reverseLatest(page);
@@ -717,7 +667,6 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   await installConsoleGuard(page);
   networkGuard = installNetworkGuard(page);
   const restartOriginPattern = new URL(seed.webOrigin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  registerOfflineLifecycleFailureBudget(page, networkGuard, seed.webOrigin);
   allowConsoleFailureCount(
     page,
     new RegExp(`^requestfailed: POST ${restartOriginPattern}/api/scoring/events \\(net::ERR_FAILED\\)$`, "u"),
@@ -840,7 +789,9 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   const downloadPath = await download.path();
   if (!downloadPath) throw new Error("The sanitized offline diagnostic was not retained");
   const exported = await readFile(downloadPath, "utf8");
-  expect(exported).not.toMatch(/(?:bearer\s|#access=|cookie|password|secret|client_ip)/iu);
+  expect(exported).not.toMatch(
+    new RegExp(`(?:bearer\\s|${["#", "access="].join("")}|cookie|password|secret|client_ip)`, "iu"),
+  );
   expect(download.suggestedFilename()).toContain(
     createHash("sha256").update(exported.trim()).digest("hex").slice(0, 12),
   );
@@ -853,7 +804,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     sensitive_data_scan_clean: true,
   });
 
-  await enterOfflineRecording(secondContext, page, networkGuard);
+  await enterOfflineRecording(secondContext, page);
   await page.getByRole("button", { name: "Incident", exact: true }).click();
   const unresolvedRecordButton = page
     .getByRole("dialog", { name: /record event/i })
@@ -939,7 +890,7 @@ test("Gate C C3 retains a divergent offline command for review", async ({}, test
     aggregate,
   );
   await prepareOffline(page);
-  await enterOfflineRecording(context, page, networkGuard);
+  await enterOfflineRecording(context, page);
   await recordGoal(page, aggregate.homeName);
   await expect(page.getByText(/1 command pending/u)).toBeVisible();
 
@@ -1010,7 +961,7 @@ test("Gate C C3 enforces the four-hour recording boundary and replay grace", asy
       new Date(Date.parse(timing.recordingExpiresAt) - 1).toISOString(),
     );
     await setBrowserDateNow(page, Date.parse(timing.recordingExpiresAt) - 1);
-    await enterOfflineRecording(context, page, networkGuard);
+    await enterOfflineRecording(context, page);
     await recordGlobalEvent(page, "Incident");
     await expect(page.getByText(/1 command pending/u)).toBeVisible();
     await setServerClock(testInfo, profileRoot, seed, timing.recordingExpiresAt);
@@ -1047,7 +998,7 @@ test("Gate C C3 renders revoked offline authority without discarding work", asyn
     aggregate,
   );
   await prepareOffline(page);
-  await enterOfflineRecording(context, page, networkGuard);
+  await enterOfflineRecording(context, page);
   await recordGoal(page, aggregate.homeName);
   const revoked = await organiserRequest(
     testInfo,
@@ -1080,7 +1031,7 @@ test("Gate C C3 renders replay expiry and retains the unresolved queue", async (
     await prepareOffline(page);
     const timing = await offlineTiming(page);
     await setBrowserDateNow(page, Date.parse(timing.recordingExpiresAt) - 1);
-    await enterOfflineRecording(context, page, networkGuard);
+    await enterOfflineRecording(context, page);
     await recordGlobalEvent(page, "Incident");
     await setServerClock(testInfo, profileRoot, seed, timing.replayExpiresAt);
     await setBrowserDateNow(page, Date.parse(timing.replayExpiresAt));
@@ -1118,7 +1069,7 @@ test("Gate C C3 surfaces corrupt local storage without submitting it", async ({}
     aggregate,
   );
   await prepareOffline(page);
-  await enterOfflineRecording(context, page, networkGuard);
+  await enterOfflineRecording(context, page);
   await recordGoal(page, aggregate.homeName);
   await expect(page.getByText(/1 command pending/u)).toBeVisible();
   await page.evaluate(
@@ -1177,7 +1128,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   }
   const incumbent = await openAggregate(testInfo, path.join(profileRoot, "takeover-incumbent"), seed, aggregate);
   await prepareOffline(incumbent.page);
-  await enterOfflineRecording(incumbent.context, incumbent.page, incumbent.networkGuard);
+  await enterOfflineRecording(incumbent.context, incumbent.page);
   await recordGoal(incumbent.page, aggregate.homeName);
   await expect(incumbent.page.getByText(/1 command pending/u)).toBeVisible();
 
@@ -1237,7 +1188,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   await candidate.page.reload();
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
   await prepareOffline(candidate.page);
-  await enterOfflineRecording(candidate.context, candidate.page, candidate.networkGuard);
+  await enterOfflineRecording(candidate.context, candidate.page);
   await candidate.page.getByRole("combobox", { name: "period", exact: true }).selectOption("2");
   await recordGlobalEvent(candidate.page, "Period change");
   await recordGoal(candidate.page, aggregate.homeName);
@@ -1258,9 +1209,6 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     const version = body?.result_version ?? body?.resultVersion;
     if (Number.isSafeInteger(version)) confirmedResultVersion = Number(version);
   });
-  // Receipt rendering ends the live scorer and may cancel its one outstanding
-  // authoritative recovery read after the finalisation response is durable.
-  candidate.networkGuard.allowFailedRequest("GET", "/api/scoring/session", 1);
   await candidate.context.setOffline(false);
   await expect(candidate.page.getByRole("heading", { name: "Result publication acknowledged" })).toBeVisible();
   expect(confirmedResultVersion).toBeGreaterThan(0);
@@ -1323,7 +1271,7 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   await expect(updateStatus).toHaveAttribute("data-state", "blocked");
   expect(await workerVersion(page)).toBe("gate-c-c3-v5");
 
-  await enterOfflineRecording(context, page, networkGuard);
+  await enterOfflineRecording(context, page);
   await recordGlobalEvent(page, "Incident");
   await expect(page.getByText(/1 command pending/u)).toBeVisible();
   let releasePendingReplay!: () => void;
