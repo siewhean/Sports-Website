@@ -238,10 +238,10 @@ async function startHttpsProxy(
               const updatedWorker = Buffer.concat(chunks)
                 .toString("utf8")
                 .replace(
-                  "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v4`;",
                   "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;",
+                  "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v6`;",
                 )
-                .replace('const WORKER_VERSION = "gate-c-c3-v4";', 'const WORKER_VERSION = "gate-c-c3-v5";');
+                .replace('const WORKER_VERSION = "gate-c-c3-v5";', 'const WORKER_VERSION = "gate-c-c3-v6";');
               response.writeHead(200, {
                 "cache-control": "no-store",
                 "content-type": "text/javascript; charset=utf-8",
@@ -876,7 +876,7 @@ async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<
         authorization.resume_hash_length === 32 &&
         authorization.device_hash_length === 32 &&
         authorization.indexeddb_schema_version === 1 &&
-        authorization.service_worker_version === "gate-c-c3-v4" &&
+        authorization.service_worker_version === "gate-c-c3-v5" &&
         authorization.recording_window_seconds >= 1 &&
         authorization.recording_window_seconds <= 4 * 60 * 60 &&
         authorization.replay_grace_seconds >= 0 &&
@@ -1424,7 +1424,15 @@ async function main(): Promise<void> {
       GATE_C_C2_BROWSER_RECEIPT: path.join(temp, "playwright-output", "c2-browser-receipt.json"),
       GATE_C_C2_SEMANTIC_RECEIPT: path.join(temp, "playwright-output", "c2-semantic-receipt.json"),
       ...(c3ScenarioDirectory ? { GATE_C_C3_SCENARIO_DIRECTORY: c3ScenarioDirectory } : {}),
-      ...(evidenceScope === "gate-c-c3" ? { GATE_C_C3_SOURCE_SHA: sourceSha } : {}),
+      ...(evidenceScope === "gate-c-c3"
+        ? {
+            GATE_C_C3_SOURCE_SHA: sourceSha,
+            // Playwright's automatic AI error context can snapshot the one-time
+            // access fragment from navigation history. C3 retains only explicit
+            // post-exchange, secret-scanned evidence.
+            PLAYWRIGHT_NO_COPY_PROMPT: "1",
+          }
+        : {}),
       SCORING_SESSION_SEAL_KEY: Buffer.alloc(32, 23).toString("base64url"),
     };
     delete runtimeEnv.MATCHDAY_PHASE2_DATA_MODE;
@@ -1640,7 +1648,7 @@ async function main(): Promise<void> {
               .digest("hex"),
             browser_version: process.env.GATE_C_C3_BROWSER_VERSION ?? "",
             indexeddb_schema_version: 1,
-            service_worker_version: "gate-c-c3-v4",
+            service_worker_version: "gate-c-c3-v5",
             scenarios: c3ScenarioReceipts,
           }
         : {}),

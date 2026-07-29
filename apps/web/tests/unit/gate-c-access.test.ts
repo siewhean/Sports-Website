@@ -149,7 +149,7 @@ describe("Gate C access source guards", () => {
     expect(browserSource).not.toContain("incumbentPage.reload()");
   });
 
-  it("invalidates session refreshes before authoritative scoring mutations", async () => {
+  it("invalidates ordinary refreshes and drains a terminal refresh before authoritative mutations", async () => {
     const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
     expect(source).toContain("mutationInFlightRef.current > 0");
     for (const [handler, mutation] of [
@@ -157,7 +157,6 @@ describe("Gate C access source guards", () => {
       ["const startScoring = async () =>", "await port.appendEvent"],
       ["const recordAction = async", "await port.appendEvent"],
       ["const reverseAction = async", "await port.appendEvent"],
-      ["const finalize = async () =>", "await port.finalizeResult"],
     ] as const) {
       const handlerIndex = source.indexOf(handler);
       const invalidationIndex = source.indexOf("sessionRefreshFenceRef.current.cancel()", handlerIndex);
@@ -166,6 +165,17 @@ describe("Gate C access source guards", () => {
       expect(invalidationIndex).toBeGreaterThan(handlerIndex);
       expect(mutationIndex).toBeGreaterThan(invalidationIndex);
     }
+    const finaliseHandlerIndex = source.indexOf("const finalize = async () =>");
+    const finaliseCounterIndex = source.indexOf("mutationInFlightRef.current += 1", finaliseHandlerIndex);
+    const finaliseDrainIndex = source.indexOf(
+      "await sessionRefreshFenceRef.current.waitForIdle()",
+      finaliseHandlerIndex,
+    );
+    const finaliseMutationIndex = source.indexOf("await port.finalizeResult", finaliseHandlerIndex);
+    expect(finaliseHandlerIndex).toBeGreaterThan(-1);
+    expect(finaliseCounterIndex).toBeGreaterThan(finaliseHandlerIndex);
+    expect(finaliseDrainIndex).toBeGreaterThan(finaliseCounterIndex);
+    expect(finaliseMutationIndex).toBeGreaterThan(finaliseDrainIndex);
     expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(5);
     expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(5);
   });

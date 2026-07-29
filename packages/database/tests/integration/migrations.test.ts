@@ -122,7 +122,10 @@ describe("foundation migrations", () => {
         "0029_gate_c_five_sport_scoring.sql",
         "0030_gate_c_published_schedule_participants.sql",
         "0031_gate_c_participant_snapshot_fencing.sql",
+        "0032_gate_c_offline_replay.sql",
       ] as const;
+      const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
+      const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
           const migrationPath = path.join(copiedDirectory, name);
@@ -315,17 +318,21 @@ describe("foundation migrations", () => {
           VALUES(${siblingDivision},${competition},'Masters',16)`;
         await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
           VALUES(${siblingEntry},${siblingDivision},'Sibling division entry',1,'placeholder','confirmed')`;
-        const participantFenceMigration = forwardMigrations.at(-1);
+        const participantFenceMigration = forwardMigrations.find(({ name }) => name === participantFenceMigrationName);
+        const offlineReplayMigration = forwardMigrations.find(({ name }) => name === offlineReplayMigrationName);
         if (!participantFenceMigration) throw new Error("Expected participant-fencing migration");
+        if (!offlineReplayMigration) throw new Error("Expected offline-replay migration");
         await Promise.all(
-          forwardMigrations.slice(0, -1).map(({ migrationPath, source }) => writeFile(migrationPath, source)),
+          forwardMigrations
+            .filter(({ name }) => name !== participantFenceMigrationName && name !== offlineReplayMigrationName)
+            .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
         const upgradedBeforeParticipantFence = await migrateDatabase({
           databaseUrl: config.databaseUrl,
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -1));
+        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -2));
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -346,6 +353,13 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgraded.applied).toEqual(["0031_gate_c_participant_snapshot_fencing.sql"]);
+        await writeFile(offlineReplayMigration.migrationPath, offlineReplayMigration.source);
+        const upgradedWithReplay = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithReplay.applied).toEqual(["0032_gate_c_offline_replay.sql"]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT

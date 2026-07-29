@@ -15,6 +15,15 @@ import {
 } from "@/lib/scoring-service-worker";
 
 type ServiceWorkerRegistrar = Pick<ServiceWorkerContainer, "register">;
+type NavigatorWithOptionalServiceWorker = {
+  readonly serviceWorker?: ServiceWorkerContainer;
+};
+
+export function availableServiceWorkerContainer(
+  navigatorLike: NavigatorWithOptionalServiceWorker,
+): ServiceWorkerContainer | null {
+  return navigatorLike.serviceWorker ?? null;
+}
 
 function nodeContainsScoringSafetyState(node: Node): boolean {
   if (!(node instanceof Element)) return false;
@@ -30,12 +39,15 @@ export function mutationAffectsScoringWorkerSafety(mutation: MutationRecord): bo
   return [...mutation.addedNodes, ...mutation.removedNodes].some(nodeContainsScoringSafetyState);
 }
 
-export async function registerServiceWorker(registrar: ServiceWorkerRegistrar): Promise<void> {
+export async function registerServiceWorker(
+  registrar: ServiceWorkerRegistrar,
+): Promise<globalThis.ServiceWorkerRegistration | null> {
   try {
-    await registrar.register("/sw.js", { scope: "/" });
+    return (await registrar.register("/sw.js", { scope: "/" })) ?? null;
   } catch {
     // Offline support is progressive enhancement. Navigation or teardown may
     // cancel registration, and that rejection must not escape as a page error.
+    return null;
   }
 }
 
@@ -43,7 +55,8 @@ export function ServiceWorkerRegistration() {
   const [updateState, setUpdateState] = useState<ScoringWorkerUpdateState>(scoringWorkerUpdateStates.idle);
 
   useEffect(() => {
-    if (process.env.NODE_ENV !== "production" || !("serviceWorker" in navigator)) return;
+    const serviceWorker = availableServiceWorkerContainer(navigator);
+    if (process.env.NODE_ENV !== "production" || !serviceWorker) return;
     let disposed = false;
     let retryTimer: number | null = null;
     let observer: MutationObserver | null = null;
@@ -64,7 +77,7 @@ export function ServiceWorkerRegistration() {
     };
     const invalidateAndReleaseSafetyFreeze = (requestId: string) => {
       safetyEpoch += 1;
-      navigator.serviceWorker.controller?.postMessage({
+      serviceWorker.controller?.postMessage({
         type: "MATCHDAY_SCORING_WORKER_SAFETY_INVALIDATED",
         protocolVersion: scoringWorkerUpdateProtocolVersion,
         epoch: safetyEpoch,
@@ -158,7 +171,7 @@ export function ServiceWorkerRegistration() {
     };
     const transitionChanged = () => {
       safetyEpoch += 1;
-      navigator.serviceWorker.controller?.postMessage({
+      serviceWorker.controller?.postMessage({
         type: "MATCHDAY_SCORING_WORKER_SAFETY_INVALIDATED",
         protocolVersion: scoringWorkerUpdateProtocolVersion,
         epoch: safetyEpoch,
@@ -167,8 +180,8 @@ export function ServiceWorkerRegistration() {
       scheduleUpdateCheck();
     };
 
-    navigator.serviceWorker.addEventListener("message", answerSafetyQuery);
-    navigator.serviceWorker.addEventListener("controllerchange", controllerChanged);
+    serviceWorker.addEventListener("message", answerSafetyQuery);
+    serviceWorker.addEventListener("controllerchange", controllerChanged);
     window.addEventListener(scoringWorkerSafetyChangedEvent, transitionChanged);
     document.addEventListener("click", blockInteractionWhileFrozen, true);
     document.addEventListener("keydown", blockInteractionWhileFrozen, true);
@@ -177,7 +190,7 @@ export function ServiceWorkerRegistration() {
     observer = new MutationObserver((mutations) => {
       if (!mutations.some(mutationAffectsScoringWorkerSafety)) return;
       safetyEpoch += 1;
-      navigator.serviceWorker.controller?.postMessage({
+      serviceWorker.controller?.postMessage({
         type: "MATCHDAY_SCORING_WORKER_SAFETY_INVALIDATED",
         protocolVersion: scoringWorkerUpdateProtocolVersion,
         epoch: safetyEpoch,
@@ -194,26 +207,23 @@ export function ServiceWorkerRegistration() {
       childList: true,
       subtree: true,
     });
-    void navigator.serviceWorker.register("/sw.js", { scope: "/" }).then(
-      (nextRegistration) => {
-        if (disposed) return;
-        registration = nextRegistration;
-        const watchInstallingWorker = () => {
-          const installing = nextRegistration.installing;
-          if (!installing || installingStateListeners.has(installing)) return;
-          const stateChanged = () => {
-            if (installing.state === "installed" && nextRegistration.waiting) scheduleUpdateCheck();
-          };
-          installingStateListeners.set(installing, stateChanged);
-          installing.addEventListener("statechange", stateChanged);
+    void registerServiceWorker(serviceWorker).then((nextRegistration) => {
+      if (disposed || !nextRegistration) return;
+      registration = nextRegistration;
+      const watchInstallingWorker = () => {
+        const installing = nextRegistration.installing;
+        if (!installing || installingStateListeners.has(installing)) return;
+        const stateChanged = () => {
+          if (installing.state === "installed" && nextRegistration.waiting) scheduleUpdateCheck();
         };
-        registrationUpdateFound = watchInstallingWorker;
-        nextRegistration.addEventListener("updatefound", watchInstallingWorker);
-        watchInstallingWorker();
-        if (nextRegistration.waiting) scheduleUpdateCheck();
-      },
-      () => undefined,
-    );
+        installingStateListeners.set(installing, stateChanged);
+        installing.addEventListener("statechange", stateChanged);
+      };
+      registrationUpdateFound = watchInstallingWorker;
+      nextRegistration.addEventListener("updatefound", watchInstallingWorker);
+      watchInstallingWorker();
+      if (nextRegistration.waiting) scheduleUpdateCheck();
+    });
 
     return () => {
       disposed = true;
@@ -234,8 +244,8 @@ export function ServiceWorkerRegistration() {
       for (const [worker, listener] of installingStateListeners) {
         worker.removeEventListener("statechange", listener);
       }
-      navigator.serviceWorker.removeEventListener("message", answerSafetyQuery);
-      navigator.serviceWorker.removeEventListener("controllerchange", controllerChanged);
+      serviceWorker.removeEventListener("message", answerSafetyQuery);
+      serviceWorker.removeEventListener("controllerchange", controllerChanged);
       window.removeEventListener(scoringWorkerSafetyChangedEvent, transitionChanged);
     };
   }, []);

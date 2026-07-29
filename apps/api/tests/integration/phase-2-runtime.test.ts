@@ -691,7 +691,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         lastReportedLocalSequence: 0,
         queueFingerprint: null,
         indexeddbSchemaVersion: 1,
-        serviceWorkerVersion: "gate-c-c3-v4",
+        serviceWorkerVersion: "gate-c-c3-v5",
       },
       randomUUID(),
     );
@@ -1319,7 +1319,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
     const transferredStaleEvidence = await client<
       {
-        after_state: string;
+        after_state: string | Record<string, unknown>;
         metadata: string | Record<string, unknown>;
       }[]
     >`
@@ -1328,7 +1328,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         AND action='scoring_event.stale_submission_rejected'
     `;
     expect({
-      after_state: JSON.parse(transferredStaleEvidence[0]?.after_state ?? "{}"),
+      after_state:
+        typeof transferredStaleEvidence[0]?.after_state === "string"
+          ? JSON.parse(transferredStaleEvidence[0].after_state)
+          : transferredStaleEvidence[0]?.after_state,
       metadata:
         typeof transferredStaleEvidence[0]?.metadata === "string"
           ? JSON.parse(transferredStaleEvidence[0].metadata)

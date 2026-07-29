@@ -184,6 +184,7 @@ export type ScoringScoreStateView = {
 };
 
 export type ScoringSessionView = {
+  principalId: string;
   competitionSlug: string;
   sportId: SportId;
   sportPackVersion: string;
@@ -403,6 +404,8 @@ export const phase2Copy = {
   offlineReplayComplete: "All pending scoring events were acknowledged by the server.",
   offlineReplayDeferred: "Pending scoring remains stored on this device. Replay will resume after access is confirmed.",
   offlinePreparationError: "Offline scoring could not be prepared on this device.",
+  offlinePreparationRetry:
+    "Offline authority was rolled back safely. Check browser storage, then retry preparation while online.",
   offlineDiagnosticError: "The offline diagnostic could not be created safely.",
   offlineMatchUnauthorized: "This match was not authorised for offline scoring.",
   offlineEventStorageError: "The scoring event could not be stored safely on this device.",
@@ -601,6 +604,7 @@ export const phase2Machine = {
   offlinePendingFinalisation: "pending-finalisation" as const,
   offlineStorageError: "storage-error" as const,
   offlinePrepareIntent: "prepare" as const,
+  offlinePreparationRollbackIntent: "preparation_rollback" as const,
   offlineResumeIntent: "resume" as const,
   unavailable: "unavailable" as const,
   anchorElement: "a" as const,

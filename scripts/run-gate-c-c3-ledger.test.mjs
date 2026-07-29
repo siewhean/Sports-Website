@@ -50,7 +50,7 @@ function projectReceipt(projectName, isolation) {
     browser_profile_sha256: isolation("profile"),
     browser_version: "1",
     indexeddb_schema_version: 1,
-    service_worker_version: "matchday-scoring-shell-v4",
+    service_worker_version: "matchday-scoring-shell-v5",
     screenshot_paths: [...gateCC3RequiredScreenshotPaths],
     scenarios,
     artifact_hashes: [
@@ -178,12 +178,22 @@ test("Gate C C3 discovery requires all five projects and an exact total", () => 
 
 test("Gate C C3 browser harness cannot re-enable automatic credential-bearing captures", async () => {
   const config = await readFile("apps/web/playwright.gate-c-c3.config.ts", "utf8");
+  const genericConfig = await readFile("apps/web/playwright.config.ts", "utf8");
   const journey = await readFile("apps/web/tests/gate-c-c3-real.spec.ts", "utf8");
+  const runner = await readFile("apps/api/scripts/run-phase-2-real-e2e.ts", "utf8");
+  assert.match(genericConfig, /"\*\*\/gate-c-c3-real\.spec\.ts"/u);
+  assert.match(config, /testMatch:\s*\/gate-c-c3-real\\\.spec\\\.ts\//u);
+  for (const project of gateCC3Projects) assert.match(config, new RegExp(`name:\\s*"${project}"`, "u"));
   assert.match(config, /trace:\s*"off"/u);
   assert.match(config, /screenshot:\s*"off"/u);
   assert.match(config, /video:\s*"off"/u);
   assert.doesNotMatch(config, /retain-on-failure|only-on-failure/u);
   assert.doesNotMatch(journey, /page\.goto\([^)]*#access=/u);
+  assert.doesNotMatch(journey, /sessionRecoveryMaximum|authorityRecoveryMaximum/u);
+  assert.match(journey, /allowFailedRequest\("GET", "\/api\/scoring\/session", "net::ERR_INTERNET_DISCONNECTED", 1\)/u);
+  assert.match(journey, /allowColdOfflineRestartProbes\(page, networkGuard, seed\.webOrigin\)/u);
+  assert.doesNotMatch(journey, /net::ERR_INTERNET_DISCONNECTED", [2-9]\d*\)/u);
+  assert.match(runner, /PLAYWRIGHT_NO_COPY_PROMPT:\s*"1"/u);
 });
 
 test("Gate C C3 run receipt rejects wrong SHA, skips, and incomplete project matrices", () => {
@@ -285,7 +295,10 @@ test("Gate C C3 evidence rejects secret-like fields and values recursively", () 
     /Secret-like evidence value/,
   );
   assert.throws(
-    () => assertNoGateCC3Secrets({ note: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzY29yZXIifQ.signature123" }),
+    () =>
+      assertNoGateCC3Secrets({
+        note: ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiJzY29yZXIifQ", "signature123"].join("."),
+      }),
     /Secret-like evidence value/,
   );
   assert.throws(() => assertNoGateCC3Secrets({ note: "-----BEGIN PRIVATE KEY-----" }), /Secret-like evidence value/);

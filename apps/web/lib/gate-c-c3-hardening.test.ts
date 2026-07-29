@@ -21,6 +21,7 @@ const now = Date.parse("2026-07-29T00:00:00.000Z");
 function matchPackage(): GateCOfflineMatchPackage {
   return {
     schema_version: 1,
+    principal_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     authorization_id: authorizationId,
     competition_id: competitionId,
     competition_slug: "gate-c-c3-hardening",
@@ -83,6 +84,7 @@ function replayRepository() {
   const conflicts: OfflineConflict[] = [];
   const transition = vi.fn();
   const repository: OfflineScoringRepository = {
+    bindPrincipal: vi.fn(),
     saveMatchPackage: vi.fn(),
     transitionMatchPackageStatus: transition,
     getMatchPackage: vi.fn(async () => storedPackage),
@@ -204,21 +206,36 @@ describe("Gate C C3 hardening", () => {
       acknowledged: 0,
       error: { code: "authority_transferred", category: "conflict" },
     });
-    expect(transition).toHaveBeenCalledWith(authorizationId, "transferred");
+    expect(transition).toHaveBeenCalledWith(
+      authorizationId,
+      "transferred",
+      expect.objectContaining({ epoch: 1, owner_id: expect.any(String) }),
+    );
     expect(conflicts).toMatchObject([{ code: "authority_transferred", local_sequence: 1 }]);
   });
 
   it("keeps append-only migrations and cached shell verification fail-closed", async () => {
-    const migration = await readFile("../../packages/database/migrations/0032_gate_c_offline_replay.sql", "utf8");
-    const worker = await readFile("public/sw.js", "utf8");
-    const scorePage = await readFile("app/score/page.tsx", "utf8");
+    const migration = await readFile(
+      new URL("../../../packages/database/migrations/0032_gate_c_offline_replay.sql", import.meta.url),
+      "utf8",
+    );
+    const worker = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+    const scorePage = await readFile(new URL("../app/score/page.tsx", import.meta.url), "utf8");
+    const backupVerifier = await readFile(
+      new URL("../../../scripts/verify-backup-restore.sh", import.meta.url),
+      "utf8",
+    );
 
     expect(migration).not.toContain("DISABLE TRIGGER audit_events_no_update");
     expect(migration).not.toMatch(/UPDATE\s+audit_events/iu);
     expect(migration).not.toMatch(/UPDATE\s+outbox_events/iu);
     expect(worker).toContain("verifiedScoringShellResponse");
-    expect(worker).toContain("response.headers.has(\"set-cookie\")");
+    expect(worker).toContain('response.headers.has("set-cookie")');
     expect(worker).toContain("SCORING_SHELL_MARKER");
     expect(scorePage).toContain('data-offline-scoring-shell="v1"');
+    expect(backupVerifier.indexOf("pnpm --filter @matchday/config build")).toBeGreaterThanOrEqual(0);
+    expect(backupVerifier.indexOf("pnpm --filter @matchday/config build")).toBeLessThan(
+      backupVerifier.indexOf("pnpm db:migrate"),
+    );
   });
 });

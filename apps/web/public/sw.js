@@ -1,10 +1,12 @@
 const FOUNDATION_CACHE_NAME = "matchday-foundation-v3";
 const SCORING_CACHE_PREFIX = "matchday-scoring-shell-";
-const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v4`;
+const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;
 const SCORING_SHELL_PATH = "/score";
 const SCORING_SHELL_MARKER = 'data-offline-scoring-shell="v1"';
-const WORKER_VERSION = "gate-c-c3-v4";
+const WORKER_VERSION = "gate-c-c3-v5";
 const UPDATE_PROTOCOL_VERSION = 1;
+const PREPARATION_PROTOCOL_VERSION = 1;
+const PREPARATION_CAPABILITIES = Object.freeze(["offline-scoring-shell-cache-v1"]);
 const CLIENT_SAFETY_TIMEOUT_MS = 5_000;
 const PUBLIC_DOCUMENT_PATHS = new Set(["/", "/competitions/singapore-open"]);
 const pendingActivationChecks = new Map();
@@ -34,6 +36,29 @@ function isImmutableBuildAsset(url, destination) {
     ["style", "script", "font"].includes(destination) &&
     url.pathname.startsWith("/_next/static/")
   );
+}
+
+function requiredScoringAssetRequests(candidates) {
+  if (!Array.isArray(candidates)) throw new Error("The offline scoring asset manifest is invalid.");
+  const requests = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") throw new Error("The offline scoring asset manifest is invalid.");
+    const url = new URL(candidate, self.location.origin);
+    if (url.origin !== self.location.origin || !url.pathname.startsWith("/_next/static/")) {
+      throw new Error("The offline scoring asset manifest is invalid.");
+    }
+    if (seen.has(url.href)) continue;
+    seen.add(url.href);
+    requests.push(new Request(url.href, { credentials: "same-origin" }));
+  }
+  return requests;
+}
+
+function scoringStorageError() {
+  const error = new Error("The offline scoring shell could not be retained.");
+  error.code = "OFFLINE_SHELL_STORAGE_UNAVAILABLE";
+  return error;
 }
 
 function offlineResponse() {
@@ -293,35 +318,70 @@ self.addEventListener("message", (event) => {
     return;
   }
   if (message.type !== "MATCHDAY_PREPARE_OFFLINE_SCORING") return;
-  const assets = Array.isArray(message.assets)
-    ? message.assets.filter((candidate) => {
-        if (typeof candidate !== "string") return false;
-        try {
-          const url = new URL(candidate, self.location.origin);
-          return url.origin === self.location.origin && url.pathname.startsWith("/_next/static/");
-        } catch {
-          return false;
-        }
-      })
+  const requiredCapabilities = Array.isArray(message.requiredCapabilities)
+    ? message.requiredCapabilities.filter((capability) => typeof capability === "string")
     : [];
+  if (
+    message.protocolVersion !== PREPARATION_PROTOCOL_VERSION ||
+    requiredCapabilities.length !== message.requiredCapabilities?.length ||
+    requiredCapabilities.some((capability) => !PREPARATION_CAPABILITIES.includes(capability))
+  ) {
+    event.ports[0]?.postMessage({
+      ok: false,
+      version: WORKER_VERSION,
+      protocolVersion: PREPARATION_PROTOCOL_VERSION,
+      capabilities: PREPARATION_CAPABILITIES,
+      code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
+    });
+    return;
+  }
   event.waitUntil(
     caches
       .open(SCORING_CACHE_NAME)
       .then(async (cache) => {
-        const networkShell = await fetch(SCORING_SHELL_PATH, { credentials: "same-origin", cache: "no-store" });
-        const shell = await verifiedScoringShellResponse(networkShell);
+        const assetRequests = requiredScoringAssetRequests(message.assets);
+        const shellResponse = await fetch(SCORING_SHELL_PATH, { credentials: "same-origin", cache: "no-store" });
+        const shell = await verifiedScoringShellResponse(shellResponse);
         if (!shell) throw new Error("The offline scoring shell failed its privacy verification.");
-        await cache.put(SCORING_SHELL_PATH, shell);
-        await Promise.all(
-          assets.map(async (asset) => {
-            const response = await fetch(asset, { credentials: "same-origin" });
-            if (response.ok) await cache.put(asset, response);
+        const shellRequest = new Request(new URL(SCORING_SHELL_PATH, self.location.origin).href, {
+          credentials: "same-origin",
+        });
+        const assetResponses = await Promise.all(
+          assetRequests.map(async (assetRequest) => {
+            const response = await fetch(assetRequest, { credentials: "same-origin", cache: "no-store" });
+            if (!response.ok) throw new Error("A required offline scoring asset could not be fetched.");
+            return response;
           }),
         );
-        event.ports[0]?.postMessage({ ok: true, version: WORKER_VERSION });
+        await Promise.all([
+          cache.put(shellRequest, shell),
+          ...assetRequests.map((assetRequest, index) => cache.put(assetRequest, assetResponses[index])),
+        ]);
+        const retained = await Promise.all([
+          cache.match(shellRequest, { ignoreVary: true }),
+          ...assetRequests.map((assetRequest) => cache.match(assetRequest, { ignoreVary: true })),
+        ]);
+        if (retained.some((response) => !response?.ok)) throw scoringStorageError();
+        event.ports[0]?.postMessage({
+          ok: true,
+          version: WORKER_VERSION,
+          protocolVersion: PREPARATION_PROTOCOL_VERSION,
+          capabilities: PREPARATION_CAPABILITIES,
+        });
       })
-      .catch(() => {
-        event.ports[0]?.postMessage({ ok: false, version: WORKER_VERSION });
+      .catch((error) => {
+        const code =
+          error && typeof error === "object" && error.code === "OFFLINE_SHELL_STORAGE_UNAVAILABLE"
+            ? error.code
+            : "OFFLINE_SHELL_PREPARATION_FAILED";
+        event.ports[0]?.postMessage({
+          ok: false,
+          version: WORKER_VERSION,
+          protocolVersion: PREPARATION_PROTOCOL_VERSION,
+          capabilities: PREPARATION_CAPABILITIES,
+          code,
+          error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        });
       }),
   );
 });
@@ -339,9 +399,13 @@ self.addEventListener("fetch", (event) => {
     const url = new URL(request.url);
     if (url.pathname === SCORING_SHELL_PATH) {
       event.respondWith(
-        fetch(request).catch(async () => {
-          const cached = await caches.open(SCORING_CACHE_NAME).then((cache) => cache.match(SCORING_SHELL_PATH));
-          return cached || offlineResponse();
+        caches.open(SCORING_CACHE_NAME).then(async (cache) => {
+          const shellRequest = new Request(new URL(SCORING_SHELL_PATH, self.location.origin).href, {
+            credentials: "same-origin",
+          });
+          const cached = await cache.match(shellRequest, { ignoreVary: true });
+          if (cached) return cached;
+          return fetch(request).catch(() => offlineResponse());
         }),
       );
       return;

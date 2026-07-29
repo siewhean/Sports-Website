@@ -20,6 +20,7 @@ const eventId = "00000000-0000-4000-8000-000000000103";
 
 function sessionView(overrides: Partial<ScoringSessionView> = {}): ScoringSessionView {
   return {
+    principalId: "a".repeat(64),
     competitionSlug: "singapore-open",
     sportId: "canoe_polo",
     sportPackVersion: SPORT_PACKS.canoe_polo.version,
@@ -593,6 +594,29 @@ describe("phase 2 browser scoring transport", () => {
 
     expect(appendReceipt).toEqual({ sequence: 5, syncState: "acknowledged" });
     expect(committed).toEqual([]);
+  });
+
+  it("lets a terminal mutation drain an active heartbeat without aborting it", async () => {
+    let resolveRefresh: (value: ScoringSessionView) => void = () => undefined;
+    const refresh = new Promise<ScoringSessionView>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const fence = new LatestRequestFence();
+    const run = fence.run(
+      () => refresh,
+      () => undefined,
+    );
+    let idle = false;
+    const wait = fence.waitForIdle().then(() => {
+      idle = true;
+    });
+
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    resolveRefresh(sessionView({ generation: 6 }));
+    await Promise.all([run, wait]);
+
+    expect(idle).toBe(true);
   });
 
   it("removes recovered cards that have a card reversal event", async () => {

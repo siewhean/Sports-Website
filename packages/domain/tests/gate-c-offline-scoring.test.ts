@@ -16,6 +16,7 @@ import type {
 import { describe, expect, it } from "vitest";
 
 const matchPackage: OfflineMatchAuthorization = {
+  principal_id: "a".repeat(64),
   authorization_id: "10000000-0000-4000-8000-000000000001",
   competition_id: "20000000-0000-4000-8000-000000000002",
   competition_slug: "offline-cup",

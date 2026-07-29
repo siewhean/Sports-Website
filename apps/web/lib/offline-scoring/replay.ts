@@ -6,7 +6,7 @@ import type {
   GateCOfflineReplayError,
 } from "@matchday/contracts";
 import { canReplayOfflineCommand, resolveOfflineCommandForReplay } from "@matchday/domain";
-import type { OfflineReplayPort, OfflineScoringRepository } from "./types";
+import { OfflineReplayFenceError, type OfflineReplayPort, type OfflineScoringRepository } from "./types";
 
 const LEASE_TTL_MS = 30_000;
 const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
@@ -90,6 +90,7 @@ export class OfflineReplayController {
       LEASE_TTL_MS,
     );
     if (epoch === null) return { status: "busy", acknowledged: 0 };
+    const fence = { owner_id: ownerId, epoch } as const;
 
     let acknowledgedCount = 0;
     try {
@@ -122,7 +123,7 @@ export class OfflineReplayController {
                   ? "pass_expired"
                   : "authority_expired";
           if (matchPackage.status === "active") {
-            await this.dependencies.repository.transitionMatchPackageStatus(authorizationId, "expired");
+            await this.dependencies.repository.transitionMatchPackageStatus(authorizationId, "expired", fence);
           }
           return {
             status: "blocked",
@@ -148,7 +149,7 @@ export class OfflineReplayController {
           resolved = resolveOfflineCommandForReplay(queued, acknowledgements);
         } catch {
           const error = { code: "missing_reversal_target", category: "conflict" } as const;
-          await this.recordBlocked(queued, error);
+          await this.recordBlocked(queued, error, fence);
           return { status: "blocked", acknowledged: acknowledgedCount, error };
         }
 
@@ -168,6 +169,14 @@ export class OfflineReplayController {
           const startedAt = new Date(this.now()).toISOString();
           const receipt = await this.dependencies.port.submit(queued, resolved, signal);
           const completedAt = new Date(this.now()).toISOString();
+          const guardMatchPackage = await this.dependencies.repository.getMatchPackage(authorizationId);
+          if (!guardMatchPackage) {
+            return {
+              status: "blocked",
+              acknowledged: acknowledgedCount,
+              error: { code: "storage_corrupt", category: "storage" },
+            };
+          }
           const responseLeaseRenewed = await this.dependencies.repository.renewReplayLease(
             authorizationId,
             ownerId,
@@ -176,25 +185,35 @@ export class OfflineReplayController {
             LEASE_TTL_MS,
           );
           if (!responseLeaseRenewed) return { status: "busy", acknowledged: acknowledgedCount };
-          await this.dependencies.repository.appendReplayAttempt({
-            authorization_id: authorizationId,
-            local_sequence: queued.local_sequence,
-            attempt,
-            started_at: startedAt,
-            completed_at: completedAt,
-            outcome: receipt.status === "acknowledged" ? "acknowledged" : receipt.status,
-            ...(receipt.status === "acknowledged" ? {} : { error: receipt.error }),
-          });
+          try {
+            await this.dependencies.repository.appendReplayAttempt(
+              {
+                authorization_id: authorizationId,
+                local_sequence: queued.local_sequence,
+                attempt,
+                started_at: startedAt,
+                completed_at: completedAt,
+                outcome: receipt.status === "acknowledged" ? "acknowledged" : receipt.status,
+                ...(receipt.status === "acknowledged" ? {} : { error: receipt.error }),
+              },
+              fence,
+            );
 
-          if (receipt.status === "acknowledged") {
-            await this.dependencies.repository.appendAcknowledgement(receipt.acknowledgement);
-            acknowledgedCount += 1;
-            if (queued.command.kind === "finalisation") {
-              await this.dependencies.repository.transitionMatchPackageStatus(authorizationId, "completed");
-              return { status: "complete", acknowledged: acknowledgedCount };
+            if (receipt.status === "acknowledged") {
+              await this.dependencies.repository.appendAcknowledgement(receipt.acknowledgement, fence);
+              acknowledgedCount += 1;
+              if (queued.command.kind === "finalisation") {
+                await this.dependencies.repository.transitionMatchPackageStatus(authorizationId, "completed", fence);
+                return { status: "complete", acknowledged: acknowledgedCount };
+              }
+              commandAcknowledged = true;
+              break;
             }
-            commandAcknowledged = true;
-            break;
+          } catch (error) {
+            if (error instanceof OfflineReplayFenceError) {
+              return { status: "busy", acknowledged: acknowledgedCount };
+            }
+            throw error;
           }
           if (
             receipt.status === "blocked" &&
@@ -210,12 +229,12 @@ export class OfflineReplayController {
                 code: refreshed,
                 category: refreshed === "authority_transferred" ? "conflict" : "permission",
               };
-              await this.recordBlocked(queued, refreshError);
+              await this.recordBlocked(queued, refreshError, fence);
               return { status: "blocked", acknowledged: acknowledgedCount, error: refreshError };
             }
           }
           if (receipt.status === "blocked") {
-            await this.recordBlocked(queued, receipt.error);
+            await this.recordBlocked(queued, receipt.error, fence);
             return { status: "blocked", acknowledged: acknowledgedCount, error: receipt.error };
           }
           if (!this.isOnline()) return { status: "offline", acknowledged: acknowledgedCount };
@@ -234,12 +253,21 @@ export class OfflineReplayController {
         }
       }
       return { status: "offline", acknowledged: acknowledgedCount };
+    } catch (error) {
+      if (error instanceof OfflineReplayFenceError) {
+        return { status: "busy", acknowledged: acknowledgedCount };
+      }
+      throw error;
     } finally {
       await this.dependencies.repository.releaseReplayLease(authorizationId, ownerId, epoch);
     }
   }
 
-  private async recordBlocked(queued: GateCOfflineQueuedCommand, error: GateCOfflineReplayError): Promise<void> {
+  private async recordBlocked(
+    queued: GateCOfflineQueuedCommand,
+    error: GateCOfflineReplayError,
+    fence?: Readonly<{ owner_id: string; epoch: number }>,
+  ): Promise<void> {
     if (error.code === "network_unavailable" || error.code === "rate_limited" || error.code === "server_unavailable") {
       return;
     }
@@ -254,17 +282,20 @@ export class OfflineReplayController {
             ? "expired"
             : null;
     if (terminalStatus) {
-      await this.dependencies.repository.transitionMatchPackageStatus(queued.authorization_id, terminalStatus);
+      await this.dependencies.repository.transitionMatchPackageStatus(queued.authorization_id, terminalStatus, fence);
     }
-    await this.dependencies.repository.appendConflict({
-      authorization_id: queued.authorization_id,
-      match_id: queued.match_id,
-      local_sequence: queued.local_sequence,
-      client_event_id: queued.command.client_event_id,
-      code: error.code,
-      writer_generation: queued.writer_generation,
-      recorded_at: new Date(this.now()).toISOString(),
-    });
+    await this.dependencies.repository.appendConflict(
+      {
+        authorization_id: queued.authorization_id,
+        match_id: queued.match_id,
+        local_sequence: queued.local_sequence,
+        client_event_id: queued.command.client_event_id,
+        code: error.code,
+        writer_generation: queued.writer_generation,
+        recorded_at: new Date(this.now()).toISOString(),
+      },
+      fence,
+    );
   }
 }
 

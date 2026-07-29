@@ -36,6 +36,11 @@ import {
 } from "@/lib/offline-scoring-coordinator";
 import { ApiOfflineScoringPort, emptyOfflineQueueSummary, offlineQueueSummary } from "@/lib/offline-scoring-port";
 import {
+  clearScoringPrincipalCookie,
+  readScoringPrincipalCookie,
+  retainScoringPrincipalCookie,
+} from "@/lib/offline-scoring-principal";
+import {
   assertScoringWorkerTransitionAllowed,
   guardScoringWorkerTransport,
   isScoringWorkerSafetyFrozen,
@@ -161,6 +166,7 @@ export function PhoneScoring({
   const [pendingSync, setPendingSync] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [offlineState, setOfflineState] = useState<OfflineState>(phase2Machine.offlineOnline);
+  const transportOnlineRef = useRef(true);
   const [offlineAuthorizationId, setOfflineAuthorizationId] = useState<string | null>(null);
   const [offlineRecordingExpiresAt, setOfflineRecordingExpiresAt] = useState<string | null>(null);
   const [offlineReplayExpiresAt, setOfflineReplayExpiresAt] = useState<string | null>(null);
@@ -209,6 +215,7 @@ export function PhoneScoring({
   const editDeviceButtonRef = useRef<HTMLButtonElement>(null);
   const deviceLabelInputRef = useRef<HTMLInputElement>(null);
   const offlineResourcesRef = useRef<OfflineResources | null>(null);
+  const principalIdRef = useRef<string | null>(null);
   const offlineReconnectRef = useRef(new OfflineReconnectSingleFlight());
   const offlineReplayAbortRef = useRef<AbortController | null>(null);
   const componentMountedRef = useRef(false);
@@ -245,9 +252,17 @@ export function PhoneScoring({
                       ? phase2Copy.writerConflict
                       : phase2Copy.readOnly;
 
-  const applySession = useCallback((session: ScoringSessionView | null) => {
+  const applySession = useCallback(async (session: ScoringSessionView | null): Promise<void> => {
     if (!session) return;
     assertScoringWorkerTransitionAllowed();
+    const previousPrincipalId = principalIdRef.current ?? readScoringPrincipalCookie();
+    if (previousPrincipalId && previousPrincipalId !== session.principalId) {
+      sessionRefreshFenceRef.current.cancel();
+      offlineReplayAbortRef.current?.abort();
+    }
+    await offlineResourcesRef.current?.repository.bindPrincipal(session.principalId);
+    principalIdRef.current = session.principalId;
+    retainScoringPrincipalCookie(session.principalId, session.expiresAt);
     const previousState = writerStateRef.current;
     setCompetitionSlug(session.competitionSlug);
     setScorecardDefinition(buildFiveSportScorecardDefinition(session.sportId, session.sportSettings));
@@ -300,6 +315,7 @@ export function PhoneScoring({
     if (offlineResourcesRef.current) return offlineResourcesRef.current;
     const device = await getScoringDeviceIdentity();
     const repository = new IndexedDbOfflineScoringRepository();
+    if (principalIdRef.current) await repository.bindPrincipal(principalIdRef.current);
     const offlinePort = guardScoringWorkerTransport(new ApiOfflineScoringPort(device.id, 1, scoringWorkerVersion), {
       allowDuringFreeze: scoringWorkerFreezeAllowedOfflineMethods,
     });
@@ -313,8 +329,8 @@ export function PhoneScoring({
   }, []);
 
   const applyOfflineProjection = useCallback(
-    (session: ScoringSessionView, authorizationId: string, count: number, state: OfflineState) => {
-      applySession(session);
+    async (session: ScoringSessionView, authorizationId: string, count: number, state: OfflineState) => {
+      await applySession(session);
       setOfflineAuthorizationId(authorizationId);
       setPendingCount(count);
       setPendingSync(count > 0);
@@ -330,14 +346,30 @@ export function PhoneScoring({
         if (mode !== phase2Machine.scoringApiMode || session.mode !== "writer" || session.readOnly) return;
         setOfflineState(phase2Machine.offlinePreparing);
         const resources = await offlineResources();
+        await resources.repository.bindPrincipal(session.principalId);
         const summary = await emptyOfflineQueueSummary(session.matchId, session.throughSequence);
         const result = await resources.port.establishAuthority(summary, phase2Machine.offlinePrepareIntent);
         const authoritative = result.session ?? session;
         const matchPackage = await saveOfflineMatchPackage(resources.repository, authoritative, result.offline);
-        await prepareOfflineScoringShell();
+        retainScoringPrincipalCookie(session.principalId, matchPackage.replay_expires_at);
         setOfflineAuthorizationId(matchPackage.authorization_id);
         setOfflineRecordingExpiresAt(matchPackage.recording_expires_at);
         setOfflineReplayExpiresAt(matchPackage.replay_expires_at);
+        try {
+          await prepareOfflineScoringShell();
+        } catch (preparationError) {
+          try {
+            await resources.port.revokeAuthority(phase2Machine.offlinePreparationRollbackIntent);
+            await resources.repository.discardResolvedAuthorization(matchPackage.authorization_id);
+            setOfflineAuthorizationId(null);
+            setOfflineRecordingExpiresAt(null);
+            setOfflineReplayExpiresAt(null);
+          } catch {
+            // Keep the empty package and sealed resume grant so an online retry can
+            // finish preparation or explicitly end the retained authority.
+          }
+          throw preparationError;
+        }
         setPendingCount(0);
         setPendingSync(false);
         setOfflineState(phase2Machine.offlineReady);
@@ -350,6 +382,9 @@ export function PhoneScoring({
     assertScoringWorkerTransitionAllowed();
     try {
       const resources = await offlineResources();
+      const principalId = readScoringPrincipalCookie();
+      if (!principalId) return false;
+      await resources.repository.bindPrincipal(principalId);
       const recovered = await recoverOfflineScoringSession(resources.repository);
       if (!recovered) return false;
       const recoveredState: OfflineState = recoveredOfflineState({
@@ -359,12 +394,13 @@ export function PhoneScoring({
         passExpiresAt: recovered.matchPackage.pass_expires_at,
         pendingCount: recovered.pendingCount,
       });
-      applyOfflineProjection(
+      await applyOfflineProjection(
         recovered.session,
         recovered.matchPackage.authorization_id,
         recovered.pendingCount,
         recoveredState,
       );
+      retainScoringPrincipalCookie(recovered.session.principalId, recovered.matchPackage.replay_expires_at);
       setOfflineRecordingExpiresAt(recovered.matchPackage.recording_expires_at);
       setOfflineReplayExpiresAt(recovered.matchPackage.replay_expires_at);
       setAnnouncement(
@@ -399,55 +435,95 @@ export function PhoneScoring({
     return () => window.cancelAnimationFrame(focusFrame);
   }, [writerState]);
 
-  const handleTransportError = useCallback((error: unknown, accessMessage: string = phase2Copy.serviceUnavailable) => {
-    sessionRefreshFenceRef.current.cancel();
-    if (error instanceof ScoringTransportError) {
-      if (error.state === phase2Machine.conflict) {
-        writerStateRef.current = phase2Machine.conflict;
-        setWriterState(phase2Machine.conflict);
+  const handleTransportError = useCallback(
+    async (error: unknown, accessMessage: string = phase2Copy.serviceUnavailable): Promise<void> => {
+      sessionRefreshFenceRef.current.cancel();
+      const ordinarySessionEnded =
+        error instanceof ScoringTransportError &&
+        (error.code === "SCORING_SESSION_EXPIRED" || error.code === "SCORING_SESSION_REVOKED");
+      if (
+        ((error instanceof ScoringTransportError && error.state === "unavailable") ||
+          ordinarySessionEnded ||
+          !navigator.onLine) &&
+        (await recoverStoredOfflineSession())
+      ) {
         return;
       }
-      if (error.state === "invalid") {
-        if (actionDialogRef.current?.open) {
-          setScorerError(phase2Copy.semanticRejected);
-          setInteractionError("");
-        } else {
-          setInteractionError(phase2Copy.semanticRejected);
-          setAnnouncement(phase2Copy.semanticRejected);
-          window.requestAnimationFrame(() => interactionErrorRef.current?.focus({ preventScroll: true }));
+      if (error instanceof ScoringTransportError) {
+        if (error.state === phase2Machine.conflict) {
+          writerStateRef.current = phase2Machine.conflict;
+          setWriterState(phase2Machine.conflict);
+          return;
         }
-        return;
+        if (error.state === "invalid") {
+          if (actionDialogRef.current?.open) {
+            setScorerError(phase2Copy.semanticRejected);
+            setInteractionError("");
+          } else {
+            setInteractionError(phase2Copy.semanticRejected);
+            setAnnouncement(phase2Copy.semanticRejected);
+            window.requestAnimationFrame(() => interactionErrorRef.current?.focus({ preventScroll: true }));
+          }
+          return;
+        }
+        if (error.state === "expired" || error.state === "revoked" || error.state === "rate_limited") {
+          const offlineTerminalState: "expired" | "revoked" | null =
+            error.code === "OFFLINE_AUTHORIZATION_EXPIRED" ||
+            error.code === "OFFLINE_RECORDING_EXPIRED" ||
+            error.code === "ACCESS_EXPIRED"
+              ? phase2Machine.expired
+              : error.code === "OFFLINE_AUTHORIZATION_REVOKED" || error.code === "ACCESS_REVOKED"
+                ? phase2Machine.revoked
+                : null;
+          if (offlineTerminalState && offlineAuthorizationId) {
+            try {
+              const resources = await offlineResources();
+              await resources.repository.transitionMatchPackageStatus(offlineAuthorizationId, offlineTerminalState);
+            } catch {
+              setOfflineState(phase2Machine.offlineStorageError);
+              setAnnouncement(phase2Copy.offlineStorageRecoveryError);
+              window.requestAnimationFrame(() => offlineStatusRef.current?.focus({ preventScroll: true }));
+              return;
+            }
+          }
+          sessionActiveRef.current = false;
+          const state = error.state === "rate_limited" ? phase2Machine.rateLimited : error.state;
+          writerStateRef.current = state;
+          setWriterState(state);
+          setCodeError(
+            error.state === "expired"
+              ? phase2Copy.sessionExpired
+              : error.state === "revoked"
+                ? phase2Copy.sessionRevoked
+                : phase2Copy.rateLimited,
+          );
+          setAnnouncement(
+            error.state === "expired"
+              ? phase2Copy.sessionExpired
+              : error.state === "revoked"
+                ? phase2Copy.sessionRevoked
+                : phase2Copy.rateLimited,
+          );
+          if (offlineTerminalState && offlineAuthorizationId) {
+            setOfflineState(offlineTerminalState);
+            setPhase("live");
+            window.requestAnimationFrame(() => offlineStatusRef.current?.focus({ preventScroll: true }));
+          } else {
+            setPhase("access");
+          }
+          return;
+        }
       }
-      if (error.state === "expired" || error.state === "revoked" || error.state === "rate_limited") {
-        sessionActiveRef.current = false;
-        const state = error.state === "rate_limited" ? phase2Machine.rateLimited : error.state;
-        writerStateRef.current = state;
-        setWriterState(state);
-        setCodeError(
-          error.state === "expired"
-            ? phase2Copy.sessionExpired
-            : error.state === "revoked"
-              ? phase2Copy.sessionRevoked
-              : phase2Copy.rateLimited,
-        );
-        setAnnouncement(
-          error.state === "expired"
-            ? phase2Copy.sessionExpired
-            : error.state === "revoked"
-              ? phase2Copy.sessionRevoked
-              : phase2Copy.rateLimited,
-        );
-        setPhase("access");
-        return;
-      }
-    }
-    setPhase("access");
-    setCodeError(accessMessage);
-  }, []);
+      setPhase("access");
+      setCodeError(accessMessage);
+    },
+    [offlineAuthorizationId, offlineResources, recoverStoredOfflineSession],
+  );
 
   useEffect(() => {
     if (bootstrappedRef.current) return;
     bootstrappedRef.current = true;
+    transportOnlineRef.current = navigator.onLine;
     const fragment = new URLSearchParams(window.location.hash.slice(1));
     const token = fragment.get(phase2Machine.access);
     if (window.location.hash) {
@@ -461,13 +537,13 @@ export function PhoneScoring({
     if (token) {
       void device
         .then((identity) => port.exchangeAccess({ token, device: identity }))
-        .then((session) => {
-          applySession(session);
+        .then(async (session) => {
+          await applySession(session);
           setPhase(session.mode === phase2Machine.writer ? "confirm" : "live");
           setAnnouncement(scoringSessionAnnouncement(session));
         })
-        .catch((error: unknown) => {
-          handleTransportError(error, phase2Copy.codeError);
+        .catch(async (error: unknown) => {
+          await handleTransportError(error, phase2Copy.codeError);
         })
         .finally(() => setAccessChecking(false));
       return;
@@ -476,18 +552,22 @@ export function PhoneScoring({
       void device.finally(() => setAccessChecking(false));
       return;
     }
+    if (!transportOnlineRef.current || !navigator.onLine) {
+      void device.then(() => recoverStoredOfflineSession()).finally(() => setAccessChecking(false));
+      return;
+    }
     void port
       .recoverSession()
-      .then((session) => {
-        if (!session) return;
-        applySession(session);
-        setPhase("live");
+      .then(async (session) => {
+        if (!session) {
+          if (!(await recoverStoredOfflineSession())) clearScoringPrincipalCookie();
+          return;
+        }
+        await applySession(session);
+        if (!(await recoverStoredOfflineSession())) setPhase("live");
       })
       .catch(async (error: unknown) => {
-        if ((error instanceof ScoringTransportError && error.state === "unavailable") || !navigator.onLine) {
-          if (await recoverStoredOfflineSession()) return;
-        }
-        handleTransportError(error);
+        await handleTransportError(error);
       })
       .finally(() => setAccessChecking(false));
   }, [applySession, handleTransportError, port, recoverOnLoad, recoverStoredOfflineSession]);
@@ -496,7 +576,14 @@ export function PhoneScoring({
     if (phase !== "live" && phase !== "review") return;
     const sessionRefreshFence = sessionRefreshFenceRef.current;
     const refresh = async (forceAuthoritative = false) => {
-      if (!sessionActiveRef.current || document.visibilityState !== "visible" || mutationInFlightRef.current > 0) {
+      if (
+        !sessionActiveRef.current ||
+        document.visibilityState !== "visible" ||
+        mutationInFlightRef.current > 0 ||
+        !transportOnlineRef.current ||
+        !navigator.onLine ||
+        offlineReplayAbortRef.current
+      ) {
         return;
       }
       try {
@@ -516,18 +603,10 @@ export function PhoneScoring({
               recoverAuthoritatively,
               signal,
             ),
-          (session) => {
-            applySession(session);
-          },
+          applySession,
         );
       } catch (error) {
-        if (
-          ((error instanceof ScoringTransportError && error.state === "unavailable") || !navigator.onLine) &&
-          (await recoverStoredOfflineSession())
-        ) {
-          return;
-        }
-        handleTransportError(error);
+        await handleTransportError(error);
       }
     };
     let active = true;
@@ -604,6 +683,10 @@ export function PhoneScoring({
 
   const reconnectAndReplay = useCallback(() => {
     if (!offlineAuthorizationId || mode !== phase2Machine.scoringApiMode) return Promise.resolve();
+    if (!transportOnlineRef.current || !navigator.onLine) {
+      setOfflineState(phase2Machine.offlinePendingSync);
+      return Promise.resolve();
+    }
     return offlineReconnectRef.current.run(async () => {
       if (isScoringWorkerSafetyFrozen()) return;
       const replayAbort = new AbortController();
@@ -616,7 +699,7 @@ export function PhoneScoring({
         const summary = await offlineQueueSummary(resources.repository, offlineAuthorizationId);
         const authority = await resources.port.establishAuthority(summary);
         if (!componentMountedRef.current) return;
-        if (authority.session) applySession(authority.session);
+        if (authority.session) await applySession(authority.session);
         setOfflineState(phase2Machine.offlineReplaying);
         setAnnouncement(phase2Copy.offlineReplayAnnouncement(summary.pending_count));
         const result = await resources.replay.replay(offlineAuthorizationId, replayAbort.signal);
@@ -644,7 +727,7 @@ export function PhoneScoring({
         const authoritative = await port.recoverSession();
         if (!authoritative) throw new Error(phase2Copy.offlineAuthoritativeUnavailable);
         if (!componentMountedRef.current) return;
-        applySession(authoritative);
+        await applySession(authoritative);
         const replayFinalReceipt = await reconcileOfflineReplayRecovery(
           resources.repository,
           authoritative,
@@ -686,11 +769,13 @@ export function PhoneScoring({
     let subscribed = true;
     const offline = () => {
       if (!subscribed) return;
+      transportOnlineRef.current = false;
       if (isScoringWorkerSafetyFrozen()) return;
       void recoverStoredOfflineSession();
     };
     const online = () => {
       if (!subscribed) return;
+      transportOnlineRef.current = true;
       void reconnectAndReplay();
     };
     window.addEventListener("offline", offline);
@@ -718,12 +803,12 @@ export function PhoneScoring({
       setDeviceLabel(device.label);
       setDeviceLabelDraft(device.label);
       const session = await port.exchangeAccess({ shortCode: code.trim(), device });
-      applySession(session);
+      await applySession(session);
       setCodeError("");
       setPhase(session.mode === phase2Machine.writer ? "confirm" : "live");
       setAnnouncement(scoringSessionAnnouncement(session));
     } catch (error) {
-      handleTransportError(error, phase2Copy.codeError);
+      await handleTransportError(error, phase2Copy.codeError);
     } finally {
       setAccessChecking(false);
     }
@@ -758,14 +843,14 @@ export function PhoneScoring({
     try {
       const session = await port.recoverSession();
       if (!session) throw new Error(phase2Copy.offlineAuthoritativeUnavailable);
-      applySession(session);
+      await applySession(session);
       await prepareOfflineAuthority(session);
     } catch (error) {
       if (error instanceof ScoringWorkerSafetyFrozenError) return;
-      if (error instanceof ScoringTransportError) handleTransportError(error);
+      if (error instanceof ScoringTransportError) await handleTransportError(error);
       else {
         setOfflineState(phase2Machine.offlineStorageError);
-        setAnnouncement(phase2Copy.offlinePreparationError);
+        setAnnouncement(phase2Copy.offlinePreparationRetry);
       }
     }
   };
@@ -814,6 +899,7 @@ export function PhoneScoring({
       setPendingCount(0);
       setPendingSync(false);
       setOfflineState(phase2Machine.offlineOnline);
+      clearScoringPrincipalCookie();
       writerStateRef.current = phase2Machine.checking;
       setWriterState(phase2Machine.checking);
       setPhase("access");
@@ -870,7 +956,7 @@ export function PhoneScoring({
       setTakeoverPending(result.status === "pending");
       setAnnouncement(phase2Copy.takeoverRequested);
     } catch (error) {
-      handleTransportError(error);
+      await handleTransportError(error);
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
@@ -896,10 +982,10 @@ export function PhoneScoring({
       });
       setPendingSync(receipt.syncState === "pending");
       const session = await port.recoverSession();
-      applySession(session);
+      await applySession(session);
       setPhase("live");
     } catch (error) {
-      handleTransportError(error);
+      await handleTransportError(error);
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
@@ -949,7 +1035,12 @@ export function PhoneScoring({
       const session = await enqueueOfflineEvent(resources.repository, matchPackage, command);
       setDiagnosticExportSha(null);
       const pending = await resources.repository.listPendingCommands(matchPackage.authorization_id);
-      applyOfflineProjection(session, matchPackage.authorization_id, pending.length, phase2Machine.offlinePendingSync);
+      await applyOfflineProjection(
+        session,
+        matchPackage.authorization_id,
+        pending.length,
+        phase2Machine.offlinePendingSync,
+      );
       setAnnouncement(phase2Copy.offlineRecordedAnnouncement(successMessage, pending.length));
     });
 
@@ -963,7 +1054,7 @@ export function PhoneScoring({
       const session = await enqueueOfflineFinalisation(resources.repository, matchPackage, command);
       setDiagnosticExportSha(null);
       const pending = await resources.repository.listPendingCommands(matchPackage.authorization_id);
-      applyOfflineProjection(
+      await applyOfflineProjection(
         session,
         matchPackage.authorization_id,
         pending.length,
@@ -1017,7 +1108,7 @@ export function PhoneScoring({
       if (!navigator.onLine) throw new ScoringTransportError(phase2Machine.unavailable);
       const receipt = await port.appendEvent(command);
       setPendingSync(receipt.syncState === "pending");
-      applySession(await port.recoverSession());
+      await applySession(await port.recoverSession());
       setAnnouncement(phase2Copy.eventRecorded);
       closeActionDialog();
     } catch (error) {
@@ -1029,7 +1120,7 @@ export function PhoneScoring({
           handleOfflineQueueFailure(offlineError, phase2Copy.offlineEventStorageError);
         }
       } else {
-        handleTransportError(error);
+        await handleTransportError(error);
       }
     } finally {
       sessionRefreshFenceRef.current.cancel();
@@ -1079,7 +1170,7 @@ export function PhoneScoring({
       if (!navigator.onLine) throw new ScoringTransportError(phase2Machine.unavailable);
       const receipt = await port.appendEvent(reversalCommand);
       setPendingSync(receipt.syncState === "pending");
-      applySession(await port.recoverSession());
+      await applySession(await port.recoverSession());
       setAnnouncement(phase2Copy.eventReversed);
       const targetId = reversalTarget.eventId;
       actionReturnTargetRef.current = null;
@@ -1095,7 +1186,7 @@ export function PhoneScoring({
           handleOfflineQueueFailure(offlineError, phase2Copy.offlineReversalStorageError);
         }
       } else {
-        handleTransportError(error);
+        await handleTransportError(error);
       }
     } finally {
       sessionRefreshFenceRef.current.cancel();
@@ -1107,7 +1198,7 @@ export function PhoneScoring({
   const finalize = async () => {
     mutationInFlightRef.current += 1;
     setInteractionError("");
-    sessionRefreshFenceRef.current.cancel();
+    await sessionRefreshFenceRef.current.waitForIdle();
     setAnnouncement(phase2Copy.scoreControlsPending);
     const command = {
       clientEventId: crypto.randomUUID(),
@@ -1131,7 +1222,7 @@ export function PhoneScoring({
           handleOfflineQueueFailure(offlineError, phase2Copy.offlineFinalisationStorageError);
         }
       } else {
-        handleTransportError(error);
+        await handleTransportError(error);
       }
     } finally {
       sessionRefreshFenceRef.current.cancel();
@@ -1374,6 +1465,15 @@ export function PhoneScoring({
             </p>
             {pendingCount >= gateCOfflineQueueWarningCount ? (
               <p>{phase2Copy.offlineQueueGuidance(gateCOfflineQueueLimit)}</p>
+            ) : null}
+            {offlineState === phase2Machine.offlineStorageError &&
+            mode === phase2Machine.scoringApiMode &&
+            writerState === phase2Machine.active &&
+            typeof navigator !== "undefined" &&
+            navigator.onLine ? (
+              <button className="p2-score-secondary" type="button" onClick={() => void prepareOfflineForCurrentMatch()}>
+                {phase2Copy.offlinePrepareAction}
+              </button>
             ) : null}
             {offlineAuthorizationId && pendingCount === 0 ? <p>{phase2Copy.offlineAllSynced}</p> : null}
             {offlineAuthorizationId ? <p>{phase2Copy.offlineLastConfirmed(throughSequence - pendingCount)}</p> : null}

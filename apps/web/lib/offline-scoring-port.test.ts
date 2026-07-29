@@ -26,6 +26,7 @@ const queued: GateCOfflineQueuedCommand = {
 function offlinePackage(): GateCOfflineMatchPackage {
   return {
     schema_version: 1,
+    principal_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     authorization_id: authorizationId,
     competition_id: "60000000-0000-4000-8000-000000000006",
     competition_slug: "offline-port-test",
@@ -55,6 +56,7 @@ function summaryRepository() {
   const matchPackage = offlinePackage();
   const saveMatchPackage = vi.fn(async () => undefined);
   const repository = {
+    bindPrincipal: vi.fn(),
     getMatchPackage: vi.fn(async () => matchPackage),
     saveMatchPackage,
     listCommands: vi.fn(async () => [queued]),
@@ -78,11 +80,10 @@ describe("offline scoring API port", () => {
       ),
     );
 
-    const result = await new ApiOfflineScoringPort(
-      "50000000-0000-4000-8000-000000000005",
-      1,
-      "gate-c-c3-v4",
-    ).submit(queued, queued.command);
+    const result = await new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v5").submit(
+      queued,
+      queued.command,
+    );
 
     expect(result).toEqual({
       status: "blocked",
@@ -102,18 +103,14 @@ describe("offline scoring API port", () => {
     );
 
     const { repository } = summaryRepository();
-    const port = new ApiOfflineScoringPort(
-      "50000000-0000-4000-8000-000000000005",
-      1,
-      "gate-c-c3-v4",
-      repository,
-    );
+    const port = new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v5", repository);
     await expect(port.refreshAuthority(authorizationId)).resolves.toBe("authority_transferred");
   });
 
   it("persists renewed recording replay and pass windows after a successful refresh", async () => {
     const renewed = {
       authorization_id: authorizationId,
+      principal_id: offlinePackage().principal_id,
       competition_id: offlinePackage().competition_id,
       match_id: queued.match_id,
       generation: queued.writer_generation,
@@ -133,12 +130,7 @@ describe("offline scoring API port", () => {
     );
 
     const { repository, saveMatchPackage, matchPackage } = summaryRepository();
-    const port = new ApiOfflineScoringPort(
-      "50000000-0000-4000-8000-000000000005",
-      1,
-      "gate-c-c3-v4",
-      repository,
-    );
+    const port = new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v5", repository);
     await expect(port.refreshAuthority(authorizationId)).resolves.toBe("active");
     expect(saveMatchPackage).toHaveBeenCalledWith({
       ...matchPackage,

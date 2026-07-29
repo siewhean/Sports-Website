@@ -14,6 +14,7 @@ import {
 import type {
   OfflineConflict,
   OfflineReplayAttempt,
+  OfflineReplayFence,
   OfflineReplayState,
   OfflineScoringRepository,
 } from "./types";
@@ -143,6 +144,10 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
     this.raw = new RawIndexedDbOfflineScoringRepository(factory);
   }
 
+  bindPrincipal(principalId: string): Promise<void> {
+    return this.raw.bindPrincipal(principalId);
+  }
+
   saveMatchPackage(matchPackage: GateCOfflineMatchPackage): Promise<void> {
     return this.raw.saveMatchPackage(matchPackage);
   }
@@ -150,8 +155,9 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
   transitionMatchPackageStatus(
     authorizationId: string,
     status: Exclude<GateCOfflineMatchPackage["status"], "active">,
+    fence?: OfflineReplayFence,
   ): Promise<void> {
-    return this.raw.transitionMatchPackageStatus(authorizationId, status);
+    return this.raw.transitionMatchPackageStatus(authorizationId, status, fence);
   }
 
   getMatchPackage(authorizationId: string): Promise<GateCOfflineMatchPackage | null> {
@@ -182,20 +188,20 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
     return this.raw.listPendingCommands(authorizationId);
   }
 
-  appendAcknowledgement(acknowledgement: GateCOfflineAcknowledgement): Promise<void> {
-    return this.raw.appendAcknowledgement(acknowledgement);
+  appendAcknowledgement(acknowledgement: GateCOfflineAcknowledgement, fence?: OfflineReplayFence): Promise<void> {
+    return this.raw.appendAcknowledgement(acknowledgement, fence);
   }
 
-  appendReplayAttempt(attempt: OfflineReplayAttempt): Promise<void> {
-    return this.raw.appendReplayAttempt(attempt);
+  appendReplayAttempt(attempt: OfflineReplayAttempt, fence?: OfflineReplayFence): Promise<void> {
+    return this.raw.appendReplayAttempt(attempt, fence);
   }
 
   listReplayAttempts(authorizationId: string): Promise<OfflineReplayAttempt[]> {
     return this.raw.listReplayAttempts(authorizationId);
   }
 
-  appendConflict(conflict: OfflineConflict): Promise<void> {
-    return this.raw.appendConflict(conflict);
+  appendConflict(conflict: OfflineConflict, fence?: OfflineReplayFence): Promise<void> {
+    return this.raw.appendConflict(conflict, fence);
   }
 
   listConflicts(authorizationId: string): Promise<OfflineConflict[]> {
@@ -207,16 +213,20 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
     sha256: string,
     canonicalJson: string,
     recordedAt: string,
+    privateIntegrityNonce: string,
+    privateIntegrityDigest: string,
   ): Promise<void> {
-    return this.raw.recordDiagnosticExport(authorizationId, sha256, canonicalJson, recordedAt);
+    return this.raw.recordDiagnosticExport(
+      authorizationId,
+      sha256,
+      canonicalJson,
+      recordedAt,
+      privateIntegrityNonce,
+      privateIntegrityDigest,
+    );
   }
 
-  acquireReplayLease(
-    authorizationId: string,
-    ownerId: string,
-    now: number,
-    ttlMs: number,
-  ): Promise<number | null> {
+  acquireReplayLease(authorizationId: string, ownerId: string, now: number, ttlMs: number): Promise<number | null> {
     return this.raw.acquireReplayLease(authorizationId, ownerId, now, ttlMs);
   }
 
@@ -277,13 +287,9 @@ export class StrictIndexedDbOfflineScoringRepository implements OfflineScoringRe
         snapshot.replayAttempts,
         snapshot.conflicts,
         snapshot.attestation.recorded_at,
-        snapshot.replayState ?? null,
       );
       const canonical = canonicalOfflineJson(document);
-      if (
-        snapshot.attestation.sha256 !== expectedExportSha256 ||
-        snapshot.attestation.canonical_json !== canonical
-      ) {
+      if (snapshot.attestation.sha256 !== expectedExportSha256 || snapshot.attestation.canonical_json !== canonical) {
         throw new Error("Offline work changed after export; create and confirm a new diagnostic export.");
       }
       await deleteCompleteSnapshotIfUnchanged(database, authorizationId, canonicalOfflineJson(snapshot));

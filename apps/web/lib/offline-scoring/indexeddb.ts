@@ -13,8 +13,14 @@ import {
   canonicalOfflineJson,
   offlineRecordingAvailability,
 } from "@matchday/domain";
-import { buildOfflineDiagnosticDocument } from "./export";
-import type { OfflineConflict, OfflineReplayAttempt, OfflineReplayState, OfflineScoringRepository } from "./types";
+import {
+  OfflineReplayFenceError,
+  type OfflineConflict,
+  type OfflineReplayAttempt,
+  type OfflineReplayFence,
+  type OfflineReplayState,
+  type OfflineScoringRepository,
+} from "./types";
 
 export const OFFLINE_SCORING_DATABASE_NAME = "matchday-offline-scoring";
 export const OFFLINE_SCORING_DATABASE_VERSION = 1;
@@ -30,8 +36,11 @@ export const offlineScoringStoreNames = [
 ] as const;
 
 const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const ACTIVE_PRINCIPAL_KEY = "active_principal_id";
+const PRINCIPAL_PATTERN = /^[0-9a-f]{64}$/;
 
 type OfflineStoreName = (typeof offlineScoringStoreNames)[number];
+type PrincipalBinding = Readonly<{ key: string; value: string; epoch: number }>;
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -110,12 +119,50 @@ function authorizationRange(authorizationId: string): IDBValidKey {
   return authorizationId;
 }
 
+async function assertPrincipalFence(
+  transaction: IDBTransaction,
+  authorizationId: string,
+  fence?: OfflineReplayFence,
+): Promise<GateCOfflineMatchPackage> {
+  const [matchPackage, principal] = await Promise.all([
+    requestResult<GateCOfflineMatchPackage | undefined>(transaction.objectStore("match_packages").get(authorizationId)),
+    requestResult<PrincipalBinding | undefined>(transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY)),
+  ]);
+  if (!matchPackage || !principal || matchPackage.principal_id !== principal.value) {
+    transaction.abort();
+    throw new OfflineReplayFenceError("Offline scoring principal changed.");
+  }
+  if (fence) {
+    const replayState = await requestResult<OfflineReplayState | undefined>(
+      transaction.objectStore("replay_state").get(authorizationId),
+    );
+    if (
+      !replayState ||
+      replayState.owner_id !== fence.owner_id ||
+      replayState.epoch !== fence.epoch ||
+      replayState.principal_id !== principal.value ||
+      replayState.principal_epoch !== principal.epoch
+    ) {
+      transaction.abort();
+      throw new OfflineReplayFenceError("Offline replay fence is stale.");
+    }
+  }
+  return matchPackage;
+}
+
 async function indexedValues<T>(
   database: IDBDatabase,
   storeName: OfflineStoreName,
   authorizationId: string,
 ): Promise<T[]> {
-  const transaction = database.transaction(storeName);
+  const transaction = database.transaction([storeName, "match_packages", "meta"]);
+  const [matchPackage, principal] = await Promise.all([
+    requestResult<GateCOfflineMatchPackage | undefined>(transaction.objectStore("match_packages").get(authorizationId)),
+    requestResult<PrincipalBinding | undefined>(transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY)),
+  ]);
+  if (!matchPackage || !principal || matchPackage.principal_id !== principal.value) {
+    throw new Error("Offline match authorization is unavailable.");
+  }
   const result = await requestResult(
     transaction.objectStore(storeName).index("authorization_id").getAll(authorizationRange(authorizationId)),
   );
@@ -134,6 +181,21 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     }
   }
 
+  async bindPrincipal(principalId: string): Promise<void> {
+    if (!PRINCIPAL_PATTERN.test(principalId)) throw new Error("Offline scoring principal is invalid.");
+    await this.withDatabase(async (database) => {
+      const transaction = database.transaction("meta", "readwrite");
+      const store = transaction.objectStore("meta");
+      const current = await requestResult<PrincipalBinding | undefined>(store.get(ACTIVE_PRINCIPAL_KEY));
+      store.put({
+        key: ACTIVE_PRINCIPAL_KEY,
+        value: principalId,
+        epoch: current?.value === principalId ? (current.epoch ?? 1) : (current?.epoch ?? 0) + 1,
+      } satisfies PrincipalBinding);
+      await transactionResult(transaction);
+    });
+  }
+
   async saveMatchPackage(matchPackage: GateCOfflineMatchPackage): Promise<void> {
     assertOfflineMatchAuthorization(matchPackage);
     await this.withDatabase(async (database) => {
@@ -142,6 +204,13 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         "readwrite",
       );
       const packages = transaction.objectStore("match_packages");
+      const activePrincipal = await requestResult<PrincipalBinding | undefined>(
+        transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
+      );
+      if (activePrincipal && activePrincipal.value !== matchPackage.principal_id) {
+        transaction.abort();
+        throw new Error("Resolve or export the existing principal's offline match before switching scoring access.");
+      }
       const existingPackages = await requestResult<GateCOfflineMatchPackage[]>(packages.getAll());
       const sameAuthorization = existingPackages.find(
         (existing) => existing.authorization_id === matchPackage.authorization_id,
@@ -200,17 +269,27 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         ),
       );
       transaction.objectStore("meta").put({ key: "schema_version", value: OFFLINE_SCORING_DATABASE_VERSION });
+      transaction.objectStore("meta").put({
+        key: ACTIVE_PRINCIPAL_KEY,
+        value: matchPackage.principal_id,
+        epoch: activePrincipal?.epoch ?? 1,
+      } satisfies PrincipalBinding);
       await transactionResult(transaction);
     });
   }
 
   async getMatchPackage(authorizationId: string): Promise<GateCOfflineMatchPackage | null> {
     return this.withDatabase(async (database) => {
-      const value = await requestResult<GateCOfflineMatchPackage | undefined>(
-        database.transaction("match_packages").objectStore("match_packages").get(authorizationId),
-      );
+      const transaction = database.transaction(["match_packages", "meta"]);
+      const [value, principal] = await Promise.all([
+        requestResult<GateCOfflineMatchPackage | undefined>(
+          transaction.objectStore("match_packages").get(authorizationId),
+        ),
+        requestResult<PrincipalBinding | undefined>(transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY)),
+      ]);
       if (!value) return null;
       assertOfflineMatchAuthorization(value);
+      if (!principal || principal.value !== value.principal_id) return null;
       return clone(value);
     });
   }
@@ -218,15 +297,15 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
   async transitionMatchPackageStatus(
     authorizationId: string,
     status: Exclude<GateCOfflineMatchPackage["status"], "active">,
+    fence?: OfflineReplayFence,
   ): Promise<void> {
     await this.withDatabase(async (database) => {
-      const transaction = database.transaction("match_packages", "readwrite");
+      const transaction = database.transaction(
+        ["match_packages", "meta", ...(fence ? (["replay_state"] as const) : [])],
+        "readwrite",
+      );
       const store = transaction.objectStore("match_packages");
-      const current = await requestResult<GateCOfflineMatchPackage | undefined>(store.get(authorizationId));
-      if (!current) {
-        transaction.abort();
-        throw new Error("Offline match authorization is unavailable.");
-      }
+      const current = await assertPrincipalFence(transaction, authorizationId, fence);
       assertOfflineMatchAuthorization(current);
       if (!canTransitionOfflineAuthorizationStatus(current.status, status)) {
         transaction.abort();
@@ -239,9 +318,14 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
 
   async getActiveMatchPackage(): Promise<GateCOfflineMatchPackage | null> {
     return this.withDatabase(async (database) => {
-      const values = await requestResult<GateCOfflineMatchPackage[]>(
-        database.transaction("match_packages").objectStore("match_packages").index("status").getAll("active"),
-      );
+      const transaction = database.transaction(["match_packages", "meta"]);
+      const [allValues, principal] = await Promise.all([
+        requestResult<GateCOfflineMatchPackage[]>(
+          transaction.objectStore("match_packages").index("status").getAll("active"),
+        ),
+        requestResult<PrincipalBinding | undefined>(transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY)),
+      ]);
+      const values = principal ? allValues.filter(({ principal_id }) => principal_id === principal.value) : [];
       if (values.length > 1) throw new Error("Offline scoring storage contains multiple active grants.");
       if (!values[0]) return null;
       assertOfflineMatchAuthorization(values[0]);
@@ -251,10 +335,12 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
 
   async getRecoverableMatchPackage(): Promise<GateCOfflineMatchPackage | null> {
     return this.withDatabase(async (database) => {
-      const transaction = database.transaction(["match_packages", "commands", "acknowledgements", "conflicts"]);
-      const packages = await requestResult<GateCOfflineMatchPackage[]>(
-        transaction.objectStore("match_packages").getAll(),
-      );
+      const transaction = database.transaction(["match_packages", "commands", "acknowledgements", "conflicts", "meta"]);
+      const [allPackages, principal] = await Promise.all([
+        requestResult<GateCOfflineMatchPackage[]>(transaction.objectStore("match_packages").getAll()),
+        requestResult<PrincipalBinding | undefined>(transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY)),
+      ]);
+      const packages = principal ? allPackages.filter(({ principal_id }) => principal_id === principal.value) : [];
       const active = packages.filter(({ status }) => status === "active");
       if (active.length > 1) throw new Error("Offline scoring storage contains multiple active grants.");
       if (active[0]) {
@@ -289,14 +375,8 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
 
   async enqueue(command: GateCOfflineQueuedCommand, now: number = Date.now()): Promise<void> {
     await this.withDatabase(async (database) => {
-      const transaction = database.transaction(["match_packages", "commands", "acknowledgements"], "readwrite");
-      const packageValue = await requestResult<GateCOfflineMatchPackage | undefined>(
-        transaction.objectStore("match_packages").get(command.authorization_id),
-      );
-      if (!packageValue) {
-        transaction.abort();
-        throw new Error("Offline match authorization is unavailable.");
-      }
+      const transaction = database.transaction(["match_packages", "commands", "acknowledgements", "meta"], "readwrite");
+      const packageValue = await assertPrincipalFence(transaction, command.authorization_id);
       const commands = (await requestResult(
         transaction.objectStore("commands").index("authorization_id").getAll(command.authorization_id),
       )) as GateCOfflineQueuedCommand[];
@@ -348,15 +428,16 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     return commands.filter(({ local_sequence }) => !acknowledged.has(local_sequence));
   }
 
-  async appendAcknowledgement(acknowledgement: GateCOfflineAcknowledgement): Promise<void> {
+  async appendAcknowledgement(acknowledgement: GateCOfflineAcknowledgement, fence?: OfflineReplayFence): Promise<void> {
     await this.withDatabase(async (database) => {
-      const transaction = database.transaction(["match_packages", "commands", "acknowledgements"], "readwrite");
+      const transaction = database.transaction(
+        ["match_packages", "commands", "acknowledgements", "meta", ...(fence ? (["replay_state"] as const) : [])],
+        "readwrite",
+      );
       const key: IDBValidKey = [acknowledgement.authorization_id, acknowledgement.local_sequence];
+      const matchPackage = await assertPrincipalFence(transaction, acknowledgement.authorization_id, fence);
       const command = await requestResult<GateCOfflineQueuedCommand | undefined>(
         transaction.objectStore("commands").get(key),
-      );
-      const matchPackage = await requestResult<GateCOfflineMatchPackage | undefined>(
-        transaction.objectStore("match_packages").get(acknowledgement.authorization_id),
       );
       const store = transaction.objectStore("acknowledgements");
       const existing = await requestResult<GateCOfflineAcknowledgement | undefined>(store.get(key));
@@ -370,7 +451,6 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
       }
       if (
         !command ||
-        !matchPackage ||
         command.match_id !== acknowledgement.match_id ||
         command.command.client_event_id !== acknowledgement.client_event_id ||
         !/^[a-f0-9]{64}$/.test(acknowledgement.command_fingerprint) ||
@@ -407,8 +487,8 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     });
   }
 
-  async appendReplayAttempt(attempt: OfflineReplayAttempt): Promise<void> {
-    await this.appendAutoIncrement("replay_attempts", attempt);
+  async appendReplayAttempt(attempt: OfflineReplayAttempt, fence?: OfflineReplayFence): Promise<void> {
+    await this.appendAutoIncrement("replay_attempts", attempt, fence);
   }
 
   async listReplayAttempts(authorizationId: string): Promise<OfflineReplayAttempt[]> {
@@ -417,8 +497,8 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     );
   }
 
-  async appendConflict(conflict: OfflineConflict): Promise<void> {
-    await this.appendAutoIncrement("conflicts", conflict);
+  async appendConflict(conflict: OfflineConflict, fence?: OfflineReplayFence): Promise<void> {
+    await this.appendAutoIncrement("conflicts", conflict, fence);
   }
 
   async listConflicts(authorizationId: string): Promise<OfflineConflict[]> {
@@ -430,18 +510,28 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     sha256: string,
     canonicalJson: string,
     recordedAt: string,
+    privateIntegrityNonce: string,
+    privateIntegrityDigest: string,
   ): Promise<void> {
-    if (!/^[a-f0-9]{64}$/.test(sha256) || (await sha256Digest(canonicalJson)) !== sha256) {
+    if (
+      !/^[a-f0-9]{64}$/.test(sha256) ||
+      (await sha256Digest(canonicalJson)) !== sha256 ||
+      !/^[a-f0-9]{64}$/.test(privateIntegrityNonce) ||
+      !/^[a-f0-9]{64}$/.test(privateIntegrityDigest)
+    ) {
       throw new Error("Diagnostic export checksum is invalid.");
     }
     await this.withDatabase(async (database) => {
-      const transaction = database.transaction("meta", "readwrite");
+      const transaction = database.transaction(["meta", "match_packages"], "readwrite");
+      await assertPrincipalFence(transaction, authorizationId);
       transaction.objectStore("meta").put({
         key: `diagnostic_export:${authorizationId}`,
         authorization_id: authorizationId,
         sha256,
         canonical_json: canonicalJson,
         recorded_at: recordedAt,
+        private_integrity_nonce: privateIntegrityNonce,
+        private_integrity_digest: privateIntegrityDigest,
       });
       await transactionResult(transaction);
     });
@@ -450,9 +540,14 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
   private async appendAutoIncrement(
     storeName: "replay_attempts" | "conflicts",
     value: OfflineReplayAttempt | OfflineConflict,
+    fence?: OfflineReplayFence,
   ): Promise<void> {
     await this.withDatabase(async (database) => {
-      const transaction = database.transaction(storeName, "readwrite");
+      const transaction = database.transaction(
+        [storeName, "match_packages", "meta", ...(fence ? (["replay_state"] as const) : [])],
+        "readwrite",
+      );
+      await assertPrincipalFence(transaction, value.authorization_id, fence);
       transaction.objectStore(storeName).add(clone(value));
       await transactionResult(transaction);
     });
@@ -465,8 +560,16 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     ttlMs: number,
   ): Promise<number | null> {
     return this.withDatabase(async (database) => {
-      const transaction = database.transaction("replay_state", "readwrite");
+      const transaction = database.transaction(["replay_state", "match_packages", "meta"], "readwrite");
       const store = transaction.objectStore("replay_state");
+      const matchPackage = await assertPrincipalFence(transaction, authorizationId).catch((error: unknown) => {
+        if (error instanceof OfflineReplayFenceError) return null;
+        throw error;
+      });
+      if (!matchPackage) return null;
+      const principal = await requestResult<PrincipalBinding>(
+        transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
+      );
       const current = await requestResult<OfflineReplayState | undefined>(store.get(authorizationId));
       if (current && current.owner_id !== ownerId && Date.parse(current.lease_expires_at) > now) {
         transaction.abort();
@@ -477,6 +580,8 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         authorization_id: authorizationId,
         owner_id: ownerId,
         epoch,
+        principal_id: matchPackage.principal_id,
+        principal_epoch: principal.epoch,
         lease_expires_at: new Date(now + ttlMs).toISOString(),
         updated_at: new Date(now).toISOString(),
       } satisfies OfflineReplayState);
@@ -493,8 +598,16 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     ttlMs: number,
   ): Promise<boolean> {
     return this.withDatabase(async (database) => {
-      const transaction = database.transaction("replay_state", "readwrite");
+      const transaction = database.transaction(["replay_state", "match_packages", "meta"], "readwrite");
       const store = transaction.objectStore("replay_state");
+      const matchPackage = await assertPrincipalFence(transaction, authorizationId, {
+        owner_id: ownerId,
+        epoch,
+      }).catch((error: unknown) => {
+        if (error instanceof OfflineReplayFenceError) return null;
+        throw error;
+      });
+      if (!matchPackage) return false;
       const current = await requestResult<OfflineReplayState | undefined>(store.get(authorizationId));
       if (!current || current.owner_id !== ownerId || current.epoch !== epoch) {
         transaction.abort();
@@ -550,9 +663,10 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     }
     const snapshot = await this.withDatabase(async (database) => {
       const transaction = database.transaction(
-        ["match_packages", "commands", "acknowledgements", "conflicts", "meta"],
+        ["match_packages", "commands", "acknowledgements", "replay_attempts", "conflicts", "meta"],
         "readonly",
       );
+      await assertPrincipalFence(transaction, authorizationId);
       const values = await Promise.all([
         requestResult<GateCOfflineMatchPackage | undefined>(
           transaction.objectStore("match_packages").get(authorizationId),
@@ -563,6 +677,9 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         requestResult<GateCOfflineAcknowledgement[]>(
           transaction.objectStore("acknowledgements").index("authorization_id").getAll(authorizationId),
         ),
+        requestResult<OfflineReplayAttempt[]>(
+          transaction.objectStore("replay_attempts").index("authorization_id").getAll(authorizationId),
+        ),
         requestResult<OfflineConflict[]>(
           transaction.objectStore("conflicts").index("authorization_id").getAll(authorizationId),
         ),
@@ -571,6 +688,8 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
               sha256: string;
               canonical_json: string;
               recorded_at: string;
+              private_integrity_nonce: string;
+              private_integrity_digest: string;
             }
           | undefined
         >(transaction.objectStore("meta").get(`diagnostic_export:${authorizationId}`)),
@@ -579,26 +698,26 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         matchPackage: values[0],
         commands: values[1],
         acknowledgements: values[2],
-        conflicts: values[3],
-        attestation: values[4],
+        replayAttempts: values[3],
+        conflicts: values[4],
+        attestation: values[5],
       };
     });
-    const currentCanonicalJson =
-      snapshot.matchPackage && snapshot.attestation
-        ? canonicalOfflineJson(
-            await buildOfflineDiagnosticDocument(
-              snapshot.matchPackage,
-              snapshot.commands,
-              snapshot.acknowledgements,
-              snapshot.conflicts,
-              snapshot.attestation.recorded_at,
-            ),
-          )
-        : null;
+    const currentPrivateIntegrityDigest = snapshot.attestation
+      ? await sha256Digest(
+          `${snapshot.attestation.private_integrity_nonce}:${canonicalOfflineJson({
+            matchPackage: snapshot.matchPackage,
+            commands: snapshot.commands,
+            acknowledgements: snapshot.acknowledgements,
+            replayAttempts: snapshot.replayAttempts,
+            conflicts: snapshot.conflicts,
+          })}`,
+        )
+      : null;
     if (
       !snapshot.attestation ||
       snapshot.attestation.sha256 !== expectedExportSha256 ||
-      snapshot.attestation.canonical_json !== currentCanonicalJson
+      snapshot.attestation.private_integrity_digest !== currentPrivateIntegrityDigest
     ) {
       throw new Error("Offline work changed after export; create and confirm a new diagnostic export.");
     }
@@ -609,6 +728,7 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         ["match_packages", "commands", "acknowledgements", "replay_attempts", "replay_state", "conflicts", "meta"],
         "readwrite",
       );
+      await assertPrincipalFence(transaction, authorizationId);
       const current = await Promise.all([
         requestResult<GateCOfflineMatchPackage | undefined>(
           transaction.objectStore("match_packages").get(authorizationId),
@@ -619,6 +739,9 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         requestResult<GateCOfflineAcknowledgement[]>(
           transaction.objectStore("acknowledgements").index("authorization_id").getAll(authorizationId),
         ),
+        requestResult<OfflineReplayAttempt[]>(
+          transaction.objectStore("replay_attempts").index("authorization_id").getAll(authorizationId),
+        ),
         requestResult<OfflineConflict[]>(
           transaction.objectStore("conflicts").index("authorization_id").getAll(authorizationId),
         ),
@@ -628,8 +751,9 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         matchPackage: current[0],
         commands: current[1],
         acknowledgements: current[2],
-        conflicts: current[3],
-        attestation: current[4],
+        replayAttempts: current[3],
+        conflicts: current[4],
+        attestation: current[5],
       });
       if (currentRawSnapshot !== rawSnapshot) {
         transaction.abort();
@@ -646,6 +770,7 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         ["match_packages", "commands", "acknowledgements", "replay_attempts", "replay_state", "conflicts", "meta"],
         "readwrite",
       );
+      await assertPrincipalFence(transaction, authorizationId);
       const [matchPackage, commands, acknowledgements, conflicts] = await Promise.all([
         requestResult<GateCOfflineMatchPackage | undefined>(
           transaction.objectStore("match_packages").get(authorizationId),

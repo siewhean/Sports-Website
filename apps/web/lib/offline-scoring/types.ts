@@ -9,6 +9,13 @@ import type {
   GateCOfflineReplayReceipt,
 } from "@matchday/contracts";
 
+export class OfflineReplayFenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OfflineReplayFenceError";
+  }
+}
+
 export type OfflineReplayAttempt = Readonly<{
   id?: number;
   authorization_id: string;
@@ -24,8 +31,15 @@ export type OfflineReplayState = Readonly<{
   authorization_id: string;
   owner_id: string;
   epoch: number;
+  principal_id: string;
+  principal_epoch: number;
   lease_expires_at: string;
   updated_at: string;
+}>;
+
+export type OfflineReplayFence = Readonly<{
+  owner_id: string;
+  epoch: number;
 }>;
 
 export type OfflineConflict = Readonly<{
@@ -42,17 +56,15 @@ export type OfflineConflict = Readonly<{
 }>;
 
 export type OfflineAuthorityRefreshResult =
-  | "active"
-  | "authority_transferred"
-  | "authority_revoked"
-  | "authority_expired"
-  | null;
+  "active" | "authority_transferred" | "authority_revoked" | "authority_expired" | null;
 
 export type OfflineScoringRepository = {
+  bindPrincipal(principalId: string): Promise<void>;
   saveMatchPackage(matchPackage: GateCOfflineMatchPackage): Promise<void>;
   transitionMatchPackageStatus(
     authorizationId: string,
     status: Exclude<GateCOfflineMatchPackage["status"], "active">,
+    fence?: OfflineReplayFence,
   ): Promise<void>;
   getMatchPackage(authorizationId: string): Promise<GateCOfflineMatchPackage | null>;
   getActiveMatchPackage(): Promise<GateCOfflineMatchPackage | null>;
@@ -61,10 +73,10 @@ export type OfflineScoringRepository = {
   listCommands(authorizationId: string): Promise<GateCOfflineQueuedCommand[]>;
   listAcknowledgements(authorizationId: string): Promise<GateCOfflineAcknowledgement[]>;
   listPendingCommands(authorizationId: string): Promise<GateCOfflineQueuedCommand[]>;
-  appendAcknowledgement(acknowledgement: GateCOfflineAcknowledgement): Promise<void>;
-  appendReplayAttempt(attempt: OfflineReplayAttempt): Promise<void>;
+  appendAcknowledgement(acknowledgement: GateCOfflineAcknowledgement, fence?: OfflineReplayFence): Promise<void>;
+  appendReplayAttempt(attempt: OfflineReplayAttempt, fence?: OfflineReplayFence): Promise<void>;
   listReplayAttempts(authorizationId: string): Promise<OfflineReplayAttempt[]>;
-  appendConflict(conflict: OfflineConflict): Promise<void>;
+  appendConflict(conflict: OfflineConflict, fence?: OfflineReplayFence): Promise<void>;
   listConflicts(authorizationId: string): Promise<OfflineConflict[]>;
   getReplayState?(authorizationId: string): Promise<OfflineReplayState | null>;
   recordDiagnosticExport(
@@ -72,6 +84,8 @@ export type OfflineScoringRepository = {
     sha256: string,
     canonicalJson: string,
     recordedAt: string,
+    privateIntegrityNonce: string,
+    privateIntegrityDigest: string,
   ): Promise<void>;
   acquireReplayLease(authorizationId: string, ownerId: string, now: number, ttlMs: number): Promise<number | null>;
   renewReplayLease(

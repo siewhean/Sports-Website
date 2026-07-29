@@ -29,6 +29,7 @@ export type ApiSessionState = {
     away: { id: string | null; name: string | null };
   };
   access: {
+    principal_id: string;
     mode: "writer" | "candidate" | "viewer" | "transferred";
     permissions: string[];
     generation: number | null;
@@ -243,6 +244,7 @@ export function scoringSessionView(state: ApiSessionState): ScoringSessionView {
     ];
   });
   return {
+    principalId: state.access.principal_id,
     competitionSlug: state.competition.slug,
     sportId: state.competition.sport_code,
     sportPackVersion: state.sport.pack_version,
@@ -512,6 +514,7 @@ class DemoScoringCommandPort implements ScoringCommandPort {
     const pack = SPORT_PACKS[this.sportId];
     const reduced = reduceFiveSportScoreEvents(this.sportId, this.canonicalEvents, pack.recommendedSettings);
     return {
+      principalId: "d".repeat(64),
       competitionSlug: phase2Machine.singaporeOpenSlug,
       sportId: this.sportId,
       sportPackVersion: pack.version,

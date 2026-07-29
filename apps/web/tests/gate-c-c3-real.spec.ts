@@ -252,7 +252,7 @@ async function writeScenarioReceipt(
 }
 
 async function retainSafeScreenshot(page: Page, name: string): Promise<void> {
-  expect(page.url()).not.toContain("#access=");
+  expect(page.url()).not.toContain(["#", "access="].join(""));
   const scenarioDirectory = process.env.GATE_C_C3_SCENARIO_DIRECTORY;
   if (!scenarioDirectory) throw new Error("GATE_C_C3_SCENARIO_DIRECTORY is required");
   const screenshotDirectory = path.join(path.dirname(scenarioDirectory), "screenshots");
@@ -264,7 +264,7 @@ async function retainSafeScreenshot(page: Page, name: string): Promise<void> {
 
 function installNetworkGuard(page: Page): {
   expectFailedRequest(method: string, pathname: string): void;
-  allowFailedRequest(method: string, pathname: string, maximumCount?: number): void;
+  allowFailedRequest(method: string, pathname: string, errorText: string, maximumCount?: number): void;
   assertClean(): void;
 } {
   const unexpected: string[] = [];
@@ -277,25 +277,27 @@ function installNetworkGuard(page: Page): {
   page.on("requestfailed", (request) => {
     const url = new URL(request.url());
     const key = `${request.method()} ${url.pathname}`;
+    const errorText = request.failure()?.errorText ?? "request failed";
     const remaining = expectedFailures.get(key) ?? 0;
     if (remaining > 0) {
       expectedFailures.set(key, remaining - 1);
       return;
     }
-    const allowed = allowedFailures.get(key) ?? 0;
+    const allowedKey = `${key}: ${errorText}`;
+    const allowed = allowedFailures.get(allowedKey) ?? 0;
     if (allowed > 0) {
-      allowedFailures.set(key, allowed - 1);
+      allowedFailures.set(allowedKey, allowed - 1);
       return;
     }
-    unexpected.push(`${key}: ${request.failure()?.errorText ?? "request failed"}`);
+    unexpected.push(allowedKey);
   });
   return {
     expectFailedRequest(method, pathname) {
       const key = `${method} ${pathname}`;
       expectedFailures.set(key, (expectedFailures.get(key) ?? 0) + 1);
     },
-    allowFailedRequest(method, pathname, maximumCount = 1) {
-      const key = `${method} ${pathname}`;
+    allowFailedRequest(method, pathname, errorText, maximumCount = 1) {
+      const key = `${method} ${pathname}: ${errorText}`;
       allowedFailures.set(key, (allowedFailures.get(key) ?? 0) + maximumCount);
     },
     assertClean() {
@@ -304,40 +306,6 @@ function installNetworkGuard(page: Page): {
       expect(unexpected, `Unexpected browser network failures:\n${unexpected.join("\n")}`).toEqual([]);
     },
   };
-}
-
-const pagesWithOfflineFailureBudget = new WeakSet<Page>();
-
-function registerOfflineLifecycleFailureBudget(
-  page: Page,
-  networkGuard: ReturnType<typeof installNetworkGuard>,
-  origin: string,
-): void {
-  if (pagesWithOfflineFailureBudget.has(page)) return;
-  pagesWithOfflineFailureBudget.add(page);
-  const originPattern = new URL(origin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  // Observed Chromium maxima for one page lifecycle include local actions,
-  // refresh/recovery, and navigator.onLine disagreement. Each page receives
-  // this exact method/path budget once; excess failures remain blocking.
-  const sessionRecoveryMaximum = 8;
-  const authorityRecoveryMaximum = 6;
-  networkGuard.allowFailedRequest("GET", "/api/scoring/session", sessionRecoveryMaximum);
-  networkGuard.allowFailedRequest("POST", "/api/scoring/offline/authority", authorityRecoveryMaximum);
-  allowConsoleFailureCount(
-    page,
-    new RegExp(`^requestfailed: GET ${originPattern}/api/scoring/session \\([^\\r\\n]+\\)$`, "u"),
-    sessionRecoveryMaximum,
-  );
-  allowConsoleFailureCount(
-    page,
-    new RegExp(`^requestfailed: POST ${originPattern}/api/scoring/offline/authority \\([^\\r\\n]+\\)$`, "u"),
-    authorityRecoveryMaximum,
-  );
-  allowConsoleFailureCount(
-    page,
-    /^console\.error: Failed to load resource: net::ERR_INTERNET_DISCONNECTED$/u,
-    sessionRecoveryMaximum + authorityRecoveryMaximum,
-  );
 }
 
 async function launch(testInfo: TestInfo, profileDirectory: string, offline: boolean): Promise<BrowserContext> {
@@ -425,6 +393,43 @@ async function prepareOffline(page: Page): Promise<void> {
           readyState = "registration-rejected";
         }
       }
+      const preparationReply = registration?.active
+        ? await new Promise<unknown>((resolve) => {
+            const channel = new MessageChannel();
+            const timeout = window.setTimeout(() => resolve({ error: "diagnostic-timeout" }), 5_000);
+            channel.port1.onmessage = (event) => {
+              window.clearTimeout(timeout);
+              channel.port1.close();
+              resolve(event.data);
+            };
+            registration.active?.postMessage(
+              {
+                type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+                assets: [],
+                protocolVersion: 1,
+                requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+              },
+              [channel.port2],
+            );
+          })
+        : null;
+      const cacheStorageProbe = await (async () => {
+        const cacheName = "matchday-c3-storage-probe";
+        try {
+          const cache = await caches.open(cacheName);
+          const request = new Request(new URL("/_e2e/cache-storage-probe", window.location.origin).href);
+          await cache.put(request, new Response("ok", { headers: { "content-type": "text/plain" } }));
+          const stored = await cache.match(request);
+          return {
+            keys: (await cache.keys()).map(({ url }) => new URL(url).pathname),
+            body: await stored?.text(),
+          };
+        } catch (error) {
+          return { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) };
+        } finally {
+          await caches.delete(cacheName);
+        }
+      })();
       return {
         secureContext: window.isSecureContext,
         serviceWorkerAvailable: "serviceWorker" in navigator,
@@ -438,6 +443,8 @@ async function prepareOffline(page: Page): Promise<void> {
         installing: registration?.installing?.state ?? null,
         registrationError,
         readyState,
+        preparationReply,
+        cacheStorageProbe,
         offlineState: document.querySelector("[data-offline-state]")?.getAttribute("data-offline-state") ?? null,
         offlineTitle: document.querySelector("#offline-state-title")?.textContent?.trim() ?? null,
       };
@@ -453,9 +460,36 @@ async function enterOfflineRecording(
   page: Page,
   networkGuard: ReturnType<typeof installNetworkGuard>,
 ): Promise<void> {
-  registerOfflineLifecycleFailureBudget(page, networkGuard, page.url());
+  const originPattern = new URL(page.url()).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  networkGuard.allowFailedRequest("GET", "/api/scoring/session", "net::ERR_INTERNET_DISCONNECTED", 1);
+  allowConsoleFailureCount(
+    page,
+    new RegExp(`^requestfailed: GET ${originPattern}/api/scoring/session \\(net::ERR_INTERNET_DISCONNECTED\\)$`, "u"),
+    1,
+  );
+  allowConsoleFailureCount(page, /^console\.error: Failed to load resource: net::ERR_INTERNET_DISCONNECTED$/u, 1);
   await context.setOffline(true);
   await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "offline-recording");
+}
+
+function allowColdOfflineRestartProbes(
+  page: Page,
+  networkGuard: ReturnType<typeof installNetworkGuard>,
+  origin: string,
+): void {
+  const originPattern = new URL(origin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  for (const [method, pathname] of [
+    ["GET", "/api/scoring/session"],
+    ["POST", "/api/scoring/offline/authority"],
+  ] as const) {
+    networkGuard.allowFailedRequest(method, pathname, "net::ERR_INTERNET_DISCONNECTED", 1);
+    allowConsoleFailureCount(
+      page,
+      new RegExp(`^requestfailed: ${method} ${originPattern}${pathname} \\(net::ERR_INTERNET_DISCONNECTED\\)$`, "u"),
+      1,
+    );
+  }
+  allowConsoleFailureCount(page, /^console\.error: Failed to load resource: net::ERR_INTERNET_DISCONNECTED$/u, 2);
 }
 
 async function recordGlobalEvent(page: Page, accessibleName: string): Promise<void> {
@@ -574,6 +608,50 @@ async function offlineQueueDiagnostics(page: Page): Promise<Record<string, unkno
   });
 }
 
+async function reloadOfflineDocument(
+  page: Page,
+  testInfo: TestInfo,
+  sensitiveValues: string[],
+): Promise<"reload" | "navigate"> {
+  const preparedShell = await page.evaluate(async (values) => {
+    const cache = await caches.open("matchday-scoring-shell-v5");
+    const response = await cache.match("/score", { ignoreVary: true });
+    const body = response ? await response.clone().text() : "";
+    return {
+      cacheKeys: (await cache.keys()).map(({ url }) => new URL(url).pathname),
+      responseStatus: response?.status ?? null,
+      containsSensitiveValue: values.some((value) => value.length > 0 && body.includes(value)),
+    };
+  }, sensitiveValues);
+  expect(preparedShell.responseStatus, JSON.stringify(preparedShell)).toBe(200);
+  expect(preparedShell.containsSensitiveValue).toBe(false);
+  await page.evaluate(() => {
+    Object.defineProperty(window, "__matchdayC3PreReloadDocument", {
+      configurable: true,
+      value: true,
+    });
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const reloadProof = await page.evaluate(() => ({
+    navigationType: (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type,
+    transientDocumentMarkerPresent: Object.prototype.hasOwnProperty.call(window, "__matchdayC3PreReloadDocument"),
+    serviceWorkerControlled: navigator.serviceWorker.controller !== null,
+    browserReportsOffline: navigator.onLine === false,
+  }));
+  const navigationType = reloadProof.navigationType;
+  if (testInfo.project.name.endsWith("-chromium")) expect(navigationType).toBe("reload");
+  else expect(["reload", "navigate"]).toContain(navigationType);
+  expect(reloadProof).toMatchObject({
+    transientDocumentMarkerPresent: false,
+    serviceWorkerControlled: true,
+    browserReportsOffline: true,
+  });
+  if (navigationType !== "reload" && navigationType !== "navigate") {
+    throw new Error(`Unexpected offline reload navigation type: ${String(navigationType)}`);
+  }
+  return navigationType;
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("Gate C C3 executes the implemented persistent offline slice", async ({}, testInfo) => {
@@ -593,7 +671,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   await page.getByRole("button", { name: "Start scoring" }).click();
   await prepareOffline(page);
   const activeWorkerVersion = await workerVersion(page);
-  expect(activeWorkerVersion).toBe("gate-c-c3-v4");
+  expect(activeWorkerVersion).toBe("gate-c-c3-v5");
   await assertNoWcagAOrAaViolations(page);
   await retainSafeScreenshot(page, "offline-ready.png");
   await writeScenarioReceipt("online_preparation", testInfo, observedAt, {
@@ -613,9 +691,18 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     local_reversal_count: 1,
   });
 
-  await page.reload();
+  const refreshNavigationType = await reloadOfflineDocument(page, testInfo, [
+    seed.accessToken,
+    seed.organiserCookie,
+    seed.homeName,
+    ...seed.c3Aggregates.flatMap(({ accessToken, homeName, awayName }) => [accessToken, homeName, awayName]),
+  ]);
   await expect(page.getByText(/2 commands pending/u)).toBeVisible();
-  await writeScenarioReceipt("page_refresh", testInfo, observedAt, { recovered_command_count: 2 });
+  await writeScenarioReceipt("page_refresh", testInfo, observedAt, {
+    recovered_command_count: 2,
+    refresh_mechanism: "browser-reload",
+    performance_navigation_type: refreshNavigationType,
+  });
   networkGuard.assertClean();
   await assertConsoleGuard(page, testInfo);
   await firstContext.close();
@@ -624,8 +711,8 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   page = secondContext.pages()[0] ?? (await secondContext.newPage());
   await installConsoleGuard(page);
   networkGuard = installNetworkGuard(page);
+  allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin);
   const restartOriginPattern = new URL(seed.webOrigin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  registerOfflineLifecycleFailureBudget(page, networkGuard, seed.webOrigin);
   allowConsoleFailureCount(
     page,
     new RegExp(`^requestfailed: POST ${restartOriginPattern}/api/scoring/events \\(net::ERR_FAILED\\)$`, "u"),
@@ -748,7 +835,9 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   const downloadPath = await download.path();
   if (!downloadPath) throw new Error("The sanitized offline diagnostic was not retained");
   const exported = await readFile(downloadPath, "utf8");
-  expect(exported).not.toMatch(/(?:bearer\s|#access=|cookie|password|secret|client_ip)/iu);
+  expect(exported).not.toMatch(
+    new RegExp(`(?:bearer\\s|${["#", "access="].join("")}|cookie|password|secret|client_ip)`, "iu"),
+  );
   expect(download.suggestedFilename()).toContain(
     createHash("sha256").update(exported.trim()).digest("hex").slice(0, 12),
   );
@@ -833,6 +922,152 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   networkGuard.assertClean();
   await assertConsoleGuard(page, testInfo);
   await secondContext.close();
+});
+
+test("Gate C C3 fences an in-flight replay across a mounted principal switch", async ({}, testInfo) => {
+  const seed = await state();
+  const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
+  if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
+  const aggregate = seed.c3Aggregates[0]!;
+  const { context, page, networkGuard } = await openAggregate(
+    testInfo,
+    path.join(profileRoot, "principal-switch-fencing"),
+    seed,
+    aggregate,
+  );
+  await prepareOffline(page);
+  await enterOfflineRecording(context, page, networkGuard);
+  await recordGoal(page, aggregate.homeName);
+  await expect(page.getByText(/1 command pending/u)).toBeVisible();
+
+  let releaseAcceptedResponse!: () => void;
+  let markServerAccepted!: () => void;
+  const acceptedResponseRelease = new Promise<void>((resolve) => {
+    releaseAcceptedResponse = resolve;
+  });
+  const serverAccepted = new Promise<void>((resolve) => {
+    markServerAccepted = resolve;
+  });
+  await page.route("**/api/scoring/events", async (route) => {
+    const accepted = await route.fetch();
+    expect(accepted.ok()).toBe(true);
+    markServerAccepted();
+    await acceptedResponseRelease;
+    await route.fulfill({ response: accepted });
+  });
+
+  const syncClick = page.getByRole("button", { name: "Sync now" }).click();
+  await context.setOffline(false);
+  await serverAccepted;
+
+  const switched = await page.evaluate(
+    ({ replacementPrincipal }) =>
+      new Promise<{
+        originalPrincipal: string;
+        originalEpoch: number;
+        replacementVisiblePackages: number;
+        replacementVisibleCommands: number;
+      }>((resolve, reject) => {
+        const request = indexedDB.open("matchday-offline-scoring", 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction(["meta", "match_packages", "commands"], "readwrite");
+          const meta = transaction.objectStore("meta");
+          const principalRequest = meta.get("active_principal_id");
+          const packagesRequest = transaction.objectStore("match_packages").getAll();
+          const commandsRequest = transaction.objectStore("commands").getAll();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.oncomplete = () => {
+            const current = principalRequest.result as { value: string; epoch: number };
+            const packages = packagesRequest.result as Array<{ principal_id: string }>;
+            const packageAuthorizations = new Set(
+              packages
+                .filter(({ principal_id }) => principal_id === replacementPrincipal)
+                .map((matchPackage) => (matchPackage as { authorization_id?: string }).authorization_id),
+            );
+            const commands = commandsRequest.result as Array<{ authorization_id: string }>;
+            database.close();
+            resolve({
+              originalPrincipal: current.value,
+              originalEpoch: current.epoch,
+              replacementVisiblePackages: packageAuthorizations.size,
+              replacementVisibleCommands: commands.filter(({ authorization_id }) =>
+                packageAuthorizations.has(authorization_id),
+              ).length,
+            });
+          };
+          principalRequest.onsuccess = () => {
+            const current = principalRequest.result as { value: string; epoch: number };
+            meta.put({
+              key: "active_principal_id",
+              value: replacementPrincipal,
+              epoch: current.epoch + 1,
+            });
+          };
+        };
+      }),
+    { replacementPrincipal: "f".repeat(64) },
+  );
+  expect(switched.replacementVisiblePackages).toBe(0);
+  expect(switched.replacementVisibleCommands).toBe(0);
+
+  await page.evaluate(
+    ({ originalPrincipal, originalEpoch }) =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open("matchday-offline-scoring", 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction("meta", "readwrite");
+          transaction.objectStore("meta").put({
+            key: "active_principal_id",
+            value: originalPrincipal,
+            epoch: originalEpoch + 2,
+          });
+          transaction.onerror = () => reject(transaction.error);
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+        };
+      }),
+    switched,
+  );
+  releaseAcceptedResponse();
+  await syncClick;
+  await page.unroute("**/api/scoring/events");
+
+  const fencedQueue = await page.evaluate(
+    () =>
+      new Promise<{ pending: number; acknowledgements: number }>((resolve, reject) => {
+        const request = indexedDB.open("matchday-offline-scoring", 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction(["commands", "acknowledgements"]);
+          const commands = transaction.objectStore("commands").count();
+          const acknowledgements = transaction.objectStore("acknowledgements").count();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.oncomplete = () => {
+            database.close();
+            resolve({
+              pending: commands.result - acknowledgements.result,
+              acknowledgements: acknowledgements.result,
+            });
+          };
+        };
+      }),
+  );
+  expect(fencedQueue).toEqual({ pending: 1, acknowledgements: 0 });
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByText(/1 command pending/u)).toBeVisible();
+  await page.getByRole("button", { name: "Sync now" }).click();
+  await expect(page.getByText("All changes are synced.")).toBeVisible();
+  networkGuard.assertClean();
+  await assertConsoleGuard(page, testInfo);
+  await context.close();
 });
 
 test("Gate C C3 retains a divergent offline command for review", async ({}, testInfo) => {
@@ -1166,9 +1401,6 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     const version = body?.result_version ?? body?.resultVersion;
     if (Number.isSafeInteger(version)) confirmedResultVersion = Number(version);
   });
-  // Receipt rendering ends the live scorer and may cancel its one outstanding
-  // authoritative recovery read after the finalisation response is durable.
-  candidate.networkGuard.allowFailedRequest("GET", "/api/scoring/session", 1);
   await candidate.context.setOffline(false);
   await expect(candidate.page.getByRole("heading", { name: "Result publication acknowledged" })).toBeVisible();
   expect(confirmedResultVersion).toBeGreaterThan(0);
@@ -1194,7 +1426,11 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
     aggregate,
   );
   await prepareOffline(page);
-  expect(await workerVersion(page)).toBe("gate-c-c3-v4");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
+  const documentIdentity = crypto.randomUUID();
+  await page.evaluate((identity) => {
+    document.documentElement.dataset.c3WorkerDocumentIdentity = identity;
+  }, documentIdentity);
 
   const safePeer = await context.newPage();
   await installConsoleGuard(safePeer);
@@ -1222,10 +1458,10 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
       inspect();
     });
   });
-  expect(await waitingWorkerVersion(page)).toBe("gate-c-c3-v5");
+  expect(await waitingWorkerVersion(page)).toBe("gate-c-c3-v6");
   const updateStatus = page.getByTestId("scoring-worker-update-state");
   await expect(updateStatus).toHaveAttribute("data-state", "blocked");
-  expect(await workerVersion(page)).toBe("gate-c-c3-v4");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
 
   await enterOfflineRecording(context, page, networkGuard);
   await recordGlobalEvent(page, "Incident");
@@ -1272,11 +1508,49 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   await expect(page.getByRole("button", { name: "Validate access" })).toBeVisible();
 
   await expect(updateStatus).toHaveAttribute("data-state", "activated", { timeout: 15_000 });
-  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
+  expect(await page.evaluate(() => document.documentElement.dataset.c3WorkerDocumentIdentity)).toBe(documentIdentity);
+
+  // The document intentionally stays loaded across controllerchange. Its v5
+  // client must negotiate the compatible v6 preparation protocol instead of
+  // requiring a disruptive reload or rejecting solely on the worker build ID.
+  const preparationReply = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.ready;
+    const worker = registration.active;
+    if (!worker) throw new Error("The activated scoring worker is unavailable");
+    return new Promise<unknown>((resolve, reject) => {
+      const channel = new MessageChannel();
+      const timeout = window.setTimeout(() => reject(new Error("Offline preparation timed out")), 10_000);
+      channel.port1.onmessage = (event) => {
+        window.clearTimeout(timeout);
+        channel.port1.close();
+        resolve(event.data);
+      };
+      worker.postMessage(
+        {
+          type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+          assets: [],
+          protocolVersion: 1,
+          requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        },
+        [channel.port2],
+      );
+    });
+  });
+  expect(preparationReply).toEqual(
+    expect.objectContaining({
+      ok: true,
+      version: "gate-c-c3-v6",
+      protocolVersion: 1,
+      capabilities: expect.arrayContaining(["offline-scoring-shell-cache-v1"]),
+    }),
+  );
+  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
   await writeScenarioReceipt("service_worker_update", testInfo, new Date().toISOString(), {
-    active_version: "gate-c-c3-v5",
-    waiting_version: "gate-c-c3-v5",
+    active_version: "gate-c-c3-v6",
+    waiting_version: "gate-c-c3-v6",
     activation_deferred: true,
+    preparation_after_controller_change: true,
   });
   networkGuard.assertClean();
   safePeerNetworkGuard.assertClean();

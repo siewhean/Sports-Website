@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,8 +32,14 @@ describe("Gate C C3 migration", () => {
     });
     try {
       const organisationId = randomUUID();
-      await sql`INSERT INTO organisations(id,name,slug)
-        VALUES(${organisationId},'C3 migration org',${`c3-migration-${organisationId}`})`;
+      const accountId = randomUUID();
+      await sql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${accountId},${`${accountId}@example.test`},'C3 migration owner')`;
+      await sql.begin(async (tx) => {
+        await tx`INSERT INTO organisations(id,name,slug)
+          VALUES(${organisationId},'C3 migration org',${`c3-migration-${organisationId}`})`;
+        await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+          VALUES(${organisationId},${accountId},'owner','active')`;
+      });
 
       const outboxKey = `c3-double-encoded-${randomUUID()}`;
       const auditRequestId = `c3-double-encoded-audit-${randomUUID()}`;
@@ -51,18 +57,14 @@ describe("Gate C C3 migration", () => {
         to_jsonb(${"preserve-before"}::text),to_jsonb(${wrappedAfter}::text)
       )`;
 
-      const [before] = await sql<{
-        payload: string;
-        before_state: string;
-        after_state: string;
-        payload_hash: string;
-        before_hash: string;
-        after_hash: string;
-      }[]>`
-        SELECT outbox.payload::text payload,audit.before_state::text before_state,audit.after_state::text after_state,
-          encode(digest(convert_to(outbox.payload::text,'UTF8'),'sha256'),'hex') payload_hash,
-          encode(digest(convert_to(audit.before_state::text,'UTF8'),'sha256'),'hex') before_hash,
-          encode(digest(convert_to(audit.after_state::text,'UTF8'),'sha256'),'hex') after_hash
+      const [before] = await sql<
+        {
+          payload: string;
+          before_state: string;
+          after_state: string;
+        }[]
+      >`
+        SELECT outbox.payload::text payload,audit.before_state::text before_state,audit.after_state::text after_state
         FROM outbox_events outbox
         JOIN audit_events audit ON audit.request_id=${auditRequestId}
         WHERE outbox.idempotency_key=${outboxKey}
@@ -77,21 +79,17 @@ describe("Gate C C3 migration", () => {
       });
       expect(result.applied).toEqual([migrationName]);
 
-      const [after] = await sql<{
-        payload: string;
-        before_state: string;
-        after_state: string;
-        payload_hash: string;
-        before_hash: string;
-        after_hash: string;
-        payload_type: string;
-        before_type: string;
-        after_type: string;
-      }[]>`
+      const [after] = await sql<
+        {
+          payload: string;
+          before_state: string;
+          after_state: string;
+          payload_type: string;
+          before_type: string;
+          after_type: string;
+        }[]
+      >`
         SELECT outbox.payload::text payload,audit.before_state::text before_state,audit.after_state::text after_state,
-          encode(digest(convert_to(outbox.payload::text,'UTF8'),'sha256'),'hex') payload_hash,
-          encode(digest(convert_to(audit.before_state::text,'UTF8'),'sha256'),'hex') before_hash,
-          encode(digest(convert_to(audit.after_state::text,'UTF8'),'sha256'),'hex') after_hash,
           jsonb_typeof(outbox.payload) payload_type,
           jsonb_typeof(audit.before_state) before_type,
           jsonb_typeof(audit.after_state) after_type
@@ -100,15 +98,28 @@ describe("Gate C C3 migration", () => {
         WHERE outbox.idempotency_key=${outboxKey}
       `;
       if (!after) throw new Error("Expected post-migration history fixture");
+      const beforeHashes = {
+        payload: createHash("sha256").update(before.payload).digest("hex"),
+        beforeState: createHash("sha256").update(before.before_state).digest("hex"),
+        afterState: createHash("sha256").update(before.after_state).digest("hex"),
+      };
+      const afterHashes = {
+        payload: createHash("sha256").update(after.payload).digest("hex"),
+        beforeState: createHash("sha256").update(after.before_state).digest("hex"),
+        afterState: createHash("sha256").update(after.after_state).digest("hex"),
+      };
       expect(after).toMatchObject({
-        ...before,
+        payload: before.payload,
+        before_state: before.before_state,
+        after_state: before.after_state,
         payload_type: "string",
         before_type: "string",
         after_type: "string",
       });
-      await expect(
-        sql`UPDATE audit_events SET action=action WHERE request_id=${auditRequestId}`,
-      ).rejects.toThrow(/append-only/i);
+      expect(afterHashes).toEqual(beforeHashes);
+      await expect(sql`UPDATE audit_events SET action=action WHERE request_id=${auditRequestId}`).rejects.toThrow(
+        /append-only/i,
+      );
       expect(
         await sql<{ table_name: string }[]>`
           SELECT table_name FROM information_schema.tables

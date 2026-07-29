@@ -11,6 +11,7 @@ export default defineConfig({
     "**/unit/**",
     "**/gate-c-access-real.spec.ts",
     "**/gate-c-c2-real.spec.ts",
+    "**/gate-c-c3-real.spec.ts",
     "**/phase-2-real-api.spec.ts",
     "**/phase-4-real-api.spec.ts",
   ],

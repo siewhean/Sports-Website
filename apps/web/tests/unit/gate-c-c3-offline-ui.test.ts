@@ -11,12 +11,24 @@ describe("Gate C3 offline scoring UI contract", () => {
 
     expect(copy).toContain('offlinePrepareAction: "Prepare offline scoring"');
     expect(source).toContain("establishAuthority(summary, phase2Machine.offlinePrepareIntent)");
+    expect(source).toContain("revokeAuthority(phase2Machine.offlinePreparationRollbackIntent)");
+    expect(source).toContain("discardResolvedAuthorization(matchPackage.authorization_id)");
+    expect(copy).toContain("Offline authority was rolled back safely.");
     expect(copy).toContain('offlineSyncNow: "Sync now"');
     expect(copy).toContain('offlineDiagnosticAction: "Export sanitized diagnostic"');
     expect(copy).toContain("Finalised on this device — Pending server confirmation");
     expect(copy).toContain('offlineEndSession: "End scoring session"');
     expect(source).toContain("discardAfterExport");
     expect(source).toContain("discardResolvedAuthorization");
+  });
+
+  it("keeps the principal marker available through the bounded offline replay window", async () => {
+    const source = await readFile(scoringSource, "utf8");
+
+    expect(source).toContain("retainScoringPrincipalCookie(session.principalId, matchPackage.replay_expires_at)");
+    expect(source).toContain(
+      "retainScoringPrincipalCookie(recovered.session.principalId, recovered.matchPackage.replay_expires_at)",
+    );
   });
 
   it("locks scoring while authoritative recovery or ordered replay is in progress", async () => {
@@ -68,5 +80,25 @@ describe("Gate C3 offline scoring UI contract", () => {
     expect(source).toContain("resources.replay.replay(offlineAuthorizationId, replayAbort.signal)");
     expect(source).toContain("if (replayAbort.signal.aborted) return");
     expect(source).toContain("offlineReplayAbortRef.current?.abort()");
+  });
+
+  it("does not overlap periodic recovery with offline recording or ordered replay", async () => {
+    const source = await readFile(scoringSource, "utf8");
+
+    expect(source).toMatch(
+      /!transportOnlineRef\.current \|\|\s*!navigator\.onLine \|\|\s*offlineReplayAbortRef\.current/u,
+    );
+    expect(source).toMatch(
+      /if \(!transportOnlineRef\.current \|\| !navigator\.onLine\) \{\s*void device\.then\(\(\) => recoverStoredOfflineSession\(\)\)\.finally\(\(\) => setAccessChecking\(false\)\)/u,
+    );
+    expect(source).toMatch(
+      /if \(!transportOnlineRef\.current \|\| !navigator\.onLine\) \{\s*setOfflineState\(phase2Machine\.offlinePendingSync\);\s*return Promise\.resolve\(\)/u,
+    );
+    expect(source).toMatch(
+      /const offline = \(\) => \{\s*if \(!subscribed\) return;\s*transportOnlineRef\.current = false/u,
+    );
+    expect(source).toMatch(
+      /const online = \(\) => \{\s*if \(!subscribed\) return;\s*transportOnlineRef\.current = true/u,
+    );
   });
 });

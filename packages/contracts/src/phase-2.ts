@@ -102,6 +102,7 @@ export type ScoringSessionState = {
     away: { id: string | null; name: string | null };
   };
   access: {
+    principal_id: string;
     mode: "writer" | "candidate" | "viewer" | "transferred";
     permissions: Array<"score:read" | "score:write" | "score:reverse" | "score:finalise">;
     session_expires_at: string;
