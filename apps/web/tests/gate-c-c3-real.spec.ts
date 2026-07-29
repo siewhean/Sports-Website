@@ -636,8 +636,8 @@ async function reloadOfflineDocument(
     browserReportsOffline: navigator.onLine === false,
   }));
   const navigationType = reloadProof.navigationType;
-  if (testInfo.project.name.endsWith("-webkit")) expect(["reload", "navigate"]).toContain(navigationType);
-  else expect(navigationType).toBe("reload");
+  if (testInfo.project.name.endsWith("-chromium")) expect(navigationType).toBe("reload");
+  else expect(["reload", "navigate"]).toContain(navigationType);
   expect(reloadProof).toMatchObject({
     transientDocumentMarkerPresent: false,
     serviceWorkerControlled: true,
