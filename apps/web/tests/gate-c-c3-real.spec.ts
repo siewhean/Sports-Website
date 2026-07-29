@@ -1164,6 +1164,12 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
       1,
     );
     allowConsoleFailureCount(page, /^console\.error: Failed to load resource: The network connection was lost\.$/u, 1);
+  } else if (testInfo.project.name.endsWith("-chromium")) {
+    allowConsoleFailureCount(
+      page,
+      new RegExp(`^requestfailed: POST ${originPattern}/api/scoring/events \\(net::ERR_ABORTED\\)$`, "u"),
+      1,
+    );
   }
   await setBrowserConnectivity(testInfo, seed, secondContext, page, true);
   await expect
@@ -1196,6 +1202,14 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   });
   await expect(discardAfterReplacement).toBeEnabled();
   if (testInfo.project.name.endsWith("-chromium")) {
+    allowConsoleFailureCount(
+      page,
+      new RegExp(
+        `^requestfailed: DELETE ${originPattern}/api/scoring/offline/authority \\(net::ERR_INTERNET_DISCONNECTED\\)$`,
+        "u",
+      ),
+      1,
+    );
     networkGuard.expectFailedRequest("DELETE", "/api/scoring/offline/authority");
   }
   // Dispatch immediately once enabled. Chromium can begin an automatic retry
