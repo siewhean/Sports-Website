@@ -632,7 +632,7 @@ async function reloadOfflineDocument(
     });
   });
   await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "offline-recording");
+  await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "pending-sync");
   const reloadProof = await page.evaluate(async () => {
     const transportProbe = await fetch("/__matchday-offline-transport-probe", { cache: "no-store" }).then(
       (response) => ({ blocked: false, status: response.status }),
