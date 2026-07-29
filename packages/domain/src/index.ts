@@ -27,6 +27,7 @@ export * from "./results.js";
 export * from "./publication.js";
 export * from "./sport-packs.js";
 export * from "./result-repair.js";
+export * from "./public-truth.js";
 export * as competitionDomain from "./competition.js";
 
 export * from "./five-sport-scoring.js";
