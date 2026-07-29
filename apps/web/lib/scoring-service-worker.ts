@@ -1,6 +1,6 @@
 "use client";
 
-export const scoringWorkerVersion = "gate-c-c3-v4";
+export const scoringWorkerVersion = "gate-c-c3-v5";
 export const scoringWorkerUpdateProtocolVersion = 1;
 export const scoringWorkerUpdateStates = {
   idle: "idle",

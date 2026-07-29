@@ -50,7 +50,7 @@ function projectReceipt(projectName, isolation) {
     browser_profile_sha256: isolation("profile"),
     browser_version: "1",
     indexeddb_schema_version: 1,
-    service_worker_version: "matchday-scoring-shell-v4",
+    service_worker_version: "matchday-scoring-shell-v5",
     screenshot_paths: [...gateCC3RequiredScreenshotPaths],
     scenarios,
     artifact_hashes: [

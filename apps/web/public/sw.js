@@ -1,8 +1,8 @@
 const FOUNDATION_CACHE_NAME = "matchday-foundation-v3";
 const SCORING_CACHE_PREFIX = "matchday-scoring-shell-";
-const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v4`;
+const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;
 const SCORING_SHELL_PATH = "/score";
-const WORKER_VERSION = "gate-c-c3-v4";
+const WORKER_VERSION = "gate-c-c3-v5";
 const UPDATE_PROTOCOL_VERSION = 1;
 const CLIENT_SAFETY_TIMEOUT_MS = 5_000;
 const PUBLIC_DOCUMENT_PATHS = new Set(["/", "/competitions/singapore-open"]);
@@ -284,7 +284,22 @@ self.addEventListener("message", (event) => {
       .then(async (cache) => {
         const shell = await fetch(SCORING_SHELL_PATH, { credentials: "same-origin", cache: "no-store" });
         if (!shell.ok) throw new Error("The offline scoring shell could not be prepared.");
-        await cache.put(SCORING_SHELL_PATH, shell);
+        const shellHeaders = new Headers(shell.headers);
+        shellHeaders.delete("vary");
+        shellHeaders.delete("content-encoding");
+        shellHeaders.delete("content-length");
+        shellHeaders.delete("transfer-encoding");
+        const durableShell = new Response(await shell.arrayBuffer(), {
+          status: shell.status,
+          statusText: shell.statusText,
+          headers: shellHeaders,
+        });
+        const shellRequest = new Request(new URL(SCORING_SHELL_PATH, self.location.origin).href, {
+          credentials: "same-origin",
+        });
+        await cache.put(shellRequest, durableShell);
+        const storedShell = await cache.match(shellRequest, { ignoreVary: true });
+        if (!storedShell?.ok) throw new Error("The offline scoring shell could not be retained.");
         await Promise.all(
           assets.map(async (asset) => {
             const response = await fetch(asset, { credentials: "same-origin" });
@@ -293,8 +308,12 @@ self.addEventListener("message", (event) => {
         );
         event.ports[0]?.postMessage({ ok: true, version: WORKER_VERSION });
       })
-      .catch(() => {
-        event.ports[0]?.postMessage({ ok: false, version: WORKER_VERSION });
+      .catch((error) => {
+        event.ports[0]?.postMessage({
+          ok: false,
+          version: WORKER_VERSION,
+          error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        });
       }),
   );
 });
@@ -312,9 +331,13 @@ self.addEventListener("fetch", (event) => {
     const url = new URL(request.url);
     if (url.pathname === SCORING_SHELL_PATH) {
       event.respondWith(
-        fetch(request).catch(async () => {
-          const cached = await caches.open(SCORING_CACHE_NAME).then((cache) => cache.match(SCORING_SHELL_PATH));
-          return cached || offlineResponse();
+        caches.open(SCORING_CACHE_NAME).then(async (cache) => {
+          const shellRequest = new Request(new URL(SCORING_SHELL_PATH, self.location.origin).href, {
+            credentials: "same-origin",
+          });
+          const cached = await cache.match(shellRequest, { ignoreVary: true });
+          if (cached) return cached;
+          return fetch(request).catch(() => offlineResponse());
         }),
       );
       return;

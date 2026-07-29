@@ -73,6 +73,9 @@ describe("Gate C3 scoring service worker", () => {
     const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
     expect(source).toContain("MATCHDAY_PREPARE_OFFLINE_SCORING");
     expect(source).toContain('request.method !== "GET"');
+    expect(source).toContain("The offline scoring shell could not be retained.");
+    expect(source).toContain("cache.match(shellRequest, { ignoreVary: true })");
+    expect(source).toMatch(/if \(cached\) return cached;[\s\S]*return fetch\(request\)\.catch/);
     expect(source).not.toMatch(/addEventListener\(["']sync["']/);
     expect(source).not.toContain("SyncManager");
   });

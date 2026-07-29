@@ -425,6 +425,35 @@ async function prepareOffline(page: Page): Promise<void> {
           readyState = "registration-rejected";
         }
       }
+      const preparationReply = registration?.active
+        ? await new Promise<unknown>((resolve) => {
+            const channel = new MessageChannel();
+            const timeout = window.setTimeout(() => resolve({ error: "diagnostic-timeout" }), 5_000);
+            channel.port1.onmessage = (event) => {
+              window.clearTimeout(timeout);
+              channel.port1.close();
+              resolve(event.data);
+            };
+            registration.active?.postMessage({ type: "MATCHDAY_PREPARE_OFFLINE_SCORING", assets: [] }, [channel.port2]);
+          })
+        : null;
+      const cacheStorageProbe = await (async () => {
+        const cacheName = "matchday-c3-storage-probe";
+        try {
+          const cache = await caches.open(cacheName);
+          const request = new Request(new URL("/_e2e/cache-storage-probe", window.location.origin).href);
+          await cache.put(request, new Response("ok", { headers: { "content-type": "text/plain" } }));
+          const stored = await cache.match(request);
+          return {
+            keys: (await cache.keys()).map(({ url }) => new URL(url).pathname),
+            body: await stored?.text(),
+          };
+        } catch (error) {
+          return { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) };
+        } finally {
+          await caches.delete(cacheName);
+        }
+      })();
       return {
         secureContext: window.isSecureContext,
         serviceWorkerAvailable: "serviceWorker" in navigator,
@@ -438,6 +467,8 @@ async function prepareOffline(page: Page): Promise<void> {
         installing: registration?.installing?.state ?? null,
         registrationError,
         readyState,
+        preparationReply,
+        cacheStorageProbe,
         offlineState: document.querySelector("[data-offline-state]")?.getAttribute("data-offline-state") ?? null,
         offlineTitle: document.querySelector("#offline-state-title")?.textContent?.trim() ?? null,
       };
@@ -574,6 +605,50 @@ async function offlineQueueDiagnostics(page: Page): Promise<Record<string, unkno
   });
 }
 
+async function reloadOfflineDocument(
+  page: Page,
+  testInfo: TestInfo,
+  sensitiveValues: string[],
+): Promise<"reload" | "navigate"> {
+  const preparedShell = await page.evaluate(async (values) => {
+    const cache = await caches.open("matchday-scoring-shell-v5");
+    const response = await cache.match("/score", { ignoreVary: true });
+    const body = response ? await response.clone().text() : "";
+    return {
+      cacheKeys: (await cache.keys()).map(({ url }) => new URL(url).pathname),
+      responseStatus: response?.status ?? null,
+      containsSensitiveValue: values.some((value) => value.length > 0 && body.includes(value)),
+    };
+  }, sensitiveValues);
+  expect(preparedShell.responseStatus, JSON.stringify(preparedShell)).toBe(200);
+  expect(preparedShell.containsSensitiveValue).toBe(false);
+  await page.evaluate(() => {
+    Object.defineProperty(window, "__matchdayC3PreReloadDocument", {
+      configurable: true,
+      value: true,
+    });
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const reloadProof = await page.evaluate(() => ({
+    navigationType: (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type,
+    transientDocumentMarkerPresent: Object.prototype.hasOwnProperty.call(window, "__matchdayC3PreReloadDocument"),
+    serviceWorkerControlled: navigator.serviceWorker.controller !== null,
+    browserReportsOffline: navigator.onLine === false,
+  }));
+  const navigationType = reloadProof.navigationType;
+  if (testInfo.project.name.endsWith("-webkit")) expect(["reload", "navigate"]).toContain(navigationType);
+  else expect(navigationType).toBe("reload");
+  expect(reloadProof).toMatchObject({
+    transientDocumentMarkerPresent: false,
+    serviceWorkerControlled: true,
+    browserReportsOffline: true,
+  });
+  if (navigationType !== "reload" && navigationType !== "navigate") {
+    throw new Error(`Unexpected offline reload navigation type: ${String(navigationType)}`);
+  }
+  return navigationType;
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("Gate C C3 executes the implemented persistent offline slice", async ({}, testInfo) => {
@@ -593,7 +668,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   await page.getByRole("button", { name: "Start scoring" }).click();
   await prepareOffline(page);
   const activeWorkerVersion = await workerVersion(page);
-  expect(activeWorkerVersion).toBe("gate-c-c3-v4");
+  expect(activeWorkerVersion).toBe("gate-c-c3-v5");
   await assertNoWcagAOrAaViolations(page);
   await retainSafeScreenshot(page, "offline-ready.png");
   await writeScenarioReceipt("online_preparation", testInfo, observedAt, {
@@ -613,9 +688,18 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     local_reversal_count: 1,
   });
 
-  await page.reload();
+  const refreshNavigationType = await reloadOfflineDocument(page, testInfo, [
+    seed.accessToken,
+    seed.organiserCookie,
+    seed.homeName,
+    ...seed.c3Aggregates.flatMap(({ accessToken, homeName, awayName }) => [accessToken, homeName, awayName]),
+  ]);
   await expect(page.getByText(/2 commands pending/u)).toBeVisible();
-  await writeScenarioReceipt("page_refresh", testInfo, observedAt, { recovered_command_count: 2 });
+  await writeScenarioReceipt("page_refresh", testInfo, observedAt, {
+    recovered_command_count: 2,
+    refresh_mechanism: "browser-reload",
+    performance_navigation_type: refreshNavigationType,
+  });
   networkGuard.assertClean();
   await assertConsoleGuard(page, testInfo);
   await firstContext.close();
@@ -1194,7 +1278,7 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
     aggregate,
   );
   await prepareOffline(page);
-  expect(await workerVersion(page)).toBe("gate-c-c3-v4");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
 
   const safePeer = await context.newPage();
   await installConsoleGuard(safePeer);
@@ -1222,10 +1306,10 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
       inspect();
     });
   });
-  expect(await waitingWorkerVersion(page)).toBe("gate-c-c3-v5");
+  expect(await waitingWorkerVersion(page)).toBe("gate-c-c3-v6");
   const updateStatus = page.getByTestId("scoring-worker-update-state");
   await expect(updateStatus).toHaveAttribute("data-state", "blocked");
-  expect(await workerVersion(page)).toBe("gate-c-c3-v4");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
 
   await enterOfflineRecording(context, page, networkGuard);
   await recordGlobalEvent(page, "Incident");
@@ -1272,10 +1356,10 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   await expect(page.getByRole("button", { name: "Validate access" })).toBeVisible();
 
   await expect(updateStatus).toHaveAttribute("data-state", "activated", { timeout: 15_000 });
-  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
   await writeScenarioReceipt("service_worker_update", testInfo, new Date().toISOString(), {
-    active_version: "gate-c-c3-v5",
-    waiting_version: "gate-c-c3-v5",
+    active_version: "gate-c-c3-v6",
+    waiting_version: "gate-c-c3-v6",
     activation_deferred: true,
   });
   networkGuard.assertClean();
