@@ -1,8 +1,14 @@
-# Gate C C4 parallel domain lane
+# Gate C C4 domain-slice provenance
 
-This branch is an isolated, parallel-safe C4 implementation lane created from the certified C2 evidence commit:
+The original isolated, parallel-safe C4 domain lane was created from the certified C2 evidence commit:
 
 `e1722bcb3cd859c4035c20efe498720fdc23e08a`
+
+Its reviewed commits were then transplanted onto the non-certifying C4 preparation branch based on frozen C3 source:
+
+`3880bbf6c86f7d3da57d673e185787e6aeb86efb`
+
+The C2-based branch remains the audit source. The C3-source preparation branch is not a release-integration branch and cannot receive C4 certification evidence until C3 has an exact-SHA PASS evidence commit.
 
 ## Included
 
@@ -24,4 +30,4 @@ This branch is an isolated, parallel-safe C4 implementation lane created from th
 
 ## Integration rule
 
-Do not merge this branch directly into the release line while C3 is unresolved. After C3 receives an exact-SHA PASS, review and transplant the C4 commits onto a branch created from the certified C3 evidence commit, then rerun format, lint, typecheck, unit, infrastructure and dedicated C4 validation.
+Do not merge either branch directly into the release line while C3 is unresolved. After C3 receives an exact-SHA PASS, create the C4 integration branch from that C3 evidence commit, review this preparation branch again, and transplant its commits before running C4 infrastructure and certification validation.
