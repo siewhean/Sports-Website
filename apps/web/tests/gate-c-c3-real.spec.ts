@@ -1813,6 +1813,12 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
       new RegExp(`^requestfailed: POST ${workerOriginPattern}/api/scoring/events \\(cancelled\\)$`, "u"),
       1,
     );
+  } else if (testInfo.project.name.endsWith("-chromium")) {
+    allowConsoleFailureCount(
+      page,
+      new RegExp(`^requestfailed: POST ${workerOriginPattern}/api/scoring/events \\(net::ERR_ABORTED\\)$`, "u"),
+      1,
+    );
   }
   networkGuard.expectFailedRequest("POST", "/api/scoring/events");
   await setBrowserConnectivity(testInfo, seed, context, page, true);
