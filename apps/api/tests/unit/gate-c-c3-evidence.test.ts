@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertNoSecretLikeText,
   createGateCC3ControllableClock,
+  gateCC3ScenarioObservationKeys,
   verifyGateCC3SafeArtifactTree,
 } from "../../scripts/gate-c-c3-evidence.js";
 
@@ -26,6 +27,23 @@ describe("Gate C C3 controllable runner clock", () => {
 });
 
 describe("Gate C C3 real-journey oracle", () => {
+  it("requires the retained page-refresh receipt to prove a real reload", () => {
+    expect(gateCC3ScenarioObservationKeys.page_refresh).toEqual([
+      "recovered_command_count",
+      "refresh_mechanism",
+      "performance_navigation_type",
+    ]);
+  });
+
+  it("requires the retained worker-update receipt to prove post-activation preparation", () => {
+    expect(gateCC3ScenarioObservationKeys.service_worker_update).toEqual([
+      "active_version",
+      "waiting_version",
+      "activation_deferred",
+      "preparation_after_controller_change",
+    ]);
+  });
+
   it("binds the final result snapshot to the isolated finalisation aggregate", async () => {
     const source = await readFile(new URL("../../scripts/run-phase-2-real-e2e.ts", import.meta.url), "utf8");
 

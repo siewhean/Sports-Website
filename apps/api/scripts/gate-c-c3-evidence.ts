@@ -72,7 +72,7 @@ export const gateCC3ScenarioAssertions: Readonly<Record<GateCC3Scenario, readonl
 export const gateCC3ScenarioObservationKeys: Readonly<Record<GateCC3Scenario, readonly string[]>> = {
   online_preparation: ["service_worker_version", "queue_count"],
   offline_event_and_local_reversal: ["queued_command_count", "local_reversal_count"],
-  page_refresh: ["recovered_command_count"],
+  page_refresh: ["recovered_command_count", "refresh_mechanism", "performance_navigation_type"],
   browser_restart: ["recovered_command_count", "persistent_profile_reused"],
   strict_ordered_replay: ["replayed_command_count", "maximum_concurrent_requests", "replay_client_id_sha256"],
   lost_response_idempotency: ["duplicate_receipt_sha256", "mutation_count"],
@@ -84,7 +84,12 @@ export const gateCC3ScenarioObservationKeys: Readonly<Record<GateCC3Scenario, re
   sign_out_with_unresolved_queue: ["signout_intercepted", "export_sha256"],
   sanitised_export: ["export_sha256", "sensitive_data_scan_clean"],
   storage_corruption: ["conflict_code", "retained_command_count"],
-  service_worker_update: ["active_version", "waiting_version", "activation_deferred"],
+  service_worker_update: [
+    "active_version",
+    "waiting_version",
+    "activation_deferred",
+    "preparation_after_controller_change",
+  ],
 };
 
 export const gateCC3RequiredScreenshotPaths = [
