@@ -314,6 +314,15 @@ function browserExposesProxyDroppedRequest(projectName: string): boolean {
   return !projectName.endsWith("-chromium");
 }
 
+function browserNeedsPersistedConnectivityHint(browserOrProjectName: string): boolean {
+  return (
+    browserOrProjectName === "firefox" ||
+    browserOrProjectName === "webkit" ||
+    browserOrProjectName.endsWith("-firefox") ||
+    browserOrProjectName.endsWith("-webkit")
+  );
+}
+
 async function launch(testInfo: TestInfo, profileDirectory: string, offline: boolean): Promise<BrowserContext> {
   const { browserType, device } = persistentProject(testInfo);
   const context = await browserType.launchPersistentContext(profileDirectory, {
@@ -338,7 +347,7 @@ async function launch(testInfo: TestInfo, profileDirectory: string, offline: boo
       sameSite: "Strict",
     },
   ]);
-  if (browserType.name() === "webkit") {
+  if (browserNeedsPersistedConnectivityHint(browserType.name())) {
     await context.addInitScript(() => {
       Object.defineProperty(navigator, "onLine", {
         configurable: true,
@@ -364,23 +373,29 @@ async function setBrowserConnectivity(
 ): Promise<void> {
   if (!testInfo.project.name.endsWith("-webkit")) {
     await context.setOffline(!online);
-    return;
   }
-  if (online) {
-    await context.clearCookies({ name: "matchday-e2e-transport-offline" });
-  } else {
-    await context.addCookies([
-      {
-        name: "matchday-e2e-transport-offline",
-        value: "1",
-        url: seed.webOrigin,
-        expires: Math.floor(Date.now() / 1_000) + 3_600,
-        httpOnly: true,
-        secure: true,
-        sameSite: "Strict",
-      },
-    ]);
+  if (testInfo.project.name.endsWith("-webkit")) {
+    if (online) {
+      await context.clearCookies({ name: "matchday-e2e-transport-offline" });
+    } else {
+      await context.addCookies([
+        {
+          name: "matchday-e2e-transport-offline",
+          value: "1",
+          url: seed.webOrigin,
+          expires: Math.floor(Date.now() / 1_000) + 3_600,
+          httpOnly: true,
+          secure: true,
+          sameSite: "Strict",
+        },
+      ]);
+    }
   }
+  // Playwright blocks Firefox/WebKit transport here, but a reloaded document
+  // does not consistently inherit the corresponding navigator.onLine hint.
+  // Persist only that lifecycle hint; the blocked HTTPS probe remains the
+  // independent offline oracle.
+  if (!browserNeedsPersistedConnectivityHint(testInfo.project.name)) return;
   await page.evaluate((nextOnline) => {
     window.localStorage.setItem("matchday-e2e-transport-offline", nextOnline ? "false" : "true");
     window.dispatchEvent(new Event(nextOnline ? "online" : "offline"));

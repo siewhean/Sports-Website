@@ -238,4 +238,15 @@ describe("Gate C C3 hardening", () => {
       backupVerifier.indexOf("pnpm db:migrate"),
     );
   });
+
+  it("persists only the Firefox and WebKit connectivity hint across offline reloads", async () => {
+    const journey = await readFile(new URL("../tests/gate-c-c3-real.spec.ts", import.meta.url), "utf8");
+
+    expect(journey).toMatch(
+      /browserOrProjectName === "firefox"[\s\S]*browserOrProjectName === "webkit"[\s\S]*endsWith\("-firefox"\)[\s\S]*endsWith\("-webkit"\)/u,
+    );
+    expect(journey).toContain("await context.setOffline(!online)");
+    expect(journey).toContain('window.localStorage.setItem("matchday-e2e-transport-offline"');
+    expect(journey).toContain('fetch("/__matchday-offline-transport-probe", { cache: "no-store" })');
+  });
 });
