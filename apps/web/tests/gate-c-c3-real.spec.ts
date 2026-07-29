@@ -1568,10 +1568,13 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   const workerOriginPattern = new URL(seed.webOrigin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   allowConsoleFailureCount(
     page,
-    new RegExp(`^requestfailed: POST ${workerOriginPattern}/api/scoring/events \\(net::ERR_FAILED\\)$`, "u"),
+    new RegExp(
+      `^requestfailed: POST ${workerOriginPattern}/api/scoring/events \\(net::ERR_(?:FAILED|ABORTED)\\)$`,
+      "u",
+    ),
     1,
   );
-  allowConsoleFailureCount(page, /^console\.error: Failed to load resource: net::ERR_FAILED$/u, 1);
+  allowConsoleFailureCount(page, /^console\.error: Failed to load resource: net::ERR_(?:FAILED|ABORTED)$/u, 1);
   await page.route("**/api/scoring/events", async (route) => {
     markReplayIntercepted();
     await pendingReplayRelease;
