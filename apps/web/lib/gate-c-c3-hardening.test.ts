@@ -248,5 +248,7 @@ describe("Gate C C3 hardening", () => {
     expect(journey).toContain("await context.setOffline(!online)");
     expect(journey).toContain('window.localStorage.setItem("matchday-e2e-transport-offline"');
     expect(journey).toContain('fetch("/__matchday-offline-transport-probe", { cache: "no-store" })');
+    expect(journey).toContain('? "The network connection was lost."');
+    expect(journey).toContain(': "net::ERR_INTERNET_DISCONNECTED"');
   });
 });

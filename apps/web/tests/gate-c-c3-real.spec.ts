@@ -1222,16 +1222,22 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   const allChangesSynced = page.getByText("All changes are synced.").first();
   await expect(discardAfterReplacement.or(allChangesSynced).first()).toBeVisible();
   const discardIsReady = await discardAfterReplacement.isEnabled().catch(() => false);
-  if (discardIsReady && testInfo.project.name.endsWith("-chromium")) {
+  if (discardIsReady && (testInfo.project.name.endsWith("-chromium") || testInfo.project.name.endsWith("-webkit"))) {
+    const offlineDeleteError = testInfo.project.name.endsWith("-webkit")
+      ? "The network connection was lost."
+      : "net::ERR_INTERNET_DISCONNECTED";
     allowConsoleFailureCount(
       page,
       new RegExp(
-        `^requestfailed: DELETE ${originPattern}/api/scoring/offline/authority \\(net::ERR_INTERNET_DISCONNECTED\\)$`,
+        `^requestfailed: DELETE ${originPattern}/api/scoring/offline/authority \\(${offlineDeleteError.replace(
+          ".",
+          "\\.",
+        )}\\)$`,
         "u",
       ),
       1,
     );
-    networkGuard.allowFailedRequest("DELETE", "/api/scoring/offline/authority", "net::ERR_INTERNET_DISCONNECTED", 1);
+    networkGuard.allowFailedRequest("DELETE", "/api/scoring/offline/authority", offlineDeleteError, 1);
   }
   // Dispatch immediately once enabled. Chromium can begin an automatic retry
   // between Playwright's actionability stability frames; that retry must not
