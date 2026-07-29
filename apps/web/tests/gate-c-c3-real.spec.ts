@@ -532,6 +532,27 @@ async function openCandidateAggregate(
   return { context, page, networkGuard };
 }
 
+async function expectScoringSessionCookie(
+  context: BrowserContext,
+  webOrigin: string,
+  checkpoint: string,
+): Promise<void> {
+  const cookies = (await context.cookies(`${webOrigin}/score`)).filter(
+    ({ name }) => name === "__Host-matchday-scoring-session",
+  );
+  expect(
+    cookies.map(({ name, path, expires, httpOnly, secure, sameSite }) => ({
+      name,
+      path,
+      expires,
+      httpOnly,
+      secure,
+      sameSite,
+    })),
+    `Scoring session cookie was not retained at ${checkpoint}`,
+  ).toHaveLength(1);
+}
+
 async function prepareOffline(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Prepare offline scoring" }).click();
   try {
@@ -1853,6 +1874,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   await expect(
     candidate.page.locator("p:not(.visually-hidden)").filter({ hasText: /^Takeover requested$/u }),
   ).toBeVisible();
+  await expectScoringSessionCookie(candidate.context, seed.webOrigin, "takeover request");
 
   const takeoverList = await organiserRequest(
     testInfo,
@@ -1881,6 +1903,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   expect(approval.status).toBe(200);
   const approvedGeneration = (approval.body as { generation?: unknown }).generation;
   expect(Number.isSafeInteger(approvedGeneration)).toBe(true);
+  await expectScoringSessionCookie(candidate.context, seed.webOrigin, "organiser approval");
   await setBrowserConnectivity(testInfo, seed, incumbent.context, incumbent.page, true);
   await expect(
     incumbent.page
@@ -1892,12 +1915,14 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     conflict_code: "stale_writer_generation",
     retained_command_count: 1,
   });
+  await expectScoringSessionCookie(candidate.context, seed.webOrigin, "incumbent reconnection");
 
   // Promotion polling is intentionally suspended for hidden scoring documents.
   // Foreground the candidate and prove its authoritative recovery before
   // exercising the promoted writer.
   await candidate.page.bringToFront();
   await expect.poll(() => candidate.page.evaluate(() => document.visibilityState)).toBe("visible");
+  await expectScoringSessionCookie(candidate.context, seed.webOrigin, "candidate foreground recovery");
   const promotedRecovery = await candidate.page.evaluate(async () => {
     const response = await fetch("/api/scoring/session", {
       cache: "no-store",
