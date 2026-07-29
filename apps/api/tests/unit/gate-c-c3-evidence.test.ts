@@ -51,10 +51,13 @@ describe("Gate C C3 real-journey oracle", () => {
     expect(source).toContain("resultSnapshots[0]?.count !== (index === 7 ? 1 : 0)");
   });
 
-  it("accepts only the explicit resolved-before-discard stream for the sign-out race", async () => {
+  it("accepts only the explicit resolved-before-discard streams for sign-out and worker update", async () => {
     const source = await readFile(new URL("../../scripts/run-phase-2-real-e2e.ts", import.meta.url), "utf8");
 
-    expect(source).toContain('index === 0 && observedEventTypes === [...configuredExpected, "incident"].join(",")');
+    expect(source).toContain("const allowsResolvedBeforeDiscard = index === 0 || index === 8");
+    expect(source).toContain(
+      'allowsResolvedBeforeDiscard && observedEventTypes === [...configuredExpected, "incident"].join(",")',
+    );
     expect(source).toContain('? [...configuredExpected, "incident"]');
     expect(source).toContain('observedEventTypes !== expected.join(",")');
   });

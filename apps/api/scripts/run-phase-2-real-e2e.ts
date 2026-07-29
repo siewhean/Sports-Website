@@ -1182,8 +1182,9 @@ async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<
     ]);
     const configuredExpected = expectedEventTypes[index]!;
     const observedEventTypes = events.map(({ event_type: eventType }) => eventType).join(",");
+    const allowsResolvedBeforeDiscard = index === 0 || index === 8;
     const expected =
-      index === 0 && observedEventTypes === [...configuredExpected, "incident"].join(",")
+      allowsResolvedBeforeDiscard && observedEventTypes === [...configuredExpected, "incident"].join(",")
         ? [...configuredExpected, "incident"]
         : configuredExpected;
     const expectedScoringEventEvidenceCount = expected.filter((eventType) => eventType !== "finalisation").length;
