@@ -11,6 +11,8 @@ import {
   isCompatibleScoringWorkerPreparationReply,
   isScoringWorkerSafetyFrozen,
   isScoringWorkerTransitionInFlight,
+  scoringWorkerPreparationError,
+  ScoringWorkerPreparationError,
   ScoringWorkerSafetyFrozenError,
 } from "./scoring-service-worker";
 
@@ -76,6 +78,7 @@ describe("Gate C3 scoring service worker", () => {
     expect(source).toContain('request.method !== "GET"');
     expect(source).toContain("The offline scoring shell could not be retained.");
     expect(source).toContain('code: "INCOMPATIBLE_PREPARATION_PROTOCOL"');
+    expect(source).toContain('"OFFLINE_SHELL_STORAGE_UNAVAILABLE"');
     expect(source).toContain("message.protocolVersion !== PREPARATION_PROTOCOL_VERSION");
     expect(source).toContain("requiredCapabilities.some");
     expect(source).toContain("cache.match(shellRequest, { ignoreVary: true })");
@@ -129,6 +132,33 @@ describe("Gate C3 scoring service worker", () => {
       protocolVersion: 1,
       capabilities: ["offline-scoring-shell-cache-v1"],
       code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
+    });
+  });
+
+  it("reports unavailable durable shell storage distinctly from protocol skew", () => {
+    const error = scoringWorkerPreparationError({
+      ok: false,
+      version: "gate-c-c3-v5",
+      protocolVersion: 1,
+      capabilities: ["offline-scoring-shell-cache-v1"],
+      code: "OFFLINE_SHELL_STORAGE_UNAVAILABLE",
+    });
+    expect(error).toBeInstanceOf(ScoringWorkerPreparationError);
+    expect(error).toMatchObject({
+      code: "OFFLINE_SHELL_STORAGE_UNAVAILABLE",
+      message: expect.stringContaining("trusted HTTPS origin"),
+    });
+    expect(
+      scoringWorkerPreparationError({
+        ok: false,
+        version: "gate-c-c3-v5",
+        protocolVersion: 1,
+        capabilities: ["offline-scoring-shell-cache-v1"],
+        code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
+      }),
+    ).toMatchObject({
+      code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
+      message: expect.stringContaining("reload when it is safe"),
     });
   });
 

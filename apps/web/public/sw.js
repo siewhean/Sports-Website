@@ -333,11 +333,16 @@ self.addEventListener("message", (event) => {
         });
       })
       .catch((error) => {
+        const code =
+          error instanceof Error && error.message === "The offline scoring shell could not be retained."
+            ? "OFFLINE_SHELL_STORAGE_UNAVAILABLE"
+            : "OFFLINE_SHELL_PREPARATION_FAILED";
         event.ports[0]?.postMessage({
           ok: false,
           version: WORKER_VERSION,
           protocolVersion: PREPARATION_PROTOCOL_VERSION,
           capabilities: PREPARATION_CAPABILITIES,
+          code,
           error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
         });
       }),

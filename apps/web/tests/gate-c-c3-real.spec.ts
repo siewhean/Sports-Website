@@ -434,7 +434,15 @@ async function prepareOffline(page: Page): Promise<void> {
               channel.port1.close();
               resolve(event.data);
             };
-            registration.active?.postMessage({ type: "MATCHDAY_PREPARE_OFFLINE_SCORING", assets: [] }, [channel.port2]);
+            registration.active?.postMessage(
+              {
+                type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+                assets: [],
+                protocolVersion: 1,
+                requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+              },
+              [channel.port2],
+            );
           })
         : null;
       const cacheStorageProbe = await (async () => {

@@ -134,6 +134,36 @@ type ScoringWorkerPreparationReply = {
   code?: string;
 };
 
+export class ScoringWorkerPreparationError extends Error {
+  constructor(
+    readonly code:
+      "INCOMPATIBLE_PREPARATION_PROTOCOL" | "OFFLINE_SHELL_STORAGE_UNAVAILABLE" | "OFFLINE_SHELL_PREPARATION_FAILED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ScoringWorkerPreparationError";
+  }
+}
+
+export function scoringWorkerPreparationError(reply: ScoringWorkerPreparationReply | null): Error {
+  if (reply?.code === "INCOMPATIBLE_PREPARATION_PROTOCOL" || reply?.ok === true) {
+    return new ScoringWorkerPreparationError(
+      "INCOMPATIBLE_PREPARATION_PROTOCOL",
+      "The active scoring worker is not compatible with this offline preparation protocol. Finish or export unresolved work, then reload when it is safe.",
+    );
+  }
+  if (reply?.code === "OFFLINE_SHELL_STORAGE_UNAVAILABLE") {
+    return new ScoringWorkerPreparationError(
+      "OFFLINE_SHELL_STORAGE_UNAVAILABLE",
+      "This browser could not retain the offline scoring shell. Use a trusted HTTPS origin with durable browser storage, then retry.",
+    );
+  }
+  return new ScoringWorkerPreparationError(
+    "OFFLINE_SHELL_PREPARATION_FAILED",
+    "The offline scoring shell could not be prepared.",
+  );
+}
+
 export function isCompatibleScoringWorkerPreparationReply(value: unknown): value is ScoringWorkerPreparationReply & {
   ok: true;
   version: string;
@@ -237,15 +267,7 @@ export async function prepareOfflineScoringShell(): Promise<void> {
         return;
       }
       const reply = event.data as ScoringWorkerPreparationReply | null;
-      if (reply?.code === "INCOMPATIBLE_PREPARATION_PROTOCOL" || reply?.ok === true) {
-        reject(
-          new Error(
-            "The active scoring worker is not compatible with this offline preparation protocol. Finish or export unresolved work, then reload when it is safe.",
-          ),
-        );
-        return;
-      }
-      reject(new Error("The offline scoring shell could not be prepared."));
+      reject(scoringWorkerPreparationError(reply));
     };
     worker.postMessage(
       {
