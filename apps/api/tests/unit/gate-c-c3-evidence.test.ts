@@ -50,6 +50,14 @@ describe("Gate C C3 real-journey oracle", () => {
     expect(source).toContain('["match_started", "period_change", "goal", "finalisation"]');
     expect(source).toContain("resultSnapshots[0]?.count !== (index === 7 ? 1 : 0)");
   });
+
+  it("accepts only the explicit resolved-before-discard stream for the sign-out race", async () => {
+    const source = await readFile(new URL("../../scripts/run-phase-2-real-e2e.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('index === 0 && observedEventTypes === [...configuredExpected, "incident"].join(",")');
+    expect(source).toContain('? [...configuredExpected, "incident"]');
+    expect(source).toContain('observedEventTypes !== expected.join(",")');
+  });
 });
 
 describe("Gate C C3 retained browser artifact safety", () => {

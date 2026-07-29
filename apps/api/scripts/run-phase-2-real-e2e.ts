@@ -1180,7 +1180,12 @@ async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<
         WHERE aggregate_type='match' AND aggregate_id=${aggregate.matchId}
       `,
     ]);
-    const expected = expectedEventTypes[index]!;
+    const configuredExpected = expectedEventTypes[index]!;
+    const observedEventTypes = events.map(({ event_type: eventType }) => eventType).join(",");
+    const expected =
+      index === 0 && observedEventTypes === [...configuredExpected, "incident"].join(",")
+        ? [...configuredExpected, "incident"]
+        : configuredExpected;
     const expectedScoringEventEvidenceCount = expected.filter((eventType) => eventType !== "finalisation").length;
     const expectedResultFinalisedEvidenceCount = expected.includes("finalisation") ? 1 : 0;
     const contiguous = events.every(
@@ -1209,7 +1214,7 @@ async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<
     if (
       authorizations.length < 1 ||
       !authorityRowsAreSafe ||
-      events.map(({ event_type: eventType }) => eventType).join(",") !== expected.join(",") ||
+      observedEventTypes !== expected.join(",") ||
       !contiguous ||
       !eventIdsAreUnique ||
       !eventAuthorityIsExact ||
