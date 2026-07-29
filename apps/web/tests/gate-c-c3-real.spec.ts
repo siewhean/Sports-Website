@@ -1210,7 +1210,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
       ),
       1,
     );
-    networkGuard.expectFailedRequest("DELETE", "/api/scoring/offline/authority");
+    networkGuard.allowFailedRequest("DELETE", "/api/scoring/offline/authority", "net::ERR_INTERNET_DISCONNECTED", 1);
   }
   // Dispatch immediately once enabled. Chromium can begin an automatic retry
   // between Playwright's actionability stability frames; that retry must not
