@@ -30,7 +30,7 @@ describe("Gate C C3 retained browser artifact safety", () => {
     "set-cookie: scoring_session=raw",
     "Authorization: Basic Zm9vOmJhcg==",
     "x-api-key: raw-key",
-    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzY29yZXIifQ.signature123",
+    ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiJzY29yZXIifQ", "signature123"].join("."),
     "-----BEGIN PRIVATE KEY-----",
     "https://example.test/score#access=raw",
   ])("rejects secret-like text: %s", (candidate) => {

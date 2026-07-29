@@ -285,7 +285,10 @@ test("Gate C C3 evidence rejects secret-like fields and values recursively", () 
     /Secret-like evidence value/,
   );
   assert.throws(
-    () => assertNoGateCC3Secrets({ note: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzY29yZXIifQ.signature123" }),
+    () =>
+      assertNoGateCC3Secrets({
+        note: ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiJzY29yZXIifQ", "signature123"].join("."),
+      }),
     /Secret-like evidence value/,
   );
   assert.throws(() => assertNoGateCC3Secrets({ note: "-----BEGIN PRIVATE KEY-----" }), /Secret-like evidence value/);
