@@ -86,5 +86,11 @@ describe("Gate C3 offline scoring UI contract", () => {
     const source = await readFile(scoringSource, "utf8");
 
     expect(source).toMatch(/!navigator\.onLine \|\|\s*offlineReplayAbortRef\.current/u);
+    expect(source).toMatch(
+      /if \(!navigator\.onLine\) \{\s*void device\.then\(\(\) => recoverStoredOfflineSession\(\)\)\.finally\(\(\) => setAccessChecking\(false\)\)/u,
+    );
+    expect(source).toMatch(
+      /if \(!navigator\.onLine\) \{\s*setOfflineState\(phase2Machine\.offlinePendingSync\);\s*return Promise\.resolve\(\)/u,
+    );
   });
 });

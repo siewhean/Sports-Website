@@ -507,6 +507,10 @@ export function PhoneScoring({
       void device.finally(() => setAccessChecking(false));
       return;
     }
+    if (!navigator.onLine) {
+      void device.then(() => recoverStoredOfflineSession()).finally(() => setAccessChecking(false));
+      return;
+    }
     void port
       .recoverSession()
       .then((session) => {
@@ -644,6 +648,10 @@ export function PhoneScoring({
 
   const reconnectAndReplay = useCallback(() => {
     if (!offlineAuthorizationId || mode !== phase2Machine.scoringApiMode) return Promise.resolve();
+    if (!navigator.onLine) {
+      setOfflineState(phase2Machine.offlinePendingSync);
+      return Promise.resolve();
+    }
     return offlineReconnectRef.current.run(async () => {
       if (isScoringWorkerSafetyFrozen()) return;
       const replayAbort = new AbortController();
