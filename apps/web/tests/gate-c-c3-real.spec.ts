@@ -1148,6 +1148,7 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByText(/1 command pending/u)).toBeVisible();
   await context.setOffline(false);
+  await page.getByRole("button", { name: "Sync now" }).click();
   await expect(page.getByText("All changes are synced.")).toBeVisible();
   networkGuard.assertClean();
   await assertConsoleGuard(page, testInfo);
