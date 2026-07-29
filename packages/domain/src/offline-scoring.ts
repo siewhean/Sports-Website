@@ -74,8 +74,11 @@ export type OfflineRecordingAvailability =
 export function assertOfflineMatchAuthorization(matchPackage: OfflineMatchAuthorization): void {
   const schemaVersion = matchPackage["schema_version"];
   const competitionId = matchPackage["competition_id"];
+  const principalId = matchPackage["principal_id"];
   if (
     (schemaVersion !== undefined && schemaVersion !== 1) ||
+    typeof principalId !== "string" ||
+    !/^[0-9a-f]{64}$/.test(principalId) ||
     !UUID_PATTERN.test(matchPackage.authorization_id) ||
     (competitionId !== undefined && (typeof competitionId !== "string" || !UUID_PATTERN.test(competitionId))) ||
     !UUID_PATTERN.test(matchPackage.match_id) ||

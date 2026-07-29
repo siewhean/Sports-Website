@@ -144,6 +144,7 @@ function projectedSession(
   const home = matchPackage.participants.find(({ side }) => side === "home");
   const away = matchPackage.participants.find(({ side }) => side === "away");
   return {
+    principalId: matchPackage.principal_id,
     competitionSlug: matchPackage.competition_slug,
     sportId: matchPackage.sport_code,
     sportPackVersion: matchPackage.sport_pack_version,
@@ -222,18 +223,20 @@ export async function saveOfflineMatchPackage(
   now: number = Date.now(),
 ): Promise<GateCOfflineMatchPackage> {
   if (
+    authority.principal_id !== session.principalId ||
     authority.match_id !== session.matchId ||
     authority.generation !== session.generation ||
     session.mode !== "writer" ||
     session.readOnly
   ) {
-    throw new Error("Offline authority does not match the active scoring session.");
+    throw new Error("Offline authority does not match the active scoring principal or session.");
   }
   if (session.canonicalEvents.length !== session.throughSequence) {
     throw new Error("Offline preparation requires the complete authoritative scoring stream.");
   }
   const matchPackage: GateCOfflineMatchPackage = {
     schema_version: 1,
+    principal_id: authority.principal_id,
     authorization_id: authority.authorization_id,
     competition_id: authority.competition_id,
     competition_slug: session.competitionSlug,

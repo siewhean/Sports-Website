@@ -20,6 +20,7 @@ const eventId = "00000000-0000-4000-8000-000000000103";
 
 function sessionView(overrides: Partial<ScoringSessionView> = {}): ScoringSessionView {
   return {
+    principalId: "a".repeat(64),
     competitionSlug: "singapore-open",
     sportId: "canoe_polo",
     sportPackVersion: SPORT_PACKS.canoe_polo.version,

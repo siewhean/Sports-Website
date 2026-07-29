@@ -36,6 +36,11 @@ import {
 } from "@/lib/offline-scoring-coordinator";
 import { ApiOfflineScoringPort, emptyOfflineQueueSummary, offlineQueueSummary } from "@/lib/offline-scoring-port";
 import {
+  clearScoringPrincipalCookie,
+  readScoringPrincipalCookie,
+  retainScoringPrincipalCookie,
+} from "@/lib/offline-scoring-principal";
+import {
   assertScoringWorkerTransitionAllowed,
   guardScoringWorkerTransport,
   isScoringWorkerSafetyFrozen,
@@ -209,6 +214,7 @@ export function PhoneScoring({
   const editDeviceButtonRef = useRef<HTMLButtonElement>(null);
   const deviceLabelInputRef = useRef<HTMLInputElement>(null);
   const offlineResourcesRef = useRef<OfflineResources | null>(null);
+  const principalIdRef = useRef<string | null>(null);
   const offlineReconnectRef = useRef(new OfflineReconnectSingleFlight());
   const offlineReplayAbortRef = useRef<AbortController | null>(null);
   const componentMountedRef = useRef(false);
@@ -248,6 +254,9 @@ export function PhoneScoring({
   const applySession = useCallback((session: ScoringSessionView | null) => {
     if (!session) return;
     assertScoringWorkerTransitionAllowed();
+    principalIdRef.current = session.principalId;
+    retainScoringPrincipalCookie(session.principalId, session.expiresAt);
+    void offlineResourcesRef.current?.repository.bindPrincipal(session.principalId);
     const previousState = writerStateRef.current;
     setCompetitionSlug(session.competitionSlug);
     setScorecardDefinition(buildFiveSportScorecardDefinition(session.sportId, session.sportSettings));
@@ -300,6 +309,7 @@ export function PhoneScoring({
     if (offlineResourcesRef.current) return offlineResourcesRef.current;
     const device = await getScoringDeviceIdentity();
     const repository = new IndexedDbOfflineScoringRepository();
+    if (principalIdRef.current) await repository.bindPrincipal(principalIdRef.current);
     const offlinePort = guardScoringWorkerTransport(new ApiOfflineScoringPort(device.id, 1, scoringWorkerVersion), {
       allowDuringFreeze: scoringWorkerFreezeAllowedOfflineMethods,
     });
@@ -330,14 +340,30 @@ export function PhoneScoring({
         if (mode !== phase2Machine.scoringApiMode || session.mode !== "writer" || session.readOnly) return;
         setOfflineState(phase2Machine.offlinePreparing);
         const resources = await offlineResources();
+        await resources.repository.bindPrincipal(session.principalId);
         const summary = await emptyOfflineQueueSummary(session.matchId, session.throughSequence);
         const result = await resources.port.establishAuthority(summary, phase2Machine.offlinePrepareIntent);
         const authoritative = result.session ?? session;
         const matchPackage = await saveOfflineMatchPackage(resources.repository, authoritative, result.offline);
-        await prepareOfflineScoringShell();
+        retainScoringPrincipalCookie(session.principalId, matchPackage.replay_expires_at);
         setOfflineAuthorizationId(matchPackage.authorization_id);
         setOfflineRecordingExpiresAt(matchPackage.recording_expires_at);
         setOfflineReplayExpiresAt(matchPackage.replay_expires_at);
+        try {
+          await prepareOfflineScoringShell();
+        } catch (preparationError) {
+          try {
+            await resources.port.revokeAuthority(phase2Machine.offlinePreparationRollbackIntent);
+            await resources.repository.discardResolvedAuthorization(matchPackage.authorization_id);
+            setOfflineAuthorizationId(null);
+            setOfflineRecordingExpiresAt(null);
+            setOfflineReplayExpiresAt(null);
+          } catch {
+            // Keep the empty package and sealed resume grant so an online retry can
+            // finish preparation or explicitly end the retained authority.
+          }
+          throw preparationError;
+        }
         setPendingCount(0);
         setPendingSync(false);
         setOfflineState(phase2Machine.offlineReady);
@@ -350,6 +376,9 @@ export function PhoneScoring({
     assertScoringWorkerTransitionAllowed();
     try {
       const resources = await offlineResources();
+      const principalId = readScoringPrincipalCookie();
+      if (!principalId) return false;
+      await resources.repository.bindPrincipal(principalId);
       const recovered = await recoverOfflineScoringSession(resources.repository);
       if (!recovered) return false;
       const recoveredState: OfflineState = recoveredOfflineState({
@@ -365,6 +394,7 @@ export function PhoneScoring({
         recovered.pendingCount,
         recoveredState,
       );
+      retainScoringPrincipalCookie(recovered.session.principalId, recovered.matchPackage.replay_expires_at);
       setOfflineRecordingExpiresAt(recovered.matchPackage.recording_expires_at);
       setOfflineReplayExpiresAt(recovered.matchPackage.replay_expires_at);
       setAnnouncement(
@@ -419,6 +449,7 @@ export function PhoneScoring({
         return;
       }
       if (error.state === "expired" || error.state === "revoked" || error.state === "rate_limited") {
+        clearScoringPrincipalCookie();
         sessionActiveRef.current = false;
         const state = error.state === "rate_limited" ? phase2Machine.rateLimited : error.state;
         writerStateRef.current = state;
@@ -479,7 +510,10 @@ export function PhoneScoring({
     void port
       .recoverSession()
       .then((session) => {
-        if (!session) return;
+        if (!session) {
+          clearScoringPrincipalCookie();
+          return;
+        }
         applySession(session);
         setPhase("live");
       })
@@ -765,7 +799,7 @@ export function PhoneScoring({
       if (error instanceof ScoringTransportError) handleTransportError(error);
       else {
         setOfflineState(phase2Machine.offlineStorageError);
-        setAnnouncement(phase2Copy.offlinePreparationError);
+        setAnnouncement(phase2Copy.offlinePreparationRetry);
       }
     }
   };
@@ -814,6 +848,7 @@ export function PhoneScoring({
       setPendingCount(0);
       setPendingSync(false);
       setOfflineState(phase2Machine.offlineOnline);
+      clearScoringPrincipalCookie();
       writerStateRef.current = phase2Machine.checking;
       setWriterState(phase2Machine.checking);
       setPhase("access");
@@ -1374,6 +1409,15 @@ export function PhoneScoring({
             </p>
             {pendingCount >= gateCOfflineQueueWarningCount ? (
               <p>{phase2Copy.offlineQueueGuidance(gateCOfflineQueueLimit)}</p>
+            ) : null}
+            {offlineState === phase2Machine.offlineStorageError &&
+            mode === phase2Machine.scoringApiMode &&
+            writerState === phase2Machine.active &&
+            typeof navigator !== "undefined" &&
+            navigator.onLine ? (
+              <button className="p2-score-secondary" type="button" onClick={() => void prepareOfflineForCurrentMatch()}>
+                {phase2Copy.offlinePrepareAction}
+              </button>
             ) : null}
             {offlineAuthorizationId && pendingCount === 0 ? <p>{phase2Copy.offlineAllSynced}</p> : null}
             {offlineAuthorizationId ? <p>{phase2Copy.offlineLastConfirmed(throughSequence - pendingCount)}</p> : null}

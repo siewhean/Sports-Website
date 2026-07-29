@@ -2,6 +2,8 @@
 
 export const scoringWorkerVersion = "gate-c-c3-v5";
 export const scoringWorkerUpdateProtocolVersion = 1;
+export const scoringWorkerPreparationProtocolVersion = 1;
+export const scoringWorkerPreparationCapabilities = ["offline-scoring-shell-cache-v1"] as const;
 export const scoringWorkerUpdateStates = {
   idle: "idle",
   checking: "checking",
@@ -124,6 +126,31 @@ type ScoringWorkerActivationReply = {
   protocolVersion: number;
 };
 
+type ScoringWorkerPreparationReply = {
+  ok?: boolean;
+  version?: string;
+  protocolVersion?: number;
+  capabilities?: unknown;
+  code?: string;
+};
+
+export function isCompatibleScoringWorkerPreparationReply(value: unknown): value is ScoringWorkerPreparationReply & {
+  ok: true;
+  version: string;
+  protocolVersion: number;
+  capabilities: string[];
+} {
+  const reply = value as ScoringWorkerPreparationReply | null;
+  const capabilities = Array.isArray(reply?.capabilities) ? reply.capabilities : [];
+  return (
+    reply?.ok === true &&
+    typeof reply.version === "string" &&
+    reply.version.length > 0 &&
+    reply.protocolVersion === scoringWorkerPreparationProtocolVersion &&
+    scoringWorkerPreparationCapabilities.every((capability) => capabilities.includes(capability))
+  );
+}
+
 const unresolvedOfflineStates = new Set([
   "pending-sync",
   "reconnecting",
@@ -205,11 +232,30 @@ export async function prepareOfflineScoringShell(): Promise<void> {
     channel.port1.onmessage = (event: MessageEvent<unknown>) => {
       window.clearTimeout(timeout);
       channel.port1.close();
-      const reply = event.data as { ok?: boolean; version?: string } | null;
-      if (reply?.ok === true && reply.version === scoringWorkerVersion) resolve();
-      else reject(new Error("The offline scoring shell could not be prepared."));
+      if (isCompatibleScoringWorkerPreparationReply(event.data)) {
+        resolve();
+        return;
+      }
+      const reply = event.data as ScoringWorkerPreparationReply | null;
+      if (reply?.code === "INCOMPATIBLE_PREPARATION_PROTOCOL" || reply?.ok === true) {
+        reject(
+          new Error(
+            "The active scoring worker is not compatible with this offline preparation protocol. Finish or export unresolved work, then reload when it is safe.",
+          ),
+        );
+        return;
+      }
+      reject(new Error("The offline scoring shell could not be prepared."));
     };
-    worker.postMessage({ type: "MATCHDAY_PREPARE_OFFLINE_SCORING", assets: immutableScoringAssets() }, [channel.port2]);
+    worker.postMessage(
+      {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        assets: immutableScoringAssets(),
+        protocolVersion: scoringWorkerPreparationProtocolVersion,
+        requiredCapabilities: [...scoringWorkerPreparationCapabilities],
+      },
+      [channel.port2],
+    );
   });
 }
 

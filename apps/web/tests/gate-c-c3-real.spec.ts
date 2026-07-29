@@ -1279,6 +1279,10 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   );
   await prepareOffline(page);
   expect(await workerVersion(page)).toBe("gate-c-c3-v5");
+  const documentIdentity = crypto.randomUUID();
+  await page.evaluate((identity) => {
+    document.documentElement.dataset.c3WorkerDocumentIdentity = identity;
+  }, documentIdentity);
 
   const safePeer = await context.newPage();
   await installConsoleGuard(safePeer);
@@ -1357,10 +1361,48 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
 
   await expect(updateStatus).toHaveAttribute("data-state", "activated", { timeout: 15_000 });
   expect(await workerVersion(page)).toBe("gate-c-c3-v6");
+  expect(await page.evaluate(() => document.documentElement.dataset.c3WorkerDocumentIdentity)).toBe(documentIdentity);
+
+  // The document intentionally stays loaded across controllerchange. Its v5
+  // client must negotiate the compatible v6 preparation protocol instead of
+  // requiring a disruptive reload or rejecting solely on the worker build ID.
+  const preparationReply = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.ready;
+    const worker = registration.active;
+    if (!worker) throw new Error("The activated scoring worker is unavailable");
+    return new Promise<unknown>((resolve, reject) => {
+      const channel = new MessageChannel();
+      const timeout = window.setTimeout(() => reject(new Error("Offline preparation timed out")), 10_000);
+      channel.port1.onmessage = (event) => {
+        window.clearTimeout(timeout);
+        channel.port1.close();
+        resolve(event.data);
+      };
+      worker.postMessage(
+        {
+          type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+          assets: [],
+          protocolVersion: 1,
+          requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        },
+        [channel.port2],
+      );
+    });
+  });
+  expect(preparationReply).toEqual(
+    expect.objectContaining({
+      ok: true,
+      version: "gate-c-c3-v6",
+      protocolVersion: 1,
+      capabilities: expect.arrayContaining(["offline-scoring-shell-cache-v1"]),
+    }),
+  );
+  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
   await writeScenarioReceipt("service_worker_update", testInfo, new Date().toISOString(), {
     active_version: "gate-c-c3-v6",
     waiting_version: "gate-c-c3-v6",
     activation_deferred: true,
+    preparation_after_controller_change: true,
   });
   networkGuard.assertClean();
   safePeerNetworkGuard.assertClean();

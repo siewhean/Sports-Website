@@ -1966,6 +1966,7 @@ export class Phase2Runtime {
         eventPayload: { competition_id: session.competition_id, match_id: session.match_id, generation },
       });
       return {
+        principal_id: hashSecret(session.id).toString("hex"),
         authorization_id: authorization.id,
         resume_secret: resumeSecret,
         recording_expires_at: recordingExpiresAt.toISOString(),
@@ -2156,6 +2157,7 @@ export class Phase2Runtime {
           lease_expires_at: leaseExpiresAt.toISOString(),
         },
         offline: {
+          principal_id: hashSecret(authorization.access_session_id).toString("hex"),
           authorization_id: authorization.id,
           resume_secret: input.resumeSecret,
           recording_expires_at: serializedDate(authorization.recording_expires_at),
@@ -2175,7 +2177,7 @@ export class Phase2Runtime {
 
   async revokeOfflineAuthorization(
     authorizationId: string,
-    input: { resumeSecret: string; deviceId: string },
+    input: { resumeSecret: string; deviceId: string; preserveWriterSession?: boolean },
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
@@ -2188,21 +2190,27 @@ export class Phase2Runtime {
       const now = this.now();
       await tx.unsafe(
         `UPDATE scoring_offline_authorizations SET
-           status='revoked',revoked_at=$2,transition_reason='Scorer ended offline access'
+           status='revoked',revoked_at=$2,transition_reason=$3
          WHERE id=$1`,
-        [authorization.id, now],
+        [
+          authorization.id,
+          now,
+          input.preserveWriterSession ? "Offline shell preparation failed" : "Scorer ended offline access",
+        ],
       );
-      await tx.unsafe(
-        `UPDATE scoring_access_sessions
-         SET revoked_at=COALESCE(revoked_at,$2)
-         WHERE id=$1`,
-        [authorization.access_session_id, now],
-      );
-      await tx.unsafe(
-        `DELETE FROM match_writer_leases
-         WHERE match_id=$1 AND access_session_id=$2 AND generation=$3`,
-        [authorization.match_id, authorization.access_session_id, authorization.writer_generation],
-      );
+      if (!input.preserveWriterSession) {
+        await tx.unsafe(
+          `UPDATE scoring_access_sessions
+           SET revoked_at=COALESCE(revoked_at,$2)
+           WHERE id=$1`,
+          [authorization.access_session_id, now],
+        );
+        await tx.unsafe(
+          `DELETE FROM match_writer_leases
+           WHERE match_id=$1 AND access_session_id=$2 AND generation=$3`,
+          [authorization.match_id, authorization.access_session_id, authorization.writer_generation],
+        );
+      }
       await this.evidence(tx, {
         requestId,
         actorAccountId: null,
@@ -2211,7 +2219,7 @@ export class Phase2Runtime {
         action: "scoring_offline_authorization.revoked",
         targetType: "scoring_offline_authorization",
         targetId: authorization.id,
-        reason: "Scorer ended offline access",
+        reason: input.preserveWriterSession ? "Offline shell preparation failed" : "Scorer ended offline access",
         eventPayload: {
           competition_id: authorization.competition_id,
           match_id: authorization.match_id,
@@ -5207,6 +5215,7 @@ export class Phase2Runtime {
           away: { id: match.away_entry_id, name: match.away_name },
         },
         access: {
+          principal_id: hashSecret(session.id).toString("hex"),
           mode: session.mode,
           permissions: jsonValue<ScoringPermission[]>(session.scope),
           session_expires_at: date(session.expires_at).toISOString(),

@@ -11,12 +11,24 @@ describe("Gate C3 offline scoring UI contract", () => {
 
     expect(copy).toContain('offlinePrepareAction: "Prepare offline scoring"');
     expect(source).toContain("establishAuthority(summary, phase2Machine.offlinePrepareIntent)");
+    expect(source).toContain("revokeAuthority(phase2Machine.offlinePreparationRollbackIntent)");
+    expect(source).toContain("discardResolvedAuthorization(matchPackage.authorization_id)");
+    expect(copy).toContain("Offline authority was rolled back safely.");
     expect(copy).toContain('offlineSyncNow: "Sync now"');
     expect(copy).toContain('offlineDiagnosticAction: "Export sanitized diagnostic"');
     expect(copy).toContain("Finalised on this device — Pending server confirmation");
     expect(copy).toContain('offlineEndSession: "End scoring session"');
     expect(source).toContain("discardAfterExport");
     expect(source).toContain("discardResolvedAuthorization");
+  });
+
+  it("keeps the principal marker available through the bounded offline replay window", async () => {
+    const source = await readFile(scoringSource, "utf8");
+
+    expect(source).toContain("retainScoringPrincipalCookie(session.principalId, matchPackage.replay_expires_at)");
+    expect(source).toContain(
+      "retainScoringPrincipalCookie(recovered.session.principalId, recovered.matchPackage.replay_expires_at)",
+    );
   });
 
   it("locks scoring while authoritative recovery or ordered replay is in progress", async () => {

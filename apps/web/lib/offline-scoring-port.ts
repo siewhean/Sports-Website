@@ -13,6 +13,7 @@ import { scoringSessionView, ScoringTransportError, type ApiSessionState } from 
 import type { ScoringSessionView } from "./phase2";
 
 export type OfflineAuthorityMetadata = Readonly<{
+  principal_id: string;
   authorization_id: string;
   competition_id: string;
   match_id: string;
@@ -142,6 +143,8 @@ function authorityMetadata(value: unknown): OfflineAuthorityMetadata | null {
   const source = value as Record<string, unknown>;
   if (
     typeof source.authorization_id !== "string" ||
+    typeof source.principal_id !== "string" ||
+    !/^[0-9a-f]{64}$/.test(source.principal_id) ||
     typeof source.competition_id !== "string" ||
     typeof source.match_id !== "string" ||
     !Number.isSafeInteger(source.generation) ||
@@ -195,12 +198,12 @@ export class ApiOfflineScoringPort implements OfflineReplayPort {
     };
   }
 
-  async revokeAuthority(): Promise<void> {
+  async revokeAuthority(intent: "end_session" | "preparation_rollback" = "end_session"): Promise<void> {
     const response = await fetch("/api/scoring/offline/authority", {
       method: "DELETE",
       headers: { "content-type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ deviceId: this.deviceId }),
+      body: JSON.stringify({ deviceId: this.deviceId, intent }),
     });
     if (!response.ok) {
       throw authorityTransportError(response, await errorEnvelope(response));

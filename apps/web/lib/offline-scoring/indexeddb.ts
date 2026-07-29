@@ -13,7 +13,6 @@ import {
   canonicalOfflineJson,
   offlineRecordingAvailability,
 } from "@matchday/domain";
-import { buildOfflineDiagnosticDocument } from "./export";
 import type { OfflineConflict, OfflineReplayAttempt, OfflineReplayState, OfflineScoringRepository } from "./types";
 
 export const OFFLINE_SCORING_DATABASE_NAME = "matchday-offline-scoring";
@@ -30,6 +29,8 @@ export const offlineScoringStoreNames = [
 ] as const;
 
 const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const ACTIVE_PRINCIPAL_KEY = "active_principal_id";
+const PRINCIPAL_PATTERN = /^[0-9a-f]{64}$/;
 
 type OfflineStoreName = (typeof offlineScoringStoreNames)[number];
 
@@ -115,7 +116,16 @@ async function indexedValues<T>(
   storeName: OfflineStoreName,
   authorizationId: string,
 ): Promise<T[]> {
-  const transaction = database.transaction(storeName);
+  const transaction = database.transaction([storeName, "match_packages", "meta"]);
+  const [matchPackage, principal] = await Promise.all([
+    requestResult<GateCOfflineMatchPackage | undefined>(transaction.objectStore("match_packages").get(authorizationId)),
+    requestResult<{ key: string; value: string } | undefined>(
+      transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
+    ),
+  ]);
+  if (!matchPackage || !principal || matchPackage.principal_id !== principal.value) {
+    throw new Error("Offline match authorization is unavailable.");
+  }
   const result = await requestResult(
     transaction.objectStore(storeName).index("authorization_id").getAll(authorizationRange(authorizationId)),
   );
@@ -134,6 +144,15 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     }
   }
 
+  async bindPrincipal(principalId: string): Promise<void> {
+    if (!PRINCIPAL_PATTERN.test(principalId)) throw new Error("Offline scoring principal is invalid.");
+    await this.withDatabase(async (database) => {
+      const transaction = database.transaction("meta", "readwrite");
+      transaction.objectStore("meta").put({ key: ACTIVE_PRINCIPAL_KEY, value: principalId });
+      await transactionResult(transaction);
+    });
+  }
+
   async saveMatchPackage(matchPackage: GateCOfflineMatchPackage): Promise<void> {
     assertOfflineMatchAuthorization(matchPackage);
     await this.withDatabase(async (database) => {
@@ -142,6 +161,13 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         "readwrite",
       );
       const packages = transaction.objectStore("match_packages");
+      const activePrincipal = await requestResult<{ key: string; value: string } | undefined>(
+        transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
+      );
+      if (activePrincipal && activePrincipal.value !== matchPackage.principal_id) {
+        transaction.abort();
+        throw new Error("Resolve or export the existing principal's offline match before switching scoring access.");
+      }
       const existingPackages = await requestResult<GateCOfflineMatchPackage[]>(packages.getAll());
       const sameAuthorization = existingPackages.find(
         (existing) => existing.authorization_id === matchPackage.authorization_id,
@@ -200,17 +226,25 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         ),
       );
       transaction.objectStore("meta").put({ key: "schema_version", value: OFFLINE_SCORING_DATABASE_VERSION });
+      transaction.objectStore("meta").put({ key: ACTIVE_PRINCIPAL_KEY, value: matchPackage.principal_id });
       await transactionResult(transaction);
     });
   }
 
   async getMatchPackage(authorizationId: string): Promise<GateCOfflineMatchPackage | null> {
     return this.withDatabase(async (database) => {
-      const value = await requestResult<GateCOfflineMatchPackage | undefined>(
-        database.transaction("match_packages").objectStore("match_packages").get(authorizationId),
-      );
+      const transaction = database.transaction(["match_packages", "meta"]);
+      const [value, principal] = await Promise.all([
+        requestResult<GateCOfflineMatchPackage | undefined>(
+          transaction.objectStore("match_packages").get(authorizationId),
+        ),
+        requestResult<{ key: string; value: string } | undefined>(
+          transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
+        ),
+      ]);
       if (!value) return null;
       assertOfflineMatchAuthorization(value);
+      if (!principal || principal.value !== value.principal_id) return null;
       return clone(value);
     });
   }
@@ -239,9 +273,16 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
 
   async getActiveMatchPackage(): Promise<GateCOfflineMatchPackage | null> {
     return this.withDatabase(async (database) => {
-      const values = await requestResult<GateCOfflineMatchPackage[]>(
-        database.transaction("match_packages").objectStore("match_packages").index("status").getAll("active"),
-      );
+      const transaction = database.transaction(["match_packages", "meta"]);
+      const [allValues, principal] = await Promise.all([
+        requestResult<GateCOfflineMatchPackage[]>(
+          transaction.objectStore("match_packages").index("status").getAll("active"),
+        ),
+        requestResult<{ key: string; value: string } | undefined>(
+          transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
+        ),
+      ]);
+      const values = principal ? allValues.filter(({ principal_id }) => principal_id === principal.value) : [];
       if (values.length > 1) throw new Error("Offline scoring storage contains multiple active grants.");
       if (!values[0]) return null;
       assertOfflineMatchAuthorization(values[0]);
@@ -251,10 +292,14 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
 
   async getRecoverableMatchPackage(): Promise<GateCOfflineMatchPackage | null> {
     return this.withDatabase(async (database) => {
-      const transaction = database.transaction(["match_packages", "commands", "acknowledgements", "conflicts"]);
-      const packages = await requestResult<GateCOfflineMatchPackage[]>(
-        transaction.objectStore("match_packages").getAll(),
-      );
+      const transaction = database.transaction(["match_packages", "commands", "acknowledgements", "conflicts", "meta"]);
+      const [allPackages, principal] = await Promise.all([
+        requestResult<GateCOfflineMatchPackage[]>(transaction.objectStore("match_packages").getAll()),
+        requestResult<{ key: string; value: string } | undefined>(
+          transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
+        ),
+      ]);
+      const packages = principal ? allPackages.filter(({ principal_id }) => principal_id === principal.value) : [];
       const active = packages.filter(({ status }) => status === "active");
       if (active.length > 1) throw new Error("Offline scoring storage contains multiple active grants.");
       if (active[0]) {
@@ -430,8 +475,15 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
     sha256: string,
     canonicalJson: string,
     recordedAt: string,
+    privateIntegrityNonce: string,
+    privateIntegrityDigest: string,
   ): Promise<void> {
-    if (!/^[a-f0-9]{64}$/.test(sha256) || (await sha256Digest(canonicalJson)) !== sha256) {
+    if (
+      !/^[a-f0-9]{64}$/.test(sha256) ||
+      (await sha256Digest(canonicalJson)) !== sha256 ||
+      !/^[a-f0-9]{64}$/.test(privateIntegrityNonce) ||
+      !/^[a-f0-9]{64}$/.test(privateIntegrityDigest)
+    ) {
       throw new Error("Diagnostic export checksum is invalid.");
     }
     await this.withDatabase(async (database) => {
@@ -442,6 +494,8 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         sha256,
         canonical_json: canonicalJson,
         recorded_at: recordedAt,
+        private_integrity_nonce: privateIntegrityNonce,
+        private_integrity_digest: privateIntegrityDigest,
       });
       await transactionResult(transaction);
     });
@@ -571,6 +625,8 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
               sha256: string;
               canonical_json: string;
               recorded_at: string;
+              private_integrity_nonce: string;
+              private_integrity_digest: string;
             }
           | undefined
         >(transaction.objectStore("meta").get(`diagnostic_export:${authorizationId}`)),
@@ -583,22 +639,20 @@ export class IndexedDbOfflineScoringRepository implements OfflineScoringReposito
         attestation: values[4],
       };
     });
-    const currentCanonicalJson =
-      snapshot.matchPackage && snapshot.attestation
-        ? canonicalOfflineJson(
-            await buildOfflineDiagnosticDocument(
-              snapshot.matchPackage,
-              snapshot.commands,
-              snapshot.acknowledgements,
-              snapshot.conflicts,
-              snapshot.attestation.recorded_at,
-            ),
-          )
-        : null;
+    const currentPrivateIntegrityDigest = snapshot.attestation
+      ? await sha256Digest(
+          `${snapshot.attestation.private_integrity_nonce}:${canonicalOfflineJson({
+            matchPackage: snapshot.matchPackage,
+            commands: snapshot.commands,
+            acknowledgements: snapshot.acknowledgements,
+            conflicts: snapshot.conflicts,
+          })}`,
+        )
+      : null;
     if (
       !snapshot.attestation ||
       snapshot.attestation.sha256 !== expectedExportSha256 ||
-      snapshot.attestation.canonical_json !== currentCanonicalJson
+      snapshot.attestation.private_integrity_digest !== currentPrivateIntegrityDigest
     ) {
       throw new Error("Offline work changed after export; create and confirm a new diagnostic export.");
     }

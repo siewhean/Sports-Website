@@ -16,6 +16,7 @@ export type GateCOfflineParticipant = Readonly<{
 
 export type GateCOfflineMatchPackage = Readonly<{
   schema_version: typeof gateCOfflineSchemaVersion;
+  principal_id: string;
   authorization_id: string;
   competition_id: string;
   competition_slug: string;

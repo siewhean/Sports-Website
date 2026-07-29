@@ -28,6 +28,7 @@ const finalEventId = "00000000-0000-4000-8000-000000000104";
 const receivedAt = "2026-07-17T02:00:01.000Z";
 const deviceId = "00000000-0000-4000-8000-000000000104";
 const offlineAuthorizationId = "00000000-0000-4000-8000-000000000105";
+const offlinePrincipalId = "a".repeat(64);
 const competitionId = "00000000-0000-4000-8000-000000000106";
 const offlineResumeSecret = "r".repeat(43);
 const offlineRecordingExpiresAt = "2030-01-01T04:00:00.000Z";
@@ -74,6 +75,7 @@ function state(extra: Record<string, unknown> = {}) {
       away: { id: null, name: "Harbour Gold" },
     },
     access: {
+      principal_id: "a".repeat(64),
       mode: "writer",
       permissions: ["score:read", "score:write"],
       session_expires_at: expiresAt,
@@ -373,6 +375,7 @@ describe("scoring BFF", () => {
         json(
           state({
             access: {
+              principal_id: offlinePrincipalId,
               mode: "writer",
               permissions: ["score:read", "score:write"],
               session_expires_at: expiresAt,
@@ -874,6 +877,7 @@ describe("scoring BFF", () => {
       expect(headerValue(init, "x-scoring-session-token")).toBe(sessionToken);
       expect(String(init?.body)).not.toContain(offlineResumeSecret);
       return json({
+        principal_id: offlinePrincipalId,
         authorization_id: offlineAuthorizationId,
         resume_secret: offlineResumeSecret,
         competition_id: competitionId,
@@ -903,6 +907,7 @@ describe("scoring BFF", () => {
     expect(JSON.stringify(payload)).not.toContain(offlineResumeSecret);
     expect(payload).toEqual({
       offline: {
+        principal_id: offlinePrincipalId,
         authorization_id: offlineAuthorizationId,
         competition_id: competitionId,
         match_id: matchId,
@@ -924,6 +929,7 @@ describe("scoring BFF", () => {
         return json({
           session: exchangedSession,
           offline: {
+            principal_id: offlinePrincipalId,
             authorization_id: offlineAuthorizationId,
             resume_secret: "s".repeat(43),
             competition_id: competitionId,
@@ -983,6 +989,7 @@ describe("scoring BFF", () => {
         resume_secret: offlineResumeSecret,
       });
       return json({
+        principal_id: offlinePrincipalId,
         authorization_id: offlineAuthorizationId,
         resume_secret: offlineResumeSecret,
         competition_id: competitionId,
@@ -1015,13 +1022,19 @@ describe("scoring BFF", () => {
       expect(JSON.parse(String(init?.body))).toEqual({
         resume_secret: offlineResumeSecret,
         device_id: deviceId,
+        preserve_writer_session: false,
       });
       return new Response(null, { status: 204 });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await revokeOfflineScoringAuthority(
-      bffRequest("DELETE", "/api/scoring/offline/authority", { deviceId }, sealedOfflineCookie()),
+      bffRequest(
+        "DELETE",
+        "/api/scoring/offline/authority",
+        { deviceId, intent: "end_session" },
+        sealedOfflineCookie(),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -1029,6 +1042,47 @@ describe("scoring BFF", () => {
     expect(response.headers.get("set-cookie")).toContain(`${offlineGrantCookieName}=`);
     expect(response.headers.get("set-cookie")).toContain(`${scoringSessionCookieName}=`);
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+
+  it("rolls back failed shell preparation without revoking the ordinary writer session", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        resume_secret: offlineResumeSecret,
+        device_id: deviceId,
+        preserve_writer_session: true,
+      });
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await revokeOfflineScoringAuthority(
+      bffRequest(
+        "DELETE",
+        "/api/scoring/offline/authority",
+        { deviceId, intent: "preparation_rollback" },
+        sealedOfflineCookie(),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toContain(`${offlineGrantCookieName}=`);
+    expect(response.headers.get("set-cookie")).not.toContain(`${scoringSessionCookieName}=`);
+  });
+
+  it("retains local rollback recovery state when the sealed offline grant is unavailable", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await revokeOfflineScoringAuthority(
+      bffRequest("DELETE", "/api/scoring/offline/authority", {
+        deviceId,
+        intent: "preparation_rollback",
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response.headers.get("set-cookie")).toBeNull();
   });
 
   it("rejects cross-origin mutations without forwarding or logging supplied secrets", async () => {

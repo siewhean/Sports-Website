@@ -42,6 +42,7 @@ export type OfflineConflict = Readonly<{
 }>;
 
 export type OfflineScoringRepository = {
+  bindPrincipal(principalId: string): Promise<void>;
   saveMatchPackage(matchPackage: GateCOfflineMatchPackage): Promise<void>;
   transitionMatchPackageStatus(
     authorizationId: string,
@@ -64,6 +65,8 @@ export type OfflineScoringRepository = {
     sha256: string,
     canonicalJson: string,
     recordedAt: string,
+    privateIntegrityNonce: string,
+    privateIntegrityDigest: string,
   ): Promise<void>;
   acquireReplayLease(authorizationId: string, ownerId: string, now: number, ttlMs: number): Promise<number | null>;
   renewReplayLease(

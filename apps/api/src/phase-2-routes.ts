@@ -152,6 +152,7 @@ const ScoringSessionStateSchema = Type.Object({
     read_only: Type.Boolean(),
   }),
   access: Type.Object({
+    principal_id: Type.String({ pattern: "^[0-9a-f]{64}$" }),
     mode: Type.Union([
       Type.Literal("writer"),
       Type.Literal("candidate"),
@@ -1045,7 +1046,7 @@ export async function registerPhase2Routes(
 
   app.delete<{
     Params: { authorizationId: string };
-    Body: { resume_secret: string; device_id: string };
+    Body: { resume_secret: string; device_id: string; preserve_writer_session?: boolean };
   }>(
     "/api/v1/scoring/offline-authorizations/:authorizationId",
     {
@@ -1056,6 +1057,7 @@ export async function registerPhase2Routes(
           {
             resume_secret: Type.String({ minLength: 32, maxLength: 256 }),
             device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            preserve_writer_session: Type.Optional(Type.Boolean()),
           },
           { additionalProperties: false },
         ),
@@ -1066,7 +1068,11 @@ export async function registerPhase2Routes(
     async (request) =>
       options.runtime.revokeOfflineAuthorization(
         request.params.authorizationId,
-        { resumeSecret: request.body.resume_secret, deviceId: request.body.device_id },
+        {
+          resumeSecret: request.body.resume_secret,
+          deviceId: request.body.device_id,
+          preserveWriterSession: request.body.preserve_writer_session === true,
+        },
         request.id,
       ),
   );

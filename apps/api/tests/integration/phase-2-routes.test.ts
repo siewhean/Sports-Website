@@ -55,6 +55,7 @@ function routeRuntime() {
             away: { id: randomUUID(), name: "Harbour Gold" },
           },
           access: {
+            principal_id: "a".repeat(64),
             mode: "writer",
             permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
             session_expires_at: "2026-08-01T00:00:00.000Z",
@@ -107,6 +108,7 @@ function routeRuntime() {
         lease_expires_at: "2026-08-01T00:00:45.000Z",
       },
       offline: {
+        principal_id: "a".repeat(64),
         authorization_id: randomUUID(),
         resume_secret: "n".repeat(43),
         recording_expires_at: "2026-08-01T04:00:00.000Z",
@@ -414,7 +416,22 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(revokedOffline.statusCode).toBe(200);
     expect(runtime.revokeOfflineAuthorization).toHaveBeenCalledWith(
       authorizationId,
-      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId },
+      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId, preserveWriterSession: false },
+      expect.any(String),
+    );
+    const rolledBackOffline = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}`,
+      payload: {
+        resume_secret: "n".repeat(43),
+        device_id: rawDeviceId,
+        preserve_writer_session: true,
+      },
+    });
+    expect(rolledBackOffline.statusCode).toBe(200);
+    expect(runtime.revokeOfflineAuthorization).toHaveBeenLastCalledWith(
+      authorizationId,
+      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId, preserveWriterSession: true },
       expect.any(String),
     );
     const retainedTransportEvidence = JSON.stringify({

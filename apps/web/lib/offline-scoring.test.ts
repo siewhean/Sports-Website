@@ -212,6 +212,7 @@ describe("Gate C offline reconnect ownership", () => {
 function matchPackage(overrides: Partial<GateCOfflineMatchPackage> = {}): GateCOfflineMatchPackage {
   return {
     schema_version: 1,
+    principal_id: "b".repeat(64),
     authorization_id: authorizationId,
     competition_id: "30000000-0000-4000-8000-000000000003",
     competition_slug: "offline-cup",
@@ -287,6 +288,28 @@ function repositoryWithOverrides(
 }
 
 describe("Gate C native IndexedDB queue", () => {
+  it("does not expose another scoring principal's retained match package or queue", async () => {
+    const factory = new IDBFactory();
+    const repository = new IndexedDbOfflineScoringRepository(factory);
+    const queued = event(1, "60000000-0000-4000-8000-000000000006");
+    await repository.saveMatchPackage(matchPackage({ principal_id: "b".repeat(64) }));
+    await repository.enqueue(queued, Date.parse("2026-07-28T01:00:00Z"));
+
+    await repository.bindPrincipal("c".repeat(64));
+
+    await expect(repository.getMatchPackage(authorizationId)).resolves.toBeNull();
+    await expect(repository.getRecoverableMatchPackage()).resolves.toBeNull();
+    await expect(repository.listCommands(authorizationId)).rejects.toThrow(
+      "Offline match authorization is unavailable",
+    );
+
+    await repository.bindPrincipal("b".repeat(64));
+    await expect(repository.getMatchPackage(authorizationId)).resolves.toMatchObject({
+      principal_id: "b".repeat(64),
+    });
+    await expect(repository.listCommands(authorizationId)).resolves.toHaveLength(1);
+  });
+
   it("creates exactly the seven schema-v1 stores and persists across reopen", async () => {
     const factory = new IDBFactory();
     const first = await openOfflineScoringDatabase(factory);
@@ -983,7 +1006,7 @@ describe("Gate C ordered replay", () => {
 });
 
 describe("Gate C sanitized recovery export", () => {
-  it("retains canonical recovery fields and acknowledgement mapping without roster, settings, or contacts", async () => {
+  it("retains only queue metadata, server fingerprints, timestamps, and conflict codes", async () => {
     const repository = new IndexedDbOfflineScoringRepository(new IDBFactory());
     const original = event(1, "60000000-0000-4000-8000-000000000006");
     if (original.command.kind !== "event") throw new Error("Test fixture must be an event.");
@@ -998,6 +1021,16 @@ describe("Gate C sanitized recovery export", () => {
     await repository.saveMatchPackage(matchPackage());
     await repository.enqueue(queued, Date.parse("2026-07-28T01:00:00Z"));
     await repository.appendAcknowledgement(acknowledgement(queued));
+    await repository.appendConflict({
+      authorization_id: authorizationId,
+      match_id: matchId,
+      local_sequence: queued.local_sequence,
+      client_event_id: queued.command.client_event_id,
+      code: "stale_writer_generation",
+      command_fingerprint: "a".repeat(64),
+      writer_generation: queued.writer_generation,
+      recorded_at: "2026-07-28T01:10:00.000Z",
+    });
 
     const exported = await createOfflineDiagnosticExport(
       repository,
@@ -1005,13 +1038,105 @@ describe("Gate C sanitized recovery export", () => {
       Date.parse("2026-07-28T02:00:00Z"),
     );
     expect(exported.sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(exported.json).toContain(queued.command.client_event_id);
-    expect(exported.json).toContain("[redacted-reason:");
-    expect(exported.json).not.toContain("Player One");
-    expect(exported.json).not.toContain("Alex Smith");
-    expect(exported.json).toContain("[redacted-participant:");
-    expect(exported.json).not.toContain("manualEventTime");
-    expect(exported.json).not.toContain("scorer@example.com");
-    expect(exported.json).not.toContain("9123 4567");
+    expect(exported.document).toMatchObject({
+      export_version: 2,
+      queue: {
+        command_count: 1,
+        acknowledged_count: 1,
+        pending_count: 0,
+        first_local_sequence: 1,
+        last_local_sequence: 1,
+        writer_generations: [5],
+      },
+      acknowledgements: [
+        {
+          local_sequence: 1,
+          command_fingerprint: "1".repeat(64),
+          outcome: "accepted",
+        },
+      ],
+      conflicts: [
+        {
+          local_sequence: 1,
+          code: "stale_writer_generation",
+          command_fingerprint: "a".repeat(64),
+        },
+      ],
+    });
+
+    for (const forbidden of [
+      "canonical_commands",
+      '"command"',
+      '"participant_id"',
+      '"reason"',
+      '"client_event_id"',
+      '"event_id"',
+      "private_integrity",
+      "Player One",
+      "Alex Smith",
+      "manualEventTime",
+      "scorer@example.com",
+      "9123 4567",
+      "[redacted-",
+    ]) {
+      expect(exported.json).not.toContain(forbidden);
+    }
+  });
+
+  it("omits adversarial participant, credential, device, network, contact, and reason values", async () => {
+    const repository = new IndexedDbOfflineScoringRepository(new IDBFactory());
+    const secrets = [
+      "participant-low-entropy",
+      "reason-low-entropy",
+      "raw-device-id-123",
+      "offline-verifier-secret",
+      "access-token-secret",
+      "session-cookie-secret",
+      "192.0.2.123",
+      "support@example.test",
+      "+65 8000 0000",
+    ];
+    const queued = event(1, "80000000-0000-4000-8000-000000000008");
+    if (queued.command.kind !== "event") throw new Error("Test fixture must be an event.");
+
+    await repository.saveMatchPackage(
+      matchPackage({
+        participants: [{ id: "40000000-0000-4000-8000-000000000004", name: secrets[0]!, side: "home" }],
+        settings: {
+          raw_device_id: secrets[2],
+          offline_verifier: secrets[3],
+          access_token: secrets[4],
+          session_cookie: secrets[5],
+          client_ip: secrets[6],
+          contact: secrets[7],
+        },
+      }),
+    );
+    await repository.enqueue(
+      {
+        ...queued,
+        command: {
+          ...queued.command,
+          participant_id: secrets[0],
+          reason: `${secrets[1]} ${secrets[7]} ${secrets[8]}`,
+        },
+      },
+      Date.parse("2026-07-28T01:00:00Z"),
+    );
+
+    const exported = await createOfflineDiagnosticExport(
+      repository,
+      authorizationId,
+      Date.parse("2026-07-28T02:00:00Z"),
+    );
+    for (const secret of [...secrets, queued.command.client_event_id]) {
+      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret)))]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+      expect(exported.json).not.toContain(secret);
+      expect(exported.json).not.toContain(digest);
+      expect(exported.json).not.toContain(digest.slice(0, 16));
+    }
+    expect(exported.json).not.toMatch(/\[redacted-(?:participant|reason):[a-f0-9]{16}\]/);
   });
 });

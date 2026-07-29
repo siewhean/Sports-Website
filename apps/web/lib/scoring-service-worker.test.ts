@@ -8,6 +8,7 @@ import {
   evaluateScoringWorkerClientSafety,
   guardScoringWorkerTransport,
   immutableScoringAssets,
+  isCompatibleScoringWorkerPreparationReply,
   isScoringWorkerSafetyFrozen,
   isScoringWorkerTransitionInFlight,
   ScoringWorkerSafetyFrozenError,
@@ -74,10 +75,73 @@ describe("Gate C3 scoring service worker", () => {
     expect(source).toContain("MATCHDAY_PREPARE_OFFLINE_SCORING");
     expect(source).toContain('request.method !== "GET"');
     expect(source).toContain("The offline scoring shell could not be retained.");
+    expect(source).toContain('code: "INCOMPATIBLE_PREPARATION_PROTOCOL"');
+    expect(source).toContain("message.protocolVersion !== PREPARATION_PROTOCOL_VERSION");
+    expect(source).toContain("requiredCapabilities.some");
     expect(source).toContain("cache.match(shellRequest, { ignoreVary: true })");
     expect(source).toMatch(/if \(cached\) return cached;[\s\S]*return fetch\(request\)\.catch/);
     expect(source).not.toMatch(/addEventListener\(["']sync["']/);
     expect(source).not.toContain("SyncManager");
+  });
+
+  it("accepts a newer worker build only when its preparation protocol and capabilities are compatible", () => {
+    expect(
+      isCompatibleScoringWorkerPreparationReply({
+        ok: true,
+        version: "gate-c-c3-v6",
+        protocolVersion: 1,
+        capabilities: ["offline-scoring-shell-cache-v1"],
+      }),
+    ).toBe(true);
+    expect(
+      isCompatibleScoringWorkerPreparationReply({
+        ok: true,
+        version: "gate-c-c3-v6",
+        protocolVersion: 2,
+        capabilities: ["offline-scoring-shell-cache-v1"],
+      }),
+    ).toBe(false);
+    expect(
+      isCompatibleScoringWorkerPreparationReply({
+        ok: true,
+        version: "gate-c-c3-v6",
+        protocolVersion: 1,
+        capabilities: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an unknown preparation protocol before touching the scoring cache", async () => {
+    const harness = await workerMessageHarness();
+    const reply = vi.fn();
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 2,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets: [],
+      },
+      ports: [{ postMessage: reply }],
+    });
+    expect(reply).toHaveBeenCalledWith({
+      ok: false,
+      version: "gate-c-c3-v5",
+      protocolVersion: 1,
+      capabilities: ["offline-scoring-shell-cache-v1"],
+      code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
+    });
+  });
+
+  it("provides a deliberate recovery path for an incompatible active worker without forcing navigation", async () => {
+    const clientSource = await readFile(new URL("./scoring-service-worker.ts", import.meta.url), "utf8");
+    const registrationSource = await readFile(
+      new URL("../components/foundation/ServiceWorkerRegistration.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(clientSource).toContain("Finish or export unresolved work, then reload when it is safe.");
+    expect(clientSource).not.toContain("window.location.reload");
+    expect(registrationSource).not.toContain("window.location.reload");
+    expect(registrationSource).not.toContain("location.assign");
   });
 
   it("prepares exact immutable resources already loaded by the uncontrolled first navigation", () => {

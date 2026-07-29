@@ -2,17 +2,14 @@
 
 import type {
   GateCOfflineAcknowledgement,
-  GateCOfflineCanonicalCommand,
   GateCOfflineMatchPackage,
   GateCOfflineQueuedCommand,
 } from "@matchday/contracts";
 import { canonicalOfflineJson } from "@matchday/domain";
 import type { OfflineConflict, OfflineScoringRepository } from "./types";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 export type OfflineDiagnosticDocument = Readonly<{
-  export_version: 1;
+  export_version: 2;
   generated_at: string;
   authorization: {
     authorization_id: string;
@@ -27,47 +24,36 @@ export type OfflineDiagnosticDocument = Readonly<{
     replay_expires_at: string;
     status: string;
   };
-  canonical_commands: readonly Readonly<{
-    local_sequence: number;
-    writer_generation: number;
-    enqueued_at: string;
-    command: GateCOfflineCanonicalCommand;
-  }>[];
-  acknowledgements: readonly GateCOfflineAcknowledgement[];
-  conflicts: readonly Omit<OfflineConflict, "id">[];
-}>;
-
-async function redactedReference(kind: "participant" | "reason", value: string): Promise<string> {
-  return `[redacted-${kind}:${(await sha256(value)).slice(0, 16)}]`;
-}
-
-async function sanitizedCommand(command: GateCOfflineCanonicalCommand): Promise<GateCOfflineCanonicalCommand> {
-  if (command.kind === "finalisation") return { ...command };
-  return {
-    kind: "event",
-    client_event_id: command.client_event_id,
-    expected_sequence: command.expected_sequence,
-    type: command.type,
-    occurred_at: command.occurred_at,
-    ...(command.team_slot ? { team_slot: command.team_slot } : {}),
-    ...(command.participant_id !== undefined
-      ? {
-          participant_id:
-            command.participant_id === null || UUID_PATTERN.test(command.participant_id)
-              ? command.participant_id
-              : await redactedReference("participant", command.participant_id),
-        }
-      : {}),
-    ...(command.unknown_participant !== undefined ? { unknown_participant: command.unknown_participant } : {}),
-    ...(command.segment_number !== undefined ? { segment_number: command.segment_number } : {}),
-    ...(command.manual_time_seconds !== undefined ? { manual_time_seconds: command.manual_time_seconds } : {}),
-    ...(command.reversal_target_event_id ? { reversal_target_event_id: command.reversal_target_event_id } : {}),
-    ...(command.reversal_target_client_event_id
-      ? { reversal_target_client_event_id: command.reversal_target_client_event_id }
-      : {}),
-    ...(command.reason ? { reason: await redactedReference("reason", command.reason) } : {}),
+  queue: {
+    command_count: number;
+    acknowledged_count: number;
+    pending_count: number;
+    first_local_sequence: number | null;
+    last_local_sequence: number | null;
+    first_enqueued_at: string | null;
+    last_enqueued_at: string | null;
+    writer_generations: readonly number[];
   };
-}
+  acknowledgements: readonly Readonly<{
+    local_sequence: number;
+    command_fingerprint: string;
+    outcome: GateCOfflineAcknowledgement["outcome"];
+    sequence: number;
+    aggregate_version: number;
+    result_version?: number;
+    publication_version?: number;
+    server_received_at: string;
+    acknowledged_at: string;
+  }>[];
+  conflicts: readonly Readonly<{
+    local_sequence: number;
+    code: OfflineConflict["code"];
+    command_fingerprint?: string;
+    writer_generation: number;
+    recorded_at: string;
+    acknowledged_at?: string;
+  }>[];
+}>;
 
 export async function buildOfflineDiagnosticDocument(
   matchPackage: GateCOfflineMatchPackage,
@@ -76,8 +62,13 @@ export async function buildOfflineDiagnosticDocument(
   conflicts: readonly OfflineConflict[],
   generatedAt: string,
 ): Promise<OfflineDiagnosticDocument> {
+  const sortedCommands = commands.toSorted((left, right) => left.local_sequence - right.local_sequence);
+  const acknowledgedSequences = new Set(acknowledgements.map(({ local_sequence }) => local_sequence));
+  const firstCommand = sortedCommands.at(0);
+  const lastCommand = sortedCommands.at(-1);
+
   return {
-    export_version: 1,
+    export_version: 2,
     generated_at: generatedAt,
     authorization: {
       authorization_id: matchPackage.authorization_id,
@@ -92,31 +83,64 @@ export async function buildOfflineDiagnosticDocument(
       replay_expires_at: matchPackage.replay_expires_at,
       status: matchPackage.status,
     },
-    canonical_commands: await Promise.all(
-      commands
-        .toSorted((left, right) => left.local_sequence - right.local_sequence)
-        .map(async ({ local_sequence, writer_generation, enqueued_at, command }) => ({
-          local_sequence,
-          writer_generation,
-          enqueued_at,
-          command: await sanitizedCommand(command),
-        })),
-    ),
+    queue: {
+      command_count: sortedCommands.length,
+      acknowledged_count: acknowledgedSequences.size,
+      pending_count: sortedCommands.filter(({ local_sequence }) => !acknowledgedSequences.has(local_sequence)).length,
+      first_local_sequence: firstCommand?.local_sequence ?? null,
+      last_local_sequence: lastCommand?.local_sequence ?? null,
+      first_enqueued_at: firstCommand?.enqueued_at ?? null,
+      last_enqueued_at: lastCommand?.enqueued_at ?? null,
+      writer_generations: [...new Set(sortedCommands.map(({ writer_generation }) => writer_generation))].toSorted(
+        (left, right) => left - right,
+      ),
+    },
     acknowledgements: acknowledgements
       .toSorted((left, right) => left.local_sequence - right.local_sequence)
-      .map(({ ...acknowledgement }) => acknowledgement),
+      .map(
+        ({
+          local_sequence,
+          command_fingerprint,
+          outcome,
+          sequence,
+          aggregate_version,
+          result_version,
+          publication_version,
+          server_received_at,
+          acknowledged_at,
+        }) => ({
+          local_sequence,
+          command_fingerprint,
+          outcome,
+          sequence,
+          aggregate_version,
+          ...(result_version === undefined ? {} : { result_version }),
+          ...(publication_version === undefined ? {} : { publication_version }),
+          server_received_at,
+          acknowledged_at,
+        }),
+      ),
     conflicts: conflicts
       .toSorted((left, right) => left.local_sequence - right.local_sequence)
-      .map(
-        (conflict) =>
-          Object.fromEntries(Object.entries(conflict).filter(([key]) => key !== "id")) as Omit<OfflineConflict, "id">,
-      ),
+      .map(({ local_sequence, code, command_fingerprint, writer_generation, recorded_at, acknowledged_at }) => ({
+        local_sequence,
+        code,
+        ...(command_fingerprint === undefined ? {} : { command_fingerprint }),
+        writer_generation,
+        recorded_at,
+        ...(acknowledged_at === undefined ? {} : { acknowledged_at }),
+      })),
   };
 }
 
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function randomHex(bytes: number): string {
+  const value = crypto.getRandomValues(new Uint8Array(bytes));
+  return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function createOfflineDiagnosticExport(
@@ -140,6 +164,17 @@ export async function createOfflineDiagnosticExport(
   );
   const json = canonicalOfflineJson(document);
   const checksum = await sha256(json);
-  await repository.recordDiagnosticExport(authorizationId, checksum, json, document.generated_at);
+  const privateIntegrityNonce = randomHex(32);
+  const privateIntegrityDigest = await sha256(
+    `${privateIntegrityNonce}:${canonicalOfflineJson({ matchPackage, commands, acknowledgements, conflicts })}`,
+  );
+  await repository.recordDiagnosticExport(
+    authorizationId,
+    checksum,
+    json,
+    document.generated_at,
+    privateIntegrityNonce,
+    privateIntegrityDigest,
+  );
   return { document, json, sha256: checksum };
 }

@@ -457,6 +457,8 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     nullableString(home.name, 200) === undefined ||
     nullableString(away.id, 64) === undefined ||
     nullableString(away.name, 200) === undefined ||
+    typeof access.principal_id !== "string" ||
+    !/^[0-9a-f]{64}$/.test(access.principal_id) ||
     !["writer", "candidate", "viewer", "transferred"].includes(String(access.mode ?? "")) ||
     !Array.isArray(access.permissions) ||
     !access.permissions.every((permission) => typeof permission === "string") ||
@@ -509,6 +511,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
       away: { id: away.id, name: away.name },
     },
     access: {
+      principal_id: access.principal_id,
       mode: access.mode,
       permissions: access.permissions,
       generation: writer.generation,
@@ -1040,6 +1043,8 @@ function offlineAuthorityMetadata(value: unknown): Record<string, unknown> | nul
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const source = value as Record<string, unknown>;
   if (
+    typeof source.principal_id !== "string" ||
+    !/^[0-9a-f]{64}$/.test(source.principal_id) ||
     typeof source.authorization_id !== "string" ||
     !UUID_PATTERN.test(source.authorization_id) ||
     typeof source.competition_id !== "string" ||
@@ -1057,6 +1062,7 @@ function offlineAuthorityMetadata(value: unknown): Record<string, unknown> | nul
     return null;
   }
   return {
+    principal_id: source.principal_id,
     authorization_id: source.authorization_id,
     competition_id: source.competition_id,
     match_id: source.match_id,
@@ -1103,10 +1109,10 @@ async function offlineError(response: Response): Promise<Response> {
   return safe;
 }
 
-function expiredOfflineScoringResponse(): Response {
+function expiredOfflineScoringResponse(preserveScoringSession = false): Response {
   const response = jsonResponse({ success: true }, 200);
   response.headers.append("set-cookie", expiredOfflineGrantCookie());
-  response.headers.append("set-cookie", expiredScoringSessionCookie());
+  if (!preserveScoringSession) response.headers.append("set-cookie", expiredScoringSessionCookie());
   return response;
 }
 
@@ -1204,7 +1210,6 @@ export async function revokeOfflineScoringAuthority(request: Request): Promise<R
   const baseUrl = apiBaseUrl();
   const existing = offlineCredential(request);
   if (!baseUrl) return safeError(503);
-  if (!existing) return expiredOfflineScoringResponse();
   let body: unknown;
   try {
     body = await request.json();
@@ -1213,16 +1218,26 @@ export async function revokeOfflineScoringAuthority(request: Request): Promise<R
   }
   const deviceId =
     body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).deviceId : null;
+  const intent =
+    body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).intent : null;
   if (typeof deviceId !== "string" || !UUID_PATTERN.test(deviceId)) return safeError(400);
+  if (intent !== "end_session" && intent !== "preparation_rollback") return safeError(400);
+  if (!existing) {
+    return intent === "preparation_rollback" ? safeError(401) : expiredOfflineScoringResponse();
+  }
   const upstream = await upstreamFetch(
     new URL(`/api/v1/scoring/offline-authorizations/${existing.authorizationId}`, baseUrl),
     {
       method: "DELETE",
       headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({ resume_secret: existing.resumeSecret, device_id: deviceId }),
+      body: JSON.stringify({
+        resume_secret: existing.resumeSecret,
+        device_id: deviceId,
+        preserve_writer_session: intent === "preparation_rollback",
+      }),
     },
   );
   if (!upstream) return safeError(503);
   if (!upstream.ok && upstream.status !== 404 && upstream.status !== 410) return offlineError(upstream);
-  return expiredOfflineScoringResponse();
+  return expiredOfflineScoringResponse(intent === "preparation_rollback");
 }

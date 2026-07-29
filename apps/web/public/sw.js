@@ -4,6 +4,8 @@ const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;
 const SCORING_SHELL_PATH = "/score";
 const WORKER_VERSION = "gate-c-c3-v5";
 const UPDATE_PROTOCOL_VERSION = 1;
+const PREPARATION_PROTOCOL_VERSION = 1;
+const PREPARATION_CAPABILITIES = Object.freeze(["offline-scoring-shell-cache-v1"]);
 const CLIENT_SAFETY_TIMEOUT_MS = 5_000;
 const PUBLIC_DOCUMENT_PATHS = new Set(["/", "/competitions/singapore-open"]);
 const pendingActivationChecks = new Map();
@@ -267,6 +269,23 @@ self.addEventListener("message", (event) => {
     return;
   }
   if (message.type !== "MATCHDAY_PREPARE_OFFLINE_SCORING") return;
+  const requiredCapabilities = Array.isArray(message.requiredCapabilities)
+    ? message.requiredCapabilities.filter((capability) => typeof capability === "string")
+    : [];
+  if (
+    message.protocolVersion !== PREPARATION_PROTOCOL_VERSION ||
+    requiredCapabilities.length !== message.requiredCapabilities?.length ||
+    requiredCapabilities.some((capability) => !PREPARATION_CAPABILITIES.includes(capability))
+  ) {
+    event.ports[0]?.postMessage({
+      ok: false,
+      version: WORKER_VERSION,
+      protocolVersion: PREPARATION_PROTOCOL_VERSION,
+      capabilities: PREPARATION_CAPABILITIES,
+      code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
+    });
+    return;
+  }
   const assets = Array.isArray(message.assets)
     ? message.assets.filter((candidate) => {
         if (typeof candidate !== "string") return false;
@@ -306,12 +325,19 @@ self.addEventListener("message", (event) => {
             if (response.ok) await cache.put(asset, response);
           }),
         );
-        event.ports[0]?.postMessage({ ok: true, version: WORKER_VERSION });
+        event.ports[0]?.postMessage({
+          ok: true,
+          version: WORKER_VERSION,
+          protocolVersion: PREPARATION_PROTOCOL_VERSION,
+          capabilities: PREPARATION_CAPABILITIES,
+        });
       })
       .catch((error) => {
         event.ports[0]?.postMessage({
           ok: false,
           version: WORKER_VERSION,
+          protocolVersion: PREPARATION_PROTOCOL_VERSION,
+          capabilities: PREPARATION_CAPABILITIES,
           error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
         });
       }),
