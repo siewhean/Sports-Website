@@ -1107,7 +1107,7 @@ export function PhoneScoring({
   const finalize = async () => {
     mutationInFlightRef.current += 1;
     setInteractionError("");
-    sessionRefreshFenceRef.current.cancel();
+    await sessionRefreshFenceRef.current.waitForIdle();
     setAnnouncement(phase2Copy.scoreControlsPending);
     const command = {
       clientEventId: crypto.randomUUID(),

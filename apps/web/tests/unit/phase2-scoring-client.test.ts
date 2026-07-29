@@ -595,6 +595,29 @@ describe("phase 2 browser scoring transport", () => {
     expect(committed).toEqual([]);
   });
 
+  it("lets a terminal mutation drain an active heartbeat without aborting it", async () => {
+    let resolveRefresh: (value: ScoringSessionView) => void = () => undefined;
+    const refresh = new Promise<ScoringSessionView>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const fence = new LatestRequestFence();
+    const run = fence.run(
+      () => refresh,
+      () => undefined,
+    );
+    let idle = false;
+    const wait = fence.waitForIdle().then(() => {
+      idle = true;
+    });
+
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    resolveRefresh(sessionView({ generation: 6 }));
+    await Promise.all([run, wait]);
+
+    expect(idle).toBe(true);
+  });
+
   it("removes recovered cards that have a card reversal event", async () => {
     const cardId = "00000000-0000-4000-8000-000000000104";
     const reverseId = "00000000-0000-4000-8000-000000000105";
