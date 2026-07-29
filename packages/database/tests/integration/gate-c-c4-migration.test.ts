@@ -29,6 +29,13 @@ describe("Gate C C4 repair persistence migration", () => {
       const competitionId = randomUUID();
       const divisionId = randomUUID();
       const otherCompetitionId = randomUUID();
+      const formatRevisionId = randomUUID();
+      const matchId = randomUUID();
+      const correctionTransactionId = randomUUID();
+      const repairCaseId = randomUUID();
+      const fingerprint = "f".repeat(64);
+      const firstEntryId = randomUUID();
+      const secondEntryId = randomUUID();
       await sql`INSERT INTO accounts(id,primary_email,display_name)
         VALUES(${accountId},${`${accountId}@example.test`},'C4 migration owner')`;
       await sql.begin(async (tx) => {
@@ -45,6 +52,70 @@ describe("Gate C C4 repair persistence migration", () => {
           'Asia/Singapore','2027-01-01','2027-01-01','organiser_pro')`;
       await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
         VALUES(${divisionId},${competitionId},'Open',16)`;
+      await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status) VALUES
+        (${firstEntryId},${divisionId},'First entry',1,'placeholder','confirmed'),
+        (${secondEntryId},${divisionId},'Second entry',2,'placeholder','confirmed')`;
+      const pack = { recommendedSlotMinutes: 20, recommendedSettings: { slotMinutes: 20 } };
+      const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) hash`;
+      await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
+        VALUES('badminton','c4-migration-1',1,${sql.json(pack)},${packHash!.hash},'active',now())`;
+      const definition = {
+        id: formatRevisionId,
+        schemaVersion: 1,
+        entryCount: 2,
+        stages: [
+          {
+            id: "final-stage",
+            label: "Final",
+            kind: "single_elimination",
+            order: 1,
+            groupIds: [],
+            groupSize: null,
+            outputRanks: 2,
+            matchIds: [matchId],
+          },
+        ],
+        matches: [
+          {
+            id: matchId,
+            stageId: "final-stage",
+            round: 1,
+            order: 1,
+            purpose: "championship",
+            home: { type: "entry_seed", seed: 1 },
+            away: { type: "entry_seed", seed: 2 },
+          },
+        ],
+        terminalMatchIds: [matchId],
+      };
+      const [definitionHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(definition)}) hash`;
+      await sql`INSERT INTO format_revisions(
+        id,competition_id,division_id,revision,definition,definition_hash,status,created_by
+      ) VALUES(
+        ${formatRevisionId},${competitionId},${divisionId},1,${sql.json(definition)},${definitionHash!.hash},'draft',${accountId}
+      )`;
+      await sql`INSERT INTO matches(id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal)
+        VALUES(${matchId},${competitionId},${divisionId},${formatRevisionId},'M1','final',1,1)`;
+      await sql`INSERT INTO match_score_streams(
+        match_id,competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint
+      ) VALUES(
+        ${matchId},${competitionId},${divisionId},'badminton','c4-migration-1',${sql.json({})},${fingerprint}
+      )`;
+      await sql`INSERT INTO score_correction_transactions(
+        id,competition_id,division_id,match_id,client_event_id,command_fingerprint,reason,
+        from_aggregate_version,through_aggregate_version,result_version,actor_account_id
+      ) VALUES(
+        ${correctionTransactionId},${competitionId},${divisionId},${matchId},${randomUUID()},${fingerprint},'Correction reason',
+        0,1,1,${accountId}
+      )`;
+      await sql`INSERT INTO schedule_repair_cases(
+        id,competition_id,corrected_division_id,corrected_match_id,correction_transaction_id,
+        source_result_version,source_schedule_version,source_projection_version,analysis_fingerprint,
+        analysis_fingerprint_input,created_by_account_id
+      ) VALUES(
+        ${repairCaseId},${competitionId},${divisionId},${matchId},${correctionTransactionId},
+        1,0,0,${fingerprint},'canonical repair analysis',${accountId}
+      )`;
 
       expect(
         await sql<{ table_name: string }[]>`
@@ -102,6 +173,94 @@ describe("Gate C C4 repair persistence migration", () => {
           SELECT proname FROM pg_proc WHERE proname='gate_c_append_schedule_repair_revision'
         `,
       ).toEqual([{ proname: "gate_c_append_schedule_repair_revision" }]);
+      expect(
+        await sql<{ tgname: string }[]>`
+          SELECT tgname FROM pg_trigger
+          WHERE tgrelid IN (
+            'schedule_repair_cases'::regclass,
+            'schedule_repair_revisions'::regclass,
+            'schedule_repair_actions'::regclass,
+            'schedule_repair_decisions'::regclass,
+            'schedule_repair_publication_receipts'::regclass,
+            'public_projection_versions'::regclass,
+            'competition_export_manifests'::regclass
+          )
+            AND tgname LIKE '%_immutable'
+          ORDER BY tgname
+        `,
+      ).toHaveLength(7);
+
+      const appendRevision = (parentRevisionId: string | null) =>
+        sql<{ id: string; revision: number }[]>`
+          SELECT id,revision FROM gate_c_append_schedule_repair_revision(
+            ${repairCaseId},1,0,${fingerprint},${parentRevisionId},'draft',${null},${accountId}
+          )
+        `;
+      const [firstRevision] = await appendRevision(null);
+      expect(firstRevision?.revision).toBe(1);
+      const [action] = await sql<{ id: string }[]>`
+        INSERT INTO schedule_repair_actions(
+          repair_revision_id,repair_case_id,competition_id,ordinal,match_id,division_id,slot,
+          source_action,dependency_path,reason
+        ) VALUES(
+          ${firstRevision!.id},${repairCaseId},${competitionId},1,${matchId},${divisionId},'home',
+          'no_change',${sql.json([])},'No repair required for this slot'
+        ) RETURNING id
+      `;
+      const [decision] = await sql<{ id: string }[]>`
+        INSERT INTO schedule_repair_decisions(
+          repair_action_id,repair_revision_id,repair_case_id,competition_id,match_id,division_id,slot,
+          decision,reason,client_event_id,request_fingerprint,decided_by_account_id
+        ) VALUES(
+          ${action!.id},${firstRevision!.id},${repairCaseId},${competitionId},${matchId},${divisionId},'home',
+          'keep_current','Keep the current slot',${randomUUID()},${fingerprint},${accountId}
+        ) RETURNING id
+      `;
+      await expect(sql`DELETE FROM schedule_repair_cases WHERE id=${repairCaseId}`).rejects.toThrow(/append-only/i);
+      await expect(sql`DELETE FROM schedule_repair_revisions WHERE id=${firstRevision!.id}`).rejects.toThrow(
+        /append-only/i,
+      );
+      await expect(sql`DELETE FROM schedule_repair_actions WHERE id=${action!.id}`).rejects.toThrow(/append-only/i);
+      await expect(sql`DELETE FROM schedule_repair_decisions WHERE id=${decision!.id}`).rejects.toThrow(/append-only/i);
+      await expect(
+        sql`INSERT INTO schedule_repair_revisions(
+          repair_case_id,competition_id,revision,parent_revision_id,status,
+          source_result_version,source_schedule_version,source_projection_version,
+          analysis_fingerprint,created_by_account_id
+        ) VALUES(
+          ${repairCaseId},${competitionId},3,${firstRevision!.id},'draft',
+          1,0,0,${fingerprint},${accountId}
+        )`,
+      ).rejects.toThrow(/contiguous/i);
+
+      const concurrentSql = postgres(config.databaseUrl, {
+        max: 1,
+        prepare: false,
+        connection: { search_path: schema },
+      });
+      try {
+        const secondAttempt = appendRevision(firstRevision!.id);
+        const staleConcurrentAttempt = concurrentSql<{ id: string; revision: number }[]>`
+          SELECT id,revision FROM gate_c_append_schedule_repair_revision(
+            ${repairCaseId},1,0,${fingerprint},${firstRevision!.id},'draft',${null},${accountId}
+          )
+        `;
+        const results = await Promise.allSettled([secondAttempt, staleConcurrentAttempt]);
+        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+        expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+        const fulfilled = results.find((result) => result.status === "fulfilled");
+        if (!fulfilled || fulfilled.status !== "fulfilled") {
+          throw new Error("one concurrent repair revision append must succeed");
+        }
+        expect(fulfilled.value[0]?.revision).toBe(2);
+        await expect(
+          sql`SELECT id FROM gate_c_append_schedule_repair_revision(
+            ${repairCaseId},2,0,${fingerprint},${fulfilled!.value[0]!.id},'draft',${null},${accountId}
+          )`,
+        ).rejects.toThrow(/stale/i);
+      } finally {
+        await concurrentSql.end({ timeout: 2 });
+      }
     } finally {
       await sql.end({ timeout: 2 });
     }

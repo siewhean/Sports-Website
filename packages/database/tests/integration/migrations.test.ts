@@ -124,10 +124,12 @@ describe("foundation migrations", () => {
         "0031_gate_c_participant_snapshot_fencing.sql",
         "0032_gate_c_offline_replay.sql",
         "0033_gate_c_repair_public_truth_exports.sql",
+        "0034_gate_c_repair_revision_fencing.sql",
       ] as const;
       const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
       const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
       const repairPersistenceMigrationName = "0033_gate_c_repair_public_truth_exports.sql";
+      const repairRevisionFencingMigrationName = "0034_gate_c_repair_revision_fencing.sql";
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
           const migrationPath = path.join(copiedDirectory, name);
@@ -334,7 +336,8 @@ describe("foundation migrations", () => {
               ({ name }) =>
                 name !== participantFenceMigrationName &&
                 name !== offlineReplayMigrationName &&
-                name !== repairPersistenceMigrationName,
+                name !== repairPersistenceMigrationName &&
+                name !== repairRevisionFencingMigrationName,
             )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
@@ -343,7 +346,7 @@ describe("foundation migrations", () => {
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -3));
+        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -4));
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -371,6 +374,15 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithReplay.applied).toEqual(["0032_gate_c_offline_replay.sql"]);
+        const correctionClientEventId = randomUUID();
+        const correctionFingerprint = createHash("sha256").update(correctionClientEventId).digest("hex");
+        await sql`INSERT INTO score_correction_transactions(
+          competition_id,division_id,match_id,client_event_id,command_fingerprint,reason,
+          from_aggregate_version,through_aggregate_version,result_version,actor_account_id
+        ) VALUES(
+          ${competition},${division},${match},${correctionClientEventId},${correctionFingerprint},'Retained correction',
+          0,1,1,${account}
+        )`;
         await writeFile(repairPersistenceMigration.migrationPath, repairPersistenceMigration.source);
         const upgradedWithRepairPersistence = await migrateDatabase({
           databaseUrl: config.databaseUrl,
@@ -378,6 +390,22 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithRepairPersistence.applied).toEqual(["0033_gate_c_repair_public_truth_exports.sql"]);
+        expect(
+          await sql<{ count: string }[]>`
+            SELECT count(*)::text count FROM score_correction_transactions
+            WHERE competition_id=${competition} AND division_id=${division} AND match_id=${match}
+          `,
+        ).toEqual([{ count: "1" }]);
+        const repairRevisionFencingMigration = forwardMigrations.find(
+          ({ name }) => name === repairRevisionFencingMigrationName,
+        )!;
+        await writeFile(repairRevisionFencingMigration.migrationPath, repairRevisionFencingMigration.source);
+        const upgradedWithRepairRevisionFencing = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithRepairRevisionFencing.applied).toEqual([repairRevisionFencingMigrationName]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
