@@ -2,6 +2,7 @@
 
 const SCORING_PRINCIPAL_COOKIE = "matchday_scoring_principal";
 const PRINCIPAL_PATTERN = /^[0-9a-f]{64}$/;
+const OFFLINE_PRINCIPAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 export function readScoringPrincipalCookie(cookieHeader: string = document.cookie): string | null {
   const encoded = cookieHeader
@@ -16,9 +17,13 @@ export function readScoringPrincipalCookie(cookieHeader: string = document.cooki
 
 export function retainScoringPrincipalCookie(principalId: string, expiresAt: string): void {
   if (!PRINCIPAL_PATTERN.test(principalId)) throw new Error("Scoring principal is invalid.");
-  const expiry = Date.parse(expiresAt);
-  if (!Number.isFinite(expiry) || expiry <= Date.now()) throw new Error("Scoring principal expiry is invalid.");
-  document.cookie = `${SCORING_PRINCIPAL_COOKIE}=${encodeURIComponent(principalId)}; Path=/score; Expires=${new Date(expiry).toUTCString()}; Secure; SameSite=Strict`;
+  const authorityExpiry = Date.parse(expiresAt);
+  if (!Number.isFinite(authorityExpiry)) throw new Error("Scoring principal expiry is invalid.");
+  // The opaque binding must outlive authority expiry so the same browser
+  // profile can still inspect or export an unresolved terminal queue. Explicit
+  // sign-out and a confirmed principal switch clear or rotate it.
+  const retentionExpiry = Math.max(authorityExpiry, Date.now() + OFFLINE_PRINCIPAL_RETENTION_MS);
+  document.cookie = `${SCORING_PRINCIPAL_COOKIE}=${encodeURIComponent(principalId)}; Path=/score; Expires=${new Date(retentionExpiry).toUTCString()}; Secure; SameSite=Strict`;
 }
 
 export function clearScoringPrincipalCookie(): void {
