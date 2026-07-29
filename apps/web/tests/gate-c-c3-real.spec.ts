@@ -76,9 +76,9 @@ async function state(): Promise<GateCC3State> {
     !parsed.organiserCookie ||
     !parsed.c3ControlToken ||
     !Array.isArray(parsed.c3Aggregates) ||
-    parsed.c3Aggregates.length !== 8
+    parsed.c3Aggregates.length !== 9
   ) {
-    throw new Error("Gate C C3 real seed must contain eight isolated authorised scoring aggregates");
+    throw new Error("Gate C C3 real seed must contain nine isolated authorised scoring aggregates");
   }
   return parsed as GateCC3State;
 }
@@ -970,7 +970,7 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[0]!;
+  const aggregate = seed.c3Aggregates[1]!;
   const { context, page, networkGuard } = await openAggregate(
     testInfo,
     path.join(profileRoot, "principal-switch-fencing"),
@@ -1116,7 +1116,7 @@ test("Gate C C3 retains a divergent offline command for review", async ({}, test
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[1]!;
+  const aggregate = seed.c3Aggregates[2]!;
   const { context, page, networkGuard } = await openAggregate(
     testInfo,
     path.join(profileRoot, "sequence-divergence"),
@@ -1178,7 +1178,7 @@ test("Gate C C3 enforces the four-hour recording boundary and replay grace", asy
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[2]!;
+  const aggregate = seed.c3Aggregates[3]!;
   const { context, page, networkGuard } = await openAggregate(
     testInfo,
     path.join(profileRoot, "four-hour-boundary"),
@@ -1224,7 +1224,7 @@ test("Gate C C3 renders revoked offline authority without discarding work", asyn
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[3]!;
+  const aggregate = seed.c3Aggregates[4]!;
   const { context, page, networkGuard } = await openAggregate(
     testInfo,
     path.join(profileRoot, "revoked-authority"),
@@ -1254,7 +1254,7 @@ test("Gate C C3 renders replay expiry and retains the unresolved queue", async (
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[4]!;
+  const aggregate = seed.c3Aggregates[5]!;
   const { context, page, networkGuard } = await openAggregate(
     testInfo,
     path.join(profileRoot, "expired-authority"),
@@ -1295,7 +1295,7 @@ test("Gate C C3 surfaces corrupt local storage without submitting it", async ({}
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[5]!;
+  const aggregate = seed.c3Aggregates[6]!;
   const { context, page, networkGuard } = await openAggregate(
     testInfo,
     path.join(profileRoot, "storage-corruption"),
@@ -1356,7 +1356,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[6]!;
+  const aggregate = seed.c3Aggregates[7]!;
   if (!aggregate.candidateAccessToken || !aggregate.candidateAccessPassId) {
     throw new Error("Gate C C3 takeover aggregate has no candidate access pass");
   }
@@ -1460,7 +1460,7 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   const seed = await state();
   const profileRoot = process.env.PHASE2_E2E_PERSISTENT_PROFILE;
   if (!profileRoot) throw new Error("PHASE2_E2E_PERSISTENT_PROFILE is required");
-  const aggregate = seed.c3Aggregates[7]!;
+  const aggregate = seed.c3Aggregates[8]!;
   const { context, page, networkGuard } = await openAggregate(
     testInfo,
     path.join(profileRoot, "service-worker-update"),

@@ -454,7 +454,7 @@ async function seed(sql: Sql, isolation: Isolation, now: () => Date = () => new 
     evidenceScope === "gate-c-c2"
       ? ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"]
       : evidenceScope === "gate-c-c3"
-        ? Array.from({ length: 8 }, () => "canoe_polo" as const)
+        ? Array.from({ length: 9 }, () => "canoe_polo" as const)
         : ["canoe_polo"];
   for (const sportId of new Set(sports)) {
     const pack = SPORT_PACKS[sportId];
@@ -685,8 +685,8 @@ async function seed(sql: Sql, isolation: Isolation, now: () => Date = () => new 
     );
     const candidate = await runtime.createAccessPass(
       actor,
-      c3Aggregates[6]!.competitionId,
-      c3Aggregates[6]!.matchId,
+      c3Aggregates[7]!.competitionId,
+      c3Aggregates[7]!.matchId,
       {
         expiresAt: new Date(now().getTime() + 6 * 60 * 60_000).toISOString(),
         role: "scorekeeper",
@@ -695,8 +695,8 @@ async function seed(sql: Sql, isolation: Isolation, now: () => Date = () => new 
       randomUUID(),
     );
     if (!candidate.token) throw new Error("Gate C C3 seed did not issue the takeover candidate token");
-    c3Aggregates[6] = {
-      ...c3Aggregates[6]!,
+    c3Aggregates[7] = {
+      ...c3Aggregates[7]!,
       candidateAccessPassId: candidate.id,
       candidateAccessToken: candidate.token,
     };
@@ -778,11 +778,12 @@ async function assertDatabaseOracle(sql: Sql, state: SeedState): Promise<void> {
 }
 
 async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<void> {
-  if (!state.c3Aggregates || state.c3Aggregates.length !== 8) {
-    throw new Error("Gate C C3 database oracle requires eight isolated scenario aggregates");
+  if (!state.c3Aggregates || state.c3Aggregates.length !== 9) {
+    throw new Error("Gate C C3 database oracle requires nine isolated scenario aggregates");
   }
   const expectedEventTypes = [
     ["match_started", "goal", "reversal"],
+    ["match_started", "goal"],
     ["match_started", "incident"],
     ["match_started", "incident"],
     ["match_started"],
