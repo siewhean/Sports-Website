@@ -691,7 +691,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         lastReportedLocalSequence: 0,
         queueFingerprint: null,
         indexeddbSchemaVersion: 1,
-        serviceWorkerVersion: "gate-c-c3-v4",
+        serviceWorkerVersion: "gate-c-c3-v5",
       },
       randomUUID(),
     );

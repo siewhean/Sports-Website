@@ -1729,7 +1729,7 @@ export class Phase2Runtime {
       !Number.isSafeInteger(input.lastReportedLocalSequence) ||
       input.lastReportedLocalSequence < 0 ||
       input.indexeddbSchemaVersion !== 1 ||
-      input.serviceWorkerVersion !== "gate-c-c3-v4" ||
+      !["gate-c-c3-v4", "gate-c-c3-v5"].includes(input.serviceWorkerVersion) ||
       (input.queueFingerprint !== null && !/^[0-9a-f]{64}$/.test(input.queueFingerprint))
     ) {
       throw new ApiError(422, "OFFLINE_QUEUE_SUMMARY_INVALID", "Offline queue summary is invalid");
