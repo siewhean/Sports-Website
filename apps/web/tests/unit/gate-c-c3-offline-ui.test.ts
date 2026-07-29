@@ -116,4 +116,12 @@ describe("Gate C3 offline scoring UI contract", () => {
       /const online = \(\) => \{\s*if \(!subscribed\) return;\s*transportOnlineRef\.current = true/u,
     );
   });
+
+  it("does not rotate authority again when a trailing reconnect sees a drained queue", async () => {
+    const source = await readFile(scoringSource, "utf8");
+
+    expect(source).toMatch(
+      /const summary = await offlineQueueSummary\(resources\.repository, offlineAuthorizationId\);\s*if \(summary\.pending_count === 0\) \{\s*setPendingCount\(0\);\s*setPendingSync\(false\);\s*setOfflineState\(phase2Machine\.offlineReady\);\s*return;\s*\}\s*const authority = await resources\.port\.establishAuthority\(summary\)/u,
+    );
+  });
 });

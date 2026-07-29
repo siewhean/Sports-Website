@@ -698,6 +698,12 @@ export function PhoneScoring({
         setAnnouncement(phase2Copy.offlineReconnectAnnouncement);
         const resources = await offlineResources();
         const summary = await offlineQueueSummary(resources.repository, offlineAuthorizationId);
+        if (summary.pending_count === 0) {
+          setPendingCount(0);
+          setPendingSync(false);
+          setOfflineState(phase2Machine.offlineReady);
+          return;
+        }
         const authority = await resources.port.establishAuthority(summary);
         if (!componentMountedRef.current) return;
         if (authority.session) await applySession(authority.session);
