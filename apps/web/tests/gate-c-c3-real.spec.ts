@@ -628,7 +628,7 @@ async function reloadOfflineDocument(
       value: true,
     });
   });
-  await page.reload({ waitUntil: "commit", timeout: 15_000 });
+  await page.reload({ waitUntil: "domcontentloaded" });
   const reloadProof = await page.evaluate(() => ({
     navigationType: (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type,
     transientDocumentMarkerPresent: Object.prototype.hasOwnProperty.call(window, "__matchdayC3PreReloadDocument"),
