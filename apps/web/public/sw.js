@@ -432,6 +432,24 @@ function sendActivationResult(client, requestId, status, unsafeClientCount = 0) 
   });
 }
 
+function activationApprovalComesFromActiveWorker(source) {
+  const active = self.registration.active;
+  if (
+    source === null ||
+    active === null ||
+    typeof source?.scriptURL !== "string" ||
+    typeof active.scriptURL !== "string" ||
+    source.state !== "activated"
+  ) {
+    return false;
+  }
+  try {
+    return new URL(source.scriptURL).href === new URL(active.scriptURL).href;
+  } catch {
+    return false;
+  }
+}
+
 function finishActivationCheck(requestId, status) {
   const check = pendingActivationChecks.get(requestId);
   if (!check) return;
@@ -566,7 +584,7 @@ self.addEventListener("message", (event) => {
   }
   if (
     message.type === "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED" &&
-    event.source === self.registration.active &&
+    activationApprovalComesFromActiveWorker(event.source) &&
     typeof message.requestId === "string" &&
     Array.isArray(message.checkedClientIds) &&
     message.protocolVersion === UPDATE_PROTOCOL_VERSION

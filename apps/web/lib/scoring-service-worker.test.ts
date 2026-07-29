@@ -28,8 +28,12 @@ async function workerMessageHarness(
 ) {
   const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
   const handlers = new Map<string, (event: Record<string, unknown>) => void>();
-  const active = { postMessage: vi.fn() };
-  const waiting = { postMessage: vi.fn() };
+  const active = { postMessage: vi.fn(), scriptURL: "https://matchday.test/sw.js", state: "activated" };
+  const waiting = {
+    postMessage: vi.fn(),
+    scriptURL: "https://matchday.test/sw.js?gate-c-c3-update=1",
+    state: "installed",
+  };
   const clients = [
     { id: "client-a", postMessage: vi.fn() },
     { id: "client-b", postMessage: vi.fn() },
@@ -93,7 +97,7 @@ describe("Gate C3 scoring service worker", () => {
     expect(source).not.toMatch(/keys\.filter\(\(key\) => key !==/);
     expect(source).not.toContain("MATCHDAY_ACTIVATE_SCORING_WORKER");
     expect(source).toContain("MATCHDAY_SCORING_WORKER_SAFE_STATE_QUERY");
-    expect(source).toContain("event.source === self.registration.active");
+    expect(source).toContain("activationApprovalComesFromActiveWorker(event.source)");
     expect(source).toContain("response.activeScoring === false");
     expect(source).toContain("response.unresolvedQueue === false");
     expect(source).toContain("response.frozen === true");
@@ -1095,6 +1099,36 @@ describe("Gate C3 scoring service worker", () => {
     expect(directActivation).toBeUndefined();
     expect(harness.skipWaiting).not.toHaveBeenCalled();
 
+    harness.message({
+      data: {
+        type: "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED",
+        requestId: "wrong-worker",
+        protocolVersion: 1,
+        checkedClientIds: ["client-a", "client-b"],
+      },
+      source: { scriptURL: "https://matchday.test/other-worker.js", state: "activated" },
+      waitUntil: (promise: Promise<unknown>) => {
+        directActivation = promise;
+      },
+    });
+    expect(harness.skipWaiting).not.toHaveBeenCalled();
+
+    harness.message({
+      data: {
+        type: "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED",
+        requestId: "firefox-wrapper",
+        protocolVersion: 1,
+        checkedClientIds: ["client-a", "client-b"],
+      },
+      source: { scriptURL: harness.active.scriptURL, state: harness.active.state },
+      waitUntil: (promise: Promise<unknown>) => {
+        directActivation = promise;
+      },
+    });
+    await directActivation;
+    expect(harness.skipWaiting).toHaveBeenCalledOnce();
+
+    harness.skipWaiting.mockClear();
     harness.message({
       data: {
         type: "MATCHDAY_SCORING_WORKER_ACTIVATION_APPROVED",
