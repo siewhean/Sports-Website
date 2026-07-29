@@ -1313,6 +1313,7 @@ test("Gate C C3 renders replay expiry and retains the unresolved queue", async (
     await recordGlobalEvent(page, "Incident");
     await setServerClock(testInfo, profileRoot, seed, timing.replayExpiresAt);
     await setBrowserDateNow(page, Date.parse(timing.replayExpiresAt));
+    allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin);
     await page.reload();
     await expect(page.getByRole("region", { name: "Offline authority expired" })).toBeVisible();
     await expect(page.getByText(/1 command pending/u)).toBeVisible();
