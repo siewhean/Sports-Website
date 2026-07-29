@@ -1014,7 +1014,6 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
     await route.fulfill({ response: accepted });
   });
 
-  const syncClick = page.getByRole("button", { name: "Sync now" }).click();
   await context.setOffline(false);
   await serverAccepted;
 
@@ -1093,7 +1092,6 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
     switched,
   );
   releaseAcceptedResponse();
-  await syncClick;
   await page.unroute("**/api/scoring/events");
 
   const fencedQueue = await page.evaluate(
