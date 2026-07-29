@@ -161,3 +161,15 @@ export {
   type GateCRepairSlotControl,
   type PublicProjectionFreshness,
 } from "./gate-c-repair.js";
+export type {
+  GateCEmergencyScoreSheet,
+  GateCEmergencyScoreSheetRequest,
+  GateCFallbackExportManifest,
+  GateCFallbackManifestEntry,
+  GateCFallbackParticipant,
+  GateCScheduleExportMatch,
+  GateCScheduleFallbackDocument,
+  GateCScheduleFallbackRequest,
+  GateCScoreSheetSection,
+  GateCScoreSheetSectionKind,
+} from "./gate-c-fallback.js";
