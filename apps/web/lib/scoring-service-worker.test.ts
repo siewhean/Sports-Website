@@ -16,7 +16,12 @@ import {
   ScoringWorkerSafetyFrozenError,
 } from "./scoring-service-worker";
 
-async function workerMessageHarness() {
+async function workerMessageHarness(
+  options: {
+    fetch?: ReturnType<typeof vi.fn>;
+    openCache?: ReturnType<typeof vi.fn>;
+  } = {},
+) {
   const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
   const handlers = new Map<string, (event: Record<string, unknown>) => void>();
   const active = { postMessage: vi.fn() };
@@ -37,13 +42,16 @@ async function workerMessageHarness() {
     skipWaiting,
   };
   runInNewContext(source, {
+    Headers,
+    Request,
     URL,
     Response,
     caches: {
       keys: vi.fn().mockResolvedValue([]),
+      ...(options.openCache ? { open: options.openCache } : {}),
     },
     clearTimeout,
-    fetch: vi.fn(),
+    fetch: options.fetch ?? vi.fn(),
     Promise,
     self: serviceWorkerGlobal,
     setTimeout,
@@ -160,6 +168,39 @@ describe("Gate C3 scoring service worker", () => {
       code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
       message: expect.stringContaining("reload when it is safe"),
     });
+  });
+
+  it("returns the stable storage-unavailable code when a cache put has no durable readback", async () => {
+    const postMessage = vi.fn();
+    const harness = await workerMessageHarness({
+      fetch: vi.fn().mockResolvedValue(new Response("<main>score</main>", { status: 200 })),
+      openCache: vi.fn().mockResolvedValue({
+        put: vi.fn().mockResolvedValue(undefined),
+        match: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
+    let preparation: Promise<unknown> | undefined;
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 1,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets: [],
+      },
+      ports: [{ postMessage }],
+      waitUntil: (promise: Promise<unknown>) => {
+        preparation = promise;
+      },
+    });
+    await preparation;
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        protocolVersion: 1,
+        code: "OFFLINE_SHELL_STORAGE_UNAVAILABLE",
+        error: "Error: The offline scoring shell could not be retained.",
+      }),
+    );
   });
 
   it("provides a deliberate recovery path for an incompatible active worker without forcing navigation", async () => {
