@@ -1923,22 +1923,21 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   await candidate.page.bringToFront();
   await expect.poll(() => candidate.page.evaluate(() => document.visibilityState)).toBe("visible");
   await expectScoringSessionCookie(candidate.context, seed.webOrigin, "candidate foreground recovery");
-  const promotedRecovery = await candidate.page.evaluate(async () => {
-    const response = await fetch("/api/scoring/session", {
-      cache: "no-store",
-      credentials: "same-origin",
-    });
-    return {
-      status: response.status,
-      body: (await response.json().catch(() => null)) as {
-        access?: { mode?: unknown; generation?: unknown };
-      } | null,
-    };
+  const promotedRecovery = candidate.page.waitForResponse(async (response) => {
+    if (
+      response.request().method() !== "GET" ||
+      new URL(response.url()).pathname !== "/api/scoring/session" ||
+      response.status() !== 200
+    ) {
+      return false;
+    }
+    const body = (await response.json().catch(() => null)) as {
+      access?: { mode?: unknown; generation?: unknown };
+    } | null;
+    return body?.access?.mode === "writer" && body.access.generation === approvedGeneration;
   });
-  expect(promotedRecovery).toMatchObject({
-    status: 200,
-    body: { access: { mode: "writer", generation: approvedGeneration } },
-  });
+  await candidate.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await promotedRecovery;
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
   await refreshPageForProject(candidate.page, testInfo);
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
