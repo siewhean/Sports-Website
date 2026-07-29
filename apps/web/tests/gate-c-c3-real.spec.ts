@@ -402,6 +402,33 @@ async function setBrowserConnectivity(
   }, online);
 }
 
+async function retainFirefoxPrincipalLocator(context: BrowserContext, webOrigin: string): Promise<void> {
+  const principalCookies = (await context.cookies(`${webOrigin}/score`)).filter(
+    (cookie) => cookie.name === "matchday_scoring_principal",
+  );
+  expect(principalCookies).toHaveLength(1);
+  const [principalCookie] = principalCookies;
+  expect(principalCookie?.value).toMatch(/^[0-9a-f]{64}$/u);
+  expect(principalCookie).toMatchObject({
+    path: "/score",
+    httpOnly: false,
+    secure: true,
+    sameSite: "Strict",
+  });
+  await context.addCookies([
+    {
+      name: principalCookie!.name,
+      value: principalCookie!.value,
+      domain: principalCookie!.domain,
+      path: principalCookie!.path,
+      expires: principalCookie!.expires,
+      httpOnly: principalCookie!.httpOnly,
+      secure: principalCookie!.secure,
+      sameSite: principalCookie!.sameSite,
+    },
+  ]);
+}
+
 async function enterScoringAccess(page: Page, webOrigin: string, accessToken: string): Promise<void> {
   await page.addInitScript((token) => {
     const injectionMarker = "matchday-c3-access-fragment-injected";
@@ -579,6 +606,9 @@ async function enterOfflineRecording(
       : /^console\.error: Failed to load resource: net::ERR_INTERNET_DISCONNECTED$/u,
     1,
   );
+  if (testInfo.project.name.endsWith("-firefox")) {
+    await retainFirefoxPrincipalLocator(context, seed.webOrigin);
+  }
   await setBrowserConnectivity(testInfo, seed, context, page, false);
   await expect(page.locator("#score-main")).toHaveAttribute("data-offline-state", "offline-recording");
 }
@@ -1285,6 +1315,12 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
     }
   }
   await expect(validateAccess).toBeVisible();
+  if (testInfo.project.name.endsWith("-firefox")) {
+    const retainedPrincipalCookies = (await secondContext.cookies(`${seed.webOrigin}/score`)).filter(
+      (cookie) => cookie.name === "matchday_scoring_principal",
+    );
+    expect(retainedPrincipalCookies).toHaveLength(0);
+  }
   await writeScenarioReceipt("sign_out_with_unresolved_queue", testInfo, observedAt, {
     signout_intercepted: true,
     export_sha256: replacementExportSha,

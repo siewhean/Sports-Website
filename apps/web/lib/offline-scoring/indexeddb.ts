@@ -115,19 +115,6 @@ export function openOfflineScoringDatabase(factory: IDBFactory = indexedDB): Pro
   });
 }
 
-export async function readActiveOfflineScoringPrincipal(factory: IDBFactory = indexedDB): Promise<string | null> {
-  const database = await openOfflineScoringDatabase(factory);
-  try {
-    const transaction = database.transaction("meta");
-    const principal = await requestResult<PrincipalBinding | undefined>(
-      transaction.objectStore("meta").get(ACTIVE_PRINCIPAL_KEY),
-    );
-    return principal && PRINCIPAL_PATTERN.test(principal.value) ? principal.value : null;
-  } finally {
-    database.close();
-  }
-}
-
 function authorizationRange(authorizationId: string): IDBValidKey {
   return authorizationId;
 }

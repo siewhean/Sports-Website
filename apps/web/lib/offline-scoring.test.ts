@@ -12,7 +12,6 @@ import {
   OFFLINE_SCORING_DATABASE_NAME,
   offlineScoringStoreNames,
   openOfflineScoringDatabase,
-  readActiveOfflineScoringPrincipal,
 } from "./offline-scoring/indexeddb";
 import { OfflineReplayController } from "./offline-scoring/replay";
 import type { OfflineScoringRepository } from "./offline-scoring/types";
@@ -289,15 +288,6 @@ function repositoryWithOverrides(
 }
 
 describe("Gate C native IndexedDB queue", () => {
-  it("recovers the active profile principal when the non-secret locator cookie is unavailable", async () => {
-    const factory = new IDBFactory();
-    const repository = new IndexedDbOfflineScoringRepository(factory);
-
-    await expect(readActiveOfflineScoringPrincipal(factory)).resolves.toBeNull();
-    await repository.bindPrincipal("b".repeat(64));
-    await expect(readActiveOfflineScoringPrincipal(factory)).resolves.toBe("b".repeat(64));
-  });
-
   it("does not expose another scoring principal's retained match package or queue", async () => {
     const factory = new IDBFactory();
     const repository = new IndexedDbOfflineScoringRepository(factory);

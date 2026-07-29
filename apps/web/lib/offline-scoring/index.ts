@@ -6,7 +6,6 @@ export {
   OFFLINE_SCORING_DATABASE_VERSION,
   offlineScoringStoreNames,
   openOfflineScoringDatabase,
-  readActiveOfflineScoringPrincipal,
   IndexedDbOfflineScoringRepository as RawIndexedDbOfflineScoringRepository,
 } from "./indexeddb";
 export { StrictIndexedDbOfflineScoringRepository as IndexedDbOfflineScoringRepository } from "./strict-indexeddb";
