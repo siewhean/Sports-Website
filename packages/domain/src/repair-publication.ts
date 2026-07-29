@@ -24,14 +24,16 @@ export type RepairActionResolution = Readonly<{
   reason: string;
 }>;
 
+export type RepairPublicationUnresolved = Readonly<{
+  matchId: string;
+  slot: RepairSlot;
+  action: AffectedMatchAction["action"];
+  reason: string;
+}>;
+
 export type RepairPublicationPlan = Readonly<{
   ready: boolean;
-  unresolved: readonly Readonly<{
-    matchId: string;
-    slot: RepairSlot;
-    action: AffectedMatchAction["action"];
-    reason: string;
-  }>[];
+  unresolved: readonly RepairPublicationUnresolved[];
   resolutions: readonly RepairActionResolution[];
   publicationFingerprintInput: string;
 }>;
@@ -44,7 +46,9 @@ function stableJson(value: unknown): string {
       .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
       .join(",")}}`;
   }
-  return JSON.stringify(value);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("Repair publication input contains an unsupported value");
+  return serialized;
 }
 
 function actionKey(matchId: string, slot: RepairSlot): string {
@@ -79,15 +83,24 @@ function permittedDecision(action: AffectedMatchAction, decision: RepairPublicat
     case "no_change":
       return false;
     case "automatic_update":
-      return decision.decision === "accept_proposed" || decision.decision === "keep_current" || decision.decision === "set_manual_entry";
+      return (
+        decision.decision === "accept_proposed" ||
+        decision.decision === "keep_current" ||
+        decision.decision === "set_manual_entry"
+      );
     case "protected_started_match":
     case "protected_finalised_match":
       return decision.decision === "leave_protected" || decision.decision === "keep_current";
     case "protected_manual_slot":
-      return decision.decision === "keep_current" || decision.decision === "set_manual_entry" || decision.decision === "accept_proposed";
+      return (
+        decision.decision === "keep_current" ||
+        decision.decision === "set_manual_entry" ||
+        decision.decision === "accept_proposed"
+      );
     case "requires_organiser_decision":
       return true;
   }
+  return false;
 }
 
 function resolveDecision(action: AffectedMatchAction, decision: RepairPublicationDecision): RepairActionResolution {
@@ -173,7 +186,7 @@ export function buildRepairPublicationPlan(
     decisionByAction.set(key, decision);
   }
 
-  const unresolved: RepairPublicationPlan["unresolved"] extends readonly (infer T)[] ? T[] : never = [];
+  const unresolved: RepairPublicationUnresolved[] = [];
   const resolutions: RepairActionResolution[] = [];
   for (const action of closure.actions) {
     const key = actionKey(action.matchId, action.slot);
