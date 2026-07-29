@@ -705,6 +705,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   });
 
   const originPattern = new URL(seed.webOrigin).origin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin);
   networkGuard.expectFailedRequest("GET", "/__matchday-offline-transport-probe");
   allowConsoleFailureCount(
     page,
