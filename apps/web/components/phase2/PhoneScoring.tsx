@@ -689,6 +689,7 @@ export function PhoneScoring({
     }
     return offlineReconnectRef.current.run(async () => {
       if (isScoringWorkerSafetyFrozen()) return;
+      setDiagnosticExportSha(null);
       const replayAbort = new AbortController();
       offlineReplayAbortRef.current = replayAbort;
       try {

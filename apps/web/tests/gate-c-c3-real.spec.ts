@@ -939,14 +939,27 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   networkGuard.expectFailedRequest("POST", "/api/scoring/events");
   await secondContext.setOffline(false);
   await replayIntercepted;
-  const discardClick = signOutDialog.getByRole("button", { name: "Discard exported work and end scoring" }).click();
+  await expect(signOutDialog.getByRole("button", { name: "Discard exported work and end scoring" })).toBeDisabled();
   releasePendingReplay();
   await replayAborted;
-  await discardClick;
+  await expect(page.getByText(/1 command pending/u)).toBeVisible();
+  const replacementExportPromise = page.waitForEvent("download");
+  await signOutDialog.getByRole("button", { name: "Export before discard" }).click();
+  const replacementExport = await replacementExportPromise;
+  const replacementExportPath = await replacementExport.path();
+  if (!replacementExportPath) throw new Error("The replacement offline diagnostic was not retained");
+  const replacementExported = await readFile(replacementExportPath, "utf8");
+  expect(replacementExported).not.toMatch(
+    new RegExp(`(?:bearer\\s|${["#", "access="].join("")}|cookie|password|secret|client_ip)`, "iu"),
+  );
+  const replacementExportSha = createHash("sha256").update(replacementExported.trim()).digest("hex");
+  expect(replacementExport.suggestedFilename()).toContain(replacementExportSha.slice(0, 12));
+  await expect(signOutDialog.getByRole("button", { name: "Discard exported work and end scoring" })).toBeEnabled();
+  await signOutDialog.getByRole("button", { name: "Discard exported work and end scoring" }).click();
   await expect(page.getByRole("button", { name: "Validate access" })).toBeVisible();
   await writeScenarioReceipt("sign_out_with_unresolved_queue", testInfo, observedAt, {
     signout_intercepted: true,
-    export_sha256: createHash("sha256").update(exported.trim()).digest("hex"),
+    export_sha256: replacementExportSha,
   });
   networkGuard.assertClean();
   await assertConsoleGuard(page, testInfo);

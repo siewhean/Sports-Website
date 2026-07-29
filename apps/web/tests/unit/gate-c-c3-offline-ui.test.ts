@@ -82,6 +82,21 @@ describe("Gate C3 offline scoring UI contract", () => {
     expect(source).toContain("offlineReplayAbortRef.current?.abort()");
   });
 
+  it("invalidates a diagnostic export before queue mutation or replay can change its integrity snapshot", async () => {
+    const source = await readFile(scoringSource, "utf8");
+
+    expect(source.match(/setDiagnosticExportSha\(null\)/gu)?.length).toBeGreaterThanOrEqual(4);
+    expect(source).toMatch(
+      /offlineReconnectRef\.current\.run\(async \(\) => \{\s*if \(isScoringWorkerSafetyFrozen\(\)\) return;\s*setDiagnosticExportSha\(null\)/u,
+    );
+    expect(source).toMatch(
+      /enqueueOfflineEvent\(resources\.repository, matchPackage, command\);\s*setDiagnosticExportSha\(null\)/u,
+    );
+    expect(source).toMatch(
+      /enqueueOfflineFinalisation\(resources\.repository, matchPackage, command\);\s*setDiagnosticExportSha\(null\)/u,
+    );
+  });
+
   it("does not overlap periodic recovery with offline recording or ordered replay", async () => {
     const source = await readFile(scoringSource, "utf8");
 
