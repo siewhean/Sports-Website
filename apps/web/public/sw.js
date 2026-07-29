@@ -1,6 +1,12 @@
 const FOUNDATION_CACHE_NAME = "matchday-foundation-v3";
 const SCORING_CACHE_PREFIX = "matchday-scoring-shell-";
 const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;
+const SCORING_FALLBACK_DB_NAME = "matchday-scoring-shell-fallback";
+const SCORING_FALLBACK_STORE = "active-resources";
+const SCORING_FALLBACK_MANIFEST_KEY = "manifest";
+const SCORING_FALLBACK_MAX_RESOURCES = 128;
+const SCORING_FALLBACK_MAX_RESOURCE_BYTES = 8 * 1024 * 1024;
+const SCORING_FALLBACK_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const SCORING_SHELL_PATH = "/score";
 const SCORING_SHELL_MARKER = 'data-offline-scoring-shell="v1"';
 const WORKER_VERSION = "gate-c-c3-v5";
@@ -33,6 +39,10 @@ function isPublicCacheable(response) {
 function isImmutableBuildAsset(url, destination) {
   return (
     url.origin === self.location.origin &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
     ["style", "script", "font"].includes(destination) &&
     url.pathname.startsWith("/_next/static/")
   );
@@ -40,12 +50,22 @@ function isImmutableBuildAsset(url, destination) {
 
 function requiredScoringAssetRequests(candidates) {
   if (!Array.isArray(candidates)) throw new Error("The offline scoring asset manifest is invalid.");
+  if (candidates.length > SCORING_FALLBACK_MAX_RESOURCES - 1) {
+    throw new Error("The offline scoring asset manifest exceeds the resource limit.");
+  }
   const requests = [];
   const seen = new Set();
   for (const candidate of candidates) {
     if (typeof candidate !== "string") throw new Error("The offline scoring asset manifest is invalid.");
     const url = new URL(candidate, self.location.origin);
-    if (url.origin !== self.location.origin || !url.pathname.startsWith("/_next/static/")) {
+    if (
+      url.origin !== self.location.origin ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !url.pathname.startsWith("/_next/static/")
+    ) {
       throw new Error("The offline scoring asset manifest is invalid.");
     }
     if (seen.has(url.href)) continue;
@@ -59,6 +79,286 @@ function scoringStorageError() {
   const error = new Error("The offline scoring shell could not be retained.");
   error.code = "OFFLINE_SHELL_STORAGE_UNAVAILABLE";
   return error;
+}
+
+function scoringResourceUrl(input) {
+  const url = new URL(input instanceof Request ? input.url : input, self.location.origin);
+  if (
+    url.origin !== self.location.origin ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== SCORING_SHELL_PATH && !url.pathname.startsWith("/_next/static/"))
+  ) {
+    throw new Error("The offline scoring fallback accepts only the scoring shell and immutable build assets.");
+  }
+  return url.href;
+}
+
+function openScoringFallbackDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(SCORING_FALLBACK_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(SCORING_FALLBACK_STORE)) {
+        request.result.createObjectStore(SCORING_FALLBACK_STORE, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? scoringStorageError());
+    request.onblocked = () => reject(scoringStorageError());
+  });
+}
+
+function awaitScoringFallbackTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? scoringStorageError());
+    transaction.onabort = () => reject(transaction.error ?? scoringStorageError());
+  });
+}
+
+async function serialiseScoringFallbackResponse(request, response, generation) {
+  const url = scoringResourceUrl(request);
+  const body = await response.arrayBuffer();
+  if (body.byteLength > SCORING_FALLBACK_MAX_RESOURCE_BYTES) {
+    throw new Error("An offline scoring resource exceeds the durable storage limit.");
+  }
+  const headers = {};
+  for (const name of [
+    "cache-control",
+    "content-language",
+    "content-type",
+    "x-content-type-options",
+    "x-matchday-offline-shell",
+  ]) {
+    const value = response.headers.get(name);
+    if (value !== null) headers[name] = value;
+  }
+  const digest = await crypto.subtle.digest("SHA-256", body);
+  const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return {
+    key: `resource:${url}`,
+    url,
+    body,
+    headers,
+    generation,
+    sha256,
+    status: response.status,
+    statusText: response.statusText,
+  };
+}
+
+function scoringFallbackRequest(store, url) {
+  return new Promise((resolve, reject) => {
+    const request = store.get(url);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? scoringStorageError());
+  });
+}
+
+async function retainScoringFallbackResponses(entries, generation) {
+  if (entries.length < 1 || entries.length > SCORING_FALLBACK_MAX_RESOURCES) {
+    throw new Error("The offline scoring resource count exceeds the durable storage limit.");
+  }
+  const records = await Promise.all(
+    entries.map(({ request, response }) => serialiseScoringFallbackResponse(request, response.clone(), generation)),
+  );
+  const totalBytes = records.reduce((sum, record) => sum + record.body.byteLength, 0);
+  if (totalBytes > SCORING_FALLBACK_MAX_TOTAL_BYTES) {
+    throw new Error("The offline scoring resources exceed the total durable storage limit.");
+  }
+  const manifest = {
+    key: SCORING_FALLBACK_MANIFEST_KEY,
+    generation,
+    worker_version: WORKER_VERSION,
+    total_bytes: totalBytes,
+    resources: records.map(({ url, sha256 }) => ({ url, sha256 })),
+  };
+  const database = await openScoringFallbackDatabase();
+  try {
+    const transaction = database.transaction(SCORING_FALLBACK_STORE, "readwrite");
+    const store = transaction.objectStore(SCORING_FALLBACK_STORE);
+    store.clear();
+    for (const record of records) store.put(record);
+    store.put(manifest);
+    await awaitScoringFallbackTransaction(transaction);
+  } finally {
+    database.close();
+  }
+}
+
+async function clearScoringFallbackResponses() {
+  const database = await openScoringFallbackDatabase();
+  try {
+    const transaction = database.transaction(SCORING_FALLBACK_STORE, "readwrite");
+    transaction.objectStore(SCORING_FALLBACK_STORE).clear();
+    await awaitScoringFallbackTransaction(transaction);
+  } finally {
+    database.close();
+  }
+}
+
+async function matchScoringFallbackResponse(request) {
+  const url = scoringResourceUrl(request);
+  const database = await openScoringFallbackDatabase();
+  try {
+    const transaction = database.transaction(SCORING_FALLBACK_STORE, "readonly");
+    const store = transaction.objectStore(SCORING_FALLBACK_STORE);
+    const [manifest, record] = await Promise.all([
+      scoringFallbackRequest(store, SCORING_FALLBACK_MANIFEST_KEY),
+      scoringFallbackRequest(store, `resource:${url}`),
+    ]);
+    await awaitScoringFallbackTransaction(transaction);
+    const manifestIsAuthoritative =
+      manifest?.worker_version === WORKER_VERSION &&
+      typeof manifest.generation === "string" &&
+      /^[a-f0-9-]{36}$/u.test(manifest.generation) &&
+      Array.isArray(manifest.resources) &&
+      manifest.resources.length > 0 &&
+      manifest.resources.length <= SCORING_FALLBACK_MAX_RESOURCES &&
+      Number.isSafeInteger(manifest.total_bytes) &&
+      manifest.total_bytes > 0 &&
+      manifest.total_bytes <= SCORING_FALLBACK_MAX_TOTAL_BYTES;
+    if (!manifestIsAuthoritative) return { authoritative: false, response: undefined };
+    const expected = manifest.resources.find((resource) => resource.url === url);
+    if (
+      !expected ||
+      expected.sha256 !== record?.sha256 ||
+      record.generation !== manifest.generation ||
+      !record.body ||
+      !Number.isSafeInteger(record.body.byteLength) ||
+      record.body.byteLength > SCORING_FALLBACK_MAX_RESOURCE_BYTES
+    ) {
+      return { authoritative: true, response: undefined };
+    }
+    const digest = await crypto.subtle.digest("SHA-256", record.body);
+    const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (sha256 !== expected.sha256) return { authoritative: true, response: undefined };
+    const response = new Response(record.body, {
+      headers: record.headers,
+      status: record.status,
+      statusText: record.statusText,
+    });
+    return { authoritative: true, response: await verifiedRetainedScoringResponse(request, response) };
+  } finally {
+    database.close();
+  }
+}
+
+async function matchScoringResource(request, options) {
+  try {
+    const fallback = await matchScoringFallbackResponse(request);
+    if (fallback.authoritative) return fallback.response;
+  } catch {
+    // IndexedDB is unavailable. A fully verified Cache Storage generation may
+    // still provide the retained scoring resource.
+  }
+  try {
+    const cache = await caches.open(SCORING_CACHE_NAME);
+    const cached = await cache.match(request, options);
+    const verified = await verifiedRetainedScoringResponse(request, cached);
+    if (verified) return verified;
+  } catch {
+    // Some otherwise durable WebKit stores expose Cache Storage but do not
+    // retain entries. The bounded IndexedDB fallback below uses the same
+    // participant-free resource allowlist.
+  }
+  return undefined;
+}
+
+async function retainScoringResources(entries) {
+  if (entries.length < 1 || entries.length > SCORING_FALLBACK_MAX_RESOURCES) {
+    throw new Error("The offline scoring resource count exceeds the durable storage limit.");
+  }
+  const sizes = await Promise.all(entries.map(({ response }) => response.clone().arrayBuffer()));
+  if (
+    sizes.some(({ byteLength }) => byteLength > SCORING_FALLBACK_MAX_RESOURCE_BYTES) ||
+    sizes.reduce((sum, { byteLength }) => sum + byteLength, 0) > SCORING_FALLBACK_MAX_TOTAL_BYTES
+  ) {
+    throw new Error("The offline scoring resources exceed the durable storage limit.");
+  }
+  const generation = crypto.randomUUID();
+  let fallbackCreated = false;
+  let fallbackRetained = false;
+  let fallbackInvalidated = false;
+  try {
+    await retainScoringFallbackResponses(entries, generation);
+    fallbackCreated = true;
+    const retained = await Promise.all(entries.map(({ request }) => matchScoringFallbackResponse(request)));
+    fallbackRetained = retained.every(({ authoritative, response }) => authoritative && response?.ok);
+  } catch {
+    // Cache Storage remains a supported durable backend when IndexedDB is
+    // unavailable.
+  }
+  if (fallbackCreated && !fallbackRetained) {
+    try {
+      await clearScoringFallbackResponses();
+      fallbackInvalidated = true;
+    } catch {
+      // A failed IndexedDB generation is authoritative until it is removed.
+      // Cache Storage must not be accepted while that generation can suppress
+      // otherwise valid cache entries.
+    }
+  }
+  let cacheRetained = false;
+  try {
+    await caches.delete(SCORING_CACHE_NAME);
+    const cache = await caches.open(SCORING_CACHE_NAME);
+    await Promise.all(
+      entries.map(async ({ request, response }) => {
+        const headers = new Headers(response.headers);
+        headers.set("x-matchday-offline-generation", generation);
+        await cache.put(
+          request,
+          new Response(await response.clone().arrayBuffer(), {
+            headers,
+            status: response.status,
+            statusText: response.statusText,
+          }),
+        );
+      }),
+    );
+    const retained = await Promise.all(
+      entries.map(async ({ request }) =>
+        verifiedRetainedScoringResponse(request, await cache.match(request, { ignoreVary: true })),
+      ),
+    );
+    cacheRetained = retained.every(
+      (response) => response?.ok && response.headers.get("x-matchday-offline-generation") === generation,
+    );
+  } catch {
+    await caches.delete(SCORING_CACHE_NAME).catch(() => false);
+  }
+  if (!cacheRetained) await caches.delete(SCORING_CACHE_NAME).catch(() => false);
+  if (fallbackCreated && !fallbackRetained && !fallbackInvalidated) {
+    await caches.delete(SCORING_CACHE_NAME).catch(() => false);
+    throw scoringStorageError();
+  }
+  if (!fallbackRetained && !cacheRetained) throw scoringStorageError();
+}
+
+function isVerifiedImmutableScoringAssetResponse(request, response) {
+  const url = new URL(scoringResourceUrl(request));
+  const policy = response?.headers.get("cache-control")?.toLowerCase() ?? "";
+  const contentType = response?.headers.get("content-type")?.toLowerCase() ?? "";
+  return (
+    url.pathname.startsWith("/_next/static/") &&
+    response?.ok === true &&
+    !response.headers.has("set-cookie") &&
+    policy.includes("public") &&
+    policy.includes("immutable") &&
+    !policy.includes("private") &&
+    !policy.includes("no-store") &&
+    /(?:javascript|text\/css|font|woff|octet-stream)/u.test(contentType)
+  );
+}
+
+async function verifiedRetainedScoringResponse(request, response) {
+  if (!response) return null;
+  const url = new URL(scoringResourceUrl(request));
+  if (url.pathname === SCORING_SHELL_PATH) return verifiedScoringShellResponse(response);
+  return isVerifiedImmutableScoringAssetResponse(request, response) ? response : null;
 }
 
 function offlineResponse() {
@@ -94,6 +394,9 @@ async function verifiedScoringShellResponse(response) {
       "Content-Language": response.headers.get("content-language") ?? "en",
       "Content-Type": "text/html; charset=utf-8",
       "X-Content-Type-Options": "nosniff",
+      ...(response.headers.get("x-matchday-offline-generation")
+        ? { "X-Matchday-Offline-Generation": response.headers.get("x-matchday-offline-generation") }
+        : {}),
       "X-Matchday-Offline-Shell": "v1",
     },
   });
@@ -336,9 +639,8 @@ self.addEventListener("message", (event) => {
     return;
   }
   event.waitUntil(
-    caches
-      .open(SCORING_CACHE_NAME)
-      .then(async (cache) => {
+    Promise.resolve()
+      .then(async () => {
         const assetRequests = requiredScoringAssetRequests(message.assets);
         const shellResponse = await fetch(SCORING_SHELL_PATH, { credentials: "same-origin", cache: "no-store" });
         const shell = await verifiedScoringShellResponse(shellResponse);
@@ -349,19 +651,16 @@ self.addEventListener("message", (event) => {
         const assetResponses = await Promise.all(
           assetRequests.map(async (assetRequest) => {
             const response = await fetch(assetRequest, { credentials: "same-origin", cache: "no-store" });
-            if (!response.ok) throw new Error("A required offline scoring asset could not be fetched.");
+            if (!isVerifiedImmutableScoringAssetResponse(assetRequest, response)) {
+              throw new Error("A required offline scoring asset failed its immutable-response verification.");
+            }
             return response;
           }),
         );
-        await Promise.all([
-          cache.put(shellRequest, shell),
-          ...assetRequests.map((assetRequest, index) => cache.put(assetRequest, assetResponses[index])),
+        await retainScoringResources([
+          { request: shellRequest, response: shell },
+          ...assetRequests.map((request, index) => ({ request, response: assetResponses[index] })),
         ]);
-        const retained = await Promise.all([
-          cache.match(shellRequest, { ignoreVary: true }),
-          ...assetRequests.map((assetRequest) => cache.match(assetRequest, { ignoreVary: true })),
-        ]);
-        if (retained.some((response) => !response?.ok)) throw scoringStorageError();
         event.ports[0]?.postMessage({
           ok: true,
           version: WORKER_VERSION,
@@ -400,11 +699,10 @@ self.addEventListener("fetch", (event) => {
     if (url.pathname === SCORING_SHELL_PATH) {
       event.respondWith(
         fetch(request).catch(async () => {
-          const cache = await caches.open(SCORING_CACHE_NAME);
           const shellRequest = new Request(new URL(SCORING_SHELL_PATH, self.location.origin).href, {
             credentials: "same-origin",
           });
-          const cached = await cache.match(shellRequest, { ignoreVary: true });
+          const cached = await matchScoringResource(shellRequest, { ignoreVary: true });
           if (cached) return cached;
           return offlineResponse();
         }),
@@ -434,16 +732,16 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (isImmutableBuildAsset(url, request.destination)) {
     event.respondWith(
-      caches.open(SCORING_CACHE_NAME).then(async (scoringCache) => {
-        const cached = (await scoringCache.match(request)) || (await caches.match(request));
-        const network = fetch(request).then((response) => {
+      Promise.resolve().then(async () => {
+        const cached = (await matchScoringResource(request)) || (await caches.match(request));
+        if (cached) return cached;
+        return fetch(request).then((response) => {
           if (isPublicCacheable(response)) {
             const copy = response.clone();
             void caches.open(FOUNDATION_CACHE_NAME).then((cache) => cache.put(request, copy));
           }
           return response;
         });
-        return cached || network;
       }),
     );
   }

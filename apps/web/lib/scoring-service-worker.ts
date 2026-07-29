@@ -241,7 +241,14 @@ export function immutableScoringAssets(
   return [...new Set([...documentAssets, ...resourceUrls])].filter((candidate) => {
     try {
       const url = new URL(candidate, window.location.origin);
-      return url.origin === window.location.origin && url.pathname.startsWith("/_next/static/");
+      return (
+        url.origin === window.location.origin &&
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash &&
+        url.pathname.startsWith("/_next/static/")
+      );
     } catch {
       return false;
     }

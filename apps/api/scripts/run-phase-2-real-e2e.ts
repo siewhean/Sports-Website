@@ -45,6 +45,8 @@ import {
   type GateCC3Project,
   type GateCC3Scenario,
 } from "./gate-c-c3-evidence.js";
+import { GateCC3LostResponseFence } from "./gate-c-c3-lost-response-fence.js";
+import { GateCC3BoundedBuffer, GateCC3ProxyFaultRegistry } from "./gate-c-c3-proxy-faults.js";
 
 const apiPort = 4100;
 const webPort = 3102;
@@ -193,6 +195,8 @@ async function startHttpsProxy(
   temp: string,
   gateCC3ClockControl?: { token: string; setNow(value: string): void; reset(): void },
 ): Promise<https.Server> {
+  const gateCC3RecoveryFence = new GateCC3LostResponseFence();
+  const gateCC3ProxyFaults = new GateCC3ProxyFaultRegistry();
   const keyPath = path.join(temp, "loopback-key.pem");
   const certificatePath = path.join(temp, "loopback-certificate.pem");
   execFileSync(
@@ -219,6 +223,334 @@ async function startHttpsProxy(
   const server = https.createServer(
     { key: readFileSync(keyPath), cert: readFileSync(certificatePath) },
     (request, response) => {
+      const requestPath = new URL(request.url ?? "/", webOrigin).pathname;
+      const cookieHeader = request.headers.cookie ?? "";
+      const clientScopeCookie = /(?:^|;\s*)matchday-e2e-client-scope=([a-f0-9]{64})(?:;|$)/u.exec(cookieHeader)?.[1];
+      const recoveryScope = clientScopeCookie
+        ? createHash("sha256").update(clientScopeCookie).digest("hex")
+        : undefined;
+      if (/(?:^|;\s*)matchday-e2e-transport-offline=1(?:;|$)/u.test(request.headers.cookie ?? "")) {
+        request.socket.destroy();
+        return;
+      }
+      const upstreamHeaders = { ...request.headers };
+      delete upstreamHeaders["x-matchday-e2e-control"];
+      const upstreamCookie = cookieHeader
+        .split(";")
+        .map((value) => value.trim())
+        .filter(
+          (value) =>
+            value.length > 0 &&
+            !value.startsWith("matchday-e2e-client-scope=") &&
+            !value.startsWith("matchday-e2e-transport-offline="),
+        )
+        .join("; ");
+      if (upstreamCookie) upstreamHeaders.cookie = upstreamCookie;
+      else delete upstreamHeaders.cookie;
+      const forwardToWeb = (body?: Buffer, dropResponse = false) => {
+        const upstream = http.request(
+          {
+            hostname: "127.0.0.1",
+            port: internalWebPort,
+            path: request.url,
+            method: request.method,
+            headers: {
+              ...upstreamHeaders,
+              host: `localhost:${webPort}`,
+              "x-forwarded-host": `localhost:${webPort}`,
+              "x-forwarded-proto": "https",
+            },
+          },
+          (upstreamResponse) => {
+            if (dropResponse) {
+              upstreamResponse.resume();
+              response.destroy();
+              return;
+            }
+            response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+            upstreamResponse.pipe(response);
+          },
+        );
+        upstream.on("error", (error) => response.destroy(error));
+        if (body) upstream.end(body);
+        else request.pipe(upstream);
+      };
+      if (request.url === "/_e2e/gate-c-c3/lost-response") {
+        if (
+          !gateCC3ClockControl ||
+          !recoveryScope ||
+          request.method !== "POST" ||
+          request.socket.remoteAddress !== "127.0.0.1" ||
+          request.headers["x-matchday-e2e-control"] !== gateCC3ClockControl.token
+        ) {
+          response.writeHead(404).end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        request.on("data", (chunk) => {
+          bytes += chunk.byteLength;
+          if (bytes <= 1_024) chunks.push(Buffer.from(chunk));
+        });
+        request.on("end", () => {
+          try {
+            if (bytes > 1_024) throw new Error("oversized");
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { client_event_id?: string };
+            if (!body.client_event_id || !gateCC3RecoveryFence.arm(recoveryScope, body.client_event_id, Date.now())) {
+              response.writeHead(409).end();
+              return;
+            }
+            response.writeHead(204).end();
+          } catch {
+            response.writeHead(400).end();
+          }
+        });
+        return;
+      }
+      if (request.url === "/_e2e/gate-c-c3/held-request") {
+        if (
+          !gateCC3ClockControl ||
+          !recoveryScope ||
+          request.socket.remoteAddress !== "127.0.0.1" ||
+          request.headers["x-matchday-e2e-control"] !== gateCC3ClockControl.token
+        ) {
+          response.writeHead(404).end();
+          return;
+        }
+        if (request.method === "GET") {
+          const held = gateCC3ProxyFaults.held(recoveryScope);
+          response
+            .writeHead(200, { "cache-control": "no-store", "content-type": "application/json" })
+            .end(JSON.stringify({ phase: held?.phase ?? "absent" }));
+          return;
+        }
+        if (request.method === "DELETE") {
+          if (!gateCC3ProxyFaults.releaseHeld(recoveryScope)) {
+            response.writeHead(409).end();
+            return;
+          }
+          response.writeHead(204).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405).end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        request.on("data", (chunk) => {
+          bytes += chunk.byteLength;
+          if (bytes <= 1_024) chunks.push(Buffer.from(chunk));
+        });
+        request.on("end", () => {
+          try {
+            if (bytes > 1_024) throw new Error("invalid");
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+              client_event_id?: string;
+              mode?: string;
+            };
+            if (
+              !body.client_event_id ||
+              !["hold_request", "hold_response"].includes(body.mode ?? "") ||
+              !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(body.client_event_id)
+            )
+              throw new Error("invalid");
+            if (
+              !gateCC3ProxyFaults.armHeld(
+                recoveryScope,
+                body.client_event_id,
+                body.mode as "hold_request" | "hold_response",
+              )
+            )
+              throw new Error("invalid");
+            response.writeHead(204).end();
+          } catch {
+            response.writeHead(409).end();
+          }
+        });
+        return;
+      }
+      if (request.url === "/_e2e/gate-c-c3/divergence") {
+        if (
+          !gateCC3ClockControl ||
+          !recoveryScope ||
+          request.method !== "POST" ||
+          request.socket.remoteAddress !== "127.0.0.1" ||
+          request.headers["x-matchday-e2e-control"] !== gateCC3ClockControl.token
+        ) {
+          response.writeHead(404).end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on("end", () => {
+          try {
+            if (Buffer.concat(chunks).byteLength > 1_024) {
+              throw new Error("invalid");
+            }
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { client_event_id?: string };
+            if (
+              !body.client_event_id ||
+              !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(body.client_event_id)
+            )
+              throw new Error("invalid");
+            if (!gateCC3ProxyFaults.armDivergence(recoveryScope, body.client_event_id)) throw new Error("invalid");
+            response.writeHead(204).end();
+          } catch {
+            response.writeHead(409).end();
+          }
+        });
+        return;
+      }
+      if (
+        (gateCC3RecoveryFence.hasActive(recoveryScope, Date.now()) || gateCC3ProxyFaults.hasActive(recoveryScope)) &&
+        requestPath === "/api/scoring/events"
+      ) {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        request.on("data", (chunk) => {
+          bytes += chunk.byteLength;
+          if (bytes <= 128 * 1_024) chunks.push(Buffer.from(chunk));
+        });
+        request.on("end", () => {
+          if (bytes > 128 * 1_024) {
+            request.socket.destroy();
+            return;
+          }
+          const body = Buffer.concat(chunks);
+          let clientEventId: string | undefined;
+          try {
+            const parsed = JSON.parse(body.toString("utf8")) as { client_event_id?: string };
+            clientEventId = parsed.client_event_id;
+          } catch {
+            request.socket.destroy();
+            return;
+          }
+          const held = gateCC3ProxyFaults.held(recoveryScope);
+          if (held) {
+            if (held.phase !== "armed" || clientEventId !== held.clientEventId) {
+              request.socket.destroy();
+              return;
+            }
+            if (held.mode === "hold_request") {
+              if (!recoveryScope || !gateCC3ProxyFaults.markHeld(recoveryScope, () => request.socket.destroy())) {
+                request.socket.destroy();
+              }
+              return;
+            }
+            const upstream = http.request(
+              {
+                hostname: "127.0.0.1",
+                port: internalWebPort,
+                path: request.url,
+                method: request.method,
+                headers: {
+                  ...upstreamHeaders,
+                  host: `localhost:${webPort}`,
+                  "x-forwarded-host": `localhost:${webPort}`,
+                  "x-forwarded-proto": "https",
+                },
+              },
+              (upstreamResponse) => {
+                const responseBody = new GateCC3BoundedBuffer(128 * 1_024);
+                let responseOverflowed = false;
+                upstreamResponse.on("data", (chunk) => {
+                  if (!responseBody.append(Buffer.from(chunk))) {
+                    responseOverflowed = true;
+                    upstreamResponse.destroy();
+                    response.destroy();
+                    if (recoveryScope) gateCC3ProxyFaults.cancelHeld(recoveryScope);
+                  }
+                });
+                upstreamResponse.on("end", () => {
+                  if (
+                    responseOverflowed ||
+                    !recoveryScope ||
+                    !gateCC3ProxyFaults.markHeld(recoveryScope, () => {
+                      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+                      response.end(responseBody.value());
+                    })
+                  )
+                    response.destroy();
+                });
+              },
+            );
+            upstream.on("error", (error) => {
+              if (recoveryScope) gateCC3ProxyFaults.cancelHeld(recoveryScope);
+              response.destroy(error);
+            });
+            upstream.end(body);
+            return;
+          }
+          if (gateCC3ProxyFaults.hasDivergence(recoveryScope)) {
+            if (!gateCC3ProxyFaults.consumeDivergence(recoveryScope, clientEventId)) {
+              request.socket.destroy();
+              return;
+            }
+            const original = JSON.parse(body.toString("utf8")) as Record<string, unknown>;
+            const injectedBody = Buffer.from(
+              JSON.stringify({
+                ...original,
+                client_event_id: randomUUID(),
+                type: "incident",
+                segment_number: 1,
+                manual_time_seconds: 30,
+                occurred_at: new Date().toISOString(),
+              }),
+            );
+            const injected = http.request(
+              {
+                hostname: "127.0.0.1",
+                port: internalWebPort,
+                path: request.url,
+                method: request.method,
+                headers: {
+                  ...upstreamHeaders,
+                  "content-length": String(injectedBody.byteLength),
+                  host: `localhost:${webPort}`,
+                  "x-forwarded-host": `localhost:${webPort}`,
+                  "x-forwarded-proto": "https",
+                },
+              },
+              (injectedResponse) => {
+                injectedResponse.resume();
+                injectedResponse.on("end", () => {
+                  if ((injectedResponse.statusCode ?? 500) >= 300) {
+                    response.destroy();
+                    return;
+                  }
+                  forwardToWeb(body);
+                });
+              },
+            );
+            injected.on("error", (error) => response.destroy(error));
+            injected.end(injectedBody);
+            return;
+          }
+          const decision = gateCC3RecoveryFence.handle({
+            ...(recoveryScope ? { scope: recoveryScope } : {}),
+            path: requestPath,
+            ...(clientEventId ? { clientEventId } : {}),
+            now: Date.now(),
+          });
+          if (decision === "destroy") {
+            request.socket.destroy();
+            return;
+          }
+          forwardToWeb(body, decision === "drop_response");
+        });
+        return;
+      }
+      if (
+        gateCC3RecoveryFence.handle({
+          ...(recoveryScope ? { scope: recoveryScope } : {}),
+          path: requestPath,
+          now: Date.now(),
+        }) === "destroy"
+      ) {
+        request.socket.destroy();
+        return;
+      }
       if (gateCC3ClockControl && request.method === "GET" && request.url === "/sw.js?gate-c-c3-update=1") {
         const workerRequest = http.get(
           {
@@ -282,37 +614,22 @@ async function startHttpsProxy(
         });
         return;
       }
-      const upstream = http.request(
-        {
-          hostname: "127.0.0.1",
-          port: internalWebPort,
-          path: request.url,
-          method: request.method,
-          headers: {
-            ...request.headers,
-            host: `localhost:${webPort}`,
-            "x-forwarded-host": `localhost:${webPort}`,
-            "x-forwarded-proto": "https",
-          },
-        },
-        (upstreamResponse) => {
-          response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-          upstreamResponse.pipe(response);
-        },
-      );
-      upstream.on("error", (error) => response.destroy(error));
-      request.pipe(upstream);
+      forwardToWeb();
     },
   );
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(webPort, "127.0.0.1", resolve);
   });
+  server.once("close", () => gateCC3ProxyFaults.dispose());
+  Object.assign(server, { disposeGateCC3Faults: () => gateCC3ProxyFaults.dispose() });
   return server;
 }
 
 async function stopHttpsProxy(server: https.Server | null): Promise<void> {
   if (!server) return;
+  (server as https.Server & { disposeGateCC3Faults?: () => void }).disposeGateCC3Faults?.();
+  server.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
@@ -1490,6 +1807,7 @@ async function main(): Promise<void> {
         "--config",
         process.env.PHASE2_E2E_PLAYWRIGHT_CONFIG ?? "playwright.real.config.ts",
         ...(process.env.PHASE2_E2E_PROJECT ? ["--project", process.env.PHASE2_E2E_PROJECT] : []),
+        ...(process.env.PHASE2_E2E_GREP ? ["--grep", process.env.PHASE2_E2E_GREP] : []),
       ],
       runtimeEnv,
     );

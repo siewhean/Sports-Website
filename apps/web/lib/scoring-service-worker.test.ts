@@ -1,5 +1,7 @@
+import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   beginScoringWorkerSafetyFreeze,
@@ -18,7 +20,9 @@ import {
 
 async function workerMessageHarness(
   options: {
+    crypto?: typeof webcrypto;
     fetch?: ReturnType<typeof vi.fn>;
+    indexedDB?: IDBFactory;
     openCache?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
@@ -47,11 +51,15 @@ async function workerMessageHarness(
     URL,
     Response,
     caches: {
+      delete: vi.fn().mockResolvedValue(true),
       keys: vi.fn().mockResolvedValue([]),
+      match: vi.fn().mockResolvedValue(undefined),
       ...(options.openCache ? { open: options.openCache } : {}),
     },
     clearTimeout,
+    crypto: options.crypto ?? webcrypto,
     fetch: options.fetch ?? vi.fn(),
+    indexedDB: options.indexedDB,
     Promise,
     self: serviceWorkerGlobal,
     setTimeout,
@@ -61,6 +69,16 @@ async function workerMessageHarness(
   const fetchEvent = handlers.get("fetch");
   if (!fetchEvent) throw new Error("The scoring worker did not install a fetch handler.");
   return { active, clients, fetchEvent, message, skipWaiting, waiting };
+}
+
+function immutableAssetResponse(status = 200): Response {
+  return new Response("immutable", {
+    status,
+    headers: {
+      "cache-control": "public, max-age=31536000, immutable",
+      "content-type": "text/javascript",
+    },
+  });
 }
 
 describe("Gate C3 scoring service worker", () => {
@@ -91,8 +109,9 @@ describe("Gate C3 scoring service worker", () => {
     expect(source).toContain('"OFFLINE_SHELL_STORAGE_UNAVAILABLE"');
     expect(source).toContain("message.protocolVersion !== PREPARATION_PROTOCOL_VERSION");
     expect(source).toContain("requiredCapabilities.some");
-    expect(source).toContain("cache.match(shellRequest, { ignoreVary: true })");
-    expect(source).toMatch(/fetch\(request\)\.catch\(async \(\) => {[\s\S]*cache\.match\(shellRequest/);
+    expect(source).toContain("matchScoringResource(shellRequest, { ignoreVary: true })");
+    expect(source).toMatch(/fetch\(request\)\.catch\(async \(\) => {[\s\S]*matchScoringResource\(shellRequest/);
+    expect(source).toContain('url.pathname !== SCORING_SHELL_PATH && !url.pathname.startsWith("/_next/static/")');
     expect(source).not.toMatch(/addEventListener\(["']sync["']/);
     expect(source).not.toContain("SyncManager");
   });
@@ -224,7 +243,7 @@ describe("Gate C3 scoring service worker", () => {
           headers: { "content-type": "text/html" },
         });
       }
-      return new Response("", { status: url.pathname.endsWith("/missing.js") ? 503 : 200 });
+      return immutableAssetResponse(url.pathname.endsWith("/missing.js") ? 503 : 200);
     });
     const harness = await workerMessageHarness({
       fetch,
@@ -253,7 +272,7 @@ describe("Gate C3 scoring service worker", () => {
       expect.objectContaining({
         ok: false,
         code: "OFFLINE_SHELL_PREPARATION_FAILED",
-        error: "Error: A required offline scoring asset could not be fetched.",
+        error: "Error: A required offline scoring asset failed its immutable-response verification.",
       }),
     );
     expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
@@ -315,7 +334,7 @@ describe("Gate C3 scoring service worker", () => {
               status: 200,
               headers: { "content-type": "text/html" },
             })
-          : new Response("immutable", { status: 200 });
+          : immutableAssetResponse();
       }),
       openCache: vi.fn().mockResolvedValue(cache),
     });
@@ -367,7 +386,7 @@ describe("Gate C3 scoring service worker", () => {
               status: 200,
               headers: { "content-type": "text/html" },
             })
-          : new Response("immutable", { status: 200 });
+          : immutableAssetResponse();
       }),
       openCache: vi.fn().mockResolvedValue(cache),
     });
@@ -400,6 +419,291 @@ describe("Gate C3 scoring service worker", () => {
     );
   });
 
+  it("uses the bounded IndexedDB shell fallback when Cache Storage cannot read back retained responses", async () => {
+    const postMessage = vi.fn();
+    const fetch = vi.fn().mockResolvedValue(
+      new Response('<main data-offline-scoring-shell="v1">score</main>', {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const harness = await workerMessageHarness({
+      fetch,
+      indexedDB: new IDBFactory(),
+      openCache: vi.fn().mockResolvedValue({
+        put: vi.fn().mockResolvedValue(undefined),
+        match: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
+    let preparation: Promise<unknown> | undefined;
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 1,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets: [],
+      },
+      ports: [{ postMessage }],
+      waitUntil: (promise: Promise<unknown>) => {
+        preparation = promise;
+      },
+    });
+    await preparation;
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        version: "gate-c-c3-v5",
+        protocolVersion: 1,
+      }),
+    );
+
+    fetch.mockRejectedValueOnce(new TypeError("offline"));
+    let offlineResponse: Promise<Response> | undefined;
+    harness.fetchEvent({
+      request: {
+        destination: "document",
+        method: "GET",
+        url: "https://matchday.test/score",
+      },
+      respondWith: (response: Promise<Response>) => {
+        offlineResponse = response;
+      },
+    });
+    await expect(offlineResponse).resolves.toMatchObject({ ok: true, status: 200 });
+    await expect((await offlineResponse)?.text()).resolves.toContain('data-offline-scoring-shell="v1"');
+  });
+
+  it("invalidates a failed IndexedDB generation before accepting Cache Storage", async () => {
+    const postMessage = vi.fn();
+    const retained = new Map<string, Response>();
+    const requestUrl = (request: RequestInfo | URL) =>
+      new URL(request instanceof Request ? request.url : request.toString(), "https://matchday.test").href;
+    const cache = {
+      put: vi.fn(async (request: RequestInfo | URL, response: Response) => {
+        retained.set(requestUrl(request), response.clone());
+      }),
+      match: vi.fn(async (request: RequestInfo | URL) => retained.get(requestUrl(request))?.clone()),
+    };
+    let digestCalls = 0;
+    const cryptoWithFailedReadback = {
+      randomUUID: () => webcrypto.randomUUID(),
+      subtle: {
+        digest: async (...args: Parameters<typeof webcrypto.subtle.digest>) => {
+          digestCalls += 1;
+          return digestCalls === 1 ? webcrypto.subtle.digest(...args) : new Uint8Array(32).fill(0xff).buffer;
+        },
+      },
+    } as unknown as typeof webcrypto;
+    const fetch = vi.fn().mockResolvedValue(
+      new Response('<main data-offline-scoring-shell="v1">cache generation</main>', {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const harness = await workerMessageHarness({
+      crypto: cryptoWithFailedReadback,
+      fetch,
+      indexedDB: new IDBFactory(),
+      openCache: vi.fn().mockResolvedValue(cache),
+    });
+    let preparation: Promise<unknown> | undefined;
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 1,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets: [],
+      },
+      ports: [{ postMessage }],
+      waitUntil: (promise: Promise<unknown>) => {
+        preparation = promise;
+      },
+    });
+    await preparation;
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+
+    fetch.mockRejectedValueOnce(new TypeError("offline"));
+    let offlineResponse: Promise<Response> | undefined;
+    harness.fetchEvent({
+      request: {
+        destination: "document",
+        method: "GET",
+        url: "https://matchday.test/score",
+      },
+      respondWith: (response: Promise<Response>) => {
+        offlineResponse = response;
+      },
+    });
+    await expect((await offlineResponse)?.text()).resolves.toContain("cache generation");
+  });
+
+  it("rejects corrupted IndexedDB shell bytes instead of serving executable content", async () => {
+    const indexedDB = new IDBFactory();
+    const fetch = vi.fn().mockResolvedValue(
+      new Response('<main data-offline-scoring-shell="v1">score</main>', {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const harness = await workerMessageHarness({
+      fetch,
+      indexedDB,
+      openCache: vi.fn().mockResolvedValue({
+        put: vi.fn().mockResolvedValue(undefined),
+        match: vi.fn().mockResolvedValue(
+          new Response('<main data-offline-scoring-shell="v1">stale cache generation</main>', {
+            status: 200,
+            headers: {
+              "content-type": "text/html",
+              "x-matchday-offline-generation": webcrypto.randomUUID(),
+            },
+          }),
+        ),
+      }),
+    });
+    let preparation: Promise<unknown> | undefined;
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 1,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets: [],
+      },
+      ports: [{ postMessage: vi.fn() }],
+      waitUntil: (promise: Promise<unknown>) => {
+        preparation = promise;
+      },
+    });
+    await preparation;
+
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("matchday-scoring-shell-fallback", 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction("active-resources", "readwrite");
+    const store = transaction.objectStore("active-resources");
+    const resourceKey = "resource:https://matchday.test/score";
+    const record = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const request = store.get(resourceKey);
+      request.onsuccess = () => resolve(request.result as Record<string, unknown>);
+      request.onerror = () => reject(request.error);
+    });
+    record.body = new TextEncoder().encode('<script data-offline-scoring-shell="v1">corrupt()</script>').buffer;
+    store.put(record);
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+
+    fetch.mockRejectedValueOnce(new TypeError("offline"));
+    let offlineResponse: Promise<Response> | undefined;
+    harness.fetchEvent({
+      request: {
+        destination: "document",
+        method: "GET",
+        url: "https://matchday.test/score",
+      },
+      respondWith: (response: Promise<Response>) => {
+        offlineResponse = response;
+      },
+    });
+    await expect(offlineResponse).resolves.toMatchObject({ ok: false, status: 503 });
+  });
+
+  it("leaves query-bearing immutable asset requests outside the scoring interception boundary", async () => {
+    const fetch = vi.fn();
+    const harness = await workerMessageHarness({ fetch });
+    const respondWith = vi.fn();
+    const request = new Request("https://matchday.test/_next/static/chunks/scoring.js?v=raw");
+    Object.defineProperty(request, "destination", { value: "script" });
+    harness.fetchEvent({ request, respondWith });
+    expect(respondWith).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("serves an exact immutable static asset from the IndexedDB fallback", async () => {
+    const postMessage = vi.fn();
+    const assetUrl = "https://matchday.test/_next/static/chunks/scoring.js";
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString(), "https://matchday.test");
+      return url.pathname === "/score"
+        ? new Response('<main data-offline-scoring-shell="v1">score</main>', {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          })
+        : immutableAssetResponse();
+    });
+    const harness = await workerMessageHarness({
+      fetch,
+      indexedDB: new IDBFactory(),
+      openCache: vi.fn().mockResolvedValue({
+        put: vi.fn().mockResolvedValue(undefined),
+        match: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
+    let preparation: Promise<unknown> | undefined;
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 1,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets: [assetUrl],
+      },
+      ports: [{ postMessage }],
+      waitUntil: (promise: Promise<unknown>) => {
+        preparation = promise;
+      },
+    });
+    await preparation;
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+
+    fetch.mockRejectedValueOnce(new TypeError("offline"));
+    let offlineResponse: Promise<Response> | undefined;
+    const assetRequest = new Request(assetUrl);
+    Object.defineProperty(assetRequest, "destination", { value: "script" });
+    harness.fetchEvent({
+      request: assetRequest,
+      respondWith: (response: Promise<Response>) => {
+        offlineResponse = response;
+      },
+    });
+    await expect((await offlineResponse)?.text()).resolves.toBe("immutable");
+  });
+
+  it.each([
+    ["query-bearing asset", ["https://matchday.test/_next/static/chunks/scoring.js?v=raw"], 0],
+    [
+      "over-count asset manifest",
+      Array.from({ length: 128 }, (_, index) => `https://matchday.test/_next/static/chunks/${index}.js`),
+      0,
+    ],
+  ])("rejects a %s before fetching resources", async (_label, assets, expectedFetchCount) => {
+    const postMessage = vi.fn();
+    const fetch = vi.fn();
+    const harness = await workerMessageHarness({ fetch });
+    let preparation: Promise<unknown> | undefined;
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 1,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets,
+      },
+      ports: [{ postMessage }],
+      waitUntil: (promise: Promise<unknown>) => {
+        preparation = promise;
+      },
+    });
+    await preparation;
+    expect(fetch).toHaveBeenCalledTimes(expectedFetchCount);
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false, code: "OFFLINE_SHELL_PREPARATION_FAILED" }),
+    );
+  });
+
   it("preserves shell privacy verification before caching any immutable asset", async () => {
     const postMessage = vi.fn();
     const cache = {
@@ -414,7 +718,7 @@ describe("Gate C3 scoring service worker", () => {
           headers: { "content-type": "text/html" },
         }),
       )
-      .mockResolvedValue(new Response("immutable", { status: 200 }));
+      .mockResolvedValue(immutableAssetResponse());
     const harness = await workerMessageHarness({
       fetch,
       openCache: vi.fn().mockResolvedValue(cache),
@@ -470,7 +774,10 @@ describe("Gate C3 scoring service worker", () => {
   });
 
   it("attempts the scoring navigation network request before recovering the retained shell offline", async () => {
-    const cached = new Response("cached", { status: 200 });
+    const cached = new Response('<main data-offline-scoring-shell="v1">cached</main>', {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    });
     const cache = { match: vi.fn().mockResolvedValue(cached) };
     const networkFetch = vi.fn().mockRejectedValue(new TypeError("network unavailable"));
     const harness = await workerMessageHarness({
@@ -489,7 +796,8 @@ describe("Gate C3 scoring service worker", () => {
         response = promise;
       },
     });
-    await expect(response).resolves.toBe(cached);
+    await expect(response).resolves.toMatchObject({ ok: true, status: 200 });
+    await expect((await response)?.text()).resolves.toContain('data-offline-scoring-shell="v1"');
     expect(networkFetch).toHaveBeenCalledWith(request);
     expect(cache.match).toHaveBeenCalledWith(expect.any(Request), { ignoreVary: true });
   });
@@ -518,6 +826,8 @@ describe("Gate C3 scoring service worker", () => {
       immutableScoringAssets(root, [
         "https://matchday.test/_next/static/media/Geist.woff2",
         "https://matchday.test/_next/static/chunks/scoring.js",
+        "https://matchday.test/_next/static/chunks/scoring.js?v=unexpected",
+        "https://matchday.test/_next/static/css/scoring.css#unexpected",
         "https://other.test/_next/static/media/untrusted.woff2",
         "https://matchday.test/api/scoring/session",
       ]),
