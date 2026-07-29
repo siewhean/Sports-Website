@@ -160,3 +160,23 @@ export {
   type GateCOfflineReplayError,
   type GateCOfflineReplayReceipt,
 } from "./gate-c-offline.js";
+export {
+  gateCRepairActionKinds,
+  type GateCRepairAction,
+  type GateCRepairActionKind,
+  type GateCRepairAnalysis,
+  type GateCRepairCaseStatus,
+  type GateCRepairCaseView,
+  type GateCRepairDecision,
+  type GateCRepairDependency,
+  type GateCRepairDependencyPathStep,
+  type GateCRepairMatchSnapshot,
+  type GateCRepairMatchState,
+  type GateCRepairOutcomeKind,
+  type GateCRepairOutcomeSnapshot,
+  type GateCRepairPublicationReceipt,
+  type GateCRepairPublicationRequest,
+  type GateCRepairSlot,
+  type GateCRepairSlotControl,
+  type PublicProjectionFreshness,
+} from "./gate-c-repair.js";
