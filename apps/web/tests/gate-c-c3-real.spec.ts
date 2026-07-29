@@ -992,7 +992,14 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
   });
   await page.route("**/api/scoring/events", async (route) => {
     const requestHeaders = await route.request().allHeaders();
-    const accepted = await route.fetch();
+    const accepted = await route.fetch({
+      headers: {
+        ...requestHeaders,
+        // Playwright's out-of-browser route.fetch transport drops this browser-generated
+        // Fetch Metadata header. Preserve the original same-origin mutation semantics.
+        "sec-fetch-site": "same-origin",
+      },
+    });
     expect(
       accepted.ok(),
       `Principal-switch replay was rejected: ${accepted.status()} ${await accepted.text()} ` +
