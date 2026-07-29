@@ -991,10 +991,17 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
     markServerAccepted = resolve;
   });
   await page.route("**/api/scoring/events", async (route) => {
+    const requestHeaders = await route.request().allHeaders();
     const accepted = await route.fetch();
-    expect(accepted.ok(), `Principal-switch replay was rejected: ${accepted.status()} ${await accepted.text()}`).toBe(
-      true,
-    );
+    expect(
+      accepted.ok(),
+      `Principal-switch replay was rejected: ${accepted.status()} ${await accepted.text()} ` +
+        JSON.stringify({
+          origin: requestHeaders.origin ?? null,
+          fetchSite: requestHeaders["sec-fetch-site"] ?? null,
+          hasCookie: Boolean(requestHeaders.cookie),
+        }),
+    ).toBe(true);
     markServerAccepted();
     await acceptedResponseRelease;
     await route.fulfill({ response: accepted });
