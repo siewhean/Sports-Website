@@ -984,11 +984,15 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
 
   let releaseAcceptedResponse!: () => void;
   let markServerAccepted!: () => void;
+  let markAcceptedResponseFulfilled!: () => void;
   const acceptedResponseRelease = new Promise<void>((resolve) => {
     releaseAcceptedResponse = resolve;
   });
   const serverAccepted = new Promise<void>((resolve) => {
     markServerAccepted = resolve;
+  });
+  const acceptedResponseFulfilled = new Promise<void>((resolve) => {
+    markAcceptedResponseFulfilled = resolve;
   });
   await page.route("**/api/scoring/events", async (route) => {
     const requestHeaders = await route.request().allHeaders();
@@ -1012,6 +1016,7 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
     markServerAccepted();
     await acceptedResponseRelease;
     await route.fulfill({ response: accepted });
+    markAcceptedResponseFulfilled();
   });
 
   await context.setOffline(false);
@@ -1092,6 +1097,7 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
     switched,
   );
   releaseAcceptedResponse();
+  await acceptedResponseFulfilled;
   await page.unroute("**/api/scoring/events");
 
   const fencedQueue = await page.evaluate(
