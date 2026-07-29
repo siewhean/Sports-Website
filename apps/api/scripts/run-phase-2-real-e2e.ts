@@ -570,10 +570,10 @@ async function startHttpsProxy(
               const updatedWorker = Buffer.concat(chunks)
                 .toString("utf8")
                 .replace(
-                  "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;",
                   "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v6`;",
+                  "const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v7`;",
                 )
-                .replace('const WORKER_VERSION = "gate-c-c3-v5";', 'const WORKER_VERSION = "gate-c-c3-v6";');
+                .replace('const WORKER_VERSION = "gate-c-c3-v6";', 'const WORKER_VERSION = "gate-c-c3-v7";');
               response.writeHead(200, {
                 "cache-control": "no-store",
                 "content-type": "text/javascript; charset=utf-8",
@@ -1200,7 +1200,7 @@ async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<
         authorization.resume_hash_length === 32 &&
         authorization.device_hash_length === 32 &&
         authorization.indexeddb_schema_version === 1 &&
-        authorization.service_worker_version === "gate-c-c3-v5" &&
+        authorization.service_worker_version === "gate-c-c3-v6" &&
         authorization.recording_window_seconds >= 1 &&
         authorization.recording_window_seconds <= 4 * 60 * 60 &&
         authorization.replay_grace_seconds >= 0 &&
@@ -1973,7 +1973,7 @@ async function main(): Promise<void> {
               .digest("hex"),
             browser_version: process.env.GATE_C_C3_BROWSER_VERSION ?? "",
             indexeddb_schema_version: 1,
-            service_worker_version: "gate-c-c3-v5",
+            service_worker_version: "gate-c-c3-v6",
             scenarios: c3ScenarioReceipts,
           }
         : {}),

@@ -1,6 +1,6 @@
 const FOUNDATION_CACHE_NAME = "matchday-foundation-v3";
 const SCORING_CACHE_PREFIX = "matchday-scoring-shell-";
-const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v5`;
+const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v6`;
 const SCORING_FALLBACK_DB_NAME = "matchday-scoring-shell-fallback";
 const SCORING_FALLBACK_STORE = "active-resources";
 const SCORING_FALLBACK_MANIFEST_KEY = "manifest";
@@ -9,7 +9,7 @@ const SCORING_FALLBACK_MAX_RESOURCE_BYTES = 8 * 1024 * 1024;
 const SCORING_FALLBACK_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const SCORING_SHELL_PATH = "/score";
 const SCORING_SHELL_MARKER = 'data-offline-scoring-shell="v1"';
-const WORKER_VERSION = "gate-c-c3-v5";
+const WORKER_VERSION = "gate-c-c3-v6";
 const UPDATE_PROTOCOL_VERSION = 1;
 const PREPARATION_PROTOCOL_VERSION = 1;
 const PREPARATION_CAPABILITIES = Object.freeze(["offline-scoring-shell-cache-v1"]);
@@ -317,6 +317,7 @@ async function retainScoringResources(entries) {
       // otherwise valid cache entries.
     }
   }
+  if (fallbackRetained) return;
   let cacheRetained = false;
   try {
     await caches.delete(SCORING_CACHE_NAME);

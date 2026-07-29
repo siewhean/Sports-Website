@@ -895,7 +895,7 @@ async function reloadOfflineDocument(
   sensitiveValues: string[],
 ): Promise<"reload" | "navigate"> {
   const preparedShell = await page.evaluate(async (values) => {
-    const cache = await caches.open("matchday-scoring-shell-v5");
+    const cache = await caches.open("matchday-scoring-shell-v6");
     const cacheResponse = await cache.match("/score", { ignoreVary: true });
     let source = "cache";
     let body = cacheResponse ? await cacheResponse.clone().text() : "";
@@ -1028,7 +1028,7 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
   await page.getByRole("button", { name: "Start scoring" }).click();
   await prepareOffline(page);
   const activeWorkerVersion = await workerVersion(page);
-  expect(activeWorkerVersion).toBe("gate-c-c3-v5");
+  expect(activeWorkerVersion).toBe("gate-c-c3-v6");
   await assertNoWcagAOrAaViolations(page);
   await retainSafeScreenshot(page, "offline-ready.png");
   await writeScenarioReceipt("online_preparation", testInfo, observedAt, {
@@ -1923,7 +1923,7 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   const workerProfileDirectory = path.join(profileRoot, "service-worker-update");
   const { context, page, networkGuard } = await openAggregate(testInfo, workerProfileDirectory, seed, aggregate);
   await prepareOffline(page);
-  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
   const documentIdentity = crypto.randomUUID();
   await page.evaluate((identity) => {
     document.documentElement.dataset.c3WorkerDocumentIdentity = identity;
@@ -1956,10 +1956,10 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
       inspect();
     });
   });
-  expect(await waitingWorkerVersion(page)).toBe("gate-c-c3-v6");
+  expect(await waitingWorkerVersion(page)).toBe("gate-c-c3-v7");
   const updateStatus = page.getByTestId("scoring-worker-update-state");
   await expect(updateStatus).toHaveAttribute("data-state", "blocked");
-  expect(await workerVersion(page)).toBe("gate-c-c3-v5");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
 
   await enterOfflineRecording(testInfo, seed, context, page, networkGuard);
   await recordGlobalEvent(page, "Incident");
@@ -2035,11 +2035,11 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
     };
     throw new Error(`Scoring worker activation remained blocked: ${JSON.stringify(diagnostics)}`, { cause: error });
   }
-  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v7");
   expect(await page.evaluate(() => document.documentElement.dataset.c3WorkerDocumentIdentity)).toBe(documentIdentity);
 
-  // The document intentionally stays loaded across controllerchange. Its v5
-  // client must negotiate the compatible v6 preparation protocol instead of
+  // The document intentionally stays loaded across controllerchange. Its v6
+  // client must negotiate the compatible v7 preparation protocol instead of
   // requiring a disruptive reload or rejecting solely on the worker build ID.
   const preparationReply = await page.evaluate(async () => {
     const registration = await navigator.serviceWorker.ready;
@@ -2067,15 +2067,15 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   expect(preparationReply).toEqual(
     expect.objectContaining({
       ok: true,
-      version: "gate-c-c3-v6",
+      version: "gate-c-c3-v7",
       protocolVersion: 1,
       capabilities: expect.arrayContaining(["offline-scoring-shell-cache-v1"]),
     }),
   );
-  expect(await workerVersion(page)).toBe("gate-c-c3-v6");
+  expect(await workerVersion(page)).toBe("gate-c-c3-v7");
   await writeScenarioReceipt("service_worker_update", testInfo, new Date().toISOString(), {
-    active_version: "gate-c-c3-v6",
-    waiting_version: "gate-c-c3-v6",
+    active_version: "gate-c-c3-v7",
+    waiting_version: "gate-c-c3-v7",
     activation_deferred: true,
     preparation_after_controller_change: true,
   });

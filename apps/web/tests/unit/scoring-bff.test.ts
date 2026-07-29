@@ -173,7 +173,7 @@ const offlineAuthorityBody = {
   lastReportedLocalSequence: 0,
   queueFingerprint: "c".repeat(64),
   indexeddbSchemaVersion: 1,
-  serviceWorkerVersion: "gate-c-c3-v5",
+  serviceWorkerVersion: "gate-c-c3-v6",
 };
 
 function headerValue(init: RequestInit | undefined, name: string): string | null {

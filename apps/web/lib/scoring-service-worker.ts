@@ -1,6 +1,6 @@
 "use client";
 
-export const scoringWorkerVersion = "gate-c-c3-v5";
+export const scoringWorkerVersion = "gate-c-c3-v6";
 export const scoringWorkerUpdateProtocolVersion = 1;
 export const scoringWorkerPreparationProtocolVersion = 1;
 export const scoringWorkerPreparationCapabilities = ["offline-scoring-shell-cache-v1"] as const;

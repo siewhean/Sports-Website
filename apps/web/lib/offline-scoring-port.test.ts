@@ -80,7 +80,7 @@ describe("offline scoring API port", () => {
       ),
     );
 
-    const result = await new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v5").submit(
+    const result = await new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v6").submit(
       queued,
       queued.command,
     );
@@ -103,7 +103,7 @@ describe("offline scoring API port", () => {
     );
 
     const { repository } = summaryRepository();
-    const port = new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v5", repository);
+    const port = new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v6", repository);
     await expect(port.refreshAuthority(authorizationId)).resolves.toBe("authority_transferred");
   });
 
@@ -130,7 +130,7 @@ describe("offline scoring API port", () => {
     );
 
     const { repository, saveMatchPackage, matchPackage } = summaryRepository();
-    const port = new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v5", repository);
+    const port = new ApiOfflineScoringPort("50000000-0000-4000-8000-000000000005", 1, "gate-c-c3-v6", repository);
     await expect(port.refreshAuthority(authorizationId)).resolves.toBe("active");
     expect(saveMatchPackage).toHaveBeenCalledWith({
       ...matchPackage,

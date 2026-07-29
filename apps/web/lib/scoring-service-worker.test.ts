@@ -27,6 +27,7 @@ async function workerMessageHarness(
     fetch?: ReturnType<typeof vi.fn>;
     indexedDB?: IDBFactory;
     openCache?: ReturnType<typeof vi.fn>;
+    cacheKeys?: string[];
     activationAck?: "accepted" | "invalid" | "none";
   } = {},
 ) {
@@ -57,6 +58,7 @@ async function workerMessageHarness(
     { id: "client-b", postMessage: vi.fn() },
   ];
   const skipWaiting = vi.fn().mockResolvedValue(undefined);
+  const deleteCache = vi.fn().mockResolvedValue(true);
   const serviceWorkerGlobal = {
     addEventListener: (type: string, handler: (event: Record<string, unknown>) => void) => handlers.set(type, handler),
     clients: {
@@ -73,8 +75,8 @@ async function workerMessageHarness(
     URL,
     Response,
     caches: {
-      delete: vi.fn().mockResolvedValue(true),
-      keys: vi.fn().mockResolvedValue([]),
+      delete: deleteCache,
+      keys: vi.fn().mockResolvedValue(options.cacheKeys ?? []),
       match: vi.fn().mockResolvedValue(undefined),
       ...(options.openCache ? { open: options.openCache } : {}),
     },
@@ -91,7 +93,9 @@ async function workerMessageHarness(
   if (!message) throw new Error("The scoring worker did not install a message handler.");
   const fetchEvent = handlers.get("fetch");
   if (!fetchEvent) throw new Error("The scoring worker did not install a fetch handler.");
-  return { active, clients, fetchEvent, message, skipWaiting, waiting };
+  const activate = handlers.get("activate");
+  if (!activate) throw new Error("The scoring worker did not install an activate handler.");
+  return { activate, active, clients, deleteCache, fetchEvent, message, skipWaiting, waiting };
 }
 
 async function completeSafeActivationQuorum(
@@ -167,6 +171,23 @@ describe("Gate C3 scoring service worker", () => {
     expect(source).toContain("message.protocolVersion === UPDATE_PROTOCOL_VERSION");
   });
 
+  it("deletes the superseded v5 scoring cache while preserving v6 and unrelated caches", async () => {
+    const harness = await workerMessageHarness({
+      cacheKeys: ["matchday-scoring-shell-v5", "matchday-scoring-shell-v6", "unrelated-cache"],
+    });
+    let activation: Promise<unknown> | undefined;
+    harness.activate({
+      waitUntil: (promise: Promise<unknown>) => {
+        activation = promise;
+      },
+    });
+    await activation;
+    expect(harness.deleteCache).toHaveBeenCalledTimes(1);
+    expect(harness.deleteCache).toHaveBeenCalledWith("matchday-scoring-shell-v5");
+    expect(harness.deleteCache).not.toHaveBeenCalledWith("matchday-scoring-shell-v6");
+    expect(harness.deleteCache).not.toHaveBeenCalledWith("unrelated-cache");
+  });
+
   it("keeps mutations out of the worker and requires explicit shell preparation", async () => {
     const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
     expect(source).toContain("MATCHDAY_PREPARE_OFFLINE_SCORING");
@@ -224,7 +245,7 @@ describe("Gate C3 scoring service worker", () => {
     });
     expect(reply).toHaveBeenCalledWith({
       ok: false,
-      version: "gate-c-c3-v5",
+      version: "gate-c-c3-v6",
       protocolVersion: 1,
       capabilities: ["offline-scoring-shell-cache-v1"],
       code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
@@ -234,7 +255,7 @@ describe("Gate C3 scoring service worker", () => {
   it("reports unavailable durable shell storage distinctly from protocol skew", () => {
     const error = scoringWorkerPreparationError({
       ok: false,
-      version: "gate-c-c3-v5",
+      version: "gate-c-c3-v6",
       protocolVersion: 1,
       capabilities: ["offline-scoring-shell-cache-v1"],
       code: "OFFLINE_SHELL_STORAGE_UNAVAILABLE",
@@ -247,7 +268,7 @@ describe("Gate C3 scoring service worker", () => {
     expect(
       scoringWorkerPreparationError({
         ok: false,
-        version: "gate-c-c3-v5",
+        version: "gate-c-c3-v6",
         protocolVersion: 1,
         capabilities: ["offline-scoring-shell-cache-v1"],
         code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
@@ -530,7 +551,7 @@ describe("Gate C3 scoring service worker", () => {
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: true,
-        version: "gate-c-c3-v5",
+        version: "gate-c-c3-v6",
         protocolVersion: 1,
       }),
     );
@@ -544,13 +565,14 @@ describe("Gate C3 scoring service worker", () => {
         headers: { "content-type": "text/html" },
       }),
     );
+    const openCache = vi.fn().mockResolvedValue({
+      put: vi.fn().mockResolvedValue(undefined),
+      match: vi.fn().mockResolvedValue(undefined),
+    });
     const harness = await workerMessageHarness({
       fetch,
       indexedDB: new IDBFactory(),
-      openCache: vi.fn().mockResolvedValue({
-        put: vi.fn().mockResolvedValue(undefined),
-        match: vi.fn().mockResolvedValue(undefined),
-      }),
+      openCache,
     });
     let preparation: Promise<unknown> | undefined;
     harness.message({
@@ -569,10 +591,11 @@ describe("Gate C3 scoring service worker", () => {
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: true,
-        version: "gate-c-c3-v5",
+        version: "gate-c-c3-v6",
         protocolVersion: 1,
       }),
     );
+    expect(openCache).not.toHaveBeenCalled();
 
     fetch.mockRejectedValueOnce(new TypeError("offline"));
     let offlineResponse: Promise<Response> | undefined;

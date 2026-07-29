@@ -8,7 +8,7 @@ import type {
 import { canonicalOfflineJson } from "@matchday/domain";
 import type { OfflineConflict, OfflineReplayAttempt, OfflineScoringRepository } from "./types";
 
-const SERVICE_WORKER_VERSION = "gate-c-c3-v5";
+const SERVICE_WORKER_VERSION = "gate-c-c3-v6";
 
 type ExportAcknowledgement = Readonly<{
   local_sequence: number;

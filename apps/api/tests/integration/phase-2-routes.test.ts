@@ -415,7 +415,7 @@ describe("Phase 2 Fastify route boundaries", () => {
       last_reported_local_sequence: 1,
       queue_fingerprint: "a".repeat(64),
       indexeddb_schema_version: 1,
-      service_worker_version: "gate-c-c3-v5",
+      service_worker_version: "gate-c-c3-v6",
     };
     const issuedOffline = await app.inject({
       method: "POST",
