@@ -1118,6 +1118,27 @@ test("Gate C C3 fences an in-flight replay across a mounted principal switch", a
       }),
   );
   expect(fencedQueue).toEqual({ pending: 1, acknowledgements: 0 });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const request = indexedDB.open("matchday-offline-scoring", 1);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+              const database = request.result;
+              const transaction = database.transaction("replay_state");
+              const count = transaction.objectStore("replay_state").count();
+              transaction.onerror = () => reject(transaction.error);
+              transaction.oncomplete = () => {
+                database.close();
+                resolve(count.result);
+              };
+            };
+          }),
+      ),
+    )
+    .toBe(0);
 
   await context.setOffline(true);
   await page.reload({ waitUntil: "domcontentloaded" });
