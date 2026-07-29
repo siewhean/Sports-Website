@@ -539,26 +539,43 @@ async function prepareOffline(page: Page): Promise<void> {
           readyState = "registration-rejected";
         }
       }
-      const preparationReply = registration?.active
-        ? await new Promise<unknown>((resolve) => {
-            const channel = new MessageChannel();
-            const timeout = window.setTimeout(() => resolve({ error: "diagnostic-timeout" }), 5_000);
-            channel.port1.onmessage = (event) => {
-              window.clearTimeout(timeout);
-              channel.port1.close();
-              resolve(event.data);
-            };
-            registration.active?.postMessage(
-              {
-                type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
-                assets: [],
-                protocolVersion: 1,
-                requiredCapabilities: ["offline-scoring-shell-cache-v1"],
-              },
-              [channel.port2],
-            );
-          })
-        : null;
+      const staticAssets = [
+        ...new Set(
+          [
+            ...[
+              ...document.querySelectorAll<HTMLScriptElement | HTMLLinkElement>(
+                "script[src],link[rel=stylesheet][href]",
+              ),
+            ].map((element) => ("src" in element ? element.src : element.href)),
+            ...performance.getEntriesByType("resource").map((entry) => entry.name),
+          ]
+            .filter((candidate) => {
+              const url = new URL(candidate, window.location.origin);
+              return (
+                url.origin === window.location.origin &&
+                !url.search &&
+                !url.hash &&
+                url.pathname.startsWith("/_next/static/")
+              );
+            })
+            .sort(),
+        ),
+      ];
+      const assetManifestBytes = new TextEncoder().encode(staticAssets.join("\n"));
+      const assetManifestSha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", assetManifestBytes))]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+      const observedAssetBytes = performance
+        .getEntriesByType("resource")
+        .filter((entry) => staticAssets.includes(entry.name))
+        .reduce(
+          (sum, entry) =>
+            sum +
+            (entry instanceof PerformanceResourceTiming
+              ? Math.max(entry.transferSize, entry.encodedBodySize, entry.decodedBodySize)
+              : 0),
+          0,
+        );
       const cacheStorageProbe = await (async () => {
         const cacheName = "matchday-c3-storage-probe";
         try {
@@ -589,7 +606,13 @@ async function prepareOffline(page: Page): Promise<void> {
         installing: registration?.installing?.state ?? null,
         registrationError,
         readyState,
-        preparationReply,
+        preparationErrorCode:
+          document.querySelector("#score-main")?.getAttribute("data-offline-preparation-error-code") ?? null,
+        assetManifest: {
+          count: staticAssets.length,
+          observedBytes: observedAssetBytes,
+          sha256: assetManifestSha256,
+        },
         cacheStorageProbe,
         offlineState: document.querySelector("[data-offline-state]")?.getAttribute("data-offline-state") ?? null,
         offlineTitle: document.querySelector("#offline-state-title")?.textContent?.trim() ?? null,

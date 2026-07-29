@@ -13,9 +13,11 @@ import {
   isCompatibleScoringWorkerPreparationReply,
   isScoringWorkerSafetyFrozen,
   isScoringWorkerTransitionInFlight,
+  runScoringWorkerPreparationAttempts,
   scoringWorkerPreparationError,
   ScoringWorkerPreparationError,
   ScoringWorkerSafetyFrozenError,
+  shouldRetryScoringWorkerPreparation,
 } from "./scoring-service-worker";
 
 async function workerMessageHarness(
@@ -193,6 +195,56 @@ describe("Gate C3 scoring service worker", () => {
       code: "INCOMPATIBLE_PREPARATION_PROTOCOL",
       message: expect.stringContaining("reload when it is safe"),
     });
+  });
+
+  it("retries only the first explicit durable-storage preparation failure", () => {
+    const unavailable = new ScoringWorkerPreparationError("OFFLINE_SHELL_STORAGE_UNAVAILABLE", "storage unavailable");
+    expect(shouldRetryScoringWorkerPreparation(unavailable, 0)).toBe(true);
+    expect(shouldRetryScoringWorkerPreparation(unavailable, 1)).toBe(false);
+    expect(
+      shouldRetryScoringWorkerPreparation(
+        new ScoringWorkerPreparationError("OFFLINE_SHELL_PREPARATION_FAILED", "asset verification failed"),
+        0,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryScoringWorkerPreparation(
+        new ScoringWorkerPreparationError("INCOMPATIBLE_PREPARATION_PROTOCOL", "protocol mismatch"),
+        0,
+      ),
+    ).toBe(false);
+    expect(shouldRetryScoringWorkerPreparation(new Error("timed out"), 0)).toBe(false);
+  });
+
+  it("runs at most two identical-manifest storage attempts and never retries generic failures", async () => {
+    const assets = Object.freeze(["/_next/static/chunks/scoring.js", "/_next/static/css/scoring.css"]);
+    const attempts: Array<readonly string[]> = [];
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await runScoringWorkerPreparationAttempts(async () => {
+      attempts.push(assets);
+      if (attempts.length === 1) {
+        throw new ScoringWorkerPreparationError("OFFLINE_SHELL_STORAGE_UNAVAILABLE", "storage unavailable");
+      }
+    }, wait);
+    expect(attempts).toEqual([assets, assets]);
+    expect(attempts[0]).toBe(attempts[1]);
+    expect(wait).toHaveBeenCalledTimes(1);
+
+    const alwaysUnavailable = vi.fn(async () => {
+      throw new ScoringWorkerPreparationError("OFFLINE_SHELL_STORAGE_UNAVAILABLE", "storage unavailable");
+    });
+    await expect(runScoringWorkerPreparationAttempts(alwaysUnavailable, wait)).rejects.toMatchObject({
+      code: "OFFLINE_SHELL_STORAGE_UNAVAILABLE",
+    });
+    expect(alwaysUnavailable).toHaveBeenCalledTimes(2);
+
+    const genericFailure = vi.fn(async () => {
+      throw new ScoringWorkerPreparationError("OFFLINE_SHELL_PREPARATION_FAILED", "asset verification failed");
+    });
+    await expect(runScoringWorkerPreparationAttempts(genericFailure, wait)).rejects.toMatchObject({
+      code: "OFFLINE_SHELL_PREPARATION_FAILED",
+    });
+    expect(genericFailure).toHaveBeenCalledTimes(1);
   });
 
   it("returns the stable storage-unavailable code when the privacy-verified shell has no durable readback", async () => {
@@ -475,6 +527,49 @@ describe("Gate C3 scoring service worker", () => {
     });
     await expect(offlineResponse).resolves.toMatchObject({ ok: true, status: 200 });
     await expect((await offlineResponse)?.text()).resolves.toContain('data-offline-scoring-shell="v1"');
+  });
+
+  it("verifies a multi-asset IndexedDB generation through one read connection", async () => {
+    const postMessage = vi.fn();
+    const indexedDB = new IDBFactory();
+    const open = vi.spyOn(indexedDB, "open");
+    const harness = await workerMessageHarness({
+      fetch: vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(input instanceof Request ? input.url : input.toString(), "https://matchday.test");
+        return url.pathname === "/score"
+          ? new Response('<main data-offline-scoring-shell="v1">score</main>', {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            })
+          : immutableAssetResponse();
+      }),
+      indexedDB,
+      openCache: vi.fn().mockResolvedValue({
+        put: vi.fn().mockResolvedValue(undefined),
+        match: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
+    let preparation: Promise<unknown> | undefined;
+    harness.message({
+      data: {
+        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+        protocolVersion: 1,
+        requiredCapabilities: ["offline-scoring-shell-cache-v1"],
+        assets: [
+          "https://matchday.test/_next/static/chunks/scoring.js",
+          "https://matchday.test/_next/static/css/scoring.css",
+        ],
+      },
+      ports: [{ postMessage }],
+      waitUntil: (promise: Promise<unknown>) => {
+        preparation = promise;
+      },
+    });
+    await preparation;
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    // One connection writes the generation and one connection verifies every
+    // retained resource in a single readonly transaction.
+    expect(open).toHaveBeenCalledTimes(2);
   });
 
   it("invalidates a failed IndexedDB generation before accepting Cache Storage", async () => {

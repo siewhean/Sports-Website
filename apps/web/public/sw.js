@@ -199,51 +199,66 @@ async function clearScoringFallbackResponses() {
   }
 }
 
-async function matchScoringFallbackResponse(request) {
-  const url = scoringResourceUrl(request);
+async function matchScoringFallbackResponses(requests) {
+  const urls = requests.map((request) => scoringResourceUrl(request));
   const database = await openScoringFallbackDatabase();
+  let manifest;
+  let records;
   try {
     const transaction = database.transaction(SCORING_FALLBACK_STORE, "readonly");
     const store = transaction.objectStore(SCORING_FALLBACK_STORE);
-    const [manifest, record] = await Promise.all([
+    [manifest, ...records] = await Promise.all([
       scoringFallbackRequest(store, SCORING_FALLBACK_MANIFEST_KEY),
-      scoringFallbackRequest(store, `resource:${url}`),
+      ...urls.map((url) => scoringFallbackRequest(store, `resource:${url}`)),
     ]);
     await awaitScoringFallbackTransaction(transaction);
-    const manifestIsAuthoritative =
-      manifest?.worker_version === WORKER_VERSION &&
-      typeof manifest.generation === "string" &&
-      /^[a-f0-9-]{36}$/u.test(manifest.generation) &&
-      Array.isArray(manifest.resources) &&
-      manifest.resources.length > 0 &&
-      manifest.resources.length <= SCORING_FALLBACK_MAX_RESOURCES &&
-      Number.isSafeInteger(manifest.total_bytes) &&
-      manifest.total_bytes > 0 &&
-      manifest.total_bytes <= SCORING_FALLBACK_MAX_TOTAL_BYTES;
-    if (!manifestIsAuthoritative) return { authoritative: false, response: undefined };
-    const expected = manifest.resources.find((resource) => resource.url === url);
-    if (
-      !expected ||
-      expected.sha256 !== record?.sha256 ||
-      record.generation !== manifest.generation ||
-      !record.body ||
-      !Number.isSafeInteger(record.body.byteLength) ||
-      record.body.byteLength > SCORING_FALLBACK_MAX_RESOURCE_BYTES
-    ) {
-      return { authoritative: true, response: undefined };
-    }
-    const digest = await crypto.subtle.digest("SHA-256", record.body);
-    const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (sha256 !== expected.sha256) return { authoritative: true, response: undefined };
-    const response = new Response(record.body, {
-      headers: record.headers,
-      status: record.status,
-      statusText: record.statusText,
-    });
-    return { authoritative: true, response: await verifiedRetainedScoringResponse(request, response) };
   } finally {
     database.close();
   }
+  const manifestIsAuthoritative =
+    manifest?.worker_version === WORKER_VERSION &&
+    typeof manifest.generation === "string" &&
+    /^[a-f0-9-]{36}$/u.test(manifest.generation) &&
+    Array.isArray(manifest.resources) &&
+    manifest.resources.length > 0 &&
+    manifest.resources.length <= SCORING_FALLBACK_MAX_RESOURCES &&
+    Number.isSafeInteger(manifest.total_bytes) &&
+    manifest.total_bytes > 0 &&
+    manifest.total_bytes <= SCORING_FALLBACK_MAX_TOTAL_BYTES;
+  if (!manifestIsAuthoritative) {
+    return { authoritative: false, responses: urls.map(() => undefined) };
+  }
+  const responses = await Promise.all(
+    urls.map(async (url, index) => {
+      const record = records[index];
+      const expected = manifest.resources.find((resource) => resource.url === url);
+      if (
+        !expected ||
+        expected.sha256 !== record?.sha256 ||
+        record.generation !== manifest.generation ||
+        !record.body ||
+        !Number.isSafeInteger(record.body.byteLength) ||
+        record.body.byteLength > SCORING_FALLBACK_MAX_RESOURCE_BYTES
+      ) {
+        return undefined;
+      }
+      const digest = await crypto.subtle.digest("SHA-256", record.body);
+      const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      if (sha256 !== expected.sha256) return undefined;
+      const response = new Response(record.body, {
+        headers: record.headers,
+        status: record.status,
+        statusText: record.statusText,
+      });
+      return verifiedRetainedScoringResponse(requests[index], response);
+    }),
+  );
+  return { authoritative: true, responses };
+}
+
+async function matchScoringFallbackResponse(request) {
+  const retained = await matchScoringFallbackResponses([request]);
+  return { authoritative: retained.authoritative, response: retained.responses[0] };
 }
 
 async function matchScoringResource(request, options) {
@@ -285,8 +300,8 @@ async function retainScoringResources(entries) {
   try {
     await retainScoringFallbackResponses(entries, generation);
     fallbackCreated = true;
-    const retained = await Promise.all(entries.map(({ request }) => matchScoringFallbackResponse(request)));
-    fallbackRetained = retained.every(({ authoritative, response }) => authoritative && response?.ok);
+    const retained = await matchScoringFallbackResponses(entries.map(({ request }) => request));
+    fallbackRetained = retained.authoritative && retained.responses.every((response) => response?.ok);
   } catch {
     // Cache Storage remains a supported durable backend when IndexedDB is
     // unavailable.

@@ -603,6 +603,7 @@ export const phase2Machine = {
   offlineReplaying: "replaying" as const,
   offlinePendingFinalisation: "pending-finalisation" as const,
   offlineStorageError: "storage-error" as const,
+  offlineUnexpectedPreparationFailure: "unexpected_preparation_failure" as const,
   offlinePrepareIntent: "prepare" as const,
   offlinePreparationRollbackIntent: "preparation_rollback" as const,
   offlineResumeIntent: "resume" as const,

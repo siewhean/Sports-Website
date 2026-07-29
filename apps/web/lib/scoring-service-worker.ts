@@ -145,6 +145,32 @@ export class ScoringWorkerPreparationError extends Error {
   }
 }
 
+const scoringWorkerStoragePreparationAttempts = 2;
+const scoringWorkerStorageRetryDelayMs = 100;
+
+export function shouldRetryScoringWorkerPreparation(error: unknown, attempt: number): boolean {
+  return (
+    attempt < scoringWorkerStoragePreparationAttempts - 1 &&
+    error instanceof ScoringWorkerPreparationError &&
+    error.code === "OFFLINE_SHELL_STORAGE_UNAVAILABLE"
+  );
+}
+
+export async function runScoringWorkerPreparationAttempts(
+  operation: () => Promise<void>,
+  wait: (delayMs: number) => Promise<void> = (delayMs) => new Promise((resolve) => window.setTimeout(resolve, delayMs)),
+): Promise<void> {
+  for (let attempt = 0; attempt < scoringWorkerStoragePreparationAttempts; attempt += 1) {
+    try {
+      await operation();
+      return;
+    } catch (error) {
+      if (!shouldRetryScoringWorkerPreparation(error, attempt)) throw error;
+      await wait(scoringWorkerStorageRetryDelayMs);
+    }
+  }
+}
+
 export function scoringWorkerPreparationError(reply: ScoringWorkerPreparationReply | null): Error {
   if (reply?.code === "INCOMPATIBLE_PREPARATION_PROTOCOL" || reply?.ok === true) {
     return new ScoringWorkerPreparationError(
@@ -260,32 +286,36 @@ export async function prepareOfflineScoringShell(): Promise<void> {
   const registration = await navigator.serviceWorker.ready;
   const worker = registration.active;
   if (!worker) throw new Error("The offline scoring worker is not active.");
-  await new Promise<void>((resolve, reject) => {
-    const channel = new MessageChannel();
-    const timeout = window.setTimeout(() => {
-      channel.port1.close();
-      reject(new Error("The offline scoring shell preparation timed out."));
-    }, 10_000);
-    channel.port1.onmessage = (event: MessageEvent<unknown>) => {
-      window.clearTimeout(timeout);
-      channel.port1.close();
-      if (isCompatibleScoringWorkerPreparationReply(event.data)) {
-        resolve();
-        return;
-      }
-      const reply = event.data as ScoringWorkerPreparationReply | null;
-      reject(scoringWorkerPreparationError(reply));
-    };
-    worker.postMessage(
-      {
-        type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
-        assets: immutableScoringAssets(),
-        protocolVersion: scoringWorkerPreparationProtocolVersion,
-        requiredCapabilities: [...scoringWorkerPreparationCapabilities],
-      },
-      [channel.port2],
-    );
-  });
+  const assets = Object.freeze([...immutableScoringAssets()]);
+  await runScoringWorkerPreparationAttempts(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const channel = new MessageChannel();
+        const timeout = window.setTimeout(() => {
+          channel.port1.close();
+          reject(new Error("The offline scoring shell preparation timed out."));
+        }, 10_000);
+        channel.port1.onmessage = (event: MessageEvent<unknown>) => {
+          window.clearTimeout(timeout);
+          channel.port1.close();
+          if (isCompatibleScoringWorkerPreparationReply(event.data)) {
+            resolve();
+            return;
+          }
+          const reply = event.data as ScoringWorkerPreparationReply | null;
+          reject(scoringWorkerPreparationError(reply));
+        };
+        worker.postMessage(
+          {
+            type: "MATCHDAY_PREPARE_OFFLINE_SCORING",
+            assets,
+            protocolVersion: scoringWorkerPreparationProtocolVersion,
+            requiredCapabilities: [...scoringWorkerPreparationCapabilities],
+          },
+          [channel.port2],
+        );
+      }),
+  );
 }
 
 export async function requestScoringWorkerVersion(timeoutMs = 2_000): Promise<string> {

@@ -47,6 +47,7 @@ import {
   prepareOfflineScoringShell,
   runScoringWorkerTransition,
   scoringWorkerFreezeAllowedOfflineMethods,
+  ScoringWorkerPreparationError,
   ScoringWorkerSafetyFrozenError,
   scoringWorkerVersion,
 } from "@/lib/scoring-service-worker";
@@ -166,6 +167,7 @@ export function PhoneScoring({
   const [pendingSync, setPendingSync] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [offlineState, setOfflineState] = useState<OfflineState>(phase2Machine.offlineOnline);
+  const [offlinePreparationErrorCode, setOfflinePreparationErrorCode] = useState<string | null>(null);
   const transportOnlineRef = useRef(true);
   const [offlineAuthorizationId, setOfflineAuthorizationId] = useState<string | null>(null);
   const [offlineRecordingExpiresAt, setOfflineRecordingExpiresAt] = useState<string | null>(null);
@@ -344,6 +346,7 @@ export function PhoneScoring({
     (session: ScoringSessionView) =>
       runScoringWorkerTransition(async () => {
         if (mode !== phase2Machine.scoringApiMode || session.mode !== "writer" || session.readOnly) return;
+        setOfflinePreparationErrorCode(null);
         setOfflineState(phase2Machine.offlinePreparing);
         const resources = await offlineResources();
         await resources.repository.bindPrincipal(session.principalId);
@@ -372,6 +375,7 @@ export function PhoneScoring({
         }
         setPendingCount(0);
         setPendingSync(false);
+        setOfflinePreparationErrorCode(null);
         setOfflineState(phase2Machine.offlineReady);
         setAnnouncement(phase2Copy.offlinePreparedAnnouncement);
       }),
@@ -856,6 +860,11 @@ export function PhoneScoring({
       if (error instanceof ScoringWorkerSafetyFrozenError) return;
       if (error instanceof ScoringTransportError) await handleTransportError(error);
       else {
+        setOfflinePreparationErrorCode(
+          error instanceof ScoringWorkerPreparationError
+            ? error.code
+            : phase2Machine.offlineUnexpectedPreparationFailure,
+        );
         setOfflineState(phase2Machine.offlineStorageError);
         setAnnouncement(phase2Copy.offlinePreparationRetry);
       }
@@ -1379,6 +1388,7 @@ export function PhoneScoring({
       data-scoring-phase={phase}
       data-writer-state={writerState}
       data-offline-state={offlineState}
+      data-offline-preparation-error-code={offlinePreparationErrorCode ?? undefined}
     >
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
