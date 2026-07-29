@@ -24,6 +24,7 @@ import {
   IndexedDbOfflineScoringRepository,
   OfflineReplayController,
   createOfflineDiagnosticExport,
+  readActiveOfflineScoringPrincipal,
   type OfflineScoringRepository,
 } from "@/lib/offline-scoring";
 import {
@@ -382,7 +383,7 @@ export function PhoneScoring({
     assertScoringWorkerTransitionAllowed();
     try {
       const resources = await offlineResources();
-      const principalId = readScoringPrincipalCookie();
+      const principalId = readScoringPrincipalCookie() ?? (await readActiveOfflineScoringPrincipal());
       if (!principalId) return false;
       await resources.repository.bindPrincipal(principalId);
       const recovered = await recoverOfflineScoringSession(resources.repository);
