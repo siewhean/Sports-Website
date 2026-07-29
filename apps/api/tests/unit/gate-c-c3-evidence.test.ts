@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -22,6 +22,15 @@ describe("Gate C C3 controllable runner clock", () => {
 
     clock.reset();
     expect(clock.now().toISOString()).toBe("2026-07-28T15:02:00.000Z");
+  });
+});
+
+describe("Gate C C3 real-journey oracle", () => {
+  it("binds the final result snapshot to the isolated finalisation aggregate", async () => {
+    const source = await readFile(new URL("../../scripts/run-phase-2-real-e2e.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('["match_started", "period_change", "goal", "finalisation"]');
+    expect(source).toContain("resultSnapshots[0]?.count !== (index === 7 ? 1 : 0)");
   });
 });
 

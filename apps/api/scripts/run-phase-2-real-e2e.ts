@@ -898,7 +898,7 @@ async function assertGateCC3DatabaseOracle(sql: Sql, state: SeedState): Promise<
       !eventAuthorityIsExact ||
       !outboxLineageIsExact ||
       stream[0]?.current_version !== expected.length ||
-      resultSnapshots[0]?.count !== (index === 6 ? 1 : 0) ||
+      resultSnapshots[0]?.count !== (index === 7 ? 1 : 0) ||
       audits.filter(({ action }) => action === "scoring_event.appended").length !== expectedScoringEventEvidenceCount ||
       outbox.filter(({ event_type: eventType }) => eventType === "scoring_event.appended").length !==
         expectedScoringEventEvidenceCount ||
