@@ -505,6 +505,28 @@ export async function refreshScoringSessionAccess(
   return port.heartbeat(input, signal);
 }
 
+export type ScoringRefreshWriterState =
+  | "active"
+  | "candidate"
+  | "checking"
+  | "conflict"
+  | "expired"
+  | "expiring"
+  | "rate-limited"
+  | "read-only"
+  | "revoked"
+  | "transferred";
+
+export function scoringRefreshFailureState(
+  currentState: ScoringRefreshWriterState,
+  error: unknown,
+  sessionActive: boolean,
+): ScoringRefreshWriterState | null {
+  if (!sessionActive) return null;
+  if (error instanceof ScoringTransportError && error.state !== "unavailable") return null;
+  return currentState === "active" ? "expiring" : currentState;
+}
+
 class DemoScoringCommandPort implements ScoringCommandPort {
   private active = false;
   private sequence = 0;

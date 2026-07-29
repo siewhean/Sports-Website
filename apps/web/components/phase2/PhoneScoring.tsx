@@ -56,6 +56,7 @@ import {
   createScoringCommandPort,
   recoveredOfflineState,
   refreshScoringSessionAccess,
+  scoringRefreshFailureState,
   scoringMutationIsLocked,
   scoringSessionAnnouncement,
   scoringWriterAvailability,
@@ -613,6 +614,15 @@ export function PhoneScoring({
         );
       } catch (error) {
         if (error instanceof ScoringWorkerSafetyFrozenError) return;
+        const preservedState = scoringRefreshFailureState(writerStateRef.current, error, sessionActiveRef.current);
+        if (preservedState) {
+          writerStateRef.current = preservedState;
+          setWriterState(preservedState);
+          setAnnouncement(
+            preservedState === phase2Machine.expiring ? phase2Copy.leaseExpiring : phase2Copy.serviceUnavailable,
+          );
+          return;
+        }
         await handleTransportError(error);
       }
     };

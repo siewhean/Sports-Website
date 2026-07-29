@@ -120,7 +120,10 @@ describe("Gate C3 offline scoring UI contract", () => {
       source.indexOf("let active = true;", source.indexOf("refreshScoringSessionAccess(")),
     );
     expect(periodicRefresh).toMatch(
-      /catch \(error\) \{\s*if \(error instanceof ScoringWorkerSafetyFrozenError\) return;\s*await handleTransportError\(error\)/u,
+      /scoringRefreshFailureState\(\s*writerStateRef\.current,\s*error,\s*sessionActiveRef\.current,?\s*\)/u,
+    );
+    expect(periodicRefresh).toMatch(
+      /if \(preservedState\) \{\s*writerStateRef\.current = preservedState;\s*setWriterState\(preservedState\);[\s\S]*?return;\s*\}\s*await handleTransportError\(error\)/u,
     );
   });
 

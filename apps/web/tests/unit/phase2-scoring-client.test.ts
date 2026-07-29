@@ -5,6 +5,7 @@ import {
   recoveredOfflineState,
   createScoringCommandPort,
   refreshScoringSessionAccess,
+  scoringRefreshFailureState,
   scoringSessionAnnouncement,
   scoringMutationIsLocked,
   terminalOfflineQueueState,
@@ -623,6 +624,36 @@ describe("phase 2 browser scoring transport", () => {
 
     expect(calls).toEqual(["recover", "heartbeat"]);
     expect(session).toEqual(heartbeaten);
+  });
+
+  it("preserves authenticated context when a background refresh is transiently unavailable", () => {
+    expect(scoringRefreshFailureState("candidate", new ScoringTransportError("unavailable"), true)).toBe("candidate");
+    expect(scoringRefreshFailureState("active", new ScoringTransportError("unavailable"), true)).toBe("expiring");
+    expect(scoringRefreshFailureState("transferred", new Error("malformed transient response"), true)).toBe(
+      "transferred",
+    );
+  });
+
+  it("delegates terminal refresh failures and unauthenticated failures to the access error handler", () => {
+    for (const state of ["access", "conflict", "expired", "invalid", "rate_limited", "revoked"] as const) {
+      expect(scoringRefreshFailureState("active", new ScoringTransportError(state), true)).toBeNull();
+    }
+    expect(scoringRefreshFailureState("candidate", new ScoringTransportError("unavailable"), false)).toBeNull();
+  });
+
+  it("fails active scoring writes closed while transient refresh recovery retries", () => {
+    const writerState = scoringRefreshFailureState("active", new ScoringTransportError("unavailable"), true);
+
+    expect(writerState).toBe("expiring");
+    expect(
+      scoringMutationIsLocked({
+        writerState: writerState ?? "active",
+        offlineState: "online",
+        hasOfflineAuthorization: false,
+        pendingCount: 0,
+        queueLimit: 2_000,
+      }),
+    ).toBe(true);
   });
 
   it("does not apply a pre-event refresh after a newer scoring append succeeds", async () => {
