@@ -18,7 +18,10 @@ const forbiddenPublicFieldPattern =
 const forbiddenPublicTextPatterns: ReadonlyArray<readonly [string, RegExp]> = [
   ["private key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/iu],
   ["bearer credential", /bearer\s+[a-z0-9._~+/=-]+/iu],
-  ["credential header", /(?:authorization|proxy-authorization|set-cookie|x-api-key|api[_-]?key)\s*[:=]\s*[^\s,;]+/iu],
+  [
+    "credential header",
+    /(?:authorization|proxy-authorization|set-cookie|x-api-key|api[_-]?key)\s*[:=]\s*[^\s,;]+/iu,
+  ],
   ["JWT", /eyJ[a-z0-9_-]{8,}\.eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}/iu],
   ["credential-bearing PostgreSQL URL", /postgres(?:ql)?:\/\/[^/\s]+:[^@\s]+@/iu],
   ["credential-bearing Redis URL", /redis:\/\/[^/\s]+:[^@\s]+@/iu],
@@ -34,7 +37,9 @@ function stableJson(value: unknown): string {
       .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
       .join(",")}}`;
   }
-  return JSON.stringify(value);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("Public projection version input contains an unsupported value");
+  return serialized;
 }
 
 function positiveVersion(value: number, label: string): void {
