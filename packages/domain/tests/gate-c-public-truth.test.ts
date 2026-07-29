@@ -9,6 +9,7 @@ describe("Gate C C4 public truth guards", () => {
   it("produces deterministic freshness input independent of property ordering and timestamp offsets", () => {
     const first = canonicalPublicProjectionVersionInput({
       competitionId: "competition-1",
+      divisionId: "division-open",
       scheduleVersion: 4,
       resultVersion: 7,
       projectionVersion: 9,
@@ -18,6 +19,7 @@ describe("Gate C C4 public truth guards", () => {
     const second = canonicalPublicProjectionVersionInput({
       projectionVersion: 9,
       competitionId: "competition-1",
+      divisionId: "division-open",
       sourceUpdatedAt: "2026-07-29T12:29:00.000Z",
       generatedAt: "2026-07-29T20:30:00.000+08:00",
       resultVersion: 7,
@@ -26,7 +28,7 @@ describe("Gate C C4 public truth guards", () => {
 
     expect(second).toBe(first);
     expect(first).toBe(
-      '{"competition_id":"competition-1","generated_at":"2026-07-29T12:30:00.000Z","projection_version":9,"result_version":7,"schedule_version":4,"source_updated_at":"2026-07-29T12:29:00.000Z"}',
+      '{"competition_id":"competition-1","division_id":"division-open","generated_at":"2026-07-29T12:30:00.000Z","projection_version":9,"result_version":7,"schedule_version":4,"source_updated_at":"2026-07-29T12:29:00.000Z"}',
     );
   });
 
@@ -34,6 +36,7 @@ describe("Gate C C4 public truth guards", () => {
     expect(() =>
       canonicalPublicProjectionVersionInput({
         competitionId: "competition-1",
+        divisionId: "division-open",
         scheduleVersion: 0,
         resultVersion: 1,
         projectionVersion: 1,
@@ -45,6 +48,7 @@ describe("Gate C C4 public truth guards", () => {
     expect(() =>
       canonicalPublicProjectionVersionInput({
         competitionId: "competition-1",
+        divisionId: "division-open",
         scheduleVersion: 1,
         resultVersion: 1,
         projectionVersion: 1,
@@ -52,6 +56,33 @@ describe("Gate C C4 public truth guards", () => {
         sourceUpdatedAt: "2026-07-29T12:29:00.000Z",
       }),
     ).toThrow(/before its source update/);
+
+    expect(() =>
+      canonicalPublicProjectionVersionInput({
+        competitionId: "competition-1",
+        divisionId: "   ",
+        scheduleVersion: 1,
+        resultVersion: 1,
+        projectionVersion: 1,
+        generatedAt: "2026-07-29T12:30:00.000Z",
+        sourceUpdatedAt: "2026-07-29T12:29:00.000Z",
+      }),
+    ).toThrow(/division ID/);
+  });
+
+  it("keeps cache identity distinct for divisions that share competition and version values", () => {
+    const base = {
+      competitionId: "competition-1",
+      scheduleVersion: 4,
+      resultVersion: 7,
+      projectionVersion: 9,
+      generatedAt: "2026-07-29T12:30:00.000Z",
+      sourceUpdatedAt: "2026-07-29T12:29:00.000Z",
+    };
+
+    expect(canonicalPublicProjectionVersionInput({ ...base, divisionId: "division-open" })).not.toBe(
+      canonicalPublicProjectionVersionInput({ ...base, divisionId: "division-women" }),
+    );
   });
 
   it("allows public competition, division, schedule, result, standings and freshness fields", () => {
@@ -111,6 +142,20 @@ describe("Gate C C4 public truth guards", () => {
       { path: "divisions.0.internal.scoring_session_id", reason: "forbidden_field" },
     ]);
     expect(() => assertPublicProjectionPrivacy(projection)).toThrow(/forbidden data/);
+  });
+
+  it("rejects camelCase and kebab-case aliases for private fields", () => {
+    expect(
+      publicProjectionPrivacyViolations({
+        accessToken: "opaque-secret",
+        deviceId: "device-1",
+        "client-ip": "192.0.2.1",
+      }),
+    ).toEqual([
+      { path: "accessToken", reason: "forbidden_field" },
+      { path: "client-ip", reason: "forbidden_field" },
+      { path: "deviceId", reason: "forbidden_field" },
+    ]);
   });
 
   it("rejects secret-like material even when placed under an otherwise public field", () => {

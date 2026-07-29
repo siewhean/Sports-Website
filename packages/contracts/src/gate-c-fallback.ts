@@ -52,14 +52,7 @@ export type GateCScheduleFallbackDocument = Readonly<{
 }>;
 
 export type GateCScoreSheetSectionKind =
-  | "periods"
-  | "segments"
-  | "quarters"
-  | "discipline"
-  | "timeouts"
-  | "incidents"
-  | "officials"
-  | "signatures";
+  "periods" | "segments" | "quarters" | "discipline" | "timeouts" | "incidents" | "officials" | "signatures";
 
 export type GateCScoreSheetSection = Readonly<{
   kind: GateCScoreSheetSectionKind;
