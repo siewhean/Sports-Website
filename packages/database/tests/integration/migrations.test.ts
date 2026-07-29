@@ -123,9 +123,11 @@ describe("foundation migrations", () => {
         "0030_gate_c_published_schedule_participants.sql",
         "0031_gate_c_participant_snapshot_fencing.sql",
         "0032_gate_c_offline_replay.sql",
+        "0033_gate_c_repair_public_truth_exports.sql",
       ] as const;
       const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
       const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
+      const repairPersistenceMigrationName = "0033_gate_c_repair_public_truth_exports.sql";
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
           const migrationPath = path.join(copiedDirectory, name);
@@ -320,11 +322,20 @@ describe("foundation migrations", () => {
           VALUES(${siblingEntry},${siblingDivision},'Sibling division entry',1,'placeholder','confirmed')`;
         const participantFenceMigration = forwardMigrations.find(({ name }) => name === participantFenceMigrationName);
         const offlineReplayMigration = forwardMigrations.find(({ name }) => name === offlineReplayMigrationName);
+        const repairPersistenceMigration = forwardMigrations.find(
+          ({ name }) => name === repairPersistenceMigrationName,
+        );
         if (!participantFenceMigration) throw new Error("Expected participant-fencing migration");
         if (!offlineReplayMigration) throw new Error("Expected offline-replay migration");
+        if (!repairPersistenceMigration) throw new Error("Expected repair-persistence migration");
         await Promise.all(
           forwardMigrations
-            .filter(({ name }) => name !== participantFenceMigrationName && name !== offlineReplayMigrationName)
+            .filter(
+              ({ name }) =>
+                name !== participantFenceMigrationName &&
+                name !== offlineReplayMigrationName &&
+                name !== repairPersistenceMigrationName,
+            )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
         const upgradedBeforeParticipantFence = await migrateDatabase({
@@ -332,7 +343,7 @@ describe("foundation migrations", () => {
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -2));
+        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -3));
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -360,6 +371,13 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithReplay.applied).toEqual(["0032_gate_c_offline_replay.sql"]);
+        await writeFile(repairPersistenceMigration.migrationPath, repairPersistenceMigration.source);
+        const upgradedWithRepairPersistence = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithRepairPersistence.applied).toEqual(["0033_gate_c_repair_public_truth_exports.sql"]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
