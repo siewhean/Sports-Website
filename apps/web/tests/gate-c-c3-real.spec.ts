@@ -1879,6 +1879,8 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     },
   );
   expect(approval.status).toBe(200);
+  const approvedGeneration = (approval.body as { generation?: unknown }).generation;
+  expect(Number.isSafeInteger(approvedGeneration)).toBe(true);
   await setBrowserConnectivity(testInfo, seed, incumbent.context, incumbent.page, true);
   await expect(
     incumbent.page
@@ -1891,8 +1893,25 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     retained_command_count: 1,
   });
 
-  // The candidate must first observe the authoritative transfer before a
-  // refresh can prove that the promoted writer session is recoverable.
+  // Promotion polling is intentionally suspended for hidden scoring documents.
+  // Foreground the candidate and prove its authoritative recovery before
+  // exercising the promoted writer.
+  const promotedRecovery = candidate.page.waitForResponse(async (response) => {
+    if (
+      response.request().method() !== "GET" ||
+      !response.url().endsWith("/api/scoring/session") ||
+      response.status() !== 200
+    ) {
+      return false;
+    }
+    const body = (await response.json().catch(() => null)) as {
+      access?: { mode?: unknown; generation?: unknown };
+    } | null;
+    return body?.access?.mode === "writer" && body.access.generation === approvedGeneration;
+  });
+  await candidate.page.bringToFront();
+  await expect.poll(() => candidate.page.evaluate(() => document.visibilityState)).toBe("visible");
+  await promotedRecovery;
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
   await refreshPageForProject(candidate.page, testInfo);
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
