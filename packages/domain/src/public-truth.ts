@@ -1,5 +1,6 @@
 export type PublicProjectionVersionInput = Readonly<{
   competitionId: string;
+  divisionId: string;
   scheduleVersion: number;
   resultVersion: number;
   projectionVersion: number;
@@ -18,10 +19,7 @@ const forbiddenPublicFieldPattern =
 const forbiddenPublicTextPatterns: ReadonlyArray<readonly [string, RegExp]> = [
   ["private key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/iu],
   ["bearer credential", /bearer\s+[a-z0-9._~+/=-]+/iu],
-  [
-    "credential header",
-    /(?:authorization|proxy-authorization|set-cookie|x-api-key|api[_-]?key)\s*[:=]\s*[^\s,;]+/iu,
-  ],
+  ["credential header", /(?:authorization|proxy-authorization|set-cookie|x-api-key|api[_-]?key)\s*[:=]\s*[^\s,;]+/iu],
   ["JWT", /eyJ[a-z0-9_-]{8,}\.eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}/iu],
   ["credential-bearing PostgreSQL URL", /postgres(?:ql)?:\/\/[^/\s]+:[^@\s]+@/iu],
   ["credential-bearing Redis URL", /redis:\/\/[^/\s]+:[^@\s]+@/iu],
@@ -52,8 +50,16 @@ function validTimestamp(value: string, label: string): number {
   return parsed;
 }
 
+function normalizedPublicFieldName(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .replace(/[\s-]+/gu, "_")
+    .toLowerCase();
+}
+
 export function canonicalPublicProjectionVersionInput(input: PublicProjectionVersionInput): string {
   if (!input.competitionId.trim()) throw new Error("Public projection requires a competition ID");
+  if (!input.divisionId.trim()) throw new Error("Public projection requires a division ID");
   positiveVersion(input.scheduleVersion, "Schedule version");
   positiveVersion(input.resultVersion, "Result version");
   positiveVersion(input.projectionVersion, "Projection version");
@@ -64,6 +70,7 @@ export function canonicalPublicProjectionVersionInput(input: PublicProjectionVer
   }
   return stableJson({
     competition_id: input.competitionId,
+    division_id: input.divisionId,
     generated_at: new Date(generatedAt).toISOString(),
     projection_version: input.projectionVersion,
     result_version: input.resultVersion,
@@ -107,7 +114,7 @@ export function publicProjectionPrivacyViolations(value: unknown): PublicProject
     }
     for (const [key, child] of Object.entries(candidate as Record<string, unknown>)) {
       const childPath = [...path, key];
-      if (forbiddenPublicFieldPattern.test(key)) {
+      if (forbiddenPublicFieldPattern.test(normalizedPublicFieldName(key))) {
         violations.push({ path: childPath.join("."), reason: "forbidden_field" });
       }
       visit(child, childPath);
@@ -115,7 +122,9 @@ export function publicProjectionPrivacyViolations(value: unknown): PublicProject
   };
 
   visit(value, []);
-  return violations.sort((left, right) => left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason));
+  return violations.sort(
+    (left, right) => left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason),
+  );
 }
 
 export function assertPublicProjectionPrivacy(value: unknown): void {

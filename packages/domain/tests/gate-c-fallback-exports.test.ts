@@ -102,7 +102,9 @@ describe("Gate C C4 deterministic fallback exports", () => {
       ),
     ).toThrow(/credential-free HTTPS/);
     expect(() =>
-      buildScheduleFallbackDocument(scheduleInput({ publicVerificationUrl: "https://example.test/competition#access=x" })),
+      buildScheduleFallbackDocument(
+        scheduleInput({ publicVerificationUrl: "https://example.test/competition#access=x" }),
+      ),
     ).toThrow(/credential-free HTTPS/);
   });
 
@@ -124,9 +126,9 @@ describe("Gate C C4 deterministic fallback exports", () => {
   });
 
   it("rejects unsafe sheet identifiers and secret-like public text", () => {
-    expect(() =>
-      buildEmergencyScoreSheet({ ...scoreSheetInput("basketball"), sheetIdentifier: "../private" }),
-    ).toThrow(/unsafe characters/);
+    expect(() => buildEmergencyScoreSheet({ ...scoreSheetInput("basketball"), sheetIdentifier: "../private" })).toThrow(
+      /unsafe characters/,
+    );
     expect(() =>
       buildEmergencyScoreSheet({
         ...scoreSheetInput("canoe_polo"),
@@ -137,7 +139,12 @@ describe("Gate C C4 deterministic fallback exports", () => {
 
   it("builds order-independent manifests and rejects unsafe or duplicate paths", () => {
     const files = [
-      { documentType: "emergency_score_sheet" as const, path: "score-sheets/match-1.pdf", sha256: "b".repeat(64), sizeBytes: 2500 },
+      {
+        documentType: "emergency_score_sheet" as const,
+        path: "score-sheets/match-1.pdf",
+        sha256: "b".repeat(64),
+        sizeBytes: 2500,
+      },
       { documentType: "schedule_pdf" as const, path: "schedule.pdf", sha256: "c".repeat(64), sizeBytes: 5000 },
     ];
     const base = {

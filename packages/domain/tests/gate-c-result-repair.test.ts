@@ -5,10 +5,7 @@ import {
   type RepairMatchSnapshot,
 } from "../src/index.js";
 
-function match(
-  matchId: string,
-  overrides: Partial<RepairMatchSnapshot> = {},
-): RepairMatchSnapshot {
+function match(matchId: string, overrides: Partial<RepairMatchSnapshot> = {}): RepairMatchSnapshot {
   return {
     matchId,
     divisionId: "division-open",
@@ -60,9 +57,7 @@ describe("Gate C C4 affected-match repair closure", () => {
       }),
     );
 
-    expect(
-      Object.fromEntries(result.actions.map((action) => [action.matchId, action.action])),
-    ).toEqual({
+    expect(Object.fromEntries(result.actions.map((action) => [action.matchId, action.action]))).toEqual({
       "finalised-medal": "protected_finalised_match",
       "locked-ready": "requires_organiser_decision",
       "manual-placement": "protected_manual_slot",
@@ -165,12 +160,31 @@ describe("Gate C C4 affected-match repair closure", () => {
       calculateAffectedMatchClosure(
         baseInput({
           matches: [match("semi-1"), match("final")],
-          dependencies: [
-            { sourceMatchId: "semi-1", downstreamMatchId: "final", slot: "home", outcome: "winner" },
-          ],
+          dependencies: [{ sourceMatchId: "semi-1", downstreamMatchId: "final", slot: "home", outcome: "winner" }],
           proposedOutcomes: [],
         }),
       ),
     ).toThrow(/requires a proposed winner and loser outcome/);
+  });
+
+  it("rejects invalid runtime enum values instead of classifying them as safe automatic updates", () => {
+    expect(() =>
+      calculateAffectedMatchClosure(
+        baseInput({
+          matches: [match("semi-1"), match("final", { state: "abandoned" as never })],
+        }),
+      ),
+    ).toThrow(/final state is invalid/);
+
+    expect(() =>
+      calculateAffectedMatchClosure(
+        baseInput({
+          matches: [match("semi-1"), match("final")],
+          dependencies: [
+            { sourceMatchId: "semi-1", downstreamMatchId: "final", slot: "home", outcome: "draw" as never },
+          ],
+        }),
+      ),
+    ).toThrow(/semi-1 outcome is invalid/);
   });
 });

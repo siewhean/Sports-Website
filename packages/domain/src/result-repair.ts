@@ -76,6 +76,15 @@ export type AffectedMatchClosure = Readonly<{
   analysisFingerprintInput: string;
 }>;
 
+const repairMatchStates = new Set<RepairMatchState>(["pending", "ready", "in_progress", "final", "corrected"]);
+const repairSlotControls = new Set<RepairSlotControl>(["automatic", "manual"]);
+const repairSlots = new Set<RepairSlot>(["home", "away"]);
+const repairOutcomeKinds = new Set<RepairOutcomeKind>(["winner", "loser"]);
+
+function assertEnum<T extends string>(value: string, allowed: ReadonlySet<T>, label: string): asserts value is T {
+  if (!allowed.has(value as T)) throw new Error(`${label} is invalid`);
+}
+
 function dependencyKey(dependency: RepairDependency): string {
   return [dependency.sourceMatchId, dependency.downstreamMatchId, dependency.slot, dependency.outcome].join("\u0000");
 }
@@ -115,6 +124,12 @@ function validateInput(input: AffectedMatchClosureInput): {
   const matches = new Map<string, RepairMatchSnapshot>();
   for (const match of input.matches) {
     if (!match.matchId || !match.divisionId) throw new Error("Repair matches require stable IDs");
+    assertEnum(match.state, repairMatchStates, `Repair match ${match.matchId} state`);
+    assertEnum(match.homeControl, repairSlotControls, `Repair match ${match.matchId} home control`);
+    assertEnum(match.awayControl, repairSlotControls, `Repair match ${match.matchId} away control`);
+    if (match.operationallyLocked !== undefined && typeof match.operationallyLocked !== "boolean") {
+      throw new Error(`Repair match ${match.matchId} operational lock is invalid`);
+    }
     if (matches.has(match.matchId)) throw new Error(`Duplicate repair match ${match.matchId}`);
     matches.set(match.matchId, match);
   }
@@ -137,6 +152,8 @@ function validateInput(input: AffectedMatchClosureInput): {
   const outgoing = new Map<string, RepairDependency[]>();
   const dependencySlots = new Set<string>();
   for (const dependency of input.dependencies) {
+    assertEnum(dependency.slot, repairSlots, `Repair dependency ${dependency.sourceMatchId} slot`);
+    assertEnum(dependency.outcome, repairOutcomeKinds, `Repair dependency ${dependency.sourceMatchId} outcome`);
     if (dependency.sourceMatchId === dependency.downstreamMatchId) {
       throw new Error(`Repair dependency ${dependency.sourceMatchId} cannot reference itself`);
     }
@@ -195,9 +212,6 @@ function classifyAction(
   proposedEntryId: string | null,
 ): Pick<AffectedMatchAction, "action" | "reason" | "control"> {
   const control = slot === "home" ? match.homeControl : match.awayControl;
-  if (currentEntryId === proposedEntryId) {
-    return { action: "no_change", reason: "Resolved participant is unchanged", control };
-  }
   if (match.state === "final" || match.state === "corrected") {
     return {
       action: "protected_finalised_match",
@@ -218,6 +232,9 @@ function classifyAction(
       reason: "The downstream participant slot is under manual organiser control",
       control,
     };
+  }
+  if (currentEntryId === proposedEntryId) {
+    return { action: "no_change", reason: "Resolved participant is unchanged", control };
   }
   if (proposedEntryId === null) {
     return {

@@ -1,10 +1,6 @@
 import type { AffectedMatchAction, AffectedMatchClosure, RepairSlot } from "./result-repair.js";
 
-export type RepairDecisionKind =
-  | "accept_proposed"
-  | "keep_current"
-  | "set_manual_entry"
-  | "leave_protected";
+export type RepairDecisionKind = "accept_proposed" | "keep_current" | "set_manual_entry" | "leave_protected";
 
 export type RepairPublicationDecision = Readonly<{
   matchId: string;
@@ -105,7 +101,9 @@ function permittedDecision(action: AffectedMatchAction, decision: RepairPublicat
 
 function resolveDecision(action: AffectedMatchAction, decision: RepairPublicationDecision): RepairActionResolution {
   if (!permittedDecision(action, decision)) {
-    throw new Error(`Decision ${decision.decision} is not permitted for ${action.matchId}/${action.slot}/${action.action}`);
+    throw new Error(
+      `Decision ${decision.decision} is not permitted for ${action.matchId}/${action.slot}/${action.action}`,
+    );
   }
   if (decision.decision === "accept_proposed" && action.proposedEntryId === null) {
     throw new Error(`Repair decision ${action.matchId}/${action.slot} cannot accept an unresolved participant`);
@@ -178,8 +176,10 @@ export function buildRepairPublicationPlan(
   for (const decision of decisions) {
     validateDecisionShape(decision);
     const key = actionKey(decision.matchId, decision.slot);
-    if (!actions.has(key)) throw new Error(`Repair decision references unknown action ${decision.matchId}/${decision.slot}`);
-    if (decisionByAction.has(key)) throw new Error(`Duplicate repair decision for ${decision.matchId}/${decision.slot}`);
+    if (!actions.has(key))
+      throw new Error(`Repair decision references unknown action ${decision.matchId}/${decision.slot}`);
+    if (decisionByAction.has(key))
+      throw new Error(`Duplicate repair decision for ${decision.matchId}/${decision.slot}`);
     if (actions.get(key)?.action === "no_change") {
       throw new Error(`Unchanged repair action ${decision.matchId}/${decision.slot} cannot be overridden`);
     }

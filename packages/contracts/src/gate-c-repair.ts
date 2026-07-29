@@ -86,6 +86,21 @@ export type GateCRepairCaseView = Readonly<{
   created_by_account_id: string;
 }>;
 
+export type GateCRepairRevisionStatus = "draft" | "ready" | "published" | "abandoned";
+
+export type GateCRepairRevisionView = Readonly<{
+  repair_revision_id: string;
+  repair_id: string;
+  revision: number;
+  status: GateCRepairRevisionStatus;
+  source_result_version: number;
+  source_schedule_version: number;
+  analysis_fingerprint: string;
+  analysis_fingerprint_input: string;
+  created_at: string;
+  created_by_account_id: string;
+}>;
+
 export type GateCRepairDecision = Readonly<{
   match_id: string;
   slot: GateCRepairSlot;
@@ -94,12 +109,30 @@ export type GateCRepairDecision = Readonly<{
   reason: string;
 }>;
 
+export type GateCRepairActionRecord = Readonly<{
+  repair_action_id: string;
+  repair_revision_id: string;
+  ordinal: number;
+  match_id: string;
+  division_id: string;
+  slot: GateCRepairSlot;
+  source_action: GateCRepairActionKind;
+  decision: GateCRepairDecision["decision"];
+  current_entry_id: string | null;
+  proposed_entry_id: string | null;
+  resolved_entry_id: string | null;
+  reason: string;
+  dependency_path: readonly GateCRepairDependencyPathStep[];
+  created_at: string;
+}>;
+
 export type GateCRepairPublicationRequest = Readonly<{
   competition_id: string;
   repair_id: string;
   repair_revision_id: string;
   expected_schedule_version: number;
   expected_result_version: number;
+  expected_analysis_fingerprint: string;
   publication_idempotency_key: string;
 }>;
 
@@ -110,11 +143,14 @@ export type GateCRepairPublicationReceipt = Readonly<{
   schedule_version: number;
   result_version: number;
   projection_version: number;
+  schedule_revision_id: string;
+  analysis_fingerprint: string;
   duplicate: boolean;
   published_at: string;
 }>;
 
 export type PublicProjectionFreshness = Readonly<{
+  division_id: string;
   schedule_version: number;
   result_version: number;
   projection_version: number;

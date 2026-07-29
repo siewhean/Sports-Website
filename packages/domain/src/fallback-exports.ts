@@ -122,10 +122,15 @@ export type FallbackExportManifest = Readonly<{
 
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 
-const scoreSheetSections: Readonly<Record<FallbackSport, readonly ScoreSheetSection[]>> = Object.freeze({
+const scoreSheetSections = Object.freeze({
   canoe_polo: Object.freeze([
     { kind: "periods", label: "Period score", columns: ["period", "home_goals", "away_goals"], repeatable: true },
-    { kind: "discipline", label: "Cards and discipline", columns: ["time", "side", "person", "card", "reason"], repeatable: true },
+    {
+      kind: "discipline",
+      label: "Cards and discipline",
+      columns: ["time", "side", "person", "card", "reason"],
+      repeatable: true,
+    },
     { kind: "timeouts", label: "Timeouts", columns: ["time", "side", "period"], repeatable: true },
     { kind: "incidents", label: "Incidents and corrections", columns: ["time", "note"], repeatable: true },
     { kind: "officials", label: "Officials", columns: ["role", "name"], repeatable: true },
@@ -153,12 +158,17 @@ const scoreSheetSections: Readonly<Record<FallbackSport, readonly ScoreSheetSect
   basketball: Object.freeze([
     { kind: "quarters", label: "Quarter score", columns: ["quarter", "home_points", "away_points"], repeatable: true },
     { kind: "timeouts", label: "Timeouts", columns: ["quarter", "side", "game_clock"], repeatable: true },
-    { kind: "discipline", label: "Fouls", columns: ["quarter", "side", "person", "foul", "game_clock"], repeatable: true },
+    {
+      kind: "discipline",
+      label: "Fouls",
+      columns: ["quarter", "side", "person", "foul", "game_clock"],
+      repeatable: true,
+    },
     { kind: "incidents", label: "Incidents and corrections", columns: ["quarter", "note"], repeatable: true },
     { kind: "officials", label: "Officials", columns: ["role", "name"], repeatable: true },
     { kind: "signatures", label: "Confirmation", columns: ["role", "name", "signature"], repeatable: false },
   ]),
-});
+} satisfies Readonly<Record<FallbackSport, readonly ScoreSheetSection[]>>);
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -267,7 +277,10 @@ export function buildScheduleFallbackDocument(input: ScheduleFallbackInput): Sch
       divisionName,
       matches: matches.filter((match) => match.divisionId === divisionId),
     }))
-    .sort((left, right) => left.divisionName.localeCompare(right.divisionName) || left.divisionId.localeCompare(right.divisionId));
+    .sort(
+      (left, right) =>
+        left.divisionName.localeCompare(right.divisionName) || left.divisionId.localeCompare(right.divisionId),
+    );
   const document: ScheduleFallbackDocument = {
     schemaVersion: 1,
     documentType: "schedule_pdf",
@@ -315,7 +328,11 @@ export function buildEmergencyScoreSheet(input: EmergencyScoreSheetInput): Emerg
 
 function manifestPath(value: string): string {
   const normalized = value.replaceAll("\\", "/");
-  if (!normalized || normalized.startsWith("/") || normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")
+  ) {
     throw new Error(`Fallback manifest path is unsafe: ${value}`);
   }
   return normalized;
