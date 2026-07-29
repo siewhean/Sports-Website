@@ -1588,10 +1588,9 @@ test("Gate C C3 defers a worker update until every controlled client is safe", a
   const downloadPromise = page.waitForEvent("download");
   await signOutDialog.getByRole("button", { name: "Export before discard" }).click();
   await downloadPromise;
-  const discardClick = signOutDialog.getByRole("button", { name: "Discard exported work and end scoring" }).click();
+  await signOutDialog.getByRole("button", { name: "Discard exported work and end scoring" }).click();
   releasePendingReplay();
   await replayAborted;
-  await discardClick;
   await expect(page.getByRole("button", { name: "Validate access" })).toBeVisible();
 
   try {
