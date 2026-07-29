@@ -1887,6 +1887,22 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     takeoverList.body as { takeover_requests?: Array<{ id?: string; status?: string }> }
   ).takeover_requests?.find(({ status }) => status === "pending")?.id;
   if (!takeoverId) throw new Error("Gate C C3 takeover request was not visible to the organiser");
+  let recoveredGeneration: unknown;
+  const promotedRecovery = candidate.page.waitForResponse(async (response) => {
+    if (
+      response.request().method() !== "GET" ||
+      new URL(response.url()).pathname !== "/api/scoring/session" ||
+      response.status() !== 200
+    ) {
+      return false;
+    }
+    const body = (await response.json().catch(() => null)) as {
+      access?: { mode?: unknown; generation?: unknown };
+    } | null;
+    if (body?.access?.mode !== "writer") return false;
+    recoveredGeneration = body.access.generation;
+    return true;
+  });
   const approval = await organiserRequest(
     testInfo,
     profileRoot,
@@ -1923,21 +1939,8 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   await candidate.page.bringToFront();
   await expect.poll(() => candidate.page.evaluate(() => document.visibilityState)).toBe("visible");
   await expectScoringSessionCookie(candidate.context, seed.webOrigin, "candidate foreground recovery");
-  const promotedRecovery = candidate.page.waitForResponse(async (response) => {
-    if (
-      response.request().method() !== "GET" ||
-      new URL(response.url()).pathname !== "/api/scoring/session" ||
-      response.status() !== 200
-    ) {
-      return false;
-    }
-    const body = (await response.json().catch(() => null)) as {
-      access?: { mode?: unknown; generation?: unknown };
-    } | null;
-    return body?.access?.mode === "writer" && body.access.generation === approvedGeneration;
-  });
-  await candidate.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await promotedRecovery;
+  expect(recoveredGeneration).toBe(approvedGeneration);
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
   await refreshPageForProject(candidate.page, testInfo);
   await expect(candidate.page.getByRole("button", { name: "Prepare offline scoring" })).toBeVisible();
