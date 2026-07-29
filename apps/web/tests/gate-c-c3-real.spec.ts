@@ -112,18 +112,31 @@ async function resetServerClock(testInfo: TestInfo, profileRoot: string, seed: G
 }
 
 async function setBrowserDateNow(page: Page, value: number): Promise<void> {
-  await page.addInitScript((now) => {
-    Object.defineProperty(Date, "now", {
-      configurable: true,
-      value: () => now,
-    });
-  }, value);
-  await page.evaluate((now) => {
-    Object.defineProperty(Date, "now", {
-      configurable: true,
-      value: () => now,
-    });
-  }, value);
+  const storageKey = "matchday-e2e-date-now";
+  await page.context().addInitScript((key) => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw === null) return;
+      const stored = Number(raw);
+      if (!Number.isFinite(stored)) return;
+      Object.defineProperty(Date, "now", {
+        configurable: true,
+        value: () => stored,
+      });
+    } catch {
+      // The origin document will install the clock once storage is available.
+    }
+  }, storageKey);
+  await page.evaluate(
+    ({ key, now }) => {
+      window.localStorage.setItem(key, String(now));
+      Object.defineProperty(Date, "now", {
+        configurable: true,
+        value: () => now,
+      });
+    },
+    { key: storageKey, now: value },
+  );
 }
 
 test.afterEach(async ({}, testInfo) => {
@@ -349,8 +362,10 @@ async function refreshPageForProject(
 
 function browserNeedsPersistedConnectivityHint(browserOrProjectName: string): boolean {
   return (
+    browserOrProjectName === "chromium" ||
     browserOrProjectName === "firefox" ||
     browserOrProjectName === "webkit" ||
+    browserOrProjectName.endsWith("-chromium") ||
     browserOrProjectName.endsWith("-firefox") ||
     browserOrProjectName.endsWith("-webkit")
   );
@@ -424,8 +439,8 @@ async function setBrowserConnectivity(
       ]);
     }
   }
-  // Playwright blocks Firefox/WebKit transport here, but a reloaded document
-  // does not consistently inherit the corresponding navigator.onLine hint.
+  // Playwright blocks browser transport here, but a service-worker-controlled
+  // replacement document does not consistently inherit navigator.onLine.
   // Persist only that lifecycle hint; the blocked HTTPS probe remains the
   // independent offline oracle.
   if (!browserNeedsPersistedConnectivityHint(testInfo.project.name)) return;
@@ -1726,6 +1741,7 @@ test("Gate C C3 renders replay expiry and retains the unresolved queue", async (
     await setBrowserDateNow(page, Date.parse(timing.replayExpiresAt));
     allowColdOfflineRestartProbes(page, networkGuard, seed.webOrigin, testInfo.project.name.endsWith("-webkit"));
     await refreshPageForProject(page, testInfo);
+    await expect.poll(() => page.evaluate(() => Date.now())).toBe(Date.parse(timing.replayExpiresAt));
     await expect(page.getByRole("region", { name: "Offline authority expired" })).toBeVisible();
     await expect(page.getByText(/1 command pending/u)).toBeVisible();
     const revoked = await organiserRequest(
