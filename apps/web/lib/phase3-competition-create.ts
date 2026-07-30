@@ -50,6 +50,10 @@ export type CompetitionOrganisationBootstrapReceipt = CompetitionOrganisationOpt
     created: boolean;
   }>;
 
+export type CompetitionCreateValidationOptions = Readonly<{
+  allowOrganisationBootstrap?: boolean;
+}>;
+
 export const phase3CompetitionCreateMachine = {
   post: "POST",
   applicationJson: "application/json",
@@ -186,8 +190,18 @@ export function parseCompetitionOrganisationBootstrapReceipt(
   return value as CompetitionOrganisationBootstrapReceipt;
 }
 
-export function firstInvalidCompetitionCreateField(draft: CompetitionCreateDraft): CompetitionCreateField | null {
+export function firstInvalidCompetitionCreateField(
+  draft: CompetitionCreateDraft,
+  options: CompetitionCreateValidationOptions = {},
+): CompetitionCreateField | null {
   for (const field of competitionCreateFieldOrder) {
+    if (
+      field === "organisation_id" &&
+      options.allowOrganisationBootstrap === true &&
+      draft.organisation_id.length === 0
+    ) {
+      continue;
+    }
     if (!competitionCreateFieldIsValid(field, draft)) return field;
   }
   return null;
