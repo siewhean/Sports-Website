@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { SportId } from "@matchday/domain";
+import { scoringControlPanelCopy } from "@/lib/scoring-control-panel-copy";
 import { PhoneScoring } from "./PhoneScoring";
 import styles from "./ScoringExperience.module.css";
 
@@ -159,15 +160,24 @@ export function ScoringExperience(props: ScoringExperienceProps) {
           >
             <span className={styles.pullMark} aria-hidden="true" />
             <span>
-              <strong>{historyOpen ? "Match events open" : "Swipe down for match events"}</strong>
-              <small>{eventCount === 1 ? "1 recorded event" : `${eventCount} recorded events`} · tap also works</small>
+              <strong>
+                {historyOpen ? scoringControlPanelCopy.matchEventsOpen : scoringControlPanelCopy.swipeDownForEvents}
+              </strong>
+              <small>
+                {scoringControlPanelCopy.recordedEvents(eventCount)} · {scoringControlPanelCopy.tapAlsoWorks}
+              </small>
             </span>
           </button>
           {historyOpen ? (
             <>
-              <button className={styles.backdrop} type="button" aria-label="Close match events" onClick={closeHistory} />
+              <button
+                className={styles.backdrop}
+                type="button"
+                aria-label={scoringControlPanelCopy.closeMatchEvents}
+                onClick={closeHistory}
+              />
               <button className={styles.closeHistory} type="button" onClick={closeHistory}>
-                Close events
+                {scoringControlPanelCopy.closeEvents}
               </button>
             </>
           ) : null}
