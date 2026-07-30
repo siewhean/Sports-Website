@@ -118,12 +118,22 @@ const scoreControlsCopy: FiveSportScoreControlsCopy = {
 };
 
 function timeSeconds(value: string): number | null {
-  const match = /^(\d{1,2}):([0-5]\d)$/.exec(value.trim());
-  if (!match) return null;
-  const minutes = Number(match[1]);
-  const seconds = Number(match[2]);
-  const total = minutes * 60 + seconds;
-  return total <= 3_599 ? total : null;
+  const trimmed = value.trim();
+  const match = /^(\d{1,2}):([0-5]\d)$/.exec(trimmed);
+  if (match) {
+    const minutes = Number(match[1]);
+    const seconds = Number(match[2]);
+    const total = minutes * 60 + seconds;
+    return total <= 3_599 ? total : null;
+  }
+  const digitsMatch = /^(\d{1,2})([0-5]\d)$/.exec(trimmed);
+  if (digitsMatch) {
+    const minutes = Number(digitsMatch[1]);
+    const seconds = Number(digitsMatch[2]);
+    const total = minutes * 60 + seconds;
+    return total <= 3_599 ? total : null;
+  }
+  return null;
 }
 
 function initialScoreState(): ScoringSessionView["scoreState"] {
@@ -1769,7 +1779,6 @@ export function PhoneScoring({
                     <span>{phase2Copy.eventTimeLabel}</span>
                     <input
                       type="text"
-                      inputMode="numeric"
                       value={eventTime}
                       onChange={(event) => setEventTime(event.target.value)}
                       disabled={locked}
