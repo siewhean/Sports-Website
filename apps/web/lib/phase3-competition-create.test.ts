@@ -4,6 +4,7 @@ import {
   firstInvalidCompetitionCreateField,
   isCompetitionCreateRequest,
   parseCompetitionCreateReceipt,
+  parseCompetitionOrganisationBootstrapReceipt,
   parseCompetitionOrganisationOptions,
   phase3CompetitionSports,
   type CompetitionCreateDraft,
@@ -81,5 +82,18 @@ describe("competition creation contract", () => {
     expect(parseCompetitionOrganisationOptions([owner])).toEqual([owner]);
     expect(parseCompetitionOrganisationOptions([{ ...owner, role: "viewer" }])).toBeNull();
     expect(parseCompetitionOrganisationOptions([owner, owner])).toBeNull();
+  });
+
+  it("accepts only exact first-workspace bootstrap receipts", () => {
+    const receipt = {
+      id: validDraft.organisation_id,
+      name: "Organiser workspace",
+      role: "owner",
+      created: true,
+    };
+    expect(parseCompetitionOrganisationBootstrapReceipt(receipt)).toEqual(receipt);
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, role: "viewer" })).toBeNull();
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, token: "must-not-be-accepted" })).toBeNull();
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, created: "true" })).toBeNull();
   });
 });
