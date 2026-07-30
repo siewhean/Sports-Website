@@ -26,37 +26,37 @@ const disabledAi: Phase4AiOptions = {
   cacheTtlSeconds: 60,
 };
 
-let client!: Sql;
-let runtime!: ReliableGateBPhase4Runtime;
-
 function required<T>(rows: readonly T[]): T {
   const row = rows[0];
   if (!row) throw new Error("Expected a database row");
   return row;
 }
 
-beforeAll(async () => {
-  await dropTestSchema(databaseUrl, schema);
-  await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
-  client = postgres(databaseUrl, {
-    max: 6,
-    onnotice: () => undefined,
-    connection: { search_path: schema },
-  });
-  runtime = new ReliableGateBPhase4Runtime(
-    client as unknown as PostgresJsSql,
-    {} as Phase3Runtime,
-    {} as ScheduleEnqueuePort,
-    disabledAi,
-  );
-});
-
-afterAll(async () => {
-  await client?.end({ timeout: 2 });
-  await dropTestSchema(databaseUrl, schema);
-});
-
 describeInfrastructure("organiser workspace bootstrap", () => {
+  let client!: Sql;
+  let runtime!: ReliableGateBPhase4Runtime;
+
+  beforeAll(async () => {
+    await dropTestSchema(databaseUrl, schema);
+    await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+    client = postgres(databaseUrl, {
+      max: 6,
+      onnotice: () => undefined,
+      connection: { search_path: schema },
+    });
+    runtime = new ReliableGateBPhase4Runtime(
+      client as unknown as PostgresJsSql,
+      {} as unknown as Phase3Runtime,
+      {} as unknown as ScheduleEnqueuePort,
+      disabledAi,
+    );
+  });
+
+  afterAll(async () => {
+    await client?.end({ timeout: 2 });
+    await dropTestSchema(databaseUrl, schema);
+  });
+
   it("creates one owner workspace under concurrent first-use requests and replays safely", async () => {
     const accountId = required(
       await client<{ id: string }[]>`
