@@ -1,0 +1,326 @@
+.experience {
+  min-height: 100dvh;
+  background: #0f1210;
+  color: #f5f6f2;
+}
+
+.historyHandle {
+  position: fixed;
+  z-index: 72;
+  top: calc(72px + env(safe-area-inset-top));
+  left: 50%;
+  width: min(calc(100% - 28px), 430px);
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border: 1px solid #515751;
+  border-radius: 0 0 18px 18px;
+  background: rgb(25 29 26 / 96%);
+  color: #f5f6f2;
+  text-align: left;
+  box-shadow: 0 16px 34px rgb(0 0 0 / 32%);
+  touch-action: pan-y;
+  transform: translateX(-50%);
+  transition:
+    opacity 150ms ease,
+    transform 180ms ease;
+}
+
+.historyHandle[data-open="true"] {
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -10px);
+}
+
+.historyHandle:focus-visible,
+.closeHistory:focus-visible,
+.backdrop:focus-visible {
+  outline: 3px solid var(--signal);
+  outline-offset: 3px;
+}
+
+.historyHandle > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.historyHandle strong,
+.historyHandle small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyHandle strong {
+  font-size: 0.76rem;
+  letter-spacing: 0.01em;
+}
+
+.historyHandle small {
+  color: #aeb4ae;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+}
+
+.pullMark {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: block;
+  border-radius: 9px;
+  background: var(--signal);
+}
+
+.pullMark::before,
+.pullMark::after {
+  position: absolute;
+  left: 50%;
+  content: "";
+  transform: translateX(-50%);
+}
+
+.pullMark::before {
+  top: 7px;
+  width: 2px;
+  height: 9px;
+  border-radius: 999px;
+  background: #15180e;
+}
+
+.pullMark::after {
+  bottom: 6px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #15180e;
+  border-bottom: 2px solid #15180e;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.backdrop {
+  position: fixed;
+  z-index: 78;
+  inset: 0;
+  border: 0;
+  background: rgb(3 5 4 / 72%);
+}
+
+.closeHistory {
+  position: fixed;
+  z-index: 92;
+  top: calc(16px + env(safe-area-inset-top));
+  right: max(16px, calc((100vw - 820px) / 2 + 16px));
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid #646b65;
+  border-radius: 999px;
+  background: #202521;
+  color: #fff;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+:global(.p2-score) {
+  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+:global(.p2-score__header) {
+  min-height: 66px;
+  flex: 0 0 auto;
+  padding-block: 8px;
+}
+
+:global(.p2-score__header h1) {
+  font-size: 1rem;
+}
+
+:global(.p2-score-warning) {
+  flex: 0 0 auto;
+  padding-block: 10px;
+}
+
+:global(.p2-score-warning p) {
+  line-height: 1.35;
+}
+
+:global(.p2-score > .p5-scoring-device) {
+  flex: 0 0 auto;
+  margin: 8px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid #363c37;
+  border-radius: 10px;
+  background: #171b18;
+}
+
+:global(.p2-score > .p5-scoring-device > strong) {
+  font-size: 0.65rem;
+}
+
+:global(.p2-score > .p5-scoring-device > div) {
+  gap: 8px;
+}
+
+:global(.p2-score > .p5-scoring-device .p2-score-secondary) {
+  min-height: 36px;
+  padding-inline: 12px;
+  font-size: 0.68rem;
+}
+
+:global(.p2-event-controls) {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 14px clamp(14px, 4vw, 24px) calc(12px + env(safe-area-inset-bottom));
+  overflow: hidden;
+}
+
+:global(.p2-event-context) {
+  flex: 0 0 auto;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+:global(.p2-event-context > div) {
+  gap: 8px;
+}
+
+:global(.p2-event-context > div > label) {
+  gap: 4px;
+  font-size: 0.66rem;
+}
+
+:global(.p2-event-context input),
+:global(.p2-event-context select) {
+  min-height: 40px;
+  padding-block: 7px;
+}
+
+:global(.p2-event-controls > div[tabindex="-1"]) {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+}
+
+:global(.p2-score-final) {
+  position: absolute;
+  z-index: 48;
+  right: clamp(14px, 4vw, 24px);
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  width: auto;
+  min-height: 46px;
+  margin: 0;
+  padding-inline: 18px;
+}
+
+:global(.p2-event-log) {
+  position: fixed;
+  z-index: 86;
+  top: 0;
+  left: 50%;
+  width: min(100%, 820px);
+  max-height: min(78dvh, 760px);
+  padding: calc(72px + env(safe-area-inset-top)) clamp(18px, 5vw, 32px) 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #4a504b;
+  border-top: 0;
+  border-radius: 0 0 24px 24px;
+  background: #171b18;
+  color: #f5f6f2;
+  box-shadow: 0 30px 90px rgb(0 0 0 / 48%);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -110%);
+  transition:
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 170ms ease,
+    visibility 0s linear 260ms;
+}
+
+:global(html[data-scoring-history-open="true"] .p2-event-log) {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+  transition-delay: 0s;
+}
+
+:global(.p2-event-log > header) {
+  position: sticky;
+  top: calc(-72px - env(safe-area-inset-top));
+  z-index: 2;
+  margin: calc(-72px - env(safe-area-inset-top)) calc(-1 * clamp(18px, 5vw, 32px)) 0;
+  padding: calc(18px + env(safe-area-inset-top)) clamp(18px, 5vw, 32px) 16px;
+  background: #171b18;
+  border-bottom: 1px solid #363c37;
+}
+
+:global(.p2-event-log h2) {
+  font-size: 1.1rem;
+}
+
+:global(.p2-event-log li) {
+  min-height: 62px;
+}
+
+:global(.p2-goal-sheet) {
+  width: min(100%, 560px);
+  max-height: min(92dvh, 760px);
+  border-radius: 26px 26px 0 0;
+}
+
+:global(.p2-goal-sheet > header h2) {
+  font-size: clamp(1.8rem, 7vw, 2.5rem);
+}
+
+@media (max-height: 760px) {
+  .historyHandle {
+    top: calc(64px + env(safe-area-inset-top));
+    min-height: 48px;
+  }
+
+  :global(.p2-score__header) {
+    min-height: 58px;
+  }
+
+  :global(.p2-score > .p5-scoring-device) {
+    display: none;
+  }
+
+  :global(.p2-event-context) {
+    padding-bottom: 8px;
+  }
+
+  :global(.p2-event-controls) {
+    padding-top: 10px;
+  }
+}
+
+@media (min-width: 48rem) {
+  .historyHandle {
+    top: 76px;
+  }
+
+  :global(.p2-score) {
+    border-inline: 1px solid #303531;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .historyHandle,
+  :global(.p2-event-log) {
+    transition: none;
+  }
+}
