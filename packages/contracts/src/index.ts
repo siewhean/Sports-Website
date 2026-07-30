@@ -184,6 +184,16 @@ export {
   type PublicProjectionFreshness,
 } from "./gate-c-repair.js";
 export type {
+  GateCRepairAbandonRequest,
+  GateCRepairActionView,
+  GateCRepairAuditEntry,
+  GateCRepairDecisionCommand,
+  GateCRepairRevisionCreateRequest,
+  GateCRepairRevisionCreateResponse,
+  GateCRepairScheduleAdjustment,
+  GateCRepairWorkspaceView,
+} from "./gate-c-repair-runtime.js";
+export type {
   GateCEmergencyScoreSheet,
   GateCEmergencyScoreSheetRequest,
   GateCFallbackExportManifest,
