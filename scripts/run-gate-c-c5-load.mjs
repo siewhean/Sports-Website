@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import { gateCC5WorkloadProfile, selectGateCC5Operation } from "./gate-c-c5-workload-profiles.mjs";
 
 const secretKeyPattern = /(?:authorization|cookie|password|secret|token|access[_-]?key|api[_-]?key)/iu;
+const secretValuePattern = /(?:bearer\s+|#access=|postgres(?:ql)?:\/\/[^/\s]+:[^@\s]+@|redis:\/\/[^/\s]+:[^@\s]+@)/iu;
 const unsafeUrlPattern = /#|(?:^|[?&])(?:access|token|secret|password|api[_-]?key)=/iu;
+const acceptedDefaultStatuses = Object.freeze([200, 201, 202, 204, 304]);
+const loadModes = new Set(["fixed-concurrency", "constant-arrival", "ramp", "burst"]);
 
 function argumentMap(argv) {
   const result = new Map();
@@ -51,7 +54,21 @@ export function percentile(values, quantile) {
   if (!Array.isArray(values) || values.length === 0) return null;
   if (!Number.isFinite(quantile) || quantile < 0 || quantile > 1) throw new Error("Percentile must be in [0,1]");
   const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.min(sorted.length - 1, Math.ceil(quantile * sorted.length) - 1)];
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(quantile * sorted.length) - 1))];
+}
+
+function assertNoCredentialMaterial(value, label, key = "") {
+  if (key && secretKeyPattern.test(key)) throw new Error(`Credential-bearing field is forbidden for ${label}: ${key}`);
+  if (typeof value === "string") {
+    if (secretValuePattern.test(value)) throw new Error(`Credential-bearing value is forbidden for ${label}`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoCredentialMaterial(item, label, String(index)));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [childKey, child] of Object.entries(value)) assertNoCredentialMaterial(child, label, childKey);
 }
 
 function assertSafeTarget(operation, target) {
@@ -62,14 +79,12 @@ function assertSafeTarget(operation, target) {
   if (typeof target.path !== "string" || !target.path.startsWith("/") || unsafeUrlPattern.test(target.path)) {
     throw new Error(`Unsafe target path for ${operation}`);
   }
-  for (const [key, value] of Object.entries(target.headers ?? {})) {
-    if (secretKeyPattern.test(key) || secretKeyPattern.test(String(value))) {
-      throw new Error(`Credential-bearing headers are forbidden for ${operation}`);
-    }
-  }
+  assertNoCredentialMaterial(target.headers ?? {}, `${operation} headers`);
+  assertNoCredentialMaterial(target.body ?? {}, `${operation} body`);
   if (
     target.expectedStatuses !== undefined &&
     (!Array.isArray(target.expectedStatuses) ||
+      target.expectedStatuses.length < 1 ||
       target.expectedStatuses.some((status) => !Number.isInteger(status) || status < 100 || status > 599))
   ) {
     throw new Error(`Invalid expected statuses for ${operation}`);
@@ -111,16 +126,22 @@ function requestContext(profile, sequence, random) {
   };
 }
 
-function targetRate(mode, elapsedSeconds, durationSeconds, profile) {
+export function targetRate(mode, elapsedSeconds, durationSeconds, profile) {
   if (mode === "burst") return profile.burstRequestsPerSecond;
-  if (mode === "ramp") return Math.max(1, profile.targetRequestsPerSecond * (elapsedSeconds / durationSeconds));
+  if (mode === "ramp") {
+    const progress = Math.min(1, Math.max(0, elapsedSeconds / durationSeconds));
+    const triangular = progress <= 0.5 ? progress * 2 : (1 - progress) * 2;
+    return Math.max(1, profile.targetRequestsPerSecond * triangular);
+  }
   return profile.targetRequestsPerSecond;
 }
 
 async function measuredFetch({ baseUrl, operation, target, context, timeoutMs }) {
-  const path = substitute(target.path, context);
-  const url = new URL(path, baseUrl);
-  if (unsafeUrlPattern.test(url.toString())) throw new Error(`Unsafe generated URL for ${operation}`);
+  const generatedPath = substitute(target.path, context);
+  const url = new URL(generatedPath, baseUrl);
+  if (unsafeUrlPattern.test(url.toString()) || url.username || url.password) {
+    throw new Error(`Unsafe generated URL for ${operation}`);
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error("request timeout")), timeoutMs);
   const started = performance.now();
@@ -155,12 +176,17 @@ async function measuredFetch({ baseUrl, operation, target, context, timeoutMs })
 function summarise(samples) {
   const durations = samples.map((sample) => sample.durationMs);
   const statuses = {};
-  for (const sample of samples) statuses[sample.status] = (statuses[sample.status] ?? 0) + 1;
+  const errors = {};
+  for (const sample of samples) {
+    statuses[sample.status] = (statuses[sample.status] ?? 0) + 1;
+    if (sample.error) errors[sample.error] = (errors[sample.error] ?? 0) + 1;
+  }
   return {
     requestCount: samples.length,
     successCount: samples.filter((sample) => sample.accepted).length,
     failureCount: samples.filter((sample) => !sample.accepted).length,
     statuses,
+    errors,
     latencyMs: {
       p50: percentile(durations, 0.5),
       p95: percentile(durations, 0.95),
@@ -171,6 +197,12 @@ function summarise(samples) {
 }
 
 export async function runGateCC5Load(options) {
+  if (!/^[a-f0-9]{40}$/u.test(options.sourceSha)) throw new Error("C5 load run requires an exact source SHA");
+  if (!loadModes.has(options.mode)) throw new Error("Unsupported C5 load mode");
+  const base = new URL(options.baseUrl);
+  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.hash) {
+    throw new Error("C5 load base URL must be credential-free HTTP(S) without a fragment");
+  }
   const profile = gateCC5WorkloadProfile(options.profileId);
   const requiredOperations = Object.entries(profile.operationWeights)
     .filter(([, weight]) => weight > 0)
@@ -178,43 +210,50 @@ export async function runGateCC5Load(options) {
   const manifest = validateTargetManifest(options.targetManifest, requiredOperations);
   const random = seededRandom(options.seed);
   const samples = [];
-  const inFlight = new Set();
   const startedAt = new Date();
   const started = performance.now();
   let sequence = 0;
-  let nextDispatch = started;
 
-  const dispatch = () => {
+  const dispatchOne = async () => {
     const operation = selectGateCC5Operation(profile, random());
     const target = manifest.operations[operation];
     const context = requestContext(profile, sequence++, random);
-    const request = measuredFetch({
+    const result = await measuredFetch({
       baseUrl: options.baseUrl,
       operation,
       target,
       context,
       timeoutMs: options.timeoutMs,
-    })
-      .then((result) => {
-        const expected = target.expectedStatuses ?? [200, 201, 202, 204, 304, 409, 422];
-        samples.push({ operation, ...result, accepted: expected.includes(result.status) });
-      })
-      .finally(() => inFlight.delete(request));
-    inFlight.add(request);
+    });
+    const expected = target.expectedStatuses ?? acceptedDefaultStatuses;
+    samples.push({ operation, ...result, accepted: expected.includes(result.status) });
   };
 
-  while ((performance.now() - started) / 1_000 < options.durationSeconds) {
-    const elapsedSeconds = (performance.now() - started) / 1_000;
-    const rate = targetRate(options.mode, elapsedSeconds, options.durationSeconds, profile);
-    const intervalMs = 1_000 / rate;
-    const now = performance.now();
-    while (nextDispatch <= now && inFlight.size < options.maximumConcurrency) {
-      dispatch();
-      nextDispatch += intervalMs;
+  if (options.mode === "fixed-concurrency") {
+    const worker = async () => {
+      while ((performance.now() - started) / 1_000 < options.durationSeconds) await dispatchOne();
+    };
+    await Promise.all(Array.from({ length: options.maximumConcurrency }, worker));
+  } else {
+    const inFlight = new Set();
+    let nextDispatch = started;
+    const dispatch = () => {
+      const request = dispatchOne().finally(() => inFlight.delete(request));
+      inFlight.add(request);
+    };
+    while ((performance.now() - started) / 1_000 < options.durationSeconds) {
+      const elapsedSeconds = (performance.now() - started) / 1_000;
+      const rate = targetRate(options.mode, elapsedSeconds, options.durationSeconds, profile);
+      const intervalMs = 1_000 / rate;
+      const now = performance.now();
+      while (nextDispatch <= now && inFlight.size < options.maximumConcurrency) {
+        dispatch();
+        nextDispatch += intervalMs;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(20, Math.max(1, nextDispatch - performance.now()))));
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(20, Math.max(1, nextDispatch - performance.now()))));
+    await Promise.all(inFlight);
   }
-  await Promise.all(inFlight);
 
   const byOperation = Object.fromEntries(
     requiredOperations.map((operation) => [operation, summarise(samples.filter((sample) => sample.operation === operation))]),
@@ -230,7 +269,7 @@ export async function runGateCC5Load(options) {
     startedAt: startedAt.toISOString(),
     durationSeconds: options.durationSeconds,
     maximumConcurrency: options.maximumConcurrency,
-    baseOriginSha256: createHash("sha256").update(new URL(options.baseUrl).origin).digest("hex"),
+    baseOriginSha256: createHash("sha256").update(base.origin).digest("hex"),
     summary,
     operations: byOperation,
   };
@@ -254,8 +293,8 @@ async function main() {
     sourceSha: sourceSha(),
     targetManifest,
   };
-  if (!new Set(["constant-arrival", "ramp", "burst"]).has(options.mode)) {
-    throw new Error("--mode must be constant-arrival, ramp, or burst");
+  if (!loadModes.has(options.mode)) {
+    throw new Error("--mode must be fixed-concurrency, constant-arrival, ramp, or burst");
   }
   const receipt = await runGateCC5Load(options);
   const output = args.get("output");
