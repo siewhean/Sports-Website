@@ -64,8 +64,11 @@ test("a first-time organiser can create a competition without a pre-existing org
     await route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Competition setup</h1>" });
   });
 
-  await page.goto("/organiser/competitions/new");
+  await page.goto("/organiser");
   await dismissConsent(page);
+  await page.getByRole("link", { name: "Create competition" }).click();
+  await expect(page).toHaveURL(/\/organiser\/competitions\/new$/u);
+  await expect(page.getByLabel("Organisation")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create competition" })).toBeEnabled();
   await fillCompetition(page);
   await page.getByRole("button", { name: "Create competition" }).click();
