@@ -168,20 +168,20 @@ describeInfrastructure("organiser workspace bootstrap", () => {
         END IF;
         RETURN NEW;
       END;
-      $$ LANGUAGE plpgsql;
+      $$ LANGUAGE plpgsql
+    `);
+    await client.unsafe(`
       CREATE TRIGGER gate_c_test_reject_bootstrap_outbox
       BEFORE INSERT ON outbox_events
-      FOR EACH ROW EXECUTE FUNCTION gate_c_test_reject_bootstrap_outbox();
+      FOR EACH ROW EXECUTE FUNCTION gate_c_test_reject_bootstrap_outbox()
     `);
     try {
       await expect(runtime.ensureWritableOrganisation({ accountId }, "bootstrap-rollback")).rejects.toThrow(
         /test bootstrap outbox rejection/i,
       );
     } finally {
-      await client.unsafe(`
-        DROP TRIGGER gate_c_test_reject_bootstrap_outbox ON outbox_events;
-        DROP FUNCTION gate_c_test_reject_bootstrap_outbox();
-      `);
+      await client.unsafe(`DROP TRIGGER gate_c_test_reject_bootstrap_outbox ON outbox_events`);
+      await client.unsafe(`DROP FUNCTION gate_c_test_reject_bootstrap_outbox()`);
     }
 
     const counts = required(
