@@ -6,6 +6,7 @@ import { messages } from "@matchday/ui";
 import {
   firstInvalidCompetitionCreateField,
   parseCompetitionCreateReceipt,
+  parseCompetitionOrganisationBootstrapReceipt,
   parseCompetitionOrganisationOptions,
   phase3CompetitionCreateMachine,
   phase3CompetitionSports,
@@ -14,6 +15,8 @@ import {
   type CompetitionOrganisationOption,
 } from "@/lib/phase3-competition-create";
 import styles from "./CompetitionCreateForm.module.css";
+
+const bootstrapOrganisationId = "00000000-0000-4000-8000-000000000000";
 
 const initialDraft = (): CompetitionCreateDraft => ({
   organisation_id: "",
@@ -29,6 +32,21 @@ const initialDraft = (): CompetitionCreateDraft => ({
   timezone: phase3CompetitionCreateMachine.defaults.timezone,
   locale: phase3CompetitionCreateMachine.defaults.locale,
 });
+
+function upstreamMessage(payload: unknown, fallback: string): string {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    payload.error &&
+    typeof payload.error === "object" &&
+    "message" in payload.error &&
+    typeof payload.error.message === "string"
+  ) {
+    return payload.error.message;
+  }
+  return fallback;
+}
 
 export function CompetitionCreateForm() {
   const router = useRouter();
@@ -62,7 +80,17 @@ export function CompetitionCreateForm() {
           return;
         }
         setOrganisations(options);
-        if (options.length === 0) setOrganisationsError(messages.organiserCreate.noWritableOrganisation);
+        setDraft((current) => {
+          const selectedStillExists = options.some((organisation) => organisation.id === current.organisation_id);
+          const organisationId = selectedStillExists
+            ? current.organisation_id
+            : options.length === 1
+              ? options[0]!.id
+              : "";
+          return organisationId === current.organisation_id
+            ? current
+            : { ...current, organisation_id: organisationId };
+        });
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setOrganisationsError(messages.organiserCreate.organisationsFailed);
@@ -88,8 +116,12 @@ export function CompetitionCreateForm() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
-    const invalidField = firstInvalidCompetitionCreateField(draft);
+    if (busy || organisationsLoading || organisationsError) return;
+    const bootstrapRequired = organisations.length === 0 && !draft.organisation_id;
+    const validationDraft = bootstrapRequired
+      ? { ...draft, organisation_id: bootstrapOrganisationId }
+      : draft;
+    const invalidField = firstInvalidCompetitionCreateField(validationDraft);
     if (invalidField) {
       setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
       setCommandError(messages.organiserCreate.validationSummary);
@@ -101,28 +133,44 @@ export function CompetitionCreateForm() {
     setCommandError("");
     setAnnouncement(messages.organiserCreate.saving);
     try {
+      let organisationId = draft.organisation_id;
+      if (bootstrapRequired) {
+        const bootstrapResponse = await fetch(phase3CompetitionCreateMachine.bootstrapRoute, {
+          method: phase3CompetitionCreateMachine.post,
+        });
+        const bootstrapPayload: unknown = await bootstrapResponse.json().catch(() => null);
+        const bootstrapReceipt = bootstrapResponse.ok
+          ? parseCompetitionOrganisationBootstrapReceipt(bootstrapPayload)
+          : null;
+        if (!bootstrapReceipt) {
+          setCommandError(upstreamMessage(bootstrapPayload, messages.organiserCreate.commandFailed));
+          setAnnouncement("");
+          requestAnimationFrame(() => errorRef.current?.focus());
+          return;
+        }
+        organisationId = bootstrapReceipt.id;
+        const option = {
+          id: bootstrapReceipt.id,
+          name: bootstrapReceipt.name,
+          role: bootstrapReceipt.role,
+        } satisfies CompetitionOrganisationOption;
+        setOrganisations([option]);
+        setDraft((current) => ({ ...current, organisation_id: organisationId }));
+      }
+
       const response = await fetch("/api/phase3/competitions", {
         method: phase3CompetitionCreateMachine.post,
         headers: { "content-type": phase3CompetitionCreateMachine.applicationJson },
         body: JSON.stringify({
           ...draft,
+          organisation_id: organisationId,
           [phase3CompetitionCreateMachine.idempotencyKey]: idempotencyKeyRef.current,
         }),
       });
       const payload: unknown = await response.json().catch(() => null);
       const receipt = response.ok ? parseCompetitionCreateReceipt(payload) : null;
       if (!receipt) {
-        const upstream =
-          payload &&
-          typeof payload === "object" &&
-          "error" in payload &&
-          payload.error &&
-          typeof payload.error === "object" &&
-          "message" in payload.error &&
-          typeof payload.error.message === "string"
-            ? payload.error.message
-            : messages.organiserCreate.commandFailed;
-        setCommandError(upstream);
+        setCommandError(upstreamMessage(payload, messages.organiserCreate.commandFailed));
         setAnnouncement("");
         requestAnimationFrame(() => errorRef.current?.focus());
         return;
@@ -197,7 +245,7 @@ export function CompetitionCreateForm() {
             id={phase3CompetitionCreateMachine.fields.organisationId}
             name={phase3CompetitionCreateMachine.fields.organisationId}
             value={draft.organisation_id}
-            required
+            required={organisations.length > 0}
             disabled={organisationsLoading || organisations.length === 0}
             aria-invalid={Boolean(fieldErrors.organisation_id || organisationsError)}
             aria-describedby={
@@ -209,10 +257,12 @@ export function CompetitionCreateForm() {
               update(phase3CompetitionCreateMachine.fields.organisationId, event.currentTarget.value)
             }
           >
-            <option value="" disabled>
+            <option value="" disabled={organisations.length > 0}>
               {organisationsLoading
                 ? messages.organiserCreate.loadingOrganisations
-                : messages.organiserCreate.chooseOrganisation}
+                : organisations.length === 0
+                  ? messages.organiserCreate.noWritableOrganisation
+                  : messages.organiserCreate.chooseOrganisation}
             </option>
             {organisations.map((organisation) => (
               <option key={organisation.id} value={organisation.id}>
@@ -314,7 +364,7 @@ export function CompetitionCreateForm() {
       <button
         className={styles.submit}
         type="submit"
-        disabled={busy || organisationsLoading || organisations.length === 0}
+        disabled={busy || organisationsLoading || Boolean(organisationsError)}
         data-busy={busy}
       >
         {busy ? messages.organiserCreate.saving : messages.organiserCreate.submit}
