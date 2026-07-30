@@ -1057,6 +1057,7 @@ export function PhoneScoring({
     if (touchStartYRef.current === null || actionPending) return;
     const deltaY = event.touches[0].clientY - touchStartYRef.current;
     if (deltaY > 0) {
+      if (event.cancelable) event.preventDefault();
       setSheetTranslateY(deltaY);
     }
   };

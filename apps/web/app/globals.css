@@ -1777,6 +1777,8 @@ body:has(.p2-score-receipt) {
   margin: 0 auto;
   padding: 12px clamp(18px, 5vw, 30px) calc(24px + env(safe-area-inset-bottom));
   overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border: 1px solid #4a504b;
   border-bottom: 0;
   border-radius: 22px 22px 0 0;
@@ -1792,14 +1794,16 @@ body:has(.p2-score-receipt) {
 
 .p2-goal-sheet::backdrop {
   background: rgb(5 7 6 / 72%);
+  overscroll-behavior: none;
 }
 
 .p2-goal-sheet__handle {
-  width: 42px;
-  height: 4px;
-  margin: 0 auto 22px;
+  width: 48px;
+  height: 5px;
+  margin: 0 auto 18px;
   border-radius: 99px;
-  background: #59605a;
+  background: #6b726c;
+  touch-action: none;
 }
 
 .p2-goal-sheet > header h2,
