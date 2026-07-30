@@ -117,7 +117,7 @@ export type GateCRepairActionRecord = Readonly<{
   division_id: string;
   slot: GateCRepairSlot;
   source_action: GateCRepairActionKind;
-  decision: GateCRepairDecision["decision"];
+  decision: GateCRepairDecision["decision"] | null;
   current_entry_id: string | null;
   proposed_entry_id: string | null;
   resolved_entry_id: string | null;
