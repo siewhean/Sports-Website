@@ -59,6 +59,7 @@ export function ScoringExperience(props: ScoringExperienceProps) {
       }
 
       eventLog.id = "score-event-history";
+      eventLog.tabIndex = -1;
       eventLog.dataset.historyDrawer = "true";
       updateEventCount();
       eventObserver = new MutationObserver(updateEventCount);
@@ -74,6 +75,7 @@ export function ScoringExperience(props: ScoringExperienceProps) {
       eventObserver?.disconnect();
       if (eventLog) {
         eventLog.removeAttribute("id");
+        eventLog.removeAttribute("tabindex");
         delete eventLog.dataset.historyDrawer;
         eventLog.removeAttribute("aria-hidden");
         eventLog.removeAttribute("inert");
@@ -91,13 +93,13 @@ export function ScoringExperience(props: ScoringExperienceProps) {
     }
 
     if (historyOpen) {
-      window.requestAnimationFrame(() => eventLog?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true }));
+      window.requestAnimationFrame(() => eventLog?.focus({ preventScroll: true }));
     }
 
     return () => {
       delete document.documentElement.dataset.scoringHistoryOpen;
     };
-  }, [historyOpen]);
+  }, [historyAvailable, historyOpen]);
 
   useEffect(() => {
     if (!historyOpen) return;
