@@ -32,6 +32,14 @@ export type FiveSportScoreControlsProps = Readonly<{
 
 type LauncherCategory = "score" | "card" | "timeout" | "event" | "other";
 
+type LauncherModel = Readonly<{
+  directScoreActions: readonly ScoreControlAction[];
+  categoryActions: Readonly<Record<LauncherCategory, readonly ScoreControlAction[]>>;
+  launcherCategories: readonly LauncherCategory[];
+}>;
+
+const launcherCategoriesInOrder: readonly LauncherCategory[] = ["score", "card", "timeout", "event", "other"];
+
 const launcherCopy: Readonly<Record<LauncherCategory, { label: string; hint: string }>> = Object.freeze({
   score: { label: "Score", hint: "Choose scoring action" },
   card: { label: "Card", hint: "Select card and team" },
@@ -48,6 +56,40 @@ function categoryForAction(action: ScoreControlAction): LauncherCategory {
   if (id.includes("timeout") || label.includes("timeout")) return "timeout";
   if (action.group === "operational") return "event";
   return "other";
+}
+
+function buildLauncherModel(definition: FiveSportScorecardDefinition): LauncherModel {
+  const actions = buildFiveSportScoreControlGroups(definition).flatMap((group) => group.actions);
+  const scoreActions = actions.filter((action) => action.group === "score");
+  const directScoreActions =
+    scoreActions.length === 2 && new Set(scoreActions.map((action) => action.control.id)).size === 1
+      ? scoreActions
+      : [];
+  const directKeys = new Set(directScoreActions.map((action) => action.key));
+  const categoryActions: Record<LauncherCategory, ScoreControlAction[]> = {
+    score: [],
+    card: [],
+    timeout: [],
+    event: [],
+    other: [],
+  };
+
+  for (const action of actions) {
+    if (directKeys.has(action.key)) continue;
+    categoryActions[categoryForAction(action)].push(action);
+  }
+
+  return Object.freeze({
+    directScoreActions: Object.freeze([...directScoreActions]),
+    categoryActions: Object.freeze(
+      Object.fromEntries(
+        launcherCategoriesInOrder.map((category) => [category, Object.freeze([...categoryActions[category]])]),
+      ) as Record<LauncherCategory, readonly ScoreControlAction[]>,
+    ),
+    launcherCategories: Object.freeze(
+      launcherCategoriesInOrder.filter((category) => categoryActions[category].length > 0),
+    ),
+  });
 }
 
 export function FiveSportScoreControls({
@@ -68,37 +110,11 @@ export function FiveSportScoreControls({
   const [pickerCategory, setPickerCategory] = useState<LauncherCategory | null>(null);
   const pickerRef = useRef<HTMLDialogElement>(null);
   const categoryReturnTargetRef = useRef<HTMLButtonElement | null>(null);
-  const groups = useMemo(() => buildFiveSportScoreControlGroups(definition), [definition]);
-  const actions = useMemo(() => groups.flatMap((group) => group.actions), [groups]);
+  const launcherModel = useMemo(() => buildLauncherModel(definition), [definition]);
   const disabled = readOnly || pending;
 
   const sideLabel = (side: ScoreControlSide | null) =>
     side === "home" ? homeLabel : side === "away" ? awayLabel : null;
-
-  const scoreActions = actions.filter((action) => action.group === "score");
-  const directScoreActions =
-    scoreActions.length === 2 && new Set(scoreActions.map((action) => action.control.id)).size === 1
-      ? scoreActions
-      : [];
-
-  const categoryActions = useMemo(() => {
-    const result: Record<LauncherCategory, ScoreControlAction[]> = {
-      score: [],
-      card: [],
-      timeout: [],
-      event: [],
-      other: [],
-    };
-    for (const action of actions) {
-      if (directScoreActions.includes(action)) continue;
-      result[categoryForAction(action)].push(action);
-    }
-    return result;
-  }, [actions, directScoreActions]);
-
-  const launcherCategories = (Object.keys(categoryActions) as LauncherCategory[]).filter(
-    (category) => categoryActions[category].length > 0,
-  );
 
   useEffect(() => {
     const dialog = pickerRef.current;
@@ -125,7 +141,7 @@ export function FiveSportScoreControls({
     window.requestAnimationFrame(() => onActivate(action, returnTarget));
   };
 
-  const pickerActions = pickerCategory ? categoryActions[pickerCategory] : [];
+  const pickerActions = pickerCategory ? launcherModel.categoryActions[pickerCategory] : [];
   const pickerLabel = pickerCategory ? launcherCopy[pickerCategory].label : "Event";
 
   return (
@@ -154,7 +170,7 @@ export function FiveSportScoreControls({
       </dl>
 
       <div className={styles.launchers} role="group" aria-label={copy.title}>
-        {directScoreActions.map((action) => {
+        {launcherModel.directScoreActions.map((action) => {
           const target = sideLabel(action.side);
           return (
             <button
@@ -175,7 +191,7 @@ export function FiveSportScoreControls({
           );
         })}
 
-        {launcherCategories.map((category) => (
+        {launcherModel.launcherCategories.map((category) => (
           <button
             type="button"
             key={category}
@@ -185,7 +201,7 @@ export function FiveSportScoreControls({
             onClick={(event) => openPicker(category, event.currentTarget)}
           >
             <span>{launcherCopy[category].label}</span>
-            <strong>{categoryActions[category].length}</strong>
+            <strong>{launcherModel.categoryActions[category].length}</strong>
             <small>{launcherCopy[category].hint}</small>
           </button>
         ))}
