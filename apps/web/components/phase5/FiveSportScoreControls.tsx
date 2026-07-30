@@ -7,6 +7,7 @@ import {
   type ScoreControlAction,
   type ScoreControlSide,
 } from "../../lib/five-sport-score-control-actions";
+import { scoringControlPanelCopy } from "../../lib/scoring-control-panel-copy";
 import styles from "./FiveSportScoreControls.module.css";
 
 export type FiveSportScoreControlsCopy = Readonly<{
@@ -41,11 +42,11 @@ type LauncherModel = Readonly<{
 const launcherCategoriesInOrder: readonly LauncherCategory[] = ["score", "card", "timeout", "event", "other"];
 
 const launcherCopy: Readonly<Record<LauncherCategory, { label: string; hint: string }>> = Object.freeze({
-  score: { label: "Score", hint: "Choose scoring action" },
-  card: { label: "Card", hint: "Select card and team" },
-  timeout: { label: "Timeout", hint: "Select timeout and team" },
-  event: { label: "Event", hint: "Record an incident or match event" },
-  other: { label: "Other", hint: "Segment and exceptional outcomes" },
+  score: { label: scoringControlPanelCopy.score, hint: scoringControlPanelCopy.scoreHint },
+  card: { label: scoringControlPanelCopy.card, hint: scoringControlPanelCopy.cardHint },
+  timeout: { label: scoringControlPanelCopy.timeout, hint: scoringControlPanelCopy.timeoutHint },
+  event: { label: scoringControlPanelCopy.event, hint: scoringControlPanelCopy.eventHint },
+  other: { label: scoringControlPanelCopy.other, hint: scoringControlPanelCopy.otherHint },
 });
 
 function categoryForAction(action: ScoreControlAction): LauncherCategory {
@@ -142,14 +143,14 @@ export function FiveSportScoreControls({
   };
 
   const pickerActions = pickerCategory ? launcherModel.categoryActions[pickerCategory] : [];
-  const pickerLabel = pickerCategory ? launcherCopy[pickerCategory].label : "Event";
+  const pickerLabel = pickerCategory ? launcherCopy[pickerCategory].label : scoringControlPanelCopy.event;
 
   return (
     <section className={styles.surface} aria-labelledby={headingId} aria-describedby={statusId}>
       <header className={styles.header}>
         <div>
-          <span className={styles.eyebrow}>Live controls</span>
-          <h2 id={headingId}>Control panel</h2>
+          <span className={styles.eyebrow}>{scoringControlPanelCopy.liveControls}</span>
+          <h2 id={headingId}>{scoringControlPanelCopy.controlPanel}</h2>
           <p>{definition.displayName}</p>
         </div>
         <p id={statusId} className={styles.status} data-state={pending ? "pending" : readOnly ? "locked" : "ready"}>
@@ -157,7 +158,7 @@ export function FiveSportScoreControls({
         </p>
       </header>
 
-      <dl className={styles.scoreboard} aria-label="Current score">
+      <dl className={styles.scoreboard} aria-label={scoringControlPanelCopy.currentScore}>
         <div>
           <dt>{homeLabel}</dt>
           <dd>{score.home}</dd>
@@ -186,7 +187,7 @@ export function FiveSportScoreControls({
             >
               <span>{action.control.label}</span>
               <strong>{target}</strong>
-              <small>Add time and player</small>
+              <small>{scoringControlPanelCopy.addTimeAndPlayer}</small>
             </button>
           );
         })}
@@ -207,7 +208,7 @@ export function FiveSportScoreControls({
         ))}
       </div>
 
-      <p className={styles.detailsHint}>Tap an event. The next card collects the time, team and player details.</p>
+      <p className={styles.detailsHint}>{scoringControlPanelCopy.detailsHint}</p>
 
       <dialog
         ref={pickerRef}
@@ -222,9 +223,9 @@ export function FiveSportScoreControls({
       >
         <div className={styles.pickerHandle} aria-hidden="true" />
         <header>
-          <span>Control panel</span>
-          <h3 id={pickerHeadingId}>Choose {pickerLabel.toLowerCase()}</h3>
-          <p id={pickerDescriptionId}>Select the exact event, then add the match time and participant details.</p>
+          <span>{scoringControlPanelCopy.controlPanel}</span>
+          <h3 id={pickerHeadingId}>{scoringControlPanelCopy.chooseCategory(pickerLabel)}</h3>
+          <p id={pickerDescriptionId}>{scoringControlPanelCopy.pickerDescription}</p>
         </header>
         <div className={styles.pickerActions}>
           {pickerActions.map((action) => {
@@ -240,14 +241,14 @@ export function FiveSportScoreControls({
                 onClick={(event) => chooseAction(action, event.currentTarget)}
               >
                 <span>{action.control.label}</span>
-                <strong>{target ?? "Whole match"}</strong>
+                <strong>{target ?? scoringControlPanelCopy.wholeMatch}</strong>
               </button>
             );
           })}
         </div>
         <footer>
           <button type="button" onClick={closePicker}>
-            Close
+            {scoringControlPanelCopy.close}
           </button>
         </footer>
       </dialog>
