@@ -116,7 +116,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
         `INSERT INTO audit_events(
            occurred_at,request_id,actor_account_id,actor_type,organisation_id,
            action,target_type,target_id,after_state,metadata
-         ) VALUES($1,$2,$3,'account',$4,'organisation.created','organisation',$4,$5::jsonb,$6::jsonb)`,
+         ) VALUES($1,$2,$3,'account',$4,'organisation.created','organisation',$4::text,$5::jsonb,$6::jsonb)`,
         [
           occurredAt,
           requestId,
