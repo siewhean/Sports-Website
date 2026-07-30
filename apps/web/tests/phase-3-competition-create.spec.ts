@@ -1,10 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 const organisationId = "79685f62-e0f7-4c41-a329-5532bf41cfa2";
 const competitionId = "4dc85811-e715-40f4-8609-2523f7516e5a";
 
-async function fillCompetition(page: Parameters<typeof test>[0] extends never ? never : any) {
+async function fillCompetition(page: Page) {
   await page.getByLabel("Competition name").fill("National Open");
   await page.getByLabel("Public address").fill("national-open");
   await page.getByLabel("Sport").selectOption("badminton");
