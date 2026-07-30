@@ -16,13 +16,22 @@ export type GateCRepairScheduleAdjustment = Readonly<{
   reason: string;
 }>;
 
+export type GateCRepairDecisionCommand = Readonly<{
+  client_event_id: string;
+  match_id: string;
+  slot: GateCRepairSlot;
+  decision: GateCRepairDecision["decision"];
+  selected_entry_id?: string | null;
+  reason: string;
+}>;
+
 export type GateCRepairRevisionCreateRequest = Readonly<{
   parent_revision_id: string | null;
   expected_result_version: number;
   expected_schedule_version: number;
   expected_analysis_fingerprint: string;
   status: Exclude<GateCRepairRevisionStatus, "published">;
-  decisions: readonly GateCRepairDecision[];
+  decisions: readonly GateCRepairDecisionCommand[];
   schedule_adjustments: readonly GateCRepairScheduleAdjustment[];
 }>;
 
@@ -60,15 +69,6 @@ export type GateCRepairWorkspaceView = Readonly<{
   published_schedule_version: number;
   public_projection_versions: Readonly<Record<string, number>>;
   audit: readonly GateCRepairAuditEntry[];
-}>;
-
-export type GateCRepairDecisionCommand = Readonly<{
-  client_event_id: string;
-  match_id: string;
-  slot: GateCRepairSlot;
-  decision: GateCRepairDecision["decision"];
-  selected_entry_id?: string | null;
-  reason: string;
 }>;
 
 export type GateCRepairAbandonRequest = Readonly<{
