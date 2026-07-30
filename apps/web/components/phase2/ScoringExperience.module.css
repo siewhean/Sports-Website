@@ -125,6 +125,7 @@
 }
 
 :global(.p2-score) {
+  position: relative;
   min-height: 100dvh;
   height: 100dvh;
   max-height: 100dvh;
@@ -181,7 +182,7 @@
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  padding: 14px clamp(14px, 4vw, 24px) calc(12px + env(safe-area-inset-bottom));
+  padding: 14px clamp(14px, 4vw, 24px) calc(68px + env(safe-area-inset-bottom));
   overflow: hidden;
 }
 
