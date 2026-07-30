@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { PrototypeShell } from "@/components/PrototypeShell";
 import { ScorekeeperPrototype } from "@/components/ScorekeeperPrototype";
-import { PhoneScoring } from "@/components/phase2/PhoneScoring";
+import { ScoringExperience } from "@/components/phase2/ScoringExperience";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { isPhase2ScoringRouteEnabled } from "@/lib/feature-flags.server";
 import { phase2Machine } from "@/lib/phase2";
@@ -18,7 +18,7 @@ export default async function ScorePage({ searchParams }: { searchParams: Promis
       demo && DEMO_SPORTS.has(requestedSport as SportId) ? (requestedSport as SportId) : phase2Machine.canoePolo;
     return (
       <div data-offline-scoring-shell="v1">
-        <PhoneScoring
+        <ScoringExperience
           mode={demo ? phase2Machine.scoringDemoMode : phase2Machine.scoringApiMode}
           recoverOnLoad={!demo}
           demoSportId={demoSportId}
