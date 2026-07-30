@@ -151,4 +151,51 @@ describeInfrastructure("organiser workspace bootstrap", () => {
       ).count,
     ).toBe(1);
   });
+
+  it("rolls back organisation, membership and audit rows when outbox evidence cannot be appended", async () => {
+    const accountId = required(
+      await client<{ id: string }[]>`
+        INSERT INTO accounts(primary_email,display_name,email_verified_at)
+        VALUES(${`rollback-${randomUUID()}@example.test`},'Rollback Organiser',now())
+        RETURNING id
+      `,
+    ).id;
+    await client.unsafe(`
+      CREATE FUNCTION gate_c_test_reject_bootstrap_outbox() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.event_type='organisation.created' THEN
+          RAISE EXCEPTION 'test bootstrap outbox rejection';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER gate_c_test_reject_bootstrap_outbox
+      BEFORE INSERT ON outbox_events
+      FOR EACH ROW EXECUTE FUNCTION gate_c_test_reject_bootstrap_outbox();
+    `);
+    try {
+      await expect(runtime.ensureWritableOrganisation({ accountId }, "bootstrap-rollback")).rejects.toThrow(
+        /test bootstrap outbox rejection/i,
+      );
+    } finally {
+      await client.unsafe(`
+        DROP TRIGGER gate_c_test_reject_bootstrap_outbox ON outbox_events;
+        DROP FUNCTION gate_c_test_reject_bootstrap_outbox();
+      `);
+    }
+
+    const counts = required(
+      await client<{ organisation_count: number; membership_count: number; audit_count: number }[]>`
+        SELECT
+          (SELECT count(*)::int
+             FROM organisations organisation
+             JOIN organisation_memberships membership ON membership.organisation_id=organisation.id
+            WHERE membership.account_id=${accountId}) AS organisation_count,
+          (SELECT count(*)::int FROM organisation_memberships WHERE account_id=${accountId}) AS membership_count,
+          (SELECT count(*)::int FROM audit_events
+            WHERE actor_account_id=${accountId} AND action='organisation.created') AS audit_count
+      `,
+    );
+    expect(counts).toEqual({ organisation_count: 0, membership_count: 0, audit_count: 0 });
+  });
 });
