@@ -16,8 +16,6 @@ import {
 } from "@/lib/phase3-competition-create";
 import styles from "./CompetitionCreateForm.module.css";
 
-const bootstrapOrganisationId = "00000000-0000-4000-8000-000000000000";
-
 const initialDraft = (): CompetitionCreateDraft => ({
   organisation_id: "",
   name: "",
@@ -118,10 +116,9 @@ export function CompetitionCreateForm() {
     event.preventDefault();
     if (busy || organisationsLoading || organisationsError) return;
     const bootstrapRequired = organisations.length === 0 && !draft.organisation_id;
-    const validationDraft = bootstrapRequired
-      ? { ...draft, organisation_id: bootstrapOrganisationId }
-      : draft;
-    const invalidField = firstInvalidCompetitionCreateField(validationDraft);
+    const invalidField = firstInvalidCompetitionCreateField(draft, {
+      allowOrganisationBootstrap: bootstrapRequired,
+    });
     if (invalidField) {
       setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
       setCommandError(messages.organiserCreate.validationSummary);
@@ -228,6 +225,8 @@ export function CompetitionCreateForm() {
     );
   };
 
+  const showOrganisationSelector = organisationsLoading || organisations.length > 0 || Boolean(organisationsError);
+
   return (
     <form ref={formRef} className={styles.form} noValidate onSubmit={submit}>
       <p className={styles.intro}>{messages.organiserCreate.intro}</p>
@@ -237,64 +236,64 @@ export function CompetitionCreateForm() {
         </div>
       ) : null}
       <div className={styles.grid}>
-        <div className={styles.field}>
-          <label htmlFor={phase3CompetitionCreateMachine.fields.organisationId}>
-            {messages.organiserCreate.organisation}
-          </label>
-          <select
-            id={phase3CompetitionCreateMachine.fields.organisationId}
-            name={phase3CompetitionCreateMachine.fields.organisationId}
-            value={draft.organisation_id}
-            required={organisations.length > 0}
-            disabled={organisationsLoading || organisations.length === 0}
-            aria-invalid={Boolean(fieldErrors.organisation_id || organisationsError)}
-            aria-describedby={
-              fieldErrors.organisation_id || organisationsError
-                ? `${phase3CompetitionCreateMachine.fields.organisationId}-error`
-                : undefined
-            }
-            onChange={(event) =>
-              update(phase3CompetitionCreateMachine.fields.organisationId, event.currentTarget.value)
-            }
-          >
-            <option value="" disabled={organisations.length > 0}>
-              {organisationsLoading
-                ? messages.organiserCreate.loadingOrganisations
-                : organisations.length === 0
-                  ? messages.organiserCreate.noWritableOrganisation
+        {showOrganisationSelector ? (
+          <div className={styles.field}>
+            <label htmlFor={phase3CompetitionCreateMachine.fields.organisationId}>
+              {messages.organiserCreate.organisation}
+            </label>
+            <select
+              id={phase3CompetitionCreateMachine.fields.organisationId}
+              name={phase3CompetitionCreateMachine.fields.organisationId}
+              value={draft.organisation_id}
+              required={organisations.length > 0}
+              disabled={organisationsLoading || organisations.length === 0}
+              aria-invalid={Boolean(fieldErrors.organisation_id || organisationsError)}
+              aria-describedby={
+                fieldErrors.organisation_id || organisationsError
+                  ? `${phase3CompetitionCreateMachine.fields.organisationId}-error`
+                  : undefined
+              }
+              onChange={(event) =>
+                update(phase3CompetitionCreateMachine.fields.organisationId, event.currentTarget.value)
+              }
+            >
+              <option value="" disabled>
+                {organisationsLoading
+                  ? messages.organiserCreate.loadingOrganisations
                   : messages.organiserCreate.chooseOrganisation}
-            </option>
-            {organisations.map((organisation) => (
-              <option key={organisation.id} value={organisation.id}>
-                {organisation.name} ·{" "}
-                {organisation.role === "owner"
-                  ? messages.organiserCreate.ownerRole
-                  : messages.organiserCreate.organiserRole}
               </option>
-            ))}
-          </select>
-          {fieldErrors.organisation_id || organisationsError ? (
-            <p
-              id={`${phase3CompetitionCreateMachine.fields.organisationId}-error`}
-              className={styles.error}
-              role={organisationsError ? "alert" : undefined}
-            >
-              {fieldErrors.organisation_id ?? organisationsError}
+              {organisations.map((organisation) => (
+                <option key={organisation.id} value={organisation.id}>
+                  {organisation.name} ·{" "}
+                  {organisation.role === "owner"
+                    ? messages.organiserCreate.ownerRole
+                    : messages.organiserCreate.organiserRole}
+                </option>
+              ))}
+            </select>
+            {fieldErrors.organisation_id || organisationsError ? (
+              <p
+                id={`${phase3CompetitionCreateMachine.fields.organisationId}-error`}
+                className={styles.error}
+                role={organisationsError ? "alert" : undefined}
+              >
+                {fieldErrors.organisation_id ?? organisationsError}
+              </p>
+            ) : null}
+            {organisationsError ? (
+              <button
+                className={styles.retry}
+                type="button"
+                onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
+              >
+                {messages.organiserCreate.retryOrganisations}
+              </button>
+            ) : null}
+            <p className={styles.live} role="status">
+              {organisationsLoading ? messages.organiserCreate.loadingOrganisations : ""}
             </p>
-          ) : null}
-          {organisationsError ? (
-            <button
-              className={styles.retry}
-              type="button"
-              onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
-            >
-              {messages.organiserCreate.retryOrganisations}
-            </button>
-          ) : null}
-          <p className={styles.live} role="status">
-            {organisationsLoading ? messages.organiserCreate.loadingOrganisations : ""}
-          </p>
-        </div>
+          </div>
+        ) : null}
         {field(phase3CompetitionCreateMachine.fields.name, messages.organiserCreate.name, {
           required: true,
           maxLength: 160,
