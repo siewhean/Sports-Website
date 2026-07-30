@@ -60,9 +60,6 @@ test("a first-time organiser can create a competition without a pre-existing org
       }),
     });
   });
-  await page.route(`**/organiser/competitions/${competitionId}/setup**`, async (route) => {
-    await route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Competition setup</h1>" });
-  });
 
   await page.goto("/organiser");
   await dismissConsent(page);
@@ -108,9 +105,6 @@ test("an existing writable organisation is selected and bootstrap is not called"
         account_default_applied: false,
       }),
     });
-  });
-  await page.route(`**/organiser/competitions/${competitionId}/setup**`, async (route) => {
-    await route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Competition setup</h1>" });
   });
 
   await page.goto("/organiser/competitions/new");
