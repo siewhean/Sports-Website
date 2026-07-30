@@ -115,6 +115,7 @@ test("an existing writable organisation is selected and bootstrap is not called"
 
   await expect.poll(() => competitionCalls).toBe(1);
   expect(bootstrapCalls).toBe(0);
+  await expect(page).toHaveURL(new RegExp(`/organiser/competitions/${competitionId}/setup`));
 });
 
 test("an unavailable organisation service keeps creation disabled and offers retry", async ({ page }) => {
