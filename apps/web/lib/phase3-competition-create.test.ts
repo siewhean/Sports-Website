@@ -61,6 +61,22 @@ describe("competition creation contract", () => {
     expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(competitionCreateFieldOrder.indexOf("sport_code"));
   });
 
+  it("allows only the absent organisation field when first-workspace bootstrap is active", () => {
+    const withoutOrganisation = { ...validDraft, organisation_id: "" };
+    expect(firstInvalidCompetitionCreateField(withoutOrganisation)).toBe("organisation_id");
+    expect(
+      firstInvalidCompetitionCreateField(withoutOrganisation, {
+        allowOrganisationBootstrap: true,
+      }),
+    ).toBeNull();
+    expect(
+      firstInvalidCompetitionCreateField(
+        { ...withoutOrganisation, name: "" },
+        { allowOrganisationBootstrap: true },
+      ),
+    ).toBe("name");
+  });
+
   it("rejects an inverted date range and malformed receipt", () => {
     expect(isCompetitionCreateRequest({ ...validCommand, ends_on: "2027-04-30" })).toBe(false);
     expect(isCompetitionCreateRequest({ ...validCommand, starts_on: "2027-02-30" })).toBe(false);
