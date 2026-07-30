@@ -198,6 +198,8 @@ export function PhoneScoring({
   const [reversalReason, setReversalReason] = useState("");
   const [actionPending, setActionPending] = useState(false);
   const [reversedFocusId, setReversedFocusId] = useState<string | null>(null);
+  const [sheetTranslateY, setSheetTranslateY] = useState(0);
+  const touchStartYRef = useRef<number | null>(null);
   const actionDialogRef = useRef<HTMLDialogElement>(null);
   const signOutDialogRef = useRef<HTMLDialogElement>(null);
   const endSessionButtonRef = useRef<HTMLButtonElement>(null);
@@ -1024,6 +1026,8 @@ export function PhoneScoring({
 
   const closeActionDialog = () => {
     if (actionDialogRef.current?.open) actionDialogRef.current.close();
+    setSheetTranslateY(0);
+    touchStartYRef.current = null;
     setPendingAction(null);
     setReversalTarget(null);
     setReversalReason("");
@@ -1032,6 +1036,29 @@ export function PhoneScoring({
     const returnTarget = actionReturnTargetRef.current;
     actionReturnTargetRef.current = null;
     window.requestAnimationFrame(() => returnTarget?.focus({ preventScroll: true }));
+  };
+
+  const handleSheetTouchStart = (event: React.TouchEvent<HTMLDialogElement>) => {
+    if (actionPending) return;
+    touchStartYRef.current = event.touches[0]?.clientY ?? null;
+  };
+
+  const handleSheetTouchMove = (event: React.TouchEvent<HTMLDialogElement>) => {
+    if (touchStartYRef.current === null || actionPending) return;
+    const deltaY = event.touches[0].clientY - touchStartYRef.current;
+    if (deltaY > 0) {
+      setSheetTranslateY(deltaY);
+    }
+  };
+
+  const handleSheetTouchEnd = () => {
+    if (touchStartYRef.current === null) return;
+    if (sheetTranslateY > 80) {
+      closeActionDialog();
+    } else {
+      setSheetTranslateY(0);
+    }
+    touchStartYRef.current = null;
   };
 
   const openActionDialog = (action: ScoreControlAction, trigger: HTMLButtonElement) => {
@@ -1853,6 +1880,10 @@ export function PhoneScoring({
             <dialog
               className="p2-goal-sheet"
               ref={actionDialogRef}
+              style={sheetTranslateY > 0 ? { transform: `translateY(${sheetTranslateY}px)` } : undefined}
+              onTouchStart={handleSheetTouchStart}
+              onTouchMove={handleSheetTouchMove}
+              onTouchEnd={handleSheetTouchEnd}
               aria-labelledby="score-action-title"
               aria-describedby="score-action-description"
               onCancel={(event) => {
