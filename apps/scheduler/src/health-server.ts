@@ -10,7 +10,7 @@ export class SchedulerHealthServer {
 
   constructor(options: { runtime: Pick<SchedulerRuntime, "getHealth" | "isReady">; host?: string; port?: number }) {
     this.#runtime = options.runtime;
-    this.#host = options.host ?? "127.0.0.1";
+    this.#host = options.host ?? "0.0.0.0";
     this.#port = options.port ?? 4010;
   }
 

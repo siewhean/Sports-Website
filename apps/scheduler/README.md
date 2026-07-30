@@ -34,7 +34,7 @@ pnpm --filter @matchday/scheduler build
 pnpm --filter @matchday/scheduler start
 ```
 
-Health endpoints default to `127.0.0.1:4010`:
+Health endpoints default to `0.0.0.0:4010`:
 
 - `GET /health/live` checks process lifecycle.
 - `GET /health/ready` requires the BullMQ worker and PostgreSQL store to be ready.

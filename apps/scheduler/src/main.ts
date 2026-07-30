@@ -35,7 +35,7 @@ const runtime = new SchedulerRuntime({
 });
 const health = new SchedulerHealthServer({
   runtime,
-  host: process.env.SCHEDULER_HEALTH_HOST ?? "127.0.0.1",
+  host: process.env.SCHEDULER_HEALTH_HOST ?? "0.0.0.0",
   port: integerEnvironment("SCHEDULER_HEALTH_PORT", 4010, 1, 65_535),
 });
 
