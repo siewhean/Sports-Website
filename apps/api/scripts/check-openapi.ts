@@ -108,4 +108,18 @@ for (const [path, method] of [
   }
 }
 
+const bootstrapPath = "/api/v1/organisations/competition-options/bootstrap";
+const bootstrap = document.paths?.[bootstrapPath]?.post;
+if (!bootstrap) throw new Error(`OpenAPI contract is missing POST ${bootstrapPath}.`);
+if (!bootstrap.security?.some((requirement) => "sessionCookie" in requirement)) {
+  throw new Error(`OpenAPI contract is missing sessionCookie security on POST ${bootstrapPath}.`);
+}
+const bootstrapHeaders = bootstrap.parameters?.map((parameter) => parameter.name) ?? [];
+if (!bootstrapHeaders.includes("origin") || !bootstrapHeaders.includes("x-csrf-token")) {
+  throw new Error(`OpenAPI contract is missing mutation headers on POST ${bootstrapPath}.`);
+}
+if (!bootstrap.responses?.["200"] || !bootstrap.responses?.["403"] || !bootstrap.responses?.["409"]) {
+  throw new Error(`OpenAPI contract is missing success or rejection responses on POST ${bootstrapPath}.`);
+}
+
 console.log("Generated OpenAPI contract is current and valid JSON.");
