@@ -170,7 +170,9 @@ export function parseGateCC4Workspace(value: unknown): GateCRepairWorkspaceView 
     value.latest_revision !== null &&
     (!record(value.latest_revision) ||
       typeof value.latest_revision.repair_revision_id !== "string" ||
-      !uuidPattern.test(value.latest_revision.repair_revision_id))
+      !uuidPattern.test(value.latest_revision.repair_revision_id) ||
+      typeof value.latest_revision.analysis_fingerprint !== "string" ||
+      !shaPattern.test(value.latest_revision.analysis_fingerprint))
   ) {
     return null;
   }
@@ -199,6 +201,8 @@ export function repairRevisionRequest(input: {
   status: "draft" | "ready";
   decisions: readonly GateCC4DecisionDraft[];
 }): GateCRepairRevisionCreateRequest {
+  const fingerprint = input.workspace.latest_revision?.analysis_fingerprint;
+  if (!fingerprint) throw new Error("The repair workspace has no retained analysis fingerprint");
   const decisions = input.decisions.map(({ starts_at: _startsAt, ends_at: _endsAt, playing_area_id: _area, ...decision }) => decision);
   const adjustmentByMatch = new Map<string, GateCRepairRevisionCreateRequest["schedule_adjustments"][number]>();
   for (const decision of input.decisions) {
@@ -224,9 +228,7 @@ export function repairRevisionRequest(input: {
     parent_revision_id: input.workspace.latest_revision?.repair_revision_id ?? null,
     expected_result_version: input.workspace.current_result_version,
     expected_schedule_version: input.workspace.published_schedule_version,
-    expected_analysis_fingerprint: input.workspace.repair.analysis.analysis_fingerprint_input
-      ? input.workspace.repair.analysis_fingerprint
-      : input.workspace.repair.analysis_fingerprint,
+    expected_analysis_fingerprint: fingerprint,
     status: input.status,
     decisions,
     schedule_adjustments: [...adjustmentByMatch.values()],
