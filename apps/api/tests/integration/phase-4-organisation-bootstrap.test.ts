@@ -78,6 +78,8 @@ describeInfrastructure("organiser workspace bootstrap", () => {
     const replay = await runtime.ensureWritableOrganisation({ accountId }, "bootstrap-request-c");
     expect(replay).toMatchObject({ id: results[0]!.id, role: "owner", created: false });
 
+    const workspaceId = results[0]!.id;
+    const outboxKey = `organisation.bootstrap:${accountId}`;
     const counts = required(
       await client<{
         organisation_count: number;
@@ -97,8 +99,10 @@ describeInfrastructure("organiser workspace bootstrap", () => {
           (SELECT count(*)::int FROM audit_events
             WHERE actor_account_id=${accountId} AND action='organisation.created') AS audit_count,
           (SELECT count(*)::int FROM outbox_events
-            WHERE event_type='organisation.created'
-              AND payload->>'owner_account_id'=${accountId}) AS outbox_count
+            WHERE aggregate_type='organisation'
+              AND aggregate_id=${workspaceId}
+              AND event_type='organisation.created'
+              AND idempotency_key=${outboxKey}) AS outbox_count
       `,
     );
     expect(counts).toEqual({
@@ -106,6 +110,27 @@ describeInfrastructure("organiser workspace bootstrap", () => {
       membership_count: 1,
       audit_count: 1,
       outbox_count: 1,
+    });
+
+    const outbox = required(
+      await client<{
+        aggregate_id: string;
+        idempotency_key: string;
+        payload: { organisation_id: string; owner_account_id: string; bootstrap: boolean };
+      }[]>`
+        SELECT aggregate_id,idempotency_key,payload
+        FROM outbox_events
+        WHERE idempotency_key=${outboxKey}
+      `,
+    );
+    expect(outbox).toEqual({
+      aggregate_id: workspaceId,
+      idempotency_key: outboxKey,
+      payload: {
+        organisation_id: workspaceId,
+        owner_account_id: accountId,
+        bootstrap: true,
+      },
     });
   });
 
