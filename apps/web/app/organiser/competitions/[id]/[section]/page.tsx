@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { CapacityEditor } from "@/components/phase3/CapacityEditor";
 import { EntriesEditor } from "@/components/phase3/EntriesEditor";
 import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
+import { gateCC4Copy } from "@/lib/gate-c-c4";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase3CapacityCopy, phase3CapacityMachine } from "@/lib/phase3-capacity";
@@ -94,7 +96,11 @@ export default async function CompetitionSectionPage({
       <OrganiserWorkspace
         competition={result.competition}
         section={phase3ResultsMachine.section}
-        sectionAction={null}
+        sectionAction={
+          <Link href={`/organiser/competitions/${encodeURIComponent(result.competition.id)}/repairs`}>
+            {gateCC4Copy.openRepairs}
+          </Link>
+        }
         pageTitle={phase3ResultsCopy.title}
         pageIntro={phase3ResultsCopy.intro}
         pageEyebrow={phase3ResultsCopy.eyebrow}
