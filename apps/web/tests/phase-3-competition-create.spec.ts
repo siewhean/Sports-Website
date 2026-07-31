@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+import {
+  allowConsoleFailure,
+  assertConsoleGuard,
+  dismissConsent,
+  installConsoleGuard,
+} from "./helpers/console-guard";
 
 const organisationId = "79685f62-e0f7-4c41-a329-5532bf41cfa2";
 const competitionId = "4dc85811-e715-40f4-8609-2523f7516e5a";
@@ -18,7 +23,9 @@ async function fillCompetition(page: Page) {
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-test("a first-time organiser can create a competition without a pre-existing organisation", async ({ page }) => {
+test("a first-time organiser can create a competition without a pre-existing organisation", async ({
+  page,
+}) => {
   let bootstrapCalls = 0;
   let competitionCalls = 0;
 
@@ -131,7 +138,9 @@ test("an unavailable organisation service keeps creation disabled and offers ret
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
 
-  await expect(page.getByText("Your organisations could not be loaded. Try again before creating a competition.")).toBeVisible();
+  await expect(
+    page.getByText("Your organisations could not be loaded. Try again before creating a competition."),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry organisation list" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Create competition" })).toBeDisabled();
 });
