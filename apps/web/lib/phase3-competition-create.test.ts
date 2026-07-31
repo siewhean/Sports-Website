@@ -58,7 +58,9 @@ describe("competition creation contract", () => {
 
   it("identifies the first invalid field in rendered form order", () => {
     expect(firstInvalidCompetitionCreateField({ ...validDraft, name: "", sport_code: "" })).toBe("name");
-    expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(competitionCreateFieldOrder.indexOf("sport_code"));
+    expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(
+      competitionCreateFieldOrder.indexOf("sport_code"),
+    );
   });
 
   it("allows only the absent organisation field when first-workspace bootstrap is active", () => {
@@ -94,7 +96,11 @@ describe("competition creation contract", () => {
   });
 
   it("accepts only unique writable organisation options", () => {
-    const owner = { id: validDraft.organisation_id, name: "National Sports", role: "owner" };
+    const owner = {
+      id: validDraft.organisation_id,
+      name: "National Sports",
+      role: "owner",
+    };
     expect(parseCompetitionOrganisationOptions([owner])).toEqual([owner]);
     expect(parseCompetitionOrganisationOptions([{ ...owner, role: "viewer" }])).toBeNull();
     expect(parseCompetitionOrganisationOptions([owner, owner])).toBeNull();
@@ -109,7 +115,12 @@ describe("competition creation contract", () => {
     };
     expect(parseCompetitionOrganisationBootstrapReceipt(receipt)).toEqual(receipt);
     expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, role: "viewer" })).toBeNull();
-    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, token: "must-not-be-accepted" })).toBeNull();
+    expect(
+      parseCompetitionOrganisationBootstrapReceipt({
+        ...receipt,
+        unexpected_private_field: "rejected-fixture",
+      }),
+    ).toBeNull();
     expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, created: "true" })).toBeNull();
   });
 });
