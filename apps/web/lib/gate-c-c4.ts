@@ -156,8 +156,8 @@ export function parseGateCC4Workspace(value: unknown): GateCRepairWorkspaceView 
     return null;
   }
   if (
-    typeof value.repair.id !== "string" ||
-    !uuidPattern.test(value.repair.id) ||
+    typeof value.repair.repair_id !== "string" ||
+    !uuidPattern.test(value.repair.repair_id) ||
     !integer(value.current_result_version) ||
     !integer(value.published_schedule_version) ||
     typeof value.publication_ready !== "boolean" ||
@@ -166,13 +166,23 @@ export function parseGateCC4Workspace(value: unknown): GateCRepairWorkspaceView 
   ) {
     return null;
   }
+  if (
+    value.latest_revision !== null &&
+    (!record(value.latest_revision) ||
+      typeof value.latest_revision.repair_revision_id !== "string" ||
+      !uuidPattern.test(value.latest_revision.repair_revision_id))
+  ) {
+    return null;
+  }
   for (const action of value.actions) {
     if (
       !record(action) ||
-      typeof action.id !== "string" ||
-      !uuidPattern.test(action.id) ||
+      typeof action.repair_action_id !== "string" ||
+      !uuidPattern.test(action.repair_action_id) ||
       typeof action.match_id !== "string" ||
       !uuidPattern.test(action.match_id) ||
+      typeof action.division_id !== "string" ||
+      !uuidPattern.test(action.division_id) ||
       (action.slot !== "home" && action.slot !== "away") ||
       typeof action.source_action !== "string" ||
       !Array.isArray(action.dependency_path) ||
@@ -190,30 +200,35 @@ export function repairRevisionRequest(input: {
   decisions: readonly GateCC4DecisionDraft[];
 }): GateCRepairRevisionCreateRequest {
   const decisions = input.decisions.map(({ starts_at: _startsAt, ends_at: _endsAt, playing_area_id: _area, ...decision }) => decision);
-  const schedule_adjustments = input.decisions.flatMap((decision) =>
-    decision.starts_at || decision.ends_at || decision.playing_area_id
-      ? [
-          {
-            match_id: decision.match_id,
-            division_id:
-              input.workspace.actions.find(
-                (action) => action.match_id === decision.match_id && action.slot === decision.slot,
-              )?.division_id ?? "",
-            ...(decision.starts_at ? { starts_at: new Date(decision.starts_at).toISOString() } : {}),
-            ...(decision.ends_at ? { ends_at: new Date(decision.ends_at).toISOString() } : {}),
-            ...(decision.playing_area_id ? { playing_area_id: decision.playing_area_id } : {}),
-            reason: decision.reason,
-          },
-        ]
-      : [],
-  );
+  const adjustmentByMatch = new Map<string, GateCRepairRevisionCreateRequest["schedule_adjustments"][number]>();
+  for (const decision of input.decisions) {
+    if (!decision.starts_at && !decision.ends_at && !decision.playing_area_id) continue;
+    const action = input.workspace.actions.find(
+      (candidate) => candidate.match_id === decision.match_id && candidate.slot === decision.slot,
+    );
+    if (!action) throw new Error("Repair action is missing from the current workspace");
+    const previous = adjustmentByMatch.get(decision.match_id);
+    adjustmentByMatch.set(decision.match_id, {
+      match_id: decision.match_id,
+      division_id: action.division_id,
+      ...(previous?.starts_at ? { starts_at: previous.starts_at } : {}),
+      ...(previous?.ends_at ? { ends_at: previous.ends_at } : {}),
+      ...(previous?.playing_area_id ? { playing_area_id: previous.playing_area_id } : {}),
+      ...(decision.starts_at ? { starts_at: new Date(decision.starts_at).toISOString() } : {}),
+      ...(decision.ends_at ? { ends_at: new Date(decision.ends_at).toISOString() } : {}),
+      ...(decision.playing_area_id ? { playing_area_id: decision.playing_area_id } : {}),
+      reason: decision.reason,
+    });
+  }
   return {
-    parent_revision_id: input.workspace.latest_revision?.id ?? null,
+    parent_revision_id: input.workspace.latest_revision?.repair_revision_id ?? null,
     expected_result_version: input.workspace.current_result_version,
     expected_schedule_version: input.workspace.published_schedule_version,
-    expected_analysis_fingerprint: input.workspace.repair.analysis_fingerprint,
+    expected_analysis_fingerprint: input.workspace.repair.analysis.analysis_fingerprint_input
+      ? input.workspace.repair.analysis_fingerprint
+      : input.workspace.repair.analysis_fingerprint,
     status: input.status,
     decisions,
-    schedule_adjustments,
+    schedule_adjustments: [...adjustmentByMatch.values()],
   };
 }
