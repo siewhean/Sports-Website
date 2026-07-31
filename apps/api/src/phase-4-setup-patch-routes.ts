@@ -1,6 +1,7 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
+import { registerGateCC4IntakeRoutes } from "./gate-c-c4-intake-routes.js";
 import { registerGateCC4Routes } from "./gate-c-c4-routes.js";
 import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import type { GateCC4Operations } from "./gate-c-c4-operations.js";
@@ -216,6 +217,10 @@ export async function registerPhase4SetupPatchRoutes(
   );
 
   if (options.runtime.gateCC4 && options.runtime.gateCC4Operations && options.runtime.gateCC4Lifecycle) {
+    await registerGateCC4IntakeRoutes(app, {
+      lifecycle: options.runtime.gateCC4Lifecycle,
+      identityRequests: options.identityRequests,
+    });
     await registerGateCC4Routes(app, {
       runtime: options.runtime.gateCC4,
       operations: options.runtime.gateCC4Operations,
