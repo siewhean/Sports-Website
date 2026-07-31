@@ -79,7 +79,9 @@ export function CompetitionCreateForm() {
         }
         setOrganisations(options);
         setDraft((current) => {
-          const selectedStillExists = options.some((organisation) => organisation.id === current.organisation_id);
+          const selectedStillExists = options.some(
+            (organisation) => organisation.id === current.organisation_id,
+          );
           const organisationId = selectedStillExists
             ? current.organisation_id
             : options.length === 1
@@ -197,7 +199,9 @@ export function CompetitionCreateForm() {
     const errorId = fieldErrors[name] ? `${name}-error` : undefined;
     const hintId = options.hint ? `${name}-hint` : undefined;
     return (
-      <div className={name === phase3CompetitionCreateMachine.fields.address ? styles.wide : styles.field}>
+      <div
+        className={name === phase3CompetitionCreateMachine.fields.address ? styles.wide : styles.field}
+      >
         <label htmlFor={name}>{label}</label>
         <input
           id={name}
@@ -225,7 +229,8 @@ export function CompetitionCreateForm() {
     );
   };
 
-  const showOrganisationSelector = organisationsLoading || organisations.length > 0 || Boolean(organisationsError);
+  const showOrganisationSelector =
+    organisationsLoading || organisations.length > 0 || Boolean(organisationsError);
 
   return (
     <form ref={formRef} className={styles.form} noValidate onSubmit={submit}>
@@ -304,7 +309,9 @@ export function CompetitionCreateForm() {
           hint: messages.organiserCreate.slugHint,
         })}
         <div className={styles.field}>
-          <label htmlFor={phase3CompetitionCreateMachine.fields.sportCode}>{messages.organiserCreate.sport}</label>
+          <label htmlFor={phase3CompetitionCreateMachine.fields.sportCode}>
+            {messages.organiserCreate.sport}
+          </label>
           <select
             id={phase3CompetitionCreateMachine.fields.sportCode}
             name={phase3CompetitionCreateMachine.fields.sportCode}
@@ -312,9 +319,13 @@ export function CompetitionCreateForm() {
             required
             aria-invalid={Boolean(fieldErrors.sport_code)}
             aria-describedby={
-              fieldErrors.sport_code ? `${phase3CompetitionCreateMachine.fields.sportCode}-error` : undefined
+              fieldErrors.sport_code
+                ? `${phase3CompetitionCreateMachine.fields.sportCode}-error`
+                : undefined
             }
-            onChange={(event) => update(phase3CompetitionCreateMachine.fields.sportCode, event.currentTarget.value)}
+            onChange={(event) =>
+              update(phase3CompetitionCreateMachine.fields.sportCode, event.currentTarget.value)
+            }
           >
             <option value="" disabled>
               {messages.organiserCreate.chooseSport}
@@ -358,7 +369,9 @@ export function CompetitionCreateForm() {
         {field(phase3CompetitionCreateMachine.fields.timezone, messages.organiserCreate.timezone, {
           required: true,
         })}
-        {field(phase3CompetitionCreateMachine.fields.locale, messages.organiserCreate.locale, { required: true })}
+        {field(phase3CompetitionCreateMachine.fields.locale, messages.organiserCreate.locale, {
+          required: true,
+        })}
       </div>
       <button
         className={styles.submit}
