@@ -72,7 +72,7 @@ describeInfrastructure("organiser workspace bootstrap", () => {
     ]);
 
     expect(results.map((result) => result.created).sort()).toEqual([false, true]);
-    expect(new Set(results.map((result) => result.id))).toHaveSize(1);
+    expect(new Set(results.map((result) => result.id)).size).toBe(1);
     expect(results.every((result) => result.role === "owner")).toBe(true);
 
     const replay = await runtime.ensureWritableOrganisation({ accountId }, "bootstrap-request-c");
