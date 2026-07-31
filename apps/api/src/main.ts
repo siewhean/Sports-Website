@@ -58,6 +58,8 @@ const scheduleQueue = new ScheduleJobQueue({
   queueName: schedulerQueueName(config.environment),
   redisUrl: config.redisUrl,
 });
+const publicApplicationOrigin = config.api.allowedOrigins[0];
+if (!publicApplicationOrigin) throw new Error("At least one allowed application origin is required");
 const phase4Runtime = new ReliableGateBPhase4Runtime(
   identitySql,
   phase3Runtime,
@@ -66,6 +68,7 @@ const phase4Runtime = new ReliableGateBPhase4Runtime(
   undefined,
   phase2Runtime,
   phase2Runtime,
+  publicApplicationOrigin,
 );
 const app = await buildApp({
   config,
