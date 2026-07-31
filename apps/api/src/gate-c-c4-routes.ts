@@ -1,12 +1,7 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import {
-  GateCRepairAbandonRequestSchema,
-  GateCRepairAnalysisInputSchema,
-  GateCRepairPublicationInputSchema,
-  GateCRepairRevisionCreateRequestSchema,
-} from "@matchday/contracts";
 import { ApiError } from "./errors.js";
+import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import type { GateCC4Operations } from "./gate-c-c4-operations.js";
 import type { GateCC4Runtime } from "./gate-c-c4-runtime.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
@@ -14,6 +9,8 @@ import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 
 const Id = Type.String({ format: "uuid" });
+const Sha256 = Type.String({ pattern: "^[a-f0-9]{64}$" });
+const IdempotencyKey = Type.String({ pattern: "^[A-Za-z0-9._:-]{1,200}$" });
 const ErrorResponse = Type.Object(
   { error: Type.Object({ code: Type.String(), message: Type.String(), request_id: Type.String() }) },
   { additionalProperties: false },
@@ -22,36 +19,78 @@ const MutationHeaders = Type.Object(
   { origin: Type.String({ minLength: 1 }), "x-csrf-token": Type.String({ minLength: 1 }) },
   { additionalProperties: true },
 );
-const RepairQueueItem = Type.Object(
-  {
-    repair_id: Id,
-    corrected_match_id: Id,
-    corrected_match_code: Type.String(),
-    division_id: Id,
-    division_name: Type.String(),
-    source_result_version: Type.Integer({ minimum: 1 }),
-    source_schedule_version: Type.Integer({ minimum: 0 }),
-    source_projection_version: Type.Integer({ minimum: 0 }),
-    analysis_fingerprint: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-    latest_revision_id: Type.Union([Id, Type.Null()]),
-    latest_revision: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-    latest_status: Type.Union([
-      Type.Literal("draft"),
-      Type.Literal("ready"),
-      Type.Literal("published"),
-      Type.Literal("abandoned"),
-      Type.Null(),
-    ]),
-    affected_action_count: Type.Integer({ minimum: 0 }),
-    unresolved_action_count: Type.Integer({ minimum: 0 }),
-    created_at: Type.String({ format: "date-time" }),
-  },
-  { additionalProperties: false },
-);
 
 function strict<T extends Record<string, TSchema>>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
 }
+
+const AnalysisBody = strict({ correction_transaction_id: Id });
+const DecisionBody = strict({
+  client_event_id: Id,
+  match_id: Id,
+  slot: Type.Union([Type.Literal("home"), Type.Literal("away")]),
+  decision: Type.Union([
+    Type.Literal("accept_proposed"),
+    Type.Literal("keep_current"),
+    Type.Literal("set_manual_entry"),
+    Type.Literal("leave_protected"),
+  ]),
+  selected_entry_id: Type.Optional(Type.Union([Id, Type.Null()])),
+  reason: Type.String({ minLength: 3, maxLength: 1_000 }),
+});
+const AdjustmentBody = strict({
+  match_id: Id,
+  division_id: Id,
+  starts_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
+  ends_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
+  playing_area_id: Type.Optional(Type.Union([Id, Type.Null()])),
+  reason: Type.String({ minLength: 3, maxLength: 1_000 }),
+});
+const RevisionBody = strict({
+  parent_revision_id: Type.Union([Id, Type.Null()]),
+  expected_result_version: Type.Integer({ minimum: 1 }),
+  expected_schedule_version: Type.Integer({ minimum: 0 }),
+  expected_analysis_fingerprint: Sha256,
+  status: Type.Union([Type.Literal("draft"), Type.Literal("ready")]),
+  decisions: Type.Array(DecisionBody, { maxItems: 10_000 }),
+  schedule_adjustments: Type.Array(AdjustmentBody, { maxItems: 10_000 }),
+});
+const PublicationBody = strict({
+  competition_id: Id,
+  repair_id: Id,
+  repair_revision_id: Id,
+  expected_schedule_version: Type.Integer({ minimum: 0 }),
+  expected_result_version: Type.Integer({ minimum: 1 }),
+  expected_analysis_fingerprint: Sha256,
+  publication_idempotency_key: IdempotencyKey,
+});
+const AbandonBody = strict({
+  expected_revision: Type.Integer({ minimum: 1 }),
+  reason: Type.String({ minLength: 3, maxLength: 1_000 }),
+});
+const RepairQueueItem = strict({
+  repair_id: Id,
+  corrected_match_id: Id,
+  corrected_match_code: Type.String({ minLength: 1 }),
+  division_id: Id,
+  division_name: Type.String({ minLength: 1 }),
+  source_result_version: Type.Integer({ minimum: 1 }),
+  source_schedule_version: Type.Integer({ minimum: 0 }),
+  source_projection_version: Type.Integer({ minimum: 0 }),
+  analysis_fingerprint: Sha256,
+  latest_revision_id: Type.Union([Id, Type.Null()]),
+  latest_revision: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+  latest_status: Type.Union([
+    Type.Literal("draft"),
+    Type.Literal("ready"),
+    Type.Literal("published"),
+    Type.Literal("abandoned"),
+    Type.Null(),
+  ]),
+  affected_action_count: Type.Integer({ minimum: 0 }),
+  unresolved_action_count: Type.Integer({ minimum: 0 }),
+  created_at: Type.String({ format: "date-time" }),
+});
 
 function rejectUnknownBodyFields(allowed: readonly string[]) {
   const expected = new Set(allowed);
@@ -73,6 +112,7 @@ export async function registerGateCC4Routes(
   options: {
     runtime: GateCC4Runtime;
     operations: GateCC4Operations;
+    lifecycle: GateCC4LifecycleOperations;
     identityRuntime: IdentityApiRuntime;
     identityRequests: IdentityRequestContext;
     allowedOrigins: readonly string[];
@@ -110,7 +150,7 @@ export async function registerGateCC4Routes(
 
   app.post<{
     Params: { competitionId: string };
-    Body: Static<typeof GateCRepairAnalysisInputSchema>;
+    Body: Static<typeof AnalysisBody>;
   }>(
     "/api/v1/competitions/:competitionId/repairs/analyse",
     {
@@ -119,7 +159,7 @@ export async function registerGateCC4Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: strict({ competitionId: Id }),
-        body: GateCRepairAnalysisInputSchema,
+        body: AnalysisBody,
         response: {
           200: Type.Unknown(),
           400: ErrorResponse,
@@ -136,7 +176,7 @@ export async function registerGateCC4Routes(
       options.runtime.analyseCorrection(
         await mutationActor(request),
         request.params.competitionId,
-        request.body,
+        request.body.correction_transaction_id,
         request.id,
       ),
   );
@@ -157,7 +197,7 @@ export async function registerGateCC4Routes(
 
   app.post<{
     Params: { competitionId: string; repairId: string };
-    Body: Static<typeof GateCRepairRevisionCreateRequestSchema>;
+    Body: Static<typeof RevisionBody>;
   }>(
     "/api/v1/competitions/:competitionId/repairs/:repairId/revisions",
     {
@@ -174,7 +214,7 @@ export async function registerGateCC4Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: strict({ competitionId: Id, repairId: Id }),
-        body: GateCRepairRevisionCreateRequestSchema,
+        body: RevisionBody,
         response: {
           201: Type.Unknown(),
           400: ErrorResponse,
@@ -201,7 +241,7 @@ export async function registerGateCC4Routes(
 
   app.post<{
     Params: { competitionId: string; repairId: string; revisionId: string };
-    Body: Static<typeof GateCRepairPublicationInputSchema>;
+    Body: Static<typeof PublicationBody>;
   }>(
     "/api/v1/competitions/:competitionId/repairs/:repairId/revisions/:revisionId/publish",
     {
@@ -211,13 +251,14 @@ export async function registerGateCC4Routes(
         "repair_revision_id",
         "expected_schedule_version",
         "expected_result_version",
+        "expected_analysis_fingerprint",
         "publication_idempotency_key",
       ]),
       schema: {
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: strict({ competitionId: Id, repairId: Id, revisionId: Id }),
-        body: GateCRepairPublicationInputSchema,
+        body: PublicationBody,
         response: {
           200: Type.Unknown(),
           400: ErrorResponse,
@@ -244,7 +285,7 @@ export async function registerGateCC4Routes(
 
   app.post<{
     Params: { competitionId: string; repairId: string };
-    Body: Static<typeof GateCRepairAbandonRequestSchema>;
+    Body: Static<typeof AbandonBody>;
   }>(
     "/api/v1/competitions/:competitionId/repairs/:repairId/abandon",
     {
@@ -253,7 +294,7 @@ export async function registerGateCC4Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: strict({ competitionId: Id, repairId: Id }),
-        body: GateCRepairAbandonRequestSchema,
+        body: AbandonBody,
         response: {
           200: Type.Unknown(),
           400: ErrorResponse,
@@ -261,12 +302,13 @@ export async function registerGateCC4Routes(
           403: ErrorResponse,
           404: ErrorResponse,
           409: ErrorResponse,
+          422: ErrorResponse,
         },
         tags: ["gate-c-c4"],
       },
     },
     async (request) =>
-      options.runtime.abandonLatestRevision(
+      options.lifecycle.abandonLatestRevision(
         await mutationActor(request),
         request.params.competitionId,
         request.params.repairId,
