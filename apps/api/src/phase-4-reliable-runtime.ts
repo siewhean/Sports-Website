@@ -8,9 +8,6 @@ import type {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
-import { GateCC4PostgresPublicationPort } from "./gate-c-c4-postgres-publisher.js";
-import { GateCC4Runtime } from "./gate-c-c4-runtime.js";
-import type { Phase2Runtime } from "./phase-2-runtime.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import type { Phase4AiOptions, Phase4PublicProjectionPort } from "./phase-4-runtime.js";
@@ -52,8 +49,6 @@ function readOnlyDocument(document: Phase4SetupDocument): Phase4SetupDocument {
 }
 
 export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
-  readonly gateCC4: GateCC4Runtime;
-
   constructor(
     private readonly reliableSql: PostgresJsSql,
     phase3: Phase3Runtime,
@@ -61,22 +56,11 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     ai: Phase4AiOptions,
     private readonly reliableNow: () => Date = () => new Date(),
     publicProjection?: Phase4PublicProjectionPort,
-    gateCC4ProjectionRuntime?: Pick<Phase2Runtime, "writePublicProjection">,
   ) {
     super(reliableSql, phase3, enqueue, ai, reliableNow, publicProjection);
-    this.gateCC4 = new GateCC4Runtime(
-      reliableSql,
-      gateCC4ProjectionRuntime
-        ? new GateCC4PostgresPublicationPort(gateCC4ProjectionRuntime, reliableNow)
-        : undefined,
-      reliableNow,
-    );
   }
 
-  async ensureWritableOrganisation(
-    actor: Phase3Actor,
-    requestId: string,
-  ): Promise<OrganisationBootstrapReceipt> {
+  async ensureWritableOrganisation(actor: Phase3Actor, requestId: string): Promise<OrganisationBootstrapReceipt> {
     if (!this.reliableSql.begin) {
       throw new Error("Organiser workspace provisioning requires a transaction-capable PostgreSQL client");
     }
