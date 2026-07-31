@@ -123,21 +123,25 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           actor.accountId,
           organisation.id,
           organisation.id,
-          JSON.stringify({ name: organisation.name, role: "owner" }),
-          JSON.stringify({ bootstrap: true }),
+          { name: organisation.name, role: "owner" },
+          { bootstrap: true },
         ],
       );
-      await tx.unsafe(
-        `INSERT INTO outbox_events(
-           aggregate_type,aggregate_id,event_type,payload,idempotency_key,created_at,available_at
-         ) VALUES('organisation',$1,'organisation.created',$2::jsonb,$3,$4,$4)
-         ON CONFLICT(idempotency_key) DO NOTHING`,
-        [
-          organisation.id,
-          JSON.stringify({ organisation_id: organisation.id, owner_account_id: actor.accountId, bootstrap: true }),
-          `organisation.bootstrap:${actor.accountId}`,
-          occurredAt,
-        ],
+      first(
+        await tx.unsafe<{ id: string }>(
+          `INSERT INTO outbox_events(
+             aggregate_type,aggregate_id,event_type,payload,idempotency_key,created_at,available_at
+           ) VALUES('organisation',$1,'organisation.created',$2::jsonb,$3,$4,$4)
+           RETURNING id`,
+          [
+            organisation.id,
+            { organisation_id: organisation.id, owner_account_id: actor.accountId, bootstrap: true },
+            `organisation.bootstrap:${actor.accountId}`,
+            occurredAt,
+          ],
+        ),
+        "ORGANISATION_OUTBOX_FAILED",
+        "The organiser workspace evidence could not be recorded",
       );
       return { id: organisation.id, name: organisation.name, role: "owner", created: true };
     });
