@@ -1,8 +1,6 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
-import { registerGateCC4Routes } from "./gate-c-c4-routes.js";
-import type { GateCC4Runtime } from "./gate-c-c4-runtime.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
@@ -39,7 +37,6 @@ const OrganisationBootstrapResponse = Type.Object(
 type SetupPatchRuntime = GateBPhase4Runtime & {
   resumeSetupDraft?: ReliableGateBPhase4Runtime["resumeSetupDraft"];
   ensureWritableOrganisation?: ReliableGateBPhase4Runtime["ensureWritableOrganisation"];
-  gateCC4?: GateCC4Runtime;
 };
 
 function strict<T extends Record<string, TSchema>>(properties: T) {
@@ -210,13 +207,4 @@ export async function registerPhase4SetupPatchRoutes(
         : options.runtime.readSetupDraft(actor, request.params.competitionId);
     },
   );
-
-  if (options.runtime.gateCC4) {
-    await registerGateCC4Routes(app, {
-      runtime: options.runtime.gateCC4,
-      identityRuntime: options.identityRuntime,
-      identityRequests: options.identityRequests,
-      allowedOrigins: options.allowedOrigins,
-    });
-  }
 }
