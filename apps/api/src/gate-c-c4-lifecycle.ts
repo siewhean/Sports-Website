@@ -22,6 +22,17 @@ type RevisionRow = {
   status: "draft" | "ready" | "published" | "abandoned";
 };
 
+export type GateCC4PendingResultRepairCase = Readonly<{
+  result_repair_case_id: string;
+  correction_transaction_id: string;
+  corrected_match_id: string;
+  corrected_match_code: string;
+  division_id: string;
+  division_name: string;
+  source_result_version: number;
+  created_at: string;
+}>;
+
 export type GateCC4AbandonReceipt = Readonly<{
   repair_id: string;
   repair_revision_id: string;
@@ -42,6 +53,73 @@ export class GateCC4LifecycleOperations {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  private async access(
+    tx: PostgresJsSql,
+    actor: Phase3Actor,
+    competitionId: string,
+    mutable = true,
+  ): Promise<AccessRow> {
+    const access = required(
+      await tx.unsafe<AccessRow>(
+        `SELECT competition.organisation_id,competition.status AS competition_status,
+                membership.role AS membership_role
+         FROM competitions competition
+         JOIN organisation_memberships membership
+           ON membership.organisation_id=competition.organisation_id
+         WHERE competition.id=$1
+           AND membership.account_id=$2
+           AND membership.status='active'
+           AND membership.role IN ('owner','organiser')`,
+        [competitionId, actor.accountId],
+      ),
+      "COMPETITION_ACCESS_DENIED",
+      "Competition access denied",
+    );
+    if (mutable && access.competition_status === "archived") {
+      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+    }
+    return access;
+  }
+
+  async listPendingCases(
+    actor: Phase3Actor,
+    competitionId: string,
+  ): Promise<readonly GateCC4PendingResultRepairCase[]> {
+    await this.access(this.sql, actor, competitionId, false);
+    const rows = await this.sql.unsafe<{
+      result_repair_case_id: string;
+      correction_transaction_id: string;
+      corrected_match_id: string;
+      corrected_match_code: string;
+      division_id: string;
+      division_name: string;
+      source_result_version: number;
+      created_at: Date | string;
+    }>(
+      `SELECT result_case.id AS result_repair_case_id,
+              result_case.correction_transaction_id,
+              result_case.corrected_match_id,
+              match.code AS corrected_match_code,
+              result_case.division_id,
+              division.name AS division_name,
+              result_case.source_result_version,
+              result_case.created_at
+       FROM result_repair_cases result_case
+       JOIN matches match ON match.id=result_case.corrected_match_id
+       JOIN divisions division ON division.id=result_case.division_id
+       LEFT JOIN schedule_repair_cases schedule_case
+         ON schedule_case.result_repair_case_id=result_case.id
+       WHERE result_case.competition_id=$1
+         AND schedule_case.id IS NULL
+       ORDER BY result_case.created_at,result_case.id`,
+      [competitionId],
+    );
+    return rows.map((row) => ({
+      ...row,
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
+    }));
+  }
+
   async abandonLatestRevision(
     actor: Phase3Actor,
     competitionId: string,
@@ -55,25 +133,7 @@ export class GateCC4LifecycleOperations {
       throw new ApiError(422, "REPAIR_ABANDON_REASON_INVALID", "Abandonment reason must contain 3 to 1000 characters");
     }
     return this.sql.begin(async (tx) => {
-      const access = required(
-        await tx.unsafe<AccessRow>(
-          `SELECT competition.organisation_id,competition.status AS competition_status,
-                  membership.role AS membership_role
-           FROM competitions competition
-           JOIN organisation_memberships membership
-             ON membership.organisation_id=competition.organisation_id
-           WHERE competition.id=$1
-             AND membership.account_id=$2
-             AND membership.status='active'
-             AND membership.role IN ('owner','organiser')`,
-          [competitionId, actor.accountId],
-        ),
-        "COMPETITION_ACCESS_DENIED",
-        "Competition access denied",
-      );
-      if (access.competition_status === "archived") {
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
-      }
+      const access = await this.access(tx, actor, competitionId);
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended('gate-c:repair-lifecycle:'||$1,0))`, [repairId]);
       const repairCase = required(
         await tx.unsafe<RepairCaseRow>(
