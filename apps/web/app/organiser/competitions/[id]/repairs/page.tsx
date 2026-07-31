@@ -1,3 +1,4 @@
+import { PendingRepairCases } from "@/components/gate-c/PendingRepairCases";
 import { RepairWorkspace } from "@/components/gate-c/RepairWorkspace";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { OrganiserState } from "@/components/phase2/OrganiserState";
@@ -36,15 +37,18 @@ export default async function CompetitionRepairsPage({
       sectionAction={null}
       enableRemoteOperations={competition.canEdit === true}
       sectionContent={
-        <RepairWorkspace
-          competitionId={competition.id}
-          matches={competition.matches.map((match) => ({
-            id: match.id,
-            label: match.label,
-            home: match.home,
-            away: match.away,
-          }))}
-        />
+        <div style={{ display: "grid", gap: "1rem" }}>
+          <PendingRepairCases competitionId={competition.id} />
+          <RepairWorkspace
+            competitionId={competition.id}
+            matches={competition.matches.map((match) => ({
+              id: match.id,
+              label: match.label,
+              home: match.home,
+              away: match.away,
+            }))}
+          />
+        </div>
       }
     />
   );
