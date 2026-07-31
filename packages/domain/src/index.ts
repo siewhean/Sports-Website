@@ -26,6 +26,11 @@ export * from "./scoring.js";
 export * from "./results.js";
 export * from "./publication.js";
 export * from "./sport-packs.js";
+export * from "./result-repair-contract.js";
+export * from "./repair-publication.js";
+export * from "./public-truth.js";
+export * from "./fallback-exports.js";
+export * from "./fallback-pdf.js";
 export * as competitionDomain from "./competition.js";
 
 export * from "./five-sport-scoring.js";

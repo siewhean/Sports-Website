@@ -123,9 +123,15 @@ describe("foundation migrations", () => {
         "0030_gate_c_published_schedule_participants.sql",
         "0031_gate_c_participant_snapshot_fencing.sql",
         "0032_gate_c_offline_replay.sql",
+        "0033_gate_c_repair_public_truth_exports.sql",
+        "0034_gate_c_repair_revision_fencing.sql",
+        "0035_gate_c_repair_lineage_fencing.sql",
       ] as const;
       const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
       const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
+      const repairPersistenceMigrationName = "0033_gate_c_repair_public_truth_exports.sql";
+      const repairRevisionFencingMigrationName = "0034_gate_c_repair_revision_fencing.sql";
+      const repairLineageFencingMigrationName = "0035_gate_c_repair_lineage_fencing.sql";
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
           const migrationPath = path.join(copiedDirectory, name);
@@ -320,11 +326,22 @@ describe("foundation migrations", () => {
           VALUES(${siblingEntry},${siblingDivision},'Sibling division entry',1,'placeholder','confirmed')`;
         const participantFenceMigration = forwardMigrations.find(({ name }) => name === participantFenceMigrationName);
         const offlineReplayMigration = forwardMigrations.find(({ name }) => name === offlineReplayMigrationName);
+        const repairPersistenceMigration = forwardMigrations.find(
+          ({ name }) => name === repairPersistenceMigrationName,
+        );
         if (!participantFenceMigration) throw new Error("Expected participant-fencing migration");
         if (!offlineReplayMigration) throw new Error("Expected offline-replay migration");
+        if (!repairPersistenceMigration) throw new Error("Expected repair-persistence migration");
         await Promise.all(
           forwardMigrations
-            .filter(({ name }) => name !== participantFenceMigrationName && name !== offlineReplayMigrationName)
+            .filter(
+              ({ name }) =>
+                name !== participantFenceMigrationName &&
+                name !== offlineReplayMigrationName &&
+                name !== repairPersistenceMigrationName &&
+                name !== repairRevisionFencingMigrationName &&
+                name !== repairLineageFencingMigrationName,
+            )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
         const upgradedBeforeParticipantFence = await migrateDatabase({
@@ -332,7 +349,7 @@ describe("foundation migrations", () => {
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -2));
+        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -5));
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -360,6 +377,48 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithReplay.applied).toEqual(["0032_gate_c_offline_replay.sql"]);
+        const correctionClientEventId = randomUUID();
+        const correctionFingerprint = createHash("sha256").update(correctionClientEventId).digest("hex");
+        await sql`INSERT INTO score_correction_transactions(
+          competition_id,division_id,match_id,client_event_id,command_fingerprint,reason,
+          from_aggregate_version,through_aggregate_version,result_version,actor_account_id
+        ) VALUES(
+          ${competition},${division},${match},${correctionClientEventId},${correctionFingerprint},'Retained correction',
+          0,1,1,${account}
+        )`;
+        await writeFile(repairPersistenceMigration.migrationPath, repairPersistenceMigration.source);
+        const upgradedWithRepairPersistence = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithRepairPersistence.applied).toEqual(["0033_gate_c_repair_public_truth_exports.sql"]);
+        expect(
+          await sql<{ count: string }[]>`
+            SELECT count(*)::text count FROM score_correction_transactions
+            WHERE competition_id=${competition} AND division_id=${division} AND match_id=${match}
+          `,
+        ).toEqual([{ count: "1" }]);
+        const repairRevisionFencingMigration = forwardMigrations.find(
+          ({ name }) => name === repairRevisionFencingMigrationName,
+        )!;
+        await writeFile(repairRevisionFencingMigration.migrationPath, repairRevisionFencingMigration.source);
+        const upgradedWithRepairRevisionFencing = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithRepairRevisionFencing.applied).toEqual([repairRevisionFencingMigrationName]);
+        const repairLineageFencingMigration = forwardMigrations.find(
+          ({ name }) => name === repairLineageFencingMigrationName,
+        )!;
+        await writeFile(repairLineageFencingMigration.migrationPath, repairLineageFencingMigration.source);
+        const upgradedWithRepairLineageFencing = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithRepairLineageFencing.applied).toEqual([repairLineageFencingMigrationName]);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
