@@ -32,7 +32,8 @@ Artifacts are ignored and retained under
 
 | Artifact               | SHA-256                                                            |
 | ---------------------- | ------------------------------------------------------------------ |
-| `playwright.log`       | `64b00d2a6bc210c9762c556211908bf36cc4efcf63b1599f0952f3943f392f44` |
+| `test-source.ts`       | `2dbd4891a14ad828c2920a6f90790bf2e0bd0f39bd261b0a881585908fbadae6` |
+| `playwright.log`       | `600a9d82e6468a74d25870d315536107a6998d6a2e3fe3d2e87c9e022f5f833f` |
 | `postgres-oracle.json` | `a1ccbc71681fbc153c59d4653d848eb06899b7472ad80c58aed946c77758bff0` |
 
 No cookies, session secrets, raw environment values, account identifiers, or
