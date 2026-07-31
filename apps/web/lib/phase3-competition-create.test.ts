@@ -4,6 +4,7 @@ import {
   firstInvalidCompetitionCreateField,
   isCompetitionCreateRequest,
   parseCompetitionCreateReceipt,
+  parseCompetitionOrganisationBootstrapReceipt,
   parseCompetitionOrganisationOptions,
   phase3CompetitionSports,
   type CompetitionCreateDraft,
@@ -60,6 +61,19 @@ describe("competition creation contract", () => {
     expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(competitionCreateFieldOrder.indexOf("sport_code"));
   });
 
+  it("allows only the absent organisation field when first-workspace bootstrap is active", () => {
+    const withoutOrganisation = { ...validDraft, organisation_id: "" };
+    expect(firstInvalidCompetitionCreateField(withoutOrganisation)).toBe("organisation_id");
+    expect(
+      firstInvalidCompetitionCreateField(withoutOrganisation, {
+        allowOrganisationBootstrap: true,
+      }),
+    ).toBeNull();
+    expect(
+      firstInvalidCompetitionCreateField({ ...withoutOrganisation, name: "" }, { allowOrganisationBootstrap: true }),
+    ).toBe("name");
+  });
+
   it("rejects an inverted date range and malformed receipt", () => {
     expect(isCompetitionCreateRequest({ ...validCommand, ends_on: "2027-04-30" })).toBe(false);
     expect(isCompetitionCreateRequest({ ...validCommand, starts_on: "2027-02-30" })).toBe(false);
@@ -77,9 +91,31 @@ describe("competition creation contract", () => {
   });
 
   it("accepts only unique writable organisation options", () => {
-    const owner = { id: validDraft.organisation_id, name: "National Sports", role: "owner" };
+    const owner = {
+      id: validDraft.organisation_id,
+      name: "National Sports",
+      role: "owner",
+    };
     expect(parseCompetitionOrganisationOptions([owner])).toEqual([owner]);
     expect(parseCompetitionOrganisationOptions([{ ...owner, role: "viewer" }])).toBeNull();
     expect(parseCompetitionOrganisationOptions([owner, owner])).toBeNull();
+  });
+
+  it("accepts only exact first-workspace bootstrap receipts", () => {
+    const receipt = {
+      id: validDraft.organisation_id,
+      name: "Organiser workspace",
+      role: "owner",
+      created: true,
+    };
+    expect(parseCompetitionOrganisationBootstrapReceipt(receipt)).toEqual(receipt);
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, role: "viewer" })).toBeNull();
+    expect(
+      parseCompetitionOrganisationBootstrapReceipt({
+        ...receipt,
+        unexpected_private_field: "rejected-fixture",
+      }),
+    ).toBeNull();
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, created: "true" })).toBeNull();
   });
 });
