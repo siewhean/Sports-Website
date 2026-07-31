@@ -8,6 +8,7 @@ import type {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError } from "./errors.js";
+import { GateCC4Operations } from "./gate-c-c4-operations.js";
 import { GateCC4PostgresPublicationPort } from "./gate-c-c4-postgres-publisher.js";
 import { GateCC4Runtime } from "./gate-c-c4-runtime.js";
 import type { Phase2Runtime } from "./phase-2-runtime.js";
@@ -53,6 +54,7 @@ function readOnlyDocument(document: Phase4SetupDocument): Phase4SetupDocument {
 
 export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   readonly gateCC4: GateCC4Runtime;
+  readonly gateCC4Operations: GateCC4Operations;
 
   constructor(
     private readonly reliableSql: PostgresJsSql,
@@ -62,6 +64,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     private readonly reliableNow: () => Date = () => new Date(),
     publicProjection?: Phase4PublicProjectionPort,
     gateCC4ProjectionRuntime?: Pick<Phase2Runtime, "writePublicProjection">,
+    gateCC4PublicOrigin = "http://localhost:3000",
   ) {
     super(reliableSql, phase3, enqueue, ai, reliableNow, publicProjection);
     this.gateCC4 = new GateCC4Runtime(
@@ -71,6 +74,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
         : undefined,
       reliableNow,
     );
+    this.gateCC4Operations = new GateCC4Operations(reliableSql, gateCC4PublicOrigin, reliableNow);
   }
 
   async ensureWritableOrganisation(
