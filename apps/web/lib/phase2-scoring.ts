@@ -597,9 +597,9 @@ class DemoScoringCommandPort implements ScoringCommandPort {
   }
 
   async exchangeAccess(input: ScoringAccessInput): Promise<ScoringSessionView> {
+    const rawCode = input.shortCode?.replace(/[\s-]/g, "").toUpperCase() ?? "";
     const accepted =
-      input.shortCode?.trim().toUpperCase() === "POLO-12" ||
-      input.token === "demo-phase2-scoring-access-token-000000000001";
+      rawCode === "POLO12" || rawCode.length >= 4 || input.token === "demo-phase2-scoring-access-token-000000000001";
     if (!accepted) throw new ScoringTransportError("access");
     this.active = true;
     return this.session();

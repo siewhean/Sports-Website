@@ -45,6 +45,15 @@ export type CompetitionOrganisationOption = Readonly<{
   role: "owner" | "organiser";
 }>;
 
+export type CompetitionOrganisationBootstrapReceipt = CompetitionOrganisationOption &
+  Readonly<{
+    created: boolean;
+  }>;
+
+export type CompetitionCreateValidationOptions = Readonly<{
+  allowOrganisationBootstrap?: boolean;
+}>;
+
 export const phase3CompetitionCreateMachine = {
   post: "POST",
   applicationJson: "application/json",
@@ -53,6 +62,8 @@ export const phase3CompetitionCreateMachine = {
   validationError: "VALIDATION_ERROR",
   invalidRequest: "The competition details are invalid",
   optionsPath: "/api/v1/organisations/competition-options",
+  bootstrapPath: "/api/v1/organisations/competition-options/bootstrap",
+  bootstrapRoute: "/api/phase3/organisations/bootstrap",
   optionsUnavailable: "The organisation service is unavailable",
   authRequired: "AUTH_REQUIRED",
   apiUnavailable: "API_UNAVAILABLE",
@@ -162,8 +173,35 @@ export function parseCompetitionOrganisationOptions(value: unknown): Competition
   return options;
 }
 
-export function firstInvalidCompetitionCreateField(draft: CompetitionCreateDraft): CompetitionCreateField | null {
+export function parseCompetitionOrganisationBootstrapReceipt(
+  value: unknown,
+): CompetitionOrganisationBootstrapReceipt | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["id", "name", "role", "created"]) ||
+    typeof value.id !== "string" ||
+    !uuidPattern.test(value.id) ||
+    typeof value.name !== "string" ||
+    value.name.trim().length === 0 ||
+    (value.role !== "owner" && value.role !== "organiser") ||
+    typeof value.created !== "boolean"
+  )
+    return null;
+  return value as CompetitionOrganisationBootstrapReceipt;
+}
+
+export function firstInvalidCompetitionCreateField(
+  draft: CompetitionCreateDraft,
+  options: CompetitionCreateValidationOptions = {},
+): CompetitionCreateField | null {
   for (const field of competitionCreateFieldOrder) {
+    if (
+      field === "organisation_id" &&
+      options.allowOrganisationBootstrap === true &&
+      draft.organisation_id.length === 0
+    ) {
+      continue;
+    }
     if (!competitionCreateFieldIsValid(field, draft)) return field;
   }
   return null;
