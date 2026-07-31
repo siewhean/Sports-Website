@@ -26,9 +26,19 @@ const Sport = Type.Union([
   Type.Literal("volleyball"),
   Type.Literal("basketball"),
 ]);
+const OrganisationBootstrapResponse = Type.Object(
+  {
+    id: Id,
+    name: Type.String({ minLength: 1 }),
+    role: Type.Union([Type.Literal("owner"), Type.Literal("organiser")]),
+    created: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
 
 type SetupPatchRuntime = GateBPhase4Runtime & {
   resumeSetupDraft?: ReliableGateBPhase4Runtime["resumeSetupDraft"];
+  ensureWritableOrganisation?: ReliableGateBPhase4Runtime["ensureWritableOrganisation"];
   gateCC4?: GateCC4Runtime;
 };
 
@@ -106,6 +116,28 @@ export async function registerPhase4SetupPatchRoutes(
       throw new ApiError(403, "CSRF_INVALID", "CSRF validation failed");
     return { accountId: session.account.id };
   };
+
+  if (options.runtime.ensureWritableOrganisation) {
+    app.post(
+      "/api/v1/organisations/competition-options/bootstrap",
+      {
+        schema: {
+          security: [{ sessionCookie: [] }],
+          headers: MutationHeaders,
+          response: {
+            200: OrganisationBootstrapResponse,
+            401: ErrorResponse,
+            403: ErrorResponse,
+            404: ErrorResponse,
+            409: ErrorResponse,
+            503: ErrorResponse,
+          },
+          tags: ["phase3-competitions"],
+        },
+      },
+      async (request) => options.runtime.ensureWritableOrganisation!(await mutationActor(request), request.id),
+    );
+  }
 
   app.patch<{
     Params: { competitionId: string };
