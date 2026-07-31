@@ -124,19 +124,22 @@ describeInfrastructure("organiser workspace bootstrap", () => {
         RETURNING id
       `,
     ).id;
-    const existingOrganisationId = required(
-      await client<{ id: string }[]>`
-        INSERT INTO organisations(name,slug)
-        VALUES('Viewer only organisation',${`viewer-only-${randomUUID()}`})
-        RETURNING id
-      `,
-    ).id;
-    await client`
-      INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
-      VALUES
-        (${existingOrganisationId},${ownerId},'owner','active'),
-        (${existingOrganisationId},${viewerId},'viewer','active')
-    `;
+    const existingOrganisationId = await client.begin(async (tx) => {
+      const organisationId = required(
+        await tx<{ id: string }[]>`
+          INSERT INTO organisations(name,slug)
+          VALUES('Viewer only organisation',${`viewer-only-${randomUUID()}`})
+          RETURNING id
+        `,
+      ).id;
+      await tx`
+        INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+        VALUES
+          (${organisationId},${ownerId},'owner','active'),
+          (${organisationId},${viewerId},'viewer','active')
+      `;
+      return organisationId;
+    });
 
     const receipt = await runtime.ensureWritableOrganisation({ accountId: viewerId }, "viewer-bootstrap");
 
