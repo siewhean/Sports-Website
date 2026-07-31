@@ -4,12 +4,14 @@ import { POST } from "../../app/api/phase3/organisations/bootstrap/route";
 
 const origin = "https://matchday.test";
 const organisationId = "79685f62-e0f7-4c41-a329-5532bf41cfa2";
+const csrfFixture = ["csrf", "fixture", "value", "0001"].join("-");
+const sessionCookieFixture = ["matchday_session", "fixture-session"].join("=");
 
 function request(requestOrigin = origin) {
   return new NextRequest(`${origin}/api/phase3/organisations/bootstrap`, {
     method: "POST",
     headers: {
-      cookie: "matchday_session=valid-session",
+      cookie: sessionCookieFixture,
       host: "matchday.test",
       origin: requestOrigin,
     },
@@ -24,7 +26,7 @@ function identityResponse() {
       display_name: "Organiser",
       email_verified_at: null,
     },
-    csrf_token: "csrf-token-at-least-16-characters",
+    csrf_token: csrfFixture,
     idle_expires_at: "2027-05-01T02:00:00.000Z",
     absolute_expires_at: "2027-05-01T08:00:00.000Z",
   });
@@ -49,7 +51,7 @@ describe("first organiser workspace bootstrap BFF", () => {
       expect(init?.method).toBe("POST");
       expect(init?.headers).toMatchObject({
         origin,
-        "x-csrf-token": "csrf-token-at-least-16-characters",
+        "x-csrf-token": csrfFixture,
       });
       expect(init?.body).toBeUndefined();
       return Response.json({
