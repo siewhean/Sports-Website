@@ -58,9 +58,7 @@ describe("competition creation contract", () => {
 
   it("identifies the first invalid field in rendered form order", () => {
     expect(firstInvalidCompetitionCreateField({ ...validDraft, name: "", sport_code: "" })).toBe("name");
-    expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(
-      competitionCreateFieldOrder.indexOf("sport_code"),
-    );
+    expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(competitionCreateFieldOrder.indexOf("sport_code"));
   });
 
   it("allows only the absent organisation field when first-workspace bootstrap is active", () => {
@@ -72,10 +70,7 @@ describe("competition creation contract", () => {
       }),
     ).toBeNull();
     expect(
-      firstInvalidCompetitionCreateField(
-        { ...withoutOrganisation, name: "" },
-        { allowOrganisationBootstrap: true },
-      ),
+      firstInvalidCompetitionCreateField({ ...withoutOrganisation, name: "" }, { allowOrganisationBootstrap: true }),
     ).toBe("name");
   });
 

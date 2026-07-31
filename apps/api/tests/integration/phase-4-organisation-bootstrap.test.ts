@@ -81,12 +81,14 @@ describeInfrastructure("organiser workspace bootstrap", () => {
     const workspaceId = results[0]!.id;
     const outboxKey = `organisation.bootstrap:${accountId}`;
     const counts = required(
-      await client<{
-        organisation_count: number;
-        membership_count: number;
-        audit_count: number;
-        outbox_count: number;
-      }[]>`
+      await client<
+        {
+          organisation_count: number;
+          membership_count: number;
+          audit_count: number;
+          outbox_count: number;
+        }[]
+      >`
         SELECT
           (SELECT count(*)::int
              FROM organisations organisation
@@ -113,11 +115,13 @@ describeInfrastructure("organiser workspace bootstrap", () => {
     });
 
     const outbox = required(
-      await client<{
-        aggregate_id: string;
-        idempotency_key: string;
-        payload: { organisation_id: string; owner_account_id: string; bootstrap: boolean };
-      }[]>`
+      await client<
+        {
+          aggregate_id: string;
+          idempotency_key: string;
+          payload: { organisation_id: string; owner_account_id: string; bootstrap: boolean };
+        }[]
+      >`
         SELECT aggregate_id,idempotency_key,payload
         FROM outbox_events
         WHERE idempotency_key=${outboxKey}

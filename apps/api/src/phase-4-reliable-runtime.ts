@@ -60,10 +60,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     super(reliableSql, phase3, enqueue, ai, reliableNow, publicProjection);
   }
 
-  async ensureWritableOrganisation(
-    actor: Phase3Actor,
-    requestId: string,
-  ): Promise<OrganisationBootstrapReceipt> {
+  async ensureWritableOrganisation(actor: Phase3Actor, requestId: string): Promise<OrganisationBootstrapReceipt> {
     if (!this.reliableSql.begin) {
       throw new Error("Organiser workspace provisioning requires a transaction-capable PostgreSQL client");
     }
