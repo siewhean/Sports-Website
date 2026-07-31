@@ -11,6 +11,7 @@ import { ApiError } from "./errors.js";
 import { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { GateCC4Operations } from "./gate-c-c4-operations.js";
 import { GateCC4PostgresPublicationPort } from "./gate-c-c4-postgres-publisher.js";
+import { GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { GateCC4Runtime } from "./gate-c-c4-runtime.js";
 import type { Phase2Runtime } from "./phase-2-runtime.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
@@ -57,6 +58,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   readonly gateCC4: GateCC4Runtime;
   readonly gateCC4Operations: GateCC4Operations;
   readonly gateCC4Lifecycle: GateCC4LifecycleOperations;
+  readonly gateCC4PublicTruth: GateCC4PublicTruthRuntime;
 
   constructor(
     private readonly reliableSql: PostgresJsSql,
@@ -78,6 +80,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     );
     this.gateCC4Operations = new GateCC4Operations(reliableSql, gateCC4PublicOrigin, reliableNow);
     this.gateCC4Lifecycle = new GateCC4LifecycleOperations(reliableSql, reliableNow);
+    this.gateCC4PublicTruth = new GateCC4PublicTruthRuntime(reliableSql);
   }
 
   async ensureWritableOrganisation(
