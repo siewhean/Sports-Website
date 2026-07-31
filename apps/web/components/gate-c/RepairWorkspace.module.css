@@ -1,0 +1,470 @@
+.workspace {
+  display: grid;
+  gap: 1rem;
+  color: var(--ink, #161b18);
+}
+
+.live {
+  min-height: 1.5rem;
+  margin: 0;
+  font-weight: 700;
+}
+
+.error {
+  margin: 0;
+  padding: 0.875rem 1rem;
+  border: 1px solid #b42318;
+  border-radius: 0.75rem;
+  background: #fff1f0;
+  color: #7a271a;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) minmax(20rem, 1.5fr) auto;
+  gap: 1rem;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid #d8ddd9;
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.toolbar h2,
+.toolbar p,
+.summary h2,
+.summary p,
+.empty h2,
+.empty p,
+.exports h2,
+.exports p,
+.audit h2 {
+  margin: 0;
+}
+
+.toolbar form {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.toolbar form label {
+  grid-column: 1 / -1;
+}
+
+.toolbar input,
+.toolbar button,
+.decisionGrid select,
+.decisionGrid textarea,
+.adjustments input,
+.adjustments select,
+.commands input,
+.commands button,
+.exports button {
+  min-height: 2.75rem;
+  border: 1px solid #aeb7b0;
+  border-radius: 0.65rem;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+
+.toolbar input,
+.decisionGrid select,
+.decisionGrid textarea,
+.adjustments input,
+.adjustments select,
+.commands input {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+}
+
+.toolbar button,
+.commands button,
+.exports button {
+  padding: 0.65rem 0.9rem;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.toolbar button:disabled,
+.commands button:disabled,
+.exports button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.queue,
+.details {
+  min-width: 0;
+}
+
+.queue {
+  position: sticky;
+  top: 1rem;
+  overflow: hidden;
+  border: 1px solid #d8ddd9;
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.queue ol,
+.actions,
+.audit ol,
+.exports ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue li + li {
+  border-top: 1px solid #e6e9e7;
+}
+
+.queue button {
+  display: grid;
+  width: 100%;
+  gap: 0.25rem;
+  padding: 0.9rem 1rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.queue button[aria-pressed="true"] {
+  box-shadow: inset 4px 0 #176b45;
+  background: #eef8f2;
+}
+
+.queue button span,
+.queue button small,
+.queue button em {
+  overflow-wrap: anywhere;
+}
+
+.queue button em {
+  color: #176b45;
+  font-size: 0.75rem;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.details {
+  display: grid;
+  gap: 1rem;
+}
+
+.summary,
+.action,
+.commands,
+.exports,
+.audit,
+.empty {
+  border: 1px solid #d8ddd9;
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+}
+
+.summary h2 {
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+}
+
+.summary dl,
+.action dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.summary dl div,
+.action dl div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.summary dt,
+.action dt {
+  color: #5d675f;
+  font-size: 0.75rem;
+}
+
+.summary dd,
+.action dd {
+  margin: 0;
+  font-weight: 750;
+}
+
+.summary > strong {
+  padding: 0.4rem 0.65rem;
+  border-radius: 99px;
+  background: #fff4ce;
+  color: #6d4b00;
+  font-size: 0.8rem;
+}
+
+.summary > strong[data-ready="true"] {
+  background: #dff6e8;
+  color: #0f5a38;
+}
+
+.actions {
+  display: grid;
+  gap: 1rem;
+}
+
+.action {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+}
+
+.action[data-protected="true"] {
+  border-color: #e0a458;
+  box-shadow: inset 4px 0 #d47a16;
+}
+
+.action > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.action header p,
+.action header h3,
+.reason {
+  margin: 0;
+}
+
+.action header p,
+.action header span {
+  color: #5d675f;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.action header h3 {
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+}
+
+.reason {
+  color: #414a43;
+}
+
+.action details {
+  padding: 0.7rem;
+  border-radius: 0.65rem;
+  background: #f5f7f5;
+}
+
+.action details summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.action details ol {
+  margin-bottom: 0;
+  padding-left: 1.25rem;
+}
+
+.action details li {
+  overflow-wrap: anywhere;
+}
+
+.decisionGrid,
+.adjustments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.decisionGrid label,
+.adjustments label,
+.commands label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.decisionGrid textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.wide {
+  grid-column: 1 / -1;
+}
+
+.adjustments {
+  margin: 0;
+  padding: 0.8rem;
+  border: 1px dashed #bec6c0;
+  border-radius: 0.75rem;
+}
+
+.adjustments legend {
+  padding: 0 0.35rem;
+  color: #5d675f;
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.commands {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.commands > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.commands > div button:nth-child(3) {
+  border-color: #176b45;
+  background: #176b45;
+  color: #fff;
+}
+
+.exports {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.exports > div {
+  display: grid;
+  gap: 0.6rem;
+  justify-items: start;
+}
+
+.exports ul {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.exports li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.7rem;
+  border-radius: 0.65rem;
+  background: #f5f7f5;
+}
+
+.exports li span {
+  display: grid;
+}
+
+.exports li small {
+  color: #5d675f;
+}
+
+.audit {
+  padding: 1rem;
+}
+
+.audit ol {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+
+.audit li {
+  display: grid;
+  grid-template-columns: minmax(9rem, auto) minmax(10rem, 1fr) minmax(0, 2fr);
+  gap: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #e6e9e7;
+}
+
+.audit time,
+.audit span {
+  color: #5d675f;
+}
+
+.empty {
+  padding: 1.25rem;
+}
+
+@media (max-width: 900px) {
+  .toolbar,
+  .layout,
+  .summary {
+    grid-template-columns: 1fr;
+  }
+
+  .queue {
+    position: static;
+  }
+
+  .queue ol {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(14rem, 75%);
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+  }
+
+  .queue li {
+    border-top: 0;
+    border-right: 1px solid #e6e9e7;
+    scroll-snap-align: start;
+  }
+
+  .audit li {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .toolbar form,
+  .decisionGrid,
+  .adjustments {
+    grid-template-columns: 1fr;
+  }
+
+  .wide {
+    grid-column: auto;
+  }
+
+  .action > header,
+  .exports li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .commands > div {
+    display: grid;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queue ol {
+    scroll-behavior: auto;
+  }
+}
