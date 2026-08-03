@@ -24,5 +24,8 @@ test("Gate C C4 repair workspace visual baseline", async ({ page }) => {
   await expect(page).toHaveScreenshot("gate-c-c4-repair-workspace.png", {
     fullPage: true,
     animations: "disabled",
+    // WebKit's native datetime-local glyphs can anti-alias differently by a few pixels.
+    // The reviewed full-page baseline remains strict for every substantive layout change.
+    maxDiffPixels: 40,
   });
 });
