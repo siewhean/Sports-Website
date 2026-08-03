@@ -369,7 +369,7 @@ export class GateCC4Operations {
           }),
         ),
       };
-      const bytes = renderScheduleFallbackPdf(document);
+      const bytes = await renderScheduleFallbackPdf(document);
       const contentSha256 = sha256(bytes);
       const manifest = await this.retainManifest(tx, {
         actor,
@@ -460,7 +460,7 @@ export class GateCC4Operations {
         ],
       };
       const renderedSheet: EmergencyScoreSheet = { ...sheet, sections: sectionDefinitions[competition.sport_code] };
-      const bytes = renderEmergencyScoreSheetPdf(renderedSheet);
+      const bytes = await renderEmergencyScoreSheetPdf(renderedSheet);
       const contentSha256 = sha256(bytes);
       const exportKind = `${competition.sport_code}_score_sheet` as const;
       const manifest = await this.retainManifest(tx, {
