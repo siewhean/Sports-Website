@@ -25,6 +25,7 @@ export const gateCC4UiMachine = {
   publishBusy: "publish",
   abandonBusy: "abandon",
   scheduleExportBusy: "schedule-export",
+  repairCreatedEvent: "matchday:gate-c-c4-repair-created",
   noChangeAction: "no_change",
   automaticUpdateAction: "automatic_update",
 } as const;
