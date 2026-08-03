@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
+  isExpectedFrameworkWarning,
   isExpectedTeardownFontCancellation,
   isExpectedTeardownServiceWorkerCancellation,
   isExpectedTeardownStaticAssetCancellation,
 } from "../helpers/console-guard";
+
+describe("framework warning filtering", () => {
+  it("ignores only Firefox's Playwright debugger-layout warning", () => {
+    expect(
+      isExpectedFrameworkWarning(
+        '[JavaScript Warning: "Layout was forced before the page was fully loaded. If stylesheets are not yet loaded this may cause a flash of unstyled content." {file: "debugger eval code" line: 393}]',
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "Layout was forced before the page was fully loaded.",
+    '[JavaScript Warning: "Layout was forced before the page was fully loaded. If stylesheets are not yet loaded this may cause a flash of unstyled content." {file: "app.js" line: 393}]',
+    '[JavaScript Warning: "A different warning" {file: "debugger eval code" line: 393}]',
+  ])("keeps unrelated framework warnings observable", (warning) => {
+    expect(isExpectedFrameworkWarning(warning)).toBe(false);
+  });
+});
 
 const localFont = {
   failure: "cancelled",

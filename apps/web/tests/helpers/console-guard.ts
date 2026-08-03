@@ -5,13 +5,23 @@ type GuardState = { failures: string[]; allowed: AllowedFailure[] };
 
 const guards = new WeakMap<Page, GuardState>();
 
-function isExpectedFrameworkWarning(text: string) {
+export function isExpectedFrameworkWarning(text: string) {
   if (text === "Service Worker registration blocked by Playwright") return true;
   // Firefox validates strict-dynamic correctly but reports this standards
   // interpretation warning for each document. It does not indicate a blocked
   // script or a failed policy; the matching browser journey remains guarded
   // for every real console error and non-framework warning.
   if (/Content-Security-Policy: Ignoring .*self.* within script-src: .*strict-dynamic.* specified/.test(text)) {
+    return true;
+  }
+  // Firefox emits this DevTools-only warning when Playwright evaluates layout
+  // while an initial stylesheet is settling. It is not page-originated and
+  // does not represent a layout, stylesheet, or runtime failure in the app.
+  if (
+    /^\[JavaScript Warning: "Layout was forced before the page was fully loaded\. If stylesheets are not yet loaded this may cause a flash of unstyled content\." \{file: "debugger eval code" line: \d+\}\]$/u.test(
+      text,
+    )
+  ) {
     return true;
   }
   return (
