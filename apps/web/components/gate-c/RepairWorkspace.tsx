@@ -11,6 +11,7 @@ import {
   type GateCC4DecisionDraft,
   type GateCC4RepairQueueItem,
 } from "@/lib/gate-c-c4";
+import { gateCC4Http, gateCC4UiMachine } from "@/lib/gate-c-c4-http";
 import { parseGateCC4References, type GateCC4ReferenceData } from "@/lib/gate-c-c4-references";
 import { isGateCC4PublicationReceipt, isGateCC4RevisionResponse } from "@/lib/gate-c-c4-validators";
 import styles from "./RepairWorkspace.module.css";
@@ -52,7 +53,7 @@ function localDateTime(value: string | null | undefined): string {
 }
 
 function actionNeedsDecision(action: GateCRepairActionView): boolean {
-  return !["no_change", "automatic_update"].includes(action.source_action);
+  return ![gateCC4UiMachine.noChangeAction, gateCC4UiMachine.automaticUpdateAction].includes(action.source_action);
 }
 
 function defaultDraft(action: GateCRepairActionView): ActionDraft {
@@ -69,8 +70,8 @@ function defaultDraft(action: GateCRepairActionView): ActionDraft {
 
 async function downloadVerifiedPdf(response: Response): Promise<void> {
   if (!response.ok) throw new Error(upstreamMessage(await response.json().catch(() => null)));
-  const expectedHash = response.headers.get("x-matchday-content-sha256");
-  const disposition = response.headers.get("content-disposition") ?? "";
+  const expectedHash = response.headers.get(gateCC4Http.contentSha256Header);
+  const disposition = response.headers.get(gateCC4Http.contentDispositionHeader) ?? "";
   const filename = /^attachment; filename="([A-Za-z0-9][A-Za-z0-9._-]{0,180}\.pdf)"$/u.exec(disposition)?.[1];
   if (!expectedHash || !/^[a-f0-9]{64}$/u.test(expectedHash) || !filename) {
     throw new Error(gateCC4Copy.failed);
@@ -81,7 +82,7 @@ async function downloadVerifiedPdf(response: Response): Promise<void> {
   if (actualHash !== expectedHash) throw new Error(gateCC4Copy.failed);
   const url = URL.createObjectURL(blob);
   try {
-    const anchor = document.createElement("a");
+    const anchor = document.createElement(gateCC4Http.anchorTag);
     anchor.href = url;
     anchor.download = filename;
     anchor.rel = "noopener";
@@ -113,7 +114,7 @@ export function RepairWorkspace({
     async (repairId: string) => {
       const response = await fetch(
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(repairId)}`,
-        { cache: "no-store" },
+        { cache: gateCC4Http.cacheNoStore },
       );
       const payload: unknown = await response.json().catch(() => null);
       const parsed = response.ok ? parseGateCC4Workspace(payload) : null;
@@ -129,8 +130,12 @@ export function RepairWorkspace({
     setError("");
     try {
       const [queueResponse, referencesResponse] = await Promise.all([
-        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, { cache: "no-store" }),
-        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/references`, { cache: "no-store" }),
+        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, {
+          cache: gateCC4Http.cacheNoStore,
+        }),
+        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/references`, {
+          cache: gateCC4Http.cacheNoStore,
+        }),
       ]);
       const [queuePayload, referencesPayload]: [unknown, unknown] = await Promise.all([
         queueResponse.json().catch(() => null),
@@ -192,13 +197,13 @@ export function RepairWorkspace({
   async function analyse(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || !correctionId) return;
-    setBusy("analyse");
+    setBusy(gateCC4UiMachine.analyseBusy);
     setError("");
     setMessage("");
     try {
       const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, {
         method: gateCC4Machine.post,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": gateCC4Http.jsonContentType },
         body: JSON.stringify({ correction_transaction_id: correctionId }),
       });
       const payload: unknown = await response.json().catch(() => null);
@@ -243,7 +248,7 @@ export function RepairWorkspace({
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(workspace.repair.repair_id)}/revisions`,
         {
           method: gateCC4Machine.post,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": gateCC4Http.jsonContentType },
           body: JSON.stringify(request),
         },
       );
@@ -260,7 +265,7 @@ export function RepairWorkspace({
 
   async function publish() {
     if (!workspace?.latest_revision || !workspace.publication_ready || busy) return;
-    setBusy("publish");
+    setBusy(gateCC4UiMachine.publishBusy);
     setError("");
     setMessage("");
     try {
@@ -269,7 +274,7 @@ export function RepairWorkspace({
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(workspace.repair.repair_id)}/revisions/${encodeURIComponent(revision.repair_revision_id)}/publish`,
         {
           method: gateCC4Machine.post,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": gateCC4Http.jsonContentType },
           body: JSON.stringify({
             competition_id: competitionId,
             repair_id: workspace.repair.repair_id,
@@ -294,7 +299,7 @@ export function RepairWorkspace({
 
   async function abandon() {
     if (!workspace?.latest_revision || abandonReason.trim().length < 3 || busy) return;
-    setBusy("abandon");
+    setBusy(gateCC4UiMachine.abandonBusy);
     setError("");
     setMessage("");
     try {
@@ -302,7 +307,7 @@ export function RepairWorkspace({
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(workspace.repair.repair_id)}/abandon`,
         {
           method: gateCC4Machine.post,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": gateCC4Http.jsonContentType },
           body: JSON.stringify({ expected_revision: workspace.latest_revision.revision, reason: abandonReason.trim() }),
         },
       );
@@ -359,7 +364,7 @@ export function RepairWorkspace({
             onChange={(event) => setCorrectionId(event.currentTarget.value)}
           />
           <button type="submit" disabled={Boolean(busy) || !correctionId}>
-            {busy === "analyse" ? gateCC4Copy.analysing : gateCC4Copy.analyse}
+            {busy === gateCC4UiMachine.analyseBusy ? gateCC4Copy.analysing : gateCC4Copy.analyse}
           </button>
         </form>
         <button type="button" disabled={loading || Boolean(busy)} onClick={() => void refresh()}>
@@ -569,22 +574,26 @@ export function RepairWorkspace({
               <section className={styles.commands}>
                 {unresolved.length ? <p role="status">{gateCC4Copy.publishBlocked}</p> : null}
                 <div>
-                  <button type="button" disabled={Boolean(busy)} onClick={() => void saveRevision("draft")}>
-                    {busy === "draft" ? gateCC4Copy.saving : gateCC4Copy.saveDraft}
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void saveRevision(gateCC4Machine.draft)}
+                  >
+                    {busy === gateCC4Machine.draft ? gateCC4Copy.saving : gateCC4Copy.saveDraft}
                   </button>
                   <button
                     type="button"
                     disabled={Boolean(busy) || unresolved.length > 0}
-                    onClick={() => void saveRevision("ready")}
+                    onClick={() => void saveRevision(gateCC4Machine.ready)}
                   >
-                    {busy === "ready" ? gateCC4Copy.saving : gateCC4Copy.markReady}
+                    {busy === gateCC4Machine.ready ? gateCC4Copy.saving : gateCC4Copy.markReady}
                   </button>
                   <button
                     type="button"
                     disabled={Boolean(busy) || !workspace.publication_ready}
                     onClick={() => void publish()}
                   >
-                    {busy === "publish" ? gateCC4Copy.publishing : gateCC4Copy.publish}
+                    {busy === gateCC4UiMachine.publishBusy ? gateCC4Copy.publishing : gateCC4Copy.publish}
                   </button>
                 </div>
                 <label>
@@ -600,7 +609,7 @@ export function RepairWorkspace({
                   disabled={Boolean(busy) || abandonReason.trim().length < 3}
                   onClick={() => void abandon()}
                 >
-                  {busy === "abandon" ? gateCC4Copy.abandoning : gateCC4Copy.abandon}
+                  {busy === gateCC4UiMachine.abandonBusy ? gateCC4Copy.abandoning : gateCC4Copy.abandon}
                 </button>
               </section>
 
@@ -614,7 +623,7 @@ export function RepairWorkspace({
                     onClick={() =>
                       void exportPdf(
                         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/schedule`,
-                        "schedule-export",
+                        gateCC4UiMachine.scheduleExportBusy,
                       )
                     }
                   >
