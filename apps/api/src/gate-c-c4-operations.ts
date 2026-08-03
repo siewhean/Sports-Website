@@ -358,7 +358,10 @@ export class GateCC4Operations {
         timezone: competition.timezone,
         scheduleVersion: competition.schedule_version,
         resultVersion: competition.result_version,
-        generatedAt: this.now().toISOString(),
+        // Export receipts are idempotent for one immutable public source. A
+        // wall-clock generation time would change the PDF bytes while its
+        // source fingerprint remained the same, breaking retained manifests.
+        generatedAt: instant(competition.source_updated_at),
         publicVerificationUrl: new URL(`/public/${encodeURIComponent(competition.slug)}`, this.publicOrigin).toString(),
         sourceFingerprint,
         filename,
@@ -419,7 +422,9 @@ export class GateCC4Operations {
         timezone: competition.timezone,
         scheduleVersion: competition.schedule_version,
         resultVersion: competition.result_version,
-        generatedAt: this.now().toISOString(),
+        // Keep the score sheet byte-identical for the same public source for
+        // the same manifest/idempotency contract as the schedule fallback.
+        generatedAt: instant(competition.source_updated_at),
         sourceFingerprint,
         sheetIdentifier,
         filename,

@@ -1,5 +1,5 @@
 import { appendFile, readFile } from "node:fs/promises";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 type Seed = {
@@ -32,6 +32,33 @@ type PublicTruth = {
   };
   divisions: unknown[];
 };
+
+async function expectVerifiedPdf(page: Page, path: string): Promise<{ idempotentReplay: string | null }> {
+  const receipt = await page.evaluate(async (requestPath) => {
+    const response = await fetch(requestPath, { method: "POST" });
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      disposition: response.headers.get("content-disposition"),
+      expectedSha256: response.headers.get("x-matchday-content-sha256"),
+      idempotentReplay: response.headers.get("x-matchday-idempotent-replay"),
+      magic: new TextDecoder().decode(bytes.slice(0, 5)),
+      byteLength: bytes.byteLength,
+      sha256,
+    };
+  }, path);
+  expect(receipt.status).toBe(200);
+  expect(receipt.contentType).toContain("application/pdf");
+  expect(receipt.disposition).toMatch(/^attachment; filename="[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.pdf"$/u);
+  expect(receipt.expectedSha256).toMatch(/^[a-f0-9]{64}$/u);
+  expect(receipt.magic).toBe("%PDF-");
+  expect(receipt.byteLength).toBeGreaterThan(0);
+  expect(receipt.sha256).toBe(receipt.expectedSha256);
+  return { idempotentReplay: receipt.idempotentReplay };
+}
 
 async function seed(projectName: string): Promise<Seed> {
   const file = process.env.PHASE4_E2E_STATE_FILE;
@@ -139,6 +166,22 @@ test("browser publishes a C4 repair through the real BFF and public truth", asyn
     { headers: { "if-none-match": scopedEtag! } },
   );
   expect(notModified.status()).toBe(304);
+
+  const scheduleExport = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname.endsWith(`/competitions/${fixture.competitionId}/exports/schedule`),
+  );
+  await page.getByRole("button", { name: "Download published schedule PDF" }).click();
+  expect((await scheduleExport).status()).toBe(200);
+  expect(
+    (await expectVerifiedPdf(page, `/api/gate-c/competitions/${fixture.competitionId}/exports/schedule`))
+      .idempotentReplay,
+  ).toBe("true");
+  await expectVerifiedPdf(
+    page,
+    `/api/gate-c/competitions/${fixture.competitionId}/exports/matches/${fixture.correctedMatchId}/score-sheet`,
+  );
 
   const resultFile = process.env.GATE_C_C4_E2E_RESULT_FILE;
   if (!resultFile) throw new Error("GATE_C_C4_E2E_RESULT_FILE is required");
