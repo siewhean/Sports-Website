@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "gate-c-c4-exact-sha-summary",
+  "source_sha": "a2b764f63aaf6c3dc4779a8b2ab78c570981dc8f",
+  "branch": "codex/c4-exact-sha-completion",
+  "scope": "Gate C C4 repair, canonical public truth, and fallback exports only",
+  "status": "PASS",
+  "full_gate_c_status": "INCOMPLETE",
+  "environment": {
+    "node": "v24.18.0",
+    "pnpm": "10.33.0",
+    "postgresql": "18.4",
+    "redis": "8.2.8",
+    "playwright": "1.61.1"
+  },
+  "ledger": {
+    "path": "artifacts/qa/gate-c-c4/a2b764f63aaf6c3dc4779a8b2ab78c570981dc8f/retained/full-ledger.log",
+    "sha256": "c73c7f1211b4b0cb7c0af9c466a186673269f50175fd29256e6c507761402a68",
+    "required_command_failures": 0,
+    "required_command_skips": 0
+  },
+  "direct_real_journeys": {
+    "path": "artifacts/qa/gate-c-c4/a2b764f63aaf6c3dc4779a8b2ab78c570981dc8f/retained/real-journeys.log",
+    "sha256": "cd75e10dc31167edf2d11088213ed9be36737de95737b60bb451cfbf01ae813a"
+  },
+  "isolation_receipt": {
+    "path": "artifacts/qa/gate-c-c4/a2b764f63aaf6c3dc4779a8b2ab78c570981dc8f/retained/phase4-real-isolation.ndjson",
+    "sha256": "37ffd6af86be3d4b702d98c27143541b8befaab0ddd68ae7f7796af9a74b29a7",
+    "runs": 2,
+    "source_sha_bound": true,
+    "redis_owned_keys": "0->0",
+    "unrelated_guards_preserved": true
+  },
+  "immutable_bundle": {
+    "path": "artifacts/qa/gate-c-c4/a2b764f63aaf6c3dc4779a8b2ab78c570981dc8f/retained-evidence.tar.gz",
+    "sha256": "d42817b44b19842f29f5df190f5f584083ac7a380f74a1c078a4616db11ce097",
+    "size_bytes": 280107,
+    "file_mode": "0444",
+    "archive_entries": 3,
+    "symlink_entries": 0
+  },
+  "results": {
+    "unit_passed": 1057,
+    "integration": { "api": 113, "database": 63, "scheduler": 3, "failed": 0 },
+    "generic_e2e": { "passed": 337, "failed": 0, "skipped": 10 },
+    "accessibility": { "passed": 94, "failed": 0, "wcag_a_aa_violations": 0 },
+    "visual": { "passed": 80, "failed": 0 },
+    "direct_isolated_journeys": { "runs": 2, "browser_projects_per_run": 6, "failed_projects": 0 }
+  },
+  "independent_review": { "p0": 0, "p1": 0, "p2": 0, "p3": 0, "verdict": "PASS" },
+  "hosted_github_actions": "Not executed because the account Actions allowance is unavailable."
+}
