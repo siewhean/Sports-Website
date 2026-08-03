@@ -1,6 +1,17 @@
 #!/bin/sh
 set -eu
 
+# Validation evidence is pinned to Node 24.18.0. GUI-launched Git hooks do not
+# inherit the interactive shell's NVM PATH, so select that runtime explicitly
+# instead of falling back to a host Node installation.
+NVM_DIR=${NVM_DIR:-"$HOME/.nvm"}
+NODE_BIN="$NVM_DIR/versions/node/v24.18.0/bin"
+if [ ! -x "$NODE_BIN/node" ]; then
+  echo "Pinned Node v24.18.0 is required for pre-commit validation." >&2
+  exit 1
+fi
+export PATH="$NODE_BIN:$PATH"
+
 pnpm format:check
 pnpm lint
 pnpm typecheck

@@ -7,6 +7,13 @@ const guards = new WeakMap<Page, GuardState>();
 
 function isExpectedFrameworkWarning(text: string) {
   if (text === "Service Worker registration blocked by Playwright") return true;
+  // Firefox validates strict-dynamic correctly but reports this standards
+  // interpretation warning for each document. It does not indicate a blocked
+  // script or a failed policy; the matching browser journey remains guarded
+  // for every real console error and non-framework warning.
+  if (/Content-Security-Policy: Ignoring .*self.* within script-src: .*strict-dynamic.* specified/.test(text)) {
+    return true;
+  }
   return (
     /was preloaded using link preload but not used within a few seconds/.test(text) &&
     (/\/_next\/static\/media\/Geist(?:Mono)?_Variable/.test(text) ||
@@ -85,7 +92,11 @@ export function installConsoleGuard(page: Page) {
     const failure = request.failure()?.errorText ?? "unknown error";
     const url = request.url();
     // Next cancels speculative RSC prefetches when navigation makes them stale.
-    if ((failure === "net::ERR_ABORTED" || failure === "cancelled") && url.includes("_rsc=")) return;
+    if (
+      (failure === "net::ERR_ABORTED" || failure === "cancelled" || failure === "NS_BINDING_ABORTED") &&
+      url.includes("_rsc=")
+    )
+      return;
     // WebKit may cancel an in-flight local font while a page or context is
     // being replaced. Keep every other font/network failure observable.
     if (
