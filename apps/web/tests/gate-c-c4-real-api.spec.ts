@@ -33,6 +33,11 @@ type PublicTruth = {
   divisions: unknown[];
 };
 
+// This spec is intentionally executed only by the isolated real-E2E runner,
+// which generates a per-project fixture file. Generic mocked-browser E2E has
+// no safe substitute for that state and must not attempt a partial journey.
+test.skip(!process.env.PHASE4_E2E_STATE_FILE, "requires the isolated Phase 4 real-E2E fixture");
+
 async function expectVerifiedPdf(page: Page, path: string): Promise<{ idempotentReplay: string | null }> {
   const receipt = await page.evaluate(async (requestPath) => {
     const response = await fetch(requestPath, { method: "POST" });
