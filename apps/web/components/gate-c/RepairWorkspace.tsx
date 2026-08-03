@@ -62,7 +62,12 @@ export function scoreSheetExportMatches(
       (() => {
         const entryName = (action: GateCRepairActionView | undefined) =>
           action?.resolved_entry_name ?? action?.current_entry_name ?? action?.proposed_entry_name ?? id;
-        return { id, label: id, home: entryName(slots.home), away: entryName(slots.away) };
+        return {
+          id,
+          label: slots.home?.match_code ?? slots.away?.match_code ?? gateCC4Copy.affectedMatch,
+          home: entryName(slots.home),
+          away: entryName(slots.away),
+        };
       })(),
     );
   }

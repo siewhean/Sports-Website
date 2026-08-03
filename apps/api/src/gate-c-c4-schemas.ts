@@ -125,6 +125,7 @@ const gateCC4ActionView = gateCC4Strict({
   reason: Type.String({ minLength: 3, maxLength: 1_000 }),
   dependency_path: Type.Array(gateCC4DependencyStep),
   created_at: gateCC4DateTime,
+  match_code: Type.Union([Type.String({ minLength: 1, maxLength: 40 }), Type.Null()]),
   current_entry_name: Type.Union([Type.String(), Type.Null()]),
   proposed_entry_name: Type.Union([Type.String(), Type.Null()]),
   resolved_entry_name: Type.Union([Type.String(), Type.Null()]),

@@ -75,7 +75,7 @@ test("Gate C C4 never offers forbidden protected-match decisions or rescheduling
 });
 
 test("Gate C C4 analyses an atomic pending repair case and verifies fallback export integrity", async ({ page }) => {
-  await installGateCC4BrowserRoutes(page);
+  await installGateCC4BrowserRoutes(page, { referenceMatches: [] });
 
   await page.goto("/organiser/competitions/singapore-open/repairs");
   await dismissConsent(page);
@@ -95,10 +95,12 @@ test("Gate C C4 analyses an atomic pending repair case and verifies fallback exp
   expect(response.headers()["x-matchday-content-sha256"]).toMatch(/^[a-f0-9]{64}$/u);
   const scoreSheetResponse = page.waitForResponse(
     (candidate) =>
-      candidate.url().endsWith(`/exports/matches/${gateCC4Ids.correctedMatch}/score-sheet`) &&
+      candidate.url().endsWith(`/exports/matches/${gateCC4Ids.downstreamMatch}/score-sheet`) &&
       candidate.request().method() === "POST",
   );
-  await page.getByTestId(`gate-c-c4-score-sheet-${gateCC4Ids.correctedMatch}`).click();
+  const scoreSheet = page.getByTestId(`gate-c-c4-score-sheet-${gateCC4Ids.downstreamMatch}`);
+  await expect(scoreSheet.locator("xpath=..").getByText("M12", { exact: true })).toBeVisible();
+  await scoreSheet.click();
   expect((await scoreSheetResponse).headers()["content-type"]).toContain("application/pdf");
   await expect(page.getByTestId("gate-c-c4-repair-workspace").getByRole("alert")).toHaveCount(0);
 });

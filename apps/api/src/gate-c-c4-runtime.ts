@@ -117,6 +117,7 @@ type RepairActionRow = {
   current_entry_name: string | null;
   proposed_entry_name: string | null;
   selected_entry_name: string | null;
+  match_code: string | null;
 };
 
 type AdjustmentRow = {
@@ -967,12 +968,14 @@ export class GateCC4Runtime {
       ? await this.sql.unsafe<RepairActionRow>(
           `SELECT action.*,decision.decision,decision.selected_entry_id,decision.reason AS decision_reason,
                   current_entry.name AS current_entry_name,proposed_entry.name AS proposed_entry_name,
-                  selected_entry.name AS selected_entry_name
+                  selected_entry.name AS selected_entry_name,match.code AS match_code
            FROM schedule_repair_actions action
            LEFT JOIN schedule_repair_decisions decision ON decision.repair_action_id=action.id
            LEFT JOIN division_entries current_entry ON current_entry.id=action.current_entry_id
            LEFT JOIN division_entries proposed_entry ON proposed_entry.id=action.proposed_entry_id
            LEFT JOIN division_entries selected_entry ON selected_entry.id=decision.selected_entry_id
+           LEFT JOIN matches match ON match.id=action.match_id
+             AND match.competition_id=action.competition_id AND match.division_id=action.division_id
            WHERE action.repair_revision_id=$1 ORDER BY action.ordinal`,
           [revision.id],
         )
@@ -1010,6 +1013,7 @@ export class GateCC4Runtime {
         reason: action.decision_reason ?? action.reason,
         dependency_path: json(action.dependency_path),
         created_at: instant(action.created_at),
+        match_code: action.match_code,
         current_entry_name: action.current_entry_name,
         proposed_entry_name: action.proposed_entry_name,
         resolved_entry_name:

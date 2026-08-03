@@ -24,7 +24,10 @@ export const gateCC4Ids = {
 const fingerprint = "a".repeat(64);
 const createdAt = "2026-08-01T00:00:00.000Z";
 
-type GateCC4FixtureOptions = Readonly<{ action?: GateCRepairActionKind }>;
+type GateCC4FixtureOptions = Readonly<{
+  action?: GateCRepairActionKind;
+  referenceMatches?: readonly Readonly<{ id: string; label: string; home: string; away: string }>[];
+}>;
 
 export function gateCC4Workspace(ready = false, options: GateCC4FixtureOptions = {}) {
   const sourceAction = options.action ?? "automatic_update";
@@ -118,6 +121,7 @@ export function gateCC4Workspace(ready = false, options: GateCC4FixtureOptions =
         current_entry_name: "Marina Blue",
         proposed_entry_name: "Harbour Gold",
         resolved_entry_name: ready ? (protectedAction ? "Marina Blue" : "Harbour Gold") : null,
+        match_code: "M12",
         adjustment: null,
       },
     ],
@@ -223,7 +227,7 @@ export async function installGateCC4BrowserRoutes(
       return;
     }
     if (path.endsWith("/references") && method === "GET") {
-      await json(route, references);
+      await json(route, { ...references, matches: options.referenceMatches ?? references.matches });
       return;
     }
     if (path.endsWith("/repairs") && method === "GET") {

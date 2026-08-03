@@ -83,6 +83,7 @@ export const gateCC4Copy = {
   audit: "Repair audit history",
   schedulePdf: "Download published schedule PDF",
   scoreSheet: "Emergency score sheet",
+  affectedMatch: "Affected match",
   exportHelp: "Exports are generated from the exact published schedule and retained with SHA-256 manifests.",
   refresh: "Refresh repairs",
   loading: "Loading repairs",
@@ -191,6 +192,7 @@ export function parseGateCC4Workspace(value: unknown): GateCRepairWorkspaceView 
       !uuidPattern.test(action.repair_action_id) ||
       typeof action.match_id !== "string" ||
       !uuidPattern.test(action.match_id) ||
+      (action.match_code !== null && typeof action.match_code !== "string") ||
       typeof action.division_id !== "string" ||
       !uuidPattern.test(action.division_id) ||
       (action.slot !== "home" && action.slot !== "away") ||

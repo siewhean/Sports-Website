@@ -44,6 +44,7 @@ export type GateCRepairRevisionCreateResponse = Readonly<{
 
 export type GateCRepairActionView = GateCRepairActionRecord &
   Readonly<{
+    match_code: string | null;
     current_entry_name: string | null;
     proposed_entry_name: string | null;
     resolved_entry_name: string | null;
