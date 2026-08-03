@@ -610,6 +610,8 @@ function assertPinnedToolchain(): void {
 }
 
 async function prepareInfrastructure(mode: InfrastructureMode): Promise<void> {
+  assertLocalInfrastructureUrls(adminDatabaseUrl, baseRedisUrl);
+
   if (mode === "docker") {
     await runProcess(
       "local infrastructure",
@@ -620,7 +622,6 @@ async function prepareInfrastructure(mode: InfrastructureMode): Promise<void> {
     return;
   }
 
-  assertLocalInfrastructureUrls(adminDatabaseUrl, baseRedisUrl);
   const adminProbe = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
   const redisProbe = new Redis(baseRedisUrl, { maxRetriesPerRequest: 1 });
   try {
