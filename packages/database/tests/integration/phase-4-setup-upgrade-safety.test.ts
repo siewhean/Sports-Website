@@ -59,6 +59,16 @@ async function makePre0014Directory(): Promise<string> {
   return directory;
 }
 
+async function makeThroughC3Directory(): Promise<string> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "matchday-through-c3-"));
+  for (const name of await readdir(migrationsDirectory)) {
+    const match = /^(\d{4})_[a-z0-9_]+\.sql$/u.exec(name);
+    if (!match || Number(match[1]) > 32) continue;
+    await cp(path.join(migrationsDirectory, name), path.join(directory, name));
+  }
+  return directory;
+}
+
 beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
@@ -137,6 +147,7 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
     async () => {
       const upgradeSchema = `test_phase4_pre0014_${randomUUID().replaceAll("-", "")}`;
       const partialDirectory = await makePre0014Directory();
+      const c3Directory = await makeThroughC3Directory();
       let upgradeSql: Sql | undefined;
       try {
         await migrateDatabase({ databaseUrl, migrationsDirectory: partialDirectory, schema: upgradeSchema });
@@ -189,7 +200,11 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
         await upgradeSql.end();
         upgradeSql = undefined;
 
-        const upgraded = await migrateDatabase({ databaseUrl, migrationsDirectory, schema: upgradeSchema });
+        const upgraded = await migrateDatabase({
+          databaseUrl,
+          migrationsDirectory: c3Directory,
+          schema: upgradeSchema,
+        });
         expect(upgraded.applied).toEqual([
           "0014_phase4_template_sport_guard.sql",
           "0015_phase4_setup_seed_and_patch.sql",
@@ -229,6 +244,7 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
       } finally {
         await upgradeSql?.end({ timeout: 2 });
         await rm(partialDirectory, { recursive: true, force: true });
+        await rm(c3Directory, { recursive: true, force: true });
         await dropTestSchema(databaseUrl, upgradeSchema);
       }
     },

@@ -126,12 +126,28 @@ describe("foundation migrations", () => {
         "0033_gate_c_repair_public_truth_exports.sql",
         "0034_gate_c_repair_revision_fencing.sql",
         "0035_gate_c_repair_lineage_fencing.sql",
+        "0036_gate_c_repair_publication_version_fencing.sql",
+        "0036_z_gate_c_repair_append_only_compatibility.sql",
+        "0037_gate_c_repair_schedule_adjustments.sql",
+        "0038_gate_c_repair_schedule_participant_snapshots.sql",
+        "0039_gate_c_multi_division_repair_projection_lineage.sql",
+        "0040_gate_c_atomic_result_repair_cases.sql",
+        "0041_gate_c_assign_result_repair_parent.sql",
       ] as const;
       const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
       const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
       const repairPersistenceMigrationName = "0033_gate_c_repair_public_truth_exports.sql";
       const repairRevisionFencingMigrationName = "0034_gate_c_repair_revision_fencing.sql";
       const repairLineageFencingMigrationName = "0035_gate_c_repair_lineage_fencing.sql";
+      const deferredC4MigrationNames = [
+        "0036_gate_c_repair_publication_version_fencing.sql",
+        "0036_z_gate_c_repair_append_only_compatibility.sql",
+        "0037_gate_c_repair_schedule_adjustments.sql",
+        "0038_gate_c_repair_schedule_participant_snapshots.sql",
+        "0039_gate_c_multi_division_repair_projection_lineage.sql",
+        "0040_gate_c_atomic_result_repair_cases.sql",
+        "0041_gate_c_assign_result_repair_parent.sql",
+      ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
           const migrationPath = path.join(copiedDirectory, name);
@@ -340,7 +356,8 @@ describe("foundation migrations", () => {
                 name !== offlineReplayMigrationName &&
                 name !== repairPersistenceMigrationName &&
                 name !== repairRevisionFencingMigrationName &&
-                name !== repairLineageFencingMigrationName,
+                name !== repairLineageFencingMigrationName &&
+                !deferredC4MigrationNames.includes(name as (typeof deferredC4MigrationNames)[number]),
             )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
@@ -349,7 +366,17 @@ describe("foundation migrations", () => {
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -5));
+        expect(upgradedBeforeParticipantFence.applied).toEqual(
+          forwardMigrationNames.filter(
+            (name) =>
+              name !== participantFenceMigrationName &&
+              name !== offlineReplayMigrationName &&
+              name !== repairPersistenceMigrationName &&
+              name !== repairRevisionFencingMigrationName &&
+              name !== repairLineageFencingMigrationName &&
+              !deferredC4MigrationNames.includes(name as (typeof deferredC4MigrationNames)[number]),
+          ),
+        );
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -419,6 +446,19 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithRepairLineageFencing.applied).toEqual([repairLineageFencingMigrationName]);
+        await Promise.all(
+          deferredC4MigrationNames.map(async (name) => {
+            const migration = forwardMigrations.find((entry) => entry.name === name);
+            if (!migration) throw new Error(`Expected deferred C4 migration ${name}`);
+            await writeFile(migration.migrationPath, migration.source);
+          }),
+        );
+        const upgradedWithDeferredC4 = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithDeferredC4.applied).toEqual(deferredC4MigrationNames);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
@@ -726,7 +766,7 @@ describe("foundation migrations", () => {
           (
             await sql<
               { expiry: string }[]
-            >`SELECT phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz)::text expiry`
+            >`SELECT (phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz) AT TIME ZONE 'UTC')::text expiry`
           )[0]?.expiry,
         ).toContain("2027-02-28 10:15:00");
       } finally {
