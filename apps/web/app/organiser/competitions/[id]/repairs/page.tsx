@@ -1,10 +1,10 @@
+import { notFound, redirect } from "next/navigation";
 import { PendingRepairCases } from "@/components/gate-c/PendingRepairCases";
 import { RepairWorkspace } from "@/components/gate-c/RepairWorkspace";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
-import { OrganiserState } from "@/components/phase2/OrganiserState";
 import { gateCC4Copy } from "@/lib/gate-c-c4";
-import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase2Copy } from "@/lib/phase2";
+import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 
 export const dynamic = "force-dynamic";
 
@@ -15,15 +15,9 @@ export default async function CompetitionRepairsPage({
 }) {
   const { id } = await params;
   const result = await getOrganiserCompetitionView(id);
-  if (result.state === "permission") {
-    return <OrganiserState state="permission" title={phase2Copy.permissionTitle} body={phase2Copy.permissionBody} />;
-  }
-  if (result.state === "notFound") {
-    return <OrganiserState state="empty" title={phase2Copy.emptyTitle} body={phase2Copy.emptyBody} />;
-  }
-  if (result.state === "error") {
-    return <OrganiserState state="error" title={phase2Copy.errorTitle} body={phase2Copy.errorBody} />;
-  }
+  if (result.state === "notFound") notFound();
+  if (result.state === "permission") redirect("/forbidden");
+  if (result.state === "error") throw new Error(phase2Copy.errorBody);
 
   const competition = result.competition;
   return (
@@ -33,9 +27,9 @@ export default async function CompetitionRepairsPage({
       pageEyebrow={gateCC4Copy.eyebrow}
       pageTitle={gateCC4Copy.title}
       pageIntro={gateCC4Copy.intro}
-      pageMeta={competition.publishedVersionLabel ?? competition.publicationRevision}
+      syncLabel={competition.publicationRevision}
+      syncState="saved"
       sectionAction={null}
-      enableRemoteOperations={competition.canEdit === true}
       sectionContent={
         <div style={{ display: "grid", gap: "1rem" }}>
           <PendingRepairCases competitionId={competition.id} />
