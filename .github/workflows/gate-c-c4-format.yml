@@ -1,0 +1,57 @@
+name: Gate C4 formatter bootstrap
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gate-c-c4-format-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prettier:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/gate-c-c4-production-integration-20260801'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact C4 branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/gate-c-c4-production-integration-20260801
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install the exact dependency graph
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Apply the repository formatter
+        run: pnpm exec prettier --write .
+
+      - name: Commit only formatter output when changed
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Source is already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -m "style(c4): apply repository formatting"
+          git push origin HEAD:fix/gate-c-c4-production-integration-20260801
