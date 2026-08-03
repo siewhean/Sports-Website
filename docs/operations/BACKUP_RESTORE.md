@@ -8,7 +8,19 @@ Phase 1 proves the procedure locally with a disposable source and restore databa
 
 ```sh
 docker compose -f infra/local/compose.yaml up -d --wait
-pnpm backup:verify
+BACKUP_VERIFY_POSTGRES_MODE=docker pnpm backup:verify
+```
+
+When Docker is not available, the verifier can instead use a local PostgreSQL
+maintenance database. This mode is deliberately limited to Unix-socket or
+loopback PostgreSQL and refuses any non-local host. It still creates only
+generated disposable `matchday_backup_test_*` and `matchday_restore_test_*`
+databases:
+
+```sh
+BACKUP_VERIFY_POSTGRES_MODE=local \
+  BACKUP_VERIFY_ADMIN_DATABASE_URL=postgresql:///postgres \
+  pnpm backup:verify
 ```
 
 The verification script migrates a new source database, inserts a deterministic sentinel, creates a custom-format `pg_dump`, restores it into another new database, compares row counts and fingerprints, verifies a post-restore constraint-valid write, and removes both databases and the temporary dump.

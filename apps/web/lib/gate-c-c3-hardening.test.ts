@@ -237,6 +237,9 @@ describe("Gate C C3 hardening", () => {
     expect(backupVerifier.indexOf("pnpm --filter @matchday/config build")).toBeLessThan(
       backupVerifier.indexOf("pnpm db:migrate"),
     );
+    expect(backupVerifier).toContain("BACKUP_VERIFY_ADMIN_DATABASE_URL");
+    expect(backupVerifier).toContain("BACKUP_VERIFY_POSTGRES_MODE");
+    expect(backupVerifier).toContain("Backup verification only permits a local PostgreSQL admin URL.");
   });
 
   it("persists only the Firefox and WebKit connectivity hint across offline reloads", async () => {
