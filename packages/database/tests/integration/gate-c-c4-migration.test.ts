@@ -1,4 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -14,9 +16,164 @@ beforeAll(async () => dropTestSchema(config.databaseUrl, schema));
 afterAll(async () => dropTestSchema(config.databaseUrl, schema));
 
 describe("Gate C C4 repair persistence migration", () => {
+  it("upgrades populated C4 repair history through 0040 and 0041 without rewriting C3 audit or outbox bytes", async () => {
+    const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-gate-c-c4-upgrade-"));
+    const migrationNames = [
+      "0040_gate_c_atomic_result_repair_cases.sql",
+      "0041_gate_c_assign_result_repair_parent.sql",
+    ] as const;
+    const upgradeSchema = `test_gate_c_c4_upgrade_${randomUUID().replaceAll("-", "")}`;
+    await cp(migrationsDirectory, copiedDirectory, { recursive: true });
+    const migrations = await Promise.all(
+      migrationNames.map(async (name) => {
+        const migrationPath = path.join(copiedDirectory, name);
+        return { migrationPath, name, source: await readFile(migrationPath, "utf8") };
+      }),
+    );
+    await Promise.all(migrations.map(({ migrationPath }) => rm(migrationPath)));
+    await migrateDatabase({
+      databaseUrl: config.databaseUrl,
+      migrationsDirectory: copiedDirectory,
+      schema: upgradeSchema,
+    });
+    const sql = postgres(config.databaseUrl, {
+      max: 1,
+      prepare: false,
+      connection: { search_path: upgradeSchema },
+    });
+    try {
+      const accountId = randomUUID();
+      const organisationId = randomUUID();
+      const competitionId = randomUUID();
+      const divisionId = randomUUID();
+      const formatRevisionId = randomUUID();
+      const matchId = randomUUID();
+      const correctionTransactionId = randomUUID();
+      const repairCaseId = randomUUID();
+      const fingerprint = "a".repeat(64);
+      const outboxKey = `c4-history-${randomUUID()}`;
+      const auditRequestId = `c4-history-audit-${randomUUID()}`;
+
+      await sql.begin(async (tx) => {
+        await tx`INSERT INTO accounts(id,primary_email,display_name)
+          VALUES(${accountId},${`${accountId}@example.test`},'C4 upgrade owner')`;
+        await tx`INSERT INTO organisations(id,name,slug)
+          VALUES(${organisationId},'C4 upgrade org',${`c4-upgrade-${organisationId}`})`;
+        await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+          VALUES(${organisationId},${accountId},'owner','active')`;
+      });
+      await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,plan_tier)
+        VALUES(${competitionId},${organisationId},${accountId},'C4 Upgrade Cup',${`c4-upgrade-cup-${competitionId}`},'badminton',
+          'Asia/Singapore','2027-02-01','2027-02-01','organiser_pro')`;
+      await sql`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competitionId},'Open',16)`;
+      const pack = { recommendedSlotMinutes: 20, recommendedSettings: { slotMinutes: 20 } };
+      const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) hash`;
+      await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
+        VALUES('badminton','c4-upgrade-1',1,${sql.json(pack)},${packHash!.hash},'active',now())`;
+      const definition = {
+        id: formatRevisionId,
+        schemaVersion: 1,
+        entryCount: 2,
+        stages: [
+          {
+            id: "final-stage",
+            label: "Final",
+            kind: "single_elimination",
+            order: 1,
+            groupIds: [],
+            groupSize: null,
+            outputRanks: 2,
+            matchIds: [matchId],
+          },
+        ],
+        matches: [
+          {
+            id: matchId,
+            stageId: "final-stage",
+            round: 1,
+            order: 1,
+            purpose: "championship",
+            home: { type: "entry_seed", seed: 1 },
+            away: { type: "entry_seed", seed: 2 },
+          },
+        ],
+        terminalMatchIds: [matchId],
+      };
+      const [definitionHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(definition)}) hash`;
+      await sql`INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,status,created_by)
+        VALUES(${formatRevisionId},${competitionId},${divisionId},1,${sql.json(definition)},${definitionHash!.hash},'draft',${accountId})`;
+      await sql`INSERT INTO matches(id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal)
+        VALUES(${matchId},${competitionId},${divisionId},${formatRevisionId},'M1','final',1,1)`;
+      await sql`INSERT INTO match_score_streams(
+        match_id,competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint
+      ) VALUES(${matchId},${competitionId},${divisionId},'badminton','c4-upgrade-1',${sql.json({})},${fingerprint})`;
+      await sql`INSERT INTO score_correction_transactions(
+        id,competition_id,division_id,match_id,client_event_id,command_fingerprint,reason,
+        from_aggregate_version,through_aggregate_version,result_version,actor_account_id
+      ) VALUES(${correctionTransactionId},${competitionId},${divisionId},${matchId},${randomUUID()},${fingerprint},'Upgrade correction',
+        0,1,1,${accountId})`;
+      await sql`INSERT INTO schedule_repair_cases(
+        id,competition_id,corrected_division_id,corrected_match_id,correction_transaction_id,
+        source_result_version,source_schedule_version,source_projection_version,analysis_fingerprint,
+        analysis_fingerprint_input,created_by_account_id
+      ) VALUES(${repairCaseId},${competitionId},${divisionId},${matchId},${correctionTransactionId},
+        1,0,0,${fingerprint},'upgrade repair analysis',${accountId})`;
+      await sql`INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload,idempotency_key)
+        VALUES('match','c4-upgrade-history','scoring_event.appended',to_jsonb(${JSON.stringify({ match_id: matchId })}::text),${outboxKey})`;
+      await sql`INSERT INTO audit_events(
+        request_id,actor_type,organisation_id,action,target_type,target_id,before_state,after_state
+      ) VALUES(${auditRequestId},'system',${organisationId},'scoring_event.appended','match','c4-upgrade-history',
+        to_jsonb(${"before"}::text),to_jsonb(${"after"}::text))`;
+      const [before] = await sql<{ payload: string; before_state: string; after_state: string }[]>`
+        SELECT outbox.payload::text payload,audit.before_state::text before_state,audit.after_state::text after_state
+        FROM outbox_events outbox JOIN audit_events audit ON audit.request_id=${auditRequestId}
+        WHERE outbox.idempotency_key=${outboxKey}
+      `;
+      if (!before) throw new Error("Expected retained C3 audit and outbox fixture");
+
+      await Promise.all(migrations.map(({ migrationPath, source }) => writeFile(migrationPath, source)));
+      const upgraded = await migrateDatabase({
+        databaseUrl: config.databaseUrl,
+        migrationsDirectory: copiedDirectory,
+        schema: upgradeSchema,
+      });
+      expect(upgraded.applied).toEqual([...migrationNames]);
+      const [after] = await sql<{ payload: string; before_state: string; after_state: string }[]>`
+        SELECT outbox.payload::text payload,audit.before_state::text before_state,audit.after_state::text after_state
+        FROM outbox_events outbox JOIN audit_events audit ON audit.request_id=${auditRequestId}
+        WHERE outbox.idempotency_key=${outboxKey}
+      `;
+      expect(after).toEqual(before);
+      expect(createHash("sha256").update(JSON.stringify(after)).digest("hex")).toBe(
+        createHash("sha256").update(JSON.stringify(before)).digest("hex"),
+      );
+      const [resultCase] = await sql<{ id: string }[]>`
+        SELECT id FROM result_repair_cases WHERE correction_transaction_id=${correctionTransactionId}
+      `;
+      expect(resultCase?.id).toBeTruthy();
+      expect(
+        await sql<{ result_repair_case_id: string }[]>`
+          SELECT result_repair_case_id FROM schedule_repair_cases WHERE id=${repairCaseId}
+        `,
+      ).toEqual([{ result_repair_case_id: resultCase!.id }]);
+      expect(
+        await sql<{ event_type: string }[]>`
+          SELECT event_type FROM result_repair_case_events WHERE result_repair_case_id=${resultCase!.id} ORDER BY event_type
+        `,
+      ).toEqual([{ event_type: "analysis_ready" }, { event_type: "created" }]);
+    } finally {
+      await sql.end({ timeout: 2 });
+      await rm(copiedDirectory, { recursive: true, force: true });
+      await dropTestSchema(config.databaseUrl, upgradeSchema);
+    }
+  }, 30_000);
+
   it("adds immutable division-scoped public truth and export metadata without mutating retained history", async () => {
     const result = await migrateDatabase({ databaseUrl: config.databaseUrl, migrationsDirectory, schema });
     expect(result.current).toContain("0033_gate_c_repair_public_truth_exports.sql");
+    expect(result.current).toContain("0036_z_gate_c_repair_append_only_compatibility.sql");
+    expect(result.current).toContain("0040_gate_c_atomic_result_repair_cases.sql");
+    expect(result.current).toContain("0041_gate_c_assign_result_repair_parent.sql");
 
     const sql = postgres(config.databaseUrl, {
       max: 1,
@@ -112,6 +269,30 @@ describe("Gate C C4 repair persistence migration", () => {
         ${correctionTransactionId},${competitionId},${divisionId},${matchId},${randomUUID()},${fingerprint},'Correction reason',
         0,1,1,${accountId}
       )`;
+      const [resultRepairCase] = await sql<{ id: string }[]>`
+        SELECT id FROM result_repair_cases
+        WHERE correction_transaction_id=${correctionTransactionId}
+          AND competition_id=${competitionId}
+          AND division_id=${divisionId}
+          AND corrected_match_id=${matchId}
+          AND source_result_version=1
+      `;
+      expect(resultRepairCase?.id).toBeTruthy();
+      expect(
+        await sql<{ event_type: string }[]>`
+          SELECT event_type FROM result_repair_case_events
+          WHERE result_repair_case_id=${resultRepairCase!.id}
+          ORDER BY event_type
+        `,
+      ).toEqual([{ event_type: "created" }]);
+      expect(
+        await sql<{ action: string; event_type: string }[]>`
+          SELECT audit.action,outbox.event_type
+          FROM audit_events audit
+          JOIN outbox_events outbox ON outbox.aggregate_id=${resultRepairCase!.id}::text
+          WHERE audit.target_id=${resultRepairCase!.id}::text
+        `,
+      ).toEqual([{ action: "result_repair_case.created", event_type: "result_repair_case.created" }]);
       await sql`INSERT INTO schedule_repair_cases(
         id,competition_id,corrected_division_id,corrected_match_id,correction_transaction_id,
         source_result_version,source_schedule_version,source_projection_version,analysis_fingerprint,
@@ -120,6 +301,92 @@ describe("Gate C C4 repair persistence migration", () => {
         ${repairCaseId},${competitionId},${divisionId},${matchId},${correctionTransactionId},
         1,0,0,${fingerprint},'canonical repair analysis',${accountId}
       )`;
+      expect(
+        await sql<{ result_repair_case_id: string }[]>`
+          SELECT result_repair_case_id FROM schedule_repair_cases WHERE id=${repairCaseId}
+        `,
+      ).toEqual([{ result_repair_case_id: resultRepairCase!.id }]);
+      expect(
+        await sql<{ event_type: string }[]>`
+          SELECT event_type FROM result_repair_case_events
+          WHERE result_repair_case_id=${resultRepairCase!.id}
+          ORDER BY event_type
+        `,
+      ).toEqual([{ event_type: "analysis_ready" }, { event_type: "created" }]);
+      await expect(sql`DELETE FROM result_repair_cases WHERE id=${resultRepairCase!.id}`).rejects.toThrow(
+        /append-only/i,
+      );
+      await expect(
+        sql`DELETE FROM result_repair_case_events WHERE result_repair_case_id=${resultRepairCase!.id}`,
+      ).rejects.toThrow(/append-only/i);
+
+      async function expectAtomicRepairIntakeRollback(label: "repair case" | "audit" | "outbox"): Promise<void> {
+        const failedCorrectionId = randomUUID();
+        const resultVersion = label === "repair case" ? 2 : label === "audit" ? 3 : 4;
+        const failingFunction = `gate_c4_fail_${label.replaceAll(" ", "_")}_intake`;
+        const failingTrigger = `${failingFunction}_trigger`;
+        const targetTable =
+          label === "repair case" ? "result_repair_cases" : label === "audit" ? "audit_events" : "outbox_events";
+        const condition =
+          label === "audit"
+            ? " WHEN (NEW.action = 'result_repair_case.created')"
+            : label === "outbox"
+              ? " WHEN (NEW.event_type = 'result_repair_case.created')"
+              : "";
+
+        await sql.unsafe(`
+          CREATE FUNCTION ${failingFunction}() RETURNS trigger AS $$
+          BEGIN
+            RAISE EXCEPTION 'forced ${label} intake failure';
+          END;
+          $$ LANGUAGE plpgsql;
+          CREATE TRIGGER ${failingTrigger}
+          BEFORE INSERT ON ${targetTable}
+          FOR EACH ROW${condition} EXECUTE FUNCTION ${failingFunction}();
+        `);
+        try {
+          await expect(
+            sql`INSERT INTO score_correction_transactions(
+              id,competition_id,division_id,match_id,client_event_id,command_fingerprint,reason,
+              from_aggregate_version,through_aggregate_version,result_version,actor_account_id
+            ) VALUES(
+              ${failedCorrectionId},${competitionId},${divisionId},${matchId},${randomUUID()},${fingerprint},'Forced rollback',
+              0,${resultVersion},${resultVersion},${accountId}
+            )`,
+          ).rejects.toThrow(`forced ${label} intake failure`);
+        } finally {
+          await sql.unsafe(`DROP TRIGGER IF EXISTS ${failingTrigger} ON ${targetTable};`);
+          await sql.unsafe(`DROP FUNCTION IF EXISTS ${failingFunction}();`);
+        }
+
+        expect(
+          await sql<{ count: string }[]>`
+            SELECT count(*)::text count FROM score_correction_transactions WHERE id=${failedCorrectionId}
+          `,
+        ).toEqual([{ count: "0" }]);
+        expect(
+          await sql<{ count: string }[]>`
+            SELECT count(*)::text count FROM result_repair_cases WHERE correction_transaction_id=${failedCorrectionId}
+          `,
+        ).toEqual([{ count: "0" }]);
+        expect(
+          await sql<{ count: string }[]>`
+            SELECT count(*)::text count
+            FROM audit_events
+            WHERE request_id=${`correction-repair-case:${failedCorrectionId}`}
+          `,
+        ).toEqual([{ count: "0" }]);
+        expect(
+          await sql<{ count: string }[]>`
+            SELECT count(*)::text count FROM outbox_events
+            WHERE payload->>'correction_transaction_id'=${failedCorrectionId}
+          `,
+        ).toEqual([{ count: "0" }]);
+      }
+
+      await expectAtomicRepairIntakeRollback("repair case");
+      await expectAtomicRepairIntakeRollback("audit");
+      await expectAtomicRepairIntakeRollback("outbox");
 
       expect(
         await sql<{ table_name: string }[]>`
@@ -286,7 +553,7 @@ describe("Gate C C4 repair persistence migration", () => {
           ${competitionId},${siblingDivisionId},1,2,1,${firstRevision!.id},${sql.json({ division: "Reserve" })},
           ${"b".repeat(64)},'"c4-reserve-v1"','2027-01-01T01:00:00Z','2027-01-01T01:00:00Z'
         )`,
-      ).rejects.toThrow(/same competition and division/i);
+      ).rejects.toThrow(/division is not affected/i);
 
       const concurrentSql = postgres(config.databaseUrl, {
         max: 1,

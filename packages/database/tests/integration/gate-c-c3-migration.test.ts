@@ -17,6 +17,7 @@ const gateC4MigrationNames = [
   "0034_gate_c_repair_revision_fencing.sql",
   "0035_gate_c_repair_lineage_fencing.sql",
   "0036_gate_c_repair_publication_version_fencing.sql",
+  "0036_z_gate_c_repair_append_only_compatibility.sql",
   "0037_gate_c_repair_schedule_adjustments.sql",
   "0038_gate_c_repair_schedule_participant_snapshots.sql",
   "0039_gate_c_multi_division_repair_projection_lineage.sql",
