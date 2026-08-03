@@ -846,7 +846,7 @@ describe("Gate C3 scoring service worker", () => {
 
     fetch.mockRejectedValueOnce(new TypeError("offline"));
     let offlineResponse: Promise<Response> | undefined;
-    const assetRequest = new Request(assetUrl);
+    const assetRequest = new Request(assetUrl, { referrer: "https://matchday.test/score" });
     Object.defineProperty(assetRequest, "destination", { value: "script" });
     harness.fetchEvent({
       request: assetRequest,
@@ -863,7 +863,7 @@ describe("Gate C3 scoring service worker", () => {
     const live = new Response("live", { status: 200 });
     const fetch = vi.fn().mockResolvedValue(live);
     const harness = await workerMessageHarness({ fetch });
-    const request = new Request(assetUrl);
+    const request = new Request(assetUrl, { referrer: "https://matchday.test/score" });
     Object.defineProperty(request, "destination", { value: "script" });
     let response: Promise<Response> | undefined;
     harness.fetchEvent({
@@ -883,16 +883,14 @@ describe("Gate C3 scoring service worker", () => {
     const harness = await workerMessageHarness({ fetch });
     const request = new Request("https://matchday.test/_next/static/chunks/organiser.js");
     Object.defineProperty(request, "destination", { value: "script" });
-    let response: Promise<Response> | undefined;
+    const respondWith = vi.fn();
     harness.fetchEvent({
       request,
       clientId: "client-b",
-      respondWith: (candidate: Promise<Response>) => {
-        response = candidate;
-      },
+      respondWith,
     });
-    await expect(response).resolves.toBe(network);
-    expect(fetch).toHaveBeenCalledWith(request);
+    expect(respondWith).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each([

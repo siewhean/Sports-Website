@@ -49,12 +49,10 @@ function isImmutableBuildAsset(url, destination) {
   );
 }
 
-async function isScoringShellClient(clientId) {
-  if (typeof clientId !== "string" || clientId.length === 0) return false;
-  const client = await self.clients.get(clientId);
-  if (!client || typeof client.url !== "string") return false;
+function isScoringShellAssetRequest(request) {
+  if (typeof request.referrer !== "string" || request.referrer.length === 0) return false;
   try {
-    const url = new URL(client.url);
+    const url = new URL(request.referrer);
     return url.origin === self.location.origin && url.pathname === SCORING_SHELL_PATH;
   } catch {
     return false;
@@ -813,13 +811,13 @@ self.addEventListener("fetch", (event) => {
   }
 
   const url = new URL(request.url);
-  if (isImmutableBuildAsset(url, request.destination)) {
+  // Do not call respondWith for organiser assets at all. Firefox keeps a
+  // service-worker client association briefly across SPA navigation; the
+  // request referrer, unlike that association, identifies the document that
+  // actually initiated the static asset request.
+  if (isImmutableBuildAsset(url, request.destination) && isScoringShellAssetRequest(request)) {
     event.respondWith(
       Promise.resolve().then(async () => {
-        // Only the explicitly prepared scoring shell may read its retained
-        // immutable assets. Intercepting every application's Next chunk makes
-        // ordinary organiser navigation dependent on service-worker storage.
-        if (!(await isScoringShellClient(event.clientId))) return fetch(request);
         // Network-first is required even for a scoring client: a client can
         // navigate away from /score while its URL is still settling. Retained
         // assets are an offline recovery path, never an online bundle source.
