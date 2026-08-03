@@ -5,8 +5,10 @@ import type { Redis } from "ioredis";
 import { describe, expect, it } from "vitest";
 import {
   assertEmptyOwnedRedisNamespace,
+  assertLocalInfrastructureUrls,
   createRedisOwnership,
   isOwnedRedisKey,
+  resolveInfrastructureMode,
   sha256Identifier,
   unlinkOwnedRedisKeys,
 } from "../../scripts/run-phase-4-real-e2e.js";
@@ -41,6 +43,38 @@ class FakeRedis {
 }
 
 describe("Phase 4 real E2E Redis ownership", () => {
+  it("defaults to local infrastructure and permits Docker only when explicitly selected", () => {
+    expect(resolveInfrastructureMode(undefined)).toBe("local");
+    expect(resolveInfrastructureMode("")).toBe("local");
+    expect(resolveInfrastructureMode("local")).toBe("local");
+    expect(resolveInfrastructureMode("docker")).toBe("docker");
+    expect(() => resolveInfrastructureMode("remote")).toThrow(/local or docker/);
+  });
+
+  it("permits only loopback local infrastructure without connection-string overrides", () => {
+    expect(() =>
+      assertLocalInfrastructureUrls(
+        "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        "redis://127.0.0.1:6379/15",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertLocalInfrastructureUrls("postgres://matchday:matchday@db.internal/matchday", "redis://127.0.0.1:6379/15"),
+    ).toThrow(/local loopback/);
+    expect(() =>
+      assertLocalInfrastructureUrls(
+        "postgres://matchday:matchday@127.0.0.1:5432/matchday?host=db.internal",
+        "redis://127.0.0.1:6379/15",
+      ),
+    ).toThrow(/query parameters/);
+    expect(() =>
+      assertLocalInfrastructureUrls(
+        "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        "redis://redis.internal:6379/15",
+      ),
+    ).toThrow(/local loopback/);
+  });
+
   it("derives four exact key families from a canonical UUID queue name", () => {
     const ownership = createRedisOwnership(queueName);
 

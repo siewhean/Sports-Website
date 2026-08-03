@@ -46,7 +46,10 @@ type Isolation =
 type RunConfiguration = {
   recordFile: string;
   redisDatabase: number;
+  infrastructureMode: InfrastructureMode;
 };
+
+export type InfrastructureMode = "docker" | "local";
 
 type IsolationRecord = {
   run: number;
@@ -117,6 +120,33 @@ function redisUrlForLogicalDatabase(logicalDatabase: number): string {
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+function assertLoopbackUrl(value: string, label: string, protocols: readonly string[]): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid URL`);
+  }
+  if (!protocols.includes(url.protocol)) throw new Error(`${label} uses an unsupported protocol`);
+  if (!["", "localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname))
+    throw new Error(`${label} must target local loopback infrastructure`);
+  if ([...url.searchParams].length > 0) throw new Error(`${label} must not contain query parameters`);
+  return url;
+}
+
+export function resolveInfrastructureMode(value: string | undefined): InfrastructureMode {
+  if (value === undefined || value === "" || value === "local") return "local";
+  if (value === "docker") return "docker";
+  throw new Error("PHASE4_E2E_INFRA_MODE must be local or docker");
+}
+
+export function assertLocalInfrastructureUrls(databaseUrl: string, redisUrl: string): void {
+  const database = assertLoopbackUrl(databaseUrl, "DATABASE_URL", ["postgres:", "postgresql:"]);
+  if (!/^\/[a-zA-Z0-9_-]+$/.test(database.pathname))
+    throw new Error("DATABASE_URL must select one local maintenance database");
+  assertLoopbackUrl(redisUrl, "TEST_REDIS_URL", ["redis:", "rediss:"]);
 }
 
 function sanitizedIsolationIdentifier(isolation: Isolation): string {
@@ -579,6 +609,32 @@ function assertPinnedToolchain(): void {
     throw new Error(`Phase 4 real E2E requires pnpm 10.33.0; received ${packageManager || "unknown"}`);
 }
 
+async function prepareInfrastructure(mode: InfrastructureMode): Promise<void> {
+  if (mode === "docker") {
+    await runProcess(
+      "local infrastructure",
+      "docker",
+      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
+      process.env,
+    );
+    return;
+  }
+
+  assertLocalInfrastructureUrls(adminDatabaseUrl, baseRedisUrl);
+  const adminProbe = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
+  const redisProbe = new Redis(baseRedisUrl, { maxRetriesPerRequest: 1 });
+  try {
+    await Promise.all([adminProbe`SELECT 1`, redisProbe.ping()]);
+  } catch (error) {
+    throw new Error(
+      `Local Phase 4 real E2E infrastructure is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    await Promise.all([adminProbe.end({ timeout: 2 }), redisProbe.quit()]);
+  }
+  process.stdout.write("Phase 4 real E2E infrastructure: local loopback PostgreSQL and Redis.\n");
+}
+
 export async function runOnce(runNumber: number, configuration: RunConfiguration): Promise<void> {
   const startedAt = new Date().toISOString();
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase4-e2e-"));
@@ -607,12 +663,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
   process.once("SIGINT", markInterrupted);
   process.once("SIGTERM", markInterrupted);
   try {
-    await runProcess(
-      "local infrastructure",
-      "docker",
-      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
-      process.env,
-    );
+    await prepareInfrastructure(configuration.infrastructureMode);
     rateLimitRedis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
     queueName = `matchday-phase4-real-e2e-${randomUUID()}`;
     redisOwnership = createRedisOwnership(queueName);
@@ -868,12 +919,13 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
 
 async function main(): Promise<void> {
   assertPinnedToolchain();
+  const infrastructureMode = resolveInfrastructureMode(process.env.PHASE4_E2E_INFRA_MODE);
   const recordFile =
     process.env.PHASE4_E2E_ISOLATION_RECORD_FILE ?? path.join(root, "artifacts/qa/phase4-real-isolation.ndjson");
   await mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
   await writeFile(recordFile, "", { mode: 0o600 });
-  await runOnce(1, { recordFile, redisDatabase: 14 });
-  await runOnce(2, { recordFile, redisDatabase: 15 });
+  await runOnce(1, { recordFile, redisDatabase: 14, infrastructureMode });
+  await runOnce(2, { recordFile, redisDatabase: 15, infrastructureMode });
   process.stdout.write(`Phase 4 real E2E isolation records: ${recordFile}\n`);
 }
 
