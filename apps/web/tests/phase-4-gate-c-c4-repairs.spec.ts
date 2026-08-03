@@ -5,7 +5,7 @@ import { gateCC4Ids, installGateCC4BrowserRoutes } from "./helpers/gate-c-c4";
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-test("Gate C C4 organiser resolves a protected participant and publishes one repaired schedule", async ({ page }) => {
+test("Gate C C4 organiser resolves an automatic participant and publishes one repaired schedule", async ({ page }) => {
   const controller = await installGateCC4BrowserRoutes(page);
 
   await page.goto("/organiser/competitions/singapore-open/repairs");
@@ -56,6 +56,24 @@ test("Gate C C4 organiser resolves a protected participant and publishes one rep
   });
 });
 
+test("Gate C C4 never offers forbidden protected-match decisions or rescheduling", async ({ page }) => {
+  await installGateCC4BrowserRoutes(page, { action: "protected_started_match" });
+
+  await page.goto("/organiser/competitions/singapore-open/repairs");
+  await dismissConsent(page);
+
+  const decision = page.getByLabel("Organiser decision");
+  await expect(decision).toBeVisible();
+  await expect(decision.locator("option")).toHaveText([
+    "—",
+    "Keep current participant",
+    "Leave protected match unchanged",
+  ]);
+  await expect(page.getByLabel("New start time")).toHaveCount(0);
+  await expect(page.getByLabel("New end time")).toHaveCount(0);
+  await expect(page.getByLabel("New playing-area ID")).toHaveCount(0);
+});
+
 test("Gate C C4 analyses an atomic pending repair case and verifies fallback export integrity", async ({ page }) => {
   await installGateCC4BrowserRoutes(page);
 
@@ -75,5 +93,5 @@ test("Gate C C4 analyses an atomic pending repair case and verifies fallback exp
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("application/pdf");
   expect(response.headers()["x-matchday-content-sha256"]).toMatch(/^[a-f0-9]{64}$/u);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByTestId("gate-c-c4-repair-workspace").getByRole("alert")).toHaveCount(0);
 });

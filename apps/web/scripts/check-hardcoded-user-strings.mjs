@@ -95,6 +95,14 @@ const machineCallNames = new Set([
 ]);
 const cssStylePropertyNames = new Set(["clip", "overflow", "position", "whiteSpace"]);
 const httpMethods = new Set(["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]);
+const nextDynamicRouteValues = new Set(["auto", "force-dynamic", "force-static", "error"]);
+
+function isNextDynamicRouteConfig(node) {
+  if (!nextDynamicRouteValues.has(node.text)) return false;
+  const declaration = node.parent;
+  if (!ts.isVariableDeclaration(declaration) || declaration.initializer !== node) return false;
+  return ts.isIdentifier(declaration.name) && declaration.name.text === "dynamic";
+}
 
 function isInsideCssStyleObject(node, source) {
   if (!ts.isPropertyAssignment(node.parent) || node.parent.initializer !== node) return false;
@@ -219,6 +227,7 @@ function isMachineLiteral(node, source) {
   const value = node.text;
   if (!/[\p{L}\p{N}]/u.test(value) || /^\s*$/.test(value)) return true;
   if (value === "use client" || value === "use server") return true;
+  if (isNextDynamicRouteConfig(node)) return true;
   if (ts.isPropertyAssignment(node.parent) && node.parent.name === node) return true;
   if (
     ts.isPropertyAssignment(node.parent) &&
@@ -515,6 +524,7 @@ function runSelfTest(catalogue) {
       true,
     ],
     ["HTTP mutation method", 'sendMutation("PATCH", body)', false],
+    ["Next dynamic route config", 'export const dynamic="force-dynamic"', false],
     ["visible HTTP-looking text", "export const A=()=> <button>PUT</button>", true],
   ];
 

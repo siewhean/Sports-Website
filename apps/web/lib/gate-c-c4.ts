@@ -90,6 +90,7 @@ export const gateCC4Copy = {
   saved: "Repair revision saved.",
   publishedMessage: "The repaired schedule is now public.",
   abandonedMessage: "The latest repair draft was abandoned.",
+  workspaceOpened: "Repair workspace opened.",
   acceptProposed: "Accept proposed participant",
   keepCurrent: "Keep current participant",
   setManual: "Select a participant manually",
@@ -210,9 +211,14 @@ export function repairRevisionRequest(input: {
 }): GateCRepairRevisionCreateRequest {
   const fingerprint = input.workspace.latest_revision?.analysis_fingerprint;
   if (!fingerprint) throw new Error("The repair workspace has no retained analysis fingerprint");
-  const decisions = input.decisions.map(
-    ({ starts_at: _startsAt, ends_at: _endsAt, playing_area_id: _area, ...decision }) => decision,
-  );
+  const decisions = input.decisions.map((decision) => ({
+    client_event_id: decision.client_event_id,
+    match_id: decision.match_id,
+    slot: decision.slot,
+    decision: decision.decision,
+    ...(decision.selected_entry_id ? { selected_entry_id: decision.selected_entry_id } : {}),
+    reason: decision.reason,
+  }));
   const adjustmentByMatch = new Map<string, GateCRepairRevisionCreateRequest["schedule_adjustments"][number]>();
   for (const decision of input.decisions) {
     if (!decision.starts_at && !decision.ends_at && !decision.playing_area_id) continue;

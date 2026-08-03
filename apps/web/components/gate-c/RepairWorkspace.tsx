@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { GateCRepairActionView, GateCRepairWorkspaceView } from "@matchday/contracts";
 import {
   gateCC4Copy,
@@ -12,11 +12,18 @@ import {
   type GateCC4RepairQueueItem,
 } from "@/lib/gate-c-c4";
 import { gateCC4Http, gateCC4UiMachine } from "@/lib/gate-c-c4-http";
+import {
+  gateCC4DecisionOptions,
+  gateCC4DecisionRequired,
+  gateCC4DecisionValues,
+  gateCC4MatchScheduleAdjustmentAllowed,
+  type GateCC4DecisionValue,
+} from "@/lib/gate-c-c4-decisions";
 import { parseGateCC4References, type GateCC4ReferenceData } from "@/lib/gate-c-c4-references";
 import { isGateCC4PublicationReceipt, isGateCC4RevisionResponse } from "@/lib/gate-c-c4-validators";
 import styles from "./RepairWorkspace.module.css";
 
-type DecisionValue = "" | "accept_proposed" | "keep_current" | "set_manual_entry" | "leave_protected";
+type DecisionValue = "" | GateCC4DecisionValue;
 
 type ActionDraft = {
   clientEventId: string;
@@ -52,8 +59,21 @@ function localDateTime(value: string | null | undefined): string {
   return local.toISOString().slice(0, 16);
 }
 
-function actionNeedsDecision(action: GateCRepairActionView): boolean {
-  return ![gateCC4UiMachine.noChangeAction, gateCC4UiMachine.automaticUpdateAction].includes(action.source_action);
+function actionAllowsDecision(action: GateCRepairActionView): boolean {
+  return action.source_action !== gateCC4UiMachine.noChangeAction;
+}
+
+function decisionLabel(decision: GateCC4DecisionValue): string {
+  switch (decision) {
+    case gateCC4DecisionValues.acceptProposed:
+      return gateCC4Copy.acceptProposed;
+    case gateCC4DecisionValues.keepCurrent:
+      return gateCC4Copy.keepCurrent;
+    case gateCC4DecisionValues.setManualEntry:
+      return gateCC4Copy.setManual;
+    case gateCC4DecisionValues.leaveProtected:
+      return gateCC4Copy.leaveProtected;
+  }
 }
 
 function defaultDraft(action: GateCRepairActionView): ActionDraft {
@@ -109,6 +129,8 @@ export function RepairWorkspace({
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
+  const repairToFocusRef = useRef<string | null>(null);
 
   const loadWorkspace = useCallback(
     async (repairId: string) => {
@@ -157,13 +179,36 @@ export function RepairWorkspace({
   }, [competitionId, loadWorkspace]);
 
   useEffect(() => {
-    void refresh();
+    const timer = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    const handleRepairCreated = (event: Event) => {
+      if (!(event instanceof CustomEvent) || !record(event.detail) || typeof event.detail.repairId !== "string") return;
+      repairToFocusRef.current = event.detail.repairId;
+      void loadWorkspace(event.detail.repairId).catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : gateCC4Copy.failed);
+      });
+    };
+    window.addEventListener(gateCC4UiMachine.repairCreatedEvent, handleRepairCreated);
+    return () => window.removeEventListener(gateCC4UiMachine.repairCreatedEvent, handleRepairCreated);
+  }, [loadWorkspace]);
+
+  useEffect(() => {
+    if (!workspace || repairToFocusRef.current !== workspace.repair.repair_id) return;
+    repairToFocusRef.current = null;
+    const timer = window.setTimeout(() => {
+      workspaceHeadingRef.current?.focus();
+      setMessage(gateCC4Copy.workspaceOpened);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [workspace]);
 
   const unresolved = useMemo(
     () =>
       workspace?.actions.filter((action) => {
-        if (!actionNeedsDecision(action)) return false;
+        if (!gateCC4DecisionRequired(action.source_action)) return false;
         const draft = drafts[action.repair_action_id];
         return (
           !draft?.decision ||
@@ -408,7 +453,9 @@ export function RepairWorkspace({
               <header className={styles.summary}>
                 <div>
                   <p>{gateCC4Copy.sourceVersions}</p>
-                  <h2>{workspace.repair.corrected_match_id}</h2>
+                  <h2 ref={workspaceHeadingRef} tabIndex={-1}>
+                    {workspace.repair.corrected_match_id}
+                  </h2>
                 </div>
                 <dl>
                   <div>
@@ -432,12 +479,22 @@ export function RepairWorkspace({
               <div className={styles.actions}>
                 {workspace.actions.map((action, index) => {
                   const draft = drafts[action.repair_action_id] ?? defaultDraft(action);
-                  const needsDecision = actionNeedsDecision(action);
+                  const decisionRequired = gateCC4DecisionRequired(action.source_action);
+                  const decisionOptions = gateCC4DecisionOptions(
+                    action.source_action,
+                    action.proposed_entry_id !== null,
+                  );
+                  const allowsDecision = actionAllowsDecision(action);
                   const firstForMatch =
                     workspace.actions.findIndex((candidate) => candidate.match_id === action.match_id) === index;
                   const entries = references.entries.filter((entry) => entry.division_id === action.division_id);
+                  const scheduleAdjustmentAllowed = gateCC4MatchScheduleAdjustmentAllowed(
+                    workspace.actions
+                      .filter((candidate) => candidate.match_id === action.match_id)
+                      .map((candidate) => candidate.source_action),
+                  );
                   return (
-                    <section key={action.repair_action_id} className={styles.action} data-protected={needsDecision}>
+                    <section key={action.repair_action_id} className={styles.action} data-protected={decisionRequired}>
                       <header>
                         <div>
                           <p>{title(action.source_action)}</p>
@@ -445,7 +502,7 @@ export function RepairWorkspace({
                             {action.match_id} · {title(action.slot)}
                           </h3>
                         </div>
-                        <span>{needsDecision ? gateCC4Copy.protected : gateCC4Copy.automatic}</span>
+                        <span>{decisionRequired ? gateCC4Copy.protected : gateCC4Copy.automatic}</span>
                       </header>
                       <dl>
                         <div>
@@ -470,13 +527,13 @@ export function RepairWorkspace({
                         </ol>
                       </details>
 
-                      {needsDecision ? (
+                      {allowsDecision ? (
                         <div className={styles.decisionGrid}>
                           <label>
                             <span>{gateCC4Copy.decision}</span>
                             <select
                               value={draft.decision}
-                              required
+                              required={decisionRequired}
                               onChange={(event) =>
                                 updateDraft(action.repair_action_id, {
                                   decision: event.currentTarget.value as DecisionValue,
@@ -484,12 +541,11 @@ export function RepairWorkspace({
                               }
                             >
                               <option value="">—</option>
-                              {action.proposed_entry_id ? (
-                                <option value="accept_proposed">{gateCC4Copy.acceptProposed}</option>
-                              ) : null}
-                              <option value="keep_current">{gateCC4Copy.keepCurrent}</option>
-                              <option value="set_manual_entry">{gateCC4Copy.setManual}</option>
-                              <option value="leave_protected">{gateCC4Copy.leaveProtected}</option>
+                              {decisionOptions.map((decision) => (
+                                <option key={decision} value={decision}>
+                                  {decisionLabel(decision)}
+                                </option>
+                              ))}
                             </select>
                           </label>
                           {draft.decision === "set_manual_entry" ? (
@@ -525,7 +581,7 @@ export function RepairWorkspace({
                         </div>
                       ) : null}
 
-                      {firstForMatch ? (
+                      {firstForMatch && scheduleAdjustmentAllowed ? (
                         <fieldset className={styles.adjustments}>
                           <legend>{gateCC4Copy.unchanged}</legend>
                           <label>
