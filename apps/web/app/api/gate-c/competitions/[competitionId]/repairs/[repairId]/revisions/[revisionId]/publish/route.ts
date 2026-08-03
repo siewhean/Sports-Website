@@ -9,8 +9,7 @@ export async function POST(
 ) {
   const { competitionId, repairId, revisionId } = await context.params;
   const body = await jsonBody(request);
-  if (!body)
-    return Response.json({ error: { code: gateCC4Http.errors.requestInvalid } }, { status: 400 });
+  if (!body) return Response.json({ error: { code: gateCC4Http.errors.requestInvalid } }, { status: 400 });
   return forwardPhase3Mutation(request, {
     method: gateCC4Http.methodPost,
     path: `/api/v1/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(repairId)}/revisions/${encodeURIComponent(revisionId)}/publish`,

@@ -21,8 +21,6 @@ import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 
-const hashPattern = /^[a-f0-9]{64}$/u;
-
 type AccessRow = {
   competition_id: string;
   organisation_id: string;
@@ -673,7 +671,7 @@ export class GateCC4Runtime {
           matchId: decision.match_id,
           slot: decision.slot,
           decision: decision.decision,
-          selectedEntryId: decision.selected_entry_id,
+          ...(decision.selected_entry_id !== undefined ? { selectedEntryId: decision.selected_entry_id } : {}),
           reason: decision.reason,
         })),
       );
@@ -745,8 +743,8 @@ export class GateCC4Runtime {
     request: GateCRepairPublicationRequest,
     requestId: string,
   ): Promise<GateCRepairPublicationReceipt> {
-    if (!this.publicationPort)
-      throw new ApiError(503, "REPAIR_PUBLICATION_UNAVAILABLE", "Repair publisher is unavailable");
+    const publicationPort = this.publicationPort;
+    if (!publicationPort) throw new ApiError(503, "REPAIR_PUBLICATION_UNAVAILABLE", "Repair publisher is unavailable");
     return this.transaction(async (tx) => {
       const access = await this.access(tx, actor, request.competition_id);
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended('gate-c:repair-publication:'||$1,0))`, [
@@ -835,7 +833,7 @@ export class GateCC4Runtime {
           matchId: decision.match_id,
           slot: decision.slot,
           decision: decision.decision,
-          selectedEntryId: decision.selected_entry_id ?? undefined,
+          ...(decision.selected_entry_id !== null ? { selectedEntryId: decision.selected_entry_id } : {}),
           reason: decision.reason,
         })),
       );
@@ -857,7 +855,7 @@ export class GateCC4Runtime {
       if (publicationFingerprint(plan, adjustments) !== revision.publication_fingerprint) {
         throw new ApiError(409, "REPAIR_PUBLICATION_FINGERPRINT_MISMATCH", "Retained repair decisions changed");
       }
-      const result = await this.publicationPort.publish(tx, {
+      const result = await publicationPort.publish(tx, {
         actor,
         requestId,
         competitionId: request.competition_id,

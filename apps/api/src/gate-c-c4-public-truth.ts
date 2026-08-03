@@ -5,6 +5,7 @@ import type { PublicProjectionFreshness } from "@matchday/contracts";
 import { assertPublicProjectionPrivacy } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError } from "./errors.js";
+import { gateCC4PublicTruthResponse } from "./gate-c-c4-schemas.js";
 import { gateCC4PublicConditionalStatus, gateCC4PublicHeaders } from "./gate-c-public-http.js";
 
 type PublicTruthRow = {
@@ -21,6 +22,10 @@ function strict<T extends Record<string, TSchema>>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
 }
 
+const ErrorResponse = strict({
+  error: strict({ code: Type.String(), message: Type.String(), request_id: Type.String() }),
+});
+
 function instant(value: Date | string): string {
   const parsed = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(parsed.getTime())) throw new Error("Public projection contains an invalid timestamp");
@@ -29,6 +34,16 @@ function instant(value: Date | string): string {
 
 function json(value: PublicTruthRow["payload"]): Record<string, unknown> {
   return typeof value === "string" ? (JSON.parse(value) as Record<string, unknown>) : value;
+}
+
+function divisionId(payload: Record<string, unknown>): string {
+  const division = payload.division;
+  if (!division || typeof division !== "object" || Array.isArray(division)) {
+    throw new Error("Public projection contains no canonical division identifier");
+  }
+  const id = (division as Record<string, unknown>).id;
+  if (typeof id !== "string") throw new Error("Public projection contains no canonical division identifier");
+  return id;
 }
 
 function stableJson(value: unknown): string {
@@ -46,6 +61,7 @@ function stableJson(value: unknown): string {
 
 function etag(input: {
   competitionId: string;
+  divisionId: string;
   scheduleVersion: number;
   resultVersion: number;
   projectionVersion: number;
@@ -55,6 +71,7 @@ function etag(input: {
     .update(
       stableJson({
         competition_id: input.competitionId,
+        division_id: input.divisionId,
         schedule_version: input.scheduleVersion,
         result_version: input.resultVersion,
         projection_version: input.projectionVersion,
@@ -103,10 +120,11 @@ export class GateCC4PublicTruthRuntime {
 
     const source = json(row.payload);
     assertPublicProjectionPrivacy(source);
+    const sourceDivisionId = divisionId(source);
     const generatedAt = instant(row.generated_at);
     const sourceUpdatedAt = instant(row.source_updated_at);
     const freshness: PublicProjectionFreshness = {
-      division_id: row.competition_id,
+      division_id: sourceDivisionId,
       schedule_version: row.schedule_version,
       result_version: row.result_version,
       projection_version: row.projection_version,
@@ -114,6 +132,7 @@ export class GateCC4PublicTruthRuntime {
       source_updated_at: sourceUpdatedAt,
       etag: etag({
         competitionId: row.competition_id,
+        divisionId: sourceDivisionId,
         scheduleVersion: row.schedule_version,
         resultVersion: row.result_version,
         projectionVersion: row.projection_version,
@@ -148,7 +167,7 @@ export async function registerGateCC4PublicTruthRoutes(
           },
           { additionalProperties: true },
         ),
-        response: { 200: Type.Unknown(), 304: Type.Null(), 404: Type.Unknown() },
+        response: { 200: gateCC4PublicTruthResponse, 304: Type.Null(), 404: ErrorResponse },
         tags: ["public", "gate-c-c4"],
       },
     },

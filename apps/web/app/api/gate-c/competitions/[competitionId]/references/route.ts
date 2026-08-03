@@ -11,10 +11,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ com
     return NextResponse.json(
       {
         error: {
-          code:
-            result.status === 401
-              ? gateCC4Http.errors.authRequired
-              : gateCC4Http.errors.referenceReadFailed,
+          code: result.status === 401 ? gateCC4Http.errors.authRequired : gateCC4Http.errors.referenceReadFailed,
         },
       },
       { status: result.status },
@@ -25,8 +22,5 @@ export async function GET(request: NextRequest, context: { params: Promise<{ com
     ? NextResponse.json(references, {
         headers: { "cache-control": gateCC4Http.cacheNoStore },
       })
-    : NextResponse.json(
-        { error: { code: gateCC4Http.errors.referenceResponseInvalid } },
-        { status: 502 },
-      );
+    : NextResponse.json({ error: { code: gateCC4Http.errors.referenceResponseInvalid } }, { status: 502 });
 }

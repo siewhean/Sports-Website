@@ -17,10 +17,7 @@ export async function GET(
     return NextResponse.json(
       {
         error: {
-          code:
-            result.status === 401
-              ? gateCC4Http.errors.authRequired
-              : gateCC4Http.errors.repairReadFailed,
+          code: result.status === 401 ? gateCC4Http.errors.authRequired : gateCC4Http.errors.repairReadFailed,
         },
       },
       { status: result.status },
@@ -31,8 +28,5 @@ export async function GET(
     ? NextResponse.json(workspace, {
         headers: { "cache-control": gateCC4Http.cacheNoStore },
       })
-    : NextResponse.json(
-        { error: { code: gateCC4Http.errors.repairResponseInvalid } },
-        { status: 502 },
-      );
+    : NextResponse.json({ error: { code: gateCC4Http.errors.repairResponseInvalid } }, { status: 502 });
 }

@@ -1,6 +1,13 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
+import {
+  gateCC4AbandonReceipt,
+  gateCC4PdfBinaryResponse,
+  gateCC4PublicationReceipt,
+  gateCC4RevisionCreateResponse,
+  gateCC4WorkspaceResponse,
+} from "./gate-c-c4-schemas.js";
 import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import type { GateCC4Operations } from "./gate-c-c4-operations.js";
 import type { GateCC4Runtime } from "./gate-c-c4-runtime.js";
@@ -25,27 +32,32 @@ function strict<T extends Record<string, TSchema>>(properties: T) {
 }
 
 const AnalysisBody = strict({ correction_transaction_id: Id });
-const DecisionBody = strict({
+const DecisionBase = {
   client_event_id: Id,
   match_id: Id,
   slot: Type.Union([Type.Literal("home"), Type.Literal("away")]),
-  decision: Type.Union([
-    Type.Literal("accept_proposed"),
-    Type.Literal("keep_current"),
-    Type.Literal("set_manual_entry"),
-    Type.Literal("leave_protected"),
-  ]),
-  selected_entry_id: Type.Optional(Type.Union([Id, Type.Null()])),
   reason: Type.String({ minLength: 3, maxLength: 1_000 }),
-});
-const AdjustmentBody = strict({
+};
+const DecisionBody = Type.Union([
+  strict({ ...DecisionBase, decision: Type.Literal("accept_proposed") }),
+  strict({ ...DecisionBase, decision: Type.Literal("keep_current") }),
+  strict({ ...DecisionBase, decision: Type.Literal("leave_protected") }),
+  strict({ ...DecisionBase, decision: Type.Literal("set_manual_entry"), selected_entry_id: Id }),
+]);
+const AdjustmentBase = {
   match_id: Id,
   division_id: Id,
-  starts_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
-  ends_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
-  playing_area_id: Type.Optional(Type.Union([Id, Type.Null()])),
   reason: Type.String({ minLength: 3, maxLength: 1_000 }),
-});
+};
+const AdjustmentBody = Type.Union([
+  strict({
+    ...AdjustmentBase,
+    starts_at: Type.String({ format: "date-time" }),
+    ends_at: Type.String({ format: "date-time" }),
+    playing_area_id: Type.Optional(Id),
+  }),
+  strict({ ...AdjustmentBase, playing_area_id: Id }),
+]);
 const RevisionBody = strict({
   parent_revision_id: Type.Union([Id, Type.Null()]),
   expected_result_version: Type.Integer({ minimum: 1 }),
@@ -161,7 +173,7 @@ export async function registerGateCC4Routes(
         params: strict({ competitionId: Id }),
         body: AnalysisBody,
         response: {
-          200: Type.Unknown(),
+          200: gateCC4WorkspaceResponse,
           400: ErrorResponse,
           401: ErrorResponse,
           403: ErrorResponse,
@@ -187,7 +199,7 @@ export async function registerGateCC4Routes(
       schema: {
         security: [{ sessionCookie: [] }],
         params: strict({ competitionId: Id, repairId: Id }),
-        response: { 200: Type.Unknown(), 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse },
+        response: { 200: gateCC4WorkspaceResponse, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse },
         tags: ["gate-c-c4"],
       },
     },
@@ -216,7 +228,7 @@ export async function registerGateCC4Routes(
         params: strict({ competitionId: Id, repairId: Id }),
         body: RevisionBody,
         response: {
-          201: Type.Unknown(),
+          201: gateCC4RevisionCreateResponse,
           400: ErrorResponse,
           401: ErrorResponse,
           403: ErrorResponse,
@@ -262,7 +274,7 @@ export async function registerGateCC4Routes(
         params: strict({ competitionId: Id, repairId: Id, revisionId: Id }),
         body: PublicationBody,
         response: {
-          200: Type.Unknown(),
+          200: gateCC4PublicationReceipt,
           400: ErrorResponse,
           401: ErrorResponse,
           403: ErrorResponse,
@@ -298,7 +310,7 @@ export async function registerGateCC4Routes(
         params: strict({ competitionId: Id, repairId: Id }),
         body: AbandonBody,
         response: {
-          200: Type.Unknown(),
+          200: gateCC4AbandonReceipt,
           400: ErrorResponse,
           401: ErrorResponse,
           403: ErrorResponse,
@@ -326,7 +338,13 @@ export async function registerGateCC4Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: strict({ competitionId: Id }),
-        response: { 200: Type.Any(), 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse },
+        response: {
+          200: gateCC4PdfBinaryResponse,
+          401: ErrorResponse,
+          403: ErrorResponse,
+          404: ErrorResponse,
+          409: ErrorResponse,
+        },
         tags: ["gate-c-c4"],
       },
     },
@@ -352,7 +370,13 @@ export async function registerGateCC4Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: strict({ competitionId: Id, matchId: Id }),
-        response: { 200: Type.Any(), 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse },
+        response: {
+          200: gateCC4PdfBinaryResponse,
+          401: ErrorResponse,
+          403: ErrorResponse,
+          404: ErrorResponse,
+          409: ErrorResponse,
+        },
         tags: ["gate-c-c4"],
       },
     },

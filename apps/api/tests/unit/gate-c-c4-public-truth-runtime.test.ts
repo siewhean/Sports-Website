@@ -70,7 +70,7 @@ describe("Gate C C4 public truth runtime", () => {
     expect(first?.payload).toMatchObject({
       publication: { schedule_version: 4, result_version: 7 },
       freshness: {
-        division_id: competitionId,
+        division_id: divisionId,
         schedule_version: 4,
         result_version: 7,
         projection_version: 3,
@@ -103,6 +103,6 @@ describe("Gate C C4 public truth runtime", () => {
       },
     ]);
 
-    await expect(runtime.read("national-open")).rejects.toThrow(/private field/i);
+    await expect(runtime.read("national-open")).rejects.toThrow(/forbidden data/i);
   });
 });

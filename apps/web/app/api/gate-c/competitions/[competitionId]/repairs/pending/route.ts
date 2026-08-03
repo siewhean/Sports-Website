@@ -14,10 +14,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ com
     return NextResponse.json(
       {
         error: {
-          code:
-            result.status === 401
-              ? gateCC4Http.errors.authRequired
-              : gateCC4Http.errors.repairIntakeReadFailed,
+          code: result.status === 401 ? gateCC4Http.errors.authRequired : gateCC4Http.errors.repairIntakeReadFailed,
         },
       },
       { status: result.status },
@@ -28,8 +25,5 @@ export async function GET(request: NextRequest, context: { params: Promise<{ com
     ? NextResponse.json(pending, {
         headers: { "cache-control": gateCC4Http.cacheNoStore },
       })
-    : NextResponse.json(
-        { error: { code: gateCC4Http.errors.repairIntakeResponseInvalid } },
-        { status: 502 },
-      );
+    : NextResponse.json({ error: { code: gateCC4Http.errors.repairIntakeResponseInvalid } }, { status: 502 });
 }

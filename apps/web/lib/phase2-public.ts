@@ -63,7 +63,7 @@ export function isGateCC4PublicCompetitionProjection(value: unknown): value is G
     typeof freshness.source_updated_at === "string" ? Date.parse(freshness.source_updated_at) : Number.NaN;
   return Boolean(
     typeof freshness.division_id === "string" &&
-    freshness.division_id === value.competition.id &&
+    freshness.division_id === value.division.id &&
     Number.isSafeInteger(freshness.schedule_version) &&
     freshness.schedule_version === value.publication.schedule_version &&
     Number.isSafeInteger(freshness.result_version) &&

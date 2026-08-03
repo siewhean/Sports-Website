@@ -42,7 +42,7 @@ describe("Gate C C4 deterministic fallback PDF rendering", () => {
       generatedAt: "2026-08-01T00:00:00.000Z",
       publicVerificationUrl: "https://example.test/competitions/national-championship",
       sourceFingerprint: fingerprint,
-      matches: Array.from({ length: 36 }, (_, index) => match(index + 1)),
+      matches: Array.from({ length: 72 }, (_, index) => match(index + 1)),
     });
 
     const first = await renderScheduleFallbackPdf(document);

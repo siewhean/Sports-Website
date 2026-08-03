@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { assertPublicProjectionPrivacy, type RepairPublicationPlan } from "@matchday/domain";
+import { assertPublicProjectionPrivacy } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError } from "./errors.js";
 import type { GateCC4PublicationPort, GateCC4PublicationResult } from "./gate-c-c4-runtime.js";
@@ -39,6 +39,12 @@ function first<T>(rows: readonly T[], code: string, message: string): T {
 
 function json<T>(value: T | string): T {
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+function warningList(value: unknown): unknown[] {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(parsed)) throw new Error("Published schedule warnings must be an array");
+  return parsed;
 }
 
 function instant(value: Date | string): string {
@@ -119,7 +125,7 @@ export class GateCC4PostgresPublicationPort implements GateCC4PublicationPort {
       }),
     );
     const warnings = [
-      ...((Array.isArray(json<unknown>(current.warnings)) ? json<unknown[]>(current.warnings) : []) as unknown[]),
+      ...warningList(current.warnings),
       {
         code: "repair_revision",
         repair_case_id: input.repairCase.id,
@@ -253,7 +259,7 @@ export class GateCC4PostgresPublicationPort implements GateCC4PublicationPort {
       throw new Error("Regenerated public projection is missing an affected division package");
     }
 
-    const projections: GateCC4PublicationResult["projections"] = [];
+    const projections: Array<GateCC4PublicationResult["projections"][number]> = [];
     for (const division of packages) {
       const id = divisionId(division);
       if (!id) throw new Error("Public division projection has no identifier");

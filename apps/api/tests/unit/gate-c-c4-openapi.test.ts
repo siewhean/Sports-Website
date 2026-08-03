@@ -7,7 +7,7 @@ type Operation = {
   requestBody?: {
     content?: { "application/json"?: { schema?: { required?: string[]; additionalProperties?: boolean } } };
   };
-  responses?: Record<string, unknown>;
+  responses?: Record<string, { content?: { "application/json"?: { schema?: { additionalProperties?: boolean } } } }>;
 };
 
 function headerNames(operation: Operation): string[] {
@@ -18,6 +18,10 @@ function headerNames(operation: Operation): string[] {
 
 function jsonBody(operation: Operation) {
   return operation.requestBody?.content?.["application/json"]?.schema;
+}
+
+function jsonResponse(operation: Operation, status: string) {
+  return operation.responses?.[status]?.content?.["application/json"]?.schema;
 }
 
 describe("Gate C C4 OpenAPI acceptance contract", () => {
@@ -64,6 +68,8 @@ describe("Gate C C4 OpenAPI acceptance contract", () => {
       ]),
     );
     expect(revision?.additionalProperties).toBe(false);
+    expect(JSON.stringify(revision)).toContain("set_manual_entry");
+    expect(JSON.stringify(revision)).toContain("selected_entry_id");
 
     const publication = jsonBody(document.paths[mutations[2][0]]!.post!);
     expect(publication?.required).toEqual(
@@ -78,6 +84,12 @@ describe("Gate C C4 OpenAPI acceptance contract", () => {
       ]),
     );
     expect(publication?.additionalProperties).toBe(false);
+
+    expect(jsonResponse(document.paths[mutations[0][0]]!.post!, "200")?.additionalProperties).toBe(false);
+    expect(jsonResponse(document.paths[reads[2][0]]!.get!, "200")?.additionalProperties).toBe(false);
+    expect(jsonResponse(document.paths[mutations[1][0]]!.post!, "201")?.additionalProperties).toBe(false);
+    expect(jsonResponse(document.paths[mutations[2][0]]!.post!, "200")?.additionalProperties).toBe(false);
+    expect(jsonResponse(document.paths[mutations[3][0]]!.post!, "200")?.additionalProperties).toBe(false);
   });
 
   it("publishes one unauthenticated version-matched public truth route with conditional reads", async () => {
@@ -92,5 +104,6 @@ describe("Gate C C4 OpenAPI acceptance contract", () => {
     expect(operation?.responses).toHaveProperty("200");
     expect(operation?.responses).toHaveProperty("304");
     expect(operation?.responses).toHaveProperty("404");
+    expect(jsonResponse(operation!, "200")?.additionalProperties).toBe(false);
   });
 });
