@@ -14,6 +14,7 @@ type PublicTruthRow = {
   schedule_version: number;
   result_version: number;
   projection_version: number;
+  division_projection_versions: Record<string, unknown> | string;
   generated_at: Date | string;
   source_updated_at: Date | string;
 };
@@ -46,6 +47,37 @@ function divisionId(payload: Record<string, unknown>): string {
   return id;
 }
 
+function divisionIds(payload: Record<string, unknown>): readonly string[] {
+  const divisions = payload.divisions;
+  if (!Array.isArray(divisions) || divisions.length === 0) {
+    throw new Error("Public projection contains no division packages");
+  }
+  const ids = divisions.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("Public projection contains an invalid division package");
+    }
+    return divisionId(entry as Record<string, unknown>);
+  });
+  if (new Set(ids).size !== ids.length) throw new Error("Public projection contains duplicate division packages");
+  return ids.sort((left, right) => left.localeCompare(right));
+}
+
+function versionRecord(value: PublicTruthRow["division_projection_versions"]): Record<string, number> {
+  const parsed = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Public projection contains malformed division freshness metadata");
+  }
+  const versions = Object.fromEntries(
+    Object.entries(parsed).map(([id, version]) => {
+      if (!Number.isSafeInteger(version) || version < 1) {
+        throw new Error("Public projection contains an invalid division projection version");
+      }
+      return [id, version];
+    }),
+  );
+  return versions;
+}
+
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -61,20 +93,20 @@ function stableJson(value: unknown): string {
 
 function etag(input: {
   competitionId: string;
-  divisionId: string;
   scheduleVersion: number;
   resultVersion: number;
   projectionVersion: number;
+  divisionProjectionVersions: Readonly<Record<string, number>>;
   payload: Record<string, unknown>;
 }): string {
   const fingerprint = createHash("sha256")
     .update(
       stableJson({
         competition_id: input.competitionId,
-        division_id: input.divisionId,
         schedule_version: input.scheduleVersion,
         result_version: input.resultVersion,
         projection_version: input.projectionVersion,
+        division_projection_versions: input.divisionProjectionVersions,
         projection: input.payload,
       }),
     )
@@ -102,6 +134,17 @@ export class GateCC4PublicTruthRuntime {
                     AND version.schedule_version=publication.schedule_version
                     AND version.result_version=publication.result_version
                 ),1)::integer AS projection_version,
+                COALESCE((
+                  SELECT jsonb_object_agg(version.division_id::text, version.projection_version)
+                  FROM (
+                    SELECT division_id,max(projection_version)::integer AS projection_version
+                    FROM public_projection_versions
+                    WHERE competition_id=competition.id
+                      AND schedule_version=publication.schedule_version
+                      AND result_version=publication.result_version
+                    GROUP BY division_id
+                  ) version
+                ),'{}'::jsonb) AS division_projection_versions,
                 current_projection.generated_at,
                 publication.updated_at AS source_updated_at
          FROM competitions competition
@@ -121,21 +164,34 @@ export class GateCC4PublicTruthRuntime {
     const source = json(row.payload);
     assertPublicProjectionPrivacy(source);
     const sourceDivisionId = divisionId(source);
+    const sourceDivisionIds = divisionIds(source);
+    if (!sourceDivisionIds.includes(sourceDivisionId)) {
+      throw new Error("Public projection compatibility division is absent from its division packages");
+    }
+    const storedDivisionVersions = versionRecord(row.division_projection_versions);
+    if (Object.keys(storedDivisionVersions).some((id) => !sourceDivisionIds.includes(id))) {
+      throw new Error("Public projection freshness references a division outside its payload");
+    }
+    const divisionProjectionVersions = Object.fromEntries(
+      sourceDivisionIds.map((id) => [id, storedDivisionVersions[id] ?? 1]),
+    );
+    const projectionVersion = Math.max(...Object.values(divisionProjectionVersions));
     const generatedAt = instant(row.generated_at);
     const sourceUpdatedAt = instant(row.source_updated_at);
     const freshness: PublicProjectionFreshness = {
       division_id: sourceDivisionId,
+      division_projection_versions: divisionProjectionVersions,
       schedule_version: row.schedule_version,
       result_version: row.result_version,
-      projection_version: row.projection_version,
+      projection_version: projectionVersion,
       generated_at: generatedAt,
       source_updated_at: sourceUpdatedAt,
       etag: etag({
         competitionId: row.competition_id,
-        divisionId: sourceDivisionId,
         scheduleVersion: row.schedule_version,
         resultVersion: row.result_version,
-        projectionVersion: row.projection_version,
+        projectionVersion,
+        divisionProjectionVersions,
         payload: source,
       }),
     };

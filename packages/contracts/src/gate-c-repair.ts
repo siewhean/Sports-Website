@@ -150,7 +150,10 @@ export type GateCRepairPublicationReceipt = Readonly<{
 }>;
 
 export type PublicProjectionFreshness = Readonly<{
+  /** Compatibility division used by existing public readers. */
   division_id: string;
+  /** Exact immutable C4 projection version for every division in the payload. */
+  division_projection_versions: Readonly<Record<string, number>>;
   schedule_version: number;
   result_version: number;
   projection_version: number;

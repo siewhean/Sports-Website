@@ -58,6 +58,7 @@ describe("public competition sport projection", () => {
       ...value,
       freshness: {
         division_id: "division",
+        division_projection_versions: { division: 1 },
         schedule_version: 1,
         result_version: 0,
         projection_version: 1,
@@ -71,6 +72,12 @@ describe("public competition sport projection", () => {
       isGateCC4PublicCompetitionProjection({
         ...valid,
         freshness: { ...(valid.freshness as Record<string, unknown>), division_id: "competition" },
+      }),
+    ).toBe(false);
+    expect(
+      isGateCC4PublicCompetitionProjection({
+        ...valid,
+        freshness: { ...(valid.freshness as Record<string, unknown>), division_projection_versions: {} },
       }),
     ).toBe(false);
   });

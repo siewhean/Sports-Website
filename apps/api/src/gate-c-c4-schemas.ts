@@ -211,6 +211,7 @@ const gateCC4PublicDivision = gateCC4Strict({
 });
 const gateCC4Freshness = gateCC4Strict({
   division_id: gateCC4Id,
+  division_projection_versions: Type.Record(gateCC4Id, Type.Integer({ minimum: 1 })),
   schedule_version: Type.Integer({ minimum: 0 }),
   result_version: Type.Integer({ minimum: 0 }),
   projection_version: Type.Integer({ minimum: 1 }),

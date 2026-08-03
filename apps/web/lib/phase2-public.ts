@@ -61,9 +61,22 @@ export function isGateCC4PublicCompetitionProjection(value: unknown): value is G
   const generatedAt = typeof freshness.generated_at === "string" ? Date.parse(freshness.generated_at) : Number.NaN;
   const sourceUpdatedAt =
     typeof freshness.source_updated_at === "string" ? Date.parse(freshness.source_updated_at) : Number.NaN;
+  const divisionProjectionVersions = freshness.division_projection_versions;
+  const publicDivisionIds = value.divisions.map((division) => division.division.id).sort();
+  const versionEntries =
+    divisionProjectionVersions &&
+    typeof divisionProjectionVersions === "object" &&
+    !Array.isArray(divisionProjectionVersions)
+      ? Object.entries(divisionProjectionVersions)
+      : [];
   return Boolean(
     typeof freshness.division_id === "string" &&
     freshness.division_id === value.division.id &&
+    versionEntries.length === publicDivisionIds.length &&
+    versionEntries.every(
+      ([divisionId, version]) =>
+        publicDivisionIds.includes(divisionId) && Number.isSafeInteger(version) && (version as number) >= 1,
+    ) &&
     Number.isSafeInteger(freshness.schedule_version) &&
     freshness.schedule_version === value.publication.schedule_version &&
     Number.isSafeInteger(freshness.result_version) &&

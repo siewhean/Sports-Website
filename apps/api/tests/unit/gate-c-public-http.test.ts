@@ -9,6 +9,7 @@ import {
 function freshness(overrides: Partial<PublicProjectionFreshness> = {}): PublicProjectionFreshness {
   return {
     division_id: "division-1",
+    division_projection_versions: { "division-1": 9 },
     schedule_version: 4,
     result_version: 7,
     projection_version: 9,

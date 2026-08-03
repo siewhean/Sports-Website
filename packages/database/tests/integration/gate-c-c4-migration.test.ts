@@ -203,9 +203,9 @@ describe("Gate C C4 repair persistence migration", () => {
         await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
           VALUES(${organisationId},${accountId},'owner','active')`;
       });
-      await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,plan_tier)
+      await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,plan_tier,status)
         VALUES(${competitionId},${organisationId},${accountId},'C4 Cup',${`c4-cup-${competitionId}`},'badminton',
-          'Asia/Singapore','2027-01-01','2027-01-01','organiser_pro')`;
+          'Asia/Singapore','2027-01-01','2027-01-01','organiser_pro','active')`;
       await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,plan_tier)
         VALUES(${otherCompetitionId},${organisationId},${accountId},'Other C4 Cup',${`other-c4-${otherCompetitionId}`},'badminton',
           'Asia/Singapore','2027-01-01','2027-01-01','organiser_pro')`;
@@ -554,6 +554,77 @@ describe("Gate C C4 repair persistence migration", () => {
           ${"b".repeat(64)},'"c4-reserve-v1"','2027-01-01T01:00:00Z','2027-01-01T01:00:00Z'
         )`,
       ).rejects.toThrow(/division is not affected/i);
+
+      await sql`INSERT INTO public_projection_versions(
+        competition_id,division_id,schedule_version,result_version,projection_version,
+        projection,projection_fingerprint,etag,generated_at,source_updated_at
+      ) VALUES(
+        ${competitionId},${siblingDivisionId},2,2,1,${sql.json({ division: "Reserve", repaired: false })},
+        ${"e".repeat(64)},'c4-reserve-v2','2027-01-01T02:00:00Z','2027-01-01T01:00:00Z'
+      )`;
+      await sql`INSERT INTO competition_publications(
+        competition_id,schedule_version,result_version,updated_at
+      ) VALUES(${competitionId},2,2,'2027-01-01T01:00:00Z')`;
+      await sql`INSERT INTO public_competition_projections(
+        competition_id,schedule_version,result_version,projection,generated_at
+      ) VALUES(
+        ${competitionId},2,2,
+        ${sql.json({
+          competition: {
+            id: competitionId,
+            name: "C4 Cup",
+            slug: `c4-cup-${competitionId}`,
+            sport_code: "badminton",
+            timezone: "Asia/Singapore",
+            starts_on: "2027-01-01",
+            ends_on: "2027-01-01",
+            status: "active",
+          },
+          divisions: [
+            { division: { id: divisionId, name: "Open" }, schedule: [], results: [], standings: null, bracket: null },
+            {
+              division: { id: siblingDivisionId, name: "Reserve" },
+              schedule: [],
+              results: [],
+              standings: null,
+              bracket: null,
+            },
+          ],
+          division: { id: divisionId, name: "Open" },
+          publication: { schedule_version: 2, result_version: 2 },
+          schedule: [],
+          results: [],
+          standings: null,
+          bracket: null,
+          last_updated_at: "2027-01-01T01:00:00.000Z",
+        })},
+        '2027-01-01T02:00:00Z'
+      )`;
+      const [publicTruth] = await sql<
+        {
+          projection_versions: Record<string, number>;
+          projection_version: number;
+        }[]
+      >`
+        SELECT COALESCE((
+          SELECT jsonb_object_agg(version.division_id::text, version.projection_version)
+          FROM (
+            SELECT division_id,max(projection_version)::integer AS projection_version
+            FROM public_projection_versions
+            WHERE competition_id=${competitionId} AND schedule_version=2 AND result_version=2
+            GROUP BY division_id
+          ) version
+        ),'{}'::jsonb) AS projection_versions,
+        COALESCE((
+          SELECT max(projection_version)::integer
+          FROM public_projection_versions
+          WHERE competition_id=${competitionId} AND schedule_version=2 AND result_version=2
+        ),1) AS projection_version
+      `;
+      expect(publicTruth).toEqual({
+        projection_versions: { [divisionId]: 2, [siblingDivisionId]: 1 },
+        projection_version: 2,
+      });
 
       const concurrentSql = postgres(config.databaseUrl, {
         max: 1,
