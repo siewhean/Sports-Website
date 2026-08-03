@@ -45,6 +45,11 @@ if (url.pathname !== "/postgres") {
   process.stderr.write("BACKUP_VERIFY_ADMIN_DATABASE_URL must connect to the postgres maintenance database.\n");
   process.exit(1);
 }
+
+if ([...url.searchParams].length > 0) {
+  process.stderr.write("BACKUP_VERIFY_ADMIN_DATABASE_URL must not contain query parameters.\n");
+  process.exit(1);
+}
 NODE
 }
 
@@ -138,6 +143,7 @@ remove_backup_file() {
 
 assert_disposable_name "$SOURCE_DB"
 assert_disposable_name "$RESTORE_DB"
+unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE
 configure_postgres_mode
 
 cleanup() {

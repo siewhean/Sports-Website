@@ -240,6 +240,8 @@ describe("Gate C C3 hardening", () => {
     expect(backupVerifier).toContain("BACKUP_VERIFY_ADMIN_DATABASE_URL");
     expect(backupVerifier).toContain("BACKUP_VERIFY_POSTGRES_MODE");
     expect(backupVerifier).toContain("Backup verification only permits a local PostgreSQL admin URL.");
+    expect(backupVerifier).toContain("BACKUP_VERIFY_ADMIN_DATABASE_URL must not contain query parameters.");
+    expect(backupVerifier).toContain("unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE");
   });
 
   it("persists only the Firefox and WebKit connectivity hint across offline reloads", async () => {
