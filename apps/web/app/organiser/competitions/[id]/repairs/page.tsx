@@ -3,10 +3,12 @@ import { PendingRepairCases } from "@/components/gate-c/PendingRepairCases";
 import { RepairWorkspace } from "@/components/gate-c/RepairWorkspace";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { gateCC4Copy } from "@/lib/gate-c-c4";
+import { gateCC4UiMachine } from "@/lib/gate-c-c4-http";
 import { phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
+import styles from "./RepairPage.module.css";
 
-export const dynamic = "force-dynamic";
+export const dynamic = gateCC4UiMachine.forceDynamic;
 
 export default async function CompetitionRepairsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -19,15 +21,15 @@ export default async function CompetitionRepairsPage({ params }: { params: Promi
   return (
     <OrganiserWorkspace
       competition={competition}
-      section="results"
+      section={gateCC4UiMachine.resultsSection}
       pageEyebrow={gateCC4Copy.eyebrow}
       pageTitle={gateCC4Copy.title}
       pageIntro={gateCC4Copy.intro}
       syncLabel={competition.publicationRevision}
-      syncState="saved"
+      syncState={gateCC4UiMachine.savedSyncState}
       sectionAction={null}
       sectionContent={
-        <div style={{ display: "grid", gap: "1rem" }}>
+        <div className={styles.stack}>
           <PendingRepairCases competitionId={competition.id} />
           <RepairWorkspace
             competitionId={competition.id}
