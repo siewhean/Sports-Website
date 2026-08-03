@@ -858,6 +858,25 @@ describe("Gate C3 scoring service worker", () => {
     await expect((await offlineResponse)?.text()).resolves.toBe("immutable");
   });
 
+  it("prefers the live immutable asset while the scoring shell is online", async () => {
+    const assetUrl = "https://matchday.test/_next/static/chunks/scoring.js";
+    const live = new Response("live", { status: 200 });
+    const fetch = vi.fn().mockResolvedValue(live);
+    const harness = await workerMessageHarness({ fetch });
+    const request = new Request(assetUrl);
+    Object.defineProperty(request, "destination", { value: "script" });
+    let response: Promise<Response> | undefined;
+    harness.fetchEvent({
+      request,
+      clientId: "client-a",
+      respondWith: (candidate: Promise<Response>) => {
+        response = candidate;
+      },
+    });
+    await expect(response).resolves.toBe(live);
+    expect(fetch).toHaveBeenCalledWith(request);
+  });
+
   it("does not route organiser static assets through scoring storage", async () => {
     const network = new Response("network", { status: 200 });
     const fetch = vi.fn().mockResolvedValue(network);

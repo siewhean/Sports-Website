@@ -820,9 +820,16 @@ self.addEventListener("fetch", (event) => {
         // immutable assets. Intercepting every application's Next chunk makes
         // ordinary organiser navigation dependent on service-worker storage.
         if (!(await isScoringShellClient(event.clientId))) return fetch(request);
-        const cached = (await matchScoringResource(request)) || (await caches.match(request));
-        if (cached) return cached;
-        return fetch(request);
+        // Network-first is required even for a scoring client: a client can
+        // navigate away from /score while its URL is still settling. Retained
+        // assets are an offline recovery path, never an online bundle source.
+        try {
+          return await fetch(request);
+        } catch (error) {
+          const cached = (await matchScoringResource(request)) || (await caches.match(request));
+          if (cached) return cached;
+          throw error;
+        }
       }),
     );
   }
