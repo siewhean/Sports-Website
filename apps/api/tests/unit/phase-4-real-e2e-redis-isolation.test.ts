@@ -175,4 +175,16 @@ describe("Phase 4 real E2E Redis ownership", () => {
     expect(source).not.toContain("job_id: event.jobid");
     expect(source).not.toContain("queue name: ${queuename}");
   });
+
+  it("wires the local Phase 2 runtime into both public-projection ports", async () => {
+    const scriptPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../scripts/run-phase-4-real-e2e.ts",
+    );
+    const source = await readFile(scriptPath, "utf8");
+
+    // The sixth constructor argument serves the legacy Phase 4 reader; the
+    // seventh is the C4 publication port. A real run must exercise both.
+    expect(source).toContain("      undefined,\n      phase2,\n      phase2,\n");
+  });
 });

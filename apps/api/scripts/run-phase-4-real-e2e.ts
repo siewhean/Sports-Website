@@ -733,6 +733,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       },
       undefined,
       phase2,
+      phase2,
     );
     await scheduler.start();
     const projectNames = [
