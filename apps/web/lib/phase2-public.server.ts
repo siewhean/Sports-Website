@@ -3,7 +3,11 @@ import "server-only";
 import { cache } from "react";
 import type { PublicCompetitionProjection, PublicDivisionProjection } from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { isGateCC4PublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
+import {
+  isGateCC4PublicCompetitionProjection,
+  publicSportName,
+  type GateCC4PublicCompetitionProjection,
+} from "@/lib/phase2-public";
 import {
   demoCompetitionReadPort,
   type CompetitionReadPort,
@@ -191,7 +195,10 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
   };
 }
 
-function publicHeadersMatchProjection(response: Response, projection: ReturnType<typeof canonicalProjection>): boolean {
+function publicHeadersMatchProjection(
+  response: Response,
+  projection: GateCC4PublicCompetitionProjection,
+): boolean {
   const quotedEtag = `"${projection.freshness.etag}"`;
   return (
     response.headers.get("etag") === quotedEtag &&
@@ -201,7 +208,7 @@ function publicHeadersMatchProjection(response: Response, projection: ReturnType
   );
 }
 
-function canonicalProjection(value: unknown) {
+function canonicalProjection(value: unknown): GateCC4PublicCompetitionProjection | null {
   return isGateCC4PublicCompetitionProjection(value) ? value : null;
 }
 
