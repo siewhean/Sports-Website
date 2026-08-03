@@ -15,6 +15,14 @@ describe("framework warning filtering", () => {
     ).toBe(true);
   });
 
+  it("ignores Firefox's equivalent Next Geist font-preload wording", () => {
+    expect(
+      isExpectedFrameworkWarning(
+        '[JavaScript Warning: "The resource at “http://localhost:3103/_next/static/media/Geist_Variable.woff2” preloaded with link preload was not used within a few seconds. Make sure all attributes of the preload tag are set correctly." {file: "http://localhost:3103/organiser" line: 0}]',
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     "Layout was forced before the page was fully loaded.",
     '[JavaScript Warning: "Layout was forced before the page was fully loaded. If stylesheets are not yet loaded this may cause a flash of unstyled content." {file: "app.js" line: 393}]',

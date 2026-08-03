@@ -25,7 +25,8 @@ export function isExpectedFrameworkWarning(text: string) {
     return true;
   }
   return (
-    /was preloaded using link preload but not used within a few seconds/.test(text) &&
+    (/was preloaded using link preload but not used within a few seconds/.test(text) ||
+      /preloaded with link preload was not used within a few seconds/.test(text)) &&
     (/\/_next\/static\/media\/Geist(?:Mono)?_Variable/.test(text) ||
       /\/_next\/static\/chunks\/[A-Za-z0-9_-]+\.css/.test(text))
   );
