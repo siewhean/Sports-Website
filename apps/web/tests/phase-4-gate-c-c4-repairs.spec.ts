@@ -93,5 +93,12 @@ test("Gate C C4 analyses an atomic pending repair case and verifies fallback exp
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("application/pdf");
   expect(response.headers()["x-matchday-content-sha256"]).toMatch(/^[a-f0-9]{64}$/u);
+  const scoreSheetResponse = page.waitForResponse(
+    (candidate) =>
+      candidate.url().endsWith(`/exports/matches/${gateCC4Ids.correctedMatch}/score-sheet`) &&
+      candidate.request().method() === "POST",
+  );
+  await page.getByTestId(`gate-c-c4-score-sheet-${gateCC4Ids.correctedMatch}`).click();
+  expect((await scoreSheetResponse).headers()["content-type"]).toContain("application/pdf");
   await expect(page.getByTestId("gate-c-c4-repair-workspace").getByRole("alert")).toHaveCount(0);
 });

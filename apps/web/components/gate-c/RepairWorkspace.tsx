@@ -37,6 +37,34 @@ type ActionDraft = {
 
 type MatchOption = Readonly<{ id: string; label: string; home: string; away: string }>;
 
+/**
+ * The schedule-workspace reference query can legitimately be empty immediately
+ * after a repair publication. The repair actions remain an authorised,
+ * match-scoped source for the emergency score-sheet exports, so retain those
+ * actions as a narrow fallback instead of leaving the export surface empty.
+ */
+export function scoreSheetExportMatches(
+  liveMatches: readonly MatchOption[],
+  actions: readonly GateCRepairActionView[],
+): readonly MatchOption[] {
+  if (liveMatches.length > 0) return liveMatches;
+
+  const byMatch = new Map<string, Partial<Record<GateCRepairActionView["slot"], GateCRepairActionView>>>();
+  for (const action of actions) {
+    const slots = byMatch.get(action.match_id) ?? {};
+    slots[action.slot] = action;
+    byMatch.set(action.match_id, slots);
+  }
+
+  return [...byMatch.entries()]
+    .map(([id, slots]) => {
+      const entryName = (action: GateCRepairActionView | undefined) =>
+        action?.resolved_entry_name ?? action?.current_entry_name ?? action?.proposed_entry_name ?? id;
+      return { id, label: id, home: entryName(slots.home), away: entryName(slots.away) };
+    })
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -132,6 +160,10 @@ export function RepairWorkspace({
   const [error, setError] = useState("");
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const repairToFocusRef = useRef<string | null>(null);
+  const exportMatches = useMemo(
+    () => scoreSheetExportMatches(liveMatches, workspace?.actions ?? []),
+    [liveMatches, workspace?.actions],
+  );
 
   const loadWorkspace = useCallback(
     async (repairId: string) => {
@@ -691,7 +723,7 @@ export function RepairWorkspace({
                   </button>
                 </div>
                 <ul>
-                  {liveMatches.map((match) => (
+                  {exportMatches.map((match) => (
                     <li key={match.id}>
                       <span>
                         <strong>{match.label}</strong>
