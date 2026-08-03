@@ -37,6 +37,10 @@ type ActionDraft = {
 
 type MatchOption = Readonly<{ id: string; label: string; home: string; away: string }>;
 
+export function repairActionMatchLabel(action: GateCRepairActionView): string {
+  return action.match_code ?? gateCC4Copy.affectedMatch;
+}
+
 /**
  * The schedule-workspace reference query can legitimately be empty immediately
  * after a repair publication. The repair actions remain an authorised,
@@ -62,10 +66,10 @@ export function scoreSheetExportMatches(
       id,
       (() => {
         const entryName = (action: GateCRepairActionView | undefined) =>
-          action?.resolved_entry_name ?? action?.current_entry_name ?? action?.proposed_entry_name ?? id;
+          action?.resolved_entry_name ?? action?.current_entry_name ?? action?.proposed_entry_name ?? "";
         return {
           id,
-          label: slots.home?.match_code ?? slots.away?.match_code ?? gateCC4Copy.affectedMatch,
+          label: repairActionMatchLabel(slots.home ?? slots.away!),
           home: entryName(slots.home),
           away: entryName(slots.away),
         };
@@ -554,7 +558,7 @@ export function RepairWorkspace({
                         <div>
                           <p>{title(action.source_action)}</p>
                           <h3>
-                            {action.match_id} · {title(action.slot)}
+                            {repairActionMatchLabel(action)} · {title(action.slot)}
                           </h3>
                         </div>
                         <span>{decisionRequired ? gateCC4Copy.protected : gateCC4Copy.automatic}</span>
@@ -575,8 +579,10 @@ export function RepairWorkspace({
                         <ol>
                           {action.dependency_path.map((step, stepIndex) => (
                             <li key={`${step.source_match_id}-${step.downstream_match_id}-${stepIndex}`}>
-                              {step.source_match_id} → {step.downstream_match_id} · {title(step.outcome)} ·{" "}
-                              {title(step.slot)}
+                              {step.downstream_match_id === action.match_id
+                                ? repairActionMatchLabel(action)
+                                : gateCC4Copy.affectedMatch}{" "}
+                              · {title(step.outcome)} · {title(step.slot)}
                             </li>
                           ))}
                         </ol>

@@ -121,7 +121,7 @@ export function gateCC4Workspace(ready = false, options: GateCC4FixtureOptions =
         current_entry_name: "Marina Blue",
         proposed_entry_name: "Harbour Gold",
         resolved_entry_name: ready ? (protectedAction ? "Marina Blue" : "Harbour Gold") : null,
-        match_code: "M12",
+        match_code: "M13",
         adjustment: null,
       },
     ],
