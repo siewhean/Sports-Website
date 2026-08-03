@@ -183,7 +183,10 @@
 }
 
 .summary h2 {
-  overflow-wrap: anywhere;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 1rem;
 }
 
