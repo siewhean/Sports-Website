@@ -2,17 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { parseGateCC4Workspace } from "@/lib/gate-c-c4";
+import { gateCC4PendingCopy } from "@/lib/gate-c-c4-pending-copy";
 import { parseGateCC4PendingRepairCases, type GateCC4PendingRepairCase } from "@/lib/gate-c-c4-pending";
 import styles from "./PendingRepairCases.module.css";
-
-const copy = {
-  title: "Corrections awaiting analysis",
-  intro: "These private repair cases were created atomically with corrected public results.",
-  empty: "No corrected result is waiting for affected-match analysis.",
-  analyse: "Build affected-match workspace",
-  analysing: "Building workspace",
-  failed: "Pending repair cases could not be loaded.",
-} as const;
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -21,7 +13,7 @@ function record(value: unknown): value is Record<string, unknown> {
 function errorMessage(payload: unknown): string {
   return record(payload) && record(payload.error) && typeof payload.error.message === "string"
     ? payload.error.message
-    : copy.failed;
+    : gateCC4PendingCopy.failed;
 }
 
 export function PendingRepairCases({ competitionId }: { competitionId: string }) {
@@ -43,7 +35,7 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
       if (!parsed) throw new Error(errorMessage(payload));
       setItems(parsed);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : copy.failed);
+      setError(caught instanceof Error ? caught.message : gateCC4PendingCopy.failed);
     } finally {
       setLoading(false);
     }
@@ -67,11 +59,16 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
         },
       );
       const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok || !parseGateCC4Workspace(payload)) throw new Error(errorMessage(payload));
+      const workspace = response.ok ? parseGateCC4Workspace(payload) : null;
+      if (!workspace) throw new Error(errorMessage(payload));
       await load();
-      window.location.reload();
+      window.dispatchEvent(
+        new CustomEvent("matchday:gate-c-c4-repair-created", {
+          detail: { repairId: workspace.repair.repair_id },
+        }),
+      );
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : copy.failed);
+      setError(caught instanceof Error ? caught.message : gateCC4PendingCopy.failed);
     } finally {
       setBusy(null);
     }
@@ -81,23 +78,31 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
     <section className={styles.panel} aria-labelledby="gate-c-c4-pending-title">
       <header>
         <div>
-          <h2 id="gate-c-c4-pending-title">{copy.title}</h2>
-          <p>{copy.intro}</p>
+          <h2 id="gate-c-c4-pending-title">{gateCC4PendingCopy.title}</h2>
+          <p>{gateCC4PendingCopy.intro}</p>
         </div>
-        <span aria-live="polite">{loading ? "Loading" : `${items.length} pending`}</span>
+        <span aria-live="polite">
+          {loading ? gateCC4PendingCopy.analysing : `${items.length} ${gateCC4PendingCopy.pending}`}
+        </span>
       </header>
-      {error ? <p role="alert" className={styles.error}>{error}</p> : null}
-      {!loading && items.length === 0 ? <p className={styles.empty}>{copy.empty}</p> : null}
+      {error ? (
+        <p role="alert" className={styles.error}>
+          {error}
+        </p>
+      ) : null}
+      {!loading && items.length === 0 ? <p className={styles.empty}>{gateCC4PendingCopy.empty}</p> : null}
       <ul>
         {items.map((item) => (
           <li key={item.result_repair_case_id}>
             <div>
               <strong>{item.corrected_match_code}</strong>
-              <span>{item.division_name} · result version {item.source_result_version}</span>
+              <span>
+                {item.division_name} · {gateCC4PendingCopy.resultVersion} {item.source_result_version}
+              </span>
               <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
             </div>
             <button type="button" disabled={Boolean(busy)} onClick={() => void analyse(item)}>
-              {busy === item.result_repair_case_id ? copy.analysing : copy.analyse}
+              {busy === item.result_repair_case_id ? gateCC4PendingCopy.analysing : gateCC4PendingCopy.analyse}
             </button>
           </li>
         ))}
