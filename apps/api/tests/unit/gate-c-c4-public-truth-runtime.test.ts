@@ -232,7 +232,13 @@ describe("Gate C C4 public truth runtime", () => {
 
     expect(first.statusCode).toBe(200);
     expect(first.headers.etag).toBe('"c4-reserve-division"');
+    expect(first.headers["last-modified"]).toBe("Sat, 01 Aug 2026 00:00:04 GMT");
+    expect(first.headers["cache-control"]).toBe("public, max-age=0, s-maxage=15, must-revalidate");
+    expect(first.headers["x-matchday-schedule-version"]).toBe("4");
+    expect(first.headers["x-matchday-result-version"]).toBe("7");
+    expect(first.headers["x-matchday-projection-version"]).toBe("2");
     expect(cached.statusCode).toBe(304);
+    expect(cached.headers["cache-control"]).toBe("public, max-age=0, s-maxage=15, must-revalidate");
     expect(selectedDivisionIds).toEqual([reserveDivisionId, reserveDivisionId]);
   });
 

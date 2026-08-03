@@ -56,73 +56,6 @@ const ScoringFinalisationReceiptSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-const PublicParticipantSchema = Type.Object({
-  id: Type.Union([Id, Type.Null()]),
-  name: Type.String(),
-});
-const PublicScheduleSchema = Type.Object({
-  id: Id,
-  code: Type.String(),
-  stage: Type.String(),
-  home: PublicParticipantSchema,
-  away: PublicParticipantSchema,
-  starts_at: Type.String({ format: "date-time" }),
-  ends_at: Type.String({ format: "date-time" }),
-  area: Type.Object({ id: Id, name: Type.String() }),
-});
-const PublicResultSchema = Type.Object({
-  id: Id,
-  code: Type.String(),
-  stage: Type.String(),
-  home: PublicParticipantSchema,
-  away: PublicParticipantSchema,
-  home_score: Type.Integer({ minimum: 0 }),
-  away_score: Type.Integer({ minimum: 0 }),
-  state: Type.Union([Type.Literal("final"), Type.Literal("corrected")]),
-  updated_at: Type.String({ format: "date-time" }),
-});
-const PublicDivisionSchema = Type.Object({
-  division: Type.Object({ id: Id, name: Type.String() }),
-  schedule: Type.Array(PublicScheduleSchema),
-  results: Type.Array(PublicResultSchema),
-  standings: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-  bracket: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-});
-const PublicCompetitionSchema = Type.Object({
-  competition: Type.Object({
-    id: Id,
-    name: Type.String(),
-    slug: Type.String(),
-    sport_code: Type.Union([
-      Type.Literal("canoe_polo"),
-      Type.Literal("badminton"),
-      Type.Literal("table_tennis"),
-      Type.Literal("volleyball"),
-      Type.Literal("basketball"),
-    ]),
-    timezone: Type.String(),
-    starts_on: Type.String({ format: "date" }),
-    ends_on: Type.String({ format: "date" }),
-    status: Type.Union([
-      Type.Literal("active"),
-      Type.Literal("published"),
-      Type.Literal("live"),
-      Type.Literal("completed"),
-      Type.Literal("archived"),
-    ]),
-  }),
-  divisions: Type.Array(PublicDivisionSchema, { minItems: 1 }),
-  division: Type.Object({ id: Id, name: Type.String() }),
-  publication: Type.Object({
-    schedule_version: Type.Integer({ minimum: 0 }),
-    result_version: Type.Integer({ minimum: 0 }),
-  }),
-  schedule: Type.Array(PublicScheduleSchema),
-  results: Type.Array(PublicResultSchema),
-  standings: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-  bracket: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-  last_updated_at: Type.String({ format: "date-time" }),
-});
 const ScoringSessionStateSchema = Type.Object({
   competition: Type.Object({
     slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
@@ -1435,19 +1368,5 @@ export async function registerPhase2Routes(
       const session = await options.identityRequests.authenticate(request);
       return options.runtime.audit({ accountId: session.account.id }, request.params.competitionId);
     },
-  );
-
-  app.get<{ Params: { slug: string } }>(
-    "/api/v1/public/competitions/:slug",
-    {
-      schema: {
-        description:
-          "Read only the current matched schedule/result projection. Draft revisions and private contacts are excluded.",
-        params: Type.Object({ slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 120 }) }),
-        response: { 200: PublicCompetitionSchema, 404: ErrorResponse },
-        tags: ["public"],
-      },
-    },
-    async (request) => options.runtime.publicCompetition(request.params.slug),
   );
 }

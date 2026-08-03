@@ -502,16 +502,11 @@ describe("Phase 2 Fastify route boundaries", () => {
       expect(retainedTransportEvidence).not.toContain(secret);
     }
 
-    const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
-    expect(publicView.statusCode).toBe(200);
-    expect(publicView.headers["cache-control"]).toContain("public");
-    expect(publicView.json()).toMatchObject({
-      competition: { name: "Singapore Open", status: "active" },
-      divisions: [{ division: { name: "Open" }, schedule: [], results: [] }],
-      division: { name: "Open" },
-      publication: { schedule_version: 1, result_version: 2 },
+    const removedLegacyPublicView = await app.inject({
+      method: "GET",
+      url: "/api/v1/public/competitions/singapore-open",
     });
-    expect(publicView.body).not.toContain("primary_email");
-    expect(publicView.body).not.toContain("session_token");
+    expect(removedLegacyPublicView.statusCode).toBe(404);
+    expect(runtime.publicCompetition).not.toHaveBeenCalled();
   });
 });

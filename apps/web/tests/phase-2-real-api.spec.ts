@@ -130,8 +130,14 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
     );
     expect(correction.status(), await correction.text()).toBe(200);
     expect(await correction.json()).toMatchObject({ match_id: state.matchId, result_version: 2 });
-    const publicProjection = await organiser.get(`/api/v1/public/competitions/${state.slug}`);
+    const publicProjection = await organiser.get(`/api/v1/public/competitions/${state.slug}/current`);
     expect(publicProjection.status(), await publicProjection.text()).toBe(200);
+    expect(publicProjection.headers()["cache-control"]).toBe("public, max-age=0, s-maxage=15, must-revalidate");
+    expect(publicProjection.headers()["etag"]).toMatch(/^"c4-/u);
+    expect(publicProjection.headers()["last-modified"]).toBeTruthy();
+    expect(publicProjection.headers()["x-matchday-schedule-version"]).toBe("1");
+    expect(publicProjection.headers()["x-matchday-result-version"]).toBe("2");
+    expect(publicProjection.headers()["x-matchday-projection-version"]).toBeTruthy();
     const projection = (await publicProjection.json()) as {
       publication: { schedule_version: number; result_version: number };
       results: Array<{ id: string; home_score: number; away_score: number; state: string }>;

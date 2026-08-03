@@ -304,7 +304,7 @@ export async function buildApp(options: BuildAppOptions) {
       reply.header("Cache-Control", "no-store, private");
       reply.header("Pragma", "no-cache");
       reply.header("Vary", "Origin, Cookie");
-    } else if (route.startsWith("/api/v1/public/")) {
+    } else if (route.startsWith("/api/v1/public/") && !reply.getHeader("cache-control")) {
       reply.header("Cache-Control", "public, max-age=15, stale-while-revalidate=45");
     }
   });

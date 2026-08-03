@@ -31,7 +31,7 @@ describe("Phase 2 OpenAPI contract", () => {
       "/api/v1/competitions/{competitionId}/result-conflicts",
       "/api/v1/competitions/{competitionId}/result-conflicts/{conflictId}/acknowledge",
       "/api/v1/competitions/{competitionId}/audit",
-      "/api/v1/public/competitions/{slug}",
+      "/api/v1/public/competitions/{slug}/current",
     ];
     expect(requiredPaths.every((path) => document.paths[path])).toBe(true);
 
@@ -164,7 +164,8 @@ describe("Phase 2 OpenAPI contract", () => {
     expect(document.paths["/api/v1/competitions/{competitionId}"]?.get).toMatchObject({
       security: [{ sessionCookie: [] }],
     });
-    const publicOperation = document.paths["/api/v1/public/competitions/{slug}"]?.get as {
+    expect(document.paths["/api/v1/public/competitions/{slug}"]).toBeUndefined();
+    const publicOperation = document.paths["/api/v1/public/competitions/{slug}/current"]?.get as {
       security?: unknown;
       responses?: {
         "200"?: {

@@ -1135,17 +1135,11 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       phase2Runtime: runtime,
     });
     try {
-      const publicResponse = await publicApp.inject({
+      const removedLegacyPublicResponse = await publicApp.inject({
         method: "GET",
         url: "/api/v1/public/competitions/singapore-open-phase-2",
       });
-      expect(publicResponse.statusCode).toBe(200);
-      expect(publicResponse.json()).toMatchObject({
-        competition: { status: "active", name: "Singapore Open" },
-        division: { name: "Open" },
-        results: [{ home: { name: expect.stringMatching(/^Team /) }, away: { name: expect.stringMatching(/^Team /) } }],
-      });
-      expect(publicResponse.body).not.toMatch(/primary_email|session_token|short_code|secret_hash|"draft"/);
+      expect(removedLegacyPublicResponse.statusCode).toBe(404);
     } finally {
       await publicApp.close();
     }
