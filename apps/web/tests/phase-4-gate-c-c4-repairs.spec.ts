@@ -100,6 +100,8 @@ test("Gate C C4 analyses an atomic pending repair case and verifies fallback exp
   );
   const scoreSheet = page.getByTestId(`gate-c-c4-score-sheet-${gateCC4Ids.downstreamMatch}`);
   await expect(scoreSheet.locator("xpath=..").getByText("M12", { exact: true })).toBeVisible();
+  const correctedScoreSheet = page.getByTestId(`gate-c-c4-score-sheet-${gateCC4Ids.correctedMatch}`);
+  await expect(correctedScoreSheet.locator("xpath=..").getByText("Affected match", { exact: true })).toBeVisible();
   await scoreSheet.click();
   expect((await scoreSheetResponse).headers()["content-type"]).toContain("application/pdf");
   await expect(page.getByTestId("gate-c-c4-repair-workspace").getByRole("alert")).toHaveCount(0);

@@ -46,6 +46,7 @@ type MatchOption = Readonly<{ id: string; label: string; home: string; away: str
 export function scoreSheetExportMatches(
   liveMatches: readonly MatchOption[],
   actions: readonly GateCRepairActionView[],
+  correctedMatchId: string | null | undefined,
 ): readonly MatchOption[] {
   const byMatch = new Map<string, Partial<Record<GateCRepairActionView["slot"], GateCRepairActionView>>>();
   for (const action of actions) {
@@ -70,6 +71,14 @@ export function scoreSheetExportMatches(
         };
       })(),
     );
+  }
+  if (correctedMatchId && !merged.has(correctedMatchId)) {
+    merged.set(correctedMatchId, {
+      id: correctedMatchId,
+      label: gateCC4Copy.affectedMatch,
+      home: "",
+      away: "",
+    });
   }
 
   return [...merged.values()].sort((left, right) => left.id.localeCompare(right.id));
@@ -171,8 +180,8 @@ export function RepairWorkspace({
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const repairToFocusRef = useRef<string | null>(null);
   const exportMatches = useMemo(
-    () => scoreSheetExportMatches(liveMatches, workspace?.actions ?? []),
-    [liveMatches, workspace?.actions],
+    () => scoreSheetExportMatches(liveMatches, workspace?.actions ?? [], workspace?.repair.corrected_match_id),
+    [liveMatches, workspace?.actions, workspace?.repair.corrected_match_id],
   );
 
   const loadWorkspace = useCallback(
@@ -737,9 +746,11 @@ export function RepairWorkspace({
                     <li key={match.id}>
                       <span>
                         <strong>{match.label}</strong>
-                        <small>
-                          {match.home} · {match.away}
-                        </small>
+                        {match.home && match.away ? (
+                          <small>
+                            {match.home} · {match.away}
+                          </small>
+                        ) : null}
                       </span>
                       <button
                         type="button"
