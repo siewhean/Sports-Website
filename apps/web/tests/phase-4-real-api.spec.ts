@@ -351,7 +351,10 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await movableMatch.click();
   await expect(movableMatch).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("heading", { name: "championship-r2-m1" })).toBeVisible();
-  await page.getByRole("link", { name: "Move" }).click();
+  await Promise.all([
+    page.waitForURL((url) => /\/schedule\/revisions\/[^/]+\/matches\/[^/]+\/move$/.test(url.pathname)),
+    page.getByRole("link", { name: "Move" }).click(),
+  ]);
   await expect(page.getByTestId("phase4-move-flow")).toBeVisible();
   await selectValidMoveSlot(page, await initialMoveValidation);
   const moveRequest = page.waitForRequest(
