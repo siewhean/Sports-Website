@@ -54,8 +54,8 @@ async function workerMessageHarness(
     state: "installed",
   };
   const clients = [
-    { id: "client-a", postMessage: vi.fn() },
-    { id: "client-b", postMessage: vi.fn() },
+    { id: "client-a", url: "https://matchday.test/score", postMessage: vi.fn() },
+    { id: "client-b", url: "https://matchday.test/organiser/competitions/singapore-open", postMessage: vi.fn() },
   ];
   const skipWaiting = vi.fn().mockResolvedValue(undefined);
   const deleteCache = vi.fn().mockResolvedValue(true);
@@ -63,6 +63,7 @@ async function workerMessageHarness(
     addEventListener: (type: string, handler: (event: Record<string, unknown>) => void) => handlers.set(type, handler),
     clients: {
       claim: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn(async (clientId: string) => clients.find((client) => client.id === clientId)),
       matchAll: vi.fn().mockResolvedValue(clients),
     },
     location: { origin: "https://matchday.test" },
@@ -849,11 +850,30 @@ describe("Gate C3 scoring service worker", () => {
     Object.defineProperty(assetRequest, "destination", { value: "script" });
     harness.fetchEvent({
       request: assetRequest,
+      clientId: "client-a",
       respondWith: (response: Promise<Response>) => {
         offlineResponse = response;
       },
     });
     await expect((await offlineResponse)?.text()).resolves.toBe("immutable");
+  });
+
+  it("does not route organiser static assets through scoring storage", async () => {
+    const network = new Response("network", { status: 200 });
+    const fetch = vi.fn().mockResolvedValue(network);
+    const harness = await workerMessageHarness({ fetch });
+    const request = new Request("https://matchday.test/_next/static/chunks/organiser.js");
+    Object.defineProperty(request, "destination", { value: "script" });
+    let response: Promise<Response> | undefined;
+    harness.fetchEvent({
+      request,
+      clientId: "client-b",
+      respondWith: (candidate: Promise<Response>) => {
+        response = candidate;
+      },
+    });
+    await expect(response).resolves.toBe(network);
+    expect(fetch).toHaveBeenCalledWith(request);
   });
 
   it.each([

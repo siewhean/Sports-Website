@@ -49,6 +49,18 @@ function isImmutableBuildAsset(url, destination) {
   );
 }
 
+async function isScoringShellClient(clientId) {
+  if (typeof clientId !== "string" || clientId.length === 0) return false;
+  const client = await self.clients.get(clientId);
+  if (!client || typeof client.url !== "string") return false;
+  try {
+    const url = new URL(client.url);
+    return url.origin === self.location.origin && url.pathname === SCORING_SHELL_PATH;
+  } catch {
+    return false;
+  }
+}
+
 function requiredScoringAssetRequests(candidates) {
   if (!Array.isArray(candidates)) throw new Error("The offline scoring asset manifest is invalid.");
   if (candidates.length > SCORING_FALLBACK_MAX_RESOURCES - 1) {
@@ -804,15 +816,13 @@ self.addEventListener("fetch", (event) => {
   if (isImmutableBuildAsset(url, request.destination)) {
     event.respondWith(
       Promise.resolve().then(async () => {
+        // Only the explicitly prepared scoring shell may read its retained
+        // immutable assets. Intercepting every application's Next chunk makes
+        // ordinary organiser navigation dependent on service-worker storage.
+        if (!(await isScoringShellClient(event.clientId))) return fetch(request);
         const cached = (await matchScoringResource(request)) || (await caches.match(request));
         if (cached) return cached;
-        return fetch(request).then((response) => {
-          if (isPublicCacheable(response)) {
-            const copy = response.clone();
-            void caches.open(FOUNDATION_CACHE_NAME).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        });
+        return fetch(request);
       }),
     );
   }
