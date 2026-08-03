@@ -11,8 +11,48 @@ function uuid(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
 }
 
-export function parseGateCC4References(value: unknown): GateCC4ReferenceData | null {
-  if (!record(value) || !Array.isArray(value.divisions) || !Array.isArray(value.capacity)) return null;
+function canonicalReferences(value: Record<string, unknown>): GateCC4ReferenceData | null {
+  if (!Array.isArray(value.entries) || !Array.isArray(value.playing_areas)) return null;
+  const entries: Array<{ id: string; division_id: string; name: string }> = [];
+  const playingAreas: Array<{ id: string; name: string }> = [];
+  const entryIds = new Set<string>();
+  const areaIds = new Set<string>();
+
+  for (const entry of value.entries) {
+    if (
+      !record(entry) ||
+      !uuid(entry.id) ||
+      entryIds.has(entry.id) ||
+      !uuid(entry.division_id) ||
+      typeof entry.name !== "string" ||
+      entry.name.trim().length < 1
+    ) {
+      return null;
+    }
+    entryIds.add(entry.id);
+    entries.push({ id: entry.id, division_id: entry.division_id, name: entry.name });
+  }
+  for (const area of value.playing_areas) {
+    if (
+      !record(area) ||
+      !uuid(area.id) ||
+      areaIds.has(area.id) ||
+      typeof area.name !== "string" ||
+      area.name.trim().length < 1
+    ) {
+      return null;
+    }
+    areaIds.add(area.id);
+    playingAreas.push({ id: area.id, name: area.name });
+  }
+  return {
+    entries: entries.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
+    playing_areas: playingAreas.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
+  };
+}
+
+function workspaceReferences(value: Record<string, unknown>): GateCC4ReferenceData | null {
+  if (!Array.isArray(value.divisions) || !Array.isArray(value.capacity)) return null;
   const entries: Array<{ id: string; division_id: string; name: string }> = [];
   const playingAreas: Array<{ id: string; name: string }> = [];
   const entryIds = new Set<string>();
@@ -50,4 +90,9 @@ export function parseGateCC4References(value: unknown): GateCC4ReferenceData | n
     entries: entries.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
     playing_areas: playingAreas.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
   };
+}
+
+export function parseGateCC4References(value: unknown): GateCC4ReferenceData | null {
+  if (!record(value)) return null;
+  return canonicalReferences(value) ?? workspaceReferences(value);
 }
