@@ -1,0 +1,54 @@
+name: Gate C4 bootstrap artifacts
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gate-c-c4-bootstrap-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lockfile:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/gate-c-c4-production-integration-20260801'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact C4 branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/gate-c-c4-production-integration-20260801
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Activate the repository package manager
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+          pnpm --version
+
+      - name: Generate only the dependency lockfile
+        run: pnpm install --lockfile-only --ignore-scripts
+
+      - name: Commit the deterministic lockfile when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- pnpm-lock.yaml; then
+            echo "pnpm-lock.yaml is already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml
+          git commit -m "build(c4): refresh frozen lockfile"
+          git push origin HEAD:fix/gate-c-c4-production-integration-20260801
