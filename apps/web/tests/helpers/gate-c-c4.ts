@@ -181,6 +181,14 @@ const references = {
     { id: gateCC4Ids.manualEntry, division_id: gateCC4Ids.division, name: "Kallang Current" },
   ],
   playing_areas: [{ id: gateCC4Ids.area, name: "Court 1" }],
+  matches: [
+    {
+      id: gateCC4Ids.correctedMatch,
+      label: "M12",
+      home: "Marina Blue",
+      away: "Harbour Gold",
+    },
+  ],
 };
 
 function json(route: Route, body: unknown, status = 200) {

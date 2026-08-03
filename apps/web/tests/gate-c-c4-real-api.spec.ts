@@ -178,10 +178,26 @@ test("browser publishes a C4 repair through the real BFF and public truth", asyn
     (await expectVerifiedPdf(page, `/api/gate-c/competitions/${fixture.competitionId}/exports/schedule`))
       .idempotentReplay,
   ).toBe("true");
-  await expectVerifiedPdf(
-    page,
-    `/api/gate-c/competitions/${fixture.competitionId}/exports/matches/${fixture.correctedMatchId}/score-sheet`,
+  const scoreSheetExport = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname.endsWith(
+        `/competitions/${fixture.competitionId}/exports/matches/${fixture.correctedMatchId}/score-sheet`,
+      ),
   );
+  await page.getByTestId(`gate-c-c4-score-sheet-${fixture.correctedMatchId}`).click();
+  const scoreSheetResponse = await scoreSheetExport;
+  expect(scoreSheetResponse.status()).toBe(200);
+  expect(scoreSheetResponse.headers()["content-type"]).toContain("application/pdf");
+  expect(scoreSheetResponse.headers()["x-matchday-content-sha256"]).toMatch(/^[a-f0-9]{64}$/u);
+  expect(
+    (
+      await expectVerifiedPdf(
+        page,
+        `/api/gate-c/competitions/${fixture.competitionId}/exports/matches/${fixture.correctedMatchId}/score-sheet`,
+      )
+    ).idempotentReplay,
+  ).toBe("true");
 
   const resultFile = process.env.GATE_C_C4_E2E_RESULT_FILE;
   if (!resultFile) throw new Error("GATE_C_C4_E2E_RESULT_FILE is required");

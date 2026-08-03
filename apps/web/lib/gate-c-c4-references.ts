@@ -1,6 +1,7 @@
 export type GateCC4ReferenceData = Readonly<{
   entries: readonly Readonly<{ id: string; division_id: string; name: string }>[];
   playing_areas: readonly Readonly<{ id: string; name: string }>[];
+  matches: readonly Readonly<{ id: string; label: string; home: string; away: string }>[];
 }>;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -14,12 +15,38 @@ function uuid(value: unknown): value is string {
   );
 }
 
+function matchReferences(value: unknown): GateCC4ReferenceData["matches"] | null {
+  if (!Array.isArray(value)) return null;
+  const matches: Array<{ id: string; label: string; home: string; away: string }> = [];
+  const matchIds = new Set<string>();
+  for (const match of value) {
+    if (
+      !record(match) ||
+      !uuid(match.id) ||
+      matchIds.has(match.id) ||
+      typeof match.label !== "string" ||
+      match.label.trim().length < 1 ||
+      typeof match.home !== "string" ||
+      match.home.trim().length < 1 ||
+      typeof match.away !== "string" ||
+      match.away.trim().length < 1
+    ) {
+      return null;
+    }
+    matchIds.add(match.id);
+    matches.push({ id: match.id, label: match.label, home: match.home, away: match.away });
+  }
+  return matches;
+}
+
 function canonicalReferences(value: Record<string, unknown>): GateCC4ReferenceData | null {
   if (!Array.isArray(value.entries) || !Array.isArray(value.playing_areas)) return null;
   const entries: Array<{ id: string; division_id: string; name: string }> = [];
   const playingAreas: Array<{ id: string; name: string }> = [];
   const entryIds = new Set<string>();
   const areaIds = new Set<string>();
+  const matches = matchReferences(value.matches);
+  if (!matches) return null;
 
   for (const entry of value.entries) {
     if (
@@ -53,6 +80,7 @@ function canonicalReferences(value: Record<string, unknown>): GateCC4ReferenceDa
     playing_areas: playingAreas.sort(
       (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
     ),
+    matches,
   };
 }
 
@@ -96,6 +124,7 @@ function workspaceReferences(value: Record<string, unknown>): GateCC4ReferenceDa
     playing_areas: playingAreas.sort(
       (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
     ),
+    matches: [],
   };
 }
 

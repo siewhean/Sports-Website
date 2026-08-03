@@ -121,7 +121,8 @@ export function RepairWorkspace({
 }) {
   const [queue, setQueue] = useState<GateCC4RepairQueueItem[]>([]);
   const [workspace, setWorkspace] = useState<GateCRepairWorkspaceView | null>(null);
-  const [references, setReferences] = useState<GateCC4ReferenceData>({ entries: [], playing_areas: [] });
+  const [references, setReferences] = useState<GateCC4ReferenceData>({ entries: [], playing_areas: [], matches: [] });
+  const [liveMatches, setLiveMatches] = useState<readonly MatchOption[]>(matches);
   const [drafts, setDrafts] = useState<Record<string, ActionDraft>>({});
   const [correctionId, setCorrectionId] = useState("");
   const [abandonReason, setAbandonReason] = useState("");
@@ -168,6 +169,7 @@ export function RepairWorkspace({
       if (!parsedQueue || !parsedReferences) throw new Error(upstreamMessage(queuePayload));
       setQueue(parsedQueue);
       setReferences(parsedReferences);
+      setLiveMatches(parsedReferences.matches);
       const preferred = parsedQueue.find((item) => item.latest_status === "draft" || item.latest_status === "ready");
       if (preferred) await loadWorkspace(preferred.repair_id);
       else setWorkspace(null);
@@ -689,7 +691,7 @@ export function RepairWorkspace({
                   </button>
                 </div>
                 <ul>
-                  {matches.map((match) => (
+                  {liveMatches.map((match) => (
                     <li key={match.id}>
                       <span>
                         <strong>{match.label}</strong>
@@ -699,6 +701,7 @@ export function RepairWorkspace({
                       </span>
                       <button
                         type="button"
+                        data-testid={`gate-c-c4-score-sheet-${match.id}`}
                         disabled={Boolean(busy)}
                         onClick={() =>
                           void exportPdf(
