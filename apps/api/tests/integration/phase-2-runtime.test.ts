@@ -2629,7 +2629,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     });
 
     await expect(client`DELETE FROM competitions WHERE id=${competition.id}`).rejects.toThrow(
-      /result_conflicts is append-only|canonical score events are append-only/i,
+      /result_conflicts is append-only|canonical score events are append-only|Gate C4 result repair facts are append-only/i,
     );
     expect(await client`SELECT count(*)::integer AS count FROM competitions WHERE id=${competition.id}`).toEqual([
       { count: 1 },
