@@ -25,17 +25,20 @@ jobs:
           ref: fix/gate-c-c4-production-integration-20260801
           fetch-depth: 0
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24.18.0
           cache: pnpm
 
-      - name: Activate the repository package manager
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.33.0 --activate
-          pnpm --version
+      - name: Confirm the repository package manager
+        run: pnpm --version
 
       - name: Generate only the dependency lockfile
         run: pnpm install --lockfile-only --ignore-scripts
