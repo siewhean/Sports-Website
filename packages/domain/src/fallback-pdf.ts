@@ -1,10 +1,4 @@
-import {
-  PDFDocument,
-  StandardFonts,
-  rgb,
-  type PDFFont,
-  type PDFPage,
-} from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { assertPublicProjectionPrivacy } from "./public-truth.js";
 import type { EmergencyScoreSheet, ScheduleFallbackDocument, ScoreSheetSection } from "./fallback-exports.js";
 

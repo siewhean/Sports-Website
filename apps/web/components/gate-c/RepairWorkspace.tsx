@@ -160,7 +160,11 @@ export function RepairWorkspace({
       workspace?.actions.filter((action) => {
         if (!actionNeedsDecision(action)) return false;
         const draft = drafts[action.repair_action_id];
-        return !draft?.decision || draft.reason.trim().length < 3 || (draft.decision === "set_manual_entry" && !draft.selectedEntryId);
+        return (
+          !draft?.decision ||
+          draft.reason.trim().length < 3 ||
+          (draft.decision === "set_manual_entry" && !draft.selectedEntryId)
+        );
       }) ?? [],
     [drafts, workspace],
   );
@@ -168,7 +172,18 @@ export function RepairWorkspace({
   function updateDraft(actionId: string, patch: Partial<ActionDraft>) {
     setDrafts((current) => ({
       ...current,
-      [actionId]: { ...(current[actionId] ?? { clientEventId: crypto.randomUUID(), decision: "", selectedEntryId: "", reason: "", startsAt: "", endsAt: "", playingAreaId: "" }), ...patch },
+      [actionId]: {
+        ...(current[actionId] ?? {
+          clientEventId: crypto.randomUUID(),
+          decision: "",
+          selectedEntryId: "",
+          reason: "",
+          startsAt: "",
+          endsAt: "",
+          playingAreaId: "",
+        }),
+        ...patch,
+      },
     }));
     setMessage("");
     setError("");
@@ -323,7 +338,11 @@ export function RepairWorkspace({
       <p className={styles.live} aria-live="polite" aria-atomic="true">
         {message}
       </p>
-      {error ? <p className={styles.error} role="alert">{error}</p> : null}
+      {error ? (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
 
       <section className={styles.toolbar} aria-labelledby="repair-analysis-title">
         <div>
@@ -362,7 +381,8 @@ export function RepairWorkspace({
                     <strong>{item.corrected_match_code}</strong>
                     <span>{item.division_name}</span>
                     <small>
-                      {item.affected_action_count} {gateCC4Copy.affected} · {item.unresolved_action_count} {gateCC4Copy.unresolved}
+                      {item.affected_action_count} {gateCC4Copy.affected} · {item.unresolved_action_count}{" "}
+                      {gateCC4Copy.unresolved}
                     </small>
                     <em>{item.latest_status ? title(item.latest_status) : gateCC4Copy.required}</em>
                   </button>
@@ -386,9 +406,18 @@ export function RepairWorkspace({
                   <h2>{workspace.repair.corrected_match_id}</h2>
                 </div>
                 <dl>
-                  <div><dt>{gateCC4Copy.resultVersion}</dt><dd>{workspace.current_result_version}</dd></div>
-                  <div><dt>{gateCC4Copy.scheduleVersion}</dt><dd>{workspace.published_schedule_version}</dd></div>
-                  <div><dt>{gateCC4Copy.unresolved}</dt><dd>{unresolved.length}</dd></div>
+                  <div>
+                    <dt>{gateCC4Copy.resultVersion}</dt>
+                    <dd>{workspace.current_result_version}</dd>
+                  </div>
+                  <div>
+                    <dt>{gateCC4Copy.scheduleVersion}</dt>
+                    <dd>{workspace.published_schedule_version}</dd>
+                  </div>
+                  <div>
+                    <dt>{gateCC4Copy.unresolved}</dt>
+                    <dd>{unresolved.length}</dd>
+                  </div>
                 </dl>
                 <strong data-ready={workspace.publication_ready}>
                   {workspace.publication_ready ? gateCC4Copy.publicationReady : gateCC4Copy.publicationNotReady}
@@ -399,20 +428,29 @@ export function RepairWorkspace({
                 {workspace.actions.map((action, index) => {
                   const draft = drafts[action.repair_action_id] ?? defaultDraft(action);
                   const needsDecision = actionNeedsDecision(action);
-                  const firstForMatch = workspace.actions.findIndex((candidate) => candidate.match_id === action.match_id) === index;
+                  const firstForMatch =
+                    workspace.actions.findIndex((candidate) => candidate.match_id === action.match_id) === index;
                   const entries = references.entries.filter((entry) => entry.division_id === action.division_id);
                   return (
                     <section key={action.repair_action_id} className={styles.action} data-protected={needsDecision}>
                       <header>
                         <div>
                           <p>{title(action.source_action)}</p>
-                          <h3>{action.match_id} · {title(action.slot)}</h3>
+                          <h3>
+                            {action.match_id} · {title(action.slot)}
+                          </h3>
                         </div>
                         <span>{needsDecision ? gateCC4Copy.protected : gateCC4Copy.automatic}</span>
                       </header>
                       <dl>
-                        <div><dt>{gateCC4Copy.currentEntry}</dt><dd>{action.current_entry_name ?? "—"}</dd></div>
-                        <div><dt>{gateCC4Copy.proposedEntry}</dt><dd>{action.proposed_entry_name ?? "—"}</dd></div>
+                        <div>
+                          <dt>{gateCC4Copy.currentEntry}</dt>
+                          <dd>{action.current_entry_name ?? "—"}</dd>
+                        </div>
+                        <div>
+                          <dt>{gateCC4Copy.proposedEntry}</dt>
+                          <dd>{action.proposed_entry_name ?? "—"}</dd>
+                        </div>
                       </dl>
                       <p className={styles.reason}>{action.reason}</p>
                       <details>
@@ -420,7 +458,8 @@ export function RepairWorkspace({
                         <ol>
                           {action.dependency_path.map((step, stepIndex) => (
                             <li key={`${step.source_match_id}-${step.downstream_match_id}-${stepIndex}`}>
-                              {step.source_match_id} → {step.downstream_match_id} · {title(step.outcome)} · {title(step.slot)}
+                              {step.source_match_id} → {step.downstream_match_id} · {title(step.outcome)} ·{" "}
+                              {title(step.slot)}
                             </li>
                           ))}
                         </ol>
@@ -433,10 +472,16 @@ export function RepairWorkspace({
                             <select
                               value={draft.decision}
                               required
-                              onChange={(event) => updateDraft(action.repair_action_id, { decision: event.currentTarget.value as DecisionValue })}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, {
+                                  decision: event.currentTarget.value as DecisionValue,
+                                })
+                              }
                             >
                               <option value="">—</option>
-                              {action.proposed_entry_id ? <option value="accept_proposed">{gateCC4Copy.acceptProposed}</option> : null}
+                              {action.proposed_entry_id ? (
+                                <option value="accept_proposed">{gateCC4Copy.acceptProposed}</option>
+                              ) : null}
                               <option value="keep_current">{gateCC4Copy.keepCurrent}</option>
                               <option value="set_manual_entry">{gateCC4Copy.setManual}</option>
                               <option value="leave_protected">{gateCC4Copy.leaveProtected}</option>
@@ -448,10 +493,16 @@ export function RepairWorkspace({
                               <select
                                 value={draft.selectedEntryId}
                                 required
-                                onChange={(event) => updateDraft(action.repair_action_id, { selectedEntryId: event.currentTarget.value })}
+                                onChange={(event) =>
+                                  updateDraft(action.repair_action_id, { selectedEntryId: event.currentTarget.value })
+                                }
                               >
                                 <option value="">—</option>
-                                {entries.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+                                {entries.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>
+                                    {entry.name}
+                                  </option>
+                                ))}
                               </select>
                             </label>
                           ) : null}
@@ -461,7 +512,9 @@ export function RepairWorkspace({
                               value={draft.reason}
                               required
                               minLength={3}
-                              onChange={(event) => updateDraft(action.repair_action_id, { reason: event.currentTarget.value })}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { reason: event.currentTarget.value })
+                              }
                             />
                           </label>
                         </div>
@@ -470,13 +523,40 @@ export function RepairWorkspace({
                       {firstForMatch ? (
                         <fieldset className={styles.adjustments}>
                           <legend>{gateCC4Copy.unchanged}</legend>
-                          <label><span>{gateCC4Copy.startsAt}</span><input type="datetime-local" value={draft.startsAt} onChange={(event) => updateDraft(action.repair_action_id, { startsAt: event.currentTarget.value })} /></label>
-                          <label><span>{gateCC4Copy.endsAt}</span><input type="datetime-local" value={draft.endsAt} onChange={(event) => updateDraft(action.repair_action_id, { endsAt: event.currentTarget.value })} /></label>
+                          <label>
+                            <span>{gateCC4Copy.startsAt}</span>
+                            <input
+                              type="datetime-local"
+                              value={draft.startsAt}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { startsAt: event.currentTarget.value })
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>{gateCC4Copy.endsAt}</span>
+                            <input
+                              type="datetime-local"
+                              value={draft.endsAt}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { endsAt: event.currentTarget.value })
+                              }
+                            />
+                          </label>
                           <label>
                             <span>{gateCC4Copy.playingArea}</span>
-                            <select value={draft.playingAreaId} onChange={(event) => updateDraft(action.repair_action_id, { playingAreaId: event.currentTarget.value })}>
+                            <select
+                              value={draft.playingAreaId}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { playingAreaId: event.currentTarget.value })
+                              }
+                            >
                               <option value="">—</option>
-                              {references.playing_areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+                              {references.playing_areas.map((area) => (
+                                <option key={area.id} value={area.id}>
+                                  {area.name}
+                                </option>
+                              ))}
                             </select>
                           </label>
                         </fieldset>
@@ -492,18 +572,34 @@ export function RepairWorkspace({
                   <button type="button" disabled={Boolean(busy)} onClick={() => void saveRevision("draft")}>
                     {busy === "draft" ? gateCC4Copy.saving : gateCC4Copy.saveDraft}
                   </button>
-                  <button type="button" disabled={Boolean(busy) || unresolved.length > 0} onClick={() => void saveRevision("ready")}>
+                  <button
+                    type="button"
+                    disabled={Boolean(busy) || unresolved.length > 0}
+                    onClick={() => void saveRevision("ready")}
+                  >
                     {busy === "ready" ? gateCC4Copy.saving : gateCC4Copy.markReady}
                   </button>
-                  <button type="button" disabled={Boolean(busy) || !workspace.publication_ready} onClick={() => void publish()}>
+                  <button
+                    type="button"
+                    disabled={Boolean(busy) || !workspace.publication_ready}
+                    onClick={() => void publish()}
+                  >
                     {busy === "publish" ? gateCC4Copy.publishing : gateCC4Copy.publish}
                   </button>
                 </div>
                 <label>
                   <span>{gateCC4Copy.reason}</span>
-                  <input value={abandonReason} minLength={3} onChange={(event) => setAbandonReason(event.currentTarget.value)} />
+                  <input
+                    value={abandonReason}
+                    minLength={3}
+                    onChange={(event) => setAbandonReason(event.currentTarget.value)}
+                  />
                 </label>
-                <button type="button" disabled={Boolean(busy) || abandonReason.trim().length < 3} onClick={() => void abandon()}>
+                <button
+                  type="button"
+                  disabled={Boolean(busy) || abandonReason.trim().length < 3}
+                  onClick={() => void abandon()}
+                >
                   {busy === "abandon" ? gateCC4Copy.abandoning : gateCC4Copy.abandon}
                 </button>
               </section>
@@ -512,15 +608,38 @@ export function RepairWorkspace({
                 <div>
                   <h2>{gateCC4Copy.schedulePdf}</h2>
                   <p>{gateCC4Copy.exportHelp}</p>
-                  <button type="button" disabled={Boolean(busy)} onClick={() => void exportPdf(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/schedule`, "schedule-export")}>
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() =>
+                      void exportPdf(
+                        `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/schedule`,
+                        "schedule-export",
+                      )
+                    }
+                  >
                     {gateCC4Copy.schedulePdf}
                   </button>
                 </div>
                 <ul>
                   {matches.map((match) => (
                     <li key={match.id}>
-                      <span><strong>{match.label}</strong><small>{match.home} · {match.away}</small></span>
-                      <button type="button" disabled={Boolean(busy)} onClick={() => void exportPdf(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/matches/${encodeURIComponent(match.id)}/score-sheet`, `score-sheet-${match.id}`)}>
+                      <span>
+                        <strong>{match.label}</strong>
+                        <small>
+                          {match.home} · {match.away}
+                        </small>
+                      </span>
+                      <button
+                        type="button"
+                        disabled={Boolean(busy)}
+                        onClick={() =>
+                          void exportPdf(
+                            `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/matches/${encodeURIComponent(match.id)}/score-sheet`,
+                            `score-sheet-${match.id}`,
+                          )
+                        }
+                      >
                         {gateCC4Copy.scoreSheet}
                       </button>
                     </li>
@@ -544,7 +663,10 @@ export function RepairWorkspace({
           ) : loading ? (
             <p role="status">{gateCC4Copy.loading}</p>
           ) : (
-            <div className={styles.empty}><h2>{gateCC4Copy.noRepairs}</h2><p>{gateCC4Copy.noRepairsBody}</p></div>
+            <div className={styles.empty}>
+              <h2>{gateCC4Copy.noRepairs}</h2>
+              <p>{gateCC4Copy.noRepairsBody}</p>
+            </div>
           )}
         </main>
       </div>

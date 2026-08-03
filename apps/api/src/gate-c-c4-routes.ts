@@ -228,15 +228,17 @@ export async function registerGateCC4Routes(
       },
     },
     async (request, reply) =>
-      reply.code(201).send(
-        await options.runtime.createRevision(
-          await mutationActor(request),
-          request.params.competitionId,
-          request.params.repairId,
-          request.body,
-          request.id,
+      reply
+        .code(201)
+        .send(
+          await options.runtime.createRevision(
+            await mutationActor(request),
+            request.params.competitionId,
+            request.params.repairId,
+            request.body,
+            request.id,
+          ),
         ),
-      ),
   );
 
   app.post<{

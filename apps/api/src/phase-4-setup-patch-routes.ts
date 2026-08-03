@@ -4,10 +4,7 @@ import { ApiError } from "./errors.js";
 import { registerGateCC4IntakeRoutes } from "./gate-c-c4-intake-routes.js";
 import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import type { GateCC4Operations } from "./gate-c-c4-operations.js";
-import {
-  registerGateCC4PublicTruthRoutes,
-  type GateCC4PublicTruthRuntime,
-} from "./gate-c-c4-public-truth.js";
+import { registerGateCC4PublicTruthRoutes, type GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { registerGateCC4Routes } from "./gate-c-c4-routes.js";
 import type { GateCC4Runtime } from "./gate-c-c4-runtime.js";
 import type { IdentityRequestContext } from "./identity-routes.js";

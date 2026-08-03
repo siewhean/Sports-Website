@@ -8,11 +8,7 @@ import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 
 export const dynamic = "force-dynamic";
 
-export default async function CompetitionRepairsPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function CompetitionRepairsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const result = await getOrganiserCompetitionView(id);
   if (result.state === "notFound") notFound();

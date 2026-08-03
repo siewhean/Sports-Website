@@ -55,9 +55,7 @@ export function isPublicCompetitionProjection(value: unknown): value is PublicCo
   );
 }
 
-export function isGateCC4PublicCompetitionProjection(
-  value: unknown,
-): value is GateCC4PublicCompetitionProjection {
+export function isGateCC4PublicCompetitionProjection(value: unknown): value is GateCC4PublicCompetitionProjection {
   if (!isPublicCompetitionProjection(value) || !isRecord((value as Record<string, unknown>).freshness)) return false;
   const freshness = (value as unknown as { freshness: Record<string, unknown> }).freshness;
   const generatedAt = typeof freshness.generated_at === "string" ? Date.parse(freshness.generated_at) : Number.NaN;
@@ -65,18 +63,18 @@ export function isGateCC4PublicCompetitionProjection(
     typeof freshness.source_updated_at === "string" ? Date.parse(freshness.source_updated_at) : Number.NaN;
   return Boolean(
     typeof freshness.division_id === "string" &&
-      freshness.division_id === value.competition.id &&
-      Number.isSafeInteger(freshness.schedule_version) &&
-      freshness.schedule_version === value.publication.schedule_version &&
-      Number.isSafeInteger(freshness.result_version) &&
-      freshness.result_version === value.publication.result_version &&
-      Number.isSafeInteger(freshness.projection_version) &&
-      (freshness.projection_version as number) >= 1 &&
-      Number.isFinite(generatedAt) &&
-      Number.isFinite(sourceUpdatedAt) &&
-      generatedAt >= sourceUpdatedAt &&
-      typeof freshness.etag === "string" &&
-      /^[A-Za-z0-9._:-]{1,250}$/u.test(freshness.etag)
+    freshness.division_id === value.competition.id &&
+    Number.isSafeInteger(freshness.schedule_version) &&
+    freshness.schedule_version === value.publication.schedule_version &&
+    Number.isSafeInteger(freshness.result_version) &&
+    freshness.result_version === value.publication.result_version &&
+    Number.isSafeInteger(freshness.projection_version) &&
+    (freshness.projection_version as number) >= 1 &&
+    Number.isFinite(generatedAt) &&
+    Number.isFinite(sourceUpdatedAt) &&
+    generatedAt >= sourceUpdatedAt &&
+    typeof freshness.etag === "string" &&
+    /^[A-Za-z0-9._:-]{1,250}$/u.test(freshness.etag),
   );
 }
 

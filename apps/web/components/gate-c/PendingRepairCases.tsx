@@ -26,10 +26,9 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(
-        `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/pending`,
-        { cache: "no-store" },
-      );
+      const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/pending`, {
+        cache: "no-store",
+      });
       const payload: unknown = await response.json().catch(() => null);
       const parsed = response.ok ? parseGateCC4PendingRepairCases(payload) : null;
       if (!parsed) throw new Error(errorMessage(payload));
@@ -50,14 +49,11 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
     setBusy(item.result_repair_case_id);
     setError("");
     try {
-      const response = await fetch(
-        `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ correction_transaction_id: item.correction_transaction_id }),
-        },
-      );
+      const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ correction_transaction_id: item.correction_transaction_id }),
+      });
       const payload: unknown = await response.json().catch(() => null);
       const workspace = response.ok ? parseGateCC4Workspace(payload) : null;
       if (!workspace) throw new Error(errorMessage(payload));

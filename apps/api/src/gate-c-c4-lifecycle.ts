@@ -116,7 +116,8 @@ export class GateCC4LifecycleOperations {
     );
     return rows.map((row) => ({
       ...row,
-      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
+      created_at:
+        row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
     }));
   }
 
@@ -127,7 +128,8 @@ export class GateCC4LifecycleOperations {
     request: { expected_revision: number; reason: string },
     requestId: string,
   ): Promise<GateCC4AbandonReceipt> {
-    if (!this.sql.begin) throw new Error("Gate C4 lifecycle operations require a transaction-capable PostgreSQL client");
+    if (!this.sql.begin)
+      throw new Error("Gate C4 lifecycle operations require a transaction-capable PostgreSQL client");
     const reason = request.reason.trim();
     if (reason.length < 3 || reason.length > 1_000) {
       throw new ApiError(422, "REPAIR_ABANDON_REASON_INVALID", "Abandonment reason must contain 3 to 1000 characters");

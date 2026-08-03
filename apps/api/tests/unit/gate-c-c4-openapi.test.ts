@@ -44,9 +44,7 @@ describe("Gate C C4 OpenAPI acceptance contract", () => {
       expect(document.paths[path]?.[method]?.security).toEqual([{ sessionCookie: [] }]);
     }
     for (const [path, method] of mutations) {
-      expect(headerNames(document.paths[path]![method]!)).toEqual(
-        expect.arrayContaining(["origin", "x-csrf-token"]),
-      );
+      expect(headerNames(document.paths[path]![method]!)).toEqual(expect.arrayContaining(["origin", "x-csrf-token"]));
     }
 
     const analyse = jsonBody(document.paths[mutations[0][0]]!.post!);

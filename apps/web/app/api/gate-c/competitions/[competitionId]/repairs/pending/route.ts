@@ -3,10 +3,7 @@ import { NextResponse } from "next/server";
 import { parseGateCC4PendingRepairCases } from "@/lib/gate-c-c4-pending";
 import { readPhase3Json } from "@/lib/phase3-settings-command.server";
 
-export async function GET(
-  request: NextRequest,
-  context: { params: Promise<{ competitionId: string }> },
-) {
+export async function GET(request: NextRequest, context: { params: Promise<{ competitionId: string }> }) {
   const { competitionId } = await context.params;
   const result = await readPhase3Json(
     request,

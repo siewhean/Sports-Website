@@ -195,10 +195,7 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
   };
 }
 
-function publicHeadersMatchProjection(
-  response: Response,
-  projection: GateCC4PublicCompetitionProjection,
-): boolean {
+function publicHeadersMatchProjection(response: Response, projection: GateCC4PublicCompetitionProjection): boolean {
   const quotedEtag = `"${projection.freshness.etag}"`;
   return (
     response.headers.get("etag") === quotedEtag &&

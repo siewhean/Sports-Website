@@ -73,9 +73,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     super(reliableSql, phase3, enqueue, ai, reliableNow, publicProjection);
     this.gateCC4 = new GateCC4Runtime(
       reliableSql,
-      gateCC4ProjectionRuntime
-        ? new GateCC4PostgresPublicationPort(gateCC4ProjectionRuntime, reliableNow)
-        : undefined,
+      gateCC4ProjectionRuntime ? new GateCC4PostgresPublicationPort(gateCC4ProjectionRuntime, reliableNow) : undefined,
       reliableNow,
     );
     this.gateCC4Operations = new GateCC4Operations(reliableSql, gateCC4PublicOrigin, reliableNow);
@@ -83,10 +81,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     this.gateCC4PublicTruth = new GateCC4PublicTruthRuntime(reliableSql);
   }
 
-  async ensureWritableOrganisation(
-    actor: Phase3Actor,
-    requestId: string,
-  ): Promise<OrganisationBootstrapReceipt> {
+  async ensureWritableOrganisation(actor: Phase3Actor, requestId: string): Promise<OrganisationBootstrapReceipt> {
     if (!this.reliableSql.begin) {
       throw new Error("Organiser workspace provisioning requires a transaction-capable PostgreSQL client");
     }

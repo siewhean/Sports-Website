@@ -8,7 +8,10 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function uuid(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
+  );
 }
 
 function canonicalReferences(value: Record<string, unknown>): GateCC4ReferenceData | null {
@@ -47,7 +50,9 @@ function canonicalReferences(value: Record<string, unknown>): GateCC4ReferenceDa
   }
   return {
     entries: entries.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
-    playing_areas: playingAreas.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
+    playing_areas: playingAreas.sort(
+      (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+    ),
   };
 }
 
@@ -88,7 +93,9 @@ function workspaceReferences(value: Record<string, unknown>): GateCC4ReferenceDa
   }
   return {
     entries: entries.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
-    playing_areas: playingAreas.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
+    playing_areas: playingAreas.sort(
+      (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+    ),
   };
 }
 

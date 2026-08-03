@@ -233,12 +233,16 @@ export async function installGateCC4BrowserRoutes(page: Page): Promise<GateCC4Br
     if (/\/repairs\/[^/]+\/revisions$/u.test(path) && method === "POST") {
       revisionRequests.push(request.postDataJSON() as Record<string, unknown>);
       ready = true;
-      await json(route, {
-        revision: gateCC4Workspace(true).latest_revision,
-        actions: gateCC4Workspace(true).actions,
-        unresolved_action_keys: [],
-        publication_ready: true,
-      }, 201);
+      await json(
+        route,
+        {
+          revision: gateCC4Workspace(true).latest_revision,
+          actions: gateCC4Workspace(true).actions,
+          unresolved_action_keys: [],
+          publication_ready: true,
+        },
+        201,
+      );
       return;
     }
     if (/\/repairs\/[^/]+\/abandon$/u.test(path) && method === "POST") {
