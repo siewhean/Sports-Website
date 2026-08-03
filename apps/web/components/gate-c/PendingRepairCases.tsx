@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { parseGateCC4Workspace } from "@/lib/gate-c-c4";
-import { gateCC4Http } from "@/lib/gate-c-c4-http";
+import { gateCC4Http, gateCC4UiMachine } from "@/lib/gate-c-c4-http";
 import { gateCC4PendingCopy } from "@/lib/gate-c-c4-pending-copy";
 import {
   parseGateCC4PendingRepairCases,
@@ -67,7 +67,7 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
       if (!workspace) throw new Error(errorMessage(payload));
       await load();
       window.dispatchEvent(
-        new CustomEvent("matchday:gate-c-c4-repair-created", {
+        new CustomEvent(gateCC4UiMachine.repairCreatedEvent, {
           detail: { repairId: workspace.repair.repair_id },
         }),
       );
