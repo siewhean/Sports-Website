@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -47,11 +47,13 @@ type RunConfiguration = {
   recordFile: string;
   redisDatabase: number;
   infrastructureMode: InfrastructureMode;
+  sourceSha: string;
 };
 
 export type InfrastructureMode = "docker" | "local";
 
 type IsolationRecord = {
+  source_sha: string;
   run: number;
   status: "passed" | "failed";
   started_at_utc: string;
@@ -1150,6 +1152,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
         : cleanupError;
     }
     await appendIsolationRecord(configuration.recordFile, {
+      source_sha: configuration.sourceSha,
       run: runNumber,
       status: primaryError ? "failed" : "passed",
       started_at_utc: startedAt,
@@ -1173,13 +1176,15 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
 
 async function main(): Promise<void> {
   assertPinnedToolchain();
+  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  if (!/^[a-f0-9]{40}$/u.test(sourceSha)) throw new Error("Phase 4 real E2E requires an exact source SHA");
   const infrastructureMode = resolveInfrastructureMode(process.env.PHASE4_E2E_INFRA_MODE);
   const recordFile =
     process.env.PHASE4_E2E_ISOLATION_RECORD_FILE ?? path.join(root, "artifacts/qa/phase4-real-isolation.ndjson");
   await mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
   await writeFile(recordFile, "", { mode: 0o600 });
-  await runOnce(1, { recordFile, redisDatabase: 14, infrastructureMode });
-  await runOnce(2, { recordFile, redisDatabase: 15, infrastructureMode });
+  await runOnce(1, { recordFile, redisDatabase: 14, infrastructureMode, sourceSha });
+  await runOnce(2, { recordFile, redisDatabase: 15, infrastructureMode, sourceSha });
   process.stdout.write(`Phase 4 real E2E isolation records: ${recordFile}\n`);
 }
 
