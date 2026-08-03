@@ -40,15 +40,13 @@ type MatchOption = Readonly<{ id: string; label: string; home: string; away: str
 /**
  * The schedule-workspace reference query can legitimately be empty immediately
  * after a repair publication. The repair actions remain an authorised,
- * match-scoped source for the emergency score-sheet exports, so retain those
- * actions as a narrow fallback instead of leaving the export surface empty.
+ * match-scoped source for the emergency score-sheet exports, so merge any
+ * missing affected matches instead of leaving their export surface empty.
  */
 export function scoreSheetExportMatches(
   liveMatches: readonly MatchOption[],
   actions: readonly GateCRepairActionView[],
 ): readonly MatchOption[] {
-  if (liveMatches.length > 0) return liveMatches;
-
   const byMatch = new Map<string, Partial<Record<GateCRepairActionView["slot"], GateCRepairActionView>>>();
   for (const action of actions) {
     const slots = byMatch.get(action.match_id) ?? {};
@@ -56,13 +54,20 @@ export function scoreSheetExportMatches(
     byMatch.set(action.match_id, slots);
   }
 
-  return [...byMatch.entries()]
-    .map(([id, slots]) => {
-      const entryName = (action: GateCRepairActionView | undefined) =>
-        action?.resolved_entry_name ?? action?.current_entry_name ?? action?.proposed_entry_name ?? id;
-      return { id, label: id, home: entryName(slots.home), away: entryName(slots.away) };
-    })
-    .sort((left, right) => left.id.localeCompare(right.id));
+  const merged = new Map(liveMatches.map((match) => [match.id, match]));
+  for (const [id, slots] of byMatch) {
+    if (merged.has(id)) continue;
+    merged.set(
+      id,
+      (() => {
+        const entryName = (action: GateCRepairActionView | undefined) =>
+          action?.resolved_entry_name ?? action?.current_entry_name ?? action?.proposed_entry_name ?? id;
+        return { id, label: id, home: entryName(slots.home), away: entryName(slots.away) };
+      })(),
+    );
+  }
+
+  return [...merged.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function record(value: unknown): value is Record<string, unknown> {
