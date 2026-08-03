@@ -1,0 +1,109 @@
+name: Gate C4 repair machine-literal codemod
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gate-c-c4-machine-literals-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codemod:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/gate-c-c4-production-integration-20260801'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact C4 branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/gate-c-c4-production-integration-20260801
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install the exact dependency graph
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Replace only validated machine literals
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("apps/web/components/gate-c/RepairWorkspace.tsx")
+          text = path.read_text()
+          import_anchor = '} from "@/lib/gate-c-c4";\n'
+          import_line = 'import { gateCC4Http, gateCC4UiMachine } from "@/lib/gate-c-c4-http";\n'
+          if import_line not in text:
+              if text.count(import_anchor) != 1:
+                  raise SystemExit("repair workspace import anchor drifted")
+              text = text.replace(import_anchor, import_anchor + import_line, 1)
+
+          replacements = [
+              (
+                  'return !["no_change", "automatic_update"].includes(action.source_action);',
+                  'return ![gateCC4UiMachine.noChangeAction, gateCC4UiMachine.automaticUpdateAction].includes(action.source_action);',
+                  1,
+              ),
+              ('response.headers.get("x-matchday-content-sha256")', 'response.headers.get(gateCC4Http.contentSha256Header)', 1),
+              ('response.headers.get("content-disposition")', 'response.headers.get(gateCC4Http.contentDispositionHeader)', 1),
+              ('document.createElement("a")', 'document.createElement(gateCC4Http.anchorTag)', 1),
+              ('"no-store"', 'gateCC4Http.cacheNoStore', 3),
+              ('setBusy("analyse");', 'setBusy(gateCC4UiMachine.analyseBusy);', 1),
+              ('busy === "analyse"', 'busy === gateCC4UiMachine.analyseBusy', 1),
+              ('"application/json"', 'gateCC4Http.jsonContentType', 4),
+              ('setBusy("publish");', 'setBusy(gateCC4UiMachine.publishBusy);', 1),
+              ('busy === "publish"', 'busy === gateCC4UiMachine.publishBusy', 1),
+              ('setBusy("abandon");', 'setBusy(gateCC4UiMachine.abandonBusy);', 1),
+              ('busy === "abandon"', 'busy === gateCC4UiMachine.abandonBusy', 1),
+              ('saveRevision("draft")', 'saveRevision(gateCC4Machine.draft)', 1),
+              ('busy === "draft"', 'busy === gateCC4Machine.draft', 1),
+              ('saveRevision("ready")', 'saveRevision(gateCC4Machine.ready)', 1),
+              ('busy === "ready"', 'busy === gateCC4Machine.ready', 1),
+              ('"schedule-export"', 'gateCC4UiMachine.scheduleExportBusy', 1),
+          ]
+
+          changed = False
+          for old, new, expected in replacements:
+              count = text.count(old)
+              if count == expected:
+                  text = text.replace(old, new)
+                  changed = True
+              elif count == 0 and new in text:
+                  continue
+              else:
+                  raise SystemExit(f"unexpected replacement count for {old!r}: {count}, expected {expected}")
+
+          if changed:
+              path.write_text(text)
+
+      - name: Format the changed component
+        run: pnpm exec prettier --write apps/web/components/gate-c/RepairWorkspace.tsx
+
+      - name: Commit only the validated component change
+        shell: bash
+        run: |
+          if git diff --quiet -- apps/web/components/gate-c/RepairWorkspace.tsx; then
+            echo "Repair workspace machine literals are already centralised"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/components/gate-c/RepairWorkspace.tsx
+          git commit -m "fix(c4): centralise repair workspace machine literals"
+          git push origin HEAD:fix/gate-c-c4-production-integration-20260801
