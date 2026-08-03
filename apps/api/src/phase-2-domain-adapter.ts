@@ -14,8 +14,10 @@ import {
   type CanoePoloScoreEvent,
   type MatchNode,
   type MatchParticipantSource,
+  type FormatGraph,
+  type FormatParticipantSource,
 } from "@matchday/domain";
-import type { NormalizedMatch, PersistedScoreEvent, Phase2DomainAdapter } from "./phase-2-runtime.js";
+import type { NormalizedMatch, PersistedResult, PersistedScoreEvent, Phase2DomainAdapter } from "./phase-2-runtime.js";
 
 function stableUuid(namespace: string, localId: string): string {
   const bytes = createHash("sha256").update(`${namespace}:${localId}`, "utf8").digest().subarray(0, 16);
@@ -27,6 +29,81 @@ function stableUuid(namespace: string, localId: string): string {
 
 function formatValue(value: Record<string, unknown>): BalancedCanoePoloFormat {
   return (typeof value === "string" ? JSON.parse(value) : value) as unknown as BalancedCanoePoloFormat;
+}
+
+function isPhase4FormatGraph(value: Record<string, unknown>): value is FormatGraph {
+  return Array.isArray(value.stages) && Array.isArray(value.matches) && !Array.isArray(value.groups);
+}
+
+function resolvedGraphSource(
+  source: FormatParticipantSource,
+  results: ReadonlyMap<string, CanoePoloResult>,
+  entriesBySeed: ReadonlyMap<number, string>,
+  graphMatchIds: Readonly<Record<string, string>>,
+): string | null {
+  switch (source.type) {
+    case "entry_seed":
+      return entriesBySeed.get(source.seed) ?? null;
+    case "winner":
+    case "loser": {
+      const result = results.get(graphMatchIds[source.matchId] ?? source.matchId);
+      if (!result || result.homeGoals === result.awayGoals) return null;
+      const winner = result.homeGoals > result.awayGoals ? result.homeEntryId : result.awayEntryId;
+      return source.type === "winner"
+        ? winner
+        : winner === result.homeEntryId
+          ? result.awayEntryId
+          : result.homeEntryId;
+    }
+    // Stage-rank and manual qualifiers are resolved by the Phase 3 advancement
+    // engine. This adapter only owns direct score-result propagation.
+    case "stage_rank":
+    case "manual_qualifier":
+      return null;
+  }
+}
+
+function resolvePhase4GraphBracket(
+  format: FormatGraph,
+  results: readonly PersistedResult[],
+  entries: readonly { id: string; name: string; seed: number }[],
+  graphMatchIds: Readonly<Record<string, string>>,
+) {
+  const domainResults = new Map(
+    results
+      .filter((result) => result.homeEntryId !== null && result.awayEntryId !== null)
+      .map((result, index) => [
+        result.matchId,
+        {
+          matchId: result.matchId,
+          homeEntryId: result.homeEntryId ?? "",
+          awayEntryId: result.awayEntryId ?? "",
+          homeGoals: result.homeScore,
+          awayGoals: result.awayScore,
+          status: result.state,
+          version: index + 1,
+        } satisfies CanoePoloResult,
+      ]),
+  );
+  const entriesBySeed = new Map(entries.map((entry) => [entry.seed, entry.id]));
+  return {
+    bracket: {
+      matches: format.matches
+        .filter((match) => match.purpose !== "pool")
+        .sort((left, right) => left.round - right.round || left.order - right.order || left.id.localeCompare(right.id))
+        .flatMap((match) => {
+          const matchId = graphMatchIds[match.id];
+          if (!matchId) return [];
+          return [
+            {
+              matchId,
+              homeEntryId: resolvedGraphSource(match.home, domainResults, entriesBySeed, graphMatchIds),
+              awayEntryId: resolvedGraphSource(match.away, domainResults, entriesBySeed, graphMatchIds),
+            },
+          ];
+        }),
+    },
+  };
 }
 
 function mapSource(source: MatchParticipantSource, ids: ReadonlyMap<string, string>): MatchParticipantSource {
@@ -244,7 +321,8 @@ export const phase2DomainAdapter: Phase2DomainAdapter = {
     return { standings, explanation: standings.map((row) => ({ entry_id: row.entryId, rules: row.explanations })) };
   },
 
-  resolveBracket({ format, results, entries }) {
+  resolveBracket({ format, results, entries, graphMatchIds = {} }) {
+    if (isPhase4FormatGraph(format)) return resolvePhase4GraphBracket(format, results, entries, graphMatchIds);
     const domainResults: CanoePoloResult[] = results
       .filter((result) => result.homeEntryId !== null && result.awayEntryId !== null)
       .map((result, index) => ({

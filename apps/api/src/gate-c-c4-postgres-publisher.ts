@@ -38,7 +38,12 @@ function first<T>(rows: readonly T[], code: string, message: string): T {
 }
 
 function json<T>(value: T | string): T {
-  return (typeof value === "string" ? JSON.parse(value) : value) as T;
+  let parsed: unknown = value;
+  // postgres-js can return JSONB as either a value or an encoded value,
+  // depending on the connection codec. Repair publication must preserve the
+  // canonical quality object, never insert an encoded JSON string.
+  while (typeof parsed === "string") parsed = JSON.parse(parsed);
+  return parsed as T;
 }
 
 function warningList(value: unknown): unknown[] {
@@ -143,10 +148,10 @@ export class GateCC4PostgresPublicationPort implements GateCC4PublicationPort {
         current.format_revision_id,
         allocated.revision,
         inputHash,
-        JSON.stringify(warnings),
+        warnings,
         input.actor.accountId,
         current.id,
-        JSON.stringify(json(current.quality)),
+        json(current.quality),
         input.repairRevision.id,
         this.now(),
       ],
@@ -294,7 +299,7 @@ export class GateCC4PostgresPublicationPort implements GateCC4PublicationPort {
           version.projection_version,
           created.id,
           input.repairRevision.id,
-          JSON.stringify(division),
+          division,
           fingerprint,
           etag,
           stored.generated_at,

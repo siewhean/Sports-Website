@@ -273,7 +273,9 @@ export function RepairWorkspace({
     try {
       const decisions: GateCC4DecisionDraft[] = workspace.actions.flatMap((action) => {
         const draft = drafts[action.repair_action_id];
-        if (!draft?.decision) return [];
+        // `no_change` actions retain a derived resolution in immutable history,
+        // but are not organiser decisions and must never be sent back as one.
+        if (action.source_action === gateCC4UiMachine.noChangeAction || !draft?.decision) return [];
         return [
           {
             client_event_id: draft.clientEventId,

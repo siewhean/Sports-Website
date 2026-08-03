@@ -128,6 +128,20 @@ type AdjustmentRow = {
   reason: string;
 };
 
+function persistedDependencyPath(path: AffectedMatchClosure["actions"][number]["dependencyPath"]): readonly {
+  source_match_id: string;
+  downstream_match_id: string;
+  slot: "home" | "away";
+  outcome: "winner" | "loser";
+}[] {
+  return path.map((step) => ({
+    source_match_id: step.sourceMatchId,
+    downstream_match_id: step.downstreamMatchId,
+    slot: step.slot,
+    outcome: step.outcome,
+  }));
+}
+
 export type GateCC4PublicationResult = Readonly<{
   scheduleRevisionId: string;
   scheduleVersion: number;
@@ -473,7 +487,7 @@ export class GateCC4Runtime {
           action.action,
           action.currentEntryId,
           action.proposedEntryId,
-          action.dependencyPath,
+          persistedDependencyPath(action.dependencyPath),
           action.reason,
         ],
       );
@@ -816,11 +830,12 @@ export class GateCC4Runtime {
       const persisted = await tx.unsafe<{
         match_id: string;
         slot: "home" | "away";
+        source_action: GateCRepairActionRecord["source_action"];
         decision: RepairPublicationDecision["decision"];
         selected_entry_id: string | null;
         reason: string;
       }>(
-        `SELECT action.match_id,action.slot,decision.decision,decision.selected_entry_id,decision.reason
+        `SELECT action.match_id,action.slot,action.source_action,decision.decision,decision.selected_entry_id,decision.reason
          FROM schedule_repair_actions action
          JOIN schedule_repair_decisions decision ON decision.repair_action_id=action.id
          WHERE action.repair_revision_id=$1
@@ -829,13 +844,15 @@ export class GateCC4Runtime {
       );
       const plan = buildRepairPublicationPlan(
         analysis.closure,
-        persisted.map((decision) => ({
-          matchId: decision.match_id,
-          slot: decision.slot,
-          decision: decision.decision,
-          ...(decision.selected_entry_id !== null ? { selectedEntryId: decision.selected_entry_id } : {}),
-          reason: decision.reason,
-        })),
+        persisted
+          .filter((decision) => decision.source_action !== "no_change")
+          .map((decision) => ({
+            matchId: decision.match_id,
+            slot: decision.slot,
+            decision: decision.decision,
+            ...(decision.selected_entry_id !== null ? { selectedEntryId: decision.selected_entry_id } : {}),
+            reason: decision.reason,
+          })),
       );
       if (!plan.ready) throw new ApiError(409, "REPAIR_DECISIONS_INCOMPLETE", "Required decisions remain unresolved");
       const adjustments = (

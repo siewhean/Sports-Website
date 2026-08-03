@@ -233,6 +233,8 @@ export type Phase2DomainAdapter = {
     format: Record<string, unknown>;
     results: readonly PersistedResult[];
     entries: readonly { id: string; name: string; seed: number }[];
+    /** Phase 4 materialises stable database match IDs from canonical graph IDs. */
+    graphMatchIds?: Readonly<Record<string, string>>;
   }): { bracket: unknown; conflicts?: unknown };
   correctionConflicts(input: {
     format: Record<string, unknown>;
@@ -4696,14 +4698,21 @@ export class Phase2Runtime {
       explanation: rows.map((row) => ({ entry_id: row.entryId, criteria: row.explanations })),
     };
     const format = required(
-      await tx.unsafe<{ definition: Record<string, unknown> }>(
-        `SELECT fr.definition FROM format_revisions fr
+      await tx.unsafe<{ id: string; definition: Record<string, unknown> }>(
+        `SELECT fr.id,fr.definition FROM format_revisions fr
          WHERE fr.division_id=$1 ORDER BY fr.revision DESC LIMIT 1`,
         [divisionId],
       ),
       "Format not found",
     );
-    const bracket = this.domain.resolveBracket({ format: format.definition, results, entries });
+    const graphMatches = await tx.unsafe<{ id: string; graph_match_id: string | null }>(
+      `SELECT id,graph_match_id FROM matches WHERE format_revision_id=$1 AND graph_match_id IS NOT NULL`,
+      [format.id],
+    );
+    const graphMatchIds = Object.fromEntries(
+      graphMatches.flatMap((match) => (match.graph_match_id ? [[match.graph_match_id, match.id]] : [])),
+    );
+    const bracket = this.domain.resolveBracket({ format: format.definition, results, entries, graphMatchIds });
     const resolved = bracket.bracket as {
       matches?: readonly { matchId: string; homeEntryId: string | null; awayEntryId: string | null }[];
     };

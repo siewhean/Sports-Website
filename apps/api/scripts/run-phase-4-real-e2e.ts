@@ -77,9 +77,18 @@ export type RedisOwnership = {
 type SeedState = {
   apiOrigin: string;
   webOrigin: string;
+  accountId: string;
   organisationId: string;
   fixtureKey: string;
   organiserCookie: string;
+};
+
+type GateCC4SeedState = SeedState & {
+  competitionId: string;
+  slug: string;
+  correctionTransactionId: string;
+  correctedMatchId: string;
+  downstreamMatchId: string;
 };
 
 type BrowserJourneyResult = {
@@ -94,6 +103,17 @@ type BrowserJourneyResult = {
     start_epoch_ms: number;
     end_epoch_ms: number;
   };
+};
+
+type GateCC4BrowserJourneyResult = {
+  project: string;
+  competitionId: string;
+  repairId: string;
+  repairRevisionId: string;
+  scheduleVersion: number;
+  resultVersion: number;
+  correctedMatchId: string;
+  downstreamMatchId: string;
 };
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -384,6 +404,7 @@ async function seed(sql: Sql, fixtureKey: string): Promise<SeedState> {
   return {
     apiOrigin,
     webOrigin,
+    accountId,
     organisationId,
     fixtureKey,
     organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
@@ -591,6 +612,207 @@ async function assertDatabaseOracle(sql: Sql, result: BrowserJourneyResult): Pro
   );
 }
 
+async function prepareGateCC4Repair(
+  sql: Sql,
+  phase2: Phase2Runtime,
+  state: SeedState,
+  journey: BrowserJourneyResult,
+): Promise<GateCC4SeedState> {
+  const source = (
+    await sql<
+      {
+        match_id: string;
+        downstream_match_id: string;
+        division_id: string;
+      }[]
+    >`
+      SELECT source.id AS match_id,dependency.match_id AS downstream_match_id,source.division_id
+      FROM match_dependencies dependency
+      JOIN matches source ON source.id=dependency.source_match_id
+      JOIN matches downstream ON downstream.id=dependency.match_id
+      WHERE source.competition_id=${journey.competitionId}
+        AND downstream.state IN ('pending','ready')
+      ORDER BY source.ordinal,source.id,dependency.match_id
+      LIMIT 1
+    `
+  )[0];
+  if (!source) throw new Error(`No correctable scheduled dependency exists for ${journey.competitionId}`);
+  const entries = await sql<{ id: string }[]>`
+    SELECT id FROM division_entries
+    WHERE division_id=${source.division_id} AND status IN ('active','confirmed')
+    ORDER BY seed,id
+    LIMIT 2
+  `;
+  if (entries.length !== 2 || !entries[0] || !entries[1])
+    throw new Error(`C4 real fixture source match has insufficient active entries for ${source.match_id}`);
+  await sql`UPDATE matches SET home_entry_id=${entries[0].id},away_entry_id=${entries[1].id} WHERE id=${source.match_id}`;
+
+  const actor = { accountId: state.accountId };
+  const accessPass = await phase2.createAccessPass(
+    actor,
+    journey.competitionId,
+    source.match_id,
+    {
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      role: "scorekeeper",
+      idempotencyKey: `c4-real-correction:${source.match_id}`,
+    },
+    randomUUID(),
+  );
+  if (!accessPass.short_code) throw new Error("C4 real fixture did not receive a fallback scorekeeping code");
+  const session = await phase2.exchangeAccess(
+    {
+      shortCode: accessPass.short_code,
+      expectedMatchId: source.match_id,
+      deviceId: randomUUID(),
+      deviceLabel: "C4 real fixture scorer",
+      ipAddress: "198.51.100.44",
+    },
+    randomUUID(),
+  );
+  if (session.mode !== "writer" || session.generation === null)
+    throw new Error("C4 real fixture did not acquire a scorekeeping writer lease");
+  const auth = { sessionId: session.session_id, sessionToken: session.session_token, generation: session.generation };
+  const occurredAt = "2027-08-01T09:00:00.000Z";
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "match_started",
+      occurred_at: occurredAt,
+      segment_number: 1,
+      manual_time_seconds: 0,
+    },
+    0,
+    randomUUID(),
+  );
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "goal",
+      occurred_at: "2027-08-01T09:01:00.000Z",
+      team_slot: "home",
+      participant_id: "C4 fixture scorer",
+      segment_number: 1,
+      manual_time_seconds: 60,
+    },
+    1,
+    randomUUID(),
+  );
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "period_change",
+      occurred_at: "2027-08-01T09:10:00.000Z",
+      segment_number: 2,
+      manual_time_seconds: 0,
+    },
+    2,
+    randomUUID(),
+  );
+  await phase2.finalise(auth, randomUUID(), randomUUID(), 3, "2027-08-01T09:20:00.000Z");
+  // The browser must resolve a real protected downstream slot. Marking it
+  // started prevents result recalculation from changing participants before
+  // the repair workflow can require the organiser's explicit decision.
+  await sql`UPDATE matches SET state='in_progress' WHERE id=${source.downstream_match_id}`;
+  const correctionClientEventId = randomUUID();
+  await phase2.correctCanonicalMatch(
+    actor,
+    journey.competitionId,
+    source.match_id,
+    {
+      clientEventId: correctionClientEventId,
+      reason: "Correct the verified fixture winner before repair analysis.",
+      expectedAggregateVersion: 4,
+      events: [
+        {
+          client_event_id: randomUUID(),
+          type: "goal",
+          occurred_at: "2027-08-01T09:21:00.000Z",
+          team_slot: "away",
+          participant_id: "C4 fixture scorer",
+          segment_number: 2,
+          manual_time_seconds: 60,
+        },
+        {
+          client_event_id: randomUUID(),
+          type: "goal",
+          occurred_at: "2027-08-01T09:22:00.000Z",
+          team_slot: "away",
+          participant_id: "C4 fixture scorer",
+          segment_number: 2,
+          manual_time_seconds: 120,
+        },
+      ],
+    },
+    randomUUID(),
+  );
+  const correction = (
+    await sql<{ id: string }[]>`
+      SELECT id FROM score_correction_transactions
+      WHERE match_id=${source.match_id} AND client_event_id=${correctionClientEventId}
+    `
+  )[0];
+  if (!correction) throw new Error("C4 real fixture correction transaction was not retained");
+  return {
+    ...state,
+    competitionId: journey.competitionId,
+    slug: journey.slug,
+    correctionTransactionId: correction.id,
+    correctedMatchId: source.match_id,
+    downstreamMatchId: source.downstream_match_id,
+  };
+}
+
+async function assertGateCC4DatabaseOracle(sql: Sql, result: GateCC4BrowserJourneyResult): Promise<void> {
+  const row = (
+    await sql<
+      {
+        published_ready_revisions: number;
+        publication_receipts: number;
+        schedule_version: number;
+        result_version: number;
+        projection_links: number;
+        audit_events: number;
+        outbox_events: number;
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM schedule_repair_revisions revision
+         JOIN schedule_repair_publication_receipts receipt ON receipt.repair_revision_id=revision.id
+         WHERE revision.repair_case_id=${result.repairId}
+           AND revision.status='ready') AS published_ready_revisions,
+        (SELECT count(*)::int FROM schedule_repair_publication_receipts
+         WHERE repair_case_id=${result.repairId} AND repair_revision_id=${result.repairRevisionId}) AS publication_receipts,
+        (SELECT schedule_version::int FROM competition_publications WHERE competition_id=${result.competitionId}) AS schedule_version,
+        (SELECT result_version::int FROM competition_publications WHERE competition_id=${result.competitionId}) AS result_version,
+        (SELECT count(*)::int FROM schedule_repair_publication_projection_versions links
+         JOIN schedule_repair_publication_receipts receipt ON receipt.id=links.publication_receipt_id
+         WHERE receipt.repair_case_id=${result.repairId}) AS projection_links,
+        (SELECT count(*)::int FROM audit_events
+         WHERE action IN ('repair.created','repair.revision_created','repair.published')
+           AND metadata->>'competition_id'=${result.competitionId}) AS audit_events,
+        (SELECT count(*)::int FROM outbox_events
+         WHERE event_type IN ('repair.created','repair.revision_created','repair.published')
+           AND payload->>'competition_id'=${result.competitionId}) AS outbox_events
+    `
+  )[0];
+  if (
+    !row ||
+    row.published_ready_revisions !== 1 ||
+    row.publication_receipts !== 1 ||
+    row.schedule_version !== result.scheduleVersion ||
+    row.result_version !== result.resultVersion ||
+    row.projection_links < 1 ||
+    row.audit_events !== 3 ||
+    row.outbox_events !== 3
+  )
+    throw new Error(`C4 browser-owned persistence oracle failed: ${JSON.stringify(row)}`);
+  process.stdout.write(`C4 persistence oracle: ${JSON.stringify(row)}\n`);
+}
+
 async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promise<void> {
   if (!isolation) return;
   if (isolation.kind === "database") {
@@ -641,6 +863,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase4-e2e-"));
   const stateFile = path.join(temp, "state.json");
   const resultFile = path.join(temp, "browser-journeys.ndjson");
+  const gateCC4ResultFile = path.join(temp, "gate-c-c4-browser-journeys.ndjson");
   const admin = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
   const redisUrl = redisUrlForLogicalDatabase(configuration.redisDatabase);
   const csrfSecret = randomBytes(32).toString("base64url");
@@ -738,8 +961,11 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     await scheduler.start();
     const projectNames = [
       "phase-4-real-phone-chromium",
+      "phase-4-real-phone-webkit",
       "phase-4-real-tablet-webkit",
       "phase-4-real-desktop-chromium",
+      "phase-4-real-desktop-webkit",
+      "phase-4-real-desktop-firefox",
     ] as const;
     const projects: Record<string, SeedState> = {};
     for (const [index, projectName] of projectNames.entries()) {
@@ -833,11 +1059,37 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as BrowserJourneyResult);
+    const gateCC4Projects: Record<string, GateCC4SeedState> = {};
     for (const projectName of projectNames) {
       const state = projects[projectName];
       const journey = journeyResults.find((result) => result.project === projectName);
       if (!state || !journey) throw new Error(`Browser journey result missing for ${projectName}`);
       await assertDatabaseOracle(sql, journey);
+      gateCC4Projects[projectName] = await prepareGateCC4Repair(sql, phase2, state, journey);
+    }
+    await writeFile(stateFile, `${JSON.stringify({ projects, gate_c_c4_projects: gateCC4Projects })}\n`, {
+      mode: 0o600,
+    });
+    await writeFile(gateCC4ResultFile, "", { mode: 0o600 });
+    await runProcess(
+      "Gate C C4 real Playwright",
+      "pnpm",
+      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", "playwright.gate-c-c4-real.config.ts"],
+      {
+        ...runtimeEnv,
+        GATE_C_C4_E2E_RESULT_FILE: gateCC4ResultFile,
+        GATE_C_C4_E2E_OUTPUT_DIR: path.join(temp, "gate-c-c4-playwright-output"),
+      },
+      true,
+    );
+    const gateCC4JourneyResults = (await readFile(gateCC4ResultFile, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as GateCC4BrowserJourneyResult);
+    for (const projectName of projectNames) {
+      const journey = gateCC4JourneyResults.find((result) => result.project === projectName);
+      if (!journey) throw new Error(`C4 browser journey result missing for ${projectName}`);
+      await assertGateCC4DatabaseOracle(sql, journey);
     }
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });
