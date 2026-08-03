@@ -62,6 +62,40 @@ function divisionIds(payload: Record<string, unknown>): readonly string[] {
   return ids.sort((left, right) => left.localeCompare(right));
 }
 
+function divisionScopedPayload(
+  payload: Record<string, unknown>,
+  selectedDivisionId?: string,
+): Record<string, unknown> | null {
+  if (!selectedDivisionId) return payload;
+  const divisions = payload.divisions;
+  if (!Array.isArray(divisions)) throw new Error("Public projection contains no division packages");
+  const selected = divisions.find(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      divisionId(entry as Record<string, unknown>) === selectedDivisionId,
+  ) as Record<string, unknown> | undefined;
+  if (!selected) return null;
+  const division = selected.division;
+  if (!division || typeof division !== "object" || Array.isArray(division)) {
+    throw new Error("Public projection contains an invalid division package");
+  }
+  // The privacy guard deliberately rejects repeated object references. Keep the division package and
+  // legacy compatibility fields independently serialisable, as they will be in the HTTP response.
+  const selectedPackage = structuredClone(selected);
+  const legacyPackage = structuredClone(selected);
+  return {
+    ...payload,
+    divisions: [selectedPackage],
+    division: legacyPackage.division,
+    schedule: legacyPackage.schedule,
+    results: legacyPackage.results,
+    standings: legacyPackage.standings,
+    bracket: legacyPackage.bracket,
+  };
+}
+
 function versionRecord(value: PublicTruthRow["division_projection_versions"]): Record<string, number> {
   const parsed = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -117,7 +151,10 @@ function etag(input: {
 export class GateCC4PublicTruthRuntime {
   constructor(private readonly sql: PostgresJsSql) {}
 
-  async read(slug: string): Promise<{
+  async read(
+    slug: string,
+    selectedDivisionId?: string,
+  ): Promise<{
     payload: Record<string, unknown>;
     freshness: PublicProjectionFreshness;
   } | null> {
@@ -161,16 +198,25 @@ export class GateCC4PublicTruthRuntime {
     )[0];
     if (!row) return null;
 
-    const source = json(row.payload);
+    const rawSource = json(row.payload);
+    assertPublicProjectionPrivacy(rawSource);
+    const rawSourceDivisionId = divisionId(rawSource);
+    const rawSourceDivisionIds = divisionIds(rawSource);
+    if (!rawSourceDivisionIds.includes(rawSourceDivisionId)) {
+      throw new Error("Public projection compatibility division is absent from its division packages");
+    }
+    const storedDivisionVersions = versionRecord(row.division_projection_versions);
+    if (Object.keys(storedDivisionVersions).some((id) => !rawSourceDivisionIds.includes(id))) {
+      throw new Error("Public projection freshness references a division outside its payload");
+    }
+
+    const source = divisionScopedPayload(rawSource, selectedDivisionId);
+    if (!source) return null;
     assertPublicProjectionPrivacy(source);
     const sourceDivisionId = divisionId(source);
     const sourceDivisionIds = divisionIds(source);
     if (!sourceDivisionIds.includes(sourceDivisionId)) {
       throw new Error("Public projection compatibility division is absent from its division packages");
-    }
-    const storedDivisionVersions = versionRecord(row.division_projection_versions);
-    if (Object.keys(storedDivisionVersions).some((id) => !sourceDivisionIds.includes(id))) {
-      throw new Error("Public projection freshness references a division outside its payload");
     }
     const divisionProjectionVersions = Object.fromEntries(
       sourceDivisionIds.map((id) => [id, storedDivisionVersions[id] ?? 1]),
@@ -209,13 +255,20 @@ export async function registerGateCC4PublicTruthRoutes(
   app: FastifyInstance,
   runtime: GateCC4PublicTruthRuntime,
 ): Promise<void> {
-  app.get<{ Params: { slug: string }; Headers: { "if-none-match"?: string; "if-modified-since"?: string } }>(
+  app.get<{
+    Params: { slug: string };
+    Querystring: { division_id?: string };
+    Headers: { "if-none-match"?: string; "if-modified-since"?: string };
+  }>(
     "/api/v1/public/competitions/:slug/current",
     {
       schema: {
         description:
-          "Read the exact current schedule/result projection with immutable C4 freshness and conditional-cache metadata.",
+          "Read the exact current schedule/result projection with immutable C4 freshness and conditional-cache metadata. Supply division_id to scope the response and cache identity to one division.",
         params: strict({ slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 120 }) }),
+        querystring: strict({
+          division_id: Type.Optional(Type.String({ format: "uuid" })),
+        }),
         headers: Type.Object(
           {
             "if-none-match": Type.Optional(Type.String({ maxLength: 1_000 })),
@@ -228,7 +281,7 @@ export async function registerGateCC4PublicTruthRoutes(
       },
     },
     async (request, reply) => {
-      const result = await runtime.read(request.params.slug);
+      const result = await runtime.read(request.params.slug, request.query.division_id);
       if (!result) throw new ApiError(404, "PUBLIC_COMPETITION_NOT_FOUND", "Competition not found");
       const headers = gateCC4PublicHeaders(result.freshness);
       for (const [name, value] of Object.entries(headers)) reply.header(name, value);

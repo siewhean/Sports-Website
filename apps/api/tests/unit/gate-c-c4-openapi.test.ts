@@ -101,9 +101,14 @@ describe("Gate C C4 OpenAPI acceptance contract", () => {
     expect(operation).toBeDefined();
     expect(operation).not.toHaveProperty("security");
     expect(headerNames(operation!)).toEqual(expect.arrayContaining(["if-none-match", "if-modified-since"]));
+    expect(operation?.parameters).toEqual(
+      expect.arrayContaining([expect.objectContaining({ in: "query", name: "division_id" })]),
+    );
     expect(operation?.responses).toHaveProperty("200");
     expect(operation?.responses).toHaveProperty("304");
     expect(operation?.responses).toHaveProperty("404");
     expect(jsonResponse(operation!, "200")?.additionalProperties).toBe(false);
+    expect(JSON.stringify(jsonResponse(operation!, "200"))).toContain('"published"');
+    expect(JSON.stringify(jsonResponse(operation!, "200"))).toContain('"live"');
   });
 });

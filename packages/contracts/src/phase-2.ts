@@ -46,7 +46,7 @@ export type PublicCompetitionProjection = {
     timezone: string;
     starts_on: string;
     ends_on: string;
-    status: "active" | "completed" | "archived";
+    status: "active" | "published" | "live" | "completed" | "archived";
   };
   divisions: PublicDivisionProjection[];
   /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */

@@ -4864,7 +4864,7 @@ export class Phase2Runtime {
         timezone: string;
         starts_on: Date | string;
         ends_on: Date | string;
-        status: "draft" | "active" | "completed" | "archived";
+        status: "draft" | "active" | "published" | "live" | "completed" | "archived";
       }>(`SELECT id,name,slug,sport_code,timezone,starts_on,ends_on,status FROM competitions WHERE id=$1`, [
         competitionId,
       ]),

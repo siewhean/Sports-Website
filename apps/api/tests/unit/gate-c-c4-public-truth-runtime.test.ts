@@ -1,6 +1,7 @@
+import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import type { PostgresJsSql } from "@matchday/identity";
-import { GateCC4PublicTruthRuntime } from "../../src/gate-c-c4-public-truth.js";
+import { GateCC4PublicTruthRuntime, registerGateCC4PublicTruthRoutes } from "../../src/gate-c-c4-public-truth.js";
 
 const competitionId = "11111111-1111-4111-8111-111111111111";
 const divisionId = "22222222-2222-4222-8222-222222222222";
@@ -99,6 +100,95 @@ describe("Gate C C4 public truth runtime", () => {
   it("returns null when no exact current projection exists", async () => {
     const { runtime } = runtimeWithRows([]);
     await expect(runtime.read("missing-open")).resolves.toBeNull();
+  });
+
+  it.each(["published", "live"] as const)("retains %s competitions in the canonical public payload", async (status) => {
+    const { runtime } = runtimeWithRows([
+      {
+        competition_id: competitionId,
+        payload: projection({ competition: { ...projection().competition, status } }),
+        schedule_version: 4,
+        result_version: 7,
+        projection_version: 3,
+        division_projection_versions: { [divisionId]: 3, [reserveDivisionId]: 2 },
+        generated_at: "2026-08-01T00:00:05.000Z",
+        source_updated_at: "2026-08-01T00:00:04.000Z",
+      },
+    ]);
+
+    await expect(runtime.read("national-open")).resolves.toMatchObject({
+      payload: { competition: { status } },
+    });
+  });
+
+  it.each(["published", "live"] as const)(
+    "serializes a %s competition through the public HTTP route",
+    async (status) => {
+      const app = Fastify();
+      await registerGateCC4PublicTruthRoutes(app, {
+        read: async () => ({
+          payload: {
+            ...projection({ competition: { ...projection().competition, status } }),
+            freshness: {
+              division_id: divisionId,
+              division_projection_versions: { [divisionId]: 3, [reserveDivisionId]: 2 },
+              schedule_version: 4,
+              result_version: 7,
+              projection_version: 3,
+              generated_at: "2026-08-01T00:00:05.000Z",
+              source_updated_at: "2026-08-01T00:00:04.000Z",
+              etag: "c4-public-status",
+            },
+          },
+          freshness: {
+            division_id: divisionId,
+            division_projection_versions: { [divisionId]: 3, [reserveDivisionId]: 2 },
+            schedule_version: 4,
+            result_version: 7,
+            projection_version: 3,
+            generated_at: "2026-08-01T00:00:05.000Z",
+            source_updated_at: "2026-08-01T00:00:04.000Z",
+            etag: "c4-public-status",
+          },
+        }),
+      } as unknown as GateCC4PublicTruthRuntime);
+
+      const response = await app.inject("/api/v1/public/competitions/national-open/current");
+      await app.close();
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ competition: { status } });
+    },
+  );
+
+  it("scopes the public response and ETag to one requested division", async () => {
+    const { runtime } = runtimeWithRows([
+      {
+        competition_id: competitionId,
+        payload: projection(),
+        schedule_version: 4,
+        result_version: 7,
+        projection_version: 3,
+        division_projection_versions: { [divisionId]: 3, [reserveDivisionId]: 2 },
+        generated_at: "2026-08-01T00:00:05.000Z",
+        source_updated_at: "2026-08-01T00:00:04.000Z",
+      },
+    ]);
+
+    const wholeCompetition = await runtime.read("national-open");
+    const reserveDivision = await runtime.read("national-open", reserveDivisionId);
+
+    expect(reserveDivision?.payload).toMatchObject({
+      divisions: [{ division: { id: reserveDivisionId, name: "Reserve" } }],
+      division: { id: reserveDivisionId, name: "Reserve" },
+      freshness: {
+        division_id: reserveDivisionId,
+        division_projection_versions: { [reserveDivisionId]: 2 },
+        projection_version: 2,
+      },
+    });
+    expect(reserveDivision?.freshness.etag).not.toBe(wholeCompetition?.freshness.etag);
+    await expect(runtime.read("national-open", "44444444-4444-4444-8444-444444444444")).resolves.toBeNull();
   });
 
   it("rejects a public projection containing private credentials", async () => {
