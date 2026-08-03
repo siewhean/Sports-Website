@@ -191,6 +191,51 @@ describe("Gate C C4 public truth runtime", () => {
     await expect(runtime.read("national-open", "44444444-4444-4444-8444-444444444444")).resolves.toBeNull();
   });
 
+  it("returns 304 only when the scoped division ETag matches", async () => {
+    const selectedDivisionIds: string[] = [];
+    const freshness = {
+      division_id: reserveDivisionId,
+      division_projection_versions: { [reserveDivisionId]: 2 },
+      schedule_version: 4,
+      result_version: 7,
+      projection_version: 2,
+      generated_at: "2026-08-01T00:00:05.000Z",
+      source_updated_at: "2026-08-01T00:00:04.000Z",
+      etag: "c4-reserve-division",
+    };
+    const source = projection();
+    const reservePackage = source.divisions[1]!;
+    const app = Fastify();
+    await registerGateCC4PublicTruthRoutes(app, {
+      read: async (_slug: string, selectedDivisionId?: string) => {
+        if (selectedDivisionId) selectedDivisionIds.push(selectedDivisionId);
+        return {
+          payload: {
+            ...source,
+            divisions: [reservePackage],
+            division: reservePackage.division,
+            schedule: reservePackage.schedule,
+            results: reservePackage.results,
+            standings: reservePackage.standings,
+            bracket: reservePackage.bracket,
+            freshness,
+          },
+          freshness,
+        };
+      },
+    } as unknown as GateCC4PublicTruthRuntime);
+
+    const path = `/api/v1/public/competitions/national-open/current?division_id=${reserveDivisionId}`;
+    const first = await app.inject(path);
+    const cached = await app.inject({ url: path, headers: { "if-none-match": first.headers.etag! } });
+    await app.close();
+
+    expect(first.statusCode).toBe(200);
+    expect(first.headers.etag).toBe('"c4-reserve-division"');
+    expect(cached.statusCode).toBe(304);
+    expect(selectedDivisionIds).toEqual([reserveDivisionId, reserveDivisionId]);
+  });
+
   it("rejects a public projection containing private credentials", async () => {
     const { runtime } = runtimeWithRows([
       {
