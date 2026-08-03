@@ -2,8 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { parseGateCC4Workspace } from "@/lib/gate-c-c4";
+import { gateCC4Http } from "@/lib/gate-c-c4-http";
 import { gateCC4PendingCopy } from "@/lib/gate-c-c4-pending-copy";
-import { parseGateCC4PendingRepairCases, type GateCC4PendingRepairCase } from "@/lib/gate-c-c4-pending";
+import {
+  parseGateCC4PendingRepairCases,
+  type GateCC4PendingRepairCase,
+} from "@/lib/gate-c-c4-pending";
 import styles from "./PendingRepairCases.module.css";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -26,9 +30,10 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/pending`, {
-        cache: "no-store",
-      });
+      const response = await fetch(
+        `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/pending`,
+        { cache: gateCC4Http.cacheNoStore },
+      );
       const payload: unknown = await response.json().catch(() => null);
       const parsed = response.ok ? parseGateCC4PendingRepairCases(payload) : null;
       if (!parsed) throw new Error(errorMessage(payload));
@@ -49,11 +54,14 @@ export function PendingRepairCases({ competitionId }: { competitionId: string })
     setBusy(item.result_repair_case_id);
     setError("");
     try {
-      const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ correction_transaction_id: item.correction_transaction_id }),
-      });
+      const response = await fetch(
+        `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`,
+        {
+          method: gateCC4Http.methodPost,
+          headers: { "content-type": gateCC4Http.jsonContentType },
+          body: JSON.stringify({ correction_transaction_id: item.correction_transaction_id }),
+        },
+      );
       const payload: unknown = await response.json().catch(() => null);
       const workspace = response.ok ? parseGateCC4Workspace(payload) : null;
       if (!workspace) throw new Error(errorMessage(payload));
