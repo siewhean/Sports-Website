@@ -12,6 +12,7 @@ import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 import { Phase2Runtime } from "./phase-2-runtime.js";
 import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
+import { reconcileScoringAccessHmacKeyring } from "./scoring-access-hmac-keyring.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { Phase3Runtime } from "./phase-3-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
@@ -36,6 +37,7 @@ const rateLimitRedis = new Redis(config.redisUrl, {
 });
 const postgresClient = postgres(config.databaseUrl, { max: 10, onnotice: () => undefined });
 const identitySql = postgresClient as unknown as PostgresJsSql;
+await reconcileScoringAccessHmacKeyring(identitySql, config.scoringAccess.rateLimitHmacKeyring);
 const identityRuntime = new IdentityApiRuntime(
   identityProvider,
   new PostgresIdentityUnitOfWork(identitySql),
@@ -48,7 +50,7 @@ const phase2Runtime = new Phase2Runtime(
   undefined,
   new RedisScoringAccessRateLimiter(
     rateLimitRedis,
-    config.scoringAccess.rateLimitHmacSecret,
+    config.scoringAccess.rateLimitHmacKeyring,
     `matchday:${config.environment}:scoring-access:`,
   ),
   config.scoringAccess.fallbackCodeHmacSecret,
@@ -76,6 +78,7 @@ const app = await buildApp({
   rateLimitRedis,
   telemetry,
   identityRuntime,
+  scoringAccessHmacKeySql: identitySql,
   phase2Runtime,
   phase3Runtime,
   phase4Runtime,

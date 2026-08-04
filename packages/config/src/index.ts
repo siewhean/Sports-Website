@@ -19,6 +19,31 @@ const redisUrlSchema = z
   });
 const identityProviderSchema = z.enum(["disabled", "oidc"]);
 const identityRecoveryModeSchema = z.enum(["hosted"]);
+const scoringAccessHmacKeyVersionSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u, {
+  message: "Scoring access rate-limit HMAC key versions must be lowercase machine identifiers",
+});
+const scoringAccessHmacKeySchema = z
+  .object({
+    version: scoringAccessHmacKeyVersionSchema,
+    secret: z.string().min(32).max(1_024),
+  })
+  .strict();
+const scoringAccessHmacKeyringSchema = z
+  .object({
+    primary: scoringAccessHmacKeySchema,
+    verificationOnly: z.array(scoringAccessHmacKeySchema).max(7).default([]),
+  })
+  .strict()
+  .superRefine((keyring, context) => {
+    const versions = [keyring.primary.version, ...keyring.verificationOnly.map((key) => key.version)];
+    const secrets = [keyring.primary.secret, ...keyring.verificationOnly.map((key) => key.secret)];
+    if (new Set(versions).size !== versions.length) {
+      context.addIssue({ code: "custom", message: "Scoring access rate-limit HMAC key versions must be unique" });
+    }
+    if (new Set(secrets).size !== secrets.length) {
+      context.addIssue({ code: "custom", message: "Scoring access rate-limit HMAC key material must be unique" });
+    }
+  });
 
 const rawConfigSchema = z.object({
   APP_ENV: environmentSchema.default("local"),
@@ -29,6 +54,17 @@ const rawConfigSchema = z.object({
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
   SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-scoring-access-rate-key"),
+  SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).max(16_384).optional(),
+  ),
+  SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+  ),
   SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: z
     .string()
     .min(32)
@@ -88,7 +124,11 @@ export type AppConfig = {
   databaseUrl: string;
   redisUrl: string;
   scoringAccess: {
-    rateLimitHmacSecret: string;
+    rateLimitHmacKeyring: {
+      primary: { version: string; secret: string };
+      verificationOnly: readonly { version: string; secret: string }[];
+      legacyV1MaterialCommitment?: string;
+    };
     fallbackCodeHmacSecret: string;
   };
   logLevel: z.infer<typeof logLevelSchema>;
@@ -228,6 +268,36 @@ function validatedEdgePurgeUrl(value: string, environment: AppEnvironment): stri
   return url.href;
 }
 
+function parseScoringAccessRateLimitHmacKeyring(
+  rawKeyring: string | undefined,
+  legacySecret: string,
+  environment: AppEnvironment,
+): AppConfig["scoringAccess"]["rateLimitHmacKeyring"] {
+  if (!rawKeyring) {
+    if (environment !== "local" && environment !== "test") {
+      throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING must be explicitly configured outside local/test");
+    }
+    return {
+      primary: { version: "v1", secret: legacySecret },
+      verificationOnly: [],
+    };
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(rawKeyring);
+  } catch {
+    throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING must be valid JSON");
+  }
+  const parsed = scoringAccessHmacKeyringSchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw new Error(
+      "SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING must contain one primary key and unique verification-only keys",
+    );
+  }
+  return parsed.data;
+}
+
 export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   const parsed = rawConfigSchema.parse(source);
   requireProductionValue(parsed.APP_ENV, source, "DATABASE_URL");
@@ -328,13 +398,32 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       cookieSite: cookieSite.origin,
     };
   }
-  if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
-    throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET must be explicitly configured outside local/test");
+  const rateLimitHmacKeyring = parseScoringAccessRateLimitHmacKeyring(
+    parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING,
+    parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET,
+    parsed.APP_ENV,
+  );
+  const includesLegacyV1 = [rateLimitHmacKeyring.primary, ...rateLimitHmacKeyring.verificationOnly].some(
+    (key) => key.version === "v1",
+  );
+  if (
+    parsed.APP_ENV !== "local" &&
+    parsed.APP_ENV !== "test" &&
+    includesLegacyV1 &&
+    !parsed.SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT
+  ) {
+    throw new Error(
+      "SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT is required while v1 retains C1-C4 rate-limit state",
+    );
   }
   if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET) {
     throw new Error("SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET must be explicitly configured outside local/test");
   }
-  if (parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET === parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
+  if (
+    [rateLimitHmacKeyring.primary, ...rateLimitHmacKeyring.verificationOnly].some(
+      (key) => key.secret === parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    )
+  ) {
     throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
   }
 
@@ -378,7 +467,12 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
     scoringAccess: {
-      rateLimitHmacSecret: parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET,
+      rateLimitHmacKeyring: {
+        ...rateLimitHmacKeyring,
+        ...(parsed.SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT
+          ? { legacyV1MaterialCommitment: parsed.SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT }
+          : {}),
+      },
       fallbackCodeHmacSecret: parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
     },
     logLevel: parsed.LOG_LEVEL,
@@ -424,7 +518,10 @@ export function safeConfigSummary(config: AppConfig) {
     databaseUrl: redactUrl(config.databaseUrl),
     redisUrl: redactUrl(config.redisUrl),
     scoringAccess: {
-      rateLimitHmacSecretConfigured: Boolean(config.scoringAccess.rateLimitHmacSecret),
+      rateLimitHmacPrimaryVersion: config.scoringAccess.rateLimitHmacKeyring.primary.version,
+      rateLimitHmacVerificationOnlyVersions: config.scoringAccess.rateLimitHmacKeyring.verificationOnly.map(
+        (key) => key.version,
+      ),
       fallbackCodeHmacSecretConfigured: Boolean(config.scoringAccess.fallbackCodeHmacSecret),
     },
     logLevel: config.logLevel,

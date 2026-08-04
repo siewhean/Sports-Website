@@ -1,4 +1,5 @@
 import { parseConfig } from "@matchday/config";
+import { createHash } from "node:crypto";
 import { buildApp } from "../src/app.js";
 import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
@@ -7,13 +8,23 @@ import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
 
+const openApiRateLimitHmacSecret = "openapi-scoring-access-rate-limit-secret";
+const openApiLegacyV1MaterialCommitment = createHash("sha256")
+  .update("matchday:scoring-access-hmac-key-material:v1:\u0000", "utf8")
+  .update(openApiRateLimitHmacSecret, "utf8")
+  .digest("hex");
+
 export async function generateOpenApiDocument() {
   const config = parseConfig({
     APP_ENV: "staging",
     API_ALLOWED_ORIGINS: "https://app.matchday.example",
     LOG_LEVEL: "silent",
     IDENTITY_CSRF_HMAC_SECRET: "o".repeat(32),
-    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "openapi-scoring-access-rate-limit-secret",
+    SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+      primary: { version: "v1", secret: openApiRateLimitHmacSecret },
+      verificationOnly: [],
+    }),
+    SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT: openApiLegacyV1MaterialCommitment,
     SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "openapi-scoring-fallback-code-secret",
     IDENTITY_PROVIDER: "oidc",
     IDENTITY_OIDC_ISSUER: "https://identity.matchday.example",
@@ -44,6 +55,7 @@ export async function generateOpenApiDocument() {
   const phase3Runtime = new Phase3Runtime(sql, phase3DomainAdapter);
   const app = await buildApp({
     config,
+    scoringAccessHmacKeySql: sql,
     probes: {
       database: async () => true,
       queue: async () => true,

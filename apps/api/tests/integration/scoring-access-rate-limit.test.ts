@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -135,6 +135,87 @@ describeInfra("Redis scoring access rate limiting", () => {
     expect(scoringAccessRateLimited(limited)).toBe(true);
     expect(limited.limit).toBe(20);
     expect(limited.remaining).toBe(0);
+  });
+
+  it("carries aggregate cooldowns across a primary-key promotion without retaining raw identifiers", async () => {
+    const v1Secret = "v1-scoring-access-rate-limit-key-material";
+    const v2Secret = "v2-scoring-access-rate-limit-key-material";
+    const rotationNamespace = `${namespace}rotation:`;
+    const credential = "rotated-access-credential-must-not-be-in-redis";
+    const ip = "203.0.113.118";
+    const beforePromotion = new RedisScoringAccessRateLimiter(
+      redis,
+      { primary: { version: "v1", secret: v1Secret }, verificationOnly: [] },
+      rotationNamespace,
+    );
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect(scoringAccessRateLimited(await beforePromotion.recordInvalid(credential, ip))).toBe(false);
+    }
+
+    const afterPromotion = new RedisScoringAccessRateLimiter(
+      redis,
+      {
+        primary: { version: "v2", secret: v2Secret },
+        verificationOnly: [{ version: "v1", secret: v1Secret }],
+      },
+      rotationNamespace,
+    );
+    expect((await afterPromotion.assertAllowed(credential, ip)).remaining).toBe(1);
+    expect(scoringAccessRateLimited(await afterPromotion.recordInvalid(credential, ip))).toBe(true);
+    expect(scoringAccessRateLimited(await afterPromotion.assertAllowed(credential, ip))).toBe(true);
+    expect(afterPromotion.fingerprints(credential, ip).keyVersion).toBe("v2");
+    expect(afterPromotion.fingerprintsForVersion("v1", credential, ip).keyVersion).toBe("v1");
+    expect(() => afterPromotion.fingerprintsForVersion("retired-v0", credential, ip)).toThrow("unknown or retired");
+
+    const keys = await ownedKeys();
+    expect(keys.filter((key) => key.startsWith(rotationNamespace)).join("\n")).not.toContain(credential);
+    expect(keys.filter((key) => key.startsWith(rotationNamespace)).join("\n")).not.toContain(ip);
+    expect(await redis.get(guardKey)).toBe("preserve");
+  });
+
+  it("includes C1-C4 unversioned v1 counters until their Redis TTL naturally expires", async () => {
+    const legacySecret = "legacy-v1-scoring-access-rate-limit-key";
+    const legacyNamespace = `${namespace}legacy-v1:`;
+    const credential = "legacy-counter-credential-must-not-appear";
+    const ip = "198.51.100.116";
+    const digest = (value: string) => createHmac("sha256", legacySecret).update(value, "utf8").digest("hex");
+    const credentialHash = digest(`credential:${credential}`);
+    const ipHash = digest(`ip:${ip}`);
+    const legacyPairKey = `${legacyNamespace}invalid:pair:${credentialHash}:${ipHash}`;
+    const legacyIpKey = `${legacyNamespace}invalid:ip:${ipHash}`;
+    await redis.set(legacyPairKey, "4", "EX", 2);
+    await redis.set(legacyIpKey, "4", "EX", 2);
+
+    const metricEvents: Record<string, unknown>[] = [];
+    const limiter = new RedisScoringAccessRateLimiter(
+      redis,
+      {
+        primary: { version: "v2", secret: "new-v2-scoring-access-rate-limit-key" },
+        verificationOnly: [{ version: "v1", secret: legacySecret }],
+      },
+      legacyNamespace,
+      undefined,
+      {
+        rateLimit: (input) => metricEvents.push(input),
+        lifecycle: (input) => metricEvents.push(input),
+      },
+    );
+    expect((await limiter.assertAllowed(credential, ip)).remaining).toBe(1);
+    expect(scoringAccessRateLimited(await limiter.recordInvalid(credential, ip))).toBe(true);
+    expect(await redis.get(legacyPairKey)).toBe("4");
+    expect(await redis.get(legacyIpKey)).toBe("4");
+    expect((await ownedKeys()).join("\n")).not.toContain(credential);
+    expect((await ownedKeys()).join("\n")).not.toContain(ip);
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    expect(await redis.get(legacyPairKey)).toBeNull();
+    expect(await redis.get(legacyIpKey)).toBeNull();
+    expect(await redis.get(guardKey)).toBe("preserve");
+    expect(metricEvents).toEqual([
+      { primaryVersion: "v2", acceptedVersionCount: 2, operation: "assert" },
+      { primaryVersion: "v2", acceptedVersionCount: 2, operation: "invalid" },
+    ]);
+    expect(JSON.stringify(metricEvents)).not.toContain(credential);
+    expect(JSON.stringify(metricEvents)).not.toContain(ip);
   });
 
   it("expires a cooldown and preserves an unrelated near-prefix key", async () => {

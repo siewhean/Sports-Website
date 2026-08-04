@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import { parseConfig, safeConfigSummary } from "../src/index.js";
 
 const flowSealKey = Buffer.alloc(32, 7).toString("base64url");
+const legacyV1MaterialCommitment = "a".repeat(64);
 const oidcConfig = {
-  SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "scoring-access-rate-limit-secret-32",
+  SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+    primary: { version: "v1", secret: "scoring-access-rate-limit-secret-32" },
+    verificationOnly: [],
+  }),
+  SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT: legacyV1MaterialCommitment,
   SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "scoring-access-fallback-code-secret-32",
   API_ALLOWED_ORIGINS: "https://app.matchday.example",
   IDENTITY_PROVIDER: "oidc",
@@ -30,7 +35,8 @@ describe("configuration", () => {
     expect(config.api.trustedProxies).toEqual([]);
     expect(config.telemetry).toEqual({ enabled: false, metricExportIntervalMs: 10_000 });
     expect(config.identity).toMatchObject({ sessionCookieName: "matchday_session", secureCookies: false });
-    expect(config.scoringAccess.rateLimitHmacSecret).toHaveLength(34);
+    expect(config.scoringAccess.rateLimitHmacKeyring.primary).toMatchObject({ version: "v1" });
+    expect(config.scoringAccess.rateLimitHmacKeyring.primary.secret).toHaveLength(34);
     expect(config.scoringAccess.fallbackCodeHmacSecret).toHaveLength(36);
   });
 
@@ -164,28 +170,78 @@ describe("configuration", () => {
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-secret-at-least-16");
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain(flowSealKey);
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-event-secret-at-least-32-bytes");
-    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(oidcConfig.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET);
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain("scoring-access-rate-limit-secret-32");
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain(
       oidcConfig.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
     );
   });
 
-  it("requires and redacts a dedicated scoring access rate-limit HMAC secret outside local/test", () => {
+  it("requires and redacts a versioned scoring access rate-limit HMAC keyring outside local/test", () => {
     expect(() =>
       parseConfig({
         APP_ENV: "staging",
         IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
         ...oidcConfig,
-        SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: undefined,
+        SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: undefined,
       }),
-    ).toThrow("SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET");
+    ).toThrow("SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING");
     const config = parseConfig({
       APP_ENV: "staging",
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
       ...oidcConfig,
     });
-    expect(safeConfigSummary(config).scoringAccess.rateLimitHmacSecretConfigured).toBe(true);
-    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(oidcConfig.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET);
+    expect(safeConfigSummary(config).scoringAccess.rateLimitHmacPrimaryVersion).toBe("v1");
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain("scoring-access-rate-limit-secret-32");
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(legacyV1MaterialCommitment);
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        ...oidcConfig,
+        SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT: undefined,
+      }),
+    ).toThrow("SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT");
+  });
+
+  it("accepts one primary and verification-only keys without exposing material", () => {
+    const primary = "p".repeat(32);
+    const previous = "q".repeat(32);
+    const config = parseConfig({
+      APP_ENV: "staging",
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...oidcConfig,
+      SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+        primary: { version: "v2", secret: primary },
+        verificationOnly: [{ version: "v1", secret: previous }],
+      }),
+    });
+    expect(config.scoringAccess.rateLimitHmacKeyring).toEqual({
+      primary: { version: "v2", secret: primary },
+      verificationOnly: [{ version: "v1", secret: previous }],
+      legacyV1MaterialCommitment,
+    });
+    const summary = JSON.stringify(safeConfigSummary(config));
+    expect(summary).toContain("v2");
+    expect(summary).toContain("v1");
+    expect(summary).not.toContain(primary);
+    expect(summary).not.toContain(previous);
+  });
+
+  it("rejects malformed, duplicate, or missing production keyrings without disclosing key material", () => {
+    const staging = { APP_ENV: "staging", IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32), ...oidcConfig };
+    expect(() => parseConfig({ ...staging, SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: "not-json" })).toThrow(
+      "must be valid JSON",
+    );
+    const duplicateSecret = "d".repeat(32);
+    expect(() =>
+      parseConfig({
+        ...staging,
+        SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+          primary: { version: "v2", secret: duplicateSecret },
+          verificationOnly: [{ version: "v1", secret: duplicateSecret }],
+        }),
+      }),
+    ).toThrow("must contain one primary");
   });
 
   it("requires and redacts a dedicated fallback-code HMAC secret outside local/test", () => {
@@ -209,7 +265,10 @@ describe("configuration", () => {
     expect(() =>
       parseConfig({
         APP_ENV: "test",
-        SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "shared-scoring-access-hmac-secret",
+        SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+          primary: { version: "v1", secret: "shared-scoring-access-hmac-secret" },
+          verificationOnly: [],
+        }),
         SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "shared-scoring-access-hmac-secret",
       }),
     ).toThrow("must be different");

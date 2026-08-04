@@ -525,6 +525,17 @@ function safeEqual(left: Buffer, right: Buffer): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function scoringAccessHmacKeyVersionPersistenceError(error: unknown): ApiError | null {
+  if (!(error instanceof Error)) return null;
+  if (error.message.includes("scoring access HMAC key version is retired")) {
+    return new ApiError(409, "SCORING_ACCESS_HMAC_KEY_VERSION_RETIRED", "Scoring access HMAC key version is retired");
+  }
+  if (error.message.includes("scoring access HMAC key version is unknown")) {
+    return new ApiError(409, "SCORING_ACCESS_HMAC_KEY_VERSION_UNKNOWN", "Scoring access HMAC key version is unknown");
+  }
+  return null;
+}
+
 function required<T>(rows: readonly T[], message: string): T {
   const row = rows[0];
   if (!row) throw new ApiError(404, "NOT_FOUND", message);
@@ -589,6 +600,21 @@ export class Phase2Runtime {
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     if (!this.sql.begin) throw new Error("Phase 2 mutations require a transaction-capable PostgreSQL client.");
     return this.sql.begin(operation);
+  }
+
+  private async assertScoringAccessRateLimitPrimaryVersion(tx: PostgresJsSql = this.sql, lock = false): Promise<void> {
+    const keyVersion = this.scoringAccessRateLimiter.primaryKeyVersion?.();
+    if (!keyVersion) return;
+    const rows = await tx.unsafe<{ status: "primary" | "verification_only" | "retired" }>(
+      `SELECT status FROM scoring_access_hmac_key_versions WHERE key_version=$1 ${lock ? "FOR SHARE" : ""}`,
+      [keyVersion],
+    );
+    if (rows[0]?.status === "primary") return;
+    const code =
+      rows[0]?.status === "retired"
+        ? "SCORING_ACCESS_HMAC_KEY_VERSION_RETIRED"
+        : "SCORING_ACCESS_HMAC_KEY_VERSION_UNKNOWN";
+    throw new ApiError(409, code, "Scoring access HMAC key version is not an active primary version");
   }
 
   private async requireCompetitionAccess(
@@ -739,27 +765,36 @@ export class Phase2Runtime {
       accessPassId?: string | null;
       organisationId?: string | null;
       cooldownUntil?: Date | null;
+      rateLimitStateExpiresAt: Date;
     },
   ): Promise<void> {
     const fingerprints = this.scoringAccessRateLimiter.fingerprints(input.credential, input.ipAddress);
-    await tx.unsafe(
-      `INSERT INTO scoring_access_attempts (
+    try {
+      await tx.unsafe(
+        `INSERT INTO scoring_access_attempts (
          competition_id,match_id,access_pass_id,credential_kind,outcome,
-         credential_hmac,ip_hmac,request_id,attempted_at,cooldown_until
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [
-        input.competitionId ?? null,
-        input.matchId ?? null,
-        input.accessPassId ?? null,
-        input.credentialKind,
-        input.outcome,
-        fingerprints.credential,
-        fingerprints.ip,
-        input.requestId,
-        this.now(),
-        input.cooldownUntil ?? null,
-      ],
-    );
+         credential_hmac,ip_hmac,hmac_key_version,request_id,attempted_at,cooldown_until,rate_limit_state_expires_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          input.competitionId ?? null,
+          input.matchId ?? null,
+          input.accessPassId ?? null,
+          input.credentialKind,
+          input.outcome,
+          fingerprints.credential,
+          fingerprints.ip,
+          fingerprints.keyVersion,
+          input.requestId,
+          this.now(),
+          input.cooldownUntil ?? null,
+          input.rateLimitStateExpiresAt,
+        ],
+      );
+    } catch (error) {
+      const mapped = scoringAccessHmacKeyVersionPersistenceError(error);
+      if (mapped) throw mapped;
+      throw error;
+    }
     await tx.unsafe(
       `INSERT INTO audit_events (
          occurred_at,request_id,actor_account_id,actor_type,organisation_id,
@@ -795,6 +830,7 @@ export class Phase2Runtime {
     accessPassId?: string | null;
     organisationId?: string | null;
     cooldownUntil?: Date | null;
+    rateLimitStateExpiresAt: Date;
   }): Promise<void> {
     await this.transaction(async (tx) => {
       await this.insertAccessAttempt(tx, input);
@@ -2298,6 +2334,7 @@ export class Phase2Runtime {
     if (!presented) throw new ApiError(400, "ACCESS_SECRET_REQUIRED", "Access token or code is required");
     const ipAddress = input.ipAddress ?? "runtime-test";
     const credentialKind = input.token ? ("token" as const) : ("fallback_code" as const);
+    await this.assertScoringAccessRateLimitPrimaryVersion();
     const initialLimit = await this.scoringAccessRateLimiter.assertAllowed(presented, ipAddress);
     if (scoringAccessRateLimited(initialLimit)) {
       await this.recordAccessAttempt({
@@ -2307,6 +2344,7 @@ export class Phase2Runtime {
         credentialKind,
         outcome: "rate_limited",
         cooldownUntil: new Date(this.now().getTime() + (initialLimit.retryAfterSeconds ?? 0) * 1_000),
+        rateLimitStateExpiresAt: new Date(this.now().getTime() + initialLimit.resetSeconds * 1_000),
       });
       throw new ScoringAccessRateLimitError(initialLimit);
     }
@@ -2481,6 +2519,7 @@ export class Phase2Runtime {
         // External success-accounting happens before PostgreSQL commit. If Redis or
         // attempt persistence fails, the enclosing transaction rolls the session
         // and writer lease back rather than returning an error with a ghost writer.
+        await this.assertScoringAccessRateLimitPrimaryVersion(tx, true);
         await this.scoringAccessRateLimiter.recordSuccess(presented, ipAddress);
         await this.insertAccessAttempt(tx, {
           requestId,
@@ -2492,6 +2531,7 @@ export class Phase2Runtime {
           matchId: pass.match_id,
           accessPassId: pass.id,
           organisationId: pass.organisation_id,
+          rateLimitStateExpiresAt: new Date(this.now().getTime() + initialLimit.resetSeconds * 1_000),
         });
         return {
           session_id: session.id,
@@ -2524,34 +2564,42 @@ export class Phase2Runtime {
           "ACCESS_FALLBACK_ROTATION_REQUIRED",
         ].includes(error.code)
       ) {
-        const state = await this.scoringAccessRateLimiter.recordInvalid(presented, ipAddress);
-        const accessContext = error instanceof ScoringAccessDeniedError ? error.accessContext : null;
-        await this.recordAccessAttempt({
-          requestId,
-          credential: presented,
-          ipAddress,
-          credentialKind,
-          outcome:
-            error.code === "ACCESS_WRONG_MATCH"
-              ? "wrong_match"
-              : error.code === "ACCESS_REVOKED"
-                ? "revoked"
-                : error.code === "ACCESS_EXPIRED"
-                  ? "expired"
-                  : error.code === "ACCESS_FALLBACK_ROTATION_REQUIRED"
-                    ? "rotation_required"
-                    : "invalid",
-          cooldownUntil: state.retryAfterSeconds
-            ? new Date(this.now().getTime() + state.retryAfterSeconds * 1_000)
-            : null,
-          ...(accessContext
-            ? {
-                competitionId: accessContext.competitionId,
-                matchId: accessContext.matchId,
-                accessPassId: accessContext.accessPassId,
-                organisationId: accessContext.organisationId,
-              }
-            : {}),
+        const state = await this.transaction(async (tx) => {
+          // Hold a shared registry lock across the Redis mutation and immutable
+          // receipt. Retirement takes FOR UPDATE, so it either waits for this
+          // pre-retirement operation or wins before any stale Redis write.
+          await this.assertScoringAccessRateLimitPrimaryVersion(tx, true);
+          const state = await this.scoringAccessRateLimiter.recordInvalid(presented, ipAddress);
+          const accessContext = error instanceof ScoringAccessDeniedError ? error.accessContext : null;
+          await this.insertAccessAttempt(tx, {
+            requestId,
+            credential: presented,
+            ipAddress,
+            credentialKind,
+            outcome:
+              error.code === "ACCESS_WRONG_MATCH"
+                ? "wrong_match"
+                : error.code === "ACCESS_REVOKED"
+                  ? "revoked"
+                  : error.code === "ACCESS_EXPIRED"
+                    ? "expired"
+                    : error.code === "ACCESS_FALLBACK_ROTATION_REQUIRED"
+                      ? "rotation_required"
+                      : "invalid",
+            cooldownUntil: state.retryAfterSeconds
+              ? new Date(this.now().getTime() + state.retryAfterSeconds * 1_000)
+              : null,
+            rateLimitStateExpiresAt: new Date(this.now().getTime() + state.resetSeconds * 1_000),
+            ...(accessContext
+              ? {
+                  competitionId: accessContext.competitionId,
+                  matchId: accessContext.matchId,
+                  accessPassId: accessContext.accessPassId,
+                  organisationId: accessContext.organisationId,
+                }
+              : {}),
+          });
+          return state;
         });
         if (scoringAccessRateLimited(state)) throw new ScoringAccessRateLimitError(state);
         throw new ScoringAccessRejectedError(error.statusCode, error.code, error.message, state);

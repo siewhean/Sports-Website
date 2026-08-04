@@ -780,23 +780,28 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     `;
   });
 
-  it("stores only fixed-length HMACs in the append-only access-attempt ledger", async () => {
+  it("stores only fixed-length versioned HMACs in the append-only access-attempt ledger", async () => {
     const world = await createWorld();
     const attempt = randomUUID();
     await sql`
+      INSERT INTO scoring_access_hmac_key_versions(
+        key_version,material_commitment,status,activated_at,verification_only_since,retirement_not_before
+      ) VALUES ('v2',${randomBytes(32)},'verification_only',now(),now(),now()+interval '15 minutes')
+    `;
+    await sql`
       INSERT INTO scoring_access_attempts (
-        id,credential_kind,outcome,credential_hmac,ip_hmac,request_id
+        id,credential_kind,outcome,credential_hmac,ip_hmac,hmac_key_version,request_id,rate_limit_state_expires_at
       ) VALUES (
-        ${attempt},'fallback_code','invalid',${randomBytes(32)},${randomBytes(32)},${`attempt-${attempt}`}
+        ${attempt},'fallback_code','invalid',${randomBytes(32)},${randomBytes(32)},'v2',${`attempt-${attempt}`},now()
       )
     `;
     await expect(sql`
       INSERT INTO scoring_access_attempts (
         competition_id,match_id,access_pass_id,credential_kind,outcome,
-        credential_hmac,ip_hmac,request_id
+        credential_hmac,ip_hmac,hmac_key_version,request_id,rate_limit_state_expires_at
       ) VALUES (
         ${world.competitionB},${world.matchB},${world.passA},'token','accepted',
-        ${randomBytes(32)},${randomBytes(32)},${`cross-tenant-${attempt}`}
+        ${randomBytes(32)},${randomBytes(32)},'v1',${`cross-tenant-${attempt}`},now()
       )
     `).rejects.toThrow();
     const hashColumns = await sql`
@@ -804,13 +809,29 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
       FROM information_schema.columns
       WHERE table_schema=${schema}
         AND table_name='scoring_access_attempts'
-        AND column_name IN ('credential_hmac','ip_hmac')
+        AND column_name IN ('credential_hmac','ip_hmac','hmac_key_version','rate_limit_state_expires_at')
       ORDER BY column_name
     `;
     expect(hashColumns).toEqual([
       { column_name: "credential_hmac", data_type: "bytea" },
+      { column_name: "hmac_key_version", data_type: "text" },
       { column_name: "ip_hmac", data_type: "bytea" },
+      { column_name: "rate_limit_state_expires_at", data_type: "timestamp with time zone" },
     ]);
+    await expect(sql`
+      INSERT INTO scoring_access_attempts (
+        credential_kind,outcome,credential_hmac,ip_hmac,hmac_key_version,request_id,rate_limit_state_expires_at
+      ) VALUES (
+        'token','invalid',${randomBytes(32)},${randomBytes(32)},'V2',${`invalid-version-${attempt}`},now()
+      )
+    `).rejects.toThrow();
+    await expect(sql`
+      INSERT INTO scoring_access_attempts (
+        credential_kind,outcome,credential_hmac,ip_hmac,request_id,rate_limit_state_expires_at
+      ) VALUES (
+        'token','invalid',${randomBytes(32)},${randomBytes(32)},${`implicit-version-${attempt}`},now()
+      )
+    `).rejects.toThrow();
     await expect(sql`
       UPDATE scoring_access_attempts SET outcome='accepted' WHERE id=${attempt}
     `).rejects.toThrow(/append-only/i);
@@ -820,10 +841,10 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     await sql`
       INSERT INTO scoring_access_attempts (
         id,competition_id,match_id,access_pass_id,credential_kind,outcome,
-        credential_hmac,ip_hmac,request_id
+        credential_hmac,ip_hmac,hmac_key_version,request_id,rate_limit_state_expires_at
       ) VALUES (
         ${retainedAttempt},${world.competitionA},${world.matchA},${world.passA},'token','accepted',
-        ${randomBytes(32)},${randomBytes(32)},${`retained-${retainedAttempt}`}
+        ${randomBytes(32)},${randomBytes(32)},'v1',${`retained-${retainedAttempt}`},now()
       )
     `;
     await sql`DELETE FROM scoring_access_passes WHERE id=${world.passA}`;

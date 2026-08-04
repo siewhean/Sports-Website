@@ -10,7 +10,7 @@ import Fastify, { LogController, type FastifyInstance, type FastifyRequest } fro
 import type { Redis } from "ioredis";
 import type { ApiErrorEnvelope, DependencyStatus, HealthStatus } from "@matchday/contracts";
 import type { AppConfig } from "@matchday/config";
-import { IdentityError, systemClock, type Clock } from "@matchday/identity";
+import { IdentityError, systemClock, type Clock, type PostgresJsSql } from "@matchday/identity";
 import { createLogger } from "@matchday/observability";
 import { ApiError } from "./errors.js";
 import { IdentityFlowSealer } from "./identity-flow.js";
@@ -30,6 +30,7 @@ import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import { registerPhase4Routes } from "./phase-4-routes.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
 import { registerPhase4SetupPatchRoutes } from "./phase-4-setup-patch-routes.js";
+import { registerScoringAccessHmacKeyringRoutes } from "./scoring-access-hmac-keyring-routes.js";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -109,6 +110,7 @@ export type BuildAppOptions = {
   phase2Runtime?: Phase2Runtime;
   phase3Runtime?: Phase3Runtime;
   phase4Runtime?: Phase4Runtime;
+  scoringAccessHmacKeySql?: PostgresJsSql;
 };
 
 const scoringSessionAuthorisedRateLimitRoutes = new Set([
@@ -492,6 +494,14 @@ export async function buildApp(options: BuildAppOptions) {
         identityRequests,
         allowedOrigins: options.config.api.allowedOrigins,
         ...(!options.phase2Runtime ? { registerCanonicalMutations: true } : {}),
+      });
+    }
+    if (options.scoringAccessHmacKeySql) {
+      await registerScoringAccessHmacKeyringRoutes(app as unknown as FastifyInstance, {
+        sql: options.scoringAccessHmacKeySql,
+        identityRuntime: options.identityRuntime,
+        identityRequests,
+        allowedOrigins: options.config.api.allowedOrigins,
       });
     }
     if (options.phase4Runtime) {

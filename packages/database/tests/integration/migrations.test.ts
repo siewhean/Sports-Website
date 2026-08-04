@@ -133,6 +133,7 @@ describe("foundation migrations", () => {
         "0039_gate_c_multi_division_repair_projection_lineage.sql",
         "0040_gate_c_atomic_result_repair_cases.sql",
         "0041_gate_c_assign_result_repair_parent.sql",
+        "0042_gate_c_scoring_access_hmac_key_versions.sql",
       ] as const;
       const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
       const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
@@ -148,6 +149,7 @@ describe("foundation migrations", () => {
         "0040_gate_c_atomic_result_repair_cases.sql",
         "0041_gate_c_assign_result_repair_parent.sql",
       ] as const;
+      const deferredC5MigrationNames = ["0042_gate_c_scoring_access_hmac_key_versions.sql"] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
           const migrationPath = path.join(copiedDirectory, name);
@@ -357,7 +359,8 @@ describe("foundation migrations", () => {
                 name !== repairPersistenceMigrationName &&
                 name !== repairRevisionFencingMigrationName &&
                 name !== repairLineageFencingMigrationName &&
-                !deferredC4MigrationNames.includes(name as (typeof deferredC4MigrationNames)[number]),
+                !deferredC4MigrationNames.includes(name as (typeof deferredC4MigrationNames)[number]) &&
+                !deferredC5MigrationNames.includes(name as (typeof deferredC5MigrationNames)[number]),
             )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
@@ -374,7 +377,8 @@ describe("foundation migrations", () => {
               name !== repairPersistenceMigrationName &&
               name !== repairRevisionFencingMigrationName &&
               name !== repairLineageFencingMigrationName &&
-              !deferredC4MigrationNames.includes(name as (typeof deferredC4MigrationNames)[number]),
+              !deferredC4MigrationNames.includes(name as (typeof deferredC4MigrationNames)[number]) &&
+              !deferredC5MigrationNames.includes(name as (typeof deferredC5MigrationNames)[number]),
           ),
         );
         await sql`UPDATE scheduled_matches
@@ -459,6 +463,19 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithDeferredC4.applied).toEqual(deferredC4MigrationNames);
+        await Promise.all(
+          deferredC5MigrationNames.map(async (name) => {
+            const migration = forwardMigrations.find((entry) => entry.name === name);
+            if (!migration) throw new Error(`Expected deferred C5 migration ${name}`);
+            await writeFile(migration.migrationPath, migration.source);
+          }),
+        );
+        const upgradedWithDeferredC5 = await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: populatedSchema,
+        });
+        expect(upgradedWithDeferredC5.applied).toEqual(deferredC5MigrationNames);
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
