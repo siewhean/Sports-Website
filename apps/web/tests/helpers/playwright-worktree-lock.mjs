@@ -8,6 +8,10 @@ function lockPathFor(worktreePath) {
   return join(tmpdir(), `matchday-playwright-${identifier}.lock`);
 }
 
+function sharedPortLockPath() {
+  return join(tmpdir(), "matchday-playwright-shared-ports.lock");
+}
+
 function processIsAlive(processId) {
   if (!Number.isSafeInteger(processId) || processId <= 0) return false;
   try {
@@ -29,9 +33,7 @@ function readOwner(lockPath) {
   }
 }
 
-export function acquirePlaywrightWorktreeLock(worktreePath, { pid = process.pid } = {}) {
-  const lockPath = lockPathFor(worktreePath);
-  const owner = { pid, worktreePath };
+function acquireLock(lockPath, owner, description, { pid = process.pid } = {}) {
   try {
     const descriptor = openSync(lockPath, "wx", 0o600);
     writeFileSync(descriptor, JSON.stringify(owner));
@@ -41,11 +43,11 @@ export function acquirePlaywrightWorktreeLock(worktreePath, { pid = process.pid 
     const existingOwner = readOwner(lockPath);
     if (existingOwner && !processIsAlive(existingOwner.pid)) {
       unlinkSync(lockPath);
-      return acquirePlaywrightWorktreeLock(worktreePath, { pid });
+      return acquireLock(lockPath, owner, description, { pid });
     }
     const ownerDescription = existingOwner ? ` (PID ${existingOwner.pid})` : "";
     throw new Error(
-      `Another Playwright run already owns this worktree${ownerDescription}. ` +
+      `Another Playwright run already owns ${description}${ownerDescription}. ` +
         "Wait for it to finish before starting another run so its Next.js build output and local ports remain isolated.",
     );
   }
@@ -53,4 +55,16 @@ export function acquirePlaywrightWorktreeLock(worktreePath, { pid = process.pid 
     if (!existsSync(lockPath)) return;
     if (readOwner(lockPath)?.pid === pid) unlinkSync(lockPath);
   };
+}
+
+export function acquirePlaywrightWorktreeLock(worktreePath, { pid = process.pid } = {}) {
+  return acquireLock(lockPathFor(worktreePath), { pid, worktreePath }, "this worktree", { pid });
+}
+
+/**
+ * The shared launcher binds fixed HTTPS/HTTP ports. This lock prevents a
+ * different worktree from accidentally serving its build to this test run.
+ */
+export function acquirePlaywrightSharedPortLock(worktreePath, { pid = process.pid } = {}) {
+  return acquireLock(sharedPortLockPath(), { pid, worktreePath }, "the shared Playwright ports", { pid });
 }

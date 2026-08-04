@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { acquirePlaywrightWorktreeLock } from "../helpers/playwright-worktree-lock.mjs";
+import {
+  acquirePlaywrightSharedPortLock,
+  acquirePlaywrightWorktreeLock,
+} from "../helpers/playwright-worktree-lock.mjs";
 
 const worktrees: string[] = [];
 
@@ -21,6 +24,21 @@ describe("Playwright worktree lock", () => {
 
     release();
     const secondRelease = acquirePlaywrightWorktreeLock(worktree);
+    secondRelease();
+  });
+
+  it("rejects a second worktree while the fixed server ports are in use", () => {
+    const firstWorktree = mkdtempSync(join(tmpdir(), "matchday-playwright-first-"));
+    const secondWorktree = mkdtempSync(join(tmpdir(), "matchday-playwright-second-"));
+    worktrees.push(firstWorktree, secondWorktree);
+    const release = acquirePlaywrightSharedPortLock(firstWorktree);
+
+    expect(() => acquirePlaywrightSharedPortLock(secondWorktree)).toThrow(
+      "Another Playwright run already owns the shared Playwright ports",
+    );
+
+    release();
+    const secondRelease = acquirePlaywrightSharedPortLock(secondWorktree);
     secondRelease();
   });
 
