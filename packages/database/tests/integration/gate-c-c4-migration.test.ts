@@ -302,7 +302,7 @@ describe("Gate C C4 repair persistence migration", () => {
           ${competitionId},${siblingDivisionId},1,2,1,${firstRevision!.id},${sql.json({ division: "Reserve" })},
           ${"b".repeat(64)},'"c4-reserve-v1"','2027-01-01T01:00:00Z','2027-01-01T01:00:00Z'
         )`,
-      ).rejects.toThrow(/same competition and division/i);
+      ).rejects.toThrow(/(same competition and division|not affected by the retained repair revision)/i);
 
       const concurrentSql = postgres(config.databaseUrl, {
         max: 1,

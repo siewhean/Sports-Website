@@ -210,6 +210,15 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0030_gate_c_published_schedule_participants.sql",
           "0031_gate_c_participant_snapshot_fencing.sql",
           "0032_gate_c_offline_replay.sql",
+          "0033_gate_c_repair_public_truth_exports.sql",
+          "0034_gate_c_repair_revision_fencing.sql",
+          "0035_gate_c_repair_lineage_fencing.sql",
+          "0036_gate_c_repair_publication_version_fencing.sql",
+          "0037_gate_c_repair_schedule_adjustments.sql",
+          "0038_gate_c_repair_schedule_participant_snapshots.sql",
+          "0039_gate_c_multi_division_repair_projection_lineage.sql",
+          "0040_gate_c_atomic_result_repair_cases.sql",
+          "0041_gate_c_assign_result_repair_parent.sql",
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,

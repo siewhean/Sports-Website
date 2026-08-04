@@ -126,6 +126,12 @@ describe("foundation migrations", () => {
         "0033_gate_c_repair_public_truth_exports.sql",
         "0034_gate_c_repair_revision_fencing.sql",
         "0035_gate_c_repair_lineage_fencing.sql",
+        "0036_gate_c_repair_publication_version_fencing.sql",
+        "0037_gate_c_repair_schedule_adjustments.sql",
+        "0038_gate_c_repair_schedule_participant_snapshots.sql",
+        "0039_gate_c_multi_division_repair_projection_lineage.sql",
+        "0040_gate_c_atomic_result_repair_cases.sql",
+        "0041_gate_c_assign_result_repair_parent.sql",
       ] as const;
       const participantFenceMigrationName = "0031_gate_c_participant_snapshot_fencing.sql";
       const offlineReplayMigrationName = "0032_gate_c_offline_replay.sql";
@@ -336,11 +342,9 @@ describe("foundation migrations", () => {
           forwardMigrations
             .filter(
               ({ name }) =>
+                name < repairPersistenceMigrationName &&
                 name !== participantFenceMigrationName &&
-                name !== offlineReplayMigrationName &&
-                name !== repairPersistenceMigrationName &&
-                name !== repairRevisionFencingMigrationName &&
-                name !== repairLineageFencingMigrationName,
+                name !== offlineReplayMigrationName,
             )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
@@ -349,7 +353,9 @@ describe("foundation migrations", () => {
           migrationsDirectory: copiedDirectory,
           schema: populatedSchema,
         });
-        expect(upgradedBeforeParticipantFence.applied).toEqual(forwardMigrationNames.slice(0, -5));
+        expect(upgradedBeforeParticipantFence.applied).toEqual(
+          forwardMigrationNames.slice(0, forwardMigrationNames.indexOf(participantFenceMigrationName)),
+        );
         await sql`UPDATE scheduled_matches
           SET home_entry_id=${siblingEntry}
           WHERE schedule_revision_id=${scheduleRevision} AND match_id=${match}`;
@@ -419,6 +425,15 @@ describe("foundation migrations", () => {
           schema: populatedSchema,
         });
         expect(upgradedWithRepairLineageFencing.applied).toEqual([repairLineageFencingMigrationName]);
+        for (const migration of forwardMigrations.filter(({ name }) => name > repairLineageFencingMigrationName)) {
+          await writeFile(migration.migrationPath, migration.source);
+          const upgradedWithRemainingRepairMigration = await migrateDatabase({
+            databaseUrl: config.databaseUrl,
+            migrationsDirectory: copiedDirectory,
+            schema: populatedSchema,
+          });
+          expect(upgradedWithRemainingRepairMigration.applied).toEqual([migration.name]);
+        }
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT
@@ -724,9 +739,10 @@ describe("foundation migrations", () => {
         ]);
         expect(
           (
-            await sql<
-              { expiry: string }[]
-            >`SELECT phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz)::text expiry`
+            await sql<{ expiry: string }[]>`SELECT to_char(
+                phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD HH24:MI:SS'
+              ) expiry`
           )[0]?.expiry,
         ).toContain("2027-02-28 10:15:00");
       } finally {

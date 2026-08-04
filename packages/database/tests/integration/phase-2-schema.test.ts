@@ -179,8 +179,8 @@ async function createWorld(): Promise<World> {
     INSERT INTO scoring_access_passes (
       id, competition_id, match_id, secret_hash, short_code_hash, fallback_code_hash_version, expires_at, created_by
     ) VALUES
-      (${passA}, ${competitionA}, ${matchA}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', '2026-08-01T12:00:00Z', ${accountA}),
-      (${passB}, ${competitionB}, ${matchB}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', '2026-08-02T12:00:00Z', ${accountB})
+      (${passA}, ${competitionA}, ${matchA}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', '2030-08-01T12:00:00Z', ${accountA}),
+      (${passB}, ${competitionB}, ${matchB}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', '2030-08-02T12:00:00Z', ${accountB})
   `;
 
   const sessionA = randomUUID();
@@ -602,7 +602,7 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
       ) VALUES (
         ${viewerPass}, ${world.competitionA}, ${world.matchA}, 'viewer',
         '["score:read","score:write"]'::jsonb, ${randomBytes(32)},
-        '2026-08-01T12:00:00Z', ${world.accountA}
+        '2030-08-01T12:00:00Z', ${world.accountA}
       )
     `).rejects.toThrow();
     await sql`
@@ -611,7 +611,7 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
       ) VALUES (
         ${viewerPass}, ${world.competitionA}, ${world.matchA}, 'viewer',
         '["score:read"]'::jsonb, ${randomBytes(32)},
-        '2026-08-01T12:00:00Z', ${world.accountA}
+        '2030-08-01T12:00:00Z', ${world.accountA}
       )
     `;
     await sql`

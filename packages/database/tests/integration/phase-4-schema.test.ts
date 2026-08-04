@@ -1053,7 +1053,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     const warningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
       VALUES(${warningRevision},${value.competition},${formatA},1,${"1".repeat(64)},'draft',${value.account},
-        current_date+interval '7 days'-interval '1 month')`;
+        (current_date+interval '7 days'-interval '1 month') AT TIME ZONE 'UTC')`;
     await sql`INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id) VALUES
       (${warningRevision},${value.competition},${value.divisionA},${formatA}),
       (${warningRevision},${value.competition},${value.divisionB},${formatB})`;
@@ -1079,7 +1079,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     const urgentWarningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
       VALUES(${urgentWarningRevision},${value.competition},${formatA},2,${"3".repeat(64)},'draft',${value.account},
-        current_date+interval '1 day'-interval '1 month')`;
+        (current_date+interval '1 day'-interval '1 month') AT TIME ZONE 'UTC')`;
     await sql`SELECT phase4_emit_schedule_expiry_warning(${urgentWarningRevision},1,${value.account},'warning-1')`;
     expect(
       await sql`SELECT id FROM schedule_revision_warnings WHERE schedule_revision_id=${urgentWarningRevision} AND warning_days=1`,
@@ -1115,7 +1115,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${monthEndRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${monthEndRevision}`
       )[0]?.editable_until,
     ).toContain("2027-02-28 10:15:00");
 
@@ -1127,7 +1127,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${leapRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${leapRevision}`
       )[0]?.editable_until,
     ).toContain("2028-02-29 10:15:00");
 
@@ -1139,7 +1139,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${yearBoundaryRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${yearBoundaryRevision}`
       )[0]?.editable_until,
     ).toContain("2028-01-31 10:15:00");
 
@@ -1152,7 +1152,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${latestEditRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${latestEditRevision}`
       )[0]?.editable_until,
     ).toContain("2027-04-20 09:30:00");
   });
