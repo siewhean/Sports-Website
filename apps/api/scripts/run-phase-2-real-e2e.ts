@@ -64,7 +64,7 @@ const adminDatabaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchd
 const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
 const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const evidenceScope = (process.env.PHASE2_E2E_EVIDENCE_SCOPE ?? "gate-c-access") as GateCEvidenceScope;
-if (!["gate-c-access", "gate-c-c2", "gate-c-c3"].includes(evidenceScope)) {
+if (!["gate-c-access", "gate-c-c2", "gate-c-c3", "gate-c-c5"].includes(evidenceScope)) {
   throw new Error(`Unsupported real-E2E evidence scope: ${evidenceScope}`);
 }
 if (evidenceScope === "gate-c-c3" && !gateCC3Projects.includes(process.env.PHASE2_E2E_PROJECT as GateCC3Project)) {
