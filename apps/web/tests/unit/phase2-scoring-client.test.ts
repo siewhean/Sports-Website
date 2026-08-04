@@ -500,6 +500,17 @@ describe("phase 2 browser scoring transport", () => {
     } satisfies Partial<ScoringTransportError>);
   });
 
+  it("rejects an unknown fallback code in the demo scorer", async () => {
+    await expect(
+      createScoringCommandPort("demo").exchangeAccess({
+        shortCode: "INVALID",
+        device: { id: "00000000-0000-4000-8000-000000000106", label: "Test device" },
+      }),
+    ).rejects.toMatchObject({
+      state: "access",
+    } satisfies Partial<ScoringTransportError>);
+  });
+
   it("preserves a revoked state when a stored scoring session is rejected", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "revoked" }, { status: 403 })));
 
