@@ -31,10 +31,23 @@ export type C5WorkloadBudget = Readonly<{
   maxUnexpectedErrorRate: number;
 }>;
 
+export type C5CorrectnessOracle = Readonly<{
+  passed: boolean;
+  failureCode?: string;
+}>;
+
 const PROFILE_ID = /^[a-z][a-z0-9-]{2,63}$/;
 const APPROVAL_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{2,199}$/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const MAX_WORKERS_PER_ROLE = 10_000;
+
+function isCanonicalUtcTimestamp(value: string): boolean {
+  if (!ISO_UTC.test(value)) return false;
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return false;
+  const canonical = new Date(timestamp).toISOString();
+  return value === canonical || value === canonical.replace(".000Z", "Z");
+}
 
 export const C5_WORKLOAD_BUDGETS: Readonly<Record<C5WorkloadOperation, C5WorkloadBudget>> = {
   score_event_acknowledgement: {
@@ -84,13 +97,21 @@ export function assertC5WorkloadProfile(profile: C5WorkloadProfile): void {
   if (profile.approval.owner.trim().length < 2 || profile.approval.owner.length > 120) {
     throw new Error("C5 approval owner is invalid");
   }
-  if (!ISO_UTC.test(profile.approval.approvedAtUtc) || Number.isNaN(Date.parse(profile.approval.approvedAtUtc))) {
+  if (!isCanonicalUtcTimestamp(profile.approval.approvedAtUtc)) {
     throw new Error("C5 approval timestamp must be an ISO UTC timestamp");
   }
   if (!APPROVAL_REFERENCE.test(profile.approval.reference)) throw new Error("C5 approval reference is invalid");
 }
 
-export function assertC5OperationBudget(operation: C5WorkloadOperation, summary: WorkloadSummary): void {
+export function assertC5OperationBudget(
+  operation: C5WorkloadOperation,
+  summary: WorkloadSummary,
+  correctness: C5CorrectnessOracle,
+): void {
+  if (!correctness.passed) {
+    const suffix = correctness.failureCode === undefined ? "" : `: ${correctness.failureCode}`;
+    throw new Error(`C5 ${operation} correctness oracle failed${suffix}`);
+  }
   const budget = C5_WORKLOAD_BUDGETS[operation];
   assertWorkloadBudget(summary, budget);
 }

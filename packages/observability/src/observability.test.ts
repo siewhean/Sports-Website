@@ -71,18 +71,30 @@ describe("C5 workload summaries", () => {
     expect(() =>
       assertC5WorkloadProfile({ ...profile, approval: { ...profile.approval, approvedAtUtc: "today" } }),
     ).toThrow("approval timestamp");
+    expect(() =>
+      assertC5WorkloadProfile({ ...profile, approval: { ...profile.approval, approvedAtUtc: "2026-02-30T00:00:00Z" } }),
+    ).toThrow("approval timestamp");
   });
 
   it("binds every C5 operation to its documented fail-closed budget", () => {
     const withinScoreWriteBudget = summarizeWorkload([{ durationMs: 500, outcome: "success" }]);
-    expect(() => assertC5OperationBudget("score_event_acknowledgement", withinScoreWriteBudget)).not.toThrow();
+    expect(() =>
+      assertC5OperationBudget("score_event_acknowledgement", withinScoreWriteBudget, { passed: true }),
+    ).not.toThrow();
     expect(C5_WORKLOAD_BUDGETS.public_result_convergence.maxP95Ms).toBe(2_000);
     expect(() =>
       assertC5OperationBudget(
         "public_current_conditional_read",
         summarizeWorkload([{ durationMs: 501, outcome: "success" }]),
+        { passed: true },
       ),
     ).toThrow("exceeds");
+    expect(() =>
+      assertC5OperationBudget("lease_takeover", summarizeWorkload([{ durationMs: 1, outcome: "success" }]), {
+        passed: false,
+        failureCode: "stale_generation_accepted",
+      }),
+    ).toThrow("correctness oracle failed: stale_generation_accepted");
   });
 });
 
