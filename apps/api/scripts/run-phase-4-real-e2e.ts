@@ -28,7 +28,10 @@ import {
   type GateCC5ScoreWriteResource,
 } from "../src/gate-c-c5-score-write.js";
 import { createGateCC5PublicCurrentExecutor } from "../src/gate-c-c5-public-current.js";
-import { createGateCC5PublicResultConvergenceExecutor } from "../src/gate-c-c5-public-result-convergence.js";
+import {
+  createGateCC5PublicResultConvergenceExecutor,
+  type GateCC5PublicResultConvergenceTarget,
+} from "../src/gate-c-c5-public-result-convergence.js";
 import { createGateCC5LeaseTakeoverExecutor, type GateCC5LeaseSession } from "../src/gate-c-c5-lease-takeover.js";
 import type { C5WorkloadExecutor } from "@matchday/observability";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
@@ -1243,8 +1246,12 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       const repair = gateCC4Projects[project];
       if (!repair) throw new Error(`C5 public-result project is not part of this isolated run: ${project}`);
       const actor = { accountId: repair.accountId };
-      const targets = await Promise.all(
-        Array.from({ length: sampleCount }, async (_, index) => {
+      const targets: GateCC5PublicResultConvergenceTarget[] = [];
+      // Provision serially. A pilot may request hundreds of samples, but
+      // fixture setup is deliberately outside the measured workload and must
+      // not exhaust the disposable database or create lease races.
+      for (let index = 0; index < sampleCount; index += 1) {
+        const target = await (async () => {
           const suffix = `${runNumber}-${index + 1}-${randomUUID().slice(0, 8)}`;
           const competition = await phase2.createCompetition(
             actor,
@@ -1357,8 +1364,9 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
             writerGeneration: session.generation,
             expectedSequence: 3,
           };
-        }),
-      );
+        })();
+        targets.push(target);
+      }
       return createGateCC5PublicResultConvergenceExecutor(targets);
     };
     const createLeaseTakeoverExecutor = async ({

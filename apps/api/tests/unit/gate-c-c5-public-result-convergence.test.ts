@@ -50,7 +50,7 @@ function current(resultVersion = 1) {
   return {
     publication: { result_version: resultVersion },
     freshness: { result_version: resultVersion },
-    results: [{ id: "match-1", state: "final" }],
+    divisions: [{ results: [{ id: "match-1", state: "final" }] }],
   };
 }
 
@@ -119,11 +119,15 @@ describe("C5 public-result convergence executor", () => {
       return json(receipt(body.client_event_id));
     });
     fetchMock.mockResolvedValueOnce(
-      json({ publication: { result_version: 1 }, freshness: { result_version: 1 }, results: [] }, 200, {
-        etag: '"c4-1-1"',
-        "last-modified": "Mon, 03 Aug 2026 00:00:00 GMT",
-        "cache-control": "public, max-age=30",
-      }),
+      json(
+        { publication: { result_version: 1 }, freshness: { result_version: 1 }, divisions: [{ results: [] }] },
+        200,
+        {
+          etag: '"c4-1-1"',
+          "last-modified": "Mon, 03 Aug 2026 00:00:00 GMT",
+          "cache-control": "public, max-age=30",
+        },
+      ),
     );
     const executor = createGateCC5PublicResultConvergenceExecutor([target]);
 

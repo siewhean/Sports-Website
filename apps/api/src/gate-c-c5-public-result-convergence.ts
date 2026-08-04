@@ -38,11 +38,17 @@ function cacheHeadersAreCanonical(response: Response): boolean {
 }
 
 function hasFinalResult(payload: RecordValue, matchId: string): boolean {
-  const results = payload.results;
-  if (!Array.isArray(results)) return false;
-  return results.some((result) => {
-    const candidate = record(result);
-    return candidate?.id === matchId && (candidate.state === "final" || candidate.state === "corrected");
+  const divisions = payload.divisions;
+  if (!Array.isArray(divisions) || divisions.length === 0) return false;
+  return divisions.some((division) => {
+    const results = record(division)?.results;
+    return (
+      Array.isArray(results) &&
+      results.some((result) => {
+        const candidate = record(result);
+        return candidate?.id === matchId && (candidate.state === "final" || candidate.state === "corrected");
+      })
+    );
   });
 }
 
