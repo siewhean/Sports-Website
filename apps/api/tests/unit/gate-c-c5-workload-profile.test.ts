@@ -36,6 +36,13 @@ describe("C5 workload profile input", () => {
       JSON.stringify({ ...JSON.parse(profile), approval: { ...JSON.parse(profile).approval, owner: null } }),
       "owner must be a string",
     ],
+    [
+      JSON.stringify({
+        ...JSON.parse(profile),
+        approval: { ...JSON.parse(profile).approval, reference: "https://secret.example" },
+      }),
+      "reference must not contain secret-like content",
+    ],
   ])("rejects invalid profile input", (input, message) => {
     expect(() => parseGateCC5WorkloadProfile(input)).toThrow(message);
   });

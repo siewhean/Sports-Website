@@ -9,6 +9,8 @@ const PROFILE_KEYS = [
   "approval",
 ] as const;
 const APPROVAL_KEYS = ["owner", "approvedAtUtc", "reference"] as const;
+const secretLikeApprovalValue =
+  /(?:\b(?:secret|token|password|cookie|authorization|bearer)\b|(?:redis|postgres(?:ql)?):\/\/|https?:\/\/)/iu;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -29,6 +31,14 @@ function requiredInteger(value: Record<string, unknown>, key: string): number {
   const candidate = value[key];
   if (typeof candidate !== "number" || !Number.isInteger(candidate)) {
     throw new Error(`Gate C C5 workload profile ${key} must be an integer`);
+  }
+  return candidate;
+}
+
+function requiredApprovalText(value: Record<string, unknown>, key: string): string {
+  const candidate = requiredString(value, key);
+  if (secretLikeApprovalValue.test(candidate)) {
+    throw new Error(`Gate C C5 workload profile ${key} must not contain secret-like content`);
   }
   return candidate;
 }
@@ -54,9 +64,9 @@ export function parseGateCC5WorkloadProfile(value: string | undefined): C5Worklo
     publicReaderCount: requiredInteger(candidate, "publicReaderCount"),
     organiserWorkerCount: requiredInteger(candidate, "organiserWorkerCount"),
     approval: {
-      owner: requiredString(approval, "owner"),
+      owner: requiredApprovalText(approval, "owner"),
       approvedAtUtc: requiredString(approval, "approvedAtUtc"),
-      reference: requiredString(approval, "reference"),
+      reference: requiredApprovalText(approval, "reference"),
     },
   };
   assertC5WorkloadProfile(profile);
