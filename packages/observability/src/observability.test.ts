@@ -16,6 +16,9 @@ import {
   type ErrorReportContext,
   type SpanLike,
   assertWorkloadBudget,
+  assertC5OperationBudget,
+  assertC5WorkloadProfile,
+  C5_WORKLOAD_BUDGETS,
   summarizeWorkload,
 } from "./index.js";
 
@@ -45,6 +48,41 @@ describe("C5 workload summaries", () => {
     expect(() => summarizeWorkload([{ durationMs: -1, outcome: "success" }])).toThrow("non-negative");
     const summary = summarizeWorkload([{ durationMs: 501, outcome: "unexpected_failure" }]);
     expect(() => assertWorkloadBudget(summary, { maxP95Ms: 500, maxUnexpectedErrorRate: 0 })).toThrow("exceeds");
+  });
+
+  it("requires an approved, bounded pilot profile before generating C5 traffic", () => {
+    const profile = {
+      profileId: "pilot-20-scorekeepers",
+      durationSeconds: 300,
+      scorekeeperCount: 20,
+      publicReaderCount: 40,
+      organiserWorkerCount: 2,
+      approval: {
+        owner: "Event Operations",
+        approvedAtUtc: "2026-08-04T00:00:00Z",
+        reference: "OPS-42",
+      },
+    } as const;
+    expect(() => assertC5WorkloadProfile(profile)).not.toThrow();
+    expect(() => assertC5WorkloadProfile({ ...profile, publicReaderCount: 0 })).toThrow("publicReaderCount");
+    expect(() => assertC5WorkloadProfile({ ...profile, approval: { ...profile.approval, reference: " " } })).toThrow(
+      "approval reference",
+    );
+    expect(() =>
+      assertC5WorkloadProfile({ ...profile, approval: { ...profile.approval, approvedAtUtc: "today" } }),
+    ).toThrow("approval timestamp");
+  });
+
+  it("binds every C5 operation to its documented fail-closed budget", () => {
+    const withinScoreWriteBudget = summarizeWorkload([{ durationMs: 500, outcome: "success" }]);
+    expect(() => assertC5OperationBudget("score_event_acknowledgement", withinScoreWriteBudget)).not.toThrow();
+    expect(C5_WORKLOAD_BUDGETS.public_result_convergence.maxP95Ms).toBe(2_000);
+    expect(() =>
+      assertC5OperationBudget(
+        "public_current_conditional_read",
+        summarizeWorkload([{ durationMs: 501, outcome: "success" }]),
+      ),
+    ).toThrow("exceeds");
   });
 });
 

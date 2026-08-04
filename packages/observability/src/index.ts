@@ -6,3 +6,4 @@ export * from "./opentelemetry.js";
 export * from "./sanitize.js";
 export * from "./tracing.js";
 export * from "./workload.js";
+export * from "./workload-profile.js";
