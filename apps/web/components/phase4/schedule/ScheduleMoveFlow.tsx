@@ -187,7 +187,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
         return;
       }
       const query = new URLSearchParams({ match: match.id, notice: phase4ScheduleMachine.moveNotice });
-      router.replace(`/organiser/competitions/${document.competitionId}/schedule?${query.toString()}`, {
+      router.replace(`/organiser/competitions/${document.competitionRouteId}/schedule?${query.toString()}`, {
         scroll: false,
       });
     } catch {
@@ -204,7 +204,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
         {validating ? phase4ScheduleCopy.validating : error}
       </p>
       <header className={styles.topbar}>
-        <Link href={`/organiser/competitions/${document.competitionId}/schedule`}>
+        <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule`}>
           <ArrowLeft />
           {phase4ScheduleCopy.backToSchedule}
         </Link>
@@ -435,7 +435,9 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
       </ol>
 
       <footer className={styles.actions}>
-        <Link href={`/organiser/competitions/${document.competitionId}/schedule`}>{phase4ScheduleCopy.cancel}</Link>
+        <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule`}>
+          {phase4ScheduleCopy.cancel}
+        </Link>
         <button
           type="button"
           disabled={!canEdit || !displayedValidation?.valid || validating || busy}

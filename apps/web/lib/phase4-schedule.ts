@@ -241,6 +241,8 @@ export type ScheduleUnlockReceipt = Readonly<{
 
 export type ScheduleDocument = Readonly<{
   state: ScheduleSurfaceState;
+  /** The organiser route parameter; distinct from the internal API aggregate ID. */
+  competitionRouteId: string;
   competitionId: string;
   competitionName: string;
   timeZone: string;

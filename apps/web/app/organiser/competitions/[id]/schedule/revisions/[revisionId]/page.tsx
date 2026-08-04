@@ -16,6 +16,7 @@ export default async function ScheduleRevisionPage({
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase4ScheduleCopy.errorBody);
   const document = await getScheduleDocument({
+    competitionRouteId: id,
     competitionId: result.competition.id,
     competitionName: result.competition.name,
     timeZone: result.competition.timezone,

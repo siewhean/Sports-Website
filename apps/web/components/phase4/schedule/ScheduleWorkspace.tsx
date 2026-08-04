@@ -441,7 +441,7 @@ export function ScheduleWorkspace({
         </div>
         <QualityOverview option={currentOption ?? options.find((option) => option.objective === objective) ?? null} />
         <div className={styles.headerActions}>
-          <Link href={`/organiser/competitions/${document.competitionId}/schedule/compare`}>
+          <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule/compare`}>
             {phase4ScheduleCopy.compare}
           </Link>
           <button type="button" onClick={() => void publish()} disabled={!document.canPublish || disabled}>
@@ -671,7 +671,7 @@ function Timeline({
           <p>{interpolate(phase4ScheduleCopy.privateDraft, { revision: document.currentRevision?.revision ?? "—" })}</p>
           <h2 id="timeline-title">{phase4ScheduleCopy.timeline}</h2>
         </div>
-        <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions`}>
+        <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule/revisions`}>
           {phase4ScheduleCopy.revisions}
         </Link>
       </header>
@@ -863,7 +863,7 @@ function MatchInspector({
           {assignment ? (
             <Link
               className={styles.moveLink}
-              href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
+              href={`/organiser/competitions/${document.competitionRouteId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
             >
               {phase4ScheduleCopy.move}
             </Link>

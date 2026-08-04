@@ -166,6 +166,7 @@ describe("production schedule alternative loading", () => {
     );
 
     const document = await getScheduleDocument({
+      competitionRouteId: "singapore-open",
       competitionId: "competition-1",
       competitionName: "Singapore Open",
       timeZone: "Asia/Singapore",
@@ -243,6 +244,7 @@ describe("production schedule alternative loading", () => {
     vi.stubGlobal("fetch", fetchMock);
     const document = scheduleUnavailableDocument(
       {
+        competitionRouteId: "singapore-open",
         competitionId: "competition-1",
         competitionName: "Open",
         timeZone: "Asia/Singapore",
