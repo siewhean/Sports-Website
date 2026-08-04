@@ -15,7 +15,38 @@ import {
   type ActiveTraceContextAdapter,
   type ErrorReportContext,
   type SpanLike,
+  assertWorkloadBudget,
+  summarizeWorkload,
 } from "./index.js";
+
+describe("C5 workload summaries", () => {
+  it("uses deterministic nearest-rank percentiles and separates expected failures", () => {
+    const summary = summarizeWorkload([
+      { durationMs: 10, outcome: "success" },
+      { durationMs: 20, outcome: "success" },
+      { durationMs: 30, outcome: "expected_failure" },
+      { durationMs: 40, outcome: "unexpected_failure" },
+    ]);
+    expect(summary).toMatchObject({
+      sampleCount: 4,
+      successfulCount: 2,
+      expectedFailureCount: 1,
+      unexpectedFailureCount: 1,
+      errorRate: 0.25,
+      p50Ms: 20,
+      p95Ms: 40,
+      p99Ms: 40,
+      maxMs: 40,
+    });
+  });
+
+  it("fails closed for invalid samples and budget breaches", () => {
+    expect(() => summarizeWorkload([])).toThrow("at least one sample");
+    expect(() => summarizeWorkload([{ durationMs: -1, outcome: "success" }])).toThrow("non-negative");
+    const summary = summarizeWorkload([{ durationMs: 501, outcome: "unexpected_failure" }]);
+    expect(() => assertWorkloadBudget(summary, { maxP95Ms: 500, maxUnexpectedErrorRate: 0 })).toThrow("exceeds");
+  });
+});
 
 describe("structured logging and redaction", () => {
   it("redacts case-insensitive secrets at arbitrary depth without mutating input", () => {
