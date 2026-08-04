@@ -12,6 +12,15 @@ export type GateCC5ScoreWriteSession = Readonly<{
 
 export type GateCC5ScoreWriteTarget = Readonly<{ competitionId: string; matchId: string; expectedSequence: number }>;
 
+export type GateCC5ScoreWriteResource = Readonly<{
+  executor: C5WorkloadExecutor;
+  close(): Promise<void>;
+}>;
+
+export const GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS = 25 * 60;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+const RESOURCE_SETTLEMENT_TIMEOUT_MS = 1_000;
+
 export async function issueGateCC5ScoreWriteSessions(
   runtime: Phase2Runtime,
   actor: Phase2Actor,
@@ -55,16 +64,16 @@ export async function issueGateCC5ScoreWriteSessions(
   );
 }
 
-type ScoreReceipt = Readonly<{
-  client_event_id?: unknown;
-  outcome?: unknown;
-  aggregate_version?: unknown;
-  sequence?: unknown;
+type AcceptedReceipt = Readonly<{
+  client_event_id: string;
+  outcome: "accepted";
+  aggregate_version: number;
+  sequence: number;
 }>;
 
-function validAcceptedReceipt(value: unknown, clientEventId: string): boolean {
+function validAcceptedReceipt(value: unknown, clientEventId: string): value is AcceptedReceipt {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const receipt = value as ScoreReceipt;
+  const receipt = value as Readonly<Record<string, unknown>>;
   return (
     receipt.client_event_id === clientEventId &&
     receipt.outcome === "accepted" &&
@@ -74,9 +83,14 @@ function validAcceptedReceipt(value: unknown, clientEventId: string): boolean {
 }
 
 /** Creates real, session-fenced score-write traffic for the C5 local harness. */
-export function createGateCC5ScoreWriteExecutor(sessions: readonly GateCC5ScoreWriteSession[]): C5WorkloadExecutor {
+export function createGateCC5ScoreWriteExecutor(
+  sessions: readonly GateCC5ScoreWriteSession[],
+  expectedSequences = sessions.map((session) => session.expectedSequence),
+): C5WorkloadExecutor {
   if (sessions.length === 0) throw new Error("C5 score-write adapter requires an active writer session");
-  const expectedSequences = sessions.map((session) => session.expectedSequence);
+  if (expectedSequences.length !== sessions.length) {
+    throw new Error("C5 score-write adapter requires one expected sequence for every writer session");
+  }
   return async (invocation) => {
     const sessionIndex = invocation.workerIndex % sessions.length;
     const session = sessions[sessionIndex]!;
@@ -95,6 +109,9 @@ export function createGateCC5ScoreWriteExecutor(sessions: readonly GateCC5ScoreW
         expected_sequence: expectedSequence,
         type: "goal",
         team_slot: invocation.sampleIndex % 2 === 0 ? "home" : "away",
+        // Canoe Polo requires scorer attribution. This is a non-personal
+        // deterministic fixture label and is never retained in C5 evidence.
+        participant_id: "C5 workload scorer",
         segment_number: 1,
         manual_time_seconds: invocation.sampleIndex % 1_800,
         occurred_at: new Date().toISOString(),
@@ -110,5 +127,191 @@ export function createGateCC5ScoreWriteExecutor(sessions: readonly GateCC5ScoreW
       outcome: "unexpected_failure",
       correctness: { passed: false, failureCode: `score_write_http_${String(response.status)}` },
     };
+  };
+}
+
+function scoringHeaders(session: GateCC5ScoreWriteSession): HeadersInit {
+  return {
+    "content-type": "application/json",
+    "x-scoring-session-id": session.sessionId,
+    "x-scoring-session-token": session.sessionToken,
+    "x-writer-generation": String(session.writerGeneration),
+  };
+}
+
+async function appendAcceptedEvent(
+  session: GateCC5ScoreWriteSession,
+  expectedSequence: number,
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<AcceptedReceipt> {
+  const clientEventId = randomUUID();
+  const init: RequestInit = {
+    method: "POST",
+    headers: scoringHeaders(session),
+    body: JSON.stringify({ ...body, client_event_id: clientEventId, expected_sequence: expectedSequence }),
+  };
+  if (signal) init.signal = signal;
+  const response = await fetch(`${session.apiOrigin}/api/v1/scoring/events`, init);
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok || !validAcceptedReceipt(payload, clientEventId)) {
+    throw new Error(`C5 score-write warm-up was rejected with HTTP ${String(response.status)}`);
+  }
+  return {
+    client_event_id: clientEventId,
+    outcome: "accepted",
+    aggregate_version: payload.aggregate_version as number,
+    sequence: payload.sequence as number,
+  };
+}
+
+function validWriterHeartbeat(value: unknown, generation: number): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  return record.mode === "writer" && record.generation === generation && record.read_only === false;
+}
+
+async function heartbeat(
+  session: GateCC5ScoreWriteSession,
+  lastAcknowledgedSequence: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${session.apiOrigin}/api/v1/scoring/sessions/heartbeat`, {
+    method: "POST",
+    headers: scoringHeaders(session),
+    body: JSON.stringify({
+      last_acknowledged_sequence: lastAcknowledgedSequence,
+      pending_event_count: 0,
+      pending_through_sequence: lastAcknowledgedSequence,
+    }),
+    signal,
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok || !validWriterHeartbeat(payload, session.writerGeneration)) {
+    throw new Error(`C5 scoring-session heartbeat was rejected with HTTP ${String(response.status)}`);
+  }
+}
+
+async function settleResourceOperations(operations: readonly Promise<unknown>[]): Promise<void> {
+  if (operations.length === 0) return;
+  const settled = Promise.allSettled(operations).then(() => true);
+  const settledBeforeTimeout = await Promise.race([
+    settled,
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), RESOURCE_SETTLEMENT_TIMEOUT_MS)),
+  ]);
+  if (!settledBeforeTimeout) throw new Error("C5 score-write resource did not settle after shutdown");
+}
+
+/**
+ * Creates a bounded score-event workload resource. It makes an actual API
+ * `match_started` request before measured writes, renews every writer lease
+ * at most every 15 seconds, and leaves session material inside this closure.
+ */
+export async function createGateCC5ScoreWriteResource(
+  sessions: readonly GateCC5ScoreWriteSession[],
+  input: Readonly<{ durationSeconds: number; heartbeatIntervalMs?: number }>,
+): Promise<GateCC5ScoreWriteResource> {
+  if (sessions.length === 0) throw new Error("C5 score-write resource requires an active writer session");
+  if (
+    !Number.isInteger(input.durationSeconds) ||
+    input.durationSeconds < 1 ||
+    input.durationSeconds > GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS
+  ) {
+    throw new Error(
+      `C5 score-write duration must be an integer from 1 to ${String(GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS)} seconds`,
+    );
+  }
+  const heartbeatIntervalMs = input.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  if (
+    !Number.isInteger(heartbeatIntervalMs) ||
+    heartbeatIntervalMs < 1 ||
+    heartbeatIntervalMs > DEFAULT_HEARTBEAT_INTERVAL_MS
+  ) {
+    throw new Error(
+      `C5 score-write heartbeat interval must be an integer from 1 to ${String(DEFAULT_HEARTBEAT_INTERVAL_MS)}ms`,
+    );
+  }
+
+  const expectedSequences = sessions.map((session) => session.expectedSequence);
+  await Promise.all(
+    sessions.map(async (session, index) => {
+      const receipt = await appendAcceptedEvent(session, expectedSequences[index]!, {
+        type: "match_started",
+        occurred_at: new Date().toISOString(),
+        segment_number: 1,
+        manual_time_seconds: 0,
+      });
+      expectedSequences[index] = receipt.aggregate_version;
+    }),
+  );
+
+  let heartbeatFailure: unknown = null;
+  let heartbeatInFlight: Promise<void> | null = null;
+  let closed = false;
+  let expired = false;
+  const lifecycleAbortController = new AbortController();
+  const inFlightWrites = new Set<Promise<unknown>>();
+  const heartbeatAll = async () => {
+    await Promise.all(
+      sessions.map((session, index) => heartbeat(session, expectedSequences[index]!, lifecycleAbortController.signal)),
+    );
+  };
+  const runHeartbeat = () => {
+    if (closed || expired || heartbeatFailure || heartbeatInFlight) return;
+    heartbeatInFlight = heartbeatAll()
+      .catch((error: unknown) => {
+        if (!closed && !expired) heartbeatFailure = error;
+      })
+      .finally(() => {
+        heartbeatInFlight = null;
+      });
+  };
+  await heartbeatAll();
+  const timer = setInterval(runHeartbeat, heartbeatIntervalMs);
+  const expiryTimer = setTimeout(() => {
+    expired = true;
+    clearInterval(timer);
+    lifecycleAbortController.abort();
+  }, input.durationSeconds * 1_000);
+  expiryTimer.unref?.();
+  const executor = createGateCC5ScoreWriteExecutor(sessions, expectedSequences);
+  return {
+    executor: async (invocation) => {
+      if (closed) {
+        return {
+          outcome: "unexpected_failure",
+          correctness: { passed: false, failureCode: "score_session_resource_closed" },
+        };
+      }
+      if (expired) {
+        return {
+          outcome: "unexpected_failure",
+          correctness: { passed: false, failureCode: "score_session_duration_expired" },
+        };
+      }
+      if (heartbeatFailure) {
+        return {
+          outcome: "unexpected_failure",
+          correctness: { passed: false, failureCode: "score_session_heartbeat_failed" },
+        };
+      }
+      const signal = AbortSignal.any([invocation.signal, lifecycleAbortController.signal]);
+      const write = executor({ ...invocation, signal });
+      inFlightWrites.add(write);
+      try {
+        return await write;
+      } finally {
+        inFlightWrites.delete(write);
+      }
+    },
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(timer);
+      clearTimeout(expiryTimer);
+      lifecycleAbortController.abort();
+      await settleResourceOperations([...inFlightWrites, ...(heartbeatInFlight ? [heartbeatInFlight] : [])]);
+      if (heartbeatFailure) throw new Error("C5 scoring-session heartbeat failed before resource shutdown");
+    },
   };
 }

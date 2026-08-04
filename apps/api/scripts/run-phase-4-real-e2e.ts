@@ -21,6 +21,12 @@ import { PostgresIdentityUnitOfWork } from "../src/identity-postgres.js";
 import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
+import {
+  createGateCC5ScoreWriteResource,
+  GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS,
+  issueGateCC5ScoreWriteSessions,
+  type GateCC5ScoreWriteResource,
+} from "../src/gate-c-c5-score-write.js";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
@@ -145,6 +151,19 @@ export type GateCC4CompletedRunContext = Readonly<{
   apiOrigin: string;
   webOrigin: string;
   ownedRedisKeyCount(): Promise<number>;
+  /**
+   * Creates one opaque, writer-fenced executor per requested worker against
+   * untouched scheduled matches in this run's named browser aggregate. It is
+   * single-use so a harness cannot accidentally introduce competing writers.
+   * Session and pass secrets remain in this runner's closure.
+   */
+  createScoreEventExecutor(
+    input: Readonly<{
+      project: string;
+      workerCount: number;
+      durationSeconds: number;
+    }>,
+  ): Promise<GateCC5ScoreWriteResource>;
 }>;
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -1137,6 +1156,69 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     }
     const activeRedis = rateLimitRedis;
     const activeRedisOwnership = redisOwnership;
+    const activeSql = sql;
+    if (!activeSql) throw new Error("C4 completion callback requires its isolated PostgreSQL connection");
+    let scoreEventExecutorReserved = false;
+    const createScoreEventExecutor = async ({
+      project,
+      workerCount,
+      durationSeconds,
+    }: Readonly<{
+      project: string;
+      workerCount: number;
+      durationSeconds: number;
+    }>): Promise<GateCC5ScoreWriteResource> => {
+      if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 10_000) {
+        throw new Error("C5 score-event worker count must be an integer from 1 to 10000");
+      }
+      if (
+        !Number.isInteger(durationSeconds) ||
+        durationSeconds < 1 ||
+        durationSeconds > GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS
+      ) {
+        throw new Error(
+          `C5 score-event duration must be an integer from 1 to ${String(GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS)} seconds`,
+        );
+      }
+      if (scoreEventExecutorReserved)
+        throw new Error("C5 score-event executor may be created only once per isolated run");
+      // Reserve before any I/O. A failed acquisition fences the run rather
+      // than allowing a retry to create a second writer against the same C4
+      // aggregate while the first attempt is still unwinding.
+      scoreEventExecutorReserved = true;
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 score-event project is not part of this isolated run: ${project}`);
+      const candidates = await activeSql<{ id: string }[]>`
+        SELECT id
+        FROM matches
+        WHERE competition_id=${repair.competitionId}
+          AND id<>${repair.correctedMatchId}
+          AND id<>${repair.downstreamMatchId}
+          AND state IN ('pending','ready')
+          AND home_entry_id IS NOT NULL
+          AND away_entry_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM canonical_score_events event WHERE event.match_id=matches.id)
+        ORDER BY ordinal,id
+        LIMIT ${workerCount}
+      `;
+      if (candidates.length !== workerCount) {
+        throw new Error(
+          `C5 score-event fixture requires ${String(workerCount)} untouched scheduled matches; found ${String(candidates.length)}`,
+        );
+      }
+      const sessions = await issueGateCC5ScoreWriteSessions(
+        phase2,
+        { accountId: repair.accountId },
+        apiOrigin,
+        candidates.map((candidate) => ({
+          competitionId: repair.competitionId,
+          matchId: candidate.id,
+          expectedSequence: 0,
+        })),
+      );
+      const resource = await createGateCC5ScoreWriteResource(sessions, { durationSeconds });
+      return resource;
+    };
     const repairs = Object.freeze(
       Object.fromEntries(
         Object.entries(gateCC4Projects).map(([project, repair]) => [
@@ -1158,6 +1240,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       apiOrigin,
       webOrigin,
       ownedRedisKeyCount: async () => (await scanOwnedRedisKeys(activeRedis, activeRedisOwnership)).length,
+      createScoreEventExecutor,
     });
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });
