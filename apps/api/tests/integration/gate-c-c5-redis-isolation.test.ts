@@ -14,7 +14,7 @@ const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis:/
 const suffix = randomUUID();
 const ownership = createGateCC5RedisOwnership(
   `matchday-c5-${suffix}`,
-  `matchday-c5-${suffix}`,
+  "matchday-foundation",
   `matchday:test:gate-c-c5:${suffix}:`,
 );
 let redis: Redis;
