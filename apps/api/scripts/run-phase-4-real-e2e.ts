@@ -43,11 +43,18 @@ type Isolation =
   | { kind: "database"; databaseName: string; databaseUrl: string }
   | { kind: "schema"; schema: string; databaseUrl: string };
 
-type RunConfiguration = {
+export type RunConfiguration = {
   recordFile: string;
   redisDatabase: number;
   infrastructureMode: InfrastructureMode;
   sourceSha: string;
+  /**
+   * Receives the live, isolated C1-C4 aggregate after the real browser
+   * journeys and their database oracles complete. The callback is deliberately
+   * in-process: callers must not persist its session material or reuse it
+   * outside this disposable run.
+   */
+  afterGateCC4Complete?: (context: GateCC4CompletedRunContext) => Promise<void>;
 };
 
 export type InfrastructureMode = "docker" | "local";
@@ -117,6 +124,28 @@ type GateCC4BrowserJourneyResult = {
   correctedMatchId: string;
   downstreamMatchId: string;
 };
+
+/**
+ * A narrowly scoped extension point for later local gates. It is available
+ * only while `runOnce` owns an isolated database, Redis namespace, API and
+ * production web process. Nothing in this context is evidence by itself.
+ */
+export type GateCC4CompletedRepair = Readonly<{
+  competitionId: string;
+  slug: string;
+  correctionTransactionId: string;
+  correctedMatchId: string;
+  downstreamMatchId: string;
+}>;
+
+export type GateCC4CompletedRunContext = Readonly<{
+  sourceSha: string;
+  runNumber: number;
+  repairs: Readonly<Record<string, GateCC4CompletedRepair>>;
+  apiOrigin: string;
+  webOrigin: string;
+  ownedRedisKeyCount(): Promise<number>;
+}>;
 
 function safeIdentifier(value: string, prefix: string): string {
   if (!value.startsWith(prefix) || !/^[a-z][a-z0-9_]*$/.test(value))
@@ -833,6 +862,12 @@ function assertPinnedToolchain(): void {
     throw new Error(`Phase 4 real E2E requires pnpm 10.33.0; received ${packageManager || "unknown"}`);
 }
 
+export function sourceShaAtHead(): string {
+  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  if (!/^[a-f0-9]{40}$/u.test(sourceSha)) throw new Error("Phase 4 real E2E requires an exact source SHA");
+  return sourceSha;
+}
+
 async function prepareInfrastructure(mode: InfrastructureMode): Promise<void> {
   assertLocalInfrastructureUrls(adminDatabaseUrl, baseRedisUrl);
 
@@ -861,6 +896,10 @@ async function prepareInfrastructure(mode: InfrastructureMode): Promise<void> {
 }
 
 export async function runOnce(runNumber: number, configuration: RunConfiguration): Promise<void> {
+  const exactSourceSha = sourceShaAtHead();
+  if (configuration.sourceSha !== exactSourceSha) {
+    throw new Error("Phase 4 real E2E configuration source SHA does not match HEAD");
+  }
   const startedAt = new Date().toISOString();
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase4-e2e-"));
   const stateFile = path.join(temp, "state.json");
@@ -1093,6 +1132,33 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       if (!journey) throw new Error(`C4 browser journey result missing for ${projectName}`);
       await assertGateCC4DatabaseOracle(sql, journey);
     }
+    if (!rateLimitRedis || !redisOwnership) {
+      throw new Error("C4 completion callback requires the active isolated Redis namespace");
+    }
+    const activeRedis = rateLimitRedis;
+    const activeRedisOwnership = redisOwnership;
+    const repairs = Object.freeze(
+      Object.fromEntries(
+        Object.entries(gateCC4Projects).map(([project, repair]) => [
+          project,
+          Object.freeze({
+            competitionId: repair.competitionId,
+            slug: repair.slug,
+            correctionTransactionId: repair.correctionTransactionId,
+            correctedMatchId: repair.correctedMatchId,
+            downstreamMatchId: repair.downstreamMatchId,
+          } satisfies GateCC4CompletedRepair),
+        ]),
+      ),
+    );
+    await configuration.afterGateCC4Complete?.({
+      sourceSha: exactSourceSha,
+      runNumber,
+      repairs,
+      apiOrigin,
+      webOrigin,
+      ownedRedisKeyCount: async () => (await scanOwnedRedisKeys(activeRedis, activeRedisOwnership)).length,
+    });
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });
     primaryError = error;
