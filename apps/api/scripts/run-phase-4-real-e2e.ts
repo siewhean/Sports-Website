@@ -27,6 +27,8 @@ import {
   issueGateCC5ScoreWriteSessions,
   type GateCC5ScoreWriteResource,
 } from "../src/gate-c-c5-score-write.js";
+import { createGateCC5PublicCurrentExecutor } from "../src/gate-c-c5-public-current.js";
+import type { C5WorkloadExecutor } from "@matchday/observability";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
@@ -164,6 +166,7 @@ export type GateCC4CompletedRunContext = Readonly<{
       durationSeconds: number;
     }>,
   ): Promise<GateCC5ScoreWriteResource>;
+  createPublicCurrentExecutor(input: Readonly<{ project: string }>): C5WorkloadExecutor;
 }>;
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -1219,6 +1222,11 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       const resource = await createGateCC5ScoreWriteResource(sessions, { durationSeconds });
       return resource;
     };
+    const createPublicCurrentExecutor = ({ project }: Readonly<{ project: string }>): C5WorkloadExecutor => {
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 public-current project is not part of this isolated run: ${project}`);
+      return createGateCC5PublicCurrentExecutor({ apiOrigin, slug: repair.slug });
+    };
     const repairs = Object.freeze(
       Object.fromEntries(
         Object.entries(gateCC4Projects).map(([project, repair]) => [
@@ -1241,6 +1249,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       webOrigin,
       ownedRedisKeyCount: async () => (await scanOwnedRedisKeys(activeRedis, activeRedisOwnership)).length,
       createScoreEventExecutor,
+      createPublicCurrentExecutor,
     });
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });
