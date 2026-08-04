@@ -3,7 +3,6 @@ import { defineConfig, devices } from "@playwright/test";
 const isCI = Boolean(process.env.CI);
 const webServerEnvironment =
   "APP_ENV=local MATCHDAY_PHASE2_DATA_MODE=demo MATCHDAY_ALLOW_DEMO_FIXTURES=1 MATCHDAY_FEATURE_SCORING_PHASE2_ROUTE=true";
-const buildStep = isCI ? "" : `${webServerEnvironment} pnpm build && `;
 
 export default defineConfig({
   testDir: "./tests",
@@ -55,10 +54,10 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `${buildStep}(${webServerEnvironment} pnpm start --hostname 127.0.0.1 --port 3101 & next_pid=$!; trap 'kill $next_pid 2>/dev/null || true' EXIT INT TERM; node tests/helpers/https-proxy.mjs)`,
+    command: `${webServerEnvironment} MATCHDAY_PLAYWRIGHT_SKIP_BUILD=${isCI ? "1" : "0"} node tests/helpers/run-playwright-web-server.mjs`,
     url: "https://127.0.0.1:3100/setup",
     ignoreHTTPSErrors: true,
-    reuseExistingServer: !isCI,
+    reuseExistingServer: false,
     timeout: isCI ? 240_000 : 120_000,
   },
 });
