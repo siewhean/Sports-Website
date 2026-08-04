@@ -28,6 +28,7 @@ import {
   type GateCC5ScoreWriteResource,
 } from "../src/gate-c-c5-score-write.js";
 import { createGateCC5PublicCurrentExecutor } from "../src/gate-c-c5-public-current.js";
+import { createGateCC5LeaseTakeoverExecutor, type GateCC5LeaseSession } from "../src/gate-c-c5-lease-takeover.js";
 import type { C5WorkloadExecutor } from "@matchday/observability";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
@@ -167,6 +168,7 @@ export type GateCC4CompletedRunContext = Readonly<{
     }>,
   ): Promise<GateCC5ScoreWriteResource>;
   createPublicCurrentExecutor(input: Readonly<{ project: string }>): C5WorkloadExecutor;
+  createLeaseTakeoverExecutor(input: Readonly<{ project: string; workerCount: number }>): Promise<C5WorkloadExecutor>;
 }>;
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -1227,6 +1229,81 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       if (!repair) throw new Error(`C5 public-current project is not part of this isolated run: ${project}`);
       return createGateCC5PublicCurrentExecutor({ apiOrigin, slug: repair.slug });
     };
+    const createLeaseTakeoverExecutor = async ({
+      project,
+      workerCount,
+    }: Readonly<{ project: string; workerCount: number }>): Promise<C5WorkloadExecutor> => {
+      if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 10_000)
+        throw new Error("C5 lease-takeover worker count must be an integer from 1 to 10000");
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 lease-takeover project is not part of this isolated run: ${project}`);
+      const candidates = await activeSql<{ id: string }[]>`
+        SELECT id FROM matches
+        WHERE competition_id=${repair.competitionId}
+          AND id<>${repair.correctedMatchId} AND id<>${repair.downstreamMatchId}
+          AND state IN ('pending','ready') AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM canonical_score_events event WHERE event.match_id=matches.id)
+        ORDER BY ordinal,id LIMIT ${workerCount}
+      `;
+      if (candidates.length !== workerCount)
+        throw new Error(
+          `C5 lease-takeover fixture requires ${String(workerCount)} untouched matches; found ${String(candidates.length)}`,
+        );
+      const writers = await issueGateCC5ScoreWriteSessions(
+        phase2,
+        { accountId: repair.accountId },
+        apiOrigin,
+        candidates.map((candidate) => ({
+          competitionId: repair.competitionId,
+          matchId: candidate.id,
+          expectedSequence: 0,
+        })),
+      );
+      const executors = await Promise.all(
+        writers.map(async (writer, index) => {
+          const matchId = candidates[index]!.id;
+          const incumbent: GateCC5LeaseSession = {
+            sessionId: writer.sessionId,
+            sessionToken: writer.sessionToken,
+            generation: writer.writerGeneration,
+          };
+          return createGateCC5LeaseTakeoverExecutor({
+            apiOrigin,
+            webOrigin,
+            competitionId: repair.competitionId,
+            organiserCookie: repair.organiserCookie,
+            incumbent,
+            createCandidate: async () => {
+              const pass = await phase2.createAccessPass(
+                { accountId: repair.accountId },
+                repair.competitionId,
+                matchId,
+                {
+                  role: "scorekeeper",
+                  expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+                  idempotencyKey: randomUUID(),
+                },
+                randomUUID(),
+              );
+              if (!pass.token) throw new Error("C5 lease-takeover pass issuance returned no token");
+              const session = await phase2.exchangeAccess(
+                {
+                  token: pass.token,
+                  expectedMatchId: matchId,
+                  deviceId: randomUUID(),
+                  deviceLabel: "C5 takeover candidate",
+                },
+                randomUUID(),
+              );
+              if (session.mode !== "candidate" || session.generation !== null)
+                throw new Error("C5 lease-takeover exchange did not produce a read-only candidate");
+              return { sessionId: session.session_id, sessionToken: session.session_token, generation: null };
+            },
+          });
+        }),
+      );
+      return async (invocation) => executors[invocation.workerIndex % executors.length]!(invocation);
+    };
     const repairs = Object.freeze(
       Object.fromEntries(
         Object.entries(gateCC4Projects).map(([project, repair]) => [
@@ -1250,6 +1327,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       ownedRedisKeyCount: async () => (await scanOwnedRedisKeys(activeRedis, activeRedisOwnership)).length,
       createScoreEventExecutor,
       createPublicCurrentExecutor,
+      createLeaseTakeoverExecutor,
     });
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });
