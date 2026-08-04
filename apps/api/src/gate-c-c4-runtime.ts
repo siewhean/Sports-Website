@@ -21,8 +21,6 @@ import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 
-const hashPattern = /^[a-f0-9]{64}$/u;
-
 type AccessRow = {
   competition_id: string;
   organisation_id: string;
@@ -190,7 +188,10 @@ function stableJson(value: unknown): string {
   return encoded;
 }
 
-function publicationFingerprint(plan: RepairPublicationPlan, adjustments: readonly GateCRepairScheduleAdjustment[]): string {
+function publicationFingerprint(
+  plan: RepairPublicationPlan,
+  adjustments: readonly GateCRepairScheduleAdjustment[],
+): string {
   return hash(
     stableJson({
       schema_version: 1,
@@ -234,12 +235,17 @@ function validateAdjustment(
   closure: AffectedMatchClosure,
 ): GateCRepairScheduleAdjustment {
   const affected = closure.actions.filter((action) => action.matchId === adjustment.match_id);
-  if (affected.length === 0) throw new ApiError(422, "REPAIR_ADJUSTMENT_UNKNOWN_MATCH", "Adjustment match is not affected");
+  if (affected.length === 0)
+    throw new ApiError(422, "REPAIR_ADJUSTMENT_UNKNOWN_MATCH", "Adjustment match is not affected");
   if (affected.some((action) => ["protected_started_match", "protected_finalised_match"].includes(action.action))) {
     throw new ApiError(409, "REPAIR_ADJUSTMENT_PROTECTED", "Started or finalised matches cannot be rescheduled here");
   }
   if (affected.some((action) => action.divisionId !== adjustment.division_id)) {
-    throw new ApiError(422, "REPAIR_ADJUSTMENT_DIVISION_MISMATCH", "Adjustment division does not match the affected match");
+    throw new ApiError(
+      422,
+      "REPAIR_ADJUSTMENT_DIVISION_MISMATCH",
+      "Adjustment division does not match the affected match",
+    );
   }
   if (adjustment.reason.trim().length < 3) {
     throw new ApiError(422, "REPAIR_ADJUSTMENT_REASON_REQUIRED", "Schedule adjustment requires a reason");
@@ -444,7 +450,9 @@ export class GateCC4Runtime {
     plan: RepairPublicationPlan,
     decisionCommands: GateCRepairRevisionCreateRequest["decisions"],
   ): Promise<void> {
-    const explicit = new Map(decisionCommands.map((decision) => [`${decision.match_id}\u0000${decision.slot}`, decision]));
+    const explicit = new Map(
+      decisionCommands.map((decision) => [`${decision.match_id}\u0000${decision.slot}`, decision]),
+    );
     const resolution = new Map(plan.resolutions.map((item) => [`${item.matchId}\u0000${item.slot}`, item]));
 
     for (const [index, action] of closure.actions.entries()) {
@@ -558,7 +566,11 @@ export class GateCC4Runtime {
           repairCase.analysis_fingerprint !== analysis.analysisFingerprint ||
           repairCase.analysis_fingerprint_input !== analysis.closure.analysisFingerprintInput
         ) {
-          throw new ApiError(409, "REPAIR_ANALYSIS_MISMATCH", "Existing repair analysis differs from current source facts");
+          throw new ApiError(
+            409,
+            "REPAIR_ANALYSIS_MISMATCH",
+            "Existing repair analysis differs from current source facts",
+          );
         }
         return repairCase.id;
       }
@@ -659,7 +671,7 @@ export class GateCC4Runtime {
           matchId: decision.match_id,
           slot: decision.slot,
           decision: decision.decision,
-          selectedEntryId: decision.selected_entry_id,
+          ...(decision.selected_entry_id === undefined ? {} : { selectedEntryId: decision.selected_entry_id }),
           reason: decision.reason,
         })),
       );
@@ -692,23 +704,25 @@ export class GateCC4Runtime {
         "REPAIR_REVISION_CREATE_FAILED",
         "Repair revision was not created",
       );
-      await this.persistActionsAndDecisions(
+      await this.persistActionsAndDecisions(tx, actor, repairCase, revision, analysis.closure, plan, request.decisions);
+      await this.persistAdjustments(tx, actor, repairCase, revision, adjustments);
+      await this.evidence(
         tx,
         actor,
-        repairCase,
-        revision,
-        analysis.closure,
-        plan,
-        request.decisions,
+        access,
+        requestId,
+        "repair.revision_created",
+        "schedule_repair_revision",
+        revision.id,
+        null,
+        {
+          competition_id: competitionId,
+          repair_case_id: repairCase.id,
+          revision: revision.revision,
+          status: revision.status,
+          unresolved_count: plan.unresolved.length,
+        },
       );
-      await this.persistAdjustments(tx, actor, repairCase, revision, adjustments);
-      await this.evidence(tx, actor, access, requestId, "repair.revision_created", "schedule_repair_revision", revision.id, null, {
-        competition_id: competitionId,
-        repair_case_id: repairCase.id,
-        revision: revision.revision,
-        status: revision.status,
-        unresolved_count: plan.unresolved.length,
-      });
       return revision.id;
     });
 
@@ -729,7 +743,8 @@ export class GateCC4Runtime {
     request: GateCRepairPublicationRequest,
     requestId: string,
   ): Promise<GateCRepairPublicationReceipt> {
-    if (!this.publicationPort) throw new ApiError(503, "REPAIR_PUBLICATION_UNAVAILABLE", "Repair publisher is unavailable");
+    const publicationPort = this.publicationPort;
+    if (!publicationPort) throw new ApiError(503, "REPAIR_PUBLICATION_UNAVAILABLE", "Repair publisher is unavailable");
     return this.transaction(async (tx) => {
       const access = await this.access(tx, actor, request.competition_id);
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended('gate-c:repair-publication:'||$1,0))`, [
@@ -818,7 +833,7 @@ export class GateCC4Runtime {
           matchId: decision.match_id,
           slot: decision.slot,
           decision: decision.decision,
-          selectedEntryId: decision.selected_entry_id ?? undefined,
+          ...(decision.selected_entry_id === null ? {} : { selectedEntryId: decision.selected_entry_id }),
           reason: decision.reason,
         })),
       );
@@ -840,7 +855,7 @@ export class GateCC4Runtime {
       if (publicationFingerprint(plan, adjustments) !== revision.publication_fingerprint) {
         throw new ApiError(409, "REPAIR_PUBLICATION_FINGERPRINT_MISMATCH", "Retained repair decisions changed");
       }
-      const result = await this.publicationPort.publish(tx, {
+      const result = await publicationPort.publish(tx, {
         actor,
         requestId,
         competitionId: request.competition_id,
@@ -851,13 +866,24 @@ export class GateCC4Runtime {
         expectedScheduleVersion: request.expected_schedule_version,
         expectedResultVersion: request.expected_result_version,
       });
+      const [firstProjection] = result.projections;
+      if (!firstProjection) {
+        throw new ApiError(
+          409,
+          "REPAIR_PUBLIC_PROJECTION_MISSING",
+          "Repair publication did not create a public projection",
+        );
+      }
       const receipt: GateCRepairPublicationReceipt = {
         competition_id: request.competition_id,
         repair_id: repairCase.id,
         repair_revision_id: revision.id,
         schedule_version: result.scheduleVersion,
         result_version: result.resultVersion,
-        projection_version: Math.max(...result.projections.map((projection) => projection.projectionVersion)),
+        projection_version: result.projections.reduce(
+          (maximum, projection) => Math.max(maximum, projection.projectionVersion),
+          firstProjection.projectionVersion,
+        ),
         schedule_revision_id: result.scheduleRevisionId,
         analysis_fingerprint: revision.analysis_fingerprint,
         duplicate: false,
@@ -915,17 +941,13 @@ export class GateCC4Runtime {
     });
   }
 
-  async readWorkspace(
-    actor: Phase3Actor,
-    competitionId: string,
-    repairId: string,
-  ): Promise<GateCRepairWorkspaceView> {
+  async readWorkspace(actor: Phase3Actor, competitionId: string, repairId: string): Promise<GateCRepairWorkspaceView> {
     await this.access(this.sql, actor, competitionId, false);
     const repairCase = first(
-      await this.sql.unsafe<RepairCaseRow>(
-        `SELECT * FROM schedule_repair_cases WHERE id=$1 AND competition_id=$2`,
-        [repairId, competitionId],
-      ),
+      await this.sql.unsafe<RepairCaseRow>(`SELECT * FROM schedule_repair_cases WHERE id=$1 AND competition_id=$2`, [
+        repairId,
+        competitionId,
+      ]),
       "REPAIR_CASE_NOT_FOUND",
       "Repair case not found",
     );
@@ -1005,11 +1027,7 @@ export class GateCC4Runtime {
       };
     });
     const unresolved = actions
-      .filter(
-        (action) =>
-          action.decision === null &&
-          !["no_change", "automatic_update"].includes(action.source_action),
-      )
+      .filter((action) => action.decision === null && !["no_change", "automatic_update"].includes(action.source_action))
       .map((action) => `${action.match_id}:${action.slot}`);
     const publication = first(
       await this.sql.unsafe<{ schedule_version: number; result_version: number }>(

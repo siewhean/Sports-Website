@@ -219,6 +219,16 @@ function isMachineLiteral(node, source) {
   const value = node.text;
   if (!/[\p{L}\p{N}]/u.test(value) || /^\s*$/.test(value)) return true;
   if (value === "use client" || value === "use server") return true;
+  // Route-segment configuration is parsed statically by Next.js and cannot be
+  // moved behind a catalogue or a runtime machine constant.
+  if (
+    value === "force-dynamic" &&
+    ts.isVariableDeclaration(node.parent) &&
+    node.parent.initializer === node &&
+    node.parent.name.getText(source) === "dynamic"
+  ) {
+    return true;
+  }
   if (ts.isPropertyAssignment(node.parent) && node.parent.name === node) return true;
   if (
     ts.isPropertyAssignment(node.parent) &&
@@ -516,6 +526,7 @@ function runSelfTest(catalogue) {
     ],
     ["HTTP mutation method", 'sendMutation("PATCH", body)', false],
     ["visible HTTP-looking text", "export const A=()=> <button>PUT</button>", true],
+    ["Next static dynamic config", 'export const dynamic = "force-dynamic"', false],
   ];
 
   const failures = cases.filter(([name, sourceText, shouldFail]) => {

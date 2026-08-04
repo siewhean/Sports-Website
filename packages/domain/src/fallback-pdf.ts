@@ -1,8 +1,9 @@
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { assertPublicProjectionPrivacy } from "./public-truth.js";
 import type { EmergencyScoreSheet, ScheduleFallbackDocument, ScoreSheetSection } from "./fallback-exports.js";
 
-const pageWidth = 595;
-const pageHeight = 842;
+const pageWidth = 595.28;
+const pageHeight = 841.89;
 const margin = 40;
 const lineHeight = 14;
 const bottomMargin = 46;
@@ -24,10 +25,6 @@ function ascii(value: string): string {
     .trim();
 }
 
-function pdfEscape(value: string): string {
-  return ascii(value).replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
-}
-
 function wrap(value: string, maximumCharacters: number): string[] {
   const words = ascii(value).split(" ").filter(Boolean);
   if (words.length === 0) return [""];
@@ -35,10 +32,8 @@ function wrap(value: string, maximumCharacters: number): string[] {
   let current = "";
   for (const word of words) {
     if (word.length > maximumCharacters) {
-      if (current) {
-        lines.push(current);
-        current = "";
-      }
+      if (current) lines.push(current);
+      current = "";
       for (let index = 0; index < word.length; index += maximumCharacters) {
         lines.push(word.slice(index, index + maximumCharacters));
       }
@@ -56,11 +51,8 @@ function wrap(value: string, maximumCharacters: number): string[] {
   return lines;
 }
 
-function textOperation(line: PdfLine, y: number): string {
-  const size = line.size ?? 10;
-  const x = margin + (line.indent ?? 0);
-  const font = line.bold ? "F2" : "F1";
-  return `BT /${font} ${size} Tf 0 g ${x} ${y} Td (${pdfEscape(line.text)}) Tj ET\n`;
+function lineHeightFor(line: PdfLine): number {
+  return Math.max(lineHeight, (line.size ?? 10) + 4);
 }
 
 function pagination(lines: readonly PdfLine[]): PdfLine[][] {
@@ -68,8 +60,7 @@ function pagination(lines: readonly PdfLine[]): PdfLine[][] {
   let page: PdfLine[] = [];
   let y = pageHeight - margin;
   for (const line of lines) {
-    const gap = line.gapBefore ?? 0;
-    const height = Math.max(lineHeight, (line.size ?? 10) + 4) + gap;
+    const height = lineHeightFor(line) + (line.gapBefore ?? 0);
     if (page.length > 0 && y - height < bottomMargin) {
       pages.push(page);
       page = [];
@@ -82,87 +73,55 @@ function pagination(lines: readonly PdfLine[]): PdfLine[][] {
   return pages;
 }
 
-function pageStream(lines: readonly PdfLine[], pageNumber: number, pageCount: number): string {
+function drawPage(
+  page: PDFPage,
+  lines: readonly PdfLine[],
+  pageNumber: number,
+  pageCount: number,
+  regular: PDFFont,
+  bold: PDFFont,
+): void {
   let y = pageHeight - margin;
-  let stream = "";
   for (const line of lines) {
     y -= line.gapBefore ?? 0;
-    stream += textOperation(line, y);
-    y -= Math.max(lineHeight, (line.size ?? 10) + 4);
+    page.drawText(ascii(line.text), {
+      x: margin + (line.indent ?? 0),
+      y,
+      size: line.size ?? 10,
+      font: line.bold ? bold : regular,
+      color: rgb(0, 0, 0),
+    });
+    y -= lineHeightFor(line);
   }
-  stream += textOperation({ text: `Page ${pageNumber} of ${pageCount}`, size: 8 }, 26);
-  return stream;
-}
-
-function pdf(objects: readonly string[]): Uint8Array {
-  const encoder = new TextEncoder();
-  const header = "%PDF-1.4\n%MATCHDAY\n";
-  const chunks: Uint8Array[] = [encoder.encode(header)];
-  const offsets = [0];
-  let offset = chunks[0]!.byteLength;
-
-  objects.forEach((object, index) => {
-    offsets.push(offset);
-    const chunk = encoder.encode(`${index + 1} 0 obj\n${object}\nendobj\n`);
-    chunks.push(chunk);
-    offset += chunk.byteLength;
+  page.drawText(`Page ${pageNumber} of ${pageCount}`, {
+    x: margin,
+    y: 26,
+    size: 8,
+    font: regular,
+    color: rgb(0, 0, 0),
   });
-
-  const xrefOffset = offset;
-  const xref = ["xref", `0 ${objects.length + 1}`, "0000000000 65535 f "];
-  for (let index = 1; index <= objects.length; index += 1) {
-    xref.push(`${String(offsets[index]).padStart(10, "0")} 00000 n `);
-  }
-  xref.push(
-    "trailer",
-    `<< /Size ${objects.length + 1} /Root 1 0 R >>`,
-    "startxref",
-    String(xrefOffset),
-    "%%EOF",
-    "",
-  );
-  chunks.push(encoder.encode(xref.join("\n")));
-
-  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  const output = new Uint8Array(total);
-  let cursor = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, cursor);
-    cursor += chunk.byteLength;
-  }
-  return output;
 }
 
-function render(lines: readonly PdfLine[]): Uint8Array {
+async function render(lines: readonly PdfLine[], title: string, generatedAt: string): Promise<Uint8Array> {
+  const document = await PDFDocument.create();
+  const regular = await document.embedFont(StandardFonts.Helvetica);
+  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  const generated = new Date(generatedAt);
+  document.setTitle(ascii(title));
+  document.setAuthor("Matchday");
+  document.setCreator("Matchday fallback document renderer");
+  document.setProducer("Matchday fallback document renderer");
+  document.setCreationDate(generated);
+  document.setModificationDate(generated);
+
   const pages = pagination(lines);
-  const objects: string[] = [];
-  const pageObjectIds: number[] = [];
-  const contentObjectIds: number[] = [];
-  const fixedObjectCount = 4;
-  for (let index = 0; index < pages.length; index += 1) {
-    pageObjectIds.push(fixedObjectCount + index * 2 + 1);
-    contentObjectIds.push(fixedObjectCount + index * 2 + 2);
-  }
-
-  objects.push("<< /Type /Catalog /Pages 2 0 R >>");
-  objects.push(`<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>`);
-  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
-
   pages.forEach((pageLines, index) => {
-    const stream = pageStream(pageLines, index + 1, pages.length);
-    const length = new TextEncoder().encode(stream).byteLength;
-    objects.push(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjectIds[index]} 0 R >>`,
-    );
-    objects.push(`<< /Length ${length} >>\nstream\n${stream}endstream`);
+    drawPage(document.addPage([pageWidth, pageHeight]), pageLines, index + 1, pages.length, regular, bold);
   });
-
-  return pdf(objects);
+  return document.save({ addDefaultPage: false, useObjectStreams: false, updateFieldAppearances: false });
 }
 
 function metadataLines(input: {
-  competitionName: string;
   sport: string;
   timezone: string;
   scheduleVersion: number;
@@ -180,7 +139,7 @@ function metadataLines(input: {
   ];
 }
 
-export function renderScheduleFallbackPdf(document: ScheduleFallbackDocument): Uint8Array {
+export async function renderScheduleFallbackPdf(document: ScheduleFallbackDocument): Promise<Uint8Array> {
   assertPublicProjectionPrivacy(document);
   const lines: PdfLine[] = [
     { text: document.competitionName, size: 19, bold: true },
@@ -200,8 +159,7 @@ export function renderScheduleFallbackPdf(document: ScheduleFallbackDocument): U
       }
     }
   }
-
-  return render(lines);
+  return render(lines, document.competitionName, document.generatedAt);
 }
 
 function scoreSheetRows(section: ScoreSheetSection): PdfLine[] {
@@ -211,12 +169,15 @@ function scoreSheetRows(section: ScoreSheetSection): PdfLine[] {
   ];
   const count = section.repeatable ? 5 : 2;
   for (let index = 0; index < count; index += 1) {
-    rows.push({ text: `${String(index + 1).padStart(2, "0")}  ${section.columns.map(() => "________________").join(" | ")}`, size: 8 });
+    rows.push({
+      text: `${String(index + 1).padStart(2, "0")}  ${section.columns.map(() => "________________").join(" | ")}`,
+      size: 8,
+    });
   }
   return rows;
 }
 
-export function renderEmergencyScoreSheetPdf(sheet: EmergencyScoreSheet): Uint8Array {
+export async function renderEmergencyScoreSheetPdf(sheet: EmergencyScoreSheet): Promise<Uint8Array> {
   assertPublicProjectionPrivacy(sheet);
   const match = sheet.match;
   const lines: PdfLine[] = [
@@ -228,7 +189,6 @@ export function renderEmergencyScoreSheetPdf(sheet: EmergencyScoreSheet): Uint8A
     { text: `${match.home.displayName || "TBD"} vs ${match.away.displayName || "TBD"}`, size: 16, bold: true },
     { text: `${match.startsAt} - ${match.endsAt} | ${match.playingArea}`, size: 9 },
   ];
-
   for (const section of sheet.sections) lines.push(...scoreSheetRows(section));
-  return render(lines);
+  return render(lines, `${sheet.competitionName} score sheet`, sheet.generatedAt);
 }

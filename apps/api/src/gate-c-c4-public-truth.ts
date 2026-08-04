@@ -2,13 +2,16 @@ import { Type, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance } from "fastify";
 import { assertPublicProjectionPrivacy } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
-import { buildGateCPublicHttpContract, gateCPublicConditionalStatus } from "./gate-c-public-http.js";
+import type { PublicProjectionFreshness } from "@matchday/contracts";
+import { gateCC4PublicConditionalStatus, gateCC4PublicHeaders } from "./gate-c-public-http.js";
 
 type PublicTruthRow = {
   payload: Record<string, unknown> | string;
   schedule_version: number;
   result_version: number;
   projection_version: number;
+  division_id: string;
+  etag: string;
   generated_at: Date | string;
   source_updated_at: Date | string;
 };
@@ -31,15 +34,17 @@ export class GateCC4PublicTruthRuntime {
   async read(slug: string): Promise<{
     payload: Record<string, unknown>;
     headers: Record<string, string>;
+    freshness: PublicProjectionFreshness;
   } | null> {
     const row = (
       await this.sql.unsafe<PublicTruthRow>(
-        `SELECT projection.payload,publication.schedule_version,publication.result_version,
-                projection.projection_version,projection.generated_at,projection.source_updated_at
+        `SELECT projection.projection AS payload,publication.schedule_version,publication.result_version,
+                projection.projection_version,projection.division_id,projection.etag,
+                projection.generated_at,projection.source_updated_at
          FROM competitions competition
          JOIN competition_publications publication ON publication.competition_id=competition.id
          JOIN LATERAL (
-           SELECT payload,projection_version,generated_at,source_updated_at
+           SELECT projection AS payload,projection_version,division_id,etag,generated_at,source_updated_at
            FROM public_projection_versions
            WHERE competition_id=competition.id
              AND schedule_version=publication.schedule_version
@@ -53,12 +58,14 @@ export class GateCC4PublicTruthRuntime {
       )
     )[0];
     if (!row) return null;
-    const freshness = {
+    const freshness: PublicProjectionFreshness = {
+      division_id: row.division_id,
       schedule_version: row.schedule_version,
       result_version: row.result_version,
       projection_version: row.projection_version,
       generated_at: instant(row.generated_at),
       source_updated_at: instant(row.source_updated_at),
+      etag: row.etag,
     };
     const source = json(row.payload);
     const divisions = Array.isArray(source.divisions)
@@ -76,25 +83,11 @@ export class GateCC4PublicTruthRuntime {
       last_updated_at: freshness.source_updated_at,
     };
     assertPublicProjectionPrivacy(payload);
-    const contract = buildGateCPublicHttpContract({
-      competitionId:
-        payload.competition && typeof payload.competition === "object" && !Array.isArray(payload.competition)
-          ? String((payload.competition as Record<string, unknown>).id ?? "")
-          : "",
-      scheduleVersion: row.schedule_version,
-      resultVersion: row.result_version,
-      projectionVersion: row.projection_version,
-      generatedAt: freshness.generated_at,
-      sourceUpdatedAt: freshness.source_updated_at,
-    });
-    return { payload, headers: contract.headers };
+    return { payload, headers: gateCC4PublicHeaders(freshness), freshness };
   }
 }
 
-export async function registerGateCC4PublicTruthRoutes(
-  app: FastifyInstance,
-  runtime: GateCC4PublicTruthRuntime,
-) {
+export async function registerGateCC4PublicTruthRoutes(app: FastifyInstance, runtime: GateCC4PublicTruthRuntime) {
   app.get<{ Params: { slug: string }; Headers: { "if-none-match"?: string; "if-modified-since"?: string } }>(
     "/api/v1/public/competitions/:slug/current",
     {
@@ -114,13 +107,12 @@ export async function registerGateCC4PublicTruthRoutes(
     async (request, reply) => {
       const result = await runtime.read(request.params.slug);
       if (!result) {
-        return reply.code(404).send({ error: { code: "PUBLIC_COMPETITION_NOT_FOUND", message: "Competition not found" } });
+        return reply
+          .code(404)
+          .send({ error: { code: "PUBLIC_COMPETITION_NOT_FOUND", message: "Competition not found" } });
       }
       for (const [name, value] of Object.entries(result.headers)) reply.header(name, value);
-      const status = gateCPublicConditionalStatus(
-        { ifNoneMatch: request.headers["if-none-match"], ifModifiedSince: request.headers["if-modified-since"] },
-        result.headers,
-      );
+      const status = gateCC4PublicConditionalStatus(result.freshness, request.headers);
       if (status === 304) return reply.code(304).send();
       return result.payload;
     },

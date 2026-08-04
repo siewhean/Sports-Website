@@ -57,7 +57,12 @@ function etagMatches(headerValue: string, currentEtag: string): boolean {
   return headerValue
     .split(",")
     .map((value) => value.trim())
-    .some((candidate) => candidate === "*" || candidate === currentEtag || candidate.replace(/^W\//u, "") === currentEtag.replace(/^W\//u, ""));
+    .some(
+      (candidate) =>
+        candidate === "*" ||
+        candidate === currentEtag ||
+        candidate.replace(/^W\//u, "") === currentEtag.replace(/^W\//u, ""),
+    );
 }
 
 export function gateCC4PublicConditionalStatus(

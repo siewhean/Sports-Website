@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { GateCRepairActionView, GateCRepairWorkspaceView } from "@matchday/contracts";
 import {
   gateCC4Copy,
@@ -8,6 +8,7 @@ import {
   parseGateCC4RepairQueue,
   parseGateCC4Workspace,
   repairRevisionRequest,
+  type GateCC4DecisionValue,
   type GateCC4DecisionDraft,
   type GateCC4RepairQueueItem,
 } from "@/lib/gate-c-c4";
@@ -15,7 +16,7 @@ import { parseGateCC4References, type GateCC4ReferenceData } from "@/lib/gate-c-
 import { isGateCC4PublicationReceipt, isGateCC4RevisionResponse } from "@/lib/gate-c-c4-validators";
 import styles from "./RepairWorkspace.module.css";
 
-type DecisionValue = "" | "accept_proposed" | "keep_current" | "set_manual_entry" | "leave_protected";
+type DecisionValue = "" | GateCC4DecisionValue;
 
 type ActionDraft = {
   clientEventId: string;
@@ -31,6 +32,10 @@ type MatchOption = Readonly<{ id: string; label: string; home: string; away: str
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isWorkspaceOpenEvent(event: Event): event is CustomEvent<unknown> {
+  return event instanceof CustomEvent;
 }
 
 function upstreamMessage(payload: unknown): string {
@@ -52,7 +57,7 @@ function localDateTime(value: string | null | undefined): string {
 }
 
 function actionNeedsDecision(action: GateCRepairActionView): boolean {
-  return !["no_change", "automatic_update"].includes(action.source_action);
+  return action.source_action !== gateCC4Machine.noChange && action.source_action !== gateCC4Machine.automaticUpdate;
 }
 
 function defaultDraft(action: GateCRepairActionView): ActionDraft {
@@ -69,8 +74,8 @@ function defaultDraft(action: GateCRepairActionView): ActionDraft {
 
 async function downloadVerifiedPdf(response: Response): Promise<void> {
   if (!response.ok) throw new Error(upstreamMessage(await response.json().catch(() => null)));
-  const expectedHash = response.headers.get("x-matchday-content-sha256");
-  const disposition = response.headers.get("content-disposition") ?? "";
+  const expectedHash = response.headers.get(gateCC4Machine.contentSha256Header);
+  const disposition = response.headers.get(gateCC4Machine.contentDispositionHeader) ?? "";
   const filename = /^attachment; filename="([A-Za-z0-9][A-Za-z0-9._-]{0,180}\.pdf)"$/u.exec(disposition)?.[1];
   if (!expectedHash || !/^[a-f0-9]{64}$/u.test(expectedHash) || !filename) {
     throw new Error(gateCC4Copy.failed);
@@ -81,7 +86,7 @@ async function downloadVerifiedPdf(response: Response): Promise<void> {
   if (actualHash !== expectedHash) throw new Error(gateCC4Copy.failed);
   const url = URL.createObjectURL(blob);
   try {
-    const anchor = document.createElement("a");
+    const anchor = document.createElement(gateCC4Machine.anchorElement);
     anchor.href = url;
     anchor.download = filename;
     anchor.rel = "noopener";
@@ -108,12 +113,13 @@ export function RepairWorkspace({
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const loadWorkspace = useCallback(
     async (repairId: string) => {
       const response = await fetch(
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(repairId)}`,
-        { cache: "no-store" },
+        { cache: gateCC4Machine.cacheNoStore },
       );
       const payload: unknown = await response.json().catch(() => null);
       const parsed = response.ok ? parseGateCC4Workspace(payload) : null;
@@ -129,8 +135,12 @@ export function RepairWorkspace({
     setError("");
     try {
       const [queueResponse, referencesResponse] = await Promise.all([
-        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, { cache: "no-store" }),
-        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/references`, { cache: "no-store" }),
+        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, {
+          cache: gateCC4Machine.cacheNoStore,
+        }),
+        fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/references`, {
+          cache: gateCC4Machine.cacheNoStore,
+        }),
       ]);
       const [queuePayload, referencesPayload]: [unknown, unknown] = await Promise.all([
         queueResponse.json().catch(() => null),
@@ -151,16 +161,46 @@ export function RepairWorkspace({
     }
   }, [competitionId, loadWorkspace]);
 
+  const openWorkspace = useCallback(
+    async (repairId: string) => {
+      setLoading(true);
+      setError("");
+      try {
+        await loadWorkspace(repairId);
+        requestAnimationFrame(() => workspaceHeadingRef.current?.focus());
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : gateCC4Copy.failed);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadWorkspace],
+  );
+
   useEffect(() => {
-    void refresh();
+    const timer = window.setTimeout(() => void refresh());
+    return () => window.clearTimeout(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    const handleOpenWorkspace = (event: Event) => {
+      if (!isWorkspaceOpenEvent(event) || !record(event.detail) || typeof event.detail.repairId !== "string") return;
+      void openWorkspace(event.detail.repairId);
+    };
+    window.addEventListener(gateCC4Machine.openWorkspaceEvent, handleOpenWorkspace);
+    return () => window.removeEventListener(gateCC4Machine.openWorkspaceEvent, handleOpenWorkspace);
+  }, [openWorkspace]);
 
   const unresolved = useMemo(
     () =>
       workspace?.actions.filter((action) => {
         if (!actionNeedsDecision(action)) return false;
         const draft = drafts[action.repair_action_id];
-        return !draft?.decision || draft.reason.trim().length < 3 || (draft.decision === "set_manual_entry" && !draft.selectedEntryId);
+        return (
+          !draft?.decision ||
+          draft.reason.trim().length < 3 ||
+          (draft.decision === "set_manual_entry" && !draft.selectedEntryId)
+        );
       }) ?? [],
     [drafts, workspace],
   );
@@ -168,7 +208,18 @@ export function RepairWorkspace({
   function updateDraft(actionId: string, patch: Partial<ActionDraft>) {
     setDrafts((current) => ({
       ...current,
-      [actionId]: { ...(current[actionId] ?? { clientEventId: crypto.randomUUID(), decision: "", selectedEntryId: "", reason: "", startsAt: "", endsAt: "", playingAreaId: "" }), ...patch },
+      [actionId]: {
+        ...(current[actionId] ?? {
+          clientEventId: crypto.randomUUID(),
+          decision: "",
+          selectedEntryId: "",
+          reason: "",
+          startsAt: "",
+          endsAt: "",
+          playingAreaId: "",
+        }),
+        ...patch,
+      },
     }));
     setMessage("");
     setError("");
@@ -177,13 +228,13 @@ export function RepairWorkspace({
   async function analyse(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || !correctionId) return;
-    setBusy("analyse");
+    setBusy(gateCC4Machine.analyse);
     setError("");
     setMessage("");
     try {
       const response = await fetch(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs`, {
         method: gateCC4Machine.post,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": gateCC4Machine.jsonContentType },
         body: JSON.stringify({ correction_transaction_id: correctionId }),
       });
       const payload: unknown = await response.json().catch(() => null);
@@ -228,7 +279,7 @@ export function RepairWorkspace({
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(workspace.repair.repair_id)}/revisions`,
         {
           method: gateCC4Machine.post,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": gateCC4Machine.jsonContentType },
           body: JSON.stringify(request),
         },
       );
@@ -245,7 +296,7 @@ export function RepairWorkspace({
 
   async function publish() {
     if (!workspace?.latest_revision || !workspace.publication_ready || busy) return;
-    setBusy("publish");
+    setBusy(gateCC4Machine.publish);
     setError("");
     setMessage("");
     try {
@@ -254,7 +305,7 @@ export function RepairWorkspace({
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(workspace.repair.repair_id)}/revisions/${encodeURIComponent(revision.repair_revision_id)}/publish`,
         {
           method: gateCC4Machine.post,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": gateCC4Machine.jsonContentType },
           body: JSON.stringify({
             competition_id: competitionId,
             repair_id: workspace.repair.repair_id,
@@ -279,7 +330,7 @@ export function RepairWorkspace({
 
   async function abandon() {
     if (!workspace?.latest_revision || abandonReason.trim().length < 3 || busy) return;
-    setBusy("abandon");
+    setBusy(gateCC4Machine.abandon);
     setError("");
     setMessage("");
     try {
@@ -287,7 +338,7 @@ export function RepairWorkspace({
         `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(workspace.repair.repair_id)}/abandon`,
         {
           method: gateCC4Machine.post,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": gateCC4Machine.jsonContentType },
           body: JSON.stringify({ expected_revision: workspace.latest_revision.revision, reason: abandonReason.trim() }),
         },
       );
@@ -323,11 +374,17 @@ export function RepairWorkspace({
       <p className={styles.live} aria-live="polite" aria-atomic="true">
         {message}
       </p>
-      {error ? <p className={styles.error} role="alert">{error}</p> : null}
+      {error ? (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
 
       <section className={styles.toolbar} aria-labelledby="repair-analysis-title">
         <div>
-          <h2 id="repair-analysis-title">{gateCC4Copy.analyseTitle}</h2>
+          <h2 id="repair-analysis-title" ref={workspaceHeadingRef} tabIndex={-1}>
+            {gateCC4Copy.analyseTitle}
+          </h2>
           <p>{gateCC4Copy.analyseBody}</p>
         </div>
         <form onSubmit={(event) => void analyse(event)}>
@@ -340,7 +397,7 @@ export function RepairWorkspace({
             onChange={(event) => setCorrectionId(event.currentTarget.value)}
           />
           <button type="submit" disabled={Boolean(busy) || !correctionId}>
-            {busy === "analyse" ? gateCC4Copy.analysing : gateCC4Copy.analyse}
+            {busy === gateCC4Machine.analyse ? gateCC4Copy.analysing : gateCC4Copy.analyse}
           </button>
         </form>
         <button type="button" disabled={loading || Boolean(busy)} onClick={() => void refresh()}>
@@ -362,7 +419,8 @@ export function RepairWorkspace({
                     <strong>{item.corrected_match_code}</strong>
                     <span>{item.division_name}</span>
                     <small>
-                      {item.affected_action_count} {gateCC4Copy.affected} · {item.unresolved_action_count} {gateCC4Copy.unresolved}
+                      {item.affected_action_count} {gateCC4Copy.affected} · {item.unresolved_action_count}{" "}
+                      {gateCC4Copy.unresolved}
                     </small>
                     <em>{item.latest_status ? title(item.latest_status) : gateCC4Copy.required}</em>
                   </button>
@@ -386,9 +444,18 @@ export function RepairWorkspace({
                   <h2>{workspace.repair.corrected_match_id}</h2>
                 </div>
                 <dl>
-                  <div><dt>{gateCC4Copy.resultVersion}</dt><dd>{workspace.current_result_version}</dd></div>
-                  <div><dt>{gateCC4Copy.scheduleVersion}</dt><dd>{workspace.published_schedule_version}</dd></div>
-                  <div><dt>{gateCC4Copy.unresolved}</dt><dd>{unresolved.length}</dd></div>
+                  <div>
+                    <dt>{gateCC4Copy.resultVersion}</dt>
+                    <dd>{workspace.current_result_version}</dd>
+                  </div>
+                  <div>
+                    <dt>{gateCC4Copy.scheduleVersion}</dt>
+                    <dd>{workspace.published_schedule_version}</dd>
+                  </div>
+                  <div>
+                    <dt>{gateCC4Copy.unresolved}</dt>
+                    <dd>{unresolved.length}</dd>
+                  </div>
                 </dl>
                 <strong data-ready={workspace.publication_ready}>
                   {workspace.publication_ready ? gateCC4Copy.publicationReady : gateCC4Copy.publicationNotReady}
@@ -399,20 +466,29 @@ export function RepairWorkspace({
                 {workspace.actions.map((action, index) => {
                   const draft = drafts[action.repair_action_id] ?? defaultDraft(action);
                   const needsDecision = actionNeedsDecision(action);
-                  const firstForMatch = workspace.actions.findIndex((candidate) => candidate.match_id === action.match_id) === index;
+                  const firstForMatch =
+                    workspace.actions.findIndex((candidate) => candidate.match_id === action.match_id) === index;
                   const entries = references.entries.filter((entry) => entry.division_id === action.division_id);
                   return (
                     <section key={action.repair_action_id} className={styles.action} data-protected={needsDecision}>
                       <header>
                         <div>
                           <p>{title(action.source_action)}</p>
-                          <h3>{action.match_id} · {title(action.slot)}</h3>
+                          <h3>
+                            {action.match_id} · {title(action.slot)}
+                          </h3>
                         </div>
                         <span>{needsDecision ? gateCC4Copy.protected : gateCC4Copy.automatic}</span>
                       </header>
                       <dl>
-                        <div><dt>{gateCC4Copy.currentEntry}</dt><dd>{action.current_entry_name ?? "—"}</dd></div>
-                        <div><dt>{gateCC4Copy.proposedEntry}</dt><dd>{action.proposed_entry_name ?? "—"}</dd></div>
+                        <div>
+                          <dt>{gateCC4Copy.currentEntry}</dt>
+                          <dd>{action.current_entry_name ?? "—"}</dd>
+                        </div>
+                        <div>
+                          <dt>{gateCC4Copy.proposedEntry}</dt>
+                          <dd>{action.proposed_entry_name ?? "—"}</dd>
+                        </div>
                       </dl>
                       <p className={styles.reason}>{action.reason}</p>
                       <details>
@@ -420,7 +496,8 @@ export function RepairWorkspace({
                         <ol>
                           {action.dependency_path.map((step, stepIndex) => (
                             <li key={`${step.source_match_id}-${step.downstream_match_id}-${stepIndex}`}>
-                              {step.source_match_id} → {step.downstream_match_id} · {title(step.outcome)} · {title(step.slot)}
+                              {step.source_match_id} → {step.downstream_match_id} · {title(step.outcome)} ·{" "}
+                              {title(step.slot)}
                             </li>
                           ))}
                         </ol>
@@ -433,10 +510,16 @@ export function RepairWorkspace({
                             <select
                               value={draft.decision}
                               required
-                              onChange={(event) => updateDraft(action.repair_action_id, { decision: event.currentTarget.value as DecisionValue })}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, {
+                                  decision: event.currentTarget.value as DecisionValue,
+                                })
+                              }
                             >
                               <option value="">—</option>
-                              {action.proposed_entry_id ? <option value="accept_proposed">{gateCC4Copy.acceptProposed}</option> : null}
+                              {action.proposed_entry_id ? (
+                                <option value="accept_proposed">{gateCC4Copy.acceptProposed}</option>
+                              ) : null}
                               <option value="keep_current">{gateCC4Copy.keepCurrent}</option>
                               <option value="set_manual_entry">{gateCC4Copy.setManual}</option>
                               <option value="leave_protected">{gateCC4Copy.leaveProtected}</option>
@@ -448,10 +531,16 @@ export function RepairWorkspace({
                               <select
                                 value={draft.selectedEntryId}
                                 required
-                                onChange={(event) => updateDraft(action.repair_action_id, { selectedEntryId: event.currentTarget.value })}
+                                onChange={(event) =>
+                                  updateDraft(action.repair_action_id, { selectedEntryId: event.currentTarget.value })
+                                }
                               >
                                 <option value="">—</option>
-                                {entries.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+                                {entries.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>
+                                    {entry.name}
+                                  </option>
+                                ))}
                               </select>
                             </label>
                           ) : null}
@@ -461,7 +550,9 @@ export function RepairWorkspace({
                               value={draft.reason}
                               required
                               minLength={3}
-                              onChange={(event) => updateDraft(action.repair_action_id, { reason: event.currentTarget.value })}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { reason: event.currentTarget.value })
+                              }
                             />
                           </label>
                         </div>
@@ -470,13 +561,40 @@ export function RepairWorkspace({
                       {firstForMatch ? (
                         <fieldset className={styles.adjustments}>
                           <legend>{gateCC4Copy.unchanged}</legend>
-                          <label><span>{gateCC4Copy.startsAt}</span><input type="datetime-local" value={draft.startsAt} onChange={(event) => updateDraft(action.repair_action_id, { startsAt: event.currentTarget.value })} /></label>
-                          <label><span>{gateCC4Copy.endsAt}</span><input type="datetime-local" value={draft.endsAt} onChange={(event) => updateDraft(action.repair_action_id, { endsAt: event.currentTarget.value })} /></label>
+                          <label>
+                            <span>{gateCC4Copy.startsAt}</span>
+                            <input
+                              type="datetime-local"
+                              value={draft.startsAt}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { startsAt: event.currentTarget.value })
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>{gateCC4Copy.endsAt}</span>
+                            <input
+                              type="datetime-local"
+                              value={draft.endsAt}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { endsAt: event.currentTarget.value })
+                              }
+                            />
+                          </label>
                           <label>
                             <span>{gateCC4Copy.playingArea}</span>
-                            <select value={draft.playingAreaId} onChange={(event) => updateDraft(action.repair_action_id, { playingAreaId: event.currentTarget.value })}>
+                            <select
+                              value={draft.playingAreaId}
+                              onChange={(event) =>
+                                updateDraft(action.repair_action_id, { playingAreaId: event.currentTarget.value })
+                              }
+                            >
                               <option value="">—</option>
-                              {references.playing_areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+                              {references.playing_areas.map((area) => (
+                                <option key={area.id} value={area.id}>
+                                  {area.name}
+                                </option>
+                              ))}
                             </select>
                           </label>
                         </fieldset>
@@ -489,22 +607,42 @@ export function RepairWorkspace({
               <section className={styles.commands}>
                 {unresolved.length ? <p role="status">{gateCC4Copy.publishBlocked}</p> : null}
                 <div>
-                  <button type="button" disabled={Boolean(busy)} onClick={() => void saveRevision("draft")}>
-                    {busy === "draft" ? gateCC4Copy.saving : gateCC4Copy.saveDraft}
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void saveRevision(gateCC4Machine.draft)}
+                  >
+                    {busy === gateCC4Machine.draft ? gateCC4Copy.saving : gateCC4Copy.saveDraft}
                   </button>
-                  <button type="button" disabled={Boolean(busy) || unresolved.length > 0} onClick={() => void saveRevision("ready")}>
-                    {busy === "ready" ? gateCC4Copy.saving : gateCC4Copy.markReady}
+                  <button
+                    type="button"
+                    disabled={Boolean(busy) || unresolved.length > 0}
+                    onClick={() => void saveRevision(gateCC4Machine.ready)}
+                  >
+                    {busy === gateCC4Machine.ready ? gateCC4Copy.saving : gateCC4Copy.markReady}
                   </button>
-                  <button type="button" disabled={Boolean(busy) || !workspace.publication_ready} onClick={() => void publish()}>
-                    {busy === "publish" ? gateCC4Copy.publishing : gateCC4Copy.publish}
+                  <button
+                    type="button"
+                    disabled={Boolean(busy) || !workspace.publication_ready}
+                    onClick={() => void publish()}
+                  >
+                    {busy === gateCC4Machine.publish ? gateCC4Copy.publishing : gateCC4Copy.publish}
                   </button>
                 </div>
                 <label>
                   <span>{gateCC4Copy.reason}</span>
-                  <input value={abandonReason} minLength={3} onChange={(event) => setAbandonReason(event.currentTarget.value)} />
+                  <input
+                    value={abandonReason}
+                    minLength={3}
+                    onChange={(event) => setAbandonReason(event.currentTarget.value)}
+                  />
                 </label>
-                <button type="button" disabled={Boolean(busy) || abandonReason.trim().length < 3} onClick={() => void abandon()}>
-                  {busy === "abandon" ? gateCC4Copy.abandoning : gateCC4Copy.abandon}
+                <button
+                  type="button"
+                  disabled={Boolean(busy) || abandonReason.trim().length < 3}
+                  onClick={() => void abandon()}
+                >
+                  {busy === gateCC4Machine.abandon ? gateCC4Copy.abandoning : gateCC4Copy.abandon}
                 </button>
               </section>
 
@@ -512,15 +650,38 @@ export function RepairWorkspace({
                 <div>
                   <h2>{gateCC4Copy.schedulePdf}</h2>
                   <p>{gateCC4Copy.exportHelp}</p>
-                  <button type="button" disabled={Boolean(busy)} onClick={() => void exportPdf(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/schedule`, "schedule-export")}>
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() =>
+                      void exportPdf(
+                        `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/schedule`,
+                        gateCC4Machine.scheduleExport,
+                      )
+                    }
+                  >
                     {gateCC4Copy.schedulePdf}
                   </button>
                 </div>
                 <ul>
                   {matches.map((match) => (
                     <li key={match.id}>
-                      <span><strong>{match.label}</strong><small>{match.home} · {match.away}</small></span>
-                      <button type="button" disabled={Boolean(busy)} onClick={() => void exportPdf(`/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/matches/${encodeURIComponent(match.id)}/score-sheet`, `score-sheet-${match.id}`)}>
+                      <span>
+                        <strong>{match.label}</strong>
+                        <small>
+                          {match.home} · {match.away}
+                        </small>
+                      </span>
+                      <button
+                        type="button"
+                        disabled={Boolean(busy)}
+                        onClick={() =>
+                          void exportPdf(
+                            `/api/gate-c/competitions/${encodeURIComponent(competitionId)}/exports/matches/${encodeURIComponent(match.id)}/score-sheet`,
+                            `score-sheet-${match.id}`,
+                          )
+                        }
+                      >
                         {gateCC4Copy.scoreSheet}
                       </button>
                     </li>
@@ -544,7 +705,10 @@ export function RepairWorkspace({
           ) : loading ? (
             <p role="status">{gateCC4Copy.loading}</p>
           ) : (
-            <div className={styles.empty}><h2>{gateCC4Copy.noRepairs}</h2><p>{gateCC4Copy.noRepairsBody}</p></div>
+            <div className={styles.empty}>
+              <h2>{gateCC4Copy.noRepairs}</h2>
+              <p>{gateCC4Copy.noRepairsBody}</p>
+            </div>
           )}
         </main>
       </div>

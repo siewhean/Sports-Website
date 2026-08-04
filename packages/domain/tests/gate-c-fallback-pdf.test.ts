@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import {
   buildEmergencyScoreSheet,
@@ -25,12 +26,8 @@ function match(index: number): FallbackMatch {
   };
 }
 
-function pdfText(bytes: Uint8Array): string {
-  return new TextDecoder().decode(bytes);
-}
-
 describe("Gate C C4 deterministic fallback PDF rendering", () => {
-  it("renders an A4 schedule deterministically and paginates long events", () => {
+  it("renders an A4 schedule deterministically and paginates long events", async () => {
     const document = buildScheduleFallbackDocument({
       competitionId: "competition-1",
       competitionName: "National Championship",
@@ -44,21 +41,21 @@ describe("Gate C C4 deterministic fallback PDF rendering", () => {
       matches: Array.from({ length: 36 }, (_, index) => match(index + 1)),
     });
 
-    const first = renderScheduleFallbackPdf(document);
-    const second = renderScheduleFallbackPdf(document);
-    const text = pdfText(first);
+    const first = await renderScheduleFallbackPdf(document);
+    const second = await renderScheduleFallbackPdf(document);
+    const parsed = await PDFDocument.load(first);
+    const [firstPage] = parsed.getPages();
 
     expect(second).toEqual(first);
-    expect(text.startsWith("%PDF-1.4")).toBe(true);
-    expect(text).toContain("/MediaBox [0 0 595 842]");
-    expect(text).toContain("Published competition schedule");
-    expect(text).toContain("Schedule v4 | Results v7");
-    expect(text).toContain("%%EOF");
-    expect([...text.matchAll(/\/Type \/Page\b/gu)]).toHaveLength(2);
+    expect(parsed.getPageCount()).toBe(2);
+    expect(firstPage?.getWidth()).toBeCloseTo(595.28, 2);
+    expect(firstPage?.getHeight()).toBeCloseTo(841.89, 2);
+    expect(parsed.getTitle()).toBe("National Championship");
+    expect(parsed.getCreationDate()?.toISOString()).toBe("2026-08-01T00:00:00.000Z");
     expect(createHash("sha256").update(first).digest("hex")).toMatch(/^[a-f0-9]{64}$/u);
   });
 
-  it("renders sport-specific emergency score sheets without private data", () => {
+  it("renders sport-specific emergency score sheets without private data", async () => {
     for (const sport of ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const) {
       const sheet = buildEmergencyScoreSheet({
         competitionId: "competition-1",
@@ -72,17 +69,19 @@ describe("Gate C C4 deterministic fallback PDF rendering", () => {
         sheetIdentifier: `sheet-${sport}`,
         match: match(1),
       });
-      const bytes = renderEmergencyScoreSheetPdf(sheet);
-      const text = pdfText(bytes);
+      const bytes = await renderEmergencyScoreSheetPdf(sheet);
+      const parsed = await PDFDocument.load(bytes);
+      const [firstPage] = parsed.getPages();
 
-      expect(text.startsWith("%PDF-1.4")).toBe(true);
-      expect(text).toContain("Emergency match score sheet");
-      expect(text).toContain(`Sheet ID: sheet-${sport}`);
-      expect(text).not.toMatch(/bearer|cookie|password|secret|#access=/iu);
+      expect(parsed.getPageCount()).toBeGreaterThan(0);
+      expect(firstPage?.getWidth()).toBeCloseTo(595.28, 2);
+      expect(firstPage?.getHeight()).toBeCloseTo(841.89, 2);
+      expect(parsed.getTitle()).toBe("National Championship score sheet");
+      expect(createHash("sha256").update(bytes).digest("hex")).toMatch(/^[a-f0-9]{64}$/u);
     }
   });
 
-  it("normalises unsupported glyphs instead of emitting invalid font data", () => {
+  it("normalises unsupported glyphs into a structurally valid PDF", async () => {
     const document = buildScheduleFallbackDocument({
       competitionId: "competition-1",
       competitionName: "Café 国际 Cup",
@@ -96,7 +95,7 @@ describe("Gate C C4 deterministic fallback PDF rendering", () => {
       matches: [match(1)],
     });
 
-    const text = pdfText(renderScheduleFallbackPdf(document));
-    expect(text).toContain("Cafe ?? Cup");
+    const parsed = await PDFDocument.load(await renderScheduleFallbackPdf(document));
+    expect(parsed.getTitle()).toBe("Cafe ?? Cup");
   });
 });

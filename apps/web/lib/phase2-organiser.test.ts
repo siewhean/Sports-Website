@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   cookieHostMatches,
   isOrganiserWorkspacePayload,
@@ -130,8 +130,15 @@ describe("organiser competition workspace mapping", () => {
   it("validates and maps authenticated workspace data without access secrets", () => {
     const payload = workspace();
     expect(isOrganiserWorkspacePayload(payload)).toBe(true);
-
-    const view = toOrganiserCompetitionView(payload);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-31T00:00:00.000Z"));
+    const view = (() => {
+      try {
+        return toOrganiserCompetitionView(payload);
+      } finally {
+        vi.useRealTimers();
+      }
+    })();
 
     expect(view).toMatchObject({
       id: competitionId,

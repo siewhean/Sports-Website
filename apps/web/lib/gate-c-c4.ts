@@ -4,6 +4,8 @@ import type {
   GateCRepairWorkspaceView,
 } from "@matchday/contracts";
 
+export type GateCC4DecisionValue = GateCRepairDecisionCommand["decision"];
+
 export type GateCC4RepairQueueItem = Readonly<{
   repair_id: string;
   corrected_match_id: string;
@@ -30,14 +32,35 @@ export type GateCC4DecisionDraft = GateCRepairDecisionCommand &
   }>;
 
 export const gateCC4Machine = {
+  forceDynamic: "force-dynamic",
+  results: "results",
+  saved: "saved",
+  readOnly: "read-only",
   section: "repairs",
   get: "GET",
   post: "POST",
+  openWorkspaceEvent: "matchday:gate-c-c4:open-repair-workspace",
+  cacheNoStore: "no-store",
+  jsonContentType: "application/json",
+  contentSha256Header: "x-matchday-content-sha256",
+  contentDispositionHeader: "content-disposition",
+  anchorElement: "a",
+  noChange: "no_change",
+  automaticUpdate: "automatic_update",
+  analyse: "analyse",
+  publish: "publish",
+  abandon: "abandon",
+  scheduleExport: "schedule-export",
   draft: "draft",
   ready: "ready",
   published: "published",
   abandoned: "abandoned",
-  decisions: ["accept_proposed", "keep_current", "set_manual_entry", "leave_protected"] as const,
+  decisions: [
+    "accept_proposed",
+    "keep_current",
+    "set_manual_entry",
+    "leave_protected",
+  ] as const satisfies readonly GateCC4DecisionValue[],
 } as const;
 
 export const gateCC4Copy = {
@@ -97,6 +120,16 @@ export const gateCC4Copy = {
   required: "Required",
   optional: "Optional",
   close: "Close repair details",
+  pendingRepairsTitle: "Corrections awaiting analysis",
+  pendingRepairsIntro: "These private repair cases were created atomically with corrected public results.",
+  pendingRepairsEmpty: "No corrected result is waiting for affected-match analysis.",
+  pendingRepairsAnalyse: "Build affected-match workspace",
+  pendingRepairsAnalysing: "Building workspace",
+  pendingRepairsFailed: "Pending repair cases could not be loaded.",
+  pendingRepairsLoading: "Loading pending repair cases",
+  pendingRepairsCount: "pending repair cases",
+  pendingRepairsResultVersion: "result version",
+  pendingRepairsWorkspaceOpened: "Repair workspace opened.",
 } as const;
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -137,7 +170,9 @@ export function parseGateCC4RepairQueue(value: unknown): GateCC4RepairQueueItem[
       !shaPattern.test(item.analysis_fingerprint) ||
       !nullableUuid(item.latest_revision_id) ||
       !(item.latest_revision === null || integer(item.latest_revision, 1)) ||
-      !(item.latest_status === null || ["draft", "ready", "published", "abandoned"].includes(String(item.latest_status))) ||
+      !(
+        item.latest_status === null || ["draft", "ready", "published", "abandoned"].includes(String(item.latest_status))
+      ) ||
       !integer(item.affected_action_count) ||
       !integer(item.unresolved_action_count) ||
       typeof item.created_at !== "string" ||
@@ -152,7 +187,12 @@ export function parseGateCC4RepairQueue(value: unknown): GateCC4RepairQueueItem[
 }
 
 export function parseGateCC4Workspace(value: unknown): GateCRepairWorkspaceView | null {
-  if (!record(value) || !record(value.repair) || !Array.isArray(value.actions) || !Array.isArray(value.unresolved_action_keys)) {
+  if (
+    !record(value) ||
+    !record(value.repair) ||
+    !Array.isArray(value.actions) ||
+    !Array.isArray(value.unresolved_action_keys)
+  ) {
     return null;
   }
   if (
@@ -203,7 +243,14 @@ export function repairRevisionRequest(input: {
 }): GateCRepairRevisionCreateRequest {
   const fingerprint = input.workspace.latest_revision?.analysis_fingerprint;
   if (!fingerprint) throw new Error("The repair workspace has no retained analysis fingerprint");
-  const decisions = input.decisions.map(({ starts_at: _startsAt, ends_at: _endsAt, playing_area_id: _area, ...decision }) => decision);
+  const decisions: GateCRepairDecisionCommand[] = input.decisions.map((decision) => ({
+    client_event_id: decision.client_event_id,
+    match_id: decision.match_id,
+    slot: decision.slot,
+    decision: decision.decision,
+    ...(decision.selected_entry_id === undefined ? {} : { selected_entry_id: decision.selected_entry_id }),
+    reason: decision.reason,
+  }));
   const adjustmentByMatch = new Map<string, GateCRepairRevisionCreateRequest["schedule_adjustments"][number]>();
   for (const decision of input.decisions) {
     if (!decision.starts_at && !decision.ends_at && !decision.playing_area_id) continue;

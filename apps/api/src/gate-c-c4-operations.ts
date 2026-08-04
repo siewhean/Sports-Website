@@ -114,7 +114,7 @@ export class GateCC4Operations {
     private readonly now: () => Date = () => new Date(),
   ) {
     const parsed = new URL(publicOrigin);
-    if (!(["https:", "http:"].includes(parsed.protocol)) || parsed.username || parsed.password || parsed.hash) {
+    if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.hash) {
       throw new Error("Gate C4 public origin must be credential-free HTTP(S)");
     }
   }
@@ -140,7 +140,8 @@ export class GateCC4Operations {
       "COMPETITION_ACCESS_DENIED",
       "Competition access denied",
     );
-    if (access.status === "archived") throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+    if (access.status === "archived")
+      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
     return access;
   }
 
@@ -369,7 +370,7 @@ export class GateCC4Operations {
           }),
         ),
       };
-      const bytes = renderScheduleFallbackPdf(document);
+      const bytes = await renderScheduleFallbackPdf(document);
       const contentSha256 = sha256(bytes);
       const manifest = await this.retainManifest(tx, {
         actor,
@@ -404,7 +405,10 @@ export class GateCC4Operations {
       const match = matches.find((candidate) => candidate.matchId === matchId);
       if (!match) throw new ApiError(404, "PUBLISHED_MATCH_NOT_FOUND", "Match is not in the published schedule");
       const sourceFingerprint = this.sourceFingerprint(competition, matches);
-      const sheetIdentifier = `schedule-v${competition.schedule_version}-${match.matchCode}`.replace(/[^A-Za-z0-9._-]/gu, "-");
+      const sheetIdentifier = `schedule-v${competition.schedule_version}-${match.matchCode}`.replace(
+        /[^A-Za-z0-9._-]/gu,
+        "-",
+      );
       const filename = safeFallbackFilename(`${competition.name}-${match.matchCode}-${sheetIdentifier}`);
       const sheet: EmergencyScoreSheet = {
         schemaVersion: 1,
@@ -425,42 +429,72 @@ export class GateCC4Operations {
       const sectionDefinitions: Record<FallbackSport, EmergencyScoreSheet["sections"]> = {
         canoe_polo: [
           { kind: "periods", label: "Period score", columns: ["period", "home_goals", "away_goals"], repeatable: true },
-          { kind: "discipline", label: "Cards and discipline", columns: ["time", "side", "person", "card", "reason"], repeatable: true },
+          {
+            kind: "discipline",
+            label: "Cards and discipline",
+            columns: ["time", "side", "person", "card", "reason"],
+            repeatable: true,
+          },
           { kind: "timeouts", label: "Timeouts", columns: ["time", "side", "period"], repeatable: true },
           { kind: "incidents", label: "Incidents and corrections", columns: ["time", "note"], repeatable: true },
           { kind: "officials", label: "Officials", columns: ["role", "name"], repeatable: true },
           { kind: "signatures", label: "Confirmation", columns: ["role", "name", "signature"], repeatable: false },
         ],
         badminton: [
-          { kind: "segments", label: "Games", columns: ["game", "home_points", "away_points", "winner"], repeatable: true },
+          {
+            kind: "segments",
+            label: "Games",
+            columns: ["game", "home_points", "away_points", "winner"],
+            repeatable: true,
+          },
           { kind: "incidents", label: "Incidents and corrections", columns: ["game", "note"], repeatable: true },
           { kind: "officials", label: "Officials", columns: ["role", "name"], repeatable: true },
           { kind: "signatures", label: "Confirmation", columns: ["role", "name", "signature"], repeatable: false },
         ],
         table_tennis: [
-          { kind: "segments", label: "Games", columns: ["game", "home_points", "away_points", "winner"], repeatable: true },
+          {
+            kind: "segments",
+            label: "Games",
+            columns: ["game", "home_points", "away_points", "winner"],
+            repeatable: true,
+          },
           { kind: "incidents", label: "Incidents and corrections", columns: ["game", "note"], repeatable: true },
           { kind: "officials", label: "Officials", columns: ["role", "name"], repeatable: true },
           { kind: "signatures", label: "Confirmation", columns: ["role", "name", "signature"], repeatable: false },
         ],
         volleyball: [
-          { kind: "segments", label: "Sets", columns: ["set", "home_points", "away_points", "winner"], repeatable: true },
+          {
+            kind: "segments",
+            label: "Sets",
+            columns: ["set", "home_points", "away_points", "winner"],
+            repeatable: true,
+          },
           { kind: "timeouts", label: "Timeouts", columns: ["set", "side", "score"], repeatable: true },
           { kind: "incidents", label: "Incidents and corrections", columns: ["set", "note"], repeatable: true },
           { kind: "officials", label: "Officials", columns: ["role", "name"], repeatable: true },
           { kind: "signatures", label: "Confirmation", columns: ["role", "name", "signature"], repeatable: false },
         ],
         basketball: [
-          { kind: "quarters", label: "Quarter score", columns: ["quarter", "home_points", "away_points"], repeatable: true },
+          {
+            kind: "quarters",
+            label: "Quarter score",
+            columns: ["quarter", "home_points", "away_points"],
+            repeatable: true,
+          },
           { kind: "timeouts", label: "Timeouts", columns: ["quarter", "side", "game_clock"], repeatable: true },
-          { kind: "discipline", label: "Fouls", columns: ["quarter", "side", "person", "foul", "game_clock"], repeatable: true },
+          {
+            kind: "discipline",
+            label: "Fouls",
+            columns: ["quarter", "side", "person", "foul", "game_clock"],
+            repeatable: true,
+          },
           { kind: "incidents", label: "Incidents and corrections", columns: ["quarter", "note"], repeatable: true },
           { kind: "officials", label: "Officials", columns: ["role", "name"], repeatable: true },
           { kind: "signatures", label: "Confirmation", columns: ["role", "name", "signature"], repeatable: false },
         ],
       };
       const renderedSheet: EmergencyScoreSheet = { ...sheet, sections: sectionDefinitions[competition.sport_code] };
-      const bytes = renderEmergencyScoreSheetPdf(renderedSheet);
+      const bytes = await renderEmergencyScoreSheetPdf(renderedSheet);
       const contentSha256 = sha256(bytes);
       const exportKind = `${competition.sport_code}_score_sheet` as const;
       const manifest = await this.retainManifest(tx, {
