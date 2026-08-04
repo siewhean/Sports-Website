@@ -93,7 +93,7 @@ describe("C5 public-result convergence executor", () => {
     });
   });
 
-  it("fails closed when public freshness is behind the finalisation receipt", async () => {
+  it("retries a lower public result version and accepts only exact convergence", async () => {
     fetchMock.mockImplementationOnce(async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { client_event_id: string };
       return json({ ...receipt(body.client_event_id), result_version: 2, publication_version: 2 });
@@ -105,12 +105,16 @@ describe("C5 public-result convergence executor", () => {
         "cache-control": "public, max-age=30",
       }),
     );
+    fetchMock.mockResolvedValueOnce(
+      json(current(2), 200, {
+        etag: '"c4-1-2"',
+        "last-modified": "Mon, 03 Aug 2026 00:00:01 GMT",
+        "cache-control": "public, max-age=30",
+      }),
+    );
     const executor = createGateCC5PublicResultConvergenceExecutor([target]);
 
-    await expect(executor(invocation)).resolves.toMatchObject({
-      outcome: "unexpected_failure",
-      correctness: { failureCode: "public_result_version_stale" },
-    });
+    await expect(executor(invocation)).resolves.toEqual({ outcome: "success", correctness: { passed: true } });
   });
 
   it("rejects malformed freshness and missing final results", async () => {

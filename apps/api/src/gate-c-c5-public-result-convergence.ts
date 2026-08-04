@@ -78,6 +78,20 @@ function scoringHeaders(target: GateCC5PublicResultConvergenceTarget): HeadersIn
   };
 }
 
+async function waitForRetry(signal: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, 50);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  });
+}
+
 /**
  * Finalises a pre-warmed isolated match and proves that its canonical public
  * projection carries the exact receipt result version. The fixture factory
@@ -127,42 +141,46 @@ export function createGateCC5PublicResultConvergenceExecutor(
       `/api/v1/public/competitions/${encodeURIComponent(target.slug)}/current`,
       target.apiOrigin,
     );
-    const publicResponse = await fetch(endpoint, {
-      headers: { accept: "application/json" },
-      signal: invocation.signal,
-    });
-    if (publicResponse.status !== 200 || !cacheHeadersAreCanonical(publicResponse)) {
-      return {
-        outcome: "unexpected_failure",
-        correctness: { passed: false, failureCode: `public_result_public_http_${String(publicResponse.status)}` },
-      };
+    while (!invocation.signal.aborted) {
+      const publicResponse = await fetch(endpoint, {
+        headers: { accept: "application/json" },
+        signal: invocation.signal,
+      });
+      if (publicResponse.status !== 200 || !cacheHeadersAreCanonical(publicResponse)) {
+        return {
+          outcome: "unexpected_failure",
+          correctness: { passed: false, failureCode: `public_result_public_http_${String(publicResponse.status)}` },
+        };
+      }
+      const projection = record(await publicResponse.json().catch(() => null));
+      if (!projection) {
+        return {
+          outcome: "unexpected_failure",
+          correctness: { passed: false, failureCode: "public_result_payload_malformed" },
+        };
+      }
+      const freshness = exactFreshness(projection, receipt.result_version);
+      if (freshness === "behind") {
+        await waitForRetry(invocation.signal);
+        continue;
+      }
+      if (freshness === "advanced") {
+        return {
+          outcome: "unexpected_failure",
+          correctness: { passed: false, failureCode: "public_result_version_advanced" },
+        };
+      }
+      if (freshness === "malformed" || !hasFinalResult(projection, target.matchId)) {
+        return {
+          outcome: "unexpected_failure",
+          correctness: { passed: false, failureCode: "public_result_projection_mismatch" },
+        };
+      }
+      return { outcome: "success", correctness: { passed: true } };
     }
-    const projection = record(await publicResponse.json().catch(() => null));
-    if (!projection) {
-      return {
-        outcome: "unexpected_failure",
-        correctness: { passed: false, failureCode: "public_result_payload_malformed" },
-      };
-    }
-    const freshness = exactFreshness(projection, receipt.result_version);
-    if (freshness === "behind") {
-      return {
-        outcome: "unexpected_failure",
-        correctness: { passed: false, failureCode: "public_result_version_stale" },
-      };
-    }
-    if (freshness === "advanced") {
-      return {
-        outcome: "unexpected_failure",
-        correctness: { passed: false, failureCode: "public_result_version_advanced" },
-      };
-    }
-    if (freshness === "malformed" || !hasFinalResult(projection, target.matchId)) {
-      return {
-        outcome: "unexpected_failure",
-        correctness: { passed: false, failureCode: "public_result_projection_mismatch" },
-      };
-    }
-    return { outcome: "success", correctness: { passed: true } };
+    return {
+      outcome: "unexpected_failure",
+      correctness: { passed: false, failureCode: "public_result_convergence_timeout" },
+    };
   };
 }
