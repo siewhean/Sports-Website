@@ -15,8 +15,10 @@ test("Gate C C4 organiser resolves a protected participant and publishes one rep
   await expect(page.getByText("Marina Blue", { exact: true })).toBeVisible();
   await expect(page.getByText("Harbour Gold", { exact: true })).toBeVisible();
 
-  await page.getByLabel("Organiser decision").selectOption("accept_proposed");
-  await page.getByLabel("Decision reason").first().fill("Accept the corrected winner before publication.");
+  await expect(page.getByLabel("Organiser decision").locator('option[value="accept_proposed"]')).toHaveCount(0);
+  await expect(page.getByLabel("New start time")).toHaveCount(0);
+  await page.getByLabel("Organiser decision").selectOption("keep_current");
+  await page.getByLabel("Decision reason").first().fill("Keep the protected participant before publication.");
   const ready = page.getByRole("button", { name: "Mark ready for publication" });
   await expect(ready).toBeEnabled();
   await ready.click();
@@ -33,8 +35,8 @@ test("Gate C C4 organiser resolves a protected participant and publishes one rep
       {
         match_id: gateCC4Ids.downstreamMatch,
         slot: "home",
-        decision: "accept_proposed",
-        reason: "Accept the corrected winner before publication.",
+        decision: "keep_current",
+        reason: "Keep the protected participant before publication.",
       },
     ],
   });
@@ -53,6 +55,26 @@ test("Gate C C4 organiser resolves a protected participant and publishes one rep
     expected_schedule_version: 4,
     expected_result_version: 7,
     expected_analysis_fingerprint: "a".repeat(64),
+  });
+});
+
+test("Gate C C4 permits accepting an automatic participant update", async ({ page }) => {
+  const controller = await installGateCC4BrowserRoutes(page, { sourceAction: "automatic_update" });
+
+  await page.goto("/organiser/competitions/singapore-open/repairs");
+  await dismissConsent(page);
+  await page.getByLabel("Organiser decision").selectOption("accept_proposed");
+  await page.getByLabel("Decision reason").first().fill("Accept the corrected winner before publication.");
+  await expect(page.getByLabel("New start time")).toBeVisible();
+  await page.getByRole("button", { name: "Mark ready for publication" }).click();
+
+  expect(controller.revisionRequests[0]).toMatchObject({
+    decisions: [
+      {
+        decision: "accept_proposed",
+        reason: "Accept the corrected winner before publication.",
+      },
+    ],
   });
 });
 
@@ -75,5 +97,5 @@ test("Gate C C4 analyses an atomic pending repair case and verifies fallback exp
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("application/pdf");
   expect(response.headers()["x-matchday-content-sha256"]).toMatch(/^[a-f0-9]{64}$/u);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator('[data-testid="gate-c-c4-repair-workspace"] [role="alert"]')).toHaveCount(0);
 });

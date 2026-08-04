@@ -38,3 +38,7 @@ export function gateCC4DecisionAllowed(action: GateCRepairActionKind, decision: 
 export function gateCC4ScheduleAdjustmentAllowed(action: GateCRepairActionKind): boolean {
   return !protectedMatchActions.has(action);
 }
+
+export function gateCC4MatchScheduleAdjustmentAllowed(actions: readonly GateCRepairActionKind[]): boolean {
+  return actions.length > 0 && actions.every(gateCC4ScheduleAdjustmentAllowed);
+}

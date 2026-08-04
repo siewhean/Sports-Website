@@ -79,6 +79,13 @@ test("Phase 2 scorer attribution visual baseline", async ({ page }) => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     window.scrollTo(0, 0);
   });
+  // Let the dialog's queued initial-focus frame complete before taking
+  // ownership for this keyboard-focus baseline. The initial target varies by
+  // action, so asserting that implementation detail made parallel runs flaky.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))),
+  );
   await page.getByRole("button", { name: "Cancel" }).focus();
   await expect(page).toHaveScreenshot("phase-2-scorer-confirmation.png", {
     fullPage: true,

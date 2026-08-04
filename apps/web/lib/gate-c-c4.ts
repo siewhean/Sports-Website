@@ -63,6 +63,7 @@ export const gateCC4Copy = {
   currentEntry: "Current participant",
   proposedEntry: "Proposed participant",
   dependency: "Dependency path",
+  affectedMatch: "Affected match",
   decision: "Organiser decision",
   reason: "Decision reason",
   selectedEntry: "Manual participant",

@@ -12,11 +12,16 @@ import {
   type GateCC4RepairQueueItem,
 } from "@/lib/gate-c-c4";
 import { gateCC4Http, gateCC4UiMachine } from "@/lib/gate-c-c4-http";
+import {
+  gateCC4DecisionAllowed,
+  gateCC4MatchScheduleAdjustmentAllowed,
+  type GateCC4DecisionValue,
+} from "@/lib/gate-c-c4-decisions";
 import { parseGateCC4References, type GateCC4ReferenceData } from "@/lib/gate-c-c4-references";
 import { isGateCC4PublicationReceipt, isGateCC4RevisionResponse } from "@/lib/gate-c-c4-validators";
 import styles from "./RepairWorkspace.module.css";
 
-type DecisionValue = "" | "accept_proposed" | "keep_current" | "set_manual_entry" | "leave_protected";
+type DecisionValue = "" | GateCC4DecisionValue;
 
 type ActionDraft = {
   clientEventId: string;
@@ -50,13 +55,6 @@ function localDateTime(value: string | null | undefined): string {
   if (!Number.isFinite(parsed.getTime())) return "";
   const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
-}
-
-function actionNeedsDecision(action: GateCRepairActionView): boolean {
-  return (
-    action.source_action !== gateCC4UiMachine.noChangeAction &&
-    action.source_action !== gateCC4UiMachine.automaticUpdateAction
-  );
 }
 
 function defaultDraft(action: GateCRepairActionView): ActionDraft {
@@ -192,7 +190,9 @@ export function RepairWorkspace({
   const unresolved = useMemo(
     () =>
       workspace?.actions.filter((action) => {
-        if (!actionNeedsDecision(action)) return false;
+        if (!gateCC4Machine.decisions.some((decision) => gateCC4DecisionAllowed(action.source_action, decision))) {
+          return false;
+        }
         const draft = drafts[action.repair_action_id];
         return (
           !draft?.decision ||
@@ -463,9 +463,18 @@ export function RepairWorkspace({
               <div className={styles.actions}>
                 {workspace.actions.map((action, index) => {
                   const draft = drafts[action.repair_action_id] ?? defaultDraft(action);
-                  const needsDecision = actionNeedsDecision(action);
+                  const decisionOptions = gateCC4Machine.decisions.filter((decision) =>
+                    gateCC4DecisionAllowed(action.source_action, decision),
+                  );
+                  const needsDecision = decisionOptions.length > 0;
                   const firstForMatch =
                     workspace.actions.findIndex((candidate) => candidate.match_id === action.match_id) === index;
+                  const matchActions = workspace.actions.filter((candidate) => candidate.match_id === action.match_id);
+                  const matchLabel =
+                    matches.find((match) => match.id === action.match_id)?.label ?? gateCC4Copy.affectedMatch;
+                  const canAdjustMatch =
+                    action.source_action !== gateCC4UiMachine.noChangeAction &&
+                    gateCC4MatchScheduleAdjustmentAllowed(matchActions.map((candidate) => candidate.source_action));
                   const entries = references.entries.filter((entry) => entry.division_id === action.division_id);
                   return (
                     <section key={action.repair_action_id} className={styles.action} data-protected={needsDecision}>
@@ -473,7 +482,7 @@ export function RepairWorkspace({
                         <div>
                           <p>{title(action.source_action)}</p>
                           <h3>
-                            {action.match_id} · {title(action.slot)}
+                            {matchLabel} · {title(action.slot)}
                           </h3>
                         </div>
                         <span>{needsDecision ? gateCC4Copy.protected : gateCC4Copy.automatic}</span>
@@ -515,12 +524,22 @@ export function RepairWorkspace({
                               }
                             >
                               <option value="">—</option>
-                              {action.proposed_entry_id ? (
-                                <option value="accept_proposed">{gateCC4Copy.acceptProposed}</option>
-                              ) : null}
-                              <option value="keep_current">{gateCC4Copy.keepCurrent}</option>
-                              <option value="set_manual_entry">{gateCC4Copy.setManual}</option>
-                              <option value="leave_protected">{gateCC4Copy.leaveProtected}</option>
+                              {decisionOptions.map((decision) => {
+                                if (decision === "accept_proposed" && !action.proposed_entry_id) return null;
+                                const label =
+                                  decision === "accept_proposed"
+                                    ? gateCC4Copy.acceptProposed
+                                    : decision === "keep_current"
+                                      ? gateCC4Copy.keepCurrent
+                                      : decision === "set_manual_entry"
+                                        ? gateCC4Copy.setManual
+                                        : gateCC4Copy.leaveProtected;
+                                return (
+                                  <option key={decision} value={decision}>
+                                    {label}
+                                  </option>
+                                );
+                              })}
                             </select>
                           </label>
                           {draft.decision === "set_manual_entry" ? (
@@ -556,7 +575,7 @@ export function RepairWorkspace({
                         </div>
                       ) : null}
 
-                      {firstForMatch ? (
+                      {firstForMatch && canAdjustMatch ? (
                         <fieldset className={styles.adjustments}>
                           <legend>{gateCC4Copy.unchanged}</legend>
                           <label>

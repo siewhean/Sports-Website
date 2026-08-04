@@ -8,7 +8,9 @@ import { phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import styles from "./RepairPage.module.css";
 
-export const dynamic = gateCC4UiMachine.forceDynamic;
+// Next.js route-segment configuration must remain a literal so the compiler can
+// determine rendering mode before evaluating this module.
+export const dynamic = "force-dynamic";
 
 export default async function CompetitionRepairsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

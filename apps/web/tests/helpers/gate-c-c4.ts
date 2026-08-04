@@ -23,9 +23,13 @@ export const gateCC4Ids = {
 const fingerprint = "a".repeat(64);
 const createdAt = "2026-08-01T00:00:00.000Z";
 
-export function gateCC4Workspace(ready = false) {
+export function gateCC4Workspace(
+  ready = false,
+  sourceAction: "protected_started_match" | "automatic_update" = "protected_started_match",
+) {
   const revisionId = ready ? gateCC4Ids.readyRevision : gateCC4Ids.revision;
-  const decision = ready ? "accept_proposed" : null;
+  const decision = ready ? (sourceAction === "automatic_update" ? "accept_proposed" : "keep_current") : null;
+  const resolvedEntryId = decision === "accept_proposed" ? gateCC4Ids.proposedEntry : gateCC4Ids.currentEntry;
   return {
     repair: {
       repair_id: gateCC4Ids.repair,
@@ -50,7 +54,7 @@ export function gateCC4Workspace(ready = false) {
             proposed_entry_id: gateCC4Ids.proposedEntry,
             match_state: "in_progress",
             control: "automatic",
-            action: "protected_started_match",
+            action: sourceAction,
             reason: "The downstream match has started and requires an organiser decision.",
             dependency_path: [
               {
@@ -87,13 +91,15 @@ export function gateCC4Workspace(ready = false) {
         match_id: gateCC4Ids.downstreamMatch,
         division_id: gateCC4Ids.division,
         slot: "home",
-        source_action: "protected_started_match",
+        source_action: sourceAction,
         decision,
         current_entry_id: gateCC4Ids.currentEntry,
         proposed_entry_id: gateCC4Ids.proposedEntry,
-        resolved_entry_id: ready ? gateCC4Ids.proposedEntry : null,
+        resolved_entry_id: ready ? resolvedEntryId : null,
         reason: ready
-          ? "Accept the corrected winner before the repaired schedule is published."
+          ? sourceAction === "automatic_update"
+            ? "Accept the corrected winner before the repaired schedule is published."
+            : "Keep the protected match participant unchanged."
           : "The downstream match has started and requires an organiser decision.",
         dependency_path: [
           {
@@ -106,7 +112,7 @@ export function gateCC4Workspace(ready = false) {
         created_at: createdAt,
         current_entry_name: "Marina Blue",
         proposed_entry_name: "Harbour Gold",
-        resolved_entry_name: ready ? "Harbour Gold" : null,
+        resolved_entry_name: ready ? (decision === "accept_proposed" ? "Harbour Gold" : "Marina Blue") : null,
         adjustment: null,
       },
     ],
@@ -183,7 +189,11 @@ export type GateCC4BrowserController = {
   setReady(value: boolean): void;
 };
 
-export async function installGateCC4BrowserRoutes(page: Page): Promise<GateCC4BrowserController> {
+export async function installGateCC4BrowserRoutes(
+  page: Page,
+  options: Readonly<{ sourceAction?: "protected_started_match" | "automatic_update" }> = {},
+): Promise<GateCC4BrowserController> {
+  const sourceAction = options.sourceAction ?? "protected_started_match";
   let ready = false;
   let published = false;
   let pendingVisible = true;
@@ -210,7 +220,7 @@ export async function installGateCC4BrowserRoutes(page: Page): Promise<GateCC4Br
     }
     if (path.endsWith("/repairs") && method === "POST") {
       pendingVisible = false;
-      await json(route, gateCC4Workspace(false));
+      await json(route, gateCC4Workspace(false, sourceAction));
       return;
     }
     if (/\/repairs\/[^/]+\/revisions\/[^/]+\/publish$/u.test(path) && method === "POST") {
@@ -236,8 +246,8 @@ export async function installGateCC4BrowserRoutes(page: Page): Promise<GateCC4Br
       await json(
         route,
         {
-          revision: gateCC4Workspace(true).latest_revision,
-          actions: gateCC4Workspace(true).actions,
+          revision: gateCC4Workspace(true, sourceAction).latest_revision,
+          actions: gateCC4Workspace(true, sourceAction).actions,
           unresolved_action_keys: [],
           publication_ready: true,
         },
@@ -257,7 +267,7 @@ export async function installGateCC4BrowserRoutes(page: Page): Promise<GateCC4Br
       return;
     }
     if (/\/repairs\/[^/]+$/u.test(path) && method === "GET") {
-      await json(route, gateCC4Workspace(ready));
+      await json(route, gateCC4Workspace(ready, sourceAction));
       return;
     }
     if (path.endsWith("/exports/schedule") && method === "POST") {

@@ -18,7 +18,6 @@ export const gateCC4Http = {
 } as const;
 
 export const gateCC4UiMachine = {
-  forceDynamic: "force-dynamic",
   resultsSection: "results",
   savedSyncState: "saved",
   analyseBusy: "analyse",
