@@ -50,6 +50,28 @@ export function createGateCC5LeaseTakeoverExecutor(
         correctness: { passed: false, failureCode: "lease_incumbent_not_writer" },
       };
     }
+    const heartbeat = await fetch(`${input.apiOrigin}/api/v1/scoring/sessions/heartbeat`, {
+      method: "POST",
+      headers: scoringHeaders(current),
+      body: JSON.stringify({
+        last_acknowledged_sequence: expectedSequence,
+        pending_event_count: 0,
+        pending_through_sequence: expectedSequence,
+      }),
+      signal: invocation.signal,
+    });
+    const heartbeated = record(await heartbeat.json().catch(() => null));
+    if (
+      heartbeat.status !== 200 ||
+      heartbeated?.mode !== "writer" ||
+      heartbeated?.read_only !== false ||
+      heartbeated?.generation !== current.generation
+    ) {
+      return {
+        outcome: "unexpected_failure",
+        correctness: { passed: false, failureCode: `takeover_heartbeat_http_${heartbeat.status}` },
+      };
+    }
     const candidate = await input.createCandidate();
     const request = await fetch(`${input.apiOrigin}/api/v1/scoring/takeover-requests`, {
       method: "POST",
