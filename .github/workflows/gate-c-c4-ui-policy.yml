@@ -1,0 +1,199 @@
+name: Gate C4 repair UI policy alignment
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gate-c-c4-ui-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  align:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/gate-c-c4-production-integration-20260801'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact C4 branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/gate-c-c4-production-integration-20260801
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install the exact dependency graph
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Align the repair UI with server policy
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("apps/web/components/gate-c/RepairWorkspace.tsx")
+          text = path.read_text()
+
+          import_anchor = 'import { gateCC4Http, gateCC4UiMachine } from "@/lib/gate-c-c4-http";\n'
+          decision_import = '''import {
+            gateCC4DecisionAllowed,
+            gateCC4DecisionValues,
+            gateCC4ScheduleAdjustmentAllowed,
+            type GateCC4DecisionValue,
+          } from "@/lib/gate-c-c4-decisions";
+          '''
+          if 'from "@/lib/gate-c-c4-decisions";' not in text:
+              if text.count(import_anchor) != 1:
+                  raise SystemExit("repair UI import anchor drifted")
+              text = text.replace(import_anchor, import_anchor + decision_import, 1)
+
+          replacements = [
+              (
+                  'type DecisionValue = "" | "accept_proposed" | "keep_current" | "set_manual_entry" | "leave_protected";',
+                  'type DecisionValue = "" | GateCC4DecisionValue;',
+                  1,
+              ),
+              (
+                  '''  useEffect(() => {
+            void refresh();
+          }, [refresh]);
+
+          const unresolved = useMemo(''',
+                  '''  useEffect(() => {
+            void refresh();
+          }, [refresh]);
+
+          useEffect(() => {
+            const handleRepairCreated = () => {
+              void refresh();
+            };
+            window.addEventListener(gateCC4UiMachine.repairCreatedEvent, handleRepairCreated);
+            return () => {
+              window.removeEventListener(gateCC4UiMachine.repairCreatedEvent, handleRepairCreated);
+            };
+          }, [refresh]);
+
+          const unresolved = useMemo(''',
+                  1,
+              ),
+              (
+                  '''                  const entries = references.entries.filter((entry) => entry.division_id === action.division_id);
+                  return (''',
+                  '''                  const entries = references.entries.filter((entry) => entry.division_id === action.division_id);
+                  const scheduleAdjustmentAllowed = workspace.actions
+                    .filter((candidate) => candidate.match_id === action.match_id)
+                    .every((candidate) => gateCC4ScheduleAdjustmentAllowed(candidate.source_action));
+                  return (''',
+                  1,
+              ),
+              (
+                  '''                              {action.proposed_entry_id ? (
+                                <option value="accept_proposed">{gateCC4Copy.acceptProposed}</option>
+                              ) : null}
+                              <option value="keep_current">{gateCC4Copy.keepCurrent}</option>
+                              <option value="set_manual_entry">{gateCC4Copy.setManual}</option>
+                              <option value="leave_protected">{gateCC4Copy.leaveProtected}</option>''',
+                  '''                              {action.proposed_entry_id &&
+                              gateCC4DecisionAllowed(
+                                action.source_action,
+                                gateCC4DecisionValues.acceptProposed,
+                              ) ? (
+                                <option value={gateCC4DecisionValues.acceptProposed}>
+                                  {gateCC4Copy.acceptProposed}
+                                </option>
+                              ) : null}
+                              {gateCC4DecisionAllowed(
+                                action.source_action,
+                                gateCC4DecisionValues.keepCurrent,
+                              ) ? (
+                                <option value={gateCC4DecisionValues.keepCurrent}>
+                                  {gateCC4Copy.keepCurrent}
+                                </option>
+                              ) : null}
+                              {gateCC4DecisionAllowed(
+                                action.source_action,
+                                gateCC4DecisionValues.setManualEntry,
+                              ) ? (
+                                <option value={gateCC4DecisionValues.setManualEntry}>
+                                  {gateCC4Copy.setManual}
+                                </option>
+                              ) : null}
+                              {gateCC4DecisionAllowed(
+                                action.source_action,
+                                gateCC4DecisionValues.leaveProtected,
+                              ) ? (
+                                <option value={gateCC4DecisionValues.leaveProtected}>
+                                  {gateCC4Copy.leaveProtected}
+                                </option>
+                              ) : null}''',
+                  1,
+              ),
+              ('{firstForMatch ? (', '{firstForMatch && scheduleAdjustmentAllowed ? (', 1),
+          ]
+
+          changed = False
+          for old, new, expected in replacements:
+              count = text.count(old)
+              if count == expected:
+                  text = text.replace(old, new)
+                  changed = True
+              elif count == 0 and new in text:
+                  continue
+              else:
+                  raise SystemExit(f"unexpected replacement count for policy block: {count}, expected {expected}")
+
+          if changed:
+              path.write_text(text)
+
+      - name: Format the exact C4 web files
+        run: >-
+          pnpm exec prettier --write
+          apps/web/app/api/gate-c/competitions/[competitionId]/references/route.ts
+          apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/abandon/route.ts
+          apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/revisions/[revisionId]/publish/route.ts
+          apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/revisions/route.ts
+          apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/route.ts
+          apps/web/app/api/gate-c/competitions/[competitionId]/repairs/pending/route.ts
+          apps/web/app/api/gate-c/competitions/[competitionId]/repairs/route.ts
+          apps/web/components/gate-c/PendingRepairCases.tsx
+          apps/web/components/gate-c/RepairWorkspace.tsx
+          apps/web/lib/gate-c-c4-decisions.ts
+          apps/web/lib/gate-c-c4-http.ts
+
+      - name: Commit only validated UI policy and formatting changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Gate C4 UI policy and formatting are already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/web/app/api/gate-c/competitions/[competitionId]/references/route.ts \
+            apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/abandon/route.ts \
+            apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/revisions/[revisionId]/publish/route.ts \
+            apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/revisions/route.ts \
+            apps/web/app/api/gate-c/competitions/[competitionId]/repairs/[repairId]/route.ts \
+            apps/web/app/api/gate-c/competitions/[competitionId]/repairs/pending/route.ts \
+            apps/web/app/api/gate-c/competitions/[competitionId]/repairs/route.ts \
+            apps/web/components/gate-c/PendingRepairCases.tsx \
+            apps/web/components/gate-c/RepairWorkspace.tsx \
+            apps/web/lib/gate-c-c4-decisions.ts \
+            apps/web/lib/gate-c-c4-http.ts
+          git commit -m "fix(c4): align repair UI with protected-match policy"
+          git push origin HEAD:fix/gate-c-c4-production-integration-20260801

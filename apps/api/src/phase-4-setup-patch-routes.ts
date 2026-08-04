@@ -2,10 +2,10 @@ import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
 import { registerGateCC4IntakeRoutes } from "./gate-c-c4-intake-routes.js";
-import { registerGateCC4Routes } from "./gate-c-c4-routes.js";
 import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import type { GateCC4Operations } from "./gate-c-c4-operations.js";
 import { registerGateCC4PublicTruthRoutes, type GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
+import { registerGateCC4Routes } from "./gate-c-c4-routes.js";
 import type { GateCC4Runtime } from "./gate-c-c4-runtime.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
@@ -218,6 +218,10 @@ export async function registerPhase4SetupPatchRoutes(
     },
   );
 
+  if (options.runtime.gateCC4PublicTruth) {
+    await registerGateCC4PublicTruthRoutes(app, options.runtime.gateCC4PublicTruth);
+  }
+
   if (options.runtime.gateCC4 && options.runtime.gateCC4Operations && options.runtime.gateCC4Lifecycle) {
     await registerGateCC4IntakeRoutes(app, {
       lifecycle: options.runtime.gateCC4Lifecycle,
@@ -231,8 +235,5 @@ export async function registerPhase4SetupPatchRoutes(
       identityRequests: options.identityRequests,
       allowedOrigins: options.allowedOrigins,
     });
-    if (options.runtime.gateCC4PublicTruth) {
-      await registerGateCC4PublicTruthRoutes(app, options.runtime.gateCC4PublicTruth);
-    }
   }
 }

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
-import { gateCC4BffMachine } from "@/lib/gate-c-c4-bff";
-import { jsonBody, forwardPhase3Mutation } from "@/lib/phase3-settings-command.server";
+import { gateCC4Http } from "@/lib/gate-c-c4-http";
 import { isGateCC4AbandonResponse } from "@/lib/gate-c-c4-validators";
+import { forwardPhase3Mutation, jsonBody } from "@/lib/phase3-settings-command.server";
 
 export async function POST(
   request: NextRequest,
@@ -9,9 +9,9 @@ export async function POST(
 ) {
   const { competitionId, repairId } = await context.params;
   const body = await jsonBody(request);
-  if (!body) return Response.json({ error: { code: gateCC4BffMachine.errors.requestInvalid } }, { status: 400 });
+  if (!body) return Response.json({ error: { code: gateCC4Http.errors.requestInvalid } }, { status: 400 });
   return forwardPhase3Mutation(request, {
-    method: gateCC4BffMachine.methods.post,
+    method: gateCC4Http.methodPost,
     path: `/api/v1/competitions/${encodeURIComponent(competitionId)}/repairs/${encodeURIComponent(repairId)}/abandon`,
     body,
     validate: isGateCC4AbandonResponse,

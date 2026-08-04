@@ -866,24 +866,13 @@ export class GateCC4Runtime {
         expectedScheduleVersion: request.expected_schedule_version,
         expectedResultVersion: request.expected_result_version,
       });
-      const [firstProjection] = result.projections;
-      if (!firstProjection) {
-        throw new ApiError(
-          409,
-          "REPAIR_PUBLIC_PROJECTION_MISSING",
-          "Repair publication did not create a public projection",
-        );
-      }
       const receipt: GateCRepairPublicationReceipt = {
         competition_id: request.competition_id,
         repair_id: repairCase.id,
         repair_revision_id: revision.id,
         schedule_version: result.scheduleVersion,
         result_version: result.resultVersion,
-        projection_version: result.projections.reduce(
-          (maximum, projection) => Math.max(maximum, projection.projectionVersion),
-          firstProjection.projectionVersion,
-        ),
+        projection_version: Math.max(...result.projections.map((projection) => projection.projectionVersion)),
         schedule_revision_id: result.scheduleRevisionId,
         analysis_fingerprint: revision.analysis_fingerprint,
         duplicate: false,

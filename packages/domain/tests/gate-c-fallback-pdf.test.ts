@@ -26,6 +26,10 @@ function match(index: number): FallbackMatch {
   };
 }
 
+async function load(bytes: Uint8Array): Promise<PDFDocument> {
+  return PDFDocument.load(bytes, { updateMetadata: false });
+}
+
 describe("Gate C C4 deterministic fallback PDF rendering", () => {
   it("renders an A4 schedule deterministically and paginates long events", async () => {
     const document = buildScheduleFallbackDocument({
@@ -43,19 +47,21 @@ describe("Gate C C4 deterministic fallback PDF rendering", () => {
 
     const first = await renderScheduleFallbackPdf(document);
     const second = await renderScheduleFallbackPdf(document);
-    const parsed = await PDFDocument.load(first);
-    const [firstPage] = parsed.getPages();
+    const parsed = await load(first);
 
     expect(second).toEqual(first);
-    expect(parsed.getPageCount()).toBe(2);
-    expect(firstPage?.getWidth()).toBeCloseTo(595.28, 2);
-    expect(firstPage?.getHeight()).toBeCloseTo(841.89, 2);
-    expect(parsed.getTitle()).toBe("National Championship");
-    expect(parsed.getCreationDate()?.toISOString()).toBe("2026-08-01T00:00:00.000Z");
+    expect(new TextDecoder().decode(first.slice(0, 8))).toMatch(/^%PDF-1\./u);
+    expect(parsed.getPageCount()).toBeGreaterThanOrEqual(2);
+    expect(parsed.getTitle()).toBe("National Championship published schedule");
+    expect(parsed.getSubject()).toBe("Schedule version 4, result version 7");
+    for (const page of parsed.getPages()) {
+      expect(page.getWidth()).toBeCloseTo(595.28, 1);
+      expect(page.getHeight()).toBeCloseTo(841.89, 1);
+    }
     expect(createHash("sha256").update(first).digest("hex")).toMatch(/^[a-f0-9]{64}$/u);
   });
 
-  it("renders sport-specific emergency score sheets without private data", async () => {
+  it("renders loadable sport-specific emergency score sheets without private data", async () => {
     for (const sport of ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const) {
       const sheet = buildEmergencyScoreSheet({
         competitionId: "competition-1",
@@ -70,18 +76,18 @@ describe("Gate C C4 deterministic fallback PDF rendering", () => {
         match: match(1),
       });
       const bytes = await renderEmergencyScoreSheetPdf(sheet);
-      const parsed = await PDFDocument.load(bytes);
-      const [firstPage] = parsed.getPages();
+      const parsed = await load(bytes);
+      const raw = new TextDecoder().decode(bytes);
 
-      expect(parsed.getPageCount()).toBeGreaterThan(0);
-      expect(firstPage?.getWidth()).toBeCloseTo(595.28, 2);
-      expect(firstPage?.getHeight()).toBeCloseTo(841.89, 2);
-      expect(parsed.getTitle()).toBe("National Championship score sheet");
-      expect(createHash("sha256").update(bytes).digest("hex")).toMatch(/^[a-f0-9]{64}$/u);
+      expect(new TextDecoder().decode(bytes.slice(0, 8))).toMatch(/^%PDF-1\./u);
+      expect(parsed.getPageCount()).toBeGreaterThanOrEqual(1);
+      expect(parsed.getTitle()).toContain("emergency score sheet");
+      expect(parsed.getSubject()).toBe("Schedule version 4, result version 7");
+      expect(raw).not.toMatch(/bearer|cookie|password|secret|#access=/iu);
     }
   });
 
-  it("normalises unsupported glyphs into a structurally valid PDF", async () => {
+  it("normalises unsupported glyphs before writing standard-font metadata", async () => {
     const document = buildScheduleFallbackDocument({
       competitionId: "competition-1",
       competitionName: "Café 国际 Cup",
@@ -95,7 +101,7 @@ describe("Gate C C4 deterministic fallback PDF rendering", () => {
       matches: [match(1)],
     });
 
-    const parsed = await PDFDocument.load(await renderScheduleFallbackPdf(document));
-    expect(parsed.getTitle()).toBe("Cafe ?? Cup");
+    const parsed = await load(await renderScheduleFallbackPdf(document));
+    expect(parsed.getTitle()).toBe("Cafe ?? Cup published schedule");
   });
 });

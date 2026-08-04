@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { gateCC4BffMachine } from "@/lib/gate-c-c4-bff";
 import { parseGateCC4Workspace } from "@/lib/gate-c-c4";
+import { gateCC4Http } from "@/lib/gate-c-c4-http";
 import { readPhase3Json } from "@/lib/phase3-settings-command.server";
 
 export async function GET(
@@ -17,8 +17,7 @@ export async function GET(
     return NextResponse.json(
       {
         error: {
-          code:
-            result.status === 401 ? gateCC4BffMachine.errors.authRequired : gateCC4BffMachine.errors.repairReadFailed,
+          code: result.status === 401 ? gateCC4Http.errors.authRequired : gateCC4Http.errors.repairReadFailed,
         },
       },
       { status: result.status },
@@ -27,7 +26,7 @@ export async function GET(
   const workspace = parseGateCC4Workspace(result.payload);
   return workspace
     ? NextResponse.json(workspace, {
-        headers: { [gateCC4BffMachine.headers.cacheControl]: gateCC4BffMachine.cache.noStore },
+        headers: { "cache-control": gateCC4Http.cacheNoStore },
       })
-    : NextResponse.json({ error: { code: gateCC4BffMachine.errors.repairResponseInvalid } }, { status: 502 });
+    : NextResponse.json({ error: { code: gateCC4Http.errors.repairResponseInvalid } }, { status: 502 });
 }

@@ -1,14 +1,14 @@
+import { notFound, redirect } from "next/navigation";
 import { PendingRepairCases } from "@/components/gate-c/PendingRepairCases";
 import { RepairWorkspace } from "@/components/gate-c/RepairWorkspace";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
-import { gateCC4Copy, gateCC4Machine } from "@/lib/gate-c-c4";
-import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
+import { gateCC4Copy } from "@/lib/gate-c-c4";
+import { gateCC4UiMachine } from "@/lib/gate-c-c4-http";
 import { phase2Copy } from "@/lib/phase2";
-import { notFound, redirect } from "next/navigation";
-import styles from "./page.module.css";
+import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
+import styles from "./RepairPage.module.css";
 
-// Next.js statically evaluates segment configuration exports; this must remain a literal.
-export const dynamic = "force-dynamic";
+export const dynamic = gateCC4UiMachine.forceDynamic;
 
 export default async function CompetitionRepairsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -21,13 +21,13 @@ export default async function CompetitionRepairsPage({ params }: { params: Promi
   return (
     <OrganiserWorkspace
       competition={competition}
-      section={gateCC4Machine.results}
+      section={gateCC4UiMachine.resultsSection}
       pageEyebrow={gateCC4Copy.eyebrow}
       pageTitle={gateCC4Copy.title}
       pageIntro={gateCC4Copy.intro}
+      syncLabel={competition.publicationRevision}
+      syncState={gateCC4UiMachine.savedSyncState}
       sectionAction={null}
-      syncLabel={competition.publishedVersionLabel ?? competition.publicationRevision}
-      syncState={competition.canEdit ? gateCC4Machine.saved : gateCC4Machine.readOnly}
       sectionContent={
         <div className={styles.stack}>
           <PendingRepairCases competitionId={competition.id} />

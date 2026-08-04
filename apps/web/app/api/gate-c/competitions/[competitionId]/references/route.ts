@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { gateCC4BffMachine } from "@/lib/gate-c-c4-bff";
+import { gateCC4Http } from "@/lib/gate-c-c4-http";
 import { parseGateCC4References } from "@/lib/gate-c-c4-references";
 import { readPhase3Json } from "@/lib/phase3-settings-command.server";
 
@@ -11,10 +11,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ com
     return NextResponse.json(
       {
         error: {
-          code:
-            result.status === 401
-              ? gateCC4BffMachine.errors.authRequired
-              : gateCC4BffMachine.errors.referenceReadFailed,
+          code: result.status === 401 ? gateCC4Http.errors.authRequired : gateCC4Http.errors.referenceReadFailed,
         },
       },
       { status: result.status },
@@ -23,7 +20,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ com
   const references = parseGateCC4References(result.payload);
   return references
     ? NextResponse.json(references, {
-        headers: { [gateCC4BffMachine.headers.cacheControl]: gateCC4BffMachine.cache.noStore },
+        headers: { "cache-control": gateCC4Http.cacheNoStore },
       })
-    : NextResponse.json({ error: { code: gateCC4BffMachine.errors.referenceResponseInvalid } }, { status: 502 });
+    : NextResponse.json({ error: { code: gateCC4Http.errors.referenceResponseInvalid } }, { status: 502 });
 }
