@@ -19,6 +19,7 @@ import {
   assertC5OperationBudget,
   assertC5WorkloadProfile,
   C5_WORKLOAD_BUDGETS,
+  executeC5Workload,
   summarizeWorkload,
 } from "./index.js";
 
@@ -95,6 +96,76 @@ describe("C5 workload summaries", () => {
         failureCode: "stale_generation_accepted",
       }),
     ).toThrow("correctness oracle failed: stale_generation_accepted");
+  });
+
+  it("bounds concurrent execution by the approved operation role and propagates correctness failures", async () => {
+    let now = 0;
+    const seenWorkers = new Set<number>();
+    const receipt = await executeC5Workload(
+      {
+        operation: "repair_publication",
+        profile: {
+          profileId: "pilot-operations",
+          durationSeconds: 1,
+          scorekeeperCount: 5,
+          publicReaderCount: 7,
+          organiserWorkerCount: 2,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 2,
+        operationTimeoutMs: 100,
+      },
+      async ({ workerIndex }) => {
+        seenWorkers.add(workerIndex);
+        now += 1;
+        return { outcome: "success", correctness: { passed: true } };
+      },
+      () => now,
+    );
+    expect(receipt.workerCount).toBe(2);
+    expect(receipt.summary.sampleCount).toBe(2);
+    expect(seenWorkers).toEqual(new Set([0, 1]));
+
+    await expect(
+      executeC5Workload(
+        {
+          operation: "lease_takeover",
+          profile: {
+            profileId: "pilot-operations",
+            durationSeconds: 1,
+            scorekeeperCount: 1,
+            publicReaderCount: 1,
+            organiserWorkerCount: 1,
+            approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+          },
+          maximumSamples: 1,
+          operationTimeoutMs: 100,
+        },
+        async () => ({ outcome: "expected_failure", correctness: { passed: false, failureCode: "stale_writer" } }),
+        () => 0,
+      ),
+    ).rejects.toThrow("correctness oracle failed: stale_writer");
+  });
+
+  it("fails closed when a traffic adapter ignores its abort signal", async () => {
+    await expect(
+      executeC5Workload(
+        {
+          operation: "score_event_acknowledgement",
+          profile: {
+            profileId: "pilot-timeout",
+            durationSeconds: 1,
+            scorekeeperCount: 1,
+            publicReaderCount: 1,
+            organiserWorkerCount: 1,
+            approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+          },
+          maximumSamples: 1,
+          operationTimeoutMs: 1,
+        },
+        async () => new Promise(() => undefined),
+      ),
+    ).rejects.toThrow("correctness oracle failed: Error");
   });
 });
 
