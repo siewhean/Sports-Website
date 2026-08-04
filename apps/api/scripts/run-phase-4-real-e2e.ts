@@ -1171,6 +1171,15 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     const activeSql = sql;
     if (!activeSql) throw new Error("C4 completion callback requires its isolated PostgreSQL connection");
     let scoreEventExecutorReserved = false;
+    const reservedC5MatchIds = new Set<string>();
+    const reserveC5Matches = (matches: readonly { id: string }[], purpose: string): void => {
+      for (const match of matches) {
+        if (reservedC5MatchIds.has(match.id)) {
+          throw new Error(`C5 ${purpose} fixture overlaps a match already reserved by another workload operation`);
+        }
+      }
+      for (const match of matches) reservedC5MatchIds.add(match.id);
+    };
     const createScoreEventExecutor = async ({
       project,
       workerCount,
@@ -1218,6 +1227,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
           `C5 score-event fixture requires ${String(workerCount)} untouched scheduled matches; found ${String(candidates.length)}`,
         );
       }
+      reserveC5Matches(candidates, "score-event");
       const sessions = await issueGateCC5ScoreWriteSessions(
         phase2,
         { accountId: repair.accountId },
@@ -1389,6 +1399,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
         throw new Error(
           `C5 lease-takeover fixture requires ${String(workerCount)} untouched matches; found ${String(candidates.length)}`,
         );
+      reserveC5Matches(candidates, "lease-takeover");
       const writers = await issueGateCC5ScoreWriteSessions(
         phase2,
         { accountId: repair.accountId },
