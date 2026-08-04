@@ -16,6 +16,45 @@ const freshness = {
   etag: "projection-9",
 };
 
+const payload = {
+  competition: {
+    id: "00000000-0000-4000-8000-000000000001",
+    name: "National Cup",
+    slug: "national-cup",
+    sport_code: "canoe_polo",
+    timezone: "Asia/Singapore",
+    starts_on: "2026-08-01",
+    ends_on: "2026-08-02",
+    status: "active",
+  },
+  divisions: [
+    {
+      division: { id: freshness.division_id, name: "Open" },
+      schedule: [],
+      results: [],
+      standings: null,
+      bracket: null,
+    },
+  ],
+  division: { id: freshness.division_id, name: "Open" },
+  publication: { schedule_version: 4, result_version: 7 },
+  schedule: [],
+  results: [],
+  standings: null,
+  bracket: null,
+  last_updated_at: freshness.source_updated_at,
+  freshness: {
+    schedule_version: freshness.schedule_version,
+    result_version: freshness.result_version,
+    projection_version: freshness.projection_version,
+    generated_at: freshness.generated_at,
+    source_updated_at: freshness.source_updated_at,
+    etag: freshness.etag,
+    division_freshness: [freshness],
+  },
+  public_notices: [],
+};
+
 describe("Gate C C4 canonical public truth", () => {
   it("reads the persisted projection column and exposes exact freshness", async () => {
     let query = "";
@@ -24,8 +63,9 @@ describe("Gate C C4 canonical public truth", () => {
         query = statement;
         return [
           {
-            payload: { division: { id: freshness.division_id, name: "Open" }, divisions: [] },
+            payload,
             ...freshness,
+            division_freshness: [freshness],
           } as T,
         ];
       },
@@ -34,10 +74,16 @@ describe("Gate C C4 canonical public truth", () => {
     const result = await new GateCC4PublicTruthRuntime(sql).read("national-cup");
 
     expect(query).toContain("projection.projection AS payload");
-    expect(query).not.toContain("projection.payload");
-    expect(result?.freshness).toEqual(freshness);
+    expect(query).toContain("JOIN public_competition_projections projection");
+    expect(query).not.toContain("LIMIT 1");
+    expect(result?.freshness).toMatchObject({
+      schedule_version: freshness.schedule_version,
+      result_version: freshness.result_version,
+      projection_version: freshness.projection_version,
+      division_freshness: [freshness],
+    });
     expect(result?.headers).toMatchObject({
-      etag: '"projection-9"',
+      etag: `"${result?.freshness.etag}"`,
       "x-matchday-schedule-version": "4",
       "x-matchday-result-version": "7",
       "x-matchday-projection-version": "9",
@@ -49,7 +95,7 @@ describe("Gate C C4 canonical public truth", () => {
     apps.push(app);
     const runtime = {
       read: async () => ({
-        payload: { division: { id: freshness.division_id, name: "Open" }, divisions: [] },
+        payload,
         freshness,
         headers: {
           etag: '"projection-9"',

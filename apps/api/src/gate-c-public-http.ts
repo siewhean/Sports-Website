@@ -1,5 +1,7 @@
 import type { PublicProjectionFreshness } from "@matchday/contracts";
 
+type PublicHttpFreshness = Omit<PublicProjectionFreshness, "division_id">;
+
 export const gateCC4PublicCacheControl = "public, max-age=0, s-maxage=15, must-revalidate";
 
 export type GateCC4PublicHeaders = Readonly<{
@@ -34,7 +36,7 @@ function quotedEtag(value: string): string {
   return `"${trimmed}"`;
 }
 
-export function gateCC4PublicHeaders(freshness: PublicProjectionFreshness): GateCC4PublicHeaders {
+export function gateCC4PublicHeaders(freshness: PublicHttpFreshness): GateCC4PublicHeaders {
   nonNegativeVersion(freshness.schedule_version, "Schedule version");
   nonNegativeVersion(freshness.result_version, "Result version");
   positiveVersion(freshness.projection_version, "Projection version");
@@ -66,7 +68,7 @@ function etagMatches(headerValue: string, currentEtag: string): boolean {
 }
 
 export function gateCC4PublicConditionalStatus(
-  freshness: PublicProjectionFreshness,
+  freshness: PublicHttpFreshness,
   requestHeaders: Readonly<Record<string, string | string[] | undefined>>,
 ): 200 | 304 {
   const responseHeaders = gateCC4PublicHeaders(freshness);

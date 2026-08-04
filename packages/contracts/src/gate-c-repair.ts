@@ -158,3 +158,14 @@ export type PublicProjectionFreshness = Readonly<{
   source_updated_at: string;
   etag: string;
 }>;
+
+/**
+ * Freshness for the canonical competition response. The HTTP cache identity
+ * represents the complete public competition projection; `division_freshness`
+ * retains the immutable version lineage for every division in that response.
+ */
+export type PublicCompetitionFreshness = Readonly<
+  Omit<PublicProjectionFreshness, "division_id"> & {
+    division_freshness: readonly PublicProjectionFreshness[];
+  }
+>;

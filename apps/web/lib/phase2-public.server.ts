@@ -1,7 +1,11 @@
 import "server-only";
 
 import { cache } from "react";
-import type { PublicCompetitionProjection, PublicDivisionProjection } from "@matchday/contracts";
+import type {
+  PublicCompetitionProjection,
+  PublicDivisionProjection,
+  PublicCompetitionFreshness,
+} from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { isPublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
 import {
@@ -191,18 +195,54 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
   };
 }
 
+function isCanonicalFreshness(value: unknown): value is PublicCompetitionFreshness {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const freshness = value as Record<string, unknown>;
+  return Boolean(
+    typeof freshness.etag === "string" &&
+    typeof freshness.generated_at === "string" &&
+    typeof freshness.source_updated_at === "string" &&
+    Number.isSafeInteger(freshness.schedule_version) &&
+    Number.isSafeInteger(freshness.result_version) &&
+    Number.isSafeInteger(freshness.projection_version) &&
+    Array.isArray(freshness.division_freshness),
+  );
+}
+
+function validCanonicalHeaders(response: Response, freshness: PublicCompetitionFreshness): boolean {
+  const etag = response.headers.get("etag");
+  const scheduleVersion = response.headers.get("x-matchday-schedule-version");
+  const resultVersion = response.headers.get("x-matchday-result-version");
+  const projectionVersion = response.headers.get("x-matchday-projection-version");
+  const lastModified = response.headers.get("last-modified");
+  const cacheControl = response.headers.get("cache-control");
+  return Boolean(
+    etag === `\"${freshness.etag}\"` &&
+    scheduleVersion === String(freshness.schedule_version) &&
+    resultVersion === String(freshness.result_version) &&
+    projectionVersion === String(freshness.projection_version) &&
+    lastModified &&
+    Number.isFinite(Date.parse(lastModified)) &&
+    cacheControl === "public, max-age=0, s-maxage=15, must-revalidate",
+  );
+}
+
 const apiCompetitionReadPort: CompetitionReadPort = {
   async getBySlug(slug) {
     const baseUrl = apiBaseUrl();
     if (!baseUrl || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null;
     try {
-      const response = await fetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}`, {
+      const response = await fetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, {
         headers: { accept: "application/json" },
         cache: "no-store",
       });
       if (!response.ok) return null;
       const payload: unknown = await response.json();
-      return isPublicCompetitionProjection(payload) ? toCompetitionView(payload) : null;
+      return isPublicCompetitionProjection(payload) &&
+        isCanonicalFreshness((payload as Record<string, unknown>).freshness) &&
+        validCanonicalHeaders(response, (payload as Record<string, unknown>).freshness as PublicCompetitionFreshness)
+        ? toCompetitionView(payload)
+        : null;
     } catch {
       return null;
     }

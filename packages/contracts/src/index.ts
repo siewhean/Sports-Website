@@ -182,6 +182,7 @@ export {
   type GateCRepairSlot,
   type GateCRepairSlotControl,
   type PublicProjectionFreshness,
+  type PublicCompetitionFreshness,
 } from "./gate-c-repair.js";
 export type {
   GateCRepairAbandonRequest,
