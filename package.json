@@ -29,6 +29,7 @@
     "test:e2e:gate-c-c3:real": "pnpm --filter @matchday/api exec tsx scripts/run-gate-c-c3-e2e.ts",
     "evidence:gate-c-c3:run": "node scripts/run-gate-c-c3-ledger.mjs",
     "test:evidence:gate-c-c3": "node --test scripts/run-gate-c-c3-ledger.test.mjs",
+    "test:gate-c-c5:lifecycle": "pnpm --filter @matchday/api exec tsx scripts/run-gate-c-c5-lifecycle.ts",
     "test:e2e:phase4:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
     "test:a11y": "pnpm --filter @matchday/web test:a11y",
     "test:visual": "pnpm --filter @matchday/web test:visual",

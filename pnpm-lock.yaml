@@ -79,6 +79,9 @@ importers:
       '@matchday/identity':
         specifier: workspace:*
         version: link:../../packages/identity
+      '@matchday/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
       '@matchday/observability':
         specifier: workspace:*
         version: link:../../packages/observability
