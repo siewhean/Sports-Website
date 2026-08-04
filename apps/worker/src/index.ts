@@ -1,5 +1,6 @@
 export { workerServiceName } from "./service.js";
 export { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
+export { resolveWorkerQueuePrefix } from "./queue-configuration.js";
 export type { FoundationProbePayload, FoundationProbeResult, WorkerJobRegistry } from "./jobs.js";
 export {
   WorkerRuntime,

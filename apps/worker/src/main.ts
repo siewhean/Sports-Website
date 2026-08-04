@@ -2,6 +2,7 @@ import { loadConfig } from "@matchday/config";
 import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
+import { resolveWorkerQueuePrefix } from "./queue-configuration.js";
 import { WorkerRuntime, type WorkerMetrics } from "./runtime.js";
 import { workerServiceName } from "./service.js";
 
@@ -13,9 +14,11 @@ const logger = createLogger({
 });
 const metricsRuntime = initializeMetrics({ serviceName: workerServiceName });
 const edgeCache = createWorkerEdgeCachePurgePort(config);
+const queuePrefix = resolveWorkerQueuePrefix(process.env);
 const runtime = new WorkerRuntime({
   queueName: "matchday-foundation",
   redisUrl: config.redisUrl,
+  ...(queuePrefix === undefined ? {} : { queuePrefix }),
   metrics: createWorkerMetrics(metricsRuntime),
   hooks: {
     onHealthChange: (health) => logger.info({ health }, "worker health changed"),
