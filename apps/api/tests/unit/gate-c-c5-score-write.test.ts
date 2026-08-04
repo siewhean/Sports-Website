@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createGateCC5ScoreWriteExecutor } from "../../src/gate-c-c5-score-write.js";
+import { createGateCC5ScoreWriteExecutor, issueGateCC5ScoreWriteSessions } from "../../src/gate-c-c5-score-write.js";
 
 const fetchMock = vi.fn<typeof fetch>();
 const originalFetch = globalThis.fetch;
@@ -39,6 +39,52 @@ function invocation(workerIndex: number) {
 }
 
 describe("C5 score-write traffic adapter", () => {
+  it("issues dedicated one-time passes and retains only exchanged writer-session material", async () => {
+    const createAccessPass = vi.fn().mockResolvedValue({ token: "one-time-token" });
+    const exchangeAccess = vi.fn().mockResolvedValue({
+      session_id: "session-1",
+      session_token: "s".repeat(32),
+      mode: "writer",
+      generation: 3,
+    });
+    const sessions = await issueGateCC5ScoreWriteSessions(
+      { createAccessPass, exchangeAccess } as never,
+      { accountId: "organiser" },
+      "http://127.0.0.1:4101",
+      [{ competitionId: "competition", matchId: "match", expectedSequence: 2 }],
+      () => new Date("2026-08-04T00:00:00.000Z"),
+    );
+    expect(createAccessPass).toHaveBeenCalledWith(
+      { accountId: "organiser" },
+      "competition",
+      "match",
+      expect.objectContaining({ role: "scorekeeper", expiresAt: "2026-08-04T00:30:00.000Z" }),
+      expect.any(String),
+    );
+    expect(exchangeAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "one-time-token", expectedMatchId: "match" }),
+      expect.any(String),
+    );
+    expect(sessions).toEqual([
+      expect.objectContaining({ sessionId: "session-1", writerGeneration: 3, expectedSequence: 2 }),
+    ]);
+    expect(JSON.stringify(sessions)).not.toContain("one-time-token");
+  });
+
+  it("rejects a candidate exchange instead of generating unfenced traffic", async () => {
+    await expect(
+      issueGateCC5ScoreWriteSessions(
+        {
+          createAccessPass: vi.fn().mockResolvedValue({ token: "one-time-token" }),
+          exchangeAccess: vi.fn().mockResolvedValue({ mode: "candidate", generation: null }),
+        } as never,
+        { accountId: "organiser" },
+        "http://127.0.0.1:4101",
+        [{ competitionId: "competition", matchId: "match", expectedSequence: 0 }],
+      ),
+    ).rejects.toThrow("did not acquire a writer lease");
+  });
+
   it("binds each worker to its own writer session and advances only accepted receipts", async () => {
     fetchMock.mockImplementation(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { client_event_id: string; expected_sequence: number };

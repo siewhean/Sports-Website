@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { C5WorkloadExecutor } from "@matchday/observability";
+import type { Phase2Actor, Phase2Runtime } from "./phase-2-runtime.js";
 
 export type GateCC5ScoreWriteSession = Readonly<{
   apiOrigin: string;
@@ -8,6 +9,51 @@ export type GateCC5ScoreWriteSession = Readonly<{
   writerGeneration: number;
   expectedSequence: number;
 }>;
+
+export type GateCC5ScoreWriteTarget = Readonly<{ competitionId: string; matchId: string; expectedSequence: number }>;
+
+export async function issueGateCC5ScoreWriteSessions(
+  runtime: Phase2Runtime,
+  actor: Phase2Actor,
+  apiOrigin: string,
+  targets: readonly GateCC5ScoreWriteTarget[],
+  now: () => Date = () => new Date(),
+): Promise<GateCC5ScoreWriteSession[]> {
+  return await Promise.all(
+    targets.map(async (target, index) => {
+      const pass = await runtime.createAccessPass(
+        actor,
+        target.competitionId,
+        target.matchId,
+        {
+          role: "scorekeeper",
+          expiresAt: new Date(now().getTime() + 30 * 60_000).toISOString(),
+          idempotencyKey: randomUUID(),
+        },
+        randomUUID(),
+      );
+      if (!pass.token) throw new Error("C5 score-write pass issuance returned no one-time token");
+      const session = await runtime.exchangeAccess(
+        {
+          token: pass.token,
+          expectedMatchId: target.matchId,
+          deviceId: randomUUID(),
+          deviceLabel: `C5 worker ${String(index + 1)}`,
+        },
+        randomUUID(),
+      );
+      if (session.mode !== "writer" || !session.generation)
+        throw new Error("C5 score-write pass did not acquire a writer lease");
+      return {
+        apiOrigin,
+        sessionId: session.session_id,
+        sessionToken: session.session_token,
+        writerGeneration: session.generation,
+        expectedSequence: target.expectedSequence,
+      };
+    }),
+  );
+}
 
 type ScoreReceipt = Readonly<{
   client_event_id?: unknown;
