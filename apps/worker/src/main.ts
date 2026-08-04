@@ -51,7 +51,11 @@ const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     forceExit = true;
   } finally {
     logger.flush();
-    if (forceExit) process.exit(1);
+    // OpenTelemetry or a logger transport may retain event-loop handles after
+    // the queue has shut down. A worker that has completed its bounded
+    // shutdown must terminate, otherwise an orchestrator cannot distinguish a
+    // drained worker from one still accepting jobs.
+    process.exit(forceExit ? 1 : 0);
   }
 };
 
