@@ -3,6 +3,8 @@ import type { Redis } from "ioredis";
 const prefixPattern = /^matchday-c5-[a-z0-9-]{3,56}$/u;
 const workerQueueName = "matchday-foundation";
 const scanCount = 100;
+const maximumScanIterations = 10_000;
+const unlinkBatchSize = 100;
 
 export type GateCC5RedisOwnership = Readonly<{
   queuePrefix: string;
@@ -51,13 +53,24 @@ export async function gateCC5OwnedRedisKeys(redis: Redis, ownership: GateCC5Redi
   const keys = new Set<string>();
   for (const pattern of ownership.ownedPatterns) {
     let cursor = "0";
+    let iterations = 0;
     do {
+      iterations += 1;
+      if (iterations > maximumScanIterations) {
+        throw new Error("Gate C C5 Redis ownership scan exceeded its bounded iteration limit");
+      }
       const [next, batch] = await redis.scan(cursor, "MATCH", pattern, "COUNT", scanCount);
       cursor = next;
       for (const key of batch) keys.add(key);
     } while (cursor !== "0");
   }
   return [...keys].sort();
+}
+
+async function unlinkOwnedKeys(redis: Redis, keys: readonly string[]): Promise<void> {
+  for (let index = 0; index < keys.length; index += unlinkBatchSize) {
+    await redis.unlink(...keys.slice(index, index + unlinkBatchSize));
+  }
 }
 
 export async function prepareGateCC5RedisOwnership(redis: Redis, ownership: GateCC5RedisOwnership): Promise<void> {
@@ -73,7 +86,7 @@ export async function cleanupGateCC5RedisOwnership(
   ownership: GateCC5RedisOwnership,
 ): Promise<GateCC5RedisCleanupReceipt> {
   const ownedKeys = await gateCC5OwnedRedisKeys(redis, ownership);
-  if (ownedKeys.length > 0) await redis.unlink(...ownedKeys);
+  await unlinkOwnedKeys(redis, ownedKeys);
   const remaining = await gateCC5OwnedRedisKeys(redis, ownership);
   if (remaining.length > 0) {
     throw new Error(`Gate C C5 Redis cleanup left ${String(remaining.length)} owned keys`);
