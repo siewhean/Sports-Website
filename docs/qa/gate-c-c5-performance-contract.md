@@ -36,6 +36,13 @@ expected concurrency and approves it against these budgets.
 - Reject a run with a nonzero unexpected error rate, a duplicate accepted
   write, stale writer acceptance, leaked credential, or public/private version
   mismatch even when latency meets budget.
+- A `public_result_convergence` sample must prove that canonical public
+  freshness has the exact `result_version` returned by that sample's
+  finalisation receipt and that the finalised match is publicly visible. A
+  shared competition may not serve concurrent convergence samples: result
+  versions are competition-global, so every concurrent sample needs an
+  independently provisioned disposable public aggregate. A later version is a
+  correctness failure, not evidence that the earlier result converged.
 - Never direct load traffic at production or a shared environment.
 
 ## Required C5 external evidence
