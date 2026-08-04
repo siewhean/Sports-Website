@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { createGateCC5LifecycleReceipt } from "../../scripts/run-gate-c-c5-lifecycle.js";
+
+const source = readFileSync(new URL("../../scripts/run-gate-c-c5-lifecycle.ts", import.meta.url), "utf8");
 
 describe("C5 real lifecycle receipt", () => {
   it("retains only hashes and proves orderly cleanup", () => {
@@ -36,5 +40,10 @@ describe("C5 real lifecycle receipt", () => {
         cleanup: { initialOwnedKeyCount: 1, finalOwnedKeyCount: 0, unrelatedGuardPreserved: false },
       }),
     ).toThrow("safe queue cleanup");
+  });
+
+  it("spawns the worker directly so graceful shutdown has an observable exit code", () => {
+    expect(source).toContain('spawn(process.execPath, [tsxCli, "apps/worker/src/main.ts"]');
+    expect(source).not.toContain('spawn("pnpm", ["--filter", "@matchday/worker"');
   });
 });

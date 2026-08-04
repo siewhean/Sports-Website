@@ -90,7 +90,12 @@ function appendTail(target: string[], chunk: Buffer): void {
 }
 
 function startWorker(redisUrl: string, queuePrefix: string, parentEnvironment: NodeJS.ProcessEnv): RunningWorker {
-  const child = spawn("pnpm", ["--filter", "@matchday/worker", "exec", "tsx", "src/main.ts"], {
+  // Spawn the worker process directly. Killing a `pnpm exec` wrapper makes the
+  // wrapper report SIGTERM even when its child drained successfully, so the
+  // lifecycle harness cannot distinguish graceful worker shutdown from an
+  // interrupted process.
+  const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
+  const child = spawn(process.execPath, [tsxCli, "apps/worker/src/main.ts"], {
     cwd: root,
     env: {
       ...parentEnvironment,
