@@ -205,6 +205,22 @@ describe("Gate C C4 repair persistence migration", () => {
         `;
       const [firstRevision] = await appendRevision(null);
       expect(firstRevision?.revision).toBe(1);
+      const [adjustment] = await sql<{ id: string }[]>`
+        INSERT INTO schedule_repair_match_adjustments(
+          repair_revision_id,repair_case_id,competition_id,match_id,division_id,
+          starts_at,ends_at,reason,decided_by_account_id
+        ) VALUES(
+          ${firstRevision!.id},${repairCaseId},${competitionId},${matchId},${divisionId},
+          '2027-01-01T09:00:00Z','2027-01-01T09:20:00Z','Move after correction',${accountId}
+        ) RETURNING id
+      `;
+      await expect(
+        sql`UPDATE schedule_repair_match_adjustments
+          SET reason='Changed after append' WHERE id=${adjustment!.id}`,
+      ).rejects.toThrow(/append-only/i);
+      await expect(sql`DELETE FROM schedule_repair_match_adjustments WHERE id=${adjustment!.id}`).rejects.toThrow(
+        /append-only/i,
+      );
       await sql`INSERT INTO schedule_revisions(
         id,competition_id,format_revision_id,revision,input_hash,created_by
       ) VALUES(${scheduleRevisionId},${competitionId},${formatRevisionId},1,${"9".repeat(64)},${accountId})`;

@@ -75,6 +75,11 @@ test("Phase 2 scorer attribution visual baseline", async ({ page }) => {
   await openPhase2Scorekeeper(page);
   await page.getByRole("button", { name: "Goal Marina Blue" }).click();
   await expect(page.getByRole("dialog", { name: "Confirm goal" })).toBeVisible();
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+  await page.getByRole("button", { name: "Cancel" }).focus();
   await expect(page).toHaveScreenshot("phase-2-scorer-confirmation.png", {
     fullPage: true,
     animations: "disabled",
