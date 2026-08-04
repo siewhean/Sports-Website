@@ -511,6 +511,24 @@ describe("phase 2 browser scoring transport", () => {
     } satisfies Partial<ScoringTransportError>);
   });
 
+  it("accepts only the normalized demo code or explicit demo token", async () => {
+    const device = { id: "00000000-0000-4000-8000-000000000106", label: "Test device" };
+
+    await expect(
+      createScoringCommandPort("demo").exchangeAccess({ shortCode: "po-lo 12", device }),
+    ).resolves.toMatchObject({
+      mode: "writer",
+    } satisfies Partial<ScoringSessionView>);
+    await expect(
+      createScoringCommandPort("demo").exchangeAccess({
+        token: "demo-phase2-scoring-access-token-000000000001",
+        device,
+      }),
+    ).resolves.toMatchObject({
+      mode: "writer",
+    } satisfies Partial<ScoringSessionView>);
+  });
+
   it("preserves a revoked state when a stored scoring session is rejected", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "revoked" }, { status: 403 })));
 
