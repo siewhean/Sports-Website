@@ -19,6 +19,7 @@ import {
   assertC5OperationBudget,
   assertC5WorkloadProfile,
   C5_WORKLOAD_BUDGETS,
+  C5WorkloadFailureError,
   executeC5Workload,
   summarizeWorkload,
 } from "./index.js";
@@ -148,12 +149,61 @@ describe("C5 workload summaries", () => {
   });
 
   it("fails closed when a traffic adapter ignores its abort signal", async () => {
-    await expect(
-      executeC5Workload(
+    const failure = await executeC5Workload(
+      {
+        operation: "score_event_acknowledgement",
+        profile: {
+          profileId: "pilot-timeout",
+          durationSeconds: 1,
+          scorekeeperCount: 1,
+          publicReaderCount: 1,
+          organiserWorkerCount: 1,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 1,
+        operationTimeoutMs: 1,
+      },
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { outcome: "success", correctness: { passed: true } };
+      },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+    expect((failure as C5WorkloadFailureError).receipt).toMatchObject({
+      timeoutCount: 1,
+      correctness: { passed: false, failureCode: "C5WorkloadTimeoutError" },
+    });
+  });
+
+  it("retains malformed adapter results as an inspectable failed receipt", async () => {
+    const failure = await executeC5Workload(
+      {
+        operation: "score_event_acknowledgement",
+        profile: {
+          profileId: "pilot-malformed-adapter",
+          durationSeconds: 1,
+          scorekeeperCount: 1,
+          publicReaderCount: 1,
+          organiserWorkerCount: 1,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 1,
+        operationTimeoutMs: 100,
+      },
+      async () => ({ outcome: "invalid" as never, correctness: { passed: "true" as never } }),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+    expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
+  });
+
+  it.each([null, { toString: () => "valid_code" }])(
+    "rejects a non-string adapter failure code",
+    async (failureCode) => {
+      const failure = await executeC5Workload(
         {
           operation: "score_event_acknowledgement",
           profile: {
-            profileId: "pilot-timeout",
+            profileId: "pilot-invalid-failure-code",
             durationSeconds: 1,
             scorekeeperCount: 1,
             publicReaderCount: 1,
@@ -161,11 +211,36 @@ describe("C5 workload summaries", () => {
             approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
           },
           maximumSamples: 1,
-          operationTimeoutMs: 1,
+          operationTimeoutMs: 100,
         },
-        async () => new Promise(() => undefined),
-      ),
-    ).rejects.toThrow("correctness oracle failed: Error");
+        async () => ({ outcome: "success", correctness: { passed: false, failureCode: failureCode as never } }),
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+      expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
+    },
+  );
+
+  it("bounds a non-settling adapter after its abort grace window", async () => {
+    const startedAt = performance.now();
+    const failure = await executeC5Workload(
+      {
+        operation: "score_event_acknowledgement",
+        profile: {
+          profileId: "pilot-nonsettling-adapter",
+          durationSeconds: 1,
+          scorekeeperCount: 1,
+          publicReaderCount: 1,
+          organiserWorkerCount: 1,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 1,
+        operationTimeoutMs: 1,
+      },
+      async () => new Promise(() => undefined),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+    expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
+    expect(performance.now() - startedAt).toBeLessThan(500);
   });
 });
 

@@ -29,14 +29,43 @@ export type C5WorkloadResult = Readonly<{
 export type C5WorkloadReceipt = Readonly<{
   operation: C5WorkloadOperation;
   workerCount: number;
+  timeoutCount: number;
   summary: WorkloadSummary;
   correctness: C5CorrectnessOracle;
 }>;
 
 export type C5WorkloadExecutor = (invocation: C5WorkloadInvocation) => Promise<C5WorkloadResult>;
 
+export class C5WorkloadFailureError extends Error {
+  readonly receipt: C5WorkloadReceipt;
+
+  constructor(cause: unknown, receipt: C5WorkloadReceipt) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "C5WorkloadFailureError";
+    this.receipt = receipt;
+  }
+}
+
 const MAX_OPERATION_TIMEOUT_MS = 60_000;
 const MAX_WORKLOAD_SAMPLES = 1_000_000;
+const POST_ABORT_SETTLEMENT_GRACE_MS = 100;
+const OUTCOMES = new Set<WorkloadSample["outcome"]>(["success", "expected_failure", "unexpected_failure"]);
+const FAILURE_CODE = /^[a-z][a-z0-9_,-]{0,199}$/;
+
+class C5WorkloadTimeoutError extends Error {
+  constructor() {
+    super("C5 workload operation timed out");
+    this.name = "C5WorkloadTimeoutError";
+  }
+}
+
+class C5WorkloadUnsettledAfterAbortError extends C5WorkloadTimeoutError {
+  constructor() {
+    super();
+    this.name = "C5WorkloadUnsettledAfterAbortError";
+    this.message = "C5 workload operation did not settle after abort";
+  }
+}
 
 function workerCount(profile: C5WorkloadProfile, operation: C5WorkloadOperation): number {
   switch (operation) {
@@ -69,24 +98,48 @@ function assertExecution(execution: C5WorkloadExecution): void {
   }
 }
 
+function assertResult(result: C5WorkloadResult): void {
+  if (!OUTCOMES.has(result.outcome)) throw new Error("C5 workload adapter returned an invalid outcome");
+  if (typeof result.correctness?.passed !== "boolean") {
+    throw new Error("C5 workload adapter returned an invalid correctness oracle");
+  }
+  if (
+    result.correctness.failureCode !== undefined &&
+    (typeof result.correctness.failureCode !== "string" || !FAILURE_CODE.test(result.correctness.failureCode))
+  ) {
+    throw new Error("C5 workload adapter returned an invalid failure code");
+  }
+}
+
 async function executeWithTimeout(
   executor: C5WorkloadExecutor,
   invocation: C5WorkloadInvocation,
 ): Promise<C5WorkloadResult> {
-  return await new Promise<C5WorkloadResult>((resolve, reject) => {
-    const onAbort = () => reject(new Error("C5 workload operation timed out"));
+  const operation = executor(invocation);
+  let timedOut = false;
+  const timeout = new Promise<never>((_, reject) => {
+    const onAbort = () => {
+      timedOut = true;
+      reject(new C5WorkloadTimeoutError());
+    };
     invocation.signal.addEventListener("abort", onAbort, { once: true });
-    void executor(invocation).then(
-      (result) => {
-        invocation.signal.removeEventListener("abort", onAbort);
-        resolve(result);
-      },
-      (error: unknown) => {
-        invocation.signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
   });
+  try {
+    return await Promise.race([operation, timeout]);
+  } catch (error) {
+    if (timedOut) {
+      const settled = operation.then(
+        () => true,
+        () => true,
+      );
+      const settledBeforeGrace = await Promise.race([
+        settled,
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), POST_ABORT_SETTLEMENT_GRACE_MS)),
+      ]);
+      if (!settledBeforeGrace) throw new C5WorkloadUnsettledAfterAbortError();
+    }
+    throw error;
+  }
 }
 
 /**
@@ -104,6 +157,7 @@ export async function executeC5Workload(
   const deadline = now() + execution.profile.durationSeconds * 1_000;
   const samples: WorkloadSample[] = [];
   const correctnessFailures: string[] = [];
+  let timeoutCount = 0;
   let nextSampleIndex = 0;
 
   const runWorker = async (workerIndex: number): Promise<void> => {
@@ -120,11 +174,14 @@ export async function executeC5Workload(
           sampleIndex,
           signal,
         });
+        assertResult(result);
         samples.push({ durationMs: now() - startedAt, outcome: result.outcome });
         if (!result.correctness.passed) correctnessFailures.push(result.correctness.failureCode ?? "unspecified");
       } catch (error) {
         samples.push({ durationMs: now() - startedAt, outcome: "unexpected_failure" });
         correctnessFailures.push(error instanceof Error ? error.name : "unknown_error");
+        if (error instanceof C5WorkloadTimeoutError) timeoutCount += 1;
+        return;
       }
     }
   };
@@ -136,6 +193,11 @@ export async function executeC5Workload(
     correctnessFailures.length === 0
       ? { passed: true }
       : { passed: false, failureCode: [...new Set(correctnessFailures)].sort().join(",") };
-  assertC5OperationBudget(execution.operation, summary, correctness);
-  return { operation: execution.operation, workerCount: workers, summary, correctness };
+  const receipt = { operation: execution.operation, workerCount: workers, timeoutCount, summary, correctness };
+  try {
+    assertC5OperationBudget(execution.operation, summary, correctness);
+  } catch (error) {
+    throw new C5WorkloadFailureError(error, receipt);
+  }
+  return receipt;
 }
