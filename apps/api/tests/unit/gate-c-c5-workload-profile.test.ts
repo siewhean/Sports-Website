@@ -31,6 +31,11 @@ describe("C5 workload profile input", () => {
       }),
       "unsupported field",
     ],
+    [JSON.stringify({ ...JSON.parse(profile), scorekeeperCount: "two" }), "scorekeeperCount must be an integer"],
+    [
+      JSON.stringify({ ...JSON.parse(profile), approval: { ...JSON.parse(profile).approval, owner: null } }),
+      "owner must be a string",
+    ],
   ])("rejects invalid profile input", (input, message) => {
     expect(() => parseGateCC5WorkloadProfile(input)).toThrow(message);
   });

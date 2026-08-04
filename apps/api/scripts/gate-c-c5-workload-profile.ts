@@ -19,6 +19,20 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return observed.length === keys.length && observed.every((key, index) => key === [...keys].sort()[index]);
 }
 
+function requiredString(value: Record<string, unknown>, key: string): string {
+  const candidate = value[key];
+  if (typeof candidate !== "string") throw new Error(`Gate C C5 workload profile ${key} must be a string`);
+  return candidate;
+}
+
+function requiredInteger(value: Record<string, unknown>, key: string): number {
+  const candidate = value[key];
+  if (typeof candidate !== "number" || !Number.isInteger(candidate)) {
+    throw new Error(`Gate C C5 workload profile ${key} must be an integer`);
+  }
+  return candidate;
+}
+
 /** Parses the deliberately non-secret approved workload profile supplied to a C5 run. */
 export function parseGateCC5WorkloadProfile(value: string | undefined): C5WorkloadProfile {
   if (!value?.trim()) throw new Error("Gate C C5 workload run requires GATE_C_C5_WORKLOAD_PROFILE_JSON");
@@ -34,15 +48,15 @@ export function parseGateCC5WorkloadProfile(value: string | undefined): C5Worklo
     throw new Error("Gate C C5 workload profile has an unsupported field");
   }
   const profile: C5WorkloadProfile = {
-    profileId: candidate.profileId as string,
-    durationSeconds: candidate.durationSeconds as number,
-    scorekeeperCount: candidate.scorekeeperCount as number,
-    publicReaderCount: candidate.publicReaderCount as number,
-    organiserWorkerCount: candidate.organiserWorkerCount as number,
+    profileId: requiredString(candidate, "profileId"),
+    durationSeconds: requiredInteger(candidate, "durationSeconds"),
+    scorekeeperCount: requiredInteger(candidate, "scorekeeperCount"),
+    publicReaderCount: requiredInteger(candidate, "publicReaderCount"),
+    organiserWorkerCount: requiredInteger(candidate, "organiserWorkerCount"),
     approval: {
-      owner: approval.owner as string,
-      approvedAtUtc: approval.approvedAtUtc as string,
-      reference: approval.reference as string,
+      owner: requiredString(approval, "owner"),
+      approvedAtUtc: requiredString(approval, "approvedAtUtc"),
+      reference: requiredString(approval, "reference"),
     },
   };
   assertC5WorkloadProfile(profile);
