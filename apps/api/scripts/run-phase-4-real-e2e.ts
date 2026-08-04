@@ -28,6 +28,7 @@ import {
   type GateCC5ScoreWriteResource,
 } from "../src/gate-c-c5-score-write.js";
 import { createGateCC5PublicCurrentExecutor } from "../src/gate-c-c5-public-current.js";
+import { createGateCC5PublicResultConvergenceExecutor } from "../src/gate-c-c5-public-result-convergence.js";
 import { createGateCC5LeaseTakeoverExecutor, type GateCC5LeaseSession } from "../src/gate-c-c5-lease-takeover.js";
 import type { C5WorkloadExecutor } from "@matchday/observability";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
@@ -168,6 +169,9 @@ export type GateCC4CompletedRunContext = Readonly<{
     }>,
   ): Promise<GateCC5ScoreWriteResource>;
   createPublicCurrentExecutor(input: Readonly<{ project: string }>): C5WorkloadExecutor;
+  createPublicResultConvergenceExecutor(
+    input: Readonly<{ project: string; sampleCount: number }>,
+  ): Promise<C5WorkloadExecutor>;
   createLeaseTakeoverExecutor(input: Readonly<{ project: string; workerCount: number }>): Promise<C5WorkloadExecutor>;
 }>;
 
@@ -1229,6 +1233,134 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       if (!repair) throw new Error(`C5 public-current project is not part of this isolated run: ${project}`);
       return createGateCC5PublicCurrentExecutor({ apiOrigin, slug: repair.slug });
     };
+    const createPublicResultConvergenceExecutor = async ({
+      project,
+      sampleCount,
+    }: Readonly<{ project: string; sampleCount: number }>): Promise<C5WorkloadExecutor> => {
+      if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 10_000) {
+        throw new Error("C5 public-result sample count must be an integer from 1 to 10000");
+      }
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 public-result project is not part of this isolated run: ${project}`);
+      const actor = { accountId: repair.accountId };
+      const targets = await Promise.all(
+        Array.from({ length: sampleCount }, async (_, index) => {
+          const suffix = `${runNumber}-${index + 1}-${randomUUID().slice(0, 8)}`;
+          const competition = await phase2.createCompetition(
+            actor,
+            {
+              organisationId: repair.organisationId,
+              name: `C5 Public Result ${suffix}`,
+              slug: `c5-public-result-${suffix}`,
+              timezone: "Asia/Singapore",
+              startsOn: "2026-08-01",
+              endsOn: "2026-08-01",
+            },
+            randomUUID(),
+          );
+          const division = await phase2.createDivision(
+            actor,
+            competition.id,
+            { name: "Open", teamLimit: 8 },
+            randomUUID(),
+          );
+          await phase2.replaceEntries(
+            actor,
+            competition.id,
+            division.id,
+            Array.from({ length: 8 }, (_unused, entryIndex) => ({
+              name: `C5 Team ${entryIndex + 1}`,
+              seed: entryIndex + 1,
+            })),
+            randomUUID(),
+          );
+          await phase2.replaceCapacity(
+            actor,
+            competition.id,
+            ["Court 1", "Court 2"].map((name) => ({
+              name,
+              windows: [{ startsAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-08-01T12:00:00.000Z" }],
+            })),
+            randomUUID(),
+          );
+          const format = await phase2.generateFormat(actor, competition.id, division.id, randomUUID());
+          const match = format.matches.find((candidate) => candidate.homeEntryId && candidate.awayEntryId);
+          if (!match) throw new Error("C5 public-result fixture has no resolved match");
+          const schedule = await phase2.generateSchedule(actor, competition.id, format.id, randomUUID());
+          await phase2.publishSchedule(actor, competition.id, schedule.id, randomUUID());
+          const pass = await phase2.createAccessPass(
+            actor,
+            competition.id,
+            match.id,
+            {
+              role: "scorekeeper",
+              expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+              idempotencyKey: randomUUID(),
+            },
+            randomUUID(),
+          );
+          if (!pass.token) throw new Error("C5 public-result fixture pass issuance returned no token");
+          const session = await phase2.exchangeAccess(
+            { token: pass.token, expectedMatchId: match.id, deviceId: randomUUID(), deviceLabel: "C5 public result" },
+            randomUUID(),
+          );
+          if (session.mode !== "writer" || session.generation === null) {
+            throw new Error("C5 public-result fixture did not acquire a writer lease");
+          }
+          const headers = {
+            "content-type": "application/json",
+            "x-scoring-session-id": session.session_id,
+            "x-scoring-session-token": session.session_token,
+            "x-writer-generation": String(session.generation),
+          };
+          const warm = async (expectedSequence: number, event: Record<string, unknown>) => {
+            const response = await fetch(`${apiOrigin}/api/v1/scoring/events`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ client_event_id: randomUUID(), expected_sequence: expectedSequence, ...event }),
+            });
+            const receipt = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+            if (
+              response.status !== 200 ||
+              receipt?.outcome !== "accepted" ||
+              receipt.sequence !== expectedSequence + 1
+            ) {
+              throw new Error(`C5 public-result warm-up failed with HTTP ${String(response.status)}`);
+            }
+          };
+          await warm(0, {
+            type: "match_started",
+            occurred_at: new Date().toISOString(),
+            segment_number: 1,
+            manual_time_seconds: 0,
+          });
+          await warm(1, {
+            type: "goal",
+            team_slot: "home",
+            participant_id: "C5 scorer",
+            occurred_at: new Date().toISOString(),
+            segment_number: 1,
+            manual_time_seconds: 1,
+          });
+          await warm(2, {
+            type: "period_change",
+            occurred_at: new Date().toISOString(),
+            segment_number: 2,
+            manual_time_seconds: 0,
+          });
+          return {
+            apiOrigin,
+            slug: `c5-public-result-${suffix}`,
+            matchId: match.id,
+            sessionId: session.session_id,
+            sessionToken: session.session_token,
+            writerGeneration: session.generation,
+            expectedSequence: 3,
+          };
+        }),
+      );
+      return createGateCC5PublicResultConvergenceExecutor(targets);
+    };
     const createLeaseTakeoverExecutor = async ({
       project,
       workerCount,
@@ -1327,6 +1459,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       ownedRedisKeyCount: async () => (await scanOwnedRedisKeys(activeRedis, activeRedisOwnership)).length,
       createScoreEventExecutor,
       createPublicCurrentExecutor,
+      createPublicResultConvergenceExecutor,
       createLeaseTakeoverExecutor,
     });
   } catch (error) {
