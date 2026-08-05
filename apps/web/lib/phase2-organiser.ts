@@ -59,6 +59,7 @@ function validWorkspaceDivision(value: unknown): boolean {
       string(entry.id) &&
       string(entry.name) &&
       (entry.seed === null || (Number.isInteger(entry.seed) && (entry.seed as number) >= 1)) &&
+      Number.isInteger(entry.revision) &&
       typeof entry.status === "string" &&
       ["active", "confirmed", "withdrawn", "replaced"].includes(entry.status),
     );
@@ -375,7 +376,10 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
         const entryName = string(entry.name);
         const status = string(entry.status);
         const seed = number(entry.seed);
-        return entryId && entryName && status ? [{ id: entryId, name: entryName, seed, status }] : [];
+        const revision = number(entry.revision);
+        return entryId && entryName && status && revision !== null
+          ? [{ id: entryId, name: entryName, seed, status, revision }]
+          : [];
       });
       return id && name
         ? [
