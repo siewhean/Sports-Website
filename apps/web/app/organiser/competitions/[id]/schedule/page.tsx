@@ -15,6 +15,7 @@ export default async function SchedulePage({
   const { id } = await params;
   const query = await searchParams;
   const result = await getOrganiserCompetitionView(id);
+  if (result.state === "unauthenticated") redirect("/api/v1/identity/authorize");
   if (result.state === "notFound") notFound();
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase4ScheduleCopy.errorBody);

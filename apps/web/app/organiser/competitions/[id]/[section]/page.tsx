@@ -25,6 +25,7 @@ export default async function CompetitionSectionPage({
   const query = await searchParams;
   if (!isOrganiserSection(section)) notFound();
   const result = await getOrganiserCompetitionView(id);
+  if (result.state === "unauthenticated") redirect("/api/v1/identity/authorize");
   if (result.state === "notFound") notFound();
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase2Copy.errorBody);

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { CalendarDots, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
@@ -12,6 +13,7 @@ export const metadata: Metadata = {
 
 export default async function OrganiserPage() {
   const result = await getOrganiserCompetitions();
+  if (result.state === "unauthenticated") redirect("/api/v1/identity/authorize");
   return (
     <ProductionShell
       kind="organiser"

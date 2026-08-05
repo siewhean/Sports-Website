@@ -15,6 +15,7 @@ export default async function CompetitionSettingsPage({
 }) {
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const competitionResult = await getOrganiserCompetitionView(id);
+  if (competitionResult.state === "unauthenticated") redirect("/api/v1/identity/authorize");
   if (competitionResult.state === "notFound") notFound();
   if (competitionResult.state === "permission") redirect("/forbidden");
   if (competitionResult.state === "error") throw new Error(phase2Copy.errorBody);

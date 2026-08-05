@@ -58,18 +58,20 @@ function isCompetitionList(value: unknown): value is OrganiserCompetitionListIte
 }
 
 export async function getOrganiserCompetitions(): Promise<
-  { state: "ready"; competitions: OrganiserCompetitionListItem[] } | { state: "permission" | "error" }
+  | { state: "ready"; competitions: OrganiserCompetitionListItem[] }
+  | { state: "unauthenticated" | "permission" | "error" }
 > {
   const baseUrl = apiBaseUrl();
   if (!baseUrl) return { state: "error" };
   const cookie = await sessionCookieHeader(baseUrl);
-  if (!cookie) return { state: "permission" };
+  if (!cookie) return { state: "unauthenticated" };
   try {
     const response = await fetch(new URL("/api/v1/competitions", baseUrl), {
       headers: { accept: "application/json", cookie },
       cache: "no-store",
     });
-    if (response.status === 401 || response.status === 403) return { state: "permission" };
+    if (response.status === 401) return { state: "unauthenticated" };
+    if (response.status === 403) return { state: "permission" };
     if (!response.ok) return { state: "error" };
     const payload: unknown = await response.json();
     return isCompetitionList(payload) ? { state: "ready", competitions: payload } : { state: "error" };
