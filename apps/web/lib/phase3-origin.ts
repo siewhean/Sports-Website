@@ -21,3 +21,27 @@ export function requestOriginMatchesHost(
     return false;
   }
 }
+
+const REQUEST_HEADERS = {
+  forwardedHost: "x-forwarded-host",
+  host: "host",
+  forwardedProtocol: "x-forwarded-proto",
+} as const;
+const HTTPS_PROTOCOL = "https";
+const HTTP_PROTOCOL = "http";
+
+export function requestForwardedOrigin(requestHeaders: Headers): string | null {
+  const host = (requestHeaders.get(REQUEST_HEADERS.forwardedHost) ?? requestHeaders.get(REQUEST_HEADERS.host))
+    ?.split(",")[0]
+    ?.trim();
+  const protocol =
+    requestHeaders.get(REQUEST_HEADERS.forwardedProtocol)?.split(",")[0]?.trim() === HTTPS_PROTOCOL
+      ? HTTPS_PROTOCOL
+      : HTTP_PROTOCOL;
+  if (!host || /[\s/\\]/u.test(host)) return null;
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch {
+    return null;
+  }
+}

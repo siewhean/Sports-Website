@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { requestOriginMatchesHost } from "./phase3-origin";
+import { requestForwardedOrigin, requestOriginMatchesHost } from "./phase3-origin";
 
 describe("Phase 3 same-origin boundary", () => {
   it("accepts the actual request host even when framework URL canonicalisation differs", () => {
@@ -12,5 +12,22 @@ describe("Phase 3 same-origin boundary", () => {
     expect(requestOriginMatchesHost("http://matchday.example", "matchday.example", "https")).toBe(false);
     expect(requestOriginMatchesHost("https://user@matchday.example", "matchday.example", "https")).toBe(false);
     expect(requestOriginMatchesHost("not-an-origin", "matchday.example", "https")).toBe(false);
+  });
+});
+
+describe("Phase 3 forwarded origin", () => {
+  it("uses the first forwarding values for an absolute same-origin return target", () => {
+    expect(
+      requestForwardedOrigin(
+        new Headers({
+          "x-forwarded-host": "c5-staging.poladex.shop, internal.example",
+          "x-forwarded-proto": "https, http",
+        }),
+      ),
+    ).toBe("https://c5-staging.poladex.shop");
+  });
+
+  it("rejects malformed hosts", () => {
+    expect(requestForwardedOrigin(new Headers({ host: "bad/path" }))).toBeNull();
   });
 });
