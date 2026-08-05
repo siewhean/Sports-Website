@@ -1,7 +1,7 @@
 import "server-only";
 
 import { cookies, headers } from "next/headers";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { cookieHostMatches, publicRequestHost } from "@/lib/phase2-organiser";
 
 export type OrganiserCompetitionListItem = {
   id: string;
@@ -29,7 +29,7 @@ function apiBaseUrl(): URL | null {
 }
 
 async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
-  if (!cookieHostMatches((await headers()).get("host"), apiUrl.hostname)) return null;
+  if (!cookieHostMatches(publicRequestHost(await headers()), apiUrl.hostname)) return null;
   const cookieStore = await cookies();
   for (const name of sessionCookieNames) {
     const value = cookieStore.get(name)?.value;

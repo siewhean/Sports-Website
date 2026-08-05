@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cookieHostMatches,
   isOrganiserWorkspacePayload,
+  publicRequestHost,
   toOrganiserCompetitionView,
   type OrganiserWorkspacePayload,
 } from "./phase2-organiser";
@@ -127,6 +128,15 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
 }
 
 describe("organiser competition workspace mapping", () => {
+  it("uses the public forwarded host for staging cookie forwarding", () => {
+    const requestHeaders = new Headers({
+      host: "matchday-web.railway.internal",
+      "x-forwarded-host": "c5-staging.poladex.shop, proxy.example",
+    });
+    expect(publicRequestHost(requestHeaders)).toBe("c5-staging.poladex.shop");
+    expect(cookieHostMatches(publicRequestHost(requestHeaders), "c5-staging.poladex.shop")).toBe(true);
+  });
+
   it("validates and maps authenticated workspace data without access secrets", () => {
     const payload = workspace();
     expect(isOrganiserWorkspacePayload(payload)).toBe(true);

@@ -637,7 +637,7 @@ export class Phase3Runtime {
       if (!result) throw new ApiError(409, "REVISION_CONFLICT", "Competition revision or lifecycle state is stale");
       if (input.action === "update" && patch.sportCode !== undefined && patch.sportCode !== current.sport) {
         const pack = this.domain.sportPack(patch.sportCode);
-        const packHash = this.domain.hash(pack);
+        const packHash = await this.persistedJsonHash(tx, pack);
         await tx.unsafe(
           `INSERT INTO sport_pack_versions (sport_code,version,schema_version,definition,definition_hash)
            VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (sport_code,version) DO NOTHING`,
@@ -2175,7 +2175,7 @@ export class Phase3Runtime {
       const issues = this.domain.validateSportPack(definition);
       if (issues.length) throw new ApiError(422, "SPORT_PACK_INVALID", "Sport pack definition is invalid");
       const pack = definition as SportPack;
-      const hash = this.domain.hash(pack);
+      const hash = await this.persistedJsonHash(tx, pack);
       const row = (
         await tx.unsafe<Record<string, unknown>>(
           `INSERT INTO sport_pack_versions

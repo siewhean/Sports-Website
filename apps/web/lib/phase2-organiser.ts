@@ -133,6 +133,15 @@ export function cookieHostMatches(requestHostHeader: string | null, apiHostname:
   }
 }
 
+/**
+ * Railway forwards the public host while the Next.js server sees its internal
+ * service host. Cookie forwarding must be authorised against the public host,
+ * never the internal one.
+ */
+export function publicRequestHost(requestHeaders: Pick<Headers, "get">): string | null {
+  return requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
+}
+
 function titleCase(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

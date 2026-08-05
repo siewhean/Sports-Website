@@ -4,7 +4,7 @@ import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 import { cookies, headers } from "next/headers";
 import type { Phase4FormatBuilderDocument, Phase4FormatDraftView } from "@matchday/contracts";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { cookieHostMatches, publicRequestHost } from "@/lib/phase2-organiser";
 import {
   parseOrganiserTemplateList,
   parseFormatWorkspaceResponse,
@@ -26,7 +26,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookie(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  if (!cookieHostMatches(publicRequestHost(requestHeaders), apiUrl.hostname)) return null;
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = store.get(name)?.value;

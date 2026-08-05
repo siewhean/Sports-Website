@@ -3,7 +3,12 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import { demoCompetitionReadPort, phase2Competition, type CompetitionView } from "@/lib/phase2";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches, isOrganiserWorkspacePayload, toOrganiserCompetitionView } from "@/lib/phase2-organiser";
+import {
+  cookieHostMatches,
+  isOrganiserWorkspacePayload,
+  publicRequestHost,
+  toOrganiserCompetitionView,
+} from "@/lib/phase2-organiser";
 
 export type OrganiserCompetitionReadResult =
   | { state: "ready"; competition: CompetitionView }
@@ -27,7 +32,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  const requestHost = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
+  const requestHost = publicRequestHost(requestHeaders);
   if (!cookieHostMatches(requestHost, apiUrl.hostname)) return null;
 
   const cookieStore = await cookies();
