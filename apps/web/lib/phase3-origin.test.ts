@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   configuredPublicOrigin,
+  requestCanForwardSessionCookie,
   requestForwardedOrigin,
   requestOriginMatchesHost,
   requestPublicOrigin,
@@ -42,5 +43,13 @@ describe("Phase 3 forwarded origin", () => {
       "https://c5-staging.poladex.shop",
     );
     expect(configuredPublicOrigin("https://c5-staging.poladex.shop/organiser")).toBeNull();
+  });
+
+  it("forwards a session only to the configured public API host when a proxy replaces the host", () => {
+    const headers = new Headers({ host: "matchdayweb-c3-staging.up.railway.app" });
+    expect(requestCanForwardSessionCookie(headers, "c5-staging.poladex.shop", "https://c5-staging.poladex.shop")).toBe(
+      true,
+    );
+    expect(requestCanForwardSessionCookie(headers, "api.attacker.test", "https://c5-staging.poladex.shop")).toBe(false);
   });
 });

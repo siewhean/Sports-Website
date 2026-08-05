@@ -42,6 +42,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   delete process.env.MATCHDAY_API_BASE_URL;
+  delete process.env.MATCHDAY_PUBLIC_ORIGIN;
 });
 
 describe("competition creation BFF", () => {
@@ -61,6 +62,75 @@ describe("competition creation BFF", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(options);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("forwards an authenticated organisation read through a proxy only to the configured public API host", async () => {
+    const stagingOrigin = "https://c5-staging.poladex.shop";
+    process.env.MATCHDAY_API_BASE_URL = stagingOrigin;
+    process.env.MATCHDAY_PUBLIC_ORIGIN = stagingOrigin;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe(`${stagingOrigin}/api/v1/organisations/competition-options`);
+      return Response.json([{ id: organisationId, name: "Staging organisation", role: "owner" }]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await GET(
+      new NextRequest(`${stagingOrigin}/api/phase3/competitions`, {
+        headers: {
+          cookie: "__Host-matchday_session=valid-session",
+          host: "matchdayweb-c3-staging.up.railway.app",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses the configured public origin for proxied competition creation", async () => {
+    const stagingOrigin = "https://c5-staging.poladex.shop";
+    process.env.MATCHDAY_API_BASE_URL = stagingOrigin;
+    process.env.MATCHDAY_PUBLIC_ORIGIN = stagingOrigin;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/identity/me")) {
+        return Response.json({
+          account: {
+            id: "account-a",
+            primary_email: "organiser@example.test",
+            display_name: "Organiser",
+            email_verified_at: null,
+          },
+          csrf_token: "csrf-token-at-least-16-characters",
+          idle_expires_at: "2027-05-01T02:00:00.000Z",
+          absolute_expires_at: "2027-05-01T08:00:00.000Z",
+        });
+      }
+      return Response.json({
+        id: "4dc85811-e715-40f4-8609-2523f7516e5a",
+        status: "draft",
+        sport_code: "table_tennis",
+        revision: 1,
+        account_default_applied: false,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(
+      new NextRequest(`${stagingOrigin}/api/phase3/competitions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: "__Host-matchday_session=valid-session",
+          host: "matchdayweb-c3-staging.up.railway.app",
+          origin: stagingOrigin,
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed when the upstream organisation response includes a viewer", async () => {

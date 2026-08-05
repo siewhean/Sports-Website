@@ -70,3 +70,27 @@ export function configuredPublicOrigin(value: string | undefined): string | null
 export function requestPublicOrigin(requestHeaders: Headers, configuredOrigin: string | undefined): string | null {
   return configuredPublicOrigin(configuredOrigin) ?? requestForwardedOrigin(requestHeaders);
 }
+
+export function requestCanForwardSessionCookie(
+  requestHeaders: Headers,
+  apiHostname: string,
+  configuredOrigin: string | undefined,
+): boolean {
+  const requestHost = requestHeaders.get(REQUEST_HEADERS.host);
+  if (requestHost && hostMatchesApiHostname(requestHost, apiHostname)) return true;
+
+  const publicOrigin = configuredPublicOrigin(configuredOrigin);
+  return publicOrigin !== null && hostMatchesApiHostname(new URL(publicOrigin).host, apiHostname);
+}
+
+function hostMatchesApiHostname(host: string, apiHostname: string): boolean {
+  try {
+    const requestHostname = new URL(`${HTTP_PROTOCOL}://${host}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const normalizedApiHostname = apiHostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (requestHostname === normalizedApiHostname) return true;
+    const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+    return loopbackHosts.has(requestHostname) && loopbackHosts.has(normalizedApiHostname);
+  } catch {
+    return false;
+  }
+}

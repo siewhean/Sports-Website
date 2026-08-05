@@ -2,8 +2,7 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookieHostMatches } from "./phase2-organiser";
-import { requestOriginMatchesHost } from "./phase3-origin";
+import { configuredPublicOrigin, requestCanForwardSessionCookie, requestOriginMatchesHost } from "./phase3-origin";
 
 type Validator = (value: unknown) => boolean;
 
@@ -25,7 +24,8 @@ function apiBaseUrl(): URL | null {
 }
 
 function sessionCookie(request: NextRequest, apiUrl: URL): string | null {
-  if (!cookieHostMatches(request.headers.get("host"), apiUrl.hostname)) return null;
+  if (!requestCanForwardSessionCookie(request.headers, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN))
+    return null;
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = request.cookies.get(name)?.value;
     if (value && !/[\u0000-\u001f\u007f;]/.test(value)) return `${name}=${value}`;
@@ -109,10 +109,14 @@ export async function forwardPhase3Mutation(
   },
 ) {
   const requestOrigin = request.headers.get("origin");
+  if (!requestOrigin) return error(403, "ORIGIN_REJECTED", "Request origin is not allowed");
+  const publicOrigin = configuredPublicOrigin(process.env.MATCHDAY_PUBLIC_ORIGIN);
   const requestHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || request.headers.get("host");
   const requestProtocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || request.nextUrl.protocol;
-  if (!requestOrigin || !requestOriginMatchesHost(requestOrigin, requestHost, requestProtocol))
-    return error(403, "ORIGIN_REJECTED", "Request origin is not allowed");
+  const originAllowed = publicOrigin
+    ? requestOrigin === publicOrigin
+    : requestOriginMatchesHost(requestOrigin, requestHost, requestProtocol);
+  if (!originAllowed) return error(403, "ORIGIN_REJECTED", "Request origin is not allowed");
   const base = apiBaseUrl();
   if (!base) return error(503, "API_UNAVAILABLE", "The settings service is unavailable");
   const cookie = sessionCookie(request, base);
