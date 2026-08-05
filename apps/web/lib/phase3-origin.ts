@@ -76,11 +76,11 @@ export function requestCanForwardSessionCookie(
   apiHostname: string,
   configuredOrigin: string | undefined,
 ): boolean {
-  const requestHost = requestHeaders.get(REQUEST_HEADERS.host);
-  if (requestHost && hostMatchesApiHostname(requestHost, apiHostname)) return true;
-
   const publicOrigin = configuredPublicOrigin(configuredOrigin);
-  return publicOrigin !== null && hostMatchesApiHostname(new URL(publicOrigin).host, apiHostname);
+  if (publicOrigin !== null) return hostMatchesApiHostname(new URL(publicOrigin).host, apiHostname);
+
+  const requestHost = requestHeaders.get(REQUEST_HEADERS.host);
+  return requestHost !== null && hostMatchesApiHostname(requestHost, apiHostname);
 }
 
 function hostMatchesApiHostname(host: string, apiHostname: string): boolean {

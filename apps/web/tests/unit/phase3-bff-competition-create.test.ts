@@ -133,6 +133,30 @@ describe("competition creation BFF", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects an internal proxy origin when a public origin is configured", async () => {
+    const stagingOrigin = "https://c5-staging.poladex.shop";
+    process.env.MATCHDAY_API_BASE_URL = stagingOrigin;
+    process.env.MATCHDAY_PUBLIC_ORIGIN = stagingOrigin;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(
+      new NextRequest(`${stagingOrigin}/api/phase3/competitions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: "__Host-matchday_session=valid-session",
+          host: "matchdayweb-c3-staging.up.railway.app",
+          origin: "https://matchdayweb-c3-staging.up.railway.app",
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the upstream organisation response includes a viewer", async () => {
     vi.stubGlobal(
       "fetch",

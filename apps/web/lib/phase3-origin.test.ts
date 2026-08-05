@@ -51,5 +51,12 @@ describe("Phase 3 forwarded origin", () => {
       true,
     );
     expect(requestCanForwardSessionCookie(headers, "api.attacker.test", "https://c5-staging.poladex.shop")).toBe(false);
+    expect(
+      requestCanForwardSessionCookie(
+        new Headers({ host: "api.attacker.test" }),
+        "api.attacker.test",
+        "https://c5-staging.poladex.shop",
+      ),
+    ).toBe(false);
   });
 });
