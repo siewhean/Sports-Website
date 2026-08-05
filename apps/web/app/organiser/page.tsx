@@ -14,6 +14,7 @@ export const metadata: Metadata = {
 export default async function OrganiserPage() {
   const result = await getOrganiserCompetitions();
   if (result.state === "unauthenticated") redirect("/api/v1/identity/authorize");
+  if (result.state === "permission") redirect("/forbidden");
   return (
     <ProductionShell
       kind="organiser"

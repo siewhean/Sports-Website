@@ -38,6 +38,11 @@ describe("organiser server authentication boundary", () => {
   });
 
   it("distinguishes an expired or missing session from an authenticated denial", async () => {
+    requestState.cookie = "";
+    await expect(getOrganiserCompetitionView(competitionId)).resolves.toEqual({ state: "unauthenticated" });
+    await expect(getOrganiserCompetitions()).resolves.toEqual({ state: "unauthenticated" });
+
+    requestState.cookie = "session-token";
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(null, { status: 401 })),
