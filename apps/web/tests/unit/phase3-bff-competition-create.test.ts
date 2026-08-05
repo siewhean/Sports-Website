@@ -64,7 +64,11 @@ describe("competition creation BFF", () => {
   });
 
   it("forwards the session cookie when a trusted HTTPS proxy preserves the public host", async () => {
-    const fetchMock = vi.fn(async () => Response.json([]));
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return Response.json([]);
+    });
     vi.stubGlobal("fetch", fetchMock);
     const organisationRequest = new NextRequest("http://127.0.0.1:3103/api/phase3/competitions", {
       headers: {
