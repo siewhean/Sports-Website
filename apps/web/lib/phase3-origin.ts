@@ -45,3 +45,28 @@ export function requestForwardedOrigin(requestHeaders: Headers): string | null {
     return null;
   }
 }
+
+export function configuredPublicOrigin(value: string | undefined): string | null {
+  const configured = value?.trim();
+  if (!configured) return null;
+  try {
+    const origin = new URL(configured);
+    if (
+      (origin.protocol !== `${HTTP_PROTOCOL}:` && origin.protocol !== `${HTTPS_PROTOCOL}:`) ||
+      origin.username ||
+      origin.password ||
+      origin.pathname !== "/" ||
+      origin.search ||
+      origin.hash
+    ) {
+      return null;
+    }
+    return origin.origin;
+  } catch {
+    return null;
+  }
+}
+
+export function requestPublicOrigin(requestHeaders: Headers, configuredOrigin: string | undefined): string | null {
+  return configuredPublicOrigin(configuredOrigin) ?? requestForwardedOrigin(requestHeaders);
+}
