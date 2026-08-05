@@ -25,7 +25,8 @@ function apiBaseUrl(): URL | null {
 }
 
 function sessionCookie(request: NextRequest, apiUrl: URL): string | null {
-  if (!cookieHostMatches(request.headers.get("host"), apiUrl.hostname)) return null;
+  const requestHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || request.headers.get("host");
+  if (!cookieHostMatches(requestHost, apiUrl.hostname)) return null;
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = request.cookies.get(name)?.value;
     if (value && !/[\u0000-\u001f\u007f;]/.test(value)) return `${name}=${value}`;

@@ -63,6 +63,29 @@ describe("competition creation BFF", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("forwards the session cookie when a trusted HTTPS proxy preserves the public host", async () => {
+    const fetchMock = vi.fn(async () => Response.json([]));
+    vi.stubGlobal("fetch", fetchMock);
+    const organisationRequest = new NextRequest("http://127.0.0.1:3103/api/phase3/competitions", {
+      headers: {
+        cookie: "matchday_session=valid-session",
+        host: "matchday-web.railway.internal",
+        "x-forwarded-host": "matchday.test",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    const response = await GET(organisationRequest);
+
+    expect(response.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe(`${origin}/api/v1/organisations/competition-options`);
+    expect(init).toEqual({
+      cache: "no-store",
+      headers: { accept: "application/json", cookie: "matchday_session=valid-session" },
+    });
+  });
+
   it("fails closed when the upstream organisation response includes a viewer", async () => {
     vi.stubGlobal(
       "fetch",
