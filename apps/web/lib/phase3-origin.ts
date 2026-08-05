@@ -71,6 +71,22 @@ export function requestPublicOrigin(requestHeaders: Headers, configuredOrigin: s
   return configuredPublicOrigin(configuredOrigin) ?? requestForwardedOrigin(requestHeaders);
 }
 
+export function requestOriginAllowed(
+  requestOrigin: string | null,
+  requestHeaders: Headers,
+  configuredOrigin: string | undefined,
+  fallbackProtocol: string | null,
+): boolean {
+  const publicOrigin = configuredPublicOrigin(configuredOrigin);
+  if (publicOrigin !== null) return requestOrigin === publicOrigin;
+  const requestHost =
+    requestHeaders.get(REQUEST_HEADERS.forwardedHost)?.split(",")[0]?.trim() ??
+    requestHeaders.get(REQUEST_HEADERS.host);
+  const requestProtocol =
+    requestHeaders.get(REQUEST_HEADERS.forwardedProtocol)?.split(",")[0]?.trim() ?? fallbackProtocol;
+  return requestOriginMatchesHost(requestOrigin, requestHost, requestProtocol);
+}
+
 export function requestCanForwardSessionCookie(
   requestHeaders: Headers,
   apiHostname: string,

@@ -2,8 +2,7 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { requestCanForwardSessionCookie } from "./phase3-origin";
-import { requestOriginMatchesHost } from "./phase3-origin";
+import { requestCanForwardSessionCookie, requestOriginAllowed } from "./phase3-origin";
 
 function apiBaseUrl(): URL | null {
   const configured = process.env.MATCHDAY_API_BASE_URL?.trim();
@@ -63,9 +62,10 @@ function safeDownloadName(value: string | null): string | null {
 
 export async function forwardGateCC4BinaryMutation(request: NextRequest, path: string): Promise<Response> {
   const requestOrigin = request.headers.get("origin");
-  const requestHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || request.headers.get("host");
-  const requestProtocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || request.nextUrl.protocol;
-  if (!requestOrigin || !requestOriginMatchesHost(requestOrigin, requestHost, requestProtocol)) {
+  if (
+    !requestOrigin ||
+    !requestOriginAllowed(requestOrigin, request.headers, process.env.MATCHDAY_PUBLIC_ORIGIN, request.nextUrl.protocol)
+  ) {
     return error(403, "ORIGIN_REJECTED", "Request origin is not allowed");
   }
   const base = apiBaseUrl();

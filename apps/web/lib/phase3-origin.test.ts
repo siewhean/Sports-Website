@@ -3,6 +3,7 @@ import {
   configuredPublicOrigin,
   requestCanForwardSessionCookie,
   requestForwardedOrigin,
+  requestOriginAllowed,
   requestOriginMatchesHost,
   requestPublicOrigin,
 } from "./phase3-origin";
@@ -58,5 +59,27 @@ describe("Phase 3 forwarded origin", () => {
         "https://c5-staging.poladex.shop",
       ),
     ).toBe(false);
+  });
+
+  it("uses the configured public origin as the mutation CSRF authority behind a proxy", () => {
+    const headers = new Headers({
+      host: "matchdayweb-c3-staging.up.railway.app",
+      "x-forwarded-host": "matchdayweb-c3-staging.up.railway.app",
+      "x-forwarded-proto": "https",
+    });
+    expect(
+      requestOriginAllowed("https://c5-staging.poladex.shop", headers, "https://c5-staging.poladex.shop", "https:"),
+    ).toBe(true);
+    expect(
+      requestOriginAllowed(
+        "https://matchdayweb-c3-staging.up.railway.app",
+        headers,
+        "https://c5-staging.poladex.shop",
+        "https:",
+      ),
+    ).toBe(false);
+    expect(requestOriginAllowed("https://attacker.test", headers, "https://c5-staging.poladex.shop", "https:")).toBe(
+      false,
+    );
   });
 });
