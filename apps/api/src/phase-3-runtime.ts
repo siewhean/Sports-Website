@@ -384,11 +384,12 @@ export class Phase3Runtime {
       availability: Phase3AvailabilityInput[];
       replacement_entry_id: string | null;
       replaces_entry_id: string | null;
+      revision: number;
       created_at: Date | string;
       updated_at: Date | string;
     }>(
       `SELECT e.id,e.division_id,e.name,e.entry_type,e.status,e.seed,e.metadata,e.availability,
-              e.replacement_entry_id,e.replaces_entry_id,e.created_at,e.updated_at
+              e.replacement_entry_id,e.replaces_entry_id,e.revision,e.created_at,e.updated_at
        FROM division_entries e JOIN divisions d ON d.id=e.division_id
        WHERE d.competition_id=$1 ORDER BY e.created_at,e.id`,
       [competitionId],
@@ -431,6 +432,7 @@ export class Phase3Runtime {
             type: entry.entry_type,
             status: entry.status === "confirmed" ? "active" : entry.status,
             seed: entry.seed,
+            revision: entry.revision,
             metadata: {
               club:
                 typeof decodedJson(entry.metadata).club === "string"
@@ -778,6 +780,16 @@ export class Phase3Runtime {
     );
   }
 
+  private async assertEntriesEditable(tx: PostgresJsSql, competitionId: string, divisionId: string) {
+    const format = (
+      await tx.unsafe<{ id: string }>(
+        `SELECT id FROM format_revisions WHERE competition_id=$1 AND division_id=$2 LIMIT 1 FOR KEY SHARE`,
+        [competitionId, divisionId],
+      )
+    )[0];
+    if (format) throw new ApiError(409, "ENTRY_MUTATION_LOCKED_BY_FORMAT", "Entries are locked after format creation");
+  }
+
   async updateEntry(
     actor: Phase3Actor,
     competitionId: string,
@@ -791,14 +803,25 @@ export class Phase3Runtime {
       availability?: unknown[];
     },
     requestId: string,
+    idempotencyKey: string,
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      const operation = "entry.update";
+      const replay = await this.mutationReplay<Record<string, unknown>>(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, entryId, input },
+      );
+      if (replay) return replay;
       this.assertMutable(competition);
       required(
         await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId]),
         "Division not found",
       );
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
       const current = await this.domainCompetition(tx, competitionId);
       expectDomain(
         this.domain.updateEntry(
@@ -837,29 +860,58 @@ export class Phase3Runtime {
       const entry = rows[0];
       if (!entry) throw new ApiError(409, "REVISION_CONFLICT", "Entry revision or status is stale");
       await this.evidence(tx, actor, competition.organisation_id, requestId, "entry.updated", "entry", entryId, entry);
+      await this.recordMutationReceipt(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, entryId, input },
+        entry,
+      );
       return entry;
     });
   }
 
-  async deleteEntry(actor: Phase3Actor, competitionId: string, divisionId: string, entryId: string, requestId: string) {
+  async deleteEntry(
+    actor: Phase3Actor,
+    competitionId: string,
+    divisionId: string,
+    entryId: string,
+    revision: number,
+    requestId: string,
+    idempotencyKey: string,
+  ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      const operation = "entry.delete";
+      const input = { competitionId, divisionId, entryId, revision };
+      const replay = await this.mutationReplay<{ id: string; deleted: true }>(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        input,
+      );
+      if (replay) return replay;
       this.assertMutable(competition);
       required(
         await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId]),
         "Division not found",
       );
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
       const rows = await tx.unsafe<{ id: string }>(
-        `DELETE FROM division_entries e WHERE e.id=$1 AND e.division_id=$2 AND e.status IN ('confirmed','active')
+        `DELETE FROM division_entries e WHERE e.id=$1 AND e.division_id=$2 AND e.revision=$3 AND e.status IN ('confirmed','active')
          AND e.replacement_entry_id IS NULL AND e.replaces_entry_id IS NULL
          AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.home_entry_id=e.id OR m.away_entry_id=e.id) RETURNING e.id`,
-        [entryId, divisionId],
+        [entryId, divisionId, revision],
       );
-      required(rows, "Entry not found");
+      if (!rows[0]) throw new ApiError(409, "REVISION_CONFLICT", "Entry revision or status is stale");
       await this.evidence(tx, actor, competition.organisation_id, requestId, "entry.deleted", "entry", entryId, {
         id: entryId,
       });
-      return { id: entryId, deleted: true };
+      const result = { id: entryId, deleted: true as const };
+      await this.recordMutationReceipt(tx, competition.organisation_id, idempotencyKey, operation, input, result);
+      return result;
     });
   }
 
@@ -1105,6 +1157,7 @@ export class Phase3Runtime {
         ]),
         "Division not found",
       );
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
       const current = await this.domainCompetition(tx, competitionId);
       const plan = required(
         await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(`SELECT plan_tier FROM competitions WHERE id=$1`, [

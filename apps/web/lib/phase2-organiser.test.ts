@@ -39,8 +39,8 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
         id: divisionId,
         name: "Open",
         entries: [
-          { id: homeId, name: "North", seed: 1, status: "active" },
-          { id: awayId, name: "South", seed: 2, status: "active" },
+          { id: homeId, name: "North", seed: 1, status: "active", revision: 1 },
+          { id: awayId, name: "South", seed: 2, status: "active", revision: 1 },
         ],
       },
     ],
@@ -197,8 +197,8 @@ describe("organiser competition workspace mapping", () => {
         id: divisionId,
         name: "Open",
         entries: [
-          { id: homeId, name: "North", seed: 1, status: "active" },
-          { id: awayId, name: "South", seed: 2, status: "active" },
+          { id: homeId, name: "North", seed: 1, status: "active", revision: 1 },
+          { id: awayId, name: "South", seed: 2, status: "active", revision: 1 },
         ],
       },
     ]);

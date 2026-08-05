@@ -6,6 +6,7 @@ import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 
 const Id = Type.String({ format: "uuid" });
+const IdempotencyKey = Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" });
 const ErrorResponse = Type.Object({
   error: Type.Object({ code: Type.String(), message: Type.String(), request_id: Type.String() }),
 });
@@ -483,6 +484,7 @@ export async function registerPhase3Routes(
     Headers: { origin?: string; "x-csrf-token"?: string };
     Body: {
       revision: number;
+      idempotency_key: string;
       name?: string;
       slug?: string;
       sport_code?: "canoe_polo" | "badminton" | "table_tennis" | "volleyball" | "basketball";
@@ -824,7 +826,7 @@ export async function registerPhase3Routes(
             seed: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 48 }), Type.Null()])),
             metadata: Type.Optional(Generic),
             availability: Type.Optional(EntryAvailability),
-            idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
+            idempotency_key: IdempotencyKey,
           },
           { additionalProperties: false },
         ),
@@ -860,6 +862,7 @@ export async function registerPhase3Routes(
       seed?: number | null;
       metadata?: Record<string, unknown>;
       availability?: Array<{ start: string; end: string }>;
+      idempotency_key: string;
     };
   }>(
     "/api/v1/competitions/:competitionId/divisions/:divisionId/entries/:entryId",
@@ -875,6 +878,7 @@ export async function registerPhase3Routes(
             seed: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 48 }), Type.Null()])),
             metadata: Type.Optional(Generic),
             availability: Type.Optional(EntryAvailability),
+            idempotency_key: IdempotencyKey,
           },
           { additionalProperties: false },
         ),
@@ -890,11 +894,13 @@ export async function registerPhase3Routes(
         request.params.entryId,
         request.body,
         request.id,
+        request.body.idempotency_key,
       ),
   );
   app.delete<{
     Params: { competitionId: string; divisionId: string; entryId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { revision: number; idempotency_key: string };
   }>(
     "/api/v1/competitions/:competitionId/divisions/:divisionId/entries/:entryId",
     {
@@ -902,6 +908,10 @@ export async function registerPhase3Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id, divisionId: Id, entryId: Id }),
+        body: Type.Object(
+          { revision: Type.Integer({ minimum: 1 }), idempotency_key: IdempotencyKey },
+          { additionalProperties: false },
+        ),
         response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
         tags: ["phase3-entries"],
       },
@@ -912,7 +922,9 @@ export async function registerPhase3Routes(
         request.params.competitionId,
         request.params.divisionId,
         request.params.entryId,
+        request.body.revision,
         request.id,
+        request.body.idempotency_key,
       ),
   );
   app.post<{

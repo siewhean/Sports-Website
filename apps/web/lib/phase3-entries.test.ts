@@ -50,7 +50,7 @@ describe("division and entry commands", () => {
         { id: "entry-1", division_id: "division-1", name: "Marina", seed: 1, status: "active", revision: 1 },
         "division-1",
       ),
-    ).toEqual({ id: "entry-1", name: "Marina", seed: 1, status: "active" });
+    ).toEqual({ id: "entry-1", name: "Marina", seed: 1, status: "active", revision: 1 });
     expect(
       parseCreatedEntry(
         { id: "entry-1", division_id: "other", name: "Marina", seed: 1, status: "active" },
@@ -72,6 +72,7 @@ describe("division and entry commands", () => {
       name: `Entry ${index}`,
       seed: index + 1,
       status: "active",
+      revision: 1,
     }));
     expect(
       totalActiveEntries([
@@ -80,7 +81,7 @@ describe("division and entry commands", () => {
           id: "women",
           name: "Women",
           entryLimit: 8,
-          entries: [...entries, { id: "old", name: "Old", seed: null, status: "withdrawn" }],
+          entries: [...entries, { id: "old", name: "Old", seed: null, status: "withdrawn", revision: 1 }],
         },
       ]),
     ).toBe(16);

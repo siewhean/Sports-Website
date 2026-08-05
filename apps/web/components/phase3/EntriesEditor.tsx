@@ -150,6 +150,79 @@ export function EntriesEditor({
     router.refresh();
   }
 
+  async function updateEntry(event: FormEvent<HTMLFormElement>, divisionId: string, entryId: string, revision: number) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get(phase3EntriesMachine.entryNameField) ?? "").trim();
+    const rawSeed = String(data.get(phase3EntriesMachine.entrySeedField) ?? "").trim();
+    const seed = rawSeed ? Number(rawSeed) : null;
+    const fingerprint = JSON.stringify({ divisionId, entryId, revision, name, seed });
+    const existing = entryCommandRefs.current.get(`update:${entryId}`);
+    const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
+    entryCommandRefs.current.set(`update:${entryId}`, pending);
+    const result = await runCommand(pending.key, () =>
+      fetch(
+        `/api/phase3/competitions/${encodeURIComponent(competitionId)}/divisions/${encodeURIComponent(divisionId)}/entries/${encodeURIComponent(entryId)}`,
+        {
+          method: phase3EntriesMachine.patch,
+          headers: { "content-type": phase3EntriesMachine.applicationJson },
+          body: JSON.stringify({ revision, name, seed, idempotency_key: pending.key }),
+        },
+      ),
+    );
+    const updated = parseCreatedEntry(result.payload, divisionId);
+    if (!updated || updated.id !== entryId) {
+      if (result.clearKey) entryCommandRefs.current.delete(`update:${entryId}`);
+      return;
+    }
+    entryCommandRefs.current.delete(`update:${entryId}`);
+    setDivisions((current) =>
+      current.map((division) =>
+        division.id === divisionId
+          ? { ...division, entries: division.entries.map((entry) => (entry.id === entryId ? updated : entry)) }
+          : division,
+      ),
+    );
+    setMessage(phase3EntriesCopy.entryUpdated);
+    router.refresh();
+  }
+
+  async function removeEntry(divisionId: string, entryId: string, revision: number) {
+    if (!canEdit) return;
+    const fingerprint = JSON.stringify({ divisionId, entryId, revision });
+    const existing = entryCommandRefs.current.get(`delete:${entryId}`);
+    const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
+    entryCommandRefs.current.set(`delete:${entryId}`, pending);
+    const result = await runCommand(pending.key, () =>
+      fetch(
+        `/api/phase3/competitions/${encodeURIComponent(competitionId)}/divisions/${encodeURIComponent(divisionId)}/entries/${encodeURIComponent(entryId)}`,
+        {
+          method: phase3EntriesMachine.delete,
+          headers: { "content-type": phase3EntriesMachine.applicationJson },
+          body: JSON.stringify({ revision, idempotency_key: pending.key }),
+        },
+      ),
+    );
+    if (
+      !result.payload ||
+      typeof result.payload !== "object" ||
+      (result.payload as { deleted?: unknown }).deleted !== true
+    ) {
+      if (result.clearKey) entryCommandRefs.current.delete(`delete:${entryId}`);
+      return;
+    }
+    entryCommandRefs.current.delete(`delete:${entryId}`);
+    setDivisions((current) =>
+      current.map((division) =>
+        division.id === divisionId
+          ? { ...division, entries: division.entries.filter((entry) => entry.id !== entryId) }
+          : division,
+      ),
+    );
+    setMessage(phase3EntriesCopy.entryRemoved);
+    router.refresh();
+  }
+
   return (
     <div className={styles.workspace}>
       {!canEdit ? (
@@ -226,6 +299,42 @@ export function EntriesEditor({
                       <span>{entry.seed ?? "—"}</span>
                       <strong>{entry.name}</strong>
                       <small>{entry.status}</small>
+                      {canEdit ? (
+                        <details>
+                          <summary>{phase3EntriesCopy.editEntry}</summary>
+                          <form onSubmit={(event) => void updateEntry(event, division.id, entry.id, entry.revision)}>
+                            <label>
+                              {phase3EntriesCopy.entryName}
+                              <input
+                                name={phase3EntriesMachine.entryNameField}
+                                defaultValue={entry.name}
+                                maxLength={120}
+                                required
+                              />
+                            </label>
+                            <label>
+                              {phase3EntriesCopy.optionalSeed}
+                              <input
+                                name={phase3EntriesMachine.entrySeedField}
+                                type="number"
+                                min={1}
+                                max={48}
+                                defaultValue={entry.seed ?? ""}
+                              />
+                            </label>
+                            <button type="submit" disabled={busy}>
+                              {phase3EntriesCopy.saveEntry}
+                            </button>
+                          </form>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void removeEntry(division.id, entry.id, entry.revision)}
+                          >
+                            {phase3EntriesCopy.removeEntry}
+                          </button>
+                        </details>
+                      ) : null}
                     </li>
                   ))}
                 </ol>
