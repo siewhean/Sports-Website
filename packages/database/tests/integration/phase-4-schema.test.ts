@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDefaultFormatTemplates, type FormatGraph } from "../../../domain/src/index.js";
-import { dropTestSchema, migrateDatabase } from "../../src/migrations.js";
+import { dropTestSchema, migrateDatabase, migrationAdvisoryLockId } from "../../src/migrations.js";
+import { contendedMigrationTestTimeoutMs } from "./migration-test-settings.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -165,9 +166,9 @@ async function prepareScheduleInput(jobId: string, value: Awaited<ReturnType<typ
         match_id: matchId,
         division_id: value.divisionA,
         duration_minutes: 30,
-        dependency_match_ids: [],
+        dependency_match_ids: [] as string[],
         possible_entry_ids: entries.slice(0, 2),
-        official_ids: [],
+        official_ids: [] as string[],
         is_championship_final: false,
       },
     ],
@@ -313,41 +314,50 @@ afterAll(async () => {
 });
 
 describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
-  it("upgrades a populated 0012 schema without rewriting legacy rows", async () => {
-    const upgradeSchema = `test_phase4_upgrade_${randomUUID().replaceAll("-", "")}`;
-    const upgradeSql = postgres(databaseUrl, {
-      max: 1,
-      onnotice: () => undefined,
-      connection: { search_path: upgradeSchema },
-    });
-    try {
-      await upgradeSql.unsafe(`CREATE SCHEMA "${upgradeSchema}"`);
-      for (const name of (await readdir(migrationsDirectory))
-        .filter((item) => /^00(0[1-9]|1[0-2])_/.test(item))
-        .sort()) {
-        await upgradeSql.begin((tx) =>
-          readFile(path.join(migrationsDirectory, name), "utf8").then((body) => tx.unsafe(body)),
-        );
-      }
-      const account = randomUUID();
-      const organisation = randomUUID();
-      const competition = randomUUID();
-      await upgradeSql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${account},${`${account}@test`},'Upgrade')`;
-      await upgradeSql.begin(async (tx) => {
-        await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisation},'Upgrade',${`upgrade-${organisation}`})`;
-        await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES(${organisation},${account},'owner','active')`;
+  it(
+    "upgrades a populated 0012 schema without rewriting legacy rows",
+    async () => {
+      const upgradeSchema = `test_phase4_upgrade_${randomUUID().replaceAll("-", "")}`;
+      const upgradeSql = postgres(databaseUrl, {
+        max: 1,
+        onnotice: () => undefined,
+        connection: { search_path: upgradeSchema },
       });
-      await upgradeSql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on)
+      try {
+        await upgradeSql.unsafe(`CREATE SCHEMA "${upgradeSchema}"`);
+        await upgradeSql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
+        try {
+          for (const name of (await readdir(migrationsDirectory))
+            .filter((item) => /^00(0[1-9]|1[0-2])_/.test(item))
+            .sort()) {
+            await upgradeSql.begin((tx) =>
+              readFile(path.join(migrationsDirectory, name), "utf8").then((body) => tx.unsafe(body)),
+            );
+          }
+        } finally {
+          await upgradeSql`SELECT pg_advisory_unlock(${migrationAdvisoryLockId})`;
+        }
+        const account = randomUUID();
+        const organisation = randomUUID();
+        const competition = randomUUID();
+        await upgradeSql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${account},${`${account}@test`},'Upgrade')`;
+        await upgradeSql.begin(async (tx) => {
+          await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisation},'Upgrade',${`upgrade-${organisation}`})`;
+          await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES(${organisation},${account},'owner','active')`;
+        });
+        await upgradeSql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on)
         VALUES(${competition},${organisation},${account},'Upgrade Cup',${`upgrade-${competition}`},'badminton','UTC','2027-01-01','2027-01-02')`;
-      const migration = await readFile(path.join(migrationsDirectory, "0013_phase4_organiser_alpha.sql"), "utf8");
-      await upgradeSql.begin((tx) => tx.unsafe(migration));
-      const row = await upgradeSql`SELECT id,name,status FROM competitions WHERE id=${competition}`;
-      expect(row).toMatchObject([{ id: competition, name: "Upgrade Cup", status: "draft" }]);
-    } finally {
-      await upgradeSql.end({ timeout: 2 });
-      await dropTestSchema(databaseUrl, upgradeSchema);
-    }
-  });
+        const migration = await readFile(path.join(migrationsDirectory, "0013_phase4_organiser_alpha.sql"), "utf8");
+        await upgradeSql.begin((tx) => tx.unsafe(migration));
+        const row = await upgradeSql`SELECT id,name,status FROM competitions WHERE id=${competition}`;
+        expect(row).toMatchObject([{ id: competition, name: "Upgrade Cup", status: "draft" }]);
+      } finally {
+        await upgradeSql.end({ timeout: 2 });
+        await dropTestSchema(databaseUrl, upgradeSchema);
+      }
+    },
+    contendedMigrationTestTimeoutMs,
+  );
 
   it("persists setup autosaves with optimistic concurrency and exact idempotent replay", async () => {
     const value = await world("Setup");
@@ -515,6 +525,19 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
         source_manual_qualifier_id: "wildcard-1",
       },
     ]);
+    const placementDependencies = await sql<{ graph_match_id: string }[]>`
+      SELECT producer.graph_match_id
+      FROM phase4_match_schedule_dependencies(
+        phase4_deterministic_uuid(${revisionId},'placement-r1-m1')
+      ) dependency
+      JOIN matches producer ON producer.id=dependency.source_match_id
+      ORDER BY producer.graph_match_id`;
+    expect(placementDependencies.map((row) => row.graph_match_id)).toEqual(
+      definition.stages
+        .find((stage) => stage.id === "groups")!
+        .matchIds.slice()
+        .sort(),
+    );
 
     const corruptions = [
       (graph: FormatGraph) => Object.assign(graph.stages[0]!, { destinationStageIds: ["championship", "placement"] }),
@@ -553,6 +576,62 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
           ?.valid,
       ).toBe(false);
     }
+  });
+
+  it("accepts only the exact authoritative qualifier dependency set in schedule jobs", async () => {
+    const value = await world("Qualifier schedule guard");
+    const baseJobId = randomUUID();
+    const baseInput = await prepareScheduleInput(baseJobId, value);
+    const definition = authoredQualifierGraph();
+    const revisionId = randomUUID();
+    const entryIds: string[] = [];
+    for (let seed = 1; seed <= 8; seed += 1) {
+      const id = randomUUID();
+      entryIds.push(id);
+      await sql`INSERT INTO division_entries(id,division_id,name,seed,status)
+        VALUES(${id},${value.divisionB},${`Qualifier entry ${seed}`},${seed},'confirmed')`;
+    }
+    await sql`INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract)
+      VALUES(${revisionId},${value.competition},${value.divisionB},1,${sql.json(definition)},${hash(definition)},${value.account},'phase3')`;
+    await sql`SELECT phase4_materialize_format_revision(${revisionId})`;
+    await sql`INSERT INTO format_validation_evidence(format_revision_id,definition_hash,valid,graph_acyclic,graph_reachable,
+      slots_unambiguous,deterministic_match_count,available_match_slots,required_match_slots,recommendation_fits_capacity,validated_by)
+      VALUES(${revisionId},${hash(definition)},false,false,false,false,0,0,0,false,${value.account})`;
+    await sql`SELECT phase4_publish_format_revision(${revisionId},${value.account},'publish-qualifier-schedule-guard')`;
+    const [target] = await sql<{ id: string }[]>`
+      SELECT id FROM matches
+      WHERE format_revision_id=${revisionId} AND graph_match_id='placement-r1-m1'`;
+    const dependencies = await sql<{ source_match_id: string }[]>`
+      SELECT source_match_id FROM phase4_match_schedule_dependencies(${target!.id})`;
+    const authoritative = structuredClone(baseInput);
+    authoritative.matches = [
+      {
+        ...baseInput.matches[0]!,
+        match_id: target!.id,
+        division_id: value.divisionB,
+        dependency_match_ids: dependencies.map((row) => row.source_match_id),
+        possible_entry_ids: entryIds,
+      },
+    ];
+    for (const dependencyMutation of [(ids: string[]) => ids.slice(1), (ids: string[]) => [...ids, target!.id]]) {
+      const forgedJobId = randomUUID();
+      const forged = structuredClone(authoritative);
+      forged.job_id = forgedJobId;
+      forged.matches[0]!.dependency_match_ids = dependencyMutation(forged.matches[0]!.dependency_match_ids);
+      await expect(sql`INSERT INTO schedule_generation_jobs(
+          id,organisation_id,competition_id,objective,input_snapshot,input_hash,requested_by,request_id,correlation_id
+        ) VALUES(
+          ${forgedJobId},${value.organisation},${value.competition},'balanced',
+          ${sql.json(forged)},${hash(forged)},${value.account},${`forged-${forgedJobId}`},${`forged-${forgedJobId}`}
+        )`).rejects.toThrow(/dependencies are not authoritative/);
+    }
+    authoritative.job_id = baseJobId;
+    await sql`INSERT INTO schedule_generation_jobs(
+      id,organisation_id,competition_id,objective,input_snapshot,input_hash,requested_by,request_id,correlation_id
+    ) VALUES(
+      ${baseJobId},${value.organisation},${value.competition},'balanced',
+      ${sql.json(authoritative)},${hash(authoritative)},${value.account},'qualifier-authoritative','qualifier-authoritative'
+    )`;
   });
 
   it("serialises format publication and leaves one current published revision per division", async () => {
@@ -974,7 +1053,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     const warningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
       VALUES(${warningRevision},${value.competition},${formatA},1,${"1".repeat(64)},'draft',${value.account},
-        current_date+interval '7 days'-interval '1 month')`;
+        (current_date+interval '7 days'-interval '1 month') AT TIME ZONE 'UTC')`;
     await sql`INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id) VALUES
       (${warningRevision},${value.competition},${value.divisionA},${formatA}),
       (${warningRevision},${value.competition},${value.divisionB},${formatB})`;
@@ -1000,7 +1079,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     const urgentWarningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
       VALUES(${urgentWarningRevision},${value.competition},${formatA},2,${"3".repeat(64)},'draft',${value.account},
-        current_date+interval '1 day'-interval '1 month')`;
+        (current_date+interval '1 day'-interval '1 month') AT TIME ZONE 'UTC')`;
     await sql`SELECT phase4_emit_schedule_expiry_warning(${urgentWarningRevision},1,${value.account},'warning-1')`;
     expect(
       await sql`SELECT id FROM schedule_revision_warnings WHERE schedule_revision_id=${urgentWarningRevision} AND warning_days=1`,
@@ -1036,7 +1115,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${monthEndRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${monthEndRevision}`
       )[0]?.editable_until,
     ).toContain("2027-02-28 10:15:00");
 
@@ -1048,7 +1127,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${leapRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${leapRevision}`
       )[0]?.editable_until,
     ).toContain("2028-02-29 10:15:00");
 
@@ -1060,7 +1139,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${yearBoundaryRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${yearBoundaryRevision}`
       )[0]?.editable_until,
     ).toContain("2028-01-31 10:15:00");
 
@@ -1073,7 +1152,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
       (
         await sql<
           { editable_until: string }[]
-        >`SELECT editable_until::text FROM schedule_revisions WHERE id=${latestEditRevision}`
+        >`SELECT (editable_until AT TIME ZONE 'UTC')::text editable_until FROM schedule_revisions WHERE id=${latestEditRevision}`
       )[0]?.editable_until,
     ).toContain("2027-04-20 09:30:00");
   });

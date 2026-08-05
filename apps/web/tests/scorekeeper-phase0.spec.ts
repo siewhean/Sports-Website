@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
+import { dismissConsent } from "./helpers/console-guard";
 
 async function openScorekeeper(page: Page) {
-  await page.goto("/score");
+  await page.goto("/score/prototype");
+  await dismissConsent(page);
   await page.getByRole("button", { name: "Validate access" }).click();
   await page.getByRole("checkbox", { name: "I am at Match 12 and ready to score this fixture." }).check();
   await page.getByRole("button", { name: "Start scoring offline" }).click();

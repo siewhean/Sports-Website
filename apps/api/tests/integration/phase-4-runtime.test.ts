@@ -28,6 +28,10 @@ const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../packages/database/migrations",
 );
+// This hook applies the complete migration chain and seeds the Phase 4 runtime
+// while the integration workspace is exercising PostgreSQL concurrently.
+// Keep the wider margin local to this setup rather than raising global limits.
+const phase4RuntimeSetupTimeoutMs = 30_000;
 let client!: Sql;
 let phase3!: Phase3Runtime;
 let runtime!: Phase4Runtime;
@@ -96,7 +100,13 @@ beforeAll(async () => {
     VALUES(${officialId},${organisationId},'competition',${competitionId},${accountId})`;
   await client`INSERT INTO ai_usage_allowances(organisation_id,actor_account_id,action,period_start,action_limit)
     VALUES(${organisationId},${accountId},'text_to_brief',current_date,10)`;
-  phase2 = new Phase2Runtime(client as unknown as PostgresJsSql, phase2DomainAdapter);
+  phase2 = new Phase2Runtime(
+    client as unknown as PostgresJsSql,
+    phase2DomainAdapter,
+    undefined,
+    undefined,
+    "phase-4-runtime-fallback-code-hmac-secret",
+  );
   runtime = new Phase4Runtime(
     client as unknown as PostgresJsSql,
     phase3,
@@ -111,7 +121,7 @@ beforeAll(async () => {
     undefined,
     phase2,
   );
-});
+}, phase4RuntimeSetupTimeoutMs);
 
 afterAll(async () => {
   await client?.end({ timeout: 2 });
@@ -170,9 +180,12 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     const sameSportDivisionId = randomUUID();
     const archivedTargetDivisionId = randomUUID();
     await client`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES
-      (${sourceDivisionId},${formatCompetitionId},'Format source',8),
+      (${sourceDivisionId},${formatCompetitionId},'Format source',12),
       (${sameSportDivisionId},${formatCompetitionId},'Format target',8),
       (${archivedTargetDivisionId},${formatCompetitionId},'Archived target',8)`;
+    await client`INSERT INTO division_entries(division_id,name,seed,status,entry_type)
+      SELECT ${sourceDivisionId},'Source entry '||seed,seed,'active','team'
+      FROM generate_series(1,8) seed`;
     const graph = structuredClone(createDefaultFormatTemplates(8)[0]!.graph);
     const document: Phase4FormatBuilderDocument = {
       schema_version: 1,
@@ -682,23 +695,25 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
   });
 
   it("carries one setup and format lineage through the real worker, revisions, publication and stale fence", async () => {
-    await phase3.createCompetition(
-      { accountId },
-      {
-        organisationId,
-        name: "Basketball pack seed",
-        slug: `basketball-pack-seed-${randomUUID()}`,
-        sportCode: "basketball",
-        venue: "Seed Arena",
-        address: "1 Seed Road",
-        countryCode: "SG",
-        startsOn: "2027-07-01",
-        endsOn: "2027-07-01",
-        timezone: "Asia/Singapore",
-        locale: "en-SG",
-      },
-      randomUUID(),
-    );
+    const unrelatedCompetitionId = (
+      await phase3.createCompetition(
+        { accountId },
+        {
+          organisationId,
+          name: "Basketball pack seed",
+          slug: `basketball-pack-seed-${randomUUID()}`,
+          sportCode: "basketball",
+          venue: "Seed Arena",
+          address: "1 Seed Road",
+          countryCode: "SG",
+          startsOn: "2027-07-01",
+          endsOn: "2027-07-01",
+          timezone: "Asia/Singapore",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      )
+    ).id;
     const journeyCompetitionId = (
       await phase3.createCompetition(
         { accountId },
@@ -922,6 +937,7 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     );
     if (!selectedRecommendation) throw new Error("Expected selected recommendation evidence");
     expect(selectedRecommendation.division_formats).toHaveLength(2);
+    const appliedFormatRevisionIds = new Map<string, string>();
     for (const divisionFormat of selectedRecommendation.division_formats) {
       if (!divisionFormat.format_revision_id) throw new Error("Expected an applied format revision");
       const builder = await journeyRuntime.readFormatBuilder(
@@ -941,19 +957,53 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
         builder.draft.document,
       );
       expect(validation).toMatchObject({ valid: true, graph_hash: divisionFormat.format_definition_hash });
+      const editedDocument: Phase4FormatBuilderDocument = {
+        ...builder.draft.document,
+        graph: {
+          ...builder.draft.document.graph,
+          stages: builder.draft.document.graph.stages.map((stage, index) =>
+            index === 0 ? { ...stage, label: `${stage.label} — organiser edit` } : stage,
+          ),
+        },
+      };
+      const edited = await journeyRuntime.saveFormatRevision(
+        { accountId },
+        journeyCompetitionId,
+        divisionFormat.division_id,
+        {
+          draft_id: builder.draft.draft_id,
+          expected_revision: builder.draft.revision,
+          parent_revision_id: builder.draft.draft_id,
+          document: editedDocument,
+          idempotency_key: `journey-edit-format-${randomUUID()}`,
+        },
+        randomUUID(),
+      );
+      expect(edited.parent_revision_id).toBe(divisionFormat.format_revision_id);
+      expect(edited.definition_hash).not.toBe(divisionFormat.format_definition_hash);
+      appliedFormatRevisionIds.set(divisionFormat.division_id, edited.draft_id);
       const materialised = await journeyRuntime.materialiseFormat(
         { accountId },
-        divisionFormat.format_revision_id,
+        edited.draft_id,
         `journey-materialise-${randomUUID()}`,
         randomUUID(),
       );
       expect(materialised.match_count).toBe(divisionFormat.match_count);
-      await client`INSERT INTO format_validation_evidence(format_revision_id,definition_hash,valid,graph_acyclic,graph_reachable,
-        slots_unambiguous,deterministic_match_count,available_match_slots,required_match_slots,recommendation_fits_capacity,validated_by)
-        SELECT id,definition_hash,false,false,false,false,0,0,0,false,${accountId}
-        FROM format_revisions WHERE id=${divisionFormat.format_revision_id}`;
+      expect(
+        await client`SELECT valid,graph_acyclic,graph_reachable,slots_unambiguous,recommendation_fits_capacity
+          FROM format_validation_evidence WHERE format_revision_id=${edited.draft_id}`,
+      ).toEqual([
+        {
+          valid: true,
+          graph_acyclic: true,
+          graph_reachable: true,
+          slots_unambiguous: true,
+          recommendation_fits_capacity: true,
+        },
+      ]);
       await client`SELECT phase4_publish_format_revision(
-        ${divisionFormat.format_revision_id},${accountId},${`journey-publish-format-${divisionFormat.format_revision_id}`})`;
+        ${edited.draft_id},${accountId},${`journey-publish-format-${edited.draft_id}`})`;
+      expect(edited.parent_revision_id).toBe(divisionFormat.format_revision_id);
     }
     const competition = required(
       await client<{ revision: number; capacity_revision: number }[]>`
@@ -1033,7 +1083,6 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       randomUUID(),
     );
     expect(accepted.status).toBe("ready_for_review");
-    if (!selectedRecommendation.format_revision_id) throw new Error("Expected selected format lineage");
     const settingsReferences = setupDocument.values.settings?.map((reference) => ({
       scope: reference.scope,
       division_id: reference.division_id,
@@ -1041,6 +1090,105 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       pack_definition_hash: reference.pack_definition_hash,
     }));
     if (!settingsReferences?.length) throw new Error("Expected schedule settings lineage");
+    const [beforeRead] = await client<{ revision: number; refresh_audits: number }[]>`
+      SELECT draft.revision,
+        (SELECT count(*)::integer
+         FROM audit_events
+         WHERE action='setup.references.refreshed' AND target_id=draft.id::text) refresh_audits
+      FROM setup_drafts draft WHERE competition_id=${journeyCompetitionId}`;
+    const readOnlyScheduleDocument = await journeyRuntime.readSetupDraft({ accountId }, journeyCompetitionId);
+    const [afterRead] = await client<{ revision: number; refresh_audits: number }[]>`
+      SELECT draft.revision,
+        (SELECT count(*)::integer
+         FROM audit_events
+         WHERE action='setup.references.refreshed' AND target_id=draft.id::text) refresh_audits
+      FROM setup_drafts draft WHERE competition_id=${journeyCompetitionId}`;
+    expect(readOnlyScheduleDocument.values.schedule_review).toBeNull();
+    expect(afterRead).toEqual(beforeRead);
+
+    const [lineagePreconditions] = await client<
+      { format_stale: boolean; schedule_formats_valid: boolean; accepted_ancestor_id: string | null }[]
+    >`SELECT
+      phase4_setup_format_evidence_stale(
+        ${journeyCompetitionId},
+        ${client.json(setupDocument.values.format_recommendations as never)}
+      ) format_stale,
+      phase4_schedule_formats_descend_from_recommendation(
+        ${journeyCompetitionId},${accepted.id},
+        ${client.json(setupDocument.values.format_recommendations as never)}
+      ) schedule_formats_valid,
+      phase4_schedule_revision_accepted_ancestor(${accepted.id}) accepted_ancestor_id`;
+    expect(lineagePreconditions).toEqual({
+      format_stale: false,
+      schedule_formats_valid: true,
+      accepted_ancestor_id: accepted.id,
+    });
+    const [directDerivation] = await client<
+      {
+        value: unknown;
+        capacity_changed: boolean;
+        settings_changed: boolean;
+        entries_changed: boolean;
+      }[]
+    >`
+      WITH canonical AS (
+        SELECT phase4_setup_seed_values(${journeyCompetitionId}) value
+      )
+      SELECT phase4_derive_setup_schedule_reference(
+          ${journeyCompetitionId},
+          canonical.value->'capacity',
+          canonical.value->'settings',
+          draft.steps->'format_recommendations'
+        ) value,
+        draft.steps->'capacity' IS DISTINCT FROM canonical.value->'capacity' capacity_changed,
+        draft.steps->'settings' IS DISTINCT FROM canonical.value->'settings' settings_changed,
+        draft.steps->'entries' IS DISTINCT FROM canonical.value->'entries' entries_changed
+      FROM setup_drafts draft CROSS JOIN canonical
+      WHERE draft.competition_id=${journeyCompetitionId}`;
+    expect(directDerivation?.value).not.toBeNull();
+    expect(directDerivation).toMatchObject({
+      capacity_changed: true,
+      settings_changed: false,
+      entries_changed: false,
+    });
+
+    const scheduleResumeKey = `journey-resume-schedule-${randomUUID()}`;
+    const derivedScheduleDocument = await journeyRuntime.resumeSetupDraft(
+      { accountId },
+      journeyCompetitionId,
+      scheduleResumeKey,
+      randomUUID(),
+    );
+    const replayedScheduleDocument = await journeyRuntime.resumeSetupDraft(
+      { accountId },
+      journeyCompetitionId,
+      scheduleResumeKey,
+      randomUUID(),
+    );
+    expect(replayedScheduleDocument).toEqual(derivedScheduleDocument);
+    const expectedAppliedFormatId = [...appliedFormatRevisionIds.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    )[0]?.[1];
+    expect(derivedScheduleDocument.values.schedule_review).toMatchObject({
+      schedule_job_id: generated.job.id,
+      selected_recommendation_id: selectedRecommendationId,
+      format_revision_id: expectedAppliedFormatId,
+      selected_result_revision: checkpointed.current_best.result_revision,
+      selected_result_hash: accepted.assignment_hash,
+      schedule_revision_id: accepted.id,
+    });
+    expect(derivedScheduleDocument.values.review_publish).toBeNull();
+    setupDocument = derivedScheduleDocument;
+    if (!setupDocument.values.schedule_review) throw new Error("Expected canonical schedule review reference");
+    const [derivedScheduleValidity] = await client<{ stale: boolean }[]>`
+      SELECT phase4_setup_schedule_evidence_stale(
+        ${journeyCompetitionId},
+        ${client.json(setupDocument.values.capacity as never)},
+        ${client.json(setupDocument.values.settings as never)},
+        ${client.json(setupDocument.values.format_recommendations as never)},
+        ${client.json(setupDocument.values.schedule_review as never)}
+      ) stale`;
+    expect(derivedScheduleValidity?.stale).toBe(false);
     const scheduleSaved = await journeyRuntime.autosaveSetupDraft(
       { accountId },
       journeyCompetitionId,
@@ -1051,20 +1199,7 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
           kind: "save_step",
           step: {
             step_id: "schedule_review",
-            value: {
-              schedule_job_id: generated.job.id,
-              source_revision: generated.job.source_revision,
-              selected_recommendation_id: selectedRecommendationId,
-              format_revision_id: selectedRecommendation.format_revision_id,
-              format_definition_hash: selectedRecommendation.format_definition_hash,
-              capacity_revision: generated.job.capacity_revision,
-              settings_references: settingsReferences,
-              selected_result_revision: checkpointed.current_best.result_revision,
-              selected_result_hash: accepted.assignment_hash!,
-              objective: generated.job.objective,
-              schedule_revision_id: accepted.id,
-              feasibility: "valid",
-            },
+            value: setupDocument.values.schedule_review,
           },
         },
       },
@@ -1199,29 +1334,6 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       client`UPDATE schedule_revision_formats SET competition_id=competition_id
         WHERE schedule_revision_id=${accepted.id}`,
     ).rejects.toThrow(/format provenance is immutable/);
-    await journeyRuntime.unlockScheduleAssignment(
-      { accountId },
-      accepted.id,
-      lockedAssignment.match_id,
-      randomUUID(),
-      randomUUID(),
-    );
-    const unlockedProblem = await buildScheduleProblem.buildScheduleProblem(
-      client as unknown as PostgresJsSql,
-      access,
-      "balanced",
-      constraints,
-    );
-    expect(
-      unlockedProblem.problem.matches.find((match) => match.id === lockedAssignment.match_id)?.fixedAssignment,
-    ).toBeUndefined();
-    const assertCurrent = journeyRuntime as unknown as {
-      assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string): Promise<void>;
-    };
-    await expect(
-      assertCurrent.assertScheduleJobCurrent(client as unknown as PostgresJsSql, generated.job.id),
-    ).resolves.toBeUndefined();
-
     for (const deniedAccountId of [viewerId, officialId]) {
       await expect(
         journeyRuntime.publishScheduleRevision(
@@ -1267,6 +1379,18 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       ),
     ).toEqual({ schedule_version: 0, published_schedule_revision_id: null });
 
+    await journeyRuntime.lockScheduleAssignment(
+      { accountId },
+      accepted.id,
+      {
+        idempotency_key: randomUUID(),
+        match_id: movable.match_id,
+        playing_area_id: movable.area_id,
+        start_epoch_ms: movable.start_epoch_ms,
+        end_epoch_ms: movable.end_epoch_ms,
+      },
+      randomUUID(),
+    );
     await journeyRuntime.publishScheduleRevision(
       { accountId },
       accepted.id,
@@ -1275,9 +1399,10 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     );
     const firstPublic = await phase2.publicCompetition("gate-b-complete-journey");
     expect(firstPublic.publication.schedule_version).toBe(1);
-    expect(firstPublic.schedule.find((match) => match.id === movable.match_id)?.starts_at).toBe(
-      new Date(movable.start_epoch_ms).toISOString(),
-    );
+    expect(
+      firstPublic.divisions.flatMap((division) => division.schedule).find((match) => match.id === movable.match_id)
+        ?.starts_at,
+    ).toBe(new Date(movable.start_epoch_ms).toISOString());
     expect((await phase2.publicCompetition("gate-b-complete-journey")).publication.schedule_version).toBe(1);
     expect(
       required(
@@ -1288,36 +1413,24 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     expect(setupDocument.values.schedule_review).toMatchObject({
       schedule_revision_id: accepted.id,
       selected_result_hash: accepted.assignment_hash,
-      format_revision_id: selectedRecommendation.format_revision_id,
-    });
-    const completedSetup = await journeyRuntime.autosaveSetupDraft(
-      { accountId },
-      journeyCompetitionId,
-      {
-        expected_revision: setupDocument.revision,
-        idempotency_key: `journey-complete-${randomUUID()}`,
-        transition: {
-          kind: "complete",
-          review: {
-            selected_format_revision_id: selectedRecommendation.format_revision_id,
-            selected_schedule_result_hash: accepted.assignment_hash!,
-            capacity_revision: generated.job.capacity_revision,
-            settings_references: settingsReferences,
-            acknowledged_warning_codes: [],
-            publication_status: "published",
-            published_schedule_revision_id: accepted.id,
-          },
-        },
-      },
-      randomUUID(),
-    );
-    if (completedSetup.outcome !== "saved") throw new Error("Expected setup completion to save");
-    expect(completedSetup.document).toMatchObject({
-      competition_id: journeyCompetitionId,
-      status: "completed",
-      current_step: "review_publish",
+      format_revision_id: expectedAppliedFormatId,
     });
 
+    await expect(
+      journeyRuntime.publishScheduleRevision(
+        { accountId },
+        repaired.id,
+        { idempotency_key: randomUUID(), expected_revision: repaired.revision },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "SCHEDULE_LOCK_CONFLICT" });
+    await journeyRuntime.unlockScheduleAssignment(
+      { accountId },
+      repaired.id,
+      movable.match_id,
+      randomUUID(),
+      randomUUID(),
+    );
     await journeyRuntime.publishScheduleRevision(
       { accountId },
       repaired.id,
@@ -1326,9 +1439,10 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     );
     const secondPublic = await phase2.publicCompetition("gate-b-complete-journey");
     expect(secondPublic.publication.schedule_version).toBe(2);
-    expect(secondPublic.schedule.find((match) => match.id === movable.match_id)?.starts_at).toBe(
-      new Date(validTarget.start_epoch_ms).toISOString(),
-    );
+    expect(
+      secondPublic.divisions.flatMap((division) => division.schedule).find((match) => match.id === movable.match_id)
+        ?.starts_at,
+    ).toBe(new Date(validTarget.start_epoch_ms).toISOString());
     expect(
       await client<{ id: string; status: string }[]>`
         SELECT id,status FROM schedule_revisions WHERE id IN (${accepted.id},${repaired.id}) ORDER BY revision`,
@@ -1336,6 +1450,143 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       { id: accepted.id, status: "superseded" },
       { id: repaired.id, status: "published" },
     ]);
+    await journeyRuntime.unlockScheduleAssignment(
+      { accountId },
+      repaired.id,
+      lockedAssignment.match_id,
+      randomUUID(),
+      randomUUID(),
+    );
+    const unlockedProblem = await buildScheduleProblem.buildScheduleProblem(
+      client as unknown as PostgresJsSql,
+      access,
+      "balanced",
+      constraints,
+    );
+    expect(
+      unlockedProblem.problem.matches.find((match) => match.id === lockedAssignment.match_id)?.fixedAssignment,
+    ).toBeUndefined();
+    const assertCurrent = journeyRuntime as unknown as {
+      assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string): Promise<void>;
+    };
+    await expect(
+      assertCurrent.assertScheduleJobCurrent(client as unknown as PostgresJsSql, generated.job.id),
+    ).resolves.toBeUndefined();
+    const [beforePublicationResume] = await client<{ audit_count: number; outbox_count: number }[]>`
+      SELECT
+        (SELECT count(*)::integer FROM audit_events
+         WHERE action='setup.references.refreshed'
+           AND target_id=(SELECT id::text FROM setup_drafts WHERE competition_id=${journeyCompetitionId})) audit_count,
+        (SELECT count(*)::integer FROM outbox_events
+         WHERE event_type='setup.references.refreshed'
+           AND aggregate_id=(SELECT id::text FROM setup_drafts WHERE competition_id=${journeyCompetitionId})) outbox_count`;
+    const publicationResumeKey = `journey-resume-publication-${randomUUID()}`;
+    const derivedPublicationDocument = await journeyRuntime.resumeSetupDraft(
+      { accountId },
+      journeyCompetitionId,
+      publicationResumeKey,
+      randomUUID(),
+    );
+    const replayedPublicationDocument = await journeyRuntime.resumeSetupDraft(
+      { accountId },
+      journeyCompetitionId,
+      publicationResumeKey,
+      randomUUID(),
+    );
+    expect(replayedPublicationDocument).toEqual(derivedPublicationDocument);
+    expect(derivedPublicationDocument.values.schedule_review).toMatchObject({
+      schedule_revision_id: repaired.id,
+      selected_result_hash: repaired.assignment_hash,
+      format_revision_id: expectedAppliedFormatId,
+    });
+    expect(derivedPublicationDocument.values.review_publish).toMatchObject({
+      publication_status: "published",
+      published_schedule_revision_id: repaired.id,
+      selected_schedule_result_hash: repaired.assignment_hash,
+      selected_format_revision_id: expectedAppliedFormatId,
+    });
+    const [afterPublicationResume] = await client<{ audit_count: number; outbox_count: number }[]>`
+      SELECT
+        (SELECT count(*)::integer FROM audit_events
+         WHERE action='setup.references.refreshed'
+           AND target_id=(SELECT id::text FROM setup_drafts WHERE competition_id=${journeyCompetitionId})) audit_count,
+        (SELECT count(*)::integer FROM outbox_events
+         WHERE event_type='setup.references.refreshed'
+           AND aggregate_id=(SELECT id::text FROM setup_drafts WHERE competition_id=${journeyCompetitionId})) outbox_count`;
+    expect(afterPublicationResume).toEqual({
+      audit_count: (beforePublicationResume?.audit_count ?? 0) + 1,
+      outbox_count: (beforePublicationResume?.outbox_count ?? 0) + 1,
+    });
+
+    const unrelatedScheduleId = randomUUID();
+    const unrelatedDivisionId = randomUUID();
+    const unrelatedFormatId = randomUUID();
+    const unrelatedGraph = structuredClone(createDefaultFormatTemplates(8)[0]!.graph);
+    await client`INSERT INTO divisions(id,competition_id,name,team_limit)
+      VALUES(${unrelatedDivisionId},${unrelatedCompetitionId},'Unrelated',8)`;
+    await client`INSERT INTO format_revisions(
+        id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract
+      ) VALUES(
+        ${unrelatedFormatId},${unrelatedCompetitionId},${unrelatedDivisionId},1,${client.json(unrelatedGraph)},
+        phase4_sha256_json(${client.json(unrelatedGraph)}::jsonb),${accountId},'phase3'
+      )`;
+    const firstDivisionFormat = selectedRecommendation.division_formats
+      .slice()
+      .sort((left, right) => left.division_id.localeCompare(right.division_id))[0]!;
+    const firstAppliedFormatId = appliedFormatRevisionIds.get(firstDivisionFormat.division_id)!;
+    await client`INSERT INTO schedule_revisions(
+      id,competition_id,format_revision_id,revision,input_hash,status,created_by,quality
+    )
+    SELECT ${unrelatedScheduleId},${journeyCompetitionId},${firstAppliedFormatId},
+      max(revision)+1,phase4_sha256_json(jsonb_build_object('unrelated',${unrelatedScheduleId}::uuid)),
+      'draft',${accountId},'{}'::jsonb
+    FROM schedule_revisions WHERE competition_id=${journeyCompetitionId}`;
+    const [lineageRejections] = await client<
+      { unrelated_format_descends: boolean; unrelated_schedule_valid: boolean; unrelated_schedule_stale: boolean }[]
+    >`SELECT
+      phase4_format_revision_descends_from(
+        ${unrelatedFormatId},${firstDivisionFormat.format_revision_id}
+      ) unrelated_format_descends,
+      phase4_schedule_formats_descend_from_recommendation(
+        ${journeyCompetitionId},${unrelatedScheduleId},
+        ${client.json(derivedPublicationDocument.values.format_recommendations as never)}
+      ) unrelated_schedule_valid,
+      phase4_setup_schedule_evidence_stale(
+        ${journeyCompetitionId},
+        ${client.json(derivedPublicationDocument.values.capacity as never)},
+        ${client.json(derivedPublicationDocument.values.settings as never)},
+        ${client.json(derivedPublicationDocument.values.format_recommendations as never)},
+        ${client.json({
+          ...derivedPublicationDocument.values.schedule_review!,
+          schedule_revision_id: unrelatedScheduleId,
+        } as never)}
+      ) unrelated_schedule_stale`;
+    expect(lineageRejections).toEqual({
+      unrelated_format_descends: false,
+      unrelated_schedule_valid: false,
+      unrelated_schedule_stale: true,
+    });
+
+    if (!derivedPublicationDocument.values.review_publish) throw new Error("Expected canonical publication reference");
+    const completedSetup = await journeyRuntime.autosaveSetupDraft(
+      { accountId },
+      journeyCompetitionId,
+      {
+        expected_revision: derivedPublicationDocument.revision,
+        idempotency_key: `journey-complete-${randomUUID()}`,
+        transition: { kind: "complete", review: derivedPublicationDocument.values.review_publish },
+      },
+      randomUUID(),
+    );
+    if (completedSetup.outcome !== "saved") throw new Error("Expected setup completion to save");
+    expect(completedSetup.document).toMatchObject({
+      competition_id: journeyCompetitionId,
+      status: "completed",
+      current_step: "review_publish",
+      permission: "read",
+      read_only: true,
+      autosave: { status: "read_only" },
+    });
     await expect(
       client`DELETE FROM schedule_revision_formats WHERE schedule_revision_id=${accepted.id}`,
     ).rejects.toThrow(/format provenance is immutable/);
@@ -1351,7 +1602,7 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       statusCode: 409,
       code: "STALE_SCHEDULE_INPUT",
     });
-  });
+  }, 15_000);
 });
 
 async function waitForCompletedScheduleJob(

@@ -582,7 +582,7 @@
   grid-template-columns: minmax(280px, 1fr) auto;
   gap: 10px 24px;
   align-items: center;
-  padding: 8px 20px;
+  padding: 8px 150px 8px 20px;
   border-top: 1px solid var(--chrome-line);
   background: var(--chrome);
   color: var(--surface);
@@ -901,7 +901,11 @@
     overflow: visible;
   }
   .canvas {
-    display: none;
+    position: relative;
+    display: block;
+    height: calc(100dvh - 258px);
+    min-height: 480px;
+    overflow: auto;
   }
   .manual {
     height: auto;
@@ -937,19 +941,19 @@
     grid-column: auto;
   }
   .validationBar {
-    position: fixed;
-    right: 0;
+    position: sticky;
+    right: auto;
     bottom: 0;
-    left: 0;
+    left: auto;
     grid-template-columns: 1fr;
-    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    padding: 10px 16px calc(58px + env(safe-area-inset-bottom));
   }
   .validationBar small {
     white-space: normal;
   }
   .validationActions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .validationActions button {
     min-height: 56px;

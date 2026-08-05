@@ -522,6 +522,19 @@ describe("Phase 4 Assisted Setup validation", () => {
     );
   });
 
+  it("allows an effective child format when the selected recommendation identity is unchanged", () => {
+    const source = completeValues();
+    const values = {
+      ...source,
+      schedule_review: {
+        ...source.schedule_review!,
+        formatRevisionId: "manual-child-format",
+        formatDefinitionHash: "manual-child-definition",
+      },
+    };
+    expect(validateAssistedSetupStep("schedule_review", values).map((item) => item.code)).not.toContain("stale_format");
+  });
+
   it("orders idempotency, permission, expiry and optimistic-conflict guards deterministically", () => {
     const base = {
       currentRevision: 4,

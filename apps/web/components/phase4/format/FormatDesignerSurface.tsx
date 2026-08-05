@@ -31,7 +31,7 @@ import styles from "./FormatDesignerWorkspace.module.css";
 import { Inspector, ManualBuilder, TemplateDialog } from "./FormatDesignerPanels";
 import { buildConnections, NODE_HEIGHT, NODE_WIDTH, MOVE_STEP, stageIcon } from "./format-designer-helpers";
 
-type BusyState = "validate" | "save" | "materialise" | "template" | null;
+type BusyState = "validate" | "save" | "materialise" | "publish" | "template" | null;
 
 type FormatDesignerSurfaceProps = {
   page: FormatBuilderPageDocument;
@@ -54,6 +54,7 @@ type FormatDesignerSurfaceProps = {
   onSave(): void;
   onValidate(): void;
   onMaterialise(): void;
+  onPublish(): void;
   onSaveTemplate(): void;
   onReuseTemplate(id: string): void;
   onArchiveTemplate(id: string): void;
@@ -80,6 +81,7 @@ export function FormatDesignerSurface({
   onSave,
   onValidate,
   onMaterialise,
+  onPublish,
   onSaveTemplate,
   onReuseTemplate,
   onArchiveTemplate,
@@ -230,6 +232,7 @@ export function FormatDesignerSurface({
           <button
             type="button"
             className={styles.primaryCommand}
+            data-testid="phase4-format-save"
             onClick={onSave}
             disabled={!editable || busy !== null || !state.dirty}
           >
@@ -417,8 +420,11 @@ export function FormatDesignerSurface({
           <button type="button" onClick={onValidate} disabled={busy !== null}>
             {busy === "validate" ? t("prototype.cd51f8c88998") : t("prototype.a8d8bdf0bca9")}
           </button>
-          <button type="button" onClick={onMaterialise} disabled={busy !== null || state.dirty || !valid}>
+          <button type="button" onClick={onMaterialise} disabled={!editable || busy !== null || state.dirty || !valid}>
             {busy === "materialise" ? t("prototype.27248e20d2d7") : t("prototype.bafe874a510c")}
+          </button>
+          <button type="button" onClick={onPublish} disabled={!editable || busy !== null || state.dirty || !valid}>
+            {busy === "publish" ? opaqueId("Publishing…") : opaqueId("Publish format")}
           </button>
         </div>
         <p aria-live="polite">{announcement}</p>

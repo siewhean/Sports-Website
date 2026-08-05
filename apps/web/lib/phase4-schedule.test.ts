@@ -290,6 +290,7 @@ describe("phase 4 schedule boundary parsers", () => {
     const endsAt = new Date(assignment.end_epoch_ms).toISOString();
     const document = {
       state: "ready",
+      competitionRouteId: "open",
       competitionId: "competition-1",
       competitionName: "Open",
       timeZone: "Asia/Singapore",

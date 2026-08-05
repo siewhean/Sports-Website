@@ -1,6 +1,7 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
-type GuardState = { failures: string[]; allowed: RegExp[] };
+type AllowedFailure = { pattern: RegExp; remaining: number | null };
+type GuardState = { failures: string[]; allowed: AllowedFailure[] };
 
 const guards = new WeakMap<Page, GuardState>();
 
@@ -124,21 +125,43 @@ export function installConsoleGuard(page: Page) {
 }
 
 export function allowConsoleFailure(page: Page, pattern: RegExp) {
-  guards.get(page)?.allowed.push(pattern);
+  guards.get(page)?.allowed.push({ pattern, remaining: null });
 }
 
-export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
+export function allowConsoleFailureCount(page: Page, pattern: RegExp, maximumCount: number) {
+  if (!Number.isSafeInteger(maximumCount) || maximumCount < 1) {
+    throw new Error("Console failure allowance count must be a positive integer.");
+  }
+  guards.get(page)?.allowed.push({ pattern, remaining: maximumCount });
+}
+
+async function assertAndClearConsoleGuard(page: Page, testInfo: TestInfo, attachmentName: string) {
   const state = guards.get(page);
-  const failures = (state?.failures ?? []).filter(
-    (failure) => !(state?.allowed ?? []).some((pattern) => pattern.test(failure)),
-  );
-  await testInfo.attach("browser-runtime-health", {
+  const failures = (state?.failures ?? []).filter((failure) => {
+    const allowance = (state?.allowed ?? []).find(({ pattern, remaining }) => remaining !== 0 && pattern.test(failure));
+    if (!allowance) return true;
+    if (allowance.remaining !== null) allowance.remaining -= 1;
+    return false;
+  });
+  await testInfo.attach(attachmentName, {
     body: failures.length
       ? failures.join("\n")
       : "No console warnings, console errors, page errors, or failed requests.",
     contentType: "text/plain",
   });
+  if (state) {
+    state.failures.length = 0;
+    state.allowed.length = 0;
+  }
   expect(failures, "unexpected browser runtime failures").toEqual([]);
+}
+
+export async function assertConsoleGuardCheckpoint(page: Page, testInfo: TestInfo, checkpoint: string) {
+  await assertAndClearConsoleGuard(page, testInfo, `browser-runtime-health-${checkpoint}`);
+}
+
+export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
+  await assertAndClearConsoleGuard(page, testInfo, "browser-runtime-health");
 }
 
 export async function dismissConsent(page: Page) {
@@ -155,7 +178,7 @@ export async function dismissConsent(page: Page) {
 }
 
 export async function openPhase2Scorekeeper(page: Page) {
-  await page.goto("/score/m12-access");
+  await page.goto("/score");
   await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();

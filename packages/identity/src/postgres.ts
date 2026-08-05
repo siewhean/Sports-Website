@@ -21,6 +21,7 @@ import type {
 export interface PostgresJsSql {
   unsafe<T>(query: string, parameters?: readonly unknown[]): PromiseLike<readonly T[]>;
   begin?<T>(callback: (transaction: PostgresJsSql) => Promise<T>): PromiseLike<T>;
+  savepoint?<T>(callback: (transaction: PostgresJsSql) => Promise<T>): PromiseLike<T>;
 }
 
 async function withTransaction<T>(

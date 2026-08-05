@@ -6,7 +6,7 @@ import { scheduleInput } from "../fixtures.js";
 
 describe("DomainScheduleOptimizer", () => {
   it("maps strict transport input into deterministic valid candidate iterations", async () => {
-    const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 3 });
+    const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 3, workerExecArgv: [] });
     const input = solvableInput();
     optimizer.validateInput(input);
 

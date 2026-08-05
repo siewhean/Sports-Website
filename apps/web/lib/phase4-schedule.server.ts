@@ -31,6 +31,7 @@ const previewStates = new Set<ScheduleSurfaceState>([
 ]);
 
 type ScheduleInput = Readonly<{
+  competitionRouteId: string;
   competitionId: string;
   competitionName: string;
   timeZone: string;
@@ -64,6 +65,7 @@ async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
 export function scheduleUnavailableDocument(input: ScheduleInput, state: ScheduleSurfaceState): ScheduleDocument {
   return {
     state,
+    competitionRouteId: input.competitionRouteId,
     competitionId: input.competitionId,
     competitionName: input.competitionName,
     timeZone: input.timeZone,
@@ -349,6 +351,7 @@ export function parseScheduleWorkspace(value: unknown, input: ScheduleInput): Sc
   const canEdit = !competition.read_only && competition.permission === "write";
   return {
     state: competition.read_only ? "read-only" : "ready",
+    competitionRouteId: input.competitionRouteId,
     competitionId: competition.id,
     competitionName: competition.name as string,
     timeZone: competition.time_zone as string,
@@ -816,6 +819,7 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
   );
   return {
     state,
+    competitionRouteId: input.competitionRouteId,
     competitionId: input.competitionId,
     competitionName: input.competitionName,
     timeZone: input.timeZone,

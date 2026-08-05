@@ -30,6 +30,7 @@ export const phase4ScheduleMachine = {
   lockKey: "schedule-lock",
   unlockKey: "schedule-unlock",
   moveKey: "schedule-move",
+  moveNotice: "moved",
   queued: "queued",
   running: "running",
   best: "valid_best_found",
@@ -224,8 +225,24 @@ export type ScheduleRevisionComparison = Readonly<{
   conflicts: Readonly<{ before: number; after: number; delta: number }>;
 }>;
 
+export type SchedulePublishEnvelope = Readonly<{
+  revision: ScheduleRevision;
+  scheduleVersion: number;
+}>;
+
+export type ScheduleMoveEnvelope = Readonly<{
+  revision: ScheduleRevision;
+  consequences: MoveConsequence;
+}>;
+
+export type ScheduleUnlockReceipt = Readonly<{
+  matchId: string;
+}>;
+
 export type ScheduleDocument = Readonly<{
   state: ScheduleSurfaceState;
+  /** The organiser route parameter; distinct from the internal API aggregate ID. */
+  competitionRouteId: string;
   competitionId: string;
   competitionName: string;
   timeZone: string;
@@ -796,12 +813,17 @@ export function parseScheduleRevisionView(
   };
 }
 
-export function parseSchedulePublishResponse(value: unknown): ScheduleRevision | null {
+export function parseSchedulePublishEnvelope(value: unknown): SchedulePublishEnvelope | null {
   const item = record(value);
   if (!item) return null;
   const { schedule_version: scheduleVersion, ...revision } = item;
   if (!integer(scheduleVersion, 1)) return null;
-  return parseScheduleRevisionView(revision, true, true);
+  const parsed = parseScheduleRevisionView(revision, true, true);
+  return parsed ? { revision: parsed, scheduleVersion } : null;
+}
+
+export function parseSchedulePublishResponse(value: unknown): ScheduleRevision | null {
+  return parseSchedulePublishEnvelope(value)?.revision ?? null;
 }
 
 export function parseScheduleRevisionComparison(value: unknown): ScheduleRevisionComparison | null {
@@ -977,18 +999,24 @@ export function isScheduleMoveValidation(value: unknown): boolean {
   return parseScheduleMoveValidation(value) !== null;
 }
 
-export function isScheduleMoveResponse(value: unknown): boolean {
+export function parseScheduleMoveResponse(value: unknown): ScheduleMoveEnvelope | null {
   const item = record(value);
-  if (!item || !Object.prototype.hasOwnProperty.call(item, "consequences")) return false;
+  if (!item || !Object.prototype.hasOwnProperty.call(item, "consequences")) return null;
   const { consequences, ...revision } = item;
-  return parseScheduleRevisionView(revision, true, true) !== null && parseMoveConsequences(consequences) !== null;
+  const parsedRevision = parseScheduleRevisionView(revision, true, true);
+  const parsedConsequences = parseMoveConsequences(consequences);
+  return parsedRevision && parsedConsequences ? { revision: parsedRevision, consequences: parsedConsequences } : null;
 }
 
-export function isScheduleLockResponse(value: unknown): boolean {
+export function isScheduleMoveResponse(value: unknown): boolean {
+  return parseScheduleMoveResponse(value) !== null;
+}
+
+export function parseScheduleLockResponse(value: unknown): ScheduleLock | null {
   const item = record(value);
-  return Boolean(
-    item &&
-    exact(item, [
+  if (
+    !item ||
+    !exact(item, [
       "id",
       "match_id",
       "source_schedule_revision_id",
@@ -998,28 +1026,45 @@ export function isScheduleLockResponse(value: unknown): boolean {
       "locked_by",
       "created_at",
       "idempotent_replay",
-    ]) &&
-    nonEmpty(item.id) &&
-    nonEmpty(item.match_id) &&
-    (item.source_schedule_revision_id === null || nonEmpty(item.source_schedule_revision_id)) &&
-    nonEmpty(item.playing_area_id) &&
-    integer(item.start_epoch_ms, 1) &&
-    integer(item.end_epoch_ms, 1) &&
-    item.end_epoch_ms > item.start_epoch_ms &&
-    nonEmpty(item.locked_by) &&
-    iso(item.created_at) &&
-    typeof item.idempotent_replay === "boolean",
-  );
+    ]) ||
+    !nonEmpty(item.id) ||
+    !nonEmpty(item.match_id) ||
+    (item.source_schedule_revision_id !== null && !nonEmpty(item.source_schedule_revision_id)) ||
+    !nonEmpty(item.playing_area_id) ||
+    !integer(item.start_epoch_ms, 1) ||
+    !integer(item.end_epoch_ms, 1) ||
+    item.end_epoch_ms <= item.start_epoch_ms ||
+    !nonEmpty(item.locked_by) ||
+    !iso(item.created_at) ||
+    typeof item.idempotent_replay !== "boolean"
+  )
+    return null;
+  return {
+    matchId: item.match_id,
+    areaId: item.playing_area_id,
+    startsAt: new Date(item.start_epoch_ms).toISOString(),
+    endsAt: new Date(item.end_epoch_ms).toISOString(),
+  };
+}
+
+export function isScheduleLockResponse(value: unknown): boolean {
+  return parseScheduleLockResponse(value) !== null;
+}
+
+export function parseScheduleUnlockResponse(value: unknown): ScheduleUnlockReceipt | null {
+  const item = record(value);
+  if (
+    !item ||
+    !exact(item, ["match_id", "unlocked", "idempotent_replay"]) ||
+    !nonEmpty(item.match_id) ||
+    item.unlocked !== true ||
+    typeof item.idempotent_replay !== "boolean"
+  )
+    return null;
+  return { matchId: item.match_id };
 }
 
 export function isScheduleUnlockResponse(value: unknown): boolean {
-  const item = record(value);
-  return Boolean(
-    item &&
-    exact(item, ["match_id", "unlocked", "idempotent_replay"]) &&
-    nonEmpty(item.match_id) &&
-    item.unlocked === true &&
-    typeof item.idempotent_replay === "boolean",
-  );
+  return parseScheduleUnlockResponse(value) !== null;
 }
 import { messages } from "@matchday/ui";

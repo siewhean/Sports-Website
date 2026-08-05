@@ -3,7 +3,12 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
-import type { PersistedScoreEvent, Phase2Actor, Phase2Runtime } from "./phase-2-runtime.js";
+import {
+  ScoringAccessRateLimitError,
+  ScoringAccessRejectedError,
+  type Phase2Actor,
+  type Phase2Runtime,
+} from "./phase-2-runtime.js";
 import type { Phase3Runtime } from "./phase-3-runtime.js";
 
 const Id = Type.String({ format: "uuid" });
@@ -17,9 +22,40 @@ const MutationHeaders = Type.Object({
 const ScoringHeaders = Type.Object({
   "x-scoring-session-id": Id,
   "x-scoring-session-token": Type.String({ minLength: 32, maxLength: 256 }),
-  "x-writer-generation": Type.String({ pattern: "^[1-9][0-9]*$" }),
+  "x-writer-generation": Type.Optional(Type.String({ pattern: "^[1-9][0-9]*$" })),
 });
 const GenericSuccess = Type.Record(Type.String(), Type.Any());
+const ResultMutationReceiptSchema = Type.Object(
+  {
+    match_id: Id,
+    aggregate_version: Type.Integer({ minimum: 1 }),
+    through_sequence: Type.Integer({ minimum: 1 }),
+    duplicate: Type.Boolean(),
+    result_version: Type.Integer({ minimum: 1 }),
+    publication_version: Type.Integer({ minimum: 1 }),
+    conflicts: Type.Array(Type.Record(Type.String(), Type.Any())),
+  },
+  { additionalProperties: false },
+);
+const ScoringFinalisationReceiptSchema = Type.Object(
+  {
+    match_id: Id,
+    client_event_id: Id,
+    event_id: Id,
+    command_fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+    outcome: Type.Union([Type.Literal("accepted"), Type.Literal("duplicate")]),
+    sequence: Type.Integer({ minimum: 1 }),
+    aggregate_version: Type.Integer({ minimum: 1 }),
+    duplicate: Type.Boolean(),
+    home_score: Type.Integer({ minimum: 0 }),
+    away_score: Type.Integer({ minimum: 0 }),
+    result_version: Type.Integer({ minimum: 1 }),
+    publication_version: Type.Integer({ minimum: 1 }),
+    published_at: Type.String({ format: "date-time" }),
+    server_received_at: Type.String({ format: "date-time" }),
+  },
+  { additionalProperties: false },
+);
 const PublicParticipantSchema = Type.Object({
   id: Type.Union([Id, Type.Null()]),
   name: Type.String(),
@@ -45,17 +81,31 @@ const PublicResultSchema = Type.Object({
   state: Type.Union([Type.Literal("final"), Type.Literal("corrected")]),
   updated_at: Type.String({ format: "date-time" }),
 });
+const PublicDivisionSchema = Type.Object({
+  division: Type.Object({ id: Id, name: Type.String() }),
+  schedule: Type.Array(PublicScheduleSchema),
+  results: Type.Array(PublicResultSchema),
+  standings: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
+  bracket: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
+});
 const PublicCompetitionSchema = Type.Object({
   competition: Type.Object({
     id: Id,
     name: Type.String(),
     slug: Type.String(),
-    sport_code: Type.Literal("canoe_polo"),
+    sport_code: Type.Union([
+      Type.Literal("canoe_polo"),
+      Type.Literal("badminton"),
+      Type.Literal("table_tennis"),
+      Type.Literal("volleyball"),
+      Type.Literal("basketball"),
+    ]),
     timezone: Type.String(),
     starts_on: Type.String({ format: "date" }),
     ends_on: Type.String({ format: "date" }),
     status: Type.Union([Type.Literal("active"), Type.Literal("completed"), Type.Literal("archived")]),
   }),
+  divisions: Type.Array(PublicDivisionSchema, { minItems: 1 }),
   division: Type.Object({ id: Id, name: Type.String() }),
   publication: Type.Object({
     schedule_version: Type.Integer({ minimum: 0 }),
@@ -70,6 +120,17 @@ const PublicCompetitionSchema = Type.Object({
 const ScoringSessionStateSchema = Type.Object({
   competition: Type.Object({
     slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
+    sport_code: Type.Union([
+      Type.Literal("canoe_polo"),
+      Type.Literal("badminton"),
+      Type.Literal("table_tennis"),
+      Type.Literal("volleyball"),
+      Type.Literal("basketball"),
+    ]),
+  }),
+  sport: Type.Object({
+    pack_version: Type.String({ minLength: 1 }),
+    settings: Type.Record(Type.String(), Type.Any()),
   }),
   match: Type.Object({
     id: Id,
@@ -86,32 +147,44 @@ const ScoringSessionStateSchema = Type.Object({
     away: Type.Object({ id: Type.Union([Id, Type.Null()]), name: Type.Union([Type.String(), Type.Null()]) }),
   }),
   writer: Type.Object({
-    generation: Type.Integer({ minimum: 1 }),
-    expires_at: Type.String({ format: "date-time" }),
+    generation: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+    expires_at: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
     read_only: Type.Boolean(),
   }),
-  score: Type.Object({
-    home: Type.Integer({ minimum: 0 }),
-    away: Type.Integer({ minimum: 0 }),
+  access: Type.Object({
+    principal_id: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+    mode: Type.Union([
+      Type.Literal("writer"),
+      Type.Literal("candidate"),
+      Type.Literal("viewer"),
+      Type.Literal("transferred"),
+    ]),
+    permissions: Type.Array(
+      Type.Union([
+        Type.Literal("score:read"),
+        Type.Literal("score:write"),
+        Type.Literal("score:reverse"),
+        Type.Literal("score:finalise"),
+      ]),
+    ),
+    session_expires_at: Type.String({ format: "date-time" }),
   }),
+  score: GenericSuccess,
+  aggregate_version: Type.Integer({ minimum: 0 }),
   through_sequence: Type.Integer({ minimum: 0 }),
+  canonical_events: Type.Array(
+    Type.Object({
+      event_id: Id,
+      sequence: Type.Integer({ minimum: 1 }),
+      command: Type.Record(Type.String(), Type.Any()),
+    }),
+  ),
   events: Type.Array(
     Type.Object({
       client_event_id: Id,
       sequence: Type.Integer({ minimum: 1 }),
-      type: Type.Union([
-        Type.Literal("match_started"),
-        Type.Literal("period_changed"),
-        Type.Literal("goal_added"),
-        Type.Literal("goal_reversed"),
-        Type.Literal("card_added"),
-        Type.Literal("card_reversed"),
-        Type.Literal("timeout_added"),
-        Type.Literal("incident_added"),
-        Type.Literal("match_finalised"),
-        Type.Literal("match_reopened"),
-        Type.Literal("correction"),
-      ]),
+      event_id: Type.Optional(Id),
+      type: Type.String({ minLength: 1, maxLength: 80 }),
       team_slot: Type.Union([Type.Literal("home"), Type.Literal("away"), Type.Null()]),
       scorer: Type.Union([Type.String(), Type.Null()]),
       manual_period: Type.Union([Type.Integer(), Type.Null()]),
@@ -126,7 +199,7 @@ const ScoringSessionStateSchema = Type.Object({
 type ScoringHeaderValues = {
   "x-scoring-session-id": string;
   "x-scoring-session-token": string;
-  "x-writer-generation": string;
+  "x-writer-generation"?: string;
 };
 
 function requireOrigin(request: FastifyRequest, allowedOrigins: readonly string[]): void {
@@ -140,8 +213,18 @@ function scoringAuth(headers: ScoringHeaderValues) {
   return {
     sessionId: headers["x-scoring-session-id"],
     sessionToken: headers["x-scoring-session-token"],
-    generation: Number(headers["x-writer-generation"]),
+    generation: headers["x-writer-generation"] ? Number(headers["x-writer-generation"]) : null,
   };
+}
+
+function setAccessRateLimitHeaders(
+  reply: { header(name: string, value: string | number): unknown },
+  input: { limit: number; remaining: number; resetSeconds: number; retryAfterSeconds?: number },
+) {
+  reply.header("RateLimit-Limit", input.limit);
+  reply.header("RateLimit-Remaining", input.remaining);
+  reply.header("RateLimit-Reset", input.resetSeconds);
+  if (input.retryAfterSeconds) reply.header("Retry-After", input.retryAfterSeconds);
 }
 
 export async function registerPhase2Routes(
@@ -260,7 +343,9 @@ export async function registerPhase2Routes(
   app.post<{
     Params: { competitionId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { name: string; team_limit: 8 | 16 } | { name: string; code?: string; entry_limit: 8 | 12 | 16 | 24 | 48 };
+    Body:
+      | { name: string; team_limit: 8 | 16; idempotency_key: string }
+      | { name: string; code?: string; entry_limit: 8 | 12 | 16 | 24 | 48; idempotency_key: string };
   }>(
     "/api/v1/competitions/:competitionId/divisions",
     {
@@ -269,60 +354,49 @@ export async function registerPhase2Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id }),
-        body: Type.Union([
-          Type.Object(
-            {
-              name: Type.String({ minLength: 1, maxLength: 100 }),
-              team_limit: Type.Union([Type.Literal(8), Type.Literal(16)]),
-            },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              name: Type.String({ minLength: 1, maxLength: 100 }),
-              code: Type.Optional(Type.String()),
-              entry_limit: Type.Union([
-                Type.Literal(8),
-                Type.Literal(12),
-                Type.Literal(16),
-                Type.Literal(24),
-                Type.Literal(48),
-              ]),
-            },
-            { additionalProperties: false },
-          ),
-        ]),
+        body: Type.Object(
+          {
+            name: Type.String({ minLength: 1, maxLength: 100 }),
+            code: Type.Optional(Type.String()),
+            team_limit: Type.Optional(Type.Union([Type.Literal(8), Type.Literal(16)])),
+            entry_limit: Type.Optional(
+              Type.Union([Type.Literal(8), Type.Literal(12), Type.Literal(16), Type.Literal(24), Type.Literal(48)]),
+            ),
+            idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
+          },
+          { additionalProperties: false },
+        ),
         response: { 201: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
         tags: ["competitions"],
       },
     },
     async (request, reply) => {
       const authenticated = await actor(request);
+      if (!options.phase3Runtime) throw new ApiError(503, "PHASE3_UNAVAILABLE", "Phase 3 runtime is unavailable");
+      let entryLimit: 8 | 12 | 16 | 24 | 48;
       if ("entry_limit" in request.body) {
-        if (!options.phase3Runtime) throw new ApiError(503, "PHASE3_UNAVAILABLE", "Phase 3 runtime is unavailable");
-        return reply.code(201).send(
-          await options.phase3Runtime.createDivision(
-            authenticated,
-            request.params.competitionId,
-            {
-              name: request.body.name,
-              ...(request.body.code ? { code: request.body.code } : {}),
-              entryLimit: request.body.entry_limit,
-            },
-            request.id,
-          ),
-        );
+        if ("team_limit" in request.body) {
+          throw new ApiError(400, "VALIDATION_ERROR", "Provide exactly one division limit");
+        }
+        entryLimit = request.body.entry_limit;
+      } else if ("team_limit" in request.body) {
+        entryLimit = request.body.team_limit;
+      } else {
+        throw new ApiError(400, "VALIDATION_ERROR", "Provide exactly one division limit");
       }
-      return reply
-        .code(201)
-        .send(
-          await options.runtime.createDivision(
-            authenticated,
-            request.params.competitionId,
-            { name: request.body.name, teamLimit: request.body.team_limit },
-            request.id,
-          ),
-        );
+      return reply.code(201).send(
+        await options.phase3Runtime.createDivision(
+          authenticated,
+          request.params.competitionId,
+          {
+            name: request.body.name,
+            ...("code" in request.body && request.body.code ? { code: request.body.code } : {}),
+            entryLimit,
+          },
+          request.id,
+          request.body.idempotency_key,
+        ),
+      );
     },
   );
 
@@ -570,7 +644,129 @@ export async function registerPhase2Routes(
   app.post<{
     Params: { competitionId: string; matchId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { expires_at: string };
+    Body: { client_event_id: string; reason: string; expected_aggregate_version: number };
+  }>(
+    "/api/v1/competitions/:competitionId/matches/:matchId/reopen",
+    {
+      schema: {
+        description: "Reopen a finalised match through an organiser-only append-only lifecycle event.",
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id, matchId: Id }),
+        body: Type.Object({
+          client_event_id: Id,
+          reason: Type.String({ minLength: 3, maxLength: 500 }),
+          expected_aggregate_version: Type.Integer({ minimum: 1 }),
+        }),
+        response: {
+          200: ResultMutationReceiptSchema,
+          401: ErrorResponse,
+          403: ErrorResponse,
+          409: ErrorResponse,
+          422: ErrorResponse,
+        },
+        tags: ["results"],
+      },
+    },
+    async (request) =>
+      options.runtime.reopenCanonicalMatch(
+        await actor(request),
+        request.params.competitionId,
+        request.params.matchId,
+        {
+          clientEventId: request.body.client_event_id,
+          reason: request.body.reason,
+          expectedAggregateVersion: request.body.expected_aggregate_version,
+        },
+        request.id,
+      ),
+  );
+
+  app.get<{ Params: { competitionId: string; matchId: string } }>(
+    "/api/v1/competitions/:competitionId/matches/:matchId/scoring-audit",
+    {
+      schema: {
+        description: "Read the canonical score stream, projection, audit history, and downstream conflicts.",
+        security: [{ sessionCookie: [] }],
+        params: Type.Object({ competitionId: Id, matchId: Id }),
+        response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse },
+        tags: ["results", "audit"],
+      },
+    },
+    async (request) =>
+      options.runtime.matchScoringAudit(await readActor(request), request.params.competitionId, request.params.matchId),
+  );
+
+  app.get<{ Params: { competitionId: string }; Querystring: { status?: string } }>(
+    "/api/v1/competitions/:competitionId/result-conflicts",
+    {
+      schema: {
+        description: "List retained downstream result conflicts without exposing scoring credentials.",
+        security: [{ sessionCookie: [] }],
+        params: Type.Object({ competitionId: Id }),
+        querystring: Type.Object({
+          status: Type.Optional(
+            Type.Union([Type.Literal("open"), Type.Literal("acknowledged"), Type.Literal("resolved")]),
+          ),
+        }),
+        response: { 200: Type.Array(GenericSuccess), 401: ErrorResponse, 403: ErrorResponse, 422: ErrorResponse },
+        tags: ["results"],
+      },
+    },
+    async (request) =>
+      options.runtime.listResultConflicts(
+        await readActor(request),
+        request.params.competitionId,
+        request.query.status ?? null,
+      ),
+  );
+
+  app.post<{
+    Params: { competitionId: string; conflictId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { client_event_id: string; reason: string; expected_revision: number };
+  }>(
+    "/api/v1/competitions/:competitionId/result-conflicts/:conflictId/acknowledge",
+    {
+      schema: {
+        description: "Acknowledge a retained downstream result conflict without altering match participants.",
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id, conflictId: Id }),
+        body: Type.Object({
+          client_event_id: Id,
+          reason: Type.String({ minLength: 3, maxLength: 1000 }),
+          expected_revision: Type.Integer({ minimum: 1 }),
+        }),
+        response: {
+          200: GenericSuccess,
+          401: ErrorResponse,
+          403: ErrorResponse,
+          404: ErrorResponse,
+          409: ErrorResponse,
+          422: ErrorResponse,
+        },
+        tags: ["results"],
+      },
+    },
+    async (request) =>
+      options.runtime.acknowledgeResultConflict(
+        await actor(request),
+        request.params.competitionId,
+        request.params.conflictId,
+        {
+          clientEventId: request.body.client_event_id,
+          reason: request.body.reason,
+          expectedRevision: request.body.expected_revision,
+        },
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Params: { competitionId: string; matchId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { expires_at: string; role: "scorekeeper" | "viewer"; idempotency_key: string };
   }>(
     "/api/v1/competitions/:competitionId/matches/:matchId/access-passes",
     {
@@ -579,28 +775,81 @@ export async function registerPhase2Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id, matchId: Id }),
-        body: Type.Object({ expires_at: Type.String({ format: "date-time" }) }),
+        body: Type.Object(
+          {
+            expires_at: Type.String({ format: "date-time" }),
+            role: Type.Union([Type.Literal("scorekeeper"), Type.Literal("viewer")]),
+            idempotency_key: Type.String({ minLength: 8, maxLength: 160 }),
+          },
+          { additionalProperties: false },
+        ),
         response: { 201: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 422: ErrorResponse },
         tags: ["scoring-access"],
       },
     },
     async (request, reply) =>
-      reply
-        .code(201)
-        .send(
-          await options.runtime.createAccessPass(
-            await actor(request),
-            request.params.competitionId,
-            request.params.matchId,
-            request.body.expires_at,
-            request.id,
-          ),
+      reply.code(201).send(
+        await options.runtime.createAccessPass(
+          await actor(request),
+          request.params.competitionId,
+          request.params.matchId,
+          {
+            expiresAt: request.body.expires_at,
+            role: request.body.role,
+            idempotencyKey: request.body.idempotency_key,
+          },
+          request.id,
         ),
+      ),
+  );
+
+  app.get<{ Params: { competitionId: string } }>(
+    "/api/v1/competitions/:competitionId/access-passes",
+    {
+      schema: {
+        description: "List secret-free scoring access passes for an organiser.",
+        security: [{ sessionCookie: [] }],
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) => ({
+      access_passes: await options.runtime.listAccessPasses(await readActor(request), request.params.competitionId),
+    }),
+  );
+
+  app.post<{
+    Params: { competitionId: string; passId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { idempotency_key: string };
+  }>(
+    "/api/v1/competitions/:competitionId/access-passes/:passId/fallback-code/rotate",
+    {
+      schema: {
+        description: "Rotate and reveal a fallback number code once.",
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id, passId: Id }),
+        body: Type.Object({ idempotency_key: Type.String({ minLength: 8, maxLength: 160 }) }),
+        response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) =>
+      options.runtime.rotateFallbackCode(
+        await actor(request),
+        request.params.competitionId,
+        request.params.passId,
+        request.body.idempotency_key,
+        request.id,
+      ),
   );
 
   app.delete<{
     Params: { competitionId: string; passId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { reason?: string };
   }>(
     "/api/v1/competitions/:competitionId/access-passes/:passId",
     {
@@ -609,6 +858,7 @@ export async function registerPhase2Routes(
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id, passId: Id }),
+        body: Type.Optional(Type.Object({ reason: Type.Optional(Type.String({ minLength: 3, maxLength: 500 })) })),
         response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse },
         tags: ["scoring-access"],
       },
@@ -619,13 +869,22 @@ export async function registerPhase2Routes(
         request.params.competitionId,
         request.params.passId,
         request.id,
+        request.body?.reason ?? null,
       ),
   );
 
-  app.post<{ Body: { token?: string; short_code?: string; expected_match_id?: string } }>(
+  app.post<{
+    Body: {
+      token?: string;
+      short_code?: string;
+      expected_match_id?: string;
+      device_id: string;
+      device_label?: string;
+    };
+  }>(
     "/api/v1/scoring/access/exchange",
     {
-      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      config: { rateLimit: false },
       schema: {
         description:
           "Exchange a QR token or number code in the request body for a short-lived writer session. The secret never appears in the URL.",
@@ -634,6 +893,8 @@ export async function registerPhase2Routes(
             token: Type.Optional(Type.String({ minLength: 32, maxLength: 256 })),
             short_code: Type.Optional(Type.String({ pattern: "^[0-9]{12}$" })),
             expected_match_id: Type.Optional(Id),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            device_label: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
           },
           { additionalProperties: false },
         ),
@@ -647,12 +908,178 @@ export async function registerPhase2Routes(
         tags: ["scoring-access"],
       },
     },
+    async (request, reply) => {
+      try {
+        const result = await options.runtime.exchangeAccess(
+          {
+            ...(request.body.token ? { token: request.body.token } : {}),
+            ...(request.body.short_code ? { shortCode: request.body.short_code } : {}),
+            ...(request.body.expected_match_id ? { expectedMatchId: request.body.expected_match_id } : {}),
+            deviceId: request.body.device_id,
+            ...(request.body.device_label ? { deviceLabel: request.body.device_label } : {}),
+            ipAddress: request.ip,
+          },
+          request.id,
+        );
+        setAccessRateLimitHeaders(reply, result.rate_limit);
+        return result;
+      } catch (error) {
+        if (error instanceof ScoringAccessRateLimitError || error instanceof ScoringAccessRejectedError) {
+          setAccessRateLimitHeaders(reply, error.rateLimit);
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: {
+      device_id: string;
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+      last_reported_local_sequence: number;
+      queue_fingerprint?: string | null;
+      indexeddb_schema_version: number;
+      service_worker_version: string;
+      resume_secret?: string;
+    };
+  }>(
+    "/api/v1/scoring/offline-authorizations",
+    {
+      schema: {
+        description:
+          "Issue or renew generation-bound offline scoring authority after confirming authoritative server state.",
+        headers: ScoringHeaders,
+        security: [{ scoringSession: [] }],
+        body: Type.Object(
+          {
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+            pending_event_count: Type.Integer({ minimum: 0 }),
+            pending_through_sequence: Type.Integer({ minimum: 0 }),
+            last_reported_local_sequence: Type.Integer({ minimum: 0 }),
+            queue_fingerprint: Type.Optional(Type.Union([Type.String({ pattern: "^[0-9a-f]{64}$" }), Type.Null()])),
+            indexeddb_schema_version: Type.Literal(1),
+            service_worker_version: Type.Union([
+              Type.Literal("gate-c-c3-v4"),
+              Type.Literal("gate-c-c3-v5"),
+              Type.Literal("gate-c-c3-v6"),
+            ]),
+            resume_secret: Type.Optional(Type.String({ minLength: 32, maxLength: 256 })),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
     async (request) =>
-      options.runtime.exchangeAccess(
+      options.runtime.issueOfflineAuthorization(
+        scoringAuth(request.headers),
         {
-          ...(request.body.token ? { token: request.body.token } : {}),
-          ...(request.body.short_code ? { shortCode: request.body.short_code } : {}),
-          ...(request.body.expected_match_id ? { expectedMatchId: request.body.expected_match_id } : {}),
+          deviceId: request.body.device_id,
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+          lastReportedLocalSequence: request.body.last_reported_local_sequence,
+          queueFingerprint: request.body.queue_fingerprint ?? null,
+          indexeddbSchemaVersion: request.body.indexeddb_schema_version,
+          serviceWorkerVersion: request.body.service_worker_version,
+          ...(request.body.resume_secret ? { resumeSecret: request.body.resume_secret } : {}),
+        },
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Params: { authorizationId: string };
+    Body: {
+      resume_secret: string;
+      device_id: string;
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+      last_reported_local_sequence: number;
+      queue_fingerprint?: string | null;
+      indexeddb_schema_version: number;
+      service_worker_version: string;
+    };
+  }>(
+    "/api/v1/scoring/offline-authorizations/:authorizationId/resume",
+    {
+      schema: {
+        description: "Resume the same offline writer generation and rotate the ordinary short-lived scoring session.",
+        params: Type.Object({ authorizationId: Id }),
+        body: Type.Object(
+          {
+            resume_secret: Type.String({ minLength: 32, maxLength: 256 }),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+            pending_event_count: Type.Integer({ minimum: 0 }),
+            pending_through_sequence: Type.Integer({ minimum: 0 }),
+            last_reported_local_sequence: Type.Integer({ minimum: 0 }),
+            queue_fingerprint: Type.Optional(Type.Union([Type.String({ pattern: "^[0-9a-f]{64}$" }), Type.Null()])),
+            indexeddb_schema_version: Type.Literal(1),
+            service_worker_version: Type.Union([
+              Type.Literal("gate-c-c3-v4"),
+              Type.Literal("gate-c-c3-v5"),
+              Type.Literal("gate-c-c3-v6"),
+            ]),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.resumeOfflineAuthorization(
+        request.params.authorizationId,
+        {
+          resumeSecret: request.body.resume_secret,
+          deviceId: request.body.device_id,
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+          lastReportedLocalSequence: request.body.last_reported_local_sequence,
+          queueFingerprint: request.body.queue_fingerprint ?? null,
+          indexeddbSchemaVersion: request.body.indexeddb_schema_version,
+          serviceWorkerVersion: request.body.service_worker_version,
+        },
+        request.id,
+      ),
+  );
+
+  app.delete<{
+    Params: { authorizationId: string };
+    Body: { resume_secret: string; device_id: string; preserve_writer_session?: boolean };
+  }>(
+    "/api/v1/scoring/offline-authorizations/:authorizationId",
+    {
+      schema: {
+        description: "Revoke a generation-bound offline authorization and relinquish its matching writer lease.",
+        params: Type.Object({ authorizationId: Id }),
+        body: Type.Object(
+          {
+            resume_secret: Type.String({ minLength: 32, maxLength: 256 }),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            preserve_writer_session: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.revokeOfflineAuthorization(
+        request.params.authorizationId,
+        {
+          resumeSecret: request.body.resume_secret,
+          deviceId: request.body.device_id,
+          preserveWriterSession: request.body.preserve_writer_session === true,
         },
         request.id,
       ),
@@ -662,7 +1089,8 @@ export async function registerPhase2Routes(
     "/api/v1/scoring/sessions/transfer",
     {
       schema: {
-        description: "Explicitly transfer the active writer lease and fence the previous session.",
+        description:
+          "Deprecated self-transfer endpoint. Always rejects; candidates must request organiser-approved takeover.",
         headers: ScoringHeaders,
         security: [{ scoringSession: [] }],
         response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse },
@@ -671,6 +1099,147 @@ export async function registerPhase2Routes(
     },
     async (request) => options.runtime.transferWriter(scoringAuth(request.headers), request.id),
   );
+
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: {
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+    };
+  }>(
+    "/api/v1/scoring/sessions/heartbeat",
+    {
+      schema: {
+        description: "Renew an authoritative scoring session and, for the active writer, its short lease.",
+        headers: ScoringHeaders,
+        security: [{ scoringSession: [] }],
+        body: Type.Object({
+          last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+          pending_event_count: Type.Integer({ minimum: 0 }),
+          pending_through_sequence: Type.Integer({ minimum: 0 }),
+        }),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) =>
+      options.runtime.heartbeatScoringSession(
+        scoringAuth(request.headers),
+        {
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+        },
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: { pending_event_count: number; pending_through_sequence: number };
+  }>(
+    "/api/v1/scoring/takeover-requests",
+    {
+      schema: {
+        description: "Request organiser approval for a candidate device to take the writer lease.",
+        headers: ScoringHeaders,
+        security: [{ scoringSession: [] }],
+        body: Type.Object({
+          pending_event_count: Type.Integer({ minimum: 0 }),
+          pending_through_sequence: Type.Integer({ minimum: 0 }),
+        }),
+        response: { 201: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request, reply) =>
+      reply.code(201).send(
+        await options.runtime.requestTakeover(
+          scoringAuth(request.headers),
+          {
+            pendingEventCount: request.body.pending_event_count,
+            pendingThroughSequence: request.body.pending_through_sequence,
+          },
+          request.id,
+        ),
+      ),
+  );
+
+  app.get<{ Params: { competitionId: string } }>(
+    "/api/v1/competitions/:competitionId/takeover-requests",
+    {
+      schema: {
+        description: "List scoring takeover requests for organiser review.",
+        security: [{ sessionCookie: [] }],
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: Type.Array(GenericSuccess), 401: ErrorResponse, 403: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) => options.runtime.listTakeoverRequests(await readActor(request), request.params.competitionId),
+  );
+
+  app.post<{
+    Params: { competitionId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+  }>(
+    "/api/v1/competitions/:competitionId/takeover-requests/expire",
+    {
+      schema: {
+        description: "Explicitly transition elapsed takeover requests and record their audit/outbox evidence.",
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: GenericSuccess, 401: ErrorResponse, 403: ErrorResponse },
+        tags: ["scoring-access"],
+      },
+    },
+    async (request) =>
+      options.runtime.expireTakeoverRequests(await actor(request), request.params.competitionId, request.id),
+  );
+
+  for (const decision of ["approve", "deny"] as const) {
+    app.post<{
+      Params: { competitionId: string; requestId: string };
+      Headers: { origin?: string; "x-csrf-token"?: string };
+      Body: { override_acknowledged?: boolean; reason: string };
+    }>(
+      `/api/v1/competitions/:competitionId/takeover-requests/:requestId/${decision}`,
+      {
+        schema: {
+          description: `${decision === "approve" ? "Approve" : "Deny"} a scoring writer takeover request.`,
+          security: [{ sessionCookie: [] }],
+          headers: MutationHeaders,
+          params: Type.Object({ competitionId: Id, requestId: Id }),
+          body: Type.Object({
+            override_acknowledged: Type.Optional(Type.Boolean()),
+            reason: Type.String({ minLength: 3, maxLength: 500 }),
+          }),
+          response: {
+            200: GenericSuccess,
+            401: ErrorResponse,
+            403: ErrorResponse,
+            409: ErrorResponse,
+            422: ErrorResponse,
+          },
+          tags: ["scoring-access"],
+        },
+      },
+      async (request) =>
+        options.runtime.resolveTakeover(
+          await actor(request),
+          request.params.competitionId,
+          request.params.requestId,
+          {
+            decision,
+            overrideAcknowledged: request.body.override_acknowledged ?? false,
+            reason: request.body.reason,
+          },
+          request.id,
+        ),
+    );
+  }
 
   app.get<{ Headers: ScoringHeaderValues }>(
     "/api/v1/scoring/session",
@@ -691,69 +1260,80 @@ export async function registerPhase2Routes(
     Headers: ScoringHeaderValues;
     Body: {
       client_event_id: string;
-      type: PersistedScoreEvent["type"];
+      expected_sequence: number;
+      type: string;
       team_slot?: "home" | "away";
-      scorer?: string;
-      manual_period: 1 | 2;
-      manual_event_seconds: number;
-      payload?: Record<string, unknown>;
-      correction_reason?: string;
+      participant_id?: string;
+      unknown_participant?: boolean;
+      segment_number?: number;
+      manual_time_seconds?: number | null;
+      reversal_target_event_id?: string;
+      reason?: string;
       occurred_at: string;
     };
   }>(
     "/api/v1/scoring/events",
     {
       schema: {
-        description: "Append one idempotent Canoe Polo score event using the active fencing generation.",
+        description: "Append one canonical, idempotent five-sport score event using the active fencing generation.",
         headers: ScoringHeaders,
         security: [{ scoringSession: [] }],
         body: Type.Object(
           {
             client_event_id: Id,
-            type: Type.Union([
-              Type.Literal("match_started"),
-              Type.Literal("period_changed"),
-              Type.Literal("goal_added"),
-              Type.Literal("goal_reversed"),
-              Type.Literal("card_added"),
-              Type.Literal("card_reversed"),
-              Type.Literal("timeout_added"),
-              Type.Literal("incident_added"),
-              Type.Literal("match_reopened"),
-            ]),
+            expected_sequence: Type.Integer({ minimum: 0 }),
+            type: Type.String({ minLength: 1, maxLength: 80 }),
             team_slot: Type.Optional(Type.Union([Type.Literal("home"), Type.Literal("away")])),
-            scorer: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
-            manual_period: Type.Union([Type.Literal(1), Type.Literal(2)]),
-            manual_event_seconds: Type.Integer({ minimum: 0, maximum: 3599 }),
-            payload: Type.Optional(Type.Record(Type.String(), Type.Any())),
-            correction_reason: Type.Optional(Type.String({ minLength: 3, maxLength: 500 })),
+            participant_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+            unknown_participant: Type.Optional(Type.Boolean()),
+            segment_number: Type.Optional(Type.Integer({ minimum: 1, maximum: 99 })),
+            manual_time_seconds: Type.Optional(Type.Union([Type.Integer({ minimum: 0, maximum: 3599 }), Type.Null()])),
+            reversal_target_event_id: Type.Optional(Id),
+            reason: Type.Optional(Type.String({ minLength: 3, maxLength: 500 })),
             occurred_at: Type.String({ format: "date-time" }),
           },
           { additionalProperties: false },
         ),
-        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        response: {
+          200: GenericSuccess,
+          403: ErrorResponse,
+          409: ErrorResponse,
+          422: ErrorResponse,
+        },
         tags: ["scoring"],
       },
     },
-    async (request) =>
-      options.runtime.appendScoreEvent(
+    async (request) => {
+      return options.runtime.appendCanonicalScoreEvent(
         scoringAuth(request.headers),
         {
-          clientEventId: request.body.client_event_id,
+          client_event_id: request.body.client_event_id,
           type: request.body.type,
-          teamSlot: request.body.team_slot ?? null,
-          scorer: request.body.scorer ?? null,
-          manualPeriod: request.body.manual_period,
-          manualEventSeconds: request.body.manual_event_seconds,
-          payload: request.body.payload ?? {},
-          correctionReason: request.body.correction_reason ?? null,
-          occurredAt: new Date(request.body.occurred_at),
+          occurred_at: request.body.occurred_at,
+          ...(request.body.team_slot ? { team_slot: request.body.team_slot } : {}),
+          ...(request.body.participant_id ? { participant_id: request.body.participant_id } : {}),
+          ...(request.body.unknown_participant !== undefined
+            ? { unknown_participant: request.body.unknown_participant }
+            : {}),
+          ...(request.body.segment_number ? { segment_number: request.body.segment_number } : {}),
+          ...(request.body.manual_time_seconds !== undefined
+            ? { manual_time_seconds: request.body.manual_time_seconds }
+            : {}),
+          ...(request.body.reversal_target_event_id
+            ? { reversal_target_event_id: request.body.reversal_target_event_id }
+            : {}),
+          ...(request.body.reason ? { reason: request.body.reason } : {}),
         },
+        request.body.expected_sequence,
         request.id,
-      ),
+      );
+    },
   );
 
-  app.post<{ Headers: ScoringHeaderValues; Body: { client_event_id: string } }>(
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: { client_event_id: string; expected_sequence: number; occurred_at?: string };
+  }>(
     "/api/v1/scoring/finalise",
     {
       schema: {
@@ -761,34 +1341,56 @@ export async function registerPhase2Routes(
           "Atomically finalise the match, recalculate table and bracket, publish results, audit, and enqueue outbox work.",
         headers: ScoringHeaders,
         security: [{ scoringSession: [] }],
-        body: Type.Object({ client_event_id: Id }),
-        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        body: Type.Object({
+          client_event_id: Id,
+          expected_sequence: Type.Integer({ minimum: 0 }),
+          occurred_at: Type.Optional(Type.String({ format: "date-time" })),
+        }),
+        response: {
+          200: ScoringFinalisationReceiptSchema,
+          403: ErrorResponse,
+          409: ErrorResponse,
+          422: ErrorResponse,
+        },
         tags: ["scoring"],
       },
     },
-    async (request) => options.runtime.finalise(scoringAuth(request.headers), request.body.client_event_id, request.id),
+    async (request) =>
+      options.runtime.finalise(
+        scoringAuth(request.headers),
+        request.body.client_event_id,
+        request.id,
+        request.body.expected_sequence,
+        request.body.occurred_at,
+      ),
   );
 
   app.post<{
     Params: { competitionId: string; matchId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { client_event_id: string; reason: string; home_score: number; away_score: number };
+    Body: {
+      client_event_id: string;
+      reason: string;
+      expected_aggregate_version: number;
+      events: unknown[];
+    };
   }>(
     "/api/v1/competitions/:competitionId/matches/:matchId/corrections",
     {
       schema: {
-        description: "Append a reasoned correction unless a final downstream result would be invalidated.",
+        description:
+          "Atomically reopen, append reasoned canonical correction events, finalise, publish, and retain downstream conflicts.",
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id, matchId: Id }),
         body: Type.Object({
           client_event_id: Id,
           reason: Type.String({ minLength: 3, maxLength: 500 }),
-          home_score: Type.Integer({ minimum: 0 }),
-          away_score: Type.Integer({ minimum: 0 }),
+          expected_aggregate_version: Type.Integer({ minimum: 1 }),
+          events: Type.Array(Type.Record(Type.String(), Type.Any()), { minItems: 1, maxItems: 25 }),
         }),
         response: {
-          200: GenericSuccess,
+          200: ResultMutationReceiptSchema,
           401: ErrorResponse,
           403: ErrorResponse,
           409: ErrorResponse,
@@ -798,15 +1400,15 @@ export async function registerPhase2Routes(
       },
     },
     async (request) =>
-      options.runtime.correct(
+      options.runtime.correctCanonicalMatch(
         await actor(request),
         request.params.competitionId,
         request.params.matchId,
         {
           clientEventId: request.body.client_event_id,
           reason: request.body.reason,
-          homeScore: request.body.home_score,
-          awayScore: request.body.away_score,
+          expectedAggregateVersion: request.body.expected_aggregate_version,
+          events: request.body.events,
         },
         request.id,
       ),

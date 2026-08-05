@@ -39,6 +39,7 @@ export type SportSettingsDocument = Readonly<{
   authority: "product_recommendation_not_federation_profile";
   definitions: Readonly<Record<string, SettingDefinition>>;
   recommended: SportPackSettings;
+  competitionOverride: SportPackOverride;
   effective: SportPackSettings;
   override: SportPackOverride;
   mode: SettingsMode;
@@ -77,6 +78,7 @@ const responseKeys = new Set([
   "pack_schema_version",
   "pack_version",
   "recommended_snapshot",
+  "competition_override",
   "override",
   "effective",
   "mode",
@@ -131,20 +133,23 @@ export function parseSportSettingsResponse(
     (payload.permission !== "read" && payload.permission !== "write") ||
     typeof payload.read_only !== "boolean" ||
     !isRecord(payload.recommended_snapshot) ||
+    !isRecord(payload.competition_override) ||
     !isRecord(payload.override) ||
     !isRecord(payload.effective)
   )
     return null;
   if ((payload.permission === "read") !== payload.read_only) return null;
   const recommended = payload.recommended_snapshot as SportPackSettings;
+  const competitionOverride = payload.competition_override as SportPackOverride;
   const override = payload.override as SportPackOverride;
   const effective = payload.effective as SportPackSettings;
   if (
     validateSportSettings(pack, recommended).length > 0 ||
+    validateSportSettings(pack, competitionOverride, { partial: true }).length > 0 ||
     validateSportSettings(pack, override, { partial: true }).length > 0 ||
     validateSportSettings(pack, effective).length > 0 ||
-    !sameSettings({ ...recommended, ...override }, effective) ||
-    settingsMode(effective, recommended) !== payload.mode
+    !sameSettings({ ...recommended, ...competitionOverride, ...override }, effective) ||
+    (Object.keys(override).length === 0 ? "recommended" : "customised") !== payload.mode
   )
     return null;
   const readOnly = payload.read_only;
@@ -159,6 +164,7 @@ export function parseSportSettingsResponse(
     authority: pack.authority,
     definitions: pack.settingsSchema,
     recommended,
+    competitionOverride,
     effective,
     override,
     mode: payload.mode,
@@ -190,6 +196,12 @@ export function deriveSportSettingsOverride(
     if (!sameValue(value, recommended[key])) override[key] = value;
   }
   return override;
+}
+
+export function sportSettingsScopeBaseline(
+  document: Pick<SportSettingsDocument, "recommended" | "competitionOverride">,
+): SportPackSettings {
+  return { ...document.recommended, ...document.competitionOverride };
 }
 
 export function validateSettingsDraft(pack: SportPack, values: SportPackSettings): Readonly<Record<string, string>> {

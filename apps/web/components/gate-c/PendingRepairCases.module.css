@@ -1,0 +1,96 @@
+.panel {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+  border: 1px solid #d8ddd9;
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.panel header,
+.panel li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+}
+
+.panel h2,
+.panel p,
+.panel ul {
+  margin: 0;
+}
+
+.panel header p,
+.panel header span,
+.panel li span,
+.panel li time {
+  color: #5d675f;
+}
+
+.panel ul {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0;
+  list-style: none;
+}
+
+.panel li {
+  padding: 0.75rem;
+  border-radius: 0.7rem;
+  background: #f5f7f5;
+}
+
+.panel li div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.panel button {
+  min-height: 2.75rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid #176b45;
+  border-radius: 0.65rem;
+  background: #176b45;
+  color: #fff;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.error {
+  padding: 0.75rem;
+  border: 1px solid #b42318;
+  border-radius: 0.65rem;
+  background: #fff1f0;
+  color: #7a271a;
+}
+
+.empty {
+  color: #5d675f;
+}
+
+.live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 600px) {
+  .panel header,
+  .panel li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

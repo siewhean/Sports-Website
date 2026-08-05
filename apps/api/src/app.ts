@@ -102,6 +102,7 @@ export type BuildAppOptions = {
   authenticatedRateLimitMax?: number;
   resolveRateLimitAccountId?: (request: FastifyRequest) => Promise<string | null> | string | null;
   telemetry?: ApiTelemetry;
+  loggerDestination?: Parameters<typeof createLogger>[1];
   identityRuntime?: IdentityApiRuntime;
   closeIdentityResources?: () => Promise<void>;
   identityProviderEventClock?: Clock;
@@ -110,14 +111,27 @@ export type BuildAppOptions = {
   phase4Runtime?: Phase4Runtime;
 };
 
+const scoringSessionAuthorisedRateLimitRoutes = new Set([
+  "GET /api/v1/scoring/session",
+  "POST /api/v1/scoring/events",
+  "POST /api/v1/scoring/finalise",
+  "POST /api/v1/scoring/offline-authorizations",
+  "POST /api/v1/scoring/sessions/heartbeat",
+  "POST /api/v1/scoring/sessions/transfer",
+  "POST /api/v1/scoring/takeover-requests",
+]);
+
 export async function buildApp(options: BuildAppOptions) {
   const telemetry = options.telemetry ?? createDisabledApiTelemetry();
   const requestTelemetry = new WeakMap<FastifyRequest, RequestTelemetryHandle>();
-  const logger = createLogger({
-    environment: options.config.environment,
-    level: options.config.logLevel,
-    service: "matchday-api",
-  });
+  const logger = createLogger(
+    {
+      environment: options.config.environment,
+      level: options.config.logLevel,
+      service: "matchday-api",
+    },
+    options.loggerDestination,
+  );
   const app = Fastify({
     genReqId(rawRequest) {
       const candidate = rawRequest.headers["x-request-id"];
@@ -138,8 +152,13 @@ export async function buildApp(options: BuildAppOptions) {
     request.routeOptions.url || request.url.split("?", 1)[0] || "unknown";
 
   app.addHook("onRequest", (request, _reply, done) => {
+    const traceparent = request.raw.headers.traceparent;
+    const tracestate = request.raw.headers.tracestate;
     const handle = telemetry.startRequest({
-      headers: request.raw.headers,
+      headers: {
+        ...(typeof traceparent === "string" ? { traceparent } : {}),
+        ...(typeof tracestate === "string" ? { tracestate } : {}),
+      },
       method: request.method,
       path: request.url.split("?", 1)[0] || "/",
       requestId: request.id,
@@ -242,10 +261,19 @@ export async function buildApp(options: BuildAppOptions) {
       const accountId = options.resolveRateLimitAccountId
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);
-      return accountId ? `account:${accountId}` : `ip:${request.ip}`;
+      if (accountId) return `account:${accountId}`;
+      const route = `${request.method} ${request.routeOptions.url}`;
+      if (scoringSessionAuthorisedRateLimitRoutes.has(route)) {
+        const scoringAccessPassId = await options.phase2Runtime?.scoringSessionRateLimitSubject(
+          request.headers["x-scoring-session-id"],
+          request.headers["x-scoring-session-token"],
+        );
+        if (scoringAccessPassId) return `scoring-access-pass:${scoringAccessPassId}`;
+      }
+      return `ip:${request.ip}`;
     },
     max: async (_request, key) =>
-      key.startsWith("account:")
+      key.startsWith("account:") || key.startsWith("scoring-access-pass:")
         ? (options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000)
         : (options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100),
     ...(options.rateLimitRedis ? { redis: options.rateLimitRedis } : {}),

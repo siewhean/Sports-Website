@@ -48,6 +48,21 @@ export type FormatMaterialisationResponse = Readonly<{
   idempotent_replay: boolean;
 }>;
 
+export type FormatPublicationResponse = Readonly<{
+  revision_id: string;
+  revision: number;
+  parent_revision_id: string | null;
+  root_revision_id: string;
+  competition_id: string;
+  division_id: string;
+  status: "published";
+  definition_hash: string;
+  document: Phase4FormatBuilderDocument;
+  created_at: string;
+  published_at: string;
+  idempotent_replay: boolean;
+}>;
+
 export type FormatEditorMode = "visual" | "manual";
 
 export type FormatEditorState = Readonly<{
@@ -310,6 +325,43 @@ export function parseFormatMaterialisation(value: unknown, formatId: string): Fo
   )
     return null;
   return item as unknown as FormatMaterialisationResponse;
+}
+
+export function parseFormatPublication(value: unknown, formatId: string): FormatPublicationResponse | null {
+  const item = record(value);
+  if (
+    !item ||
+    !exactKeys(item, [
+      "revision_id",
+      "revision",
+      "parent_revision_id",
+      "root_revision_id",
+      "competition_id",
+      "division_id",
+      "status",
+      "definition_hash",
+      "document",
+      "created_at",
+      "published_at",
+      "idempotent_replay",
+    ]) ||
+    item.revision_id !== formatId ||
+    !integer(item.revision, 1) ||
+    !(item.parent_revision_id === null || typeof item.parent_revision_id === "string") ||
+    typeof item.root_revision_id !== "string" ||
+    typeof item.competition_id !== "string" ||
+    typeof item.division_id !== "string" ||
+    item.status !== "published" ||
+    typeof item.definition_hash !== "string" ||
+    !parseFormatBuilderDocument(item.document) ||
+    typeof item.created_at !== "string" ||
+    Number.isNaN(Date.parse(item.created_at)) ||
+    typeof item.published_at !== "string" ||
+    Number.isNaN(Date.parse(item.published_at)) ||
+    typeof item.idempotent_replay !== "boolean"
+  )
+    return null;
+  return item as unknown as FormatPublicationResponse;
 }
 
 export function parseOrganiserTemplate(value: unknown, organisationId: string): Phase4OrganiserTemplateView | null {

@@ -1,6 +1,12 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError } from "./errors.js";
+import { registerGateCC4IntakeRoutes } from "./gate-c-c4-intake-routes.js";
+import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
+import type { GateCC4Operations } from "./gate-c-c4-operations.js";
+import { registerGateCC4PublicTruthRoutes, type GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
+import { registerGateCC4Routes } from "./gate-c-c4-routes.js";
+import type { GateCC4Runtime } from "./gate-c-c4-runtime.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
@@ -24,9 +30,23 @@ const Sport = Type.Union([
   Type.Literal("volleyball"),
   Type.Literal("basketball"),
 ]);
+const OrganisationBootstrapResponse = Type.Object(
+  {
+    id: Id,
+    name: Type.String({ minLength: 1 }),
+    role: Type.Union([Type.Literal("owner"), Type.Literal("organiser")]),
+    created: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
 
 type SetupPatchRuntime = GateBPhase4Runtime & {
   resumeSetupDraft?: ReliableGateBPhase4Runtime["resumeSetupDraft"];
+  ensureWritableOrganisation?: ReliableGateBPhase4Runtime["ensureWritableOrganisation"];
+  gateCC4?: GateCC4Runtime;
+  gateCC4Operations?: GateCC4Operations;
+  gateCC4Lifecycle?: GateCC4LifecycleOperations;
+  gateCC4PublicTruth?: GateCC4PublicTruthRuntime;
 };
 
 function strict<T extends Record<string, TSchema>>(properties: T) {
@@ -104,6 +124,28 @@ export async function registerPhase4SetupPatchRoutes(
     return { accountId: session.account.id };
   };
 
+  if (options.runtime.ensureWritableOrganisation) {
+    app.post(
+      "/api/v1/organisations/competition-options/bootstrap",
+      {
+        schema: {
+          security: [{ sessionCookie: [] }],
+          headers: MutationHeaders,
+          response: {
+            200: OrganisationBootstrapResponse,
+            401: ErrorResponse,
+            403: ErrorResponse,
+            404: ErrorResponse,
+            409: ErrorResponse,
+            503: ErrorResponse,
+          },
+          tags: ["phase3-competitions"],
+        },
+      },
+      async (request) => options.runtime.ensureWritableOrganisation!(await mutationActor(request), request.id),
+    );
+  }
+
   app.patch<{
     Params: { competitionId: string };
     Body: Static<typeof PatchBody>;
@@ -175,4 +217,23 @@ export async function registerPhase4SetupPatchRoutes(
         : options.runtime.readSetupDraft(actor, request.params.competitionId);
     },
   );
+
+  if (options.runtime.gateCC4PublicTruth) {
+    await registerGateCC4PublicTruthRoutes(app, options.runtime.gateCC4PublicTruth);
+  }
+
+  if (options.runtime.gateCC4 && options.runtime.gateCC4Operations && options.runtime.gateCC4Lifecycle) {
+    await registerGateCC4IntakeRoutes(app, {
+      lifecycle: options.runtime.gateCC4Lifecycle,
+      identityRequests: options.identityRequests,
+    });
+    await registerGateCC4Routes(app, {
+      runtime: options.runtime.gateCC4,
+      operations: options.runtime.gateCC4Operations,
+      lifecycle: options.runtime.gateCC4Lifecycle,
+      identityRuntime: options.identityRuntime,
+      identityRequests: options.identityRequests,
+      allowedOrigins: options.allowedOrigins,
+    });
+  }
 }

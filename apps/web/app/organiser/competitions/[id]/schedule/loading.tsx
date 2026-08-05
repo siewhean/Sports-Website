@@ -8,6 +8,7 @@ import { scheduleUnavailableDocument } from "@/lib/phase4-schedule.server";
 export default function ScheduleLoading() {
   const document = scheduleUnavailableDocument(
     {
+      competitionRouteId: phase2Competition.slug,
       competitionId: phase2Competition.id,
       competitionName: phase2Competition.name,
       timeZone: phase2Competition.timezone,

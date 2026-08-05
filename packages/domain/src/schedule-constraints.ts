@@ -1257,11 +1257,21 @@ function assignmentFor(match: SchedulingMatch, slot: SchedulingSlot): ScheduleAs
   };
 }
 
+type CandidateEvaluationContext = {
+  matchesById: ReadonlyMap<string, SchedulingMatch>;
+  allEntryIds: readonly string[];
+  localDateByStart: ReadonlyMap<number, string>;
+  localMinuteByStart: ReadonlyMap<number, number>;
+  earlyThreshold: number;
+  lateThreshold: number;
+};
+
 function partialAllows(
   problem: ScheduleProblem,
   match: SchedulingMatch,
   candidate: ScheduleAssignment,
   assigned: ReadonlyMap<string, ScheduleAssignment>,
+  context: CandidateEvaluationContext,
 ): boolean {
   if (candidate.endEpochMs - candidate.startEpochMs !== match.durationMinutes * MINUTE_MS) return false;
   const fixed = match.fixedAssignment;
@@ -1278,7 +1288,7 @@ function partialAllows(
     const prior = assigned.get(dependency);
     if (!prior || candidate.startEpochMs < prior.endEpochMs) return false;
   }
-  const matches = new Map(problem.matches.map((value) => [value.id, value]));
+  const matches = context.matchesById;
   for (const prior of assigned.values()) {
     const priorMatch = matches.get(prior.matchId)!;
     if (prior.areaId === candidate.areaId && intervalsOverlap(prior, candidate)) return false;
@@ -1333,12 +1343,12 @@ function partialAllows(
     }
   }
   if (problem.constraints.maximumMatchesPerDay.mode === "required") {
-    const date = localDateKey(candidate.startEpochMs, problem.timeZone);
+    const date = context.localDateByStart.get(candidate.startEpochMs)!;
     for (const entryId of match.possibleEntryIds) {
       const count = [...assigned.values()].filter((prior) => {
         const priorMatch = matches.get(prior.matchId)!;
         return (
-          priorMatch.possibleEntryIds.includes(entryId) && localDateKey(prior.startEpochMs, problem.timeZone) === date
+          priorMatch.possibleEntryIds.includes(entryId) && context.localDateByStart.get(prior.startEpochMs) === date
         );
       }).length;
       if (count >= problem.constraints.maximumMatchesPerDay.value.matches) return false;
@@ -1385,9 +1395,11 @@ function candidateRank(
   match: SchedulingMatch,
   candidate: ScheduleAssignment,
   assigned: ReadonlyMap<string, ScheduleAssignment>,
+  context: CandidateEvaluationContext,
 ): readonly number[] {
-  const matches = new Map(problem.matches.map((value) => [value.id, value]));
-  const shared = [...assigned.values()].filter((prior) => {
+  const matches = context.matchesById;
+  const assignedValues = [...assigned.values()];
+  const shared = assignedValues.filter((prior) => {
     const priorMatch = matches.get(prior.matchId)!;
     return match.possibleEntryIds.some((entryId) => priorMatch.possibleEntryIds.includes(entryId));
   });
@@ -1403,15 +1415,15 @@ function candidateRank(
         ),
       )
     : Number.MAX_SAFE_INTEGER;
-  const date = localDateKey(candidate.startEpochMs, problem.timeZone);
+  const date = context.localDateByStart.get(candidate.startEpochMs)!;
   const dailyLoad = Math.max(
     0,
     ...match.possibleEntryIds.map(
       (entryId) =>
-        [...assigned.values()].filter((prior) => {
+        assignedValues.filter((prior) => {
           const priorMatch = matches.get(prior.matchId)!;
           return (
-            priorMatch.possibleEntryIds.includes(entryId) && localDateKey(prior.startEpochMs, problem.timeZone) === date
+            priorMatch.possibleEntryIds.includes(entryId) && context.localDateByStart.get(prior.startEpochMs) === date
           );
         }).length + 1,
     ),
@@ -1457,7 +1469,7 @@ function candidateRank(
       ? Math.max(0, problem.constraints.avoidConsecutiveMatches.value.minutes - nearestRest)
       : 0;
   const divisionAreas = new Set(
-    [...assigned.values()]
+    assignedValues
       .filter((prior) => matches.get(prior.matchId)!.divisionId === match.divisionId)
       .map((prior) => prior.areaId),
   );
@@ -1477,23 +1489,19 @@ function candidateRank(
         )
       : 0;
   const balanceSpread = (kind: "early" | "late"): number => {
-    const threshold =
-      kind === "early"
-        ? parseLocalTime(problem.constraints.balanceEarlyMatches.value.beforeLocalTime, "Early threshold")
-        : parseLocalTime(problem.constraints.balanceLateMatches.value.atOrAfterLocalTime, "Late threshold");
+    const threshold = kind === "early" ? context.earlyThreshold : context.lateThreshold;
     const qualifies = (assignment: ScheduleAssignment) =>
       kind === "early"
-        ? localMinuteOfDay(assignment.startEpochMs, problem.timeZone) < threshold
-        : localMinuteOfDay(assignment.startEpochMs, problem.timeZone) >= threshold;
+        ? context.localMinuteByStart.get(assignment.startEpochMs)! < threshold
+        : context.localMinuteByStart.get(assignment.startEpochMs)! >= threshold;
     const counts = new Map<string, number>();
-    for (const current of [...assigned.values(), candidate]) {
+    for (const current of [...assignedValues, candidate]) {
       if (!qualifies(current)) continue;
       for (const entryId of matches.get(current.matchId)!.possibleEntryIds) {
         counts.set(entryId, (counts.get(entryId) ?? 0) + 1);
       }
     }
-    const allEntries = uniqueSorted(problem.matches.flatMap((current) => current.possibleEntryIds));
-    const values = allEntries.map((entryId) => counts.get(entryId) ?? 0);
+    const values = context.allEntryIds.map((entryId) => counts.get(entryId) ?? 0);
     return values.length === 0 ? 0 : Math.max(...values) - Math.min(...values);
   };
   const preferredEarlySpread =
@@ -1537,6 +1545,19 @@ function stableIterationIndex(iteration: number, matchId: string, candidateCount
   return (offset + iteration) % candidateCount;
 }
 
+function exceedsRequiredDailyMatchCapacity(problem: ScheduleProblem): boolean {
+  if (problem.constraints.maximumMatchesPerDay.mode !== "required") return false;
+  const availableDates = new Set(problem.slots.map((slot) => localDateKey(slot.startEpochMs, problem.timeZone)));
+  const totalLimit = problem.constraints.maximumMatchesPerDay.value.matches * availableDates.size;
+  const possibleMatchesByEntry = new Map<string, number>();
+  for (const match of problem.matches) {
+    for (const entryId of match.possibleEntryIds) {
+      possibleMatchesByEntry.set(entryId, (possibleMatchesByEntry.get(entryId) ?? 0) + 1);
+    }
+  }
+  return [...possibleMatchesByEntry.values()].some((count) => count > totalLimit);
+}
+
 function generateIteration(problem: ScheduleProblem, iteration: number): ScheduleAssignment[] {
   validateProblem(problem);
   const slots = [...problem.slots].sort(
@@ -1545,22 +1566,39 @@ function generateIteration(problem: ScheduleProblem, iteration: number): Schedul
       left.areaId.localeCompare(right.areaId) ||
       left.id.localeCompare(right.id),
   );
+  const context: CandidateEvaluationContext = {
+    matchesById: new Map(problem.matches.map((match) => [match.id, match])),
+    allEntryIds: uniqueSorted(problem.matches.flatMap((match) => match.possibleEntryIds)),
+    localDateByStart: new Map(
+      slots.map((slot) => [slot.startEpochMs, localDateKey(slot.startEpochMs, problem.timeZone)]),
+    ),
+    localMinuteByStart: new Map(
+      slots.map((slot) => [slot.startEpochMs, localMinuteOfDay(slot.startEpochMs, problem.timeZone)]),
+    ),
+    earlyThreshold: parseLocalTime(problem.constraints.balanceEarlyMatches.value.beforeLocalTime, "Early threshold"),
+    lateThreshold: parseLocalTime(problem.constraints.balanceLateMatches.value.atOrAfterLocalTime, "Late threshold"),
+  };
   const assigned = new Map<string, ScheduleAssignment>();
   for (const match of topologicalMatches(problem.matches)) {
     let candidates = slots
       .filter((slot) => ![...assigned.values()].some((assignment) => assignment.slotId === slot.id))
       .map((slot) => assignmentFor(match, slot))
-      .filter((assignment) => partialAllows(problem, match, assignment, assigned));
+      .filter((assignment) => partialAllows(problem, match, assignment, assigned, context));
     if (match.fixedAssignment)
       candidates = candidates.filter((candidate) => candidate.slotId === match.fixedAssignment!.slotId);
-    candidates.sort((left, right) => {
-      const ranked = compareRank(
-        candidateRank(problem, match, left, assigned),
-        candidateRank(problem, match, right, assigned),
+    const rankedCandidates = candidates.map((candidate) => ({
+      candidate,
+      rank: candidateRank(problem, match, candidate, assigned, context),
+    }));
+    rankedCandidates.sort((left, right) => {
+      const ranked = compareRank(left.rank, right.rank);
+      return (
+        ranked ||
+        left.candidate.areaId.localeCompare(right.candidate.areaId) ||
+        left.candidate.slotId.localeCompare(right.candidate.slotId)
       );
-      return ranked || left.areaId.localeCompare(right.areaId) || left.slotId.localeCompare(right.slotId);
     });
-    const selected = candidates[stableIterationIndex(iteration, match.id, candidates.length)];
+    const selected = rankedCandidates[stableIterationIndex(iteration, match.id, rankedCandidates.length)]?.candidate;
     if (!selected) throw new Error(`No valid slot remains for match ${match.id}`);
     assigned.set(match.id, selected);
   }
@@ -1573,15 +1611,15 @@ function generateIteration(problem: ScheduleProblem, iteration: number): Schedul
   return result;
 }
 
+function isNoValidSlotError(error: unknown): error is Error {
+  return error instanceof Error && error.message.startsWith("No valid slot remains");
+}
+
 export function generateConstraintAwareSchedule(problem: ScheduleProblem): ScheduleAssignment[] {
   try {
     return generateIteration(problem, 0);
   } catch (error) {
-    if (
-      problem.objective === "fastest" ||
-      !(error instanceof Error) ||
-      !error.message.startsWith("No valid slot remains")
-    ) {
+    if (problem.objective === "fastest" || !isNoValidSlotError(error)) {
       throw error;
     }
     // Preference-led greedy placement may consume a scarce late slot. Fall
@@ -1605,6 +1643,8 @@ export function generateScheduleCandidates(
   assertNonNegativeInteger(startIteration, "Candidate start iteration");
   assertPositiveInteger(maxIterations, "Candidate iteration count");
   if (maxIterations > 256) throw new Error("Candidate iteration count cannot exceed 256 per worker step");
+  validateProblem(problem);
+  if (exceedsRequiredDailyMatchCapacity(problem)) return [];
   const candidates: ScheduleCandidate[] = [];
   const seen = new Set<string>();
   const add = (iteration: number, assignments: readonly ScheduleAssignment[]) => {
@@ -1629,7 +1669,16 @@ export function generateScheduleCandidates(
     try {
       add(iteration, generateIteration(problem, iteration));
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith("No valid slot remains")) throw error;
+      if (!isNoValidSlotError(error)) throw error;
+      if (problem.objective === "fastest") continue;
+      try {
+        // Keep worker exploration aligned with generateConstraintAwareSchedule:
+        // an objective preference may consume a scarce slot, but it must not
+        // hide a deterministic feasible draft from the organiser.
+        add(iteration, generateIteration({ ...problem, objective: "fastest" }, iteration));
+      } catch (fallbackError) {
+        if (!isNoValidSlotError(fallbackError)) throw fallbackError;
+      }
     }
   }
   return candidates;

@@ -3,7 +3,7 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import type { Phase4SetupDocument } from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { cookieHostMatches, publicRequestHost } from "@/lib/phase2-organiser";
 import {
   parseAssistedSetupDocument,
   type AssistedSetupPageDocument,
@@ -23,7 +23,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookie(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  if (!cookieHostMatches(publicRequestHost(requestHeaders), apiUrl.hostname)) return null;
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = store.get(name)?.value;

@@ -18,11 +18,18 @@ describe("Phase 2 OpenAPI contract", () => {
       "/api/v1/competitions/{competitionId}/schedule-revisions/{revisionId}/publish",
       "/api/v1/competitions/{competitionId}/matches/{matchId}/access-passes",
       "/api/v1/scoring/access/exchange",
+      "/api/v1/scoring/offline-authorizations",
+      "/api/v1/scoring/offline-authorizations/{authorizationId}/resume",
+      "/api/v1/scoring/offline-authorizations/{authorizationId}",
       "/api/v1/scoring/session",
       "/api/v1/scoring/sessions/transfer",
       "/api/v1/scoring/events",
       "/api/v1/scoring/finalise",
+      "/api/v1/competitions/{competitionId}/matches/{matchId}/reopen",
       "/api/v1/competitions/{competitionId}/matches/{matchId}/corrections",
+      "/api/v1/competitions/{competitionId}/matches/{matchId}/scoring-audit",
+      "/api/v1/competitions/{competitionId}/result-conflicts",
+      "/api/v1/competitions/{competitionId}/result-conflicts/{conflictId}/acknowledge",
       "/api/v1/competitions/{competitionId}/audit",
       "/api/v1/public/competitions/{slug}",
     ];
@@ -39,6 +46,104 @@ describe("Phase 2 OpenAPI contract", () => {
       const method = route === "/api/v1/scoring/session" ? "get" : "post";
       expect(document.paths[route]?.[method]).toMatchObject({ security: [{ scoringSession: [] }] });
     }
+    const scoringEvent = document.paths["/api/v1/scoring/events"]?.post as {
+      requestBody?: {
+        content?: {
+          "application/json"?: {
+            schema?: { required?: string[]; properties?: Record<string, unknown> };
+          };
+        };
+      };
+    };
+    const scoringEventSchema = scoringEvent.requestBody?.content?.["application/json"]?.schema;
+    expect(scoringEventSchema?.required).toEqual(
+      expect.arrayContaining(["client_event_id", "expected_sequence", "type", "occurred_at"]),
+    );
+    expect(scoringEventSchema?.properties).not.toHaveProperty("home_score");
+    expect(scoringEventSchema?.properties).not.toHaveProperty("payload");
+    const scoringFinalisation = document.paths["/api/v1/scoring/finalise"]?.post as {
+      responses?: {
+        "200"?: {
+          content?: {
+            "application/json"?: {
+              schema?: {
+                required?: string[];
+                properties?: Record<string, unknown>;
+                additionalProperties?: boolean;
+              };
+            };
+          };
+        };
+      };
+    };
+    const scoringFinalisationSchema = scoringFinalisation.responses?.["200"]?.content?.["application/json"]?.schema;
+    const scoringFinalisationReceiptKeys = [
+      "match_id",
+      "client_event_id",
+      "event_id",
+      "command_fingerprint",
+      "outcome",
+      "sequence",
+      "aggregate_version",
+      "duplicate",
+      "home_score",
+      "away_score",
+      "result_version",
+      "publication_version",
+      "published_at",
+      "server_received_at",
+    ];
+    expect(scoringFinalisationSchema?.required).toEqual(scoringFinalisationReceiptKeys);
+    expect(Object.keys(scoringFinalisationSchema?.properties ?? {})).toEqual(scoringFinalisationReceiptKeys);
+    expect(scoringFinalisationSchema?.additionalProperties).toBe(false);
+    const correction = document.paths["/api/v1/competitions/{competitionId}/matches/{matchId}/corrections"]?.post as {
+      requestBody?: {
+        content?: { "application/json"?: { schema?: { required?: string[]; properties?: Record<string, unknown> } } };
+      };
+    };
+    const correctionSchema = correction.requestBody?.content?.["application/json"]?.schema;
+    expect(correctionSchema?.required).toEqual(
+      expect.arrayContaining(["client_event_id", "reason", "expected_aggregate_version", "events"]),
+    );
+    expect(correctionSchema?.properties).not.toHaveProperty("home_score");
+    expect(correctionSchema?.properties).not.toHaveProperty("away_score");
+    for (const route of [
+      "/api/v1/competitions/{competitionId}/matches/{matchId}/reopen",
+      "/api/v1/competitions/{competitionId}/matches/{matchId}/corrections",
+    ]) {
+      const response = document.paths[route]?.post as {
+        responses?: {
+          "200"?: {
+            content?: {
+              "application/json"?: { schema?: { required?: string[]; additionalProperties?: boolean } };
+            };
+          };
+        };
+      };
+      const schema = response.responses?.["200"]?.content?.["application/json"]?.schema;
+      expect(schema?.required).toEqual(
+        expect.arrayContaining([
+          "match_id",
+          "aggregate_version",
+          "through_sequence",
+          "duplicate",
+          "result_version",
+          "publication_version",
+          "conflicts",
+        ]),
+      );
+      expect(schema?.additionalProperties).toBe(false);
+    }
+    const acknowledgement = document.paths[
+      "/api/v1/competitions/{competitionId}/result-conflicts/{conflictId}/acknowledge"
+    ]?.post as {
+      requestBody?: {
+        content?: { "application/json"?: { schema?: { required?: string[] } } };
+      };
+    };
+    expect(acknowledgement.requestBody?.content?.["application/json"]?.schema?.required).toEqual(
+      expect.arrayContaining(["client_event_id", "reason", "expected_revision"]),
+    );
     const scoringSessionOperation = document.paths["/api/v1/scoring/session"]?.get as {
       responses?: {
         "200"?: {
@@ -72,6 +177,7 @@ describe("Phase 2 OpenAPI contract", () => {
     expect(publicSchema?.required).toEqual(
       expect.arrayContaining([
         "competition",
+        "divisions",
         "division",
         "publication",
         "schedule",
@@ -83,5 +189,6 @@ describe("Phase 2 OpenAPI contract", () => {
     );
     expect(publicSchema?.properties).toHaveProperty("schedule");
     expect(publicSchema?.properties).toHaveProperty("results");
+    expect(publicSchema?.properties).toHaveProperty("divisions");
   });
 });

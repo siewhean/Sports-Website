@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { ScoringSessionState } from "@matchday/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
-import type { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { ScoringAccessRejectedError, type Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -32,33 +33,104 @@ function authenticatedIdentityRuntime(): IdentityApiRuntime {
 
 function routeRuntime() {
   return {
+    scoringSessionRateLimitSubject: vi.fn(async (sessionId: unknown, sessionToken: unknown): Promise<string | null> => {
+      void sessionId;
+      void sessionToken;
+      return null;
+    }),
     createCompetition: vi.fn(async () => ({ id: randomUUID(), status: "draft", sport_code: "canoe_polo" })),
     competitionWorkspace: vi.fn(async () => ({
       competition: { id: randomUUID(), name: "Singapore Open" },
       access_passes: [{ id: randomUUID(), expires_at: "2026-08-01T00:00:00.000Z", revoked_at: null }],
     })),
-    scoringSessionState: vi.fn(async () => ({
-      competition: { slug: "singapore-open" },
-      match: {
-        id: randomUUID(),
-        code: "group-A-r1-m1",
-        stage: "group",
-        state: "in_progress",
-        home: { id: randomUUID(), name: "Marina Blue" },
-        away: { id: randomUUID(), name: "Harbour Gold" },
-      },
-      writer: { generation: 1, expires_at: "2026-08-01T00:00:00.000Z", read_only: false },
-      score: { home: 1, away: 0 },
-      through_sequence: 2,
-      events: [],
-    })),
+    scoringSessionState: vi.fn(
+      async () =>
+        ({
+          competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+          sport: {
+            pack_version: "phase2-canoe-polo-v1",
+            settings: { period_count: 2, period_duration_minutes: 10 },
+          },
+          match: {
+            id: randomUUID(),
+            code: "group-A-r1-m1",
+            stage: "group",
+            state: "in_progress",
+            home: { id: randomUUID(), name: "Marina Blue" },
+            away: { id: randomUUID(), name: "Harbour Gold" },
+          },
+          access: {
+            principal_id: "a".repeat(64),
+            mode: "writer",
+            permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+            session_expires_at: "2026-08-01T00:00:00.000Z",
+          },
+          writer: { generation: 1, expires_at: "2026-08-01T00:00:00.000Z", read_only: false },
+          score: {
+            home: 1,
+            away: 0,
+            lifecycle: "in_progress",
+            current_segment: 1,
+            total_points: { home: 1, away: 0 },
+            segment_wins: { home: 0, away: 0 },
+            segments: [{ number: 1, home: 1, away: 0, completed: false, winner: null }],
+            actions: [],
+            conflicts: [],
+          },
+          aggregate_version: 2,
+          through_sequence: 2,
+          canonical_events: [],
+          events: [],
+        }) satisfies ScoringSessionState,
+    ),
     exchangeAccess: vi.fn(async () => ({
       session_id: randomUUID(),
       session_token: "s".repeat(43),
       match_id: randomUUID(),
       generation: 1,
       expires_at: "2026-08-01T00:00:00.000Z",
+      rate_limit: { limit: 5, remaining: 5, resetSeconds: 600 },
     })),
+    issueOfflineAuthorization: vi.fn(async () => ({
+      authorization_id: randomUUID(),
+      resume_secret: "r".repeat(43),
+      recording_expires_at: "2026-08-01T04:00:00.000Z",
+      replay_expires_at: "2026-08-01T04:15:00.000Z",
+      pass_expires_at: "2026-08-01T05:00:00.000Z",
+      generation: 1,
+      match_id: randomUUID(),
+      competition_id: randomUUID(),
+    })),
+    resumeOfflineAuthorization: vi.fn(async () => ({
+      session: {
+        session_id: randomUUID(),
+        session_token: "s".repeat(43),
+        match_id: randomUUID(),
+        mode: "writer",
+        permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+        generation: 1,
+        expires_at: "2026-08-01T00:30:00.000Z",
+        lease_expires_at: "2026-08-01T00:00:45.000Z",
+      },
+      offline: {
+        principal_id: "a".repeat(64),
+        authorization_id: randomUUID(),
+        resume_secret: "n".repeat(43),
+        recording_expires_at: "2026-08-01T04:00:00.000Z",
+        replay_expires_at: "2026-08-01T04:15:00.000Z",
+        pass_expires_at: "2026-08-01T05:00:00.000Z",
+        generation: 1,
+        match_id: randomUUID(),
+        competition_id: randomUUID(),
+      },
+    })),
+    revokeOfflineAuthorization: vi.fn(async () => ({
+      authorization_id: randomUUID(),
+      status: "revoked",
+      duplicate: false,
+    })),
+    listTakeoverRequests: vi.fn(async () => []),
+    expireTakeoverRequests: vi.fn(async () => ({ expired_count: 1 })),
     publicCompetition: vi.fn(async () => ({
       competition: {
         id: randomUUID(),
@@ -70,7 +142,16 @@ function routeRuntime() {
         ends_on: "2026-08-01",
         status: "active",
       },
-      division: { id: randomUUID(), name: "Open" },
+      divisions: [
+        {
+          division: { id: "00000000-0000-4000-8000-000000000301", name: "Open" },
+          schedule: [],
+          results: [],
+          standings: null,
+          bracket: null,
+        },
+      ],
+      division: { id: "00000000-0000-4000-8000-000000000301", name: "Open" },
       publication: { schedule_version: 1, result_version: 2 },
       schedule: [],
       results: [],
@@ -82,6 +163,54 @@ function routeRuntime() {
 }
 
 describe("Phase 2 Fastify route boundaries", () => {
+  it("gives only validated scoring sessions independent authenticated rate-limit budgets", async () => {
+    const runtime = routeRuntime();
+    const firstToken = "a".repeat(43);
+    const rotatedFirstToken = "c".repeat(43);
+    const secondToken = "b".repeat(43);
+    const firstSession = randomUUID();
+    const rotatedFirstSession = randomUUID();
+    const secondSession = randomUUID();
+    const firstAccessPass = randomUUID();
+    const secondAccessPass = randomUUID();
+    const validSessions = new Map([
+      [firstToken, { sessionId: firstSession, subject: firstAccessPass }],
+      [rotatedFirstToken, { sessionId: rotatedFirstSession, subject: firstAccessPass }],
+      [secondToken, { sessionId: secondSession, subject: secondAccessPass }],
+    ]);
+    runtime.scoringSessionRateLimitSubject.mockImplementation(async (sessionId, sessionToken) => {
+      const expected = typeof sessionToken === "string" ? validSessions.get(sessionToken) : null;
+      return typeof sessionId === "string" && expected?.sessionId === sessionId ? expected.subject : null;
+    });
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: authenticatedIdentityRuntime(),
+      phase2Runtime: runtime as unknown as Phase2Runtime,
+      anonymousRateLimitMax: 2,
+      authenticatedRateLimitMax: 2,
+    });
+    apps.push(app);
+    const request = (sessionId: string, sessionToken: string, url = "/api/v1/scoring/session") =>
+      app.inject({
+        method: "GET",
+        url,
+        headers: {
+          "x-scoring-session-id": sessionId,
+          "x-scoring-session-token": sessionToken,
+        },
+      });
+    expect((await request(firstSession, firstToken)).statusCode).toBe(200);
+    expect((await request(rotatedFirstSession, rotatedFirstToken)).statusCode).toBe(200);
+    expect((await request(firstSession, firstToken)).statusCode).toBe(429);
+    expect((await request(secondSession, secondToken)).statusCode).toBe(200);
+    expect((await request(secondSession, secondToken)).statusCode).toBe(200);
+
+    expect((await request(firstSession, firstToken, "/api/v1/status")).statusCode).toBe(200);
+    expect((await request(randomUUID(), "y".repeat(43))).statusCode).toBe(200);
+    expect((await request(randomUUID(), "z".repeat(43))).statusCode).toBe(429);
+  });
+
   it("enforces organiser origin, session and CSRF before mutation and excludes access secrets from reads", async () => {
     const runtime = routeRuntime();
     const app = await buildApp({
@@ -142,25 +271,63 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(created.statusCode).toBe(201);
     expect(runtime.createCompetition).toHaveBeenCalledOnce();
 
+    const competitionId = randomUUID();
     const workspace = await app.inject({
       method: "GET",
-      url: `/api/v1/competitions/${randomUUID()}`,
+      url: `/api/v1/competitions/${competitionId}`,
       headers: { cookie: "matchday_session=session-token" },
     });
     expect(workspace.statusCode).toBe(200);
     expect(workspace.body).not.toContain("session_token");
     expect(workspace.body).not.toContain("short_code");
     expect(workspace.body).not.toContain('"token"');
+
+    const takeoverList = await app.inject({
+      method: "GET",
+      url: `/api/v1/competitions/${competitionId}/takeover-requests`,
+      headers: { cookie: "matchday_session=session-token" },
+    });
+    expect(takeoverList.statusCode).toBe(200);
+    expect(runtime.listTakeoverRequests).toHaveBeenCalledOnce();
+    expect(runtime.expireTakeoverRequests).not.toHaveBeenCalled();
+    const expired = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/takeover-requests/expire`,
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        cookie: "matchday_session=session-token",
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    expect(expired.statusCode).toBe(200);
+    expect(expired.json()).toEqual({ expired_count: 1 });
+    expect(runtime.expireTakeoverRequests).toHaveBeenCalledOnce();
   });
 
-  it("validates scoring headers, throttles access exchange, and leaves the public projection unauthenticated", async () => {
+  it("validates scoring headers, exposes access-limit headers, and leaves the public projection unauthenticated", async () => {
     const runtime = routeRuntime();
+    const retainedLogLines: string[] = [];
+    const telemetryInputs: unknown[] = [];
+    const telemetry = {
+      startRequest: vi.fn((input: unknown) => {
+        telemetryInputs.push(input);
+        return {
+          correlation: Object.freeze({ requestId: "route-test" }),
+          run: <T>(callback: () => T) => callback(),
+          reportError: vi.fn(async () => undefined),
+          finish: vi.fn(),
+        };
+      }),
+      shutdown: vi.fn(async () => undefined),
+    };
     const app = await buildApp({
       config: testConfig(),
       probes: healthyProbes,
       identityRuntime: authenticatedIdentityRuntime(),
       phase2Runtime: runtime as unknown as Phase2Runtime,
       anonymousRateLimitMax: 100,
+      telemetry,
+      loggerDestination: { write: (line: string) => retainedLogLines.push(line) },
     });
     apps.push(app);
     expect((await app.inject({ method: "GET", url: "/api/v1/scoring/session" })).statusCode).toBe(400);
@@ -175,24 +342,172 @@ describe("Phase 2 Fastify route boundaries", () => {
     });
     expect(scoring.statusCode).toBe(200);
     expect(scoring.headers["cache-control"]).toBe("no-store, private");
-    expect(scoring.json()).toMatchObject({ competition: { slug: "singapore-open" } });
+    expect(scoring.json()).toMatchObject({
+      competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+      sport: { pack_version: "phase2-canoe-polo-v1" },
+      aggregate_version: 2,
+    });
 
+    const rawAccessToken = "q".repeat(43);
+    const rawDeviceId = "d".repeat(43);
+    const rawClientNetworkInput = "198.51.100.201";
+    const returnedScoringSessionToken = "s".repeat(43);
+    const rawFallbackCode = "012345678901";
     const exchange = () =>
       app.inject({
         method: "POST",
         url: "/api/v1/scoring/access/exchange",
-        payload: { token: "q".repeat(43) },
+        headers: { "x-forwarded-for": rawClientNetworkInput },
+        payload: { token: rawAccessToken, device_id: rawDeviceId },
       });
-    for (let attempt = 0; attempt < 5; attempt += 1) expect((await exchange()).statusCode).toBe(200);
-    const limited = await exchange();
-    expect(limited.statusCode).toBe(429);
-    expect(limited.json().error.code).toBe("RATE_LIMITED");
+    runtime.exchangeAccess.mockRejectedValueOnce(
+      new ScoringAccessRejectedError(403, "ACCESS_DENIED", "Access is invalid", {
+        limit: 5,
+        remaining: 4,
+        resetSeconds: 600,
+      }),
+    );
+    const invalidExchange = await exchange();
+    expect(invalidExchange.statusCode).toBe(403);
+    expect(invalidExchange.headers["ratelimit-limit"]).toBe("5");
+    expect(invalidExchange.headers["ratelimit-remaining"]).toBe("4");
+    expect(invalidExchange.headers["ratelimit-reset"]).toBe("600");
+    expect(invalidExchange.headers["retry-after"]).toBeUndefined();
+    const exchanged = await exchange();
+    expect(exchanged.statusCode).toBe(200);
+    expect(exchanged.headers["set-cookie"]).toBeUndefined();
+    expect(exchanged.headers["ratelimit-limit"]).toBe("5");
+    expect(exchanged.headers["ratelimit-remaining"]).toBe("5");
+    const fallbackExchange = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      headers: { "x-forwarded-for": rawClientNetworkInput },
+      payload: { short_code: rawFallbackCode, device_id: rawDeviceId },
+    });
+    expect(fallbackExchange.statusCode).toBe(200);
+    expect(fallbackExchange.headers["set-cookie"]).toBeUndefined();
+    const tooLongDeviceLabel = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      payload: { token: "q".repeat(43), device_id: "d".repeat(43), device_label: "x".repeat(81) },
+    });
+    expect(tooLongDeviceLabel.statusCode).toBe(400);
+    const maximumDeviceLabel = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      payload: { token: "q".repeat(43), device_id: "d".repeat(43), device_label: "x".repeat(80) },
+    });
+    expect(maximumDeviceLabel.statusCode).toBe(200);
+    expect(runtime.exchangeAccess).toHaveBeenLastCalledWith(
+      expect.objectContaining({ deviceLabel: "x".repeat(80) }),
+      expect.any(String),
+    );
+    const scoringHeaders = {
+      "x-scoring-session-id": randomUUID(),
+      "x-scoring-session-token": "t".repeat(43),
+      "x-writer-generation": "1",
+    };
+    const offlineSummary = {
+      device_id: rawDeviceId,
+      last_acknowledged_sequence: 2,
+      pending_event_count: 1,
+      pending_through_sequence: 3,
+      last_reported_local_sequence: 1,
+      queue_fingerprint: "a".repeat(64),
+      indexeddb_schema_version: 1,
+      service_worker_version: "gate-c-c3-v6",
+    };
+    const issuedOffline = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/offline-authorizations",
+      headers: scoringHeaders,
+      payload: offlineSummary,
+    });
+    expect(issuedOffline.statusCode).toBe(200);
+    expect(runtime.issueOfflineAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: 1 }),
+      expect.objectContaining({
+        deviceId: rawDeviceId,
+        pendingEventCount: 1,
+        queueFingerprint: "a".repeat(64),
+      }),
+      expect.any(String),
+    );
+    const renewedOffline = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/offline-authorizations",
+      headers: scoringHeaders,
+      payload: { ...offlineSummary, resume_secret: "r".repeat(43) },
+    });
+    expect(renewedOffline.statusCode).toBe(200);
+    expect(runtime.issueOfflineAuthorization).toHaveBeenLastCalledWith(
+      expect.objectContaining({ generation: 1 }),
+      expect.objectContaining({ resumeSecret: "r".repeat(43) }),
+      expect.any(String),
+    );
+    const authorizationId = randomUUID();
+    const resumedOffline = await app.inject({
+      method: "POST",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}/resume`,
+      payload: { ...offlineSummary, resume_secret: "r".repeat(43) },
+    });
+    expect(resumedOffline.statusCode).toBe(200);
+    expect(runtime.resumeOfflineAuthorization).toHaveBeenCalledWith(
+      authorizationId,
+      expect.objectContaining({
+        resumeSecret: "r".repeat(43),
+        deviceId: rawDeviceId,
+        pendingEventCount: 1,
+      }),
+      expect.any(String),
+    );
+    const revokedOffline = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}`,
+      payload: { resume_secret: "n".repeat(43), device_id: rawDeviceId },
+    });
+    expect(revokedOffline.statusCode).toBe(200);
+    expect(runtime.revokeOfflineAuthorization).toHaveBeenCalledWith(
+      authorizationId,
+      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId, preserveWriterSession: false },
+      expect.any(String),
+    );
+    const rolledBackOffline = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}`,
+      payload: {
+        resume_secret: "n".repeat(43),
+        device_id: rawDeviceId,
+        preserve_writer_session: true,
+      },
+    });
+    expect(rolledBackOffline.statusCode).toBe(200);
+    expect(runtime.revokeOfflineAuthorization).toHaveBeenLastCalledWith(
+      authorizationId,
+      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId, preserveWriterSession: true },
+      expect.any(String),
+    );
+    const retainedTransportEvidence = JSON.stringify({
+      logs: retainedLogLines,
+      telemetry: telemetryInputs,
+      cookies: [exchanged.headers["set-cookie"], fallbackExchange.headers["set-cookie"]],
+    });
+    for (const secret of [
+      rawAccessToken,
+      rawFallbackCode,
+      returnedScoringSessionToken,
+      rawDeviceId,
+      rawClientNetworkInput,
+    ]) {
+      expect(retainedTransportEvidence).not.toContain(secret);
+    }
 
     const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
     expect(publicView.statusCode).toBe(200);
     expect(publicView.headers["cache-control"]).toContain("public");
     expect(publicView.json()).toMatchObject({
       competition: { name: "Singapore Open", status: "active" },
+      divisions: [{ division: { name: "Open" }, schedule: [], results: [] }],
       division: { name: "Open" },
       publication: { schedule_version: 1, result_version: 2 },
     });

@@ -1,4 +1,5 @@
 import type { Phase3SportCode } from "./phase-3.js";
+import type { GateCOfflineCanonicalCommand } from "./gate-c-offline.js";
 
 export type PublicParticipant = {
   id: string | null;
@@ -28,6 +29,14 @@ export type PublicMatchResult = {
   updated_at: string;
 };
 
+export type PublicDivisionProjection = {
+  division: { id: string; name: string };
+  schedule: PublicScheduledMatch[];
+  results: PublicMatchResult[];
+  standings: Record<string, unknown> | null;
+  bracket: Record<string, unknown> | null;
+};
+
 export type PublicCompetitionProjection = {
   competition: {
     id: string;
@@ -39,17 +48,51 @@ export type PublicCompetitionProjection = {
     ends_on: string;
     status: "active" | "completed" | "archived";
   };
+  divisions: PublicDivisionProjection[];
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   division: { id: string; name: string };
   publication: { schedule_version: number; result_version: number };
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   schedule: PublicScheduledMatch[];
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   results: PublicMatchResult[];
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   standings: Record<string, unknown> | null;
+  /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
   bracket: Record<string, unknown> | null;
   last_updated_at: string;
 };
 
+export type ResultMutationReceipt = {
+  match_id: string;
+  aggregate_version: number;
+  through_sequence: number;
+  duplicate: boolean;
+  result_version: number;
+  publication_version: number;
+  conflicts: Record<string, unknown>[];
+};
+
+export type ScoringFinalisationReceipt = {
+  match_id: string;
+  client_event_id: string;
+  event_id: string;
+  command_fingerprint: string;
+  outcome: "accepted" | "duplicate";
+  sequence: number;
+  aggregate_version: number;
+  duplicate: boolean;
+  home_score: number;
+  away_score: number;
+  result_version: number;
+  publication_version: number;
+  published_at: string;
+  server_received_at: string;
+};
+
 export type ScoringSessionState = {
-  competition: { slug: string };
+  competition: { slug: string; sport_code: Phase3SportCode };
+  sport: { pack_version: string; settings: Record<string, unknown> };
   match: {
     id: string;
     code: string;
@@ -58,24 +101,54 @@ export type ScoringSessionState = {
     home: { id: string | null; name: string | null };
     away: { id: string | null; name: string | null };
   };
-  writer: { generation: number; expires_at: string; read_only: boolean };
-  score: { home: number; away: number };
+  access: {
+    principal_id: string;
+    mode: "writer" | "candidate" | "viewer" | "transferred";
+    permissions: Array<"score:read" | "score:write" | "score:reverse" | "score:finalise">;
+    session_expires_at: string;
+  };
+  writer: { generation: number | null; expires_at: string | null; read_only: boolean };
+  score: {
+    home: number;
+    away: number;
+    lifecycle: "not_started" | "in_progress" | "finalised";
+    current_segment: number;
+    total_points: { home: number; away: number };
+    segment_wins: { home: number; away: number };
+    segments: Array<{
+      number: number;
+      home: number;
+      away: number;
+      completed: boolean;
+      winner: "home" | "away" | null;
+    }>;
+    actions: Array<{
+      event_id: string;
+      client_event_id: string;
+      event_type: string;
+      label: string;
+      side: "home" | "away" | null;
+      participant_id: string | null;
+      segment_number: number;
+      score_delta: number;
+      occurred_at: string;
+      reversed: boolean;
+      reversible: boolean;
+    }>;
+    conflicts: Array<{
+      code: "segment_reopened_after_reversal";
+      segment_number: number;
+      target_event_id: string;
+      later_segment_numbers: number[];
+    }>;
+  };
+  aggregate_version: number;
   through_sequence: number;
   events: Array<{
+    event_id?: string;
     client_event_id: string;
     sequence: number;
-    type:
-      | "match_started"
-      | "period_changed"
-      | "goal_added"
-      | "goal_reversed"
-      | "card_added"
-      | "card_reversed"
-      | "timeout_added"
-      | "incident_added"
-      | "match_finalised"
-      | "match_reopened"
-      | "correction";
+    type: string;
     team_slot: "home" | "away" | null;
     scorer: string | null;
     manual_period: number | null;
@@ -83,5 +156,10 @@ export type ScoringSessionState = {
     payload: Record<string, unknown>;
     correction_reason: string | null;
     occurred_at: string;
+  }>;
+  canonical_events: Array<{
+    event_id: string;
+    sequence: number;
+    command: GateCOfflineCanonicalCommand;
   }>;
 };

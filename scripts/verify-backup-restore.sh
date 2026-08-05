@@ -3,9 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/infra/local/compose.yaml"
-SOURCE_DB="matchday_backup_test"
-RESTORE_DB="matchday_restore_test"
+RUN_SUFFIX="$(date -u +%s)_$$_${RANDOM}"
+SOURCE_DB="matchday_backup_test_${RUN_SUFFIX}"
+RESTORE_DB="matchday_restore_test_${RUN_SUFFIX}"
 BACKUP_FILE="/tmp/${SOURCE_DB}.dump"
+
+assert_disposable_name() {
+  local database_name="$1"
+  if [[ ! "$database_name" =~ ^matchday_(backup|restore)_test_[0-9]+_[0-9]+_[0-9]+$ ]]; then
+    echo "Refusing to operate on non-disposable database name: ${database_name}" >&2
+    exit 1
+  fi
+}
+
+assert_disposable_name "$SOURCE_DB"
+assert_disposable_name "$RESTORE_DB"
 
 container_id() {
   docker compose -f "$COMPOSE_FILE" ps -q postgres
@@ -33,7 +45,11 @@ postgres_exec createdb -U matchday "$SOURCE_DB"
 export DATABASE_URL="postgres://matchday:matchday@127.0.0.1:5432/$SOURCE_DB"
 export APP_ENV=test
 export LOG_LEVEL=silent
-pnpm --dir "$ROOT_DIR" db:migrate
+(
+  cd "$ROOT_DIR"
+  pnpm --filter @matchday/config build
+  pnpm db:migrate
+)
 
 postgres_exec psql -v ON_ERROR_STOP=1 -U matchday -d "$SOURCE_DB" -c \
   "INSERT INTO accounts (id, primary_email, display_name, status) VALUES ('00000000-0000-4000-8000-000000000001', 'restore-check@example.test', 'Restore Check', 'active');" >/dev/null

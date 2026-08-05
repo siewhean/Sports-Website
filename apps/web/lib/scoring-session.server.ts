@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-const COOKIE_VERSION = 1;
-const COOKIE_AAD = Buffer.from("matchday-scoring-session-v1", "utf8");
+const COOKIE_VERSION = 2;
+const COOKIE_AAD = Buffer.from("matchday-scoring-session-v2", "utf8");
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const scoringSessionCookieName = "__Host-matchday-scoring-session";
@@ -9,9 +9,12 @@ export const scoringSessionCookieName = "__Host-matchday-scoring-session";
 export type ScoringServerAuth = {
   sessionId: string;
   sessionToken: string;
-  generation: number;
+  mode: "writer" | "candidate" | "viewer" | "transferred";
+  permissions: string[];
+  generation: number | null;
   matchId: string;
   expiresAt: string;
+  leaseExpiresAt: string | null;
 };
 
 type SealedScoringServerAuth = ScoringServerAuth & { version: number };
@@ -47,11 +50,20 @@ function isValidAuth(value: unknown, now: number): value is SealedScoringServerA
     typeof auth.sessionToken === "string" &&
     auth.sessionToken.length >= 32 &&
     auth.sessionToken.length <= 256 &&
-    typeof auth.generation === "number" &&
-    Number.isSafeInteger(auth.generation) &&
-    auth.generation > 0 &&
+    (auth.generation === null ||
+      (typeof auth.generation === "number" && Number.isSafeInteger(auth.generation) && auth.generation > 0)) &&
+    (auth.mode === "writer" || auth.mode === "candidate" || auth.mode === "viewer" || auth.mode === "transferred") &&
+    Array.isArray(auth.permissions) &&
+    auth.permissions.length <= 16 &&
+    auth.permissions.every(
+      (permission) => typeof permission === "string" && /^[a-z]+:[a-z_]+$/.test(permission) && permission.length <= 64,
+    ) &&
+    (auth.mode === "writer" || auth.mode === "transferred" ? auth.generation !== null : auth.generation === null) &&
     typeof auth.matchId === "string" &&
     UUID_PATTERN.test(auth.matchId) &&
+    (auth.leaseExpiresAt === null ||
+      (typeof auth.leaseExpiresAt === "string" && expiresAtMs(auth.leaseExpiresAt) !== null)) &&
+    (auth.mode === "writer" ? auth.leaseExpiresAt !== null : auth.leaseExpiresAt === null) &&
     expiry !== null &&
     expiry > now
   );
@@ -106,9 +118,12 @@ export class ScoringSessionSealer {
       return {
         sessionId: payload.sessionId,
         sessionToken: payload.sessionToken,
+        mode: payload.mode,
+        permissions: payload.permissions,
         generation: payload.generation,
         matchId: payload.matchId,
         expiresAt: payload.expiresAt,
+        leaseExpiresAt: payload.leaseExpiresAt,
       };
     } catch (error) {
       if (error instanceof InvalidScoringSessionError) throw error;

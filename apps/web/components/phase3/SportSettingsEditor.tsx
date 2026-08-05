@@ -26,6 +26,7 @@ import {
   phase3SettingsMachine,
   phase3CommandMachine,
   settingsMode,
+  sportSettingsScopeBaseline,
   validateSettingsDraft,
   type SportSettingsDocument,
   type SportSettingsSurfaceState,
@@ -64,17 +65,18 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
   const [commandState, setCommandState] = useState<SportSettingsSurfaceState | null>(null);
   const [busyAction, setBusyAction] = useState<"save" | "default" | "copy" | null>(null);
   const [revision, setRevision] = useState(document.revision);
+  const scopeBaseline = sportSettingsScopeBaseline(document);
   const errors = useMemo(
     () => validateSettingsDraft(document.packDefinition, values),
     [document.packDefinition, values],
   );
-  const mode = settingsMode(values, document.recommended);
+  const mode = settingsMode(values, scopeBaseline);
   const dirty = JSON.stringify(values) !== JSON.stringify(savedValues);
   const blocked =
     !document.canEdit || !document.capabilities.save || Object.keys(errors).length > 0 || busyAction !== null;
 
   if (document.state === "loading") return <SettingsSkeleton />;
-  if (commandState && commandState !== "ready")
+  if (commandState && commandState !== "ready" && commandState !== phase3SettingsMachine.conflict)
     return <SettingsState state={commandState as Exclude<SportSettingsSurfaceState, "ready" | "loading">} />;
   if (document.state !== "ready" && document.state !== "conflict" && document.state !== "read-only") {
     return <SettingsState state={document.state} />;
@@ -86,7 +88,7 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
   }
 
   function reset() {
-    setValues(document.recommended);
+    setValues(scopeBaseline);
     setAnnouncement(phase3SettingsCopy.restoredAnnouncement);
   }
 
@@ -108,7 +110,7 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
         ? {
             pack_version: document.packVersion,
             revision,
-            override: deriveSportSettingsOverride(values, document.recommended),
+            override: deriveSportSettingsOverride(values, scopeBaseline),
           }
         : action === "default"
           ? { pack_version: document.packVersion, settings: values }
@@ -162,8 +164,15 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
       <p className={cx("p3-live")} aria-live="polite">
         {announcement}
       </p>
-      {document.state === phase3SettingsMachine.conflict ? (
-        <SettingsState state={phase3SettingsMachine.conflict} compact />
+      {document.state === phase3SettingsMachine.conflict || commandState === phase3SettingsMachine.conflict ? (
+        <SettingsState
+          state={phase3SettingsMachine.conflict}
+          compact
+          onConflictRetry={() => {
+            setCommandState(null);
+            router.refresh();
+          }}
+        />
       ) : null}
       {document.state === phase3SettingsMachine.readOnly ? (
         <SettingsState state={phase3SettingsMachine.readOnly} compact />
@@ -476,10 +485,16 @@ function moveItem(values: readonly string[], from: number, to: number): readonly
 function SettingsState({
   state,
   compact = false,
+  onConflictRetry,
 }: {
   state: Exclude<SportSettingsSurfaceState, "ready" | "loading">;
   compact?: boolean;
+  onConflictRetry?: () => void;
 }) {
+  const router = useRouter();
+  const refresh = () => {
+    router.refresh();
+  };
   const copy = stateCopy[state];
   const Icon = state === "permission" || state === "read-only" ? LockKey : Warning;
   return (
@@ -496,7 +511,7 @@ function SettingsState({
           <button
             className={cx("p3-button", "p3-button--secondary")}
             type="button"
-            onClick={() => window.location.reload()}
+            onClick={onConflictRetry ?? refresh}
           >
             {phase3SettingsCopy.reload}
           </button>

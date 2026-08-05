@@ -2,7 +2,7 @@
 useDefault = true
 
 [allowlist]
-description = "Generated and third-party artifacts"
+description = "Generated artifacts and exact non-secret test fixtures"
 paths = [
   '''(^|/)node_modules/''',
   '''(^|/)\.next/''',
@@ -13,5 +13,14 @@ paths = [
   '''sports_competition_platform_implementation_plan\.md$'''
 ]
 regexes = [
-  '''^\.p2-organiser$'''
+  '''^\.p2-organiser$''',
+  '''^redacted$''',
+  '''^abc\.def$''',
+  '''^leaked\.secret$''',
+  '''^user:password$''',
+  '''^postgres://user:password@localhost/db$''',
+  '''^raw-value$''',
+  '''^Zm9vOmJhcg==$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJzY29yZXIifQ\.signature123$''',
+  '''^-----BEGIN PRIVATE KEY-----$'''
 ]

@@ -3,7 +3,7 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import { SPORT_PACKS, type SportId, type SportPackOverride } from "@matchday/domain";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { cookieHostMatches, publicRequestHost } from "@/lib/phase2-organiser";
 import {
   parseSportSettingsResponse,
   type SportSettingsContext,
@@ -78,6 +78,7 @@ function documentForState(context: SportSettingsContext, state: SportSettingsSur
     authority: pack.authority,
     definitions: pack.settingsSchema,
     recommended,
+    competitionOverride: {},
     effective: { ...recommended, ...override },
     override,
     mode: Object.keys(override).length ? "customised" : "recommended",
@@ -85,7 +86,10 @@ function documentForState(context: SportSettingsContext, state: SportSettingsSur
     definitionHash: "demo-canoe-polo-draft-1",
     packDefinition: pack,
     canEdit: state === "ready",
-    capabilities: { save: false, saveDefault: false, copyPrevious: false },
+    capabilities:
+      state === "ready"
+        ? { save: true, saveDefault: false, copyPrevious: false }
+        : { save: false, saveDefault: false, copyPrevious: false },
   };
 }
 
@@ -102,7 +106,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookie(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  if (!cookieHostMatches(publicRequestHost(requestHeaders), apiUrl.hostname)) return null;
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = store.get(name)?.value;

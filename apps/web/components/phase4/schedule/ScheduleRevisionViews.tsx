@@ -26,7 +26,7 @@ export function ScheduleRevisionHistory({ document }: { document: ScheduleDocume
           <p>{phase4ScheduleCopy.immutablePrivateHistory}</p>
           <h2>{phase4ScheduleCopy.revisionHistory}</h2>
         </div>
-        <Link href={`/organiser/competitions/${document.competitionId}/schedule`}>
+        <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule`}>
           <ArrowLeft />
           {phase4ScheduleCopy.backToSchedule}
         </Link>
@@ -57,7 +57,7 @@ export function ScheduleRevisionHistory({ document }: { document: ScheduleDocume
                   </dd>
                 </div>
               </dl>
-              <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${revision.id}`}>
+              <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule/revisions/${revision.id}`}>
                 {phase4ScheduleCopy.inspectRevision}
               </Link>
             </li>
@@ -92,13 +92,13 @@ export function ScheduleRevisionDetail({
           <span data-status={revision.status}>{revision.status.replaceAll("_", " ")}</span>
         </div>
         <div className={styles.detailActions}>
-          <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions`}>
+          <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule/revisions`}>
             <ClockCounterClockwise />
             {phase4ScheduleCopy.revisions}
           </Link>
           {revision.parentRevisionId ? (
             <Link
-              href={`/organiser/competitions/${document.competitionId}/schedule/compare?left=${revision.parentRevisionId}&right=${revision.id}`}
+              href={`/organiser/competitions/${document.competitionRouteId}/schedule/compare?left=${revision.parentRevisionId}&right=${revision.id}`}
             >
               <ArrowsLeftRight />
               {phase4ScheduleCopy.compareWithParent}
@@ -174,7 +174,7 @@ export function ScheduleRevisionComparison({
         <ArrowsLeftRight />
         <h2>{phase4ScheduleCopy.selectTwo}</h2>
         <p>{phase4ScheduleCopy.selectTwoBody}</p>
-        <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions`}>
+        <Link href={`/organiser/competitions/${document.competitionRouteId}/schedule/revisions`}>
           {phase4ScheduleCopy.chooseHistory}
         </Link>
       </section>

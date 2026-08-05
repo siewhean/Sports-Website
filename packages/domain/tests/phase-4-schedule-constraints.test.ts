@@ -288,6 +288,12 @@ describe("Phase 4 configurable constraint semantics", () => {
     ).toBe(true);
   });
 
+  it("rejects an impossible required daily match load before candidate search", () => {
+    const matches = [simpleMatch("one", ["a", "b"]), simpleMatch("two", ["a", "c"]), simpleMatch("three", ["a", "d"])];
+    const configured = constraints({ maximumMatchesPerDay: setting("required", { matches: 2 }) });
+    expect(generateScheduleCandidates(problem(matches, slots(3), configured), { maxIterations: 3 })).toEqual([]);
+  });
+
   it("enforces entry/official availability, featured area, division cohesion, and existing schedule preservation", () => {
     const match = simpleMatch("featured", ["a", "b"], [], { officialIds: ["o1"] });
     const available = slots(2, 2);
@@ -510,6 +516,18 @@ describe("Phase 4 objectives, quality, and worker boundary", () => {
       }
     },
   );
+
+  it("retains a feasibility-first candidate when rest-focused ranking consumes a dependency slot", () => {
+    const matches = [simpleMatch("a", ["x", "y"]), simpleMatch("b", ["x", "z"]), simpleMatch("c", ["z", "w"], ["b"])];
+    const input = problem(matches, slots(3), constraints(), "rest_focused");
+
+    const candidates = generateScheduleCandidates(input, { maxIterations: 1 });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.assignments.map((item) => item.slotId)).toEqual(["slot-001", "slot-002", "slot-003"]);
+    expect(validateSchedule(input, candidates[0]!.assignments).valid).toBe(true);
+    expect(evaluateScheduleQuality(input, candidates[0]!.assignments).objective).toBe("rest_focused");
+  });
 
   it("offers bounded resumable candidate iterations and validates a seed checkpoint", () => {
     const input = problem([simpleMatch("one", ["a", "b"]), simpleMatch("two", ["a", "c"])], slots(8, 1, 60));

@@ -5,7 +5,7 @@ import postgres from "postgres";
 
 const migrationPattern = /^\d{4}_[a-z0-9_]+\.sql$/;
 const identifierPattern = /^[a-z][a-z0-9_]*$/;
-const migrationAdvisoryLockId = 1_450_121_337;
+export const migrationAdvisoryLockId = 1_450_121_337;
 
 export type MigrationResult = {
   applied: readonly string[];
@@ -36,6 +36,10 @@ export async function migrateDatabase(options: {
     // A session lock keeps parallel deploy/test migrators from racing before either transaction commits.
     await sql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
     lockAcquired = true;
+    // Keep database-global extension objects out of isolated application/test
+    // schemas. Otherwise dropping one schema can remove pgcrypto while another
+    // schema is still using migration functions that depend on it.
+    await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public`;
     await sql.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
     await sql.unsafe(`SET search_path TO "${schema}", public`);
     await sql`
@@ -107,9 +111,18 @@ export async function dropTestSchema(databaseUrl: string, schema: string): Promi
   if (!identifierPattern.test(schema) || !schema.startsWith("test_")) {
     throw new Error("Refusing to drop a non-test schema");
   }
-  const sql = postgres(databaseUrl, { max: 1 });
+  const sql = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
   try {
-    await sql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    // A migrated test schema contains enough dependent objects that concurrent
+    // DROP SCHEMA operations can exhaust PostgreSQL's shared lock table. Use
+    // the same database-global lock as migrations so setup and teardown remain
+    // isolated without weakening the rest of the integration suite's concurrency.
+    // The transaction-scoped form also releases the lock automatically if the
+    // DROP fails, so cleanup cannot strand the database-global migration lock.
+    await sql.begin(async (transaction) => {
+      await transaction`SELECT pg_advisory_xact_lock(${migrationAdvisoryLockId})`;
+      await transaction.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    });
   } finally {
     await sql.end();
   }

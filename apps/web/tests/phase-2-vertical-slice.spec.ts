@@ -13,15 +13,15 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
   const routeEvidence = [
     ["/organiser/competitions/singapore-open/setup", "Set the event capacity", "Singapore Open 2026"],
     ["/organiser/competitions/singapore-open/settings", "Competition settings", "2"],
-    ["/organiser/competitions/singapore-open/entries", "Entries and divisions", "Open division"],
-    ["/organiser/competitions/singapore-open/entries", "Entries and divisions", "Pasir Ris Rapids"],
+    ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Open division"],
+    ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Women's division"],
     ["/organiser/competitions/singapore-open/capacity", "Capacity", "Required match slots"],
     ["/organiser/competitions/singapore-open/format", "Competition format", "Group A"],
     ["/organiser/competitions/singapore-open/format", "Competition format", "Semifinals"],
     ["/organiser/competitions/singapore-open/schedule", "Schedule", "Playing-area timeline"],
     ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
-    ["/score/m12-access", "Marina Blue", "Validate access"],
+    ["/score", "Marina Blue", "Validate access"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Results"],
     ["/organiser/competitions/singapore-open/audit", "Audit log", "Finalised Match 12"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Bracket"],
@@ -37,7 +37,7 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
 });
 
 test("phone scoring validates access, confirms scorer attribution, appends a goal, and finalises", async ({ page }) => {
-  await page.goto("/score/m12-access");
+  await page.goto("/score");
   await dismissConsent(page);
 
   await page.getByLabel("Scoring code").fill("INVALID");
@@ -53,13 +53,15 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
   await expect(confirmation).toBeVisible();
   await expect(confirmation.getByText("Marina Blue", { exact: true })).toBeVisible();
-  const scorer = confirmation.getByLabel("Scorer name");
+  const scorer = confirmation.getByLabel("Scorer or participant name");
   await expect(scorer).toBeFocused();
   await scorer.fill("Aisha Tan");
   await confirmation.getByRole("button", { name: "Record goal for Marina Blue" }).click();
 
-  await expect(page.getByLabel("Marina Blue 1")).toBeVisible();
-  await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
+  const scoringControls = page.getByRole("region", { name: "Scoring controls" });
+  await expect(scoringControls).toContainText("Marina Blue1");
+  await expect(scoringControls).toContainText("Harbour Gold0");
+  await expect(page.locator(".p2-event-log")).toContainText("Aisha Tan");
   await expect(page.getByText("1 event pending sync")).toBeVisible();
 
   await page.getByRole("button", { name: "Review final score" }).click();
@@ -93,5 +95,5 @@ test("public projection is complete in raw server-rendered HTML", async ({ reque
 
 test("scoring helper reaches the single-active-writer surface", async ({ page }) => {
   await openPhase2Scorekeeper(page);
-  await expect(page.getByRole("status")).toContainText("Active scorer");
+  await expect(page.locator(".p2-writer")).toContainText("Active scorer");
 });

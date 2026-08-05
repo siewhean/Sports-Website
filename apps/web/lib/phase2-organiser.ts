@@ -11,6 +11,8 @@ export type OrganiserWorkspacePayload = {
   private_schedule: WorkspaceRecord | null;
   publication: WorkspaceRecord | null;
   access_passes: WorkspaceRecord[];
+  permission: "read" | "write";
+  read_only: boolean;
 };
 
 const sportLabels = {
@@ -35,12 +37,64 @@ function number(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function nonNegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+
 function records(value: unknown): WorkspaceRecord[] {
   return Array.isArray(value) ? value.flatMap((item) => (record(item) ? [item as WorkspaceRecord] : [])) : [];
 }
 
 function supportedSportCode(value: unknown): value is SupportedSportCode {
   return typeof value === "string" && Object.hasOwn(sportLabels, value);
+}
+
+function validWorkspaceDivision(value: unknown): boolean {
+  const division = record(value);
+  if (!division || !string(division.id) || !string(division.name) || !Array.isArray(division.entries)) return false;
+  return division.entries.every((rawEntry) => {
+    const entry = record(rawEntry);
+    return Boolean(
+      entry &&
+      string(entry.id) &&
+      string(entry.name) &&
+      (entry.seed === null || (Number.isInteger(entry.seed) && (entry.seed as number) >= 1)) &&
+      Number.isInteger(entry.revision) &&
+      typeof entry.status === "string" &&
+      ["active", "confirmed", "withdrawn", "replaced"].includes(entry.status),
+    );
+  });
+}
+
+function validPrivateScheduleMatch(value: unknown): boolean {
+  const match = record(value);
+  if (!match || !["pending", "ready", "in_progress", "final", "corrected"].includes(String(match.state))) {
+    return false;
+  }
+  if (match.state === "final" || match.state === "corrected") {
+    return (
+      nonNegativeInteger(match.home_score) !== null &&
+      nonNegativeInteger(match.away_score) !== null &&
+      nonNegativeInteger(match.result_version) !== null &&
+      Number(match.result_version) >= 1
+    );
+  }
+  const hasNoResult = match.home_score === null && match.away_score === null && match.result_version === null;
+  const hasRetainedResult =
+    match.state === "in_progress" &&
+    nonNegativeInteger(match.home_score) !== null &&
+    nonNegativeInteger(match.away_score) !== null &&
+    nonNegativeInteger(match.result_version) !== null &&
+    Number(match.result_version) >= 1;
+  return hasNoResult || hasRetainedResult;
+}
+
+function validPrivateSchedule(value: unknown): boolean {
+  if (value === null) return true;
+  const schedule = record(value);
+  return Boolean(
+    schedule && Array.isArray(schedule.matches) && schedule.matches.every((match) => validPrivateScheduleMatch(match)),
+  );
 }
 
 export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserWorkspacePayload {
@@ -57,8 +111,12 @@ export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserW
     string(competition.starts_on) &&
     string(competition.ends_on) &&
     Array.isArray(payload.divisions) &&
+    payload.divisions.every(validWorkspaceDivision) &&
     Array.isArray(payload.capacity) &&
-    Array.isArray(payload.access_passes),
+    Array.isArray(payload.access_passes) &&
+    validPrivateSchedule(payload.private_schedule) &&
+    (payload.permission === "read" || payload.permission === "write") &&
+    typeof payload.read_only === "boolean",
   );
 }
 
@@ -73,6 +131,15 @@ export function cookieHostMatches(requestHostHeader: string | null, apiHostname:
   } catch {
     return false;
   }
+}
+
+/**
+ * Railway forwards the public host while the Next.js server sees its internal
+ * service host. Cookie forwarding must be authorised against the public host,
+ * never the internal one.
+ */
+export function publicRequestHost(requestHeaders: Pick<Headers, "get">): string | null {
+  return requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
 }
 
 function titleCase(value: string): string {
@@ -233,6 +300,15 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
   const matches: MatchView[] = schedule.map((match) => {
     const id = string(match.match_id) ?? string(match.id) ?? "unknown-match";
     const formatMatch = formatById.get(id);
+    if (!validPrivateScheduleMatch(match)) {
+      throw new Error(`Private schedule match ${id} has an invalid scoring state`);
+    }
+    const state = String(match.state);
+    const status: MatchView["status"] =
+      state === "final" || state === "corrected" ? "final" : state === "in_progress" ? "live" : "scheduled";
+    const homeScore = nonNegativeInteger(match.home_score);
+    const awayScore = nonNegativeInteger(match.away_score);
+    const resultVersion = nonNegativeInteger(match.result_version);
     return {
       id,
       label: string(match.code) ?? id,
@@ -241,7 +317,10 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
       area: string(match.area) ?? "—",
       home: participantLabel(formatMatch?.home, entryNames, matchCodes),
       away: participantLabel(formatMatch?.away, entryNames, matchCodes),
-      status: "scheduled",
+      ...(homeScore === null ? {} : { homeScore }),
+      ...(awayScore === null ? {} : { awayScore }),
+      ...(resultVersion === null ? {} : { resultVersion }),
+      status,
     };
   });
   const areas = [
@@ -300,7 +379,27 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     divisions: divisions.flatMap((division) => {
       const id = string(division.id);
       const name = string(division.name);
-      return id && name ? [{ id, name }] : [];
+      const entryLimit = number(division.team_limit);
+      const divisionEntries = records(division.entries).flatMap((entry) => {
+        const entryId = string(entry.id);
+        const entryName = string(entry.name);
+        const status = string(entry.status);
+        const seed = number(entry.seed);
+        const revision = number(entry.revision);
+        return entryId && entryName && status && revision !== null
+          ? [{ id: entryId, name: entryName, seed, status, revision }]
+          : [];
+      });
+      return id && name
+        ? [
+            {
+              id,
+              name,
+              ...(entryLimit === null ? {} : { entryLimit }),
+              entries: divisionEntries,
+            },
+          ]
+        : [];
     }),
     teams: entries.flatMap((entry) => (string(entry.name) ? [string(entry.name)!] : [])),
     areas,
@@ -310,9 +409,31 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     audit: [],
     scheduleRows: scheduleRows(matches, areas, schedule),
     accessPasses: records(payload.access_passes).flatMap((pass) => {
+      const id = string(pass.id);
       const matchId = string(pass.match_id);
-      if (!matchId) return [];
-      return [{ matchId, displayCode: "••••-••", expiresAt: dateTime(pass.expires_at, timezone) }];
+      const role = pass.role;
+      if (!id || !matchId || (role !== "viewer" && role !== "scorekeeper")) return [];
+      const revoked = Boolean(pass.revoked_at ?? pass.revoked);
+      const expiresAt = string(pass.expires_at);
+      const expired = expiresAt ? Date.parse(expiresAt) <= Date.now() : true;
+      const fallbackCodeStatus =
+        pass.fallback_code_status === "available" ||
+        pass.fallback_code_status === "rotation_required" ||
+        pass.fallback_code_status === "unavailable"
+          ? pass.fallback_code_status
+          : undefined;
+      return [
+        {
+          id,
+          matchId,
+          role,
+          displayCode: "••••••••••••",
+          expiresAt: dateTime(pass.expires_at, timezone),
+          revoked,
+          status: revoked ? "revoked" : expired ? "expired" : "active",
+          ...(fallbackCodeStatus ? { fallbackCodeStatus } : {}),
+        },
+      ];
     }),
     settings: settings
       ? [
@@ -331,5 +452,6 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     publishedVersionLabel: isPublished ? `Schedule ${scheduleVersion} · Results ${resultVersion}` : undefined,
     publicationState: isPublished ? "published" : "draft",
     formatSummary,
+    canEdit: payload.permission === "write" && !payload.read_only,
   };
 }

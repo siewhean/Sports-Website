@@ -6,6 +6,7 @@ import {
   formatEditorReducer,
   parseFormatDraft,
   parseFormatMaterialisation,
+  parseFormatPublication,
   parseOrganiserTemplate,
   parseFormatValidation,
   type FormatBuilderPageDocument,
@@ -44,8 +45,8 @@ export function FormatEditor({
   onDraft(value: Phase4FormatDraftView): void;
   viewState: FormatSurfaceState;
   onViewState(value: FormatSurfaceState): void;
-  busy: "validate" | "save" | "materialise" | "template" | null;
-  onBusy(value: "validate" | "save" | "materialise" | "template" | null): void;
+  busy: "validate" | "save" | "materialise" | "publish" | "template" | null;
+  onBusy(value: "validate" | "save" | "materialise" | "publish" | "template" | null): void;
   announcement: string;
   onAnnouncement(value: string): void;
   showTemplates: boolean;
@@ -164,6 +165,39 @@ export function FormatEditor({
           ? t("prototype.ddaf7c4e576a", { value1: result.match_count })
           : t("prototype.312322978db0", { value1: result.match_count }),
       );
+    } catch {
+      onViewState(opaqueId("offline"));
+    } finally {
+      onBusy(null);
+    }
+  }
+
+  async function publish() {
+    if (busy || state.dirty || !valid) return;
+    onBusy(opaqueId("publish"));
+    try {
+      const response = await fetch(`/api/phase4/format-revisions/${encodeURIComponent(draft.draft_id)}/publish`, {
+        method: opaqueId("POST"),
+        headers: { "content-type": opaqueId("application/json") },
+        body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
+      });
+      const result = response.ok
+        ? parseFormatPublication(await response.json().catch(() => null), draft.draft_id)
+        : null;
+      if (!response.ok || !result) {
+        if (response.status === 409) onViewState(opaqueId("conflict"));
+        else onAnnouncement(opaqueId("The format could not be published."));
+        return;
+      }
+      onDraft({
+        ...draft,
+        status: result.status,
+        read_only: true,
+        permission: opaqueId("view"),
+        definition_hash: result.definition_hash,
+        document: result.document,
+      });
+      onAnnouncement(opaqueId("Format published. It is now available to deterministic scheduling."));
     } catch {
       onViewState(opaqueId("offline"));
     } finally {
@@ -298,6 +332,7 @@ export function FormatEditor({
       onSave={() => void save()}
       onValidate={() => void validate()}
       onMaterialise={() => void materialise()}
+      onPublish={() => void publish()}
       onSaveTemplate={() => void saveTemplate()}
       onReuseTemplate={(id) => void reuseTemplate(id)}
       onArchiveTemplate={(id) => void archiveTemplate(id)}

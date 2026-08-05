@@ -9,7 +9,13 @@ export const healthyProbes: DependencyProbes = {
 };
 
 export function testConfig(overrides: NodeJS.ProcessEnv = {}) {
-  return parseConfig({ APP_ENV: "test", LOG_LEVEL: "silent", ...overrides });
+  return parseConfig({
+    APP_ENV: "test",
+    LOG_LEVEL: "silent",
+    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "test-scoring-access-rate-limit-secret",
+    SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "test-scoring-fallback-code-hmac-secret",
+    ...overrides,
+  });
 }
 
 export function oidcEnvironment(appOrigin: string, apiOrigin = appOrigin): NodeJS.ProcessEnv {

@@ -3,10 +3,16 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import { demoCompetitionReadPort, phase2Competition, type CompetitionView } from "@/lib/phase2";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches, isOrganiserWorkspacePayload, toOrganiserCompetitionView } from "@/lib/phase2-organiser";
+import {
+  cookieHostMatches,
+  isOrganiserWorkspacePayload,
+  publicRequestHost,
+  toOrganiserCompetitionView,
+} from "@/lib/phase2-organiser";
 
 export type OrganiserCompetitionReadResult =
   | { state: "ready"; competition: CompetitionView }
+  | { state: "unauthenticated" }
   | { state: "permission" }
   | { state: "notFound" }
   | { state: "error" };
@@ -27,7 +33,8 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  const requestHost = publicRequestHost(requestHeaders);
+  if (!cookieHostMatches(requestHost, apiUrl.hostname)) return null;
 
   const cookieStore = await cookies();
   for (const name of sessionCookieNames) {
@@ -49,14 +56,15 @@ export async function getOrganiserCompetitionView(id: string): Promise<Organiser
   const baseUrl = apiBaseUrl();
   if (!baseUrl) return { state: "error" };
   const cookie = await sessionCookieHeader(baseUrl);
-  if (!cookie) return { state: "permission" };
+  if (!cookie) return { state: "unauthenticated" };
 
   try {
     const response = await fetch(new URL(`/api/v1/competitions/${encodeURIComponent(id)}`, baseUrl), {
       headers: { accept: "application/json", cookie },
       cache: "no-store",
     });
-    if (response.status === 401 || response.status === 403) return { state: "permission" };
+    if (response.status === 401) return { state: "unauthenticated" };
+    if (response.status === 403) return { state: "permission" };
     if (response.status === 404) return { state: "notFound" };
     if (!response.ok) return { state: "error" };
     const payload: unknown = await response.json();

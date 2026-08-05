@@ -1,35 +1,83 @@
-# Phase 4 — Independent Gate B verdict
+# Phase 4 independent Gate B verdict
 
-Verdict: PASS
+Validated source SHA:
+`4f9202e4e1c546bfef2a23bcfc7e26825c90b314`
 
-## Fresh independent review
+Branch: `fix/gate-b-local-remediation-20260724-132224`
+
+Independent review:
 
 - P0: 0
 - P1: 0
-- P2: 1 — accepted; owner Frontend UX, target before the Gate C browser verdict
-- P3: 2 — accepted; owners QA Automation and Platform Dependency, targets before the Gate C visual verdict and the next stable dependency review respectively
+- P2: 2
+- P3: 5
 
-The independent reviewer inspected the complete main diff, requirements and task IDs, database migrations, authorisation and tenant scoping, idempotency, concurrency, audit/outbox atomicity, browser flows, phone/tablet/desktop behavior, accessibility, visual baselines, exact-SHA command output, production dependency audit and residual risks.
+The reviewer inspected the complete diff from `main`, Redis and PostgreSQL
+isolation, migration safety, authorization, idempotency, concurrency,
+audit/outbox behavior, strict WCAG gating, interaction-state preservation,
+browser-owned organiser journey, console/network guards, dependency audit,
+visual artifacts, all command logs, the immutable bundle and schema-v2 hashes.
 
-## Exact reproducibility
+The final independent rehash reconciled every retained artifact and reran the
+validator without mismatch.
 
-The previous P1 is closed. The validated production and test source is committed at `b2306e6dfc9d44c8d53bf756c00b1530202188e0`. The following post-commit logs all exit 0 under Node 24.18.0 and pnpm 10.33.0:
+## Accepted P2 findings
 
-- `90-b2306e6-pnpm-check.log`
-- `91-b2306e6-infrastructure-gates.log`
-- `92-b2306e6-test-e2e.log`
-- `93-b2306e6-a11y-visual-diff.log`
+### Sticky action rails
 
-The browser evidence passed 255 generic tests with 7 intentional project-applicability skips, followed by the real 3/3 browser→BFF→API→PostgreSQL/Redis matrix. Accessibility passed 47/47 and visual comparison passed 13/13. The WebKit cleanup aborts only unsettled validation requests; its five-repeat phone regression and full exact-SHA matrix passed with clean browser runtime guards.
+- Owner: Frontend UX
+- Rationale: reachability, overflow, safe-area and accessibility tests pass; no
+  content, action or Gate B data is unreachable.
+- Deadline: 2026-09-30, before the Gate C browser verdict.
 
-## Accepted non-blocking findings
+### Integration-suite serialization cost
 
-- P2: fixed/sticky action rails may obscure terminal phone/tablet content even though current reachability, safe-area, accessibility and overflow tests pass. Owner Frontend UX; fix or explicitly re-accept before the Gate C browser verdict.
-- P3: Phase 3 forced-viewport baseline filenames overstate some native project coverage. Owner QA Automation; rename or split before the Gate C visual verdict.
-- P3: `next>sharp` remains a scoped compatibility override despite a clean production audit and passing build/image regressions. Owner Platform Dependency; review at the next stable dependency update.
+- Owner: Developer Experience and Database Test Infrastructure
+- Rationale: serial execution prevents cross-suite PostgreSQL migration
+  contention. The exact infrastructure run completed in 45.355 seconds and
+  the umbrella command in 60.275 seconds.
+- Deadline: 2026-09-30; replace broad serialization with equivalent per-worker
+  database/schema isolation before the Gate C release gate if the suite grows.
 
-## Confirmed boundaries
+## Accepted P3 findings
 
-No blocking finding remains in migration safety, authorisation, tenant scoping, idempotency, schedule concurrency, audit/outbox behavior, diff hygiene, dependency audit, accessibility or visual comparison. No tracked secret, QA log, temporary credential or production-enabled demo fallback was found.
+### Phase 3 visual baseline filenames
 
-Hosted GitHub Actions: Not executed because the account Actions allowance is unavailable.
+- Owner: QA Automation
+- Rationale: executed projects/viewports are explicit and images remain valid.
+- Deadline: 2026-09-30, before the Gate C visual verdict.
+
+### Scoped Sharp override
+
+- Owner: Platform Dependency
+- Rationale: the safe pinned version passes audit, build, image and visual
+  regression checks.
+- Deadline: 2026-09-30, at the next stable Next dependency review.
+
+### Swagger UI static-plugin override
+
+- Owner: Platform Dependency
+- Rationale: Swagger, OpenAPI, serialization, typechecking, integration and
+  audit checks pass despite the direct parent's older declared major range.
+- Deadline: 2026-09-30 or the first direct-parent release declaring support,
+  whichever comes first.
+
+### Visual evidence boundary
+
+- Owner: QA Automation
+- Rationale: demo visual fixtures and real persistence E2E prove different,
+  explicitly documented properties.
+- Deadline: 2026-09-30, before the Gate C visual verdict.
+
+### Exact-SHA Turbo cache provenance
+
+- Owner: Release Engineering
+- Rationale: content-addressed cache keys match the source inputs, while
+  critical affected paths also executed through fresh PostgreSQL/Redis and
+  browser suites.
+- Deadline: 2026-09-30; use a forced/no-cache ledger for the Gate C release
+  decision.
+
+Local Gate B validation: PASS
+
+Verdict: PASS

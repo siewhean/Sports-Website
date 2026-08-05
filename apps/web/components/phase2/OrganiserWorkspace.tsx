@@ -5,11 +5,8 @@ import {
   ArrowRight,
   CalendarDots,
   Check,
-  Clock,
-  Copy,
   Gauge,
   LockKey,
-  QrCode,
   ShieldCheck,
   UsersThree,
   Warning,
@@ -24,6 +21,7 @@ import {
   type SurfaceState,
 } from "@/lib/phase2";
 import { SurfaceStatePanel } from "./SurfaceState";
+import { AccessPassManager } from "@/components/phase5/AccessPassManager";
 
 function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
   const shared: Record<OrganiserSection, { title: string; intro: string }> = {
@@ -78,6 +76,7 @@ export function OrganiserWorkspace({
   syncLabel,
   syncState,
   layoutMode = opaqueId("default"),
+  accessApiEnabled = false,
 }: {
   competition?: CompetitionView;
   section?: OrganiserSection;
@@ -90,6 +89,7 @@ export function OrganiserWorkspace({
   syncLabel?: string;
   syncState?: "saved" | "local" | "unavailable" | "offline" | "conflict" | "read-only";
   layoutMode?: "default" | "setup" | "format";
+  accessApiEnabled?: boolean;
 }) {
   const fallbackMeta = sectionMeta(competition, section);
   const meta = {
@@ -99,7 +99,9 @@ export function OrganiserWorkspace({
   const organiserBase = `/organiser/competitions/${competition.id}`;
   const content =
     state === "ready" ? (
-      (sectionContent ?? <SectionContent competition={competition} section={section} />)
+      (sectionContent ?? (
+        <SectionContent competition={competition} section={section} accessApiEnabled={accessApiEnabled} />
+      ))
     ) : (
       <SurfaceStatePanel state={state} />
     );
@@ -170,7 +172,15 @@ export function OrganiserWorkspace({
   );
 }
 
-function SectionContent({ competition, section }: { competition: CompetitionView; section: OrganiserSection }) {
+function SectionContent({
+  competition,
+  section,
+  accessApiEnabled,
+}: {
+  competition: CompetitionView;
+  section: OrganiserSection;
+  accessApiEnabled: boolean;
+}) {
   switch (section) {
     case "control-room":
       return <ControlRoom competition={competition} />;
@@ -191,7 +201,7 @@ function SectionContent({ competition, section }: { competition: CompetitionView
     case "publish":
       return <Publish competition={competition} />;
     case "access":
-      return <Access competition={competition} />;
+      return <Access competition={competition} accessApiEnabled={accessApiEnabled} />;
     case "audit":
       return <Audit competition={competition} />;
   }
@@ -466,47 +476,15 @@ function Publish({ competition }: { competition: CompetitionView }) {
   );
 }
 
-function Access({ competition }: { competition: CompetitionView }) {
+function Access({ competition, accessApiEnabled }: { competition: CompetitionView; accessApiEnabled: boolean }) {
   return (
-    <section className="p2-access">
-      <header>
-        <QrCode />
-        <div>
-          <h2>{phase2Copy.accessPasses}</h2>
-          <p>{phase2Copy.accessPassesBody}</p>
-        </div>
-        <button className="p2-button p2-button--dark" type="button">
-          {phase2Copy.issuePass}
-        </button>
-      </header>
-      {competition.matches.slice(0, 3).map((match) => {
-        const accessPass = competition.accessPasses?.find((pass) => pass.matchId === match.id);
-        return (
-          <div key={match.id}>
-            <span>
-              <strong>{match.label}</strong>
-              <small>
-                {match.home} · {match.away}
-              </small>
-            </span>
-            <code>{accessPass?.displayCode ?? "••••-••"}</code>
-            <span>
-              <Clock />
-              {phase2Copy.expires} {accessPass?.expiresAt ?? match.time}
-            </span>
-            {accessPass?.scoringHref ? (
-              <Link href={accessPass.scoringHref} aria-label={`${phase2Copy.openScoringPrefix} ${match.label}`}>
-                <Copy />
-              </Link>
-            ) : (
-              <span aria-hidden="true">
-                <Copy />
-              </span>
-            )}
-          </div>
-        );
-      })}
-    </section>
+    <AccessPassManager
+      competitionId={competition.id}
+      matches={competition.matches}
+      initialPasses={competition.accessPasses ?? []}
+      canEdit={competition.canEdit ?? false}
+      enableRemoteTakeovers={accessApiEnabled}
+    />
   );
 }
 

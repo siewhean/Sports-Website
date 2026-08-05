@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { dropTestSchema, migrateDatabase } from "../../src/migrations.js";
+import { dropTestSchema, migrateDatabase, migrationAdvisoryLockId } from "../../src/migrations.js";
+import { contendedMigrationTestTimeoutMs } from "./migration-test-settings.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -312,58 +313,67 @@ describeInfrastructure("Phase 3 PostgreSQL guardrails", () => {
     expect(guards.map((row) => row.table_name)).toEqual(expectedTables);
   });
 
-  it("backfills legacy null slot durations before enforcing competition-wide consistency", async () => {
-    const upgradeSchema = `test_phase3_upgrade_${randomUUID().replaceAll("-", "")}`;
-    const upgradeSql = postgres(databaseUrl, {
-      max: 1,
-      onnotice: () => undefined,
-      connection: { search_path: upgradeSchema },
-    });
-    try {
-      await upgradeSql.unsafe(`CREATE SCHEMA "${upgradeSchema}"`);
-      const migrationNames = (await readdir(migrationsDirectory))
-        .filter((name) => /^000[1-8]_[a-z0-9_]+\.sql$/.test(name))
-        .sort();
-      for (const name of migrationNames) {
-        const contents = await readFile(path.join(migrationsDirectory, name), "utf8");
-        await upgradeSql.begin((tx) => tx.unsafe(contents));
-      }
-
-      const account = randomUUID();
-      const organisation = randomUUID();
-      const competition = randomUUID();
-      await upgradeSql`INSERT INTO accounts (id,primary_email,display_name) VALUES (${account},${`${account}@example.test`},'Upgrade')`;
-      await upgradeSql.begin(async (tx) => {
-        await tx`INSERT INTO organisations (id,name,slug) VALUES (${organisation},'Upgrade',${`upgrade-${organisation}`})`;
-        await tx`INSERT INTO organisation_memberships (organisation_id,account_id,role,status) VALUES (${organisation},${account},'owner','active')`;
+  it(
+    "backfills legacy null slot durations before enforcing competition-wide consistency",
+    async () => {
+      const upgradeSchema = `test_phase3_upgrade_${randomUUID().replaceAll("-", "")}`;
+      const upgradeSql = postgres(databaseUrl, {
+        max: 1,
+        onnotice: () => undefined,
+        connection: { search_path: upgradeSchema },
       });
-      await upgradeSql`INSERT INTO competitions (id,organisation_id,created_by,name,slug,timezone,starts_on,ends_on)
-        VALUES (${competition},${organisation},${account},'Upgrade Cup',${`upgrade-cup-${competition}`},'Asia/Singapore','2027-01-01','2027-01-02')`;
-      await upgradeSql`INSERT INTO competition_sport_settings (competition_id,slot_minutes,updated_by)
-        VALUES (${competition},30,${account})`;
-      await upgradeSql`INSERT INTO playing_areas (competition_id,name,slot_minutes)
-        VALUES (${competition},'Legacy Court',NULL)`;
+      try {
+        await upgradeSql.unsafe(`CREATE SCHEMA "${upgradeSchema}"`);
+        const migrationNames = (await readdir(migrationsDirectory))
+          .filter((name) => /^000[1-8]_[a-z0-9_]+\.sql$/.test(name))
+          .sort();
+        await upgradeSql`SELECT pg_advisory_lock(${migrationAdvisoryLockId})`;
+        try {
+          for (const name of migrationNames) {
+            const contents = await readFile(path.join(migrationsDirectory, name), "utf8");
+            await upgradeSql.begin((tx) => tx.unsafe(contents));
+          }
+        } finally {
+          await upgradeSql`SELECT pg_advisory_unlock(${migrationAdvisoryLockId})`;
+        }
 
-      const alignment = await readFile(path.join(migrationsDirectory, "0009_phase3_runtime_alignment.sql"), "utf8");
-      await upgradeSql.begin((tx) => tx.unsafe(alignment));
-      const areas = await upgradeSql<{ slot_minutes: number }[]>`
-        SELECT slot_minutes FROM playing_areas WHERE competition_id=${competition}`;
-      expect(areas).toEqual([{ slot_minutes: 30 }]);
-      const nullability = await upgradeSql<{ is_nullable: string }[]>`
-        SELECT is_nullable FROM information_schema.columns
-        WHERE table_schema=${upgradeSchema} AND table_name='playing_areas' AND column_name='slot_minutes'`;
-      expect(nullability[0]?.is_nullable).toBe("NO");
-      await upgradeSql`INSERT INTO playing_areas (competition_id,name,slot_minutes)
-        VALUES (${competition},'Court 2',30)`;
-      await expect(
-        upgradeSql`INSERT INTO playing_areas (competition_id,name,slot_minutes)
-          VALUES (${competition},'Court 3',45)`,
-      ).rejects.toThrow(/one competition slot duration/);
-    } finally {
-      await upgradeSql.end({ timeout: 2 });
-      await dropTestSchema(databaseUrl, upgradeSchema);
-    }
-  });
+        const account = randomUUID();
+        const organisation = randomUUID();
+        const competition = randomUUID();
+        await upgradeSql`INSERT INTO accounts (id,primary_email,display_name) VALUES (${account},${`${account}@example.test`},'Upgrade')`;
+        await upgradeSql.begin(async (tx) => {
+          await tx`INSERT INTO organisations (id,name,slug) VALUES (${organisation},'Upgrade',${`upgrade-${organisation}`})`;
+          await tx`INSERT INTO organisation_memberships (organisation_id,account_id,role,status) VALUES (${organisation},${account},'owner','active')`;
+        });
+        await upgradeSql`INSERT INTO competitions (id,organisation_id,created_by,name,slug,timezone,starts_on,ends_on)
+          VALUES (${competition},${organisation},${account},'Upgrade Cup',${`upgrade-cup-${competition}`},'Asia/Singapore','2027-01-01','2027-01-02')`;
+        await upgradeSql`INSERT INTO competition_sport_settings (competition_id,slot_minutes,updated_by)
+          VALUES (${competition},30,${account})`;
+        await upgradeSql`INSERT INTO playing_areas (competition_id,name,slot_minutes)
+          VALUES (${competition},'Legacy Court',NULL)`;
+
+        const alignment = await readFile(path.join(migrationsDirectory, "0009_phase3_runtime_alignment.sql"), "utf8");
+        await upgradeSql.begin((tx) => tx.unsafe(alignment));
+        const areas = await upgradeSql<{ slot_minutes: number }[]>`
+          SELECT slot_minutes FROM playing_areas WHERE competition_id=${competition}`;
+        expect(areas).toEqual([{ slot_minutes: 30 }]);
+        const nullability = await upgradeSql<{ is_nullable: string }[]>`
+          SELECT is_nullable FROM information_schema.columns
+          WHERE table_schema=${upgradeSchema} AND table_name='playing_areas' AND column_name='slot_minutes'`;
+        expect(nullability[0]?.is_nullable).toBe("NO");
+        await upgradeSql`INSERT INTO playing_areas (competition_id,name,slot_minutes)
+          VALUES (${competition},'Court 2',30)`;
+        await expect(
+          upgradeSql`INSERT INTO playing_areas (competition_id,name,slot_minutes)
+            VALUES (${competition},'Court 3',45)`,
+        ).rejects.toThrow(/one competition slot duration/);
+      } finally {
+        await upgradeSql.end({ timeout: 2 });
+        await dropTestSchema(databaseUrl, upgradeSchema);
+      }
+    },
+    contendedMigrationTestTimeoutMs,
+  );
 
   it("serializes the free limit across divisions and preserves entries on upgrade", async () => {
     const value = await world();

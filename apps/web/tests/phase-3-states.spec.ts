@@ -1,15 +1,19 @@
 import { expect, test } from "@playwright/test";
-import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-test("unsupported settings commands never report simulated success", async ({ page }) => {
+test("an unavailable settings service never reports simulated success", async ({ page }) => {
+  allowConsoleFailure(page, /server responded with a status of 503/);
   await page.goto("/organiser/competitions/singapore-open/settings");
   await dismissConsent(page);
   await page.getByLabel("Match slot").fill("36");
   await expect(page.getByText("Local draft — not saved")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Saving unavailable" })).toBeDisabled();
+  const save = page.getByRole("button", { name: "Save settings" });
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(page.getByText("The authenticated settings command failed. No success was recorded.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy previous" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Save as my default" })).toBeDisabled();
   await expect(page.getByText("Settings saved as a new revision.")).toHaveCount(0);
@@ -29,7 +33,7 @@ test("settings header reports document truth and scope links expose the current 
   await expect(
     page.getByText("Set the versioned competition baseline, then review any division-specific overrides."),
   ).toBeVisible();
-  await expect(page.getByText("Revision loaded 4 · saving unavailable")).toBeVisible();
+  await expect(page.getByText("Saved revision 4")).toBeVisible();
   await expect(page.getByText("Draft synced 18 seconds ago")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Competition", exact: true })).toHaveAttribute("aria-current", "page");
 

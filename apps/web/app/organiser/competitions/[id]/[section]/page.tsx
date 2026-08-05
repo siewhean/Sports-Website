@@ -1,25 +1,31 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { CapacityEditor } from "@/components/phase3/CapacityEditor";
+import { EntriesEditor } from "@/components/phase3/EntriesEditor";
 import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
+import { gateCC4Copy } from "@/lib/gate-c-c4";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase3CapacityCopy, phase3CapacityMachine } from "@/lib/phase3-capacity";
 import { getCapacityDocument } from "@/lib/phase3-capacity.server";
+import { phase3EntriesCopy, phase3EntriesMachine, totalActiveEntries } from "@/lib/phase3-entries";
 import { phase3ResultsCopy, phase3ResultsMachine, resultVersionLabel } from "@/lib/phase3-results";
 import { getResultsDocument } from "@/lib/phase3-results.server";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 export default async function CompetitionSectionPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string; section: string }>;
-  searchParams: Promise<{ state?: string }>;
+  searchParams: Promise<{ state?: string; match?: string }>;
 }) {
   const { id, section } = await params;
   const query = await searchParams;
   if (!isOrganiserSection(section)) notFound();
   const result = await getOrganiserCompetitionView(id);
+  if (result.state === "unauthenticated") redirect("/api/v1/identity/authorize");
   if (result.state === "notFound") notFound();
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase2Copy.errorBody);
@@ -49,6 +55,33 @@ export default async function CompetitionSectionPage({
       />
     );
   }
+  if (section === phase3EntriesMachine.section) {
+    const divisions = (result.competition.divisions ?? []).map((division) => ({
+      id: division.id,
+      name: division.name,
+      entryLimit: division.entryLimit ?? 16,
+      entries: division.entries ?? [],
+    }));
+    return (
+      <OrganiserWorkspace
+        competition={result.competition}
+        section={phase3EntriesMachine.section}
+        sectionAction={null}
+        pageTitle={phase3EntriesCopy.title}
+        pageIntro={phase3EntriesCopy.intro}
+        pageEyebrow={phase3EntriesCopy.eyebrow}
+        syncLabel={`${totalActiveEntries(divisions)} / 16`}
+        syncState={phase3CapacityMachine.saved}
+        sectionContent={
+          <EntriesEditor
+            competitionId={result.competition.id}
+            initialDivisions={divisions}
+            canEdit={result.competition.canEdit ?? false}
+          />
+        }
+      />
+    );
+  }
   if (section === phase3ResultsMachine.section) {
     const resultVersionMatch = /(?:^|\s)res_(\d+)(?:$|\s)/.exec(result.competition.publicationRevision);
     const results = await getResultsDocument({
@@ -64,7 +97,11 @@ export default async function CompetitionSectionPage({
       <OrganiserWorkspace
         competition={result.competition}
         section={phase3ResultsMachine.section}
-        sectionAction={null}
+        sectionAction={
+          <Link href={`/organiser/competitions/${encodeURIComponent(result.competition.id)}/repairs`}>
+            {gateCC4Copy.openRepairs}
+          </Link>
+        }
         pageTitle={phase3ResultsCopy.title}
         pageIntro={phase3ResultsCopy.intro}
         pageEyebrow={phase3ResultsCopy.eyebrow}
@@ -86,9 +123,18 @@ export default async function CompetitionSectionPage({
                   ? phase3ResultsMachine.saved
                   : phase3ResultsMachine.unavailable
         }
-        sectionContent={<ResultsWorkspace document={results} />}
+        sectionContent={
+          <ResultsWorkspace
+            document={results}
+            matches={result.competition.matches}
+            initialMatchId={query.match}
+            enableRemoteOperations={!demoFixturesEnabled()}
+          />
+        }
       />
     );
   }
-  return <OrganiserWorkspace competition={result.competition} section={section} />;
+  return (
+    <OrganiserWorkspace competition={result.competition} section={section} accessApiEnabled={!demoFixturesEnabled()} />
+  );
 }
