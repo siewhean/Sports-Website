@@ -155,6 +155,17 @@ export class Phase3Runtime {
     return this.sql.begin(operation);
   }
 
+  private async persistedJsonHash(tx: PostgresJsSql, value: unknown): Promise<string> {
+    const row = required(
+      await tx.unsafe<{ definition_hash: string }>(
+        `SELECT encode(pg_catalog.sha256(convert_to(phase3_canonical_jsonb($1::jsonb),'UTF8')),'hex') AS definition_hash`,
+        [value],
+      ),
+      "Canonical JSON hash could not be calculated",
+    );
+    return row.definition_hash;
+  }
+
   private async mutationReplay<T>(
     tx: PostgresJsSql,
     organisationId: string,
@@ -334,7 +345,7 @@ export class Phase3Runtime {
       ).count;
       if (count > 0) throw new ApiError(409, "SPORT_PACK_NOT_ACTIVE", "No active sport pack version exists");
       const bootstrap = this.domain.sportPack(sportCode);
-      const bootstrapHash = this.domain.hash(bootstrap);
+      const bootstrapHash = await this.persistedJsonHash(tx, bootstrap);
       await tx.unsafe(
         `INSERT INTO sport_pack_versions
          (sport_code,version,schema_version,definition,definition_hash,created_by,status,revision,activated_at,activated_by)
@@ -354,7 +365,10 @@ export class Phase3Runtime {
       };
     }
     const pack = decodedJson(row.definition);
-    if (this.domain.validateSportPack(pack).length || this.domain.hash(pack) !== row.definition_hash) {
+    if (
+      this.domain.validateSportPack(pack).length ||
+      (await this.persistedJsonHash(tx, pack)) !== row.definition_hash
+    ) {
       throw new ApiError(409, "SPORT_PACK_CORRUPT", "The active sport pack failed immutable validation");
     }
     return { ...row, pack };
