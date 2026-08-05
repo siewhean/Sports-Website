@@ -283,14 +283,27 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       SELECT encode(pg_catalog.sha256(convert_to(phase3_canonical_jsonb(${client.json(normalized as never)}::jsonb),'UTF8')),'hex') AS hash`;
     expect(phase3DomainAdapter.hash(value)).toBe(rows[0]?.hash);
   });
-  it("pins PostgreSQL sport-pack canonical key ordering to the C collation", async () => {
+  it("pins PostgreSQL sport-pack canonical key ordering to the C collation without changing shared hashes", async () => {
     const definition = SPORT_PACKS.canoe_polo;
-    const rows = await client<{ hash: string }[]>`
+    const localeSensitive = { Ångström: { z: 1 }, Zulu: true, alpha: ["x", "y"] };
+    const rows = await client<{ hash: string; shared_hash: string; locale_hash: string; function_body: string }[]>`
       SELECT encode(
+        pg_catalog.sha256(convert_to(phase3_canonical_sport_pack_jsonb(${client.json(definition)}::jsonb),'UTF8')),
+        'hex'
+      ) AS hash,
+      encode(
         pg_catalog.sha256(convert_to(phase3_canonical_jsonb(${client.json(definition)}::jsonb),'UTF8')),
         'hex'
-      ) AS hash`;
+      ) AS shared_hash,
+      encode(
+        pg_catalog.sha256(convert_to(phase3_canonical_sport_pack_jsonb(${client.json(localeSensitive)}::jsonb),'UTF8')),
+        'hex'
+      ) AS locale_hash,
+      pg_get_functiondef('phase3_canonical_sport_pack_jsonb(jsonb)'::regprocedure) AS function_body`;
     expect(rows[0]?.hash).toBe(phase3DomainAdapter.hash(definition));
+    expect(rows[0]?.shared_hash).toBe(phase3DomainAdapter.hash(definition));
+    expect(rows[0]?.locale_hash).toBe(phase3DomainAdapter.hash(localeSensitive));
+    expect(rows[0]?.function_body).toContain('COLLATE "C"');
   });
   it.each(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const)(
     "creates %s with a database-verified immutable sport-pack hash",
