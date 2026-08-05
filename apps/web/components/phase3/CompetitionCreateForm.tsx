@@ -52,6 +52,7 @@ export function CompetitionCreateForm() {
   const [organisations, setOrganisations] = useState<CompetitionOrganisationOption[]>([]);
   const [organisationsLoading, setOrganisationsLoading] = useState(true);
   const [organisationsError, setOrganisationsError] = useState("");
+  const [organisationsAuthRequired, setOrganisationsAuthRequired] = useState(false);
   const [organisationLoadAttempt, setOrganisationLoadAttempt] = useState(0);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<CompetitionCreateField, string>>>({});
   const [commandError, setCommandError] = useState("");
@@ -66,6 +67,7 @@ export function CompetitionCreateForm() {
     void (async () => {
       setOrganisationsLoading(true);
       setOrganisationsError("");
+      setOrganisationsAuthRequired(false);
       try {
         const response = await fetch("/api/phase3/competitions", {
           cache: phase3CompetitionCreateMachine.noStore,
@@ -74,6 +76,7 @@ export function CompetitionCreateForm() {
         const payload: unknown = await response.json().catch(() => null);
         const options = response.ok ? parseCompetitionOrganisationOptions(payload) : null;
         if (!options) {
+          setOrganisationsAuthRequired(response.status === 401 || response.status === 403);
           setOrganisationsError(messages.organiserCreate.organisationsFailed);
           return;
         }
@@ -279,13 +282,20 @@ export function CompetitionCreateForm() {
               </p>
             ) : null}
             {organisationsError ? (
-              <button
-                className={styles.retry}
-                type="button"
-                onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
-              >
-                {messages.organiserCreate.retryOrganisations}
-              </button>
+              <>
+                <button
+                  className={styles.retry}
+                  type="button"
+                  onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
+                >
+                  {messages.organiserCreate.retryOrganisations}
+                </button>
+                {organisationsAuthRequired ? (
+                  <a className={styles.retry} href="/api/v1/identity/authorize">
+                    {messages.organiserCreate.signInToLoadOrganisations}
+                  </a>
+                ) : null}
+              </>
             ) : null}
             <p className={styles.live} role="status">
               {organisationsLoading ? messages.organiserCreate.loadingOrganisations : ""}

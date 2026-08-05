@@ -137,3 +137,23 @@ test("an unavailable organisation service keeps creation disabled and offers ret
   await expect(page.getByRole("button", { name: "Retry organisation list" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Create competition" })).toBeDisabled();
 });
+
+test("an unauthenticated organiser can start the MATCHDAY sign-in flow from competition creation", async ({ page }) => {
+  allowConsoleFailure(page, /server responded with a status of 401/);
+  await page.route("**/api/phase3/competitions", async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "AUTH_REQUIRED", message: "Sign in required" } }),
+    });
+  });
+
+  await page.goto("/organiser/competitions/new");
+  await dismissConsent(page);
+
+  await expect(page.getByRole("link", { name: "Sign in to load organisations" })).toHaveAttribute(
+    "href",
+    "/api/v1/identity/authorize",
+  );
+  await expect(page.getByRole("button", { name: "Create competition" })).toBeDisabled();
+});

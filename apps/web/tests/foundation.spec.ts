@@ -70,6 +70,12 @@ test("public home keeps its headline wide and preserves reduced-motion behavior"
   await expect(page.locator("[data-marquee-track]")).toHaveCSS("transform", "none");
 });
 
+test("the MATCHDAY sign-in action starts the server-owned identity flow", async ({ page }) => {
+  await page.goto("/");
+  await rejectOptionalConsent(page);
+  await expect(page.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/api/v1/identity/authorize");
+});
+
 test("organiser, official and public shells expose role-specific primary actions", async ({ page }) => {
   await page.goto("/organiser");
   await rejectOptionalConsent(page);

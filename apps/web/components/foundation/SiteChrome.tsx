@@ -19,7 +19,7 @@ export function SiteHeader({ inverse = false }: { inverse?: boolean }) {
           </Link>
         ))}
       </nav>
-      <Link className="site-header__access" href="/organiser">
+      <Link className="site-header__access" href="/api/v1/identity/authorize" prefetch={false}>
         {messages.navigation.signIn}
       </Link>
     </header>
