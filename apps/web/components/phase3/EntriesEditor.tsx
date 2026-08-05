@@ -15,6 +15,7 @@ import styles from "./EntriesEditor.module.css";
 type ErrorEnvelope = { error?: { code?: unknown; message?: unknown } };
 type PendingCommand = { fingerprint: string; key: string };
 type CommandResult = { payload: unknown | null; clearKey: boolean };
+type PendingDelete = { divisionId: string; entryId: string; entryName: string; revision: number };
 
 function responseMessage(status: number, payload: unknown): string {
   if (status === 401 || status === 403) return phase3EntriesCopy.authRequired;
@@ -42,6 +43,8 @@ export function EntriesEditor({
   const commandRef = useRef<string | null>(null);
   const divisionCommandRef = useRef<PendingCommand | null>(null);
   const entryCommandRefs = useRef(new Map<string, PendingCommand>());
+  const deleteDialogRef = useRef<HTMLDialogElement>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const activeCount = totalActiveEntries(divisions);
 
   async function runCommand(commandId: string, operation: () => Promise<Response>): Promise<CommandResult> {
@@ -223,6 +226,25 @@ export function EntriesEditor({
     router.refresh();
   }
 
+  function openDeleteDialog(deleteRequest: PendingDelete) {
+    setPendingDelete(deleteRequest);
+    queueMicrotask(() => {
+      if (!deleteDialogRef.current?.open) deleteDialogRef.current?.showModal();
+    });
+  }
+
+  function cancelDelete() {
+    deleteDialogRef.current?.close();
+  }
+
+  function confirmDelete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const request = pendingDelete;
+    if (!request) return;
+    deleteDialogRef.current?.close();
+    void removeEntry(request.divisionId, request.entryId, request.revision);
+  }
+
   return (
     <div className={styles.workspace}>
       {!canEdit ? (
@@ -329,7 +351,14 @@ export function EntriesEditor({
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => void removeEntry(division.id, entry.id, entry.revision)}
+                            onClick={() =>
+                              openDeleteDialog({
+                                divisionId: division.id,
+                                entryId: entry.id,
+                                entryName: entry.name,
+                                revision: entry.revision,
+                              })
+                            }
                           >
                             {phase3EntriesCopy.removeEntry}
                           </button>
@@ -365,6 +394,31 @@ export function EntriesEditor({
           );
         })}
       </div>
+
+      <dialog
+        ref={deleteDialogRef}
+        onClose={() => setPendingDelete(null)}
+        aria-describedby="entry-delete-description"
+        aria-labelledby="entry-delete-title"
+      >
+        <form onSubmit={confirmDelete}>
+          <h2 id="entry-delete-title">{phase3EntriesCopy.confirmRemoveEntry}</h2>
+          <p id="entry-delete-description">
+            {pendingDelete
+              ? phase3EntriesCopy.removeEntryDescription.replace(
+                  phase3EntriesMachine.entryNameToken,
+                  pendingDelete.entryName,
+                )
+              : ""}
+          </p>
+          <button type="button" onClick={cancelDelete} disabled={busy}>
+            {phase3EntriesCopy.cancel}
+          </button>
+          <button type="submit" disabled={busy || !pendingDelete}>
+            {phase3EntriesCopy.removeEntry}
+          </button>
+        </form>
+      </dialog>
 
       <p className={error ? styles.error : styles.status} role={error ? "alert" : "status"} aria-live="polite">
         {error || message}

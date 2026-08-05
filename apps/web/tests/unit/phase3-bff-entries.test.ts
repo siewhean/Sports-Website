@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import {
@@ -50,6 +51,18 @@ afterEach(() => {
 });
 
 describe("division and entry BFF", () => {
+  it("requires an accessible confirmation before removing an entry", async () => {
+    const source = await readFile(new URL("../../components/phase3/EntriesEditor.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain('aria-labelledby="entry-delete-title"');
+    expect(source).toContain('aria-describedby="entry-delete-description"');
+    expect(source).toContain("openDeleteDialog({");
+    expect(source).toContain("function confirmDelete");
+    expect(source.indexOf("void removeEntry(request.divisionId")).toBeGreaterThan(
+      source.indexOf("function confirmDelete"),
+    );
+  });
+
   it("creates a second division through the authenticated CSRF boundary", async () => {
     const body = { name: "Women", code: "WOMEN", entry_limit: 16, idempotency_key: idempotencyKey };
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

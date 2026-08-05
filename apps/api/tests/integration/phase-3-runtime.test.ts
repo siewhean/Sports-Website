@@ -1196,6 +1196,86 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
     expect(counts).toEqual({ revisions: 2, evidence: 2 });
   });
 
+  it("serializes an entry edit with concurrent format creation", async () => {
+    const actor = { accountId };
+    const competition = await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Entry format fence cup",
+        slug: `entry-format-fence-${randomUUID()}`,
+        sportCode: "badminton",
+        venue: "Hall",
+        address: "3 Fence Road",
+        countryCode: "SG",
+        startsOn: "2027-04-01",
+        endsOn: "2027-04-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+    const division = (await runtime.createDivision(
+      actor,
+      competition.id,
+      { name: "Open", entryLimit: 8 },
+      randomUUID(),
+      randomUUID(),
+    )) as { id: string };
+    const entries = await Promise.all(
+      Array.from({ length: 8 }, async (_, index) =>
+        runtime.mutateEntry(
+          actor,
+          competition.id,
+          division.id,
+          { action: "create", name: `Before format ${index + 1}`, seed: index + 1 },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ),
+    );
+    const entry = entries[0] as { id: string; revision: number };
+    if (!entry) throw new Error("Expected entry");
+
+    const [formatResult, updateResult] = await Promise.allSettled([
+      runtime.createFormatRevision(
+        actor,
+        competition.id,
+        division.id,
+        { ...createRoundRobinFormatGraph(8), id: `entry-format-fence-${randomUUID()}` },
+        randomUUID(),
+      ),
+      runtime.updateEntry(
+        actor,
+        competition.id,
+        division.id,
+        entry.id,
+        { revision: entry.revision, name: "After format", seed: null },
+        randomUUID(),
+        randomUUID(),
+      ),
+    ]);
+
+    expect(formatResult.status).toBe("fulfilled");
+    if (updateResult.status === "fulfilled") {
+      expect(updateResult.value).toMatchObject({ id: entry.id, name: "After format", revision: entry.revision + 1 });
+    } else {
+      expect(updateResult.reason).toMatchObject({ statusCode: 409, code: "ENTRY_MUTATION_LOCKED_BY_FORMAT" });
+    }
+    const persisted = required(
+      await client<{ name: string; revision: number }[]>`
+        SELECT name,revision::int FROM division_entries WHERE id=${entry.id}`,
+    );
+    expect(persisted).toEqual(
+      updateResult.status === "fulfilled"
+        ? { name: "After format", revision: entry.revision + 1 }
+        : { name: "Before format 1", revision: entry.revision },
+    );
+    await expect(
+      runtime.deleteEntry(actor, competition.id, division.id, entry.id, persisted.revision, randomUUID(), randomUUID()),
+    ).rejects.toMatchObject({ statusCode: 409, code: "ENTRY_MUTATION_LOCKED_BY_FORMAT" });
+  });
+
   it("validates the complete competition patch and lifecycle contract", async () => {
     const actor = { accountId };
     await expect(
