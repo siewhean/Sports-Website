@@ -2,7 +2,7 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookieHostMatches } from "./phase2-organiser";
+import { requestCanForwardSessionCookie } from "./phase3-origin";
 import { requestOriginMatchesHost } from "./phase3-origin";
 
 function apiBaseUrl(): URL | null {
@@ -17,7 +17,8 @@ function apiBaseUrl(): URL | null {
 }
 
 function sessionCookie(request: NextRequest, apiUrl: URL): string | null {
-  if (!cookieHostMatches(request.headers.get("host"), apiUrl.hostname)) return null;
+  if (!requestCanForwardSessionCookie(request.headers, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN))
+    return null;
   for (const name of ["__Host-matchday_session", "matchday_session"] as const) {
     const value = request.cookies.get(name)?.value;
     if (value && !/[\u0000-\u001f\u007f;]/u.test(value)) return `${name}=${value}`;

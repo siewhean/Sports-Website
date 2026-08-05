@@ -3,7 +3,7 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import { SPORT_PACKS, type SportId, type SportPackOverride } from "@matchday/domain";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { requestCanForwardSessionCookie } from "@/lib/phase3-origin";
 import {
   parseSportSettingsResponse,
   type SportSettingsContext,
@@ -106,7 +106,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookie(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  if (!requestCanForwardSessionCookie(requestHeaders, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN)) return null;
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = store.get(name)?.value;
