@@ -28,6 +28,7 @@ export const phase3EntriesMachine = {
   divisionLimitField: "division-limit",
   entryNameField: "entry-name",
   entrySeedField: "entry-seed",
+  entryNameToken: "{entryName}",
   teamEntryType: "team" as const,
   freePlanMessageFragment: "free plan",
 };
@@ -47,6 +48,9 @@ export const phase3EntriesCopy = {
   optionalSeed: "Seed (optional)",
   editEntry: "Edit",
   removeEntry: "Remove",
+  confirmRemoveEntry: "Remove entry?",
+  removeEntryDescription: "Remove {entryName} from this division. This cannot be undone.",
+  cancel: "Cancel",
   saveEntry: "Save changes",
   entryUpdated: "Entry updated.",
   entryRemoved: "Entry removed.",

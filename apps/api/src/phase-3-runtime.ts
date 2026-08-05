@@ -818,7 +818,10 @@ export class Phase3Runtime {
       if (replay) return replay;
       this.assertMutable(competition);
       required(
-        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId]),
+        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`, [
+          divisionId,
+          competitionId,
+        ]),
         "Division not found",
       );
       await this.assertEntriesEditable(tx, competitionId, divisionId);
@@ -840,15 +843,14 @@ export class Phase3Runtime {
         ),
       );
       const rows = await tx.unsafe<Record<string, unknown>>(
-        `UPDATE division_entries SET name=COALESCE($5,name),seed=CASE WHEN $6 THEN $7 ELSE seed END,
-          metadata=COALESCE($8::jsonb,metadata),availability=COALESCE($9::jsonb,availability),revision=revision+1,updated_at=$10
+        `UPDATE division_entries SET name=COALESCE($4,name),seed=CASE WHEN $5 THEN $6::int ELSE seed END,
+          metadata=COALESCE($7::jsonb,metadata),availability=COALESCE($8::jsonb,availability),revision=revision+1,updated_at=$9
          WHERE id=$1 AND division_id=$2 AND revision=$3 AND status IN ('confirmed','active')
          RETURNING id,division_id,name,entry_type,status,seed,metadata,availability,revision`,
         [
           entryId,
           divisionId,
           input.revision,
-          competitionId,
           input.name?.trim() ?? null,
           input.seed !== undefined,
           input.seed ?? null,
@@ -895,7 +897,10 @@ export class Phase3Runtime {
       if (replay) return replay;
       this.assertMutable(competition);
       required(
-        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId]),
+        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`, [
+          divisionId,
+          competitionId,
+        ]),
         "Division not found",
       );
       await this.assertEntriesEditable(tx, competitionId, divisionId);
@@ -1157,7 +1162,7 @@ export class Phase3Runtime {
         ]),
         "Division not found",
       );
-      await this.assertEntriesEditable(tx, competitionId, divisionId);
+      if (input.action === "create") await this.assertEntriesEditable(tx, competitionId, divisionId);
       const current = await this.domainCompetition(tx, competitionId);
       const plan = required(
         await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(`SELECT plan_tier FROM competitions WHERE id=$1`, [
