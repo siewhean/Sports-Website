@@ -153,7 +153,9 @@ test("an unauthenticated organiser can start the MATCHDAY sign-in flow from comp
 
   await expect(page.getByRole("link", { name: "Sign in to load organisations" })).toHaveAttribute(
     "href",
-    "/api/v1/identity/authorize",
+    `/api/v1/identity/authorize?return_to=${encodeURIComponent(
+      `${new URL(page.url()).origin}/organiser/competitions/new`,
+    )}`,
   );
   await expect(page.getByRole("button", { name: "Create competition" })).toBeDisabled();
 });

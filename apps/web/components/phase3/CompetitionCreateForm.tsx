@@ -48,6 +48,12 @@ function upstreamMessage(payload: unknown, fallback: string): string {
 
 export function CompetitionCreateForm() {
   const router = useRouter();
+  const signInToCreateCompetitionHref =
+    typeof window === "undefined"
+      ? "/api/v1/identity/authorize"
+      : `/api/v1/identity/authorize?return_to=${encodeURIComponent(
+          `${window.location.origin}/organiser/competitions/new`,
+        )}`;
   const [draft, setDraft] = useState(initialDraft);
   const [organisations, setOrganisations] = useState<CompetitionOrganisationOption[]>([]);
   const [organisationsLoading, setOrganisationsLoading] = useState(true);
@@ -291,7 +297,7 @@ export function CompetitionCreateForm() {
                   {messages.organiserCreate.retryOrganisations}
                 </button>
                 {organisationsAuthRequired ? (
-                  <a className={styles.retry} href="/api/v1/identity/authorize">
+                  <a className={styles.retry} href={signInToCreateCompetitionHref}>
                     {messages.organiserCreate.signInToLoadOrganisations}
                   </a>
                 ) : null}
