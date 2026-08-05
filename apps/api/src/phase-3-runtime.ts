@@ -23,6 +23,18 @@ export type Phase3OrganisationOption = {
   role: "owner" | "organiser";
 };
 
+export type Phase3OrganiserCompetition = {
+  id: string;
+  name: string;
+  slug: string;
+  sport_code: Phase3SportCode;
+  status: string;
+  starts_on: string;
+  ends_on: string;
+  organisation_name: string;
+  membership_role: "owner" | "organiser" | "viewer";
+};
+
 export type Phase3CompetitionCreateInput = {
   organisationId: string;
   name: string;
@@ -272,6 +284,20 @@ export class Phase3Runtime {
          AND membership.status='active'
          AND membership.role IN ('owner','organiser')
        ORDER BY lower(organisation.name),organisation.id`,
+      [actor.accountId],
+    );
+  }
+
+  async listOrganiserCompetitions(actor: Phase3Actor): Promise<readonly Phase3OrganiserCompetition[]> {
+    return this.sql.unsafe<Phase3OrganiserCompetition>(
+      `SELECT competition.id,competition.name,competition.slug,competition.sport_code,competition.status,
+              competition.starts_on::text,competition.ends_on::text,organisation.name AS organisation_name,
+              membership.role AS membership_role
+       FROM competitions competition
+       JOIN organisation_memberships membership ON membership.organisation_id=competition.organisation_id
+       JOIN organisations organisation ON organisation.id=competition.organisation_id
+       WHERE membership.account_id=$1 AND membership.status='active'
+       ORDER BY competition.starts_on DESC,competition.created_at DESC,competition.id DESC`,
       [actor.accountId],
     );
   }

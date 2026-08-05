@@ -36,6 +36,19 @@ function runtime() {
     listWritableOrganisations: vi.fn(async () => [
       { id: randomUUID(), name: "Phase 3 Organisation", role: "owner" as const },
     ]),
+    listOrganiserCompetitions: vi.fn(async () => [
+      {
+        id: randomUUID(),
+        name: "Phase 3 Cup",
+        slug: "phase-3-cup",
+        sport_code: "badminton" as const,
+        status: "draft",
+        starts_on: "2027-01-01",
+        ends_on: "2027-01-02",
+        organisation_name: "Phase 3 Organisation",
+        membership_role: "owner" as const,
+      },
+    ]),
     readCompetition: vi.fn(async (_actor, id: string) => ({ id, sport_code: "badminton", revision: 1 })),
     createCompetition: vi.fn(async () => ({ id: randomUUID(), sport_code: "badminton", status: "draft", revision: 1 })),
     mutateCompetition: vi.fn(async () => ({ revision: 2 })),
@@ -234,6 +247,29 @@ describe("Phase 3 authenticated route boundary", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([expect.objectContaining({ name: "Phase 3 Organisation", role: "owner" })]);
     expect(phase3Runtime.listWritableOrganisations).toHaveBeenCalledOnce();
+  });
+
+  it("lists only competitions accessible to the authenticated organiser", async () => {
+    const phase3Runtime = runtime();
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: identityRuntime(),
+      phase3Runtime,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/competitions",
+      headers: { cookie: "matchday_session=session" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([
+      expect.objectContaining({ name: "Phase 3 Cup", membership_role: "owner", sport_code: "badminton" }),
+    ]);
+    expect(phase3Runtime.listOrganiserCompetitions).toHaveBeenCalledOnce();
   });
 
   it("requires same-origin and CSRF for mutations and permits authenticated reads", async () => {

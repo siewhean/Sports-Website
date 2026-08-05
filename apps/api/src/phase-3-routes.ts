@@ -33,6 +33,22 @@ const OrganisationOptionsResponse = Type.Array(
     { additionalProperties: false },
   ),
 );
+const OrganiserCompetitionListResponse = Type.Array(
+  Type.Object(
+    {
+      id: Id,
+      name: Type.String({ minLength: 1 }),
+      slug: Type.String({ minLength: 1 }),
+      sport_code: Sport,
+      status: Type.String({ minLength: 1 }),
+      starts_on: Type.String({ format: "date" }),
+      ends_on: Type.String({ format: "date" }),
+      organisation_name: Type.String({ minLength: 1 }),
+      membership_role: Type.Union([Type.Literal("owner"), Type.Literal("organiser"), Type.Literal("viewer")]),
+    },
+    { additionalProperties: false },
+  ),
+);
 const JsonObject = Type.Record(Type.String(), Type.Unknown());
 const SportSettingsResponse = Type.Object(
   {
@@ -395,6 +411,18 @@ export async function registerPhase3Routes(
       },
     },
     async (request) => options.runtime.listWritableOrganisations(await readActor(request)),
+  );
+
+  app.get(
+    "/api/v1/competitions",
+    {
+      schema: {
+        security: [{ sessionCookie: [] }],
+        response: { 200: OrganiserCompetitionListResponse, 401: ErrorResponse },
+        tags: ["phase3-competitions"],
+      },
+    },
+    async (request) => options.runtime.listOrganiserCompetitions(await readActor(request)),
   );
 
   app.get<{ Params: { competitionId: string } }>(

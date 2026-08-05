@@ -78,6 +78,11 @@ export const messages = {
     createCompetition: "Create competition",
     fixturesTitle: "Upcoming fixtures",
     fixturesEmpty: "Fixtures will appear after the schedule is generated.",
+    yourCompetitions: "Your competitions",
+    competitionsIntro: "Open a competition you organise, or create a new one.",
+    noCompetitions: "You do not have any competitions yet.",
+    openCompetition: "Open competition",
+    competitionsUnavailable: "Your competitions could not be loaded. Try again.",
   },
   organiserCreate: {
     title: "Create competition",
