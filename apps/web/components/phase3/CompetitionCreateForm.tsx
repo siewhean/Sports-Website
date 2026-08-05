@@ -46,6 +46,22 @@ function upstreamMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+async function csrfHeaders(): Promise<HeadersInit> {
+  const response = await fetch("/api/v1/identity/me", { cache: phase3CompetitionCreateMachine.noStore });
+  const payload: unknown = await response.json().catch(() => null);
+  if (
+    !response.ok ||
+    !payload ||
+    typeof payload !== "object" ||
+    !("csrf_token" in payload) ||
+    typeof payload.csrf_token !== "string" ||
+    payload.csrf_token.length < 16
+  ) {
+    throw new Error(phase3CompetitionCreateMachine.authRequired);
+  }
+  return { "x-csrf-token": payload.csrf_token };
+}
+
 export function CompetitionCreateForm() {
   const router = useRouter();
   const [draft, setDraft] = useState(initialDraft);
@@ -67,7 +83,7 @@ export function CompetitionCreateForm() {
       setOrganisationsLoading(true);
       setOrganisationsError("");
       try {
-        const response = await fetch("/api/phase3/competitions", {
+        const response = await fetch("/api/v1/organisations/competition-options", {
           cache: phase3CompetitionCreateMachine.noStore,
           signal: controller.signal,
         });
@@ -129,9 +145,11 @@ export function CompetitionCreateForm() {
     setAnnouncement(messages.organiserCreate.saving);
     try {
       let organisationId = draft.organisation_id;
+      const csrf = await csrfHeaders();
       if (bootstrapRequired) {
-        const bootstrapResponse = await fetch(phase3CompetitionCreateMachine.bootstrapRoute, {
+        const bootstrapResponse = await fetch(phase3CompetitionCreateMachine.bootstrapPath, {
           method: phase3CompetitionCreateMachine.post,
+          headers: csrf,
         });
         const bootstrapPayload: unknown = await bootstrapResponse.json().catch(() => null);
         const bootstrapReceipt = bootstrapResponse.ok
@@ -153,9 +171,9 @@ export function CompetitionCreateForm() {
         setDraft((current) => ({ ...current, organisation_id: organisationId }));
       }
 
-      const response = await fetch("/api/phase3/competitions", {
+      const response = await fetch("/api/v1/competitions/phase3", {
         method: phase3CompetitionCreateMachine.post,
-        headers: { "content-type": phase3CompetitionCreateMachine.applicationJson },
+        headers: { ...csrf, "content-type": phase3CompetitionCreateMachine.applicationJson },
         body: JSON.stringify({
           ...draft,
           organisation_id: organisationId,
