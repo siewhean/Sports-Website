@@ -34,4 +34,4 @@ FOR EACH ROW EXECUTE FUNCTION phase3_guard_nested_competition_mutation();
 
 CREATE TRIGGER schedule_repair_match_adjustments_immutable
 BEFORE UPDATE OR DELETE ON schedule_repair_match_adjustments
-FOR EACH ROW EXECUTE FUNCTION phase3_prevent_append_only_mutation();
+FOR EACH ROW EXECUTE FUNCTION phase3_reject_append_only_change();
