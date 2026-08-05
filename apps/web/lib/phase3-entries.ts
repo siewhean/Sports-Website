@@ -41,6 +41,7 @@ export const phase3EntriesCopy = {
   entryName: "Entry name",
   seed: "Seed",
   addEntry: "Add entry",
+  optionalSeed: "Seed (optional)",
   confirmed: "Confirmed entries",
   freeUsage: "Free-plan entry usage",
   freeLimit: "16 entries maximum across this competition",

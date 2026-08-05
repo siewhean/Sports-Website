@@ -112,7 +112,8 @@ export function EntriesEditor({
     const form = event.currentTarget;
     const data = new FormData(form);
     const name = String(data.get(phase3EntriesMachine.entryNameField) ?? "").trim();
-    const seed = Number(data.get(phase3EntriesMachine.entrySeedField));
+    const rawSeed = String(data.get(phase3EntriesMachine.entrySeedField) ?? "").trim();
+    const seed = rawSeed ? Number(rawSeed) : null;
     const fingerprint = JSON.stringify({ divisionId, name, seed });
     const existing = entryCommandRefs.current.get(divisionId);
     const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
@@ -126,7 +127,7 @@ export function EntriesEditor({
           body: JSON.stringify({
             name,
             entry_type: phase3EntriesMachine.teamEntryType,
-            seed,
+            ...(seed === null ? {} : { seed }),
             idempotency_key: pending.key,
           }),
         },
@@ -237,14 +238,13 @@ export function EntriesEditor({
                   <input name={phase3EntriesMachine.entryNameField} maxLength={120} required disabled={!canEdit} />
                 </label>
                 <label>
-                  {phase3EntriesCopy.seed}
+                  {phase3EntriesCopy.optionalSeed}
                   <input
                     name={phase3EntriesMachine.entrySeedField}
                     type="number"
                     min={1}
                     max={48}
-                    defaultValue={nextSeed}
-                    required
+                    placeholder={String(nextSeed)}
                     disabled={!canEdit}
                   />
                 </label>
