@@ -122,6 +122,20 @@ describe("OidcIdentityProvider", () => {
     expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
     expect(authorization.searchParams.has("client_secret")).toBe(false);
 
+    const recoveryAuthorization = new URL(
+      await adapter.createAuthorizationUrl({
+        redirectUri: "http://127.0.0.1:4000/api/v1/identity/callback",
+        state: "r".repeat(43),
+        nonce: "m".repeat(43),
+        pkceChallenge: "p".repeat(43),
+        prompt: "login",
+      }),
+    );
+    expect(recoveryAuthorization.searchParams.get("prompt")).toBe("login");
+    expect(recoveryAuthorization.searchParams.get("state")).toBe("r".repeat(43));
+    expect(recoveryAuthorization.searchParams.get("nonce")).toBe("m".repeat(43));
+    expect(recoveryAuthorization.searchParams.get("code_challenge_method")).toBe("S256");
+
     await expect(
       adapter.exchangeAuthorizationCode({
         authorizationCode: "one-time-code",

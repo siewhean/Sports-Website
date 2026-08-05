@@ -81,8 +81,8 @@ if (
 ) {
   throw new Error("OpenAPI contract is missing signed security on POST /api/v1/identity/provider-events.");
 }
-if (!document.paths?.["/api/v1/identity/recovery"]?.get?.responses?.["303"]) {
-  throw new Error("OpenAPI contract is missing hosted recovery redirect.");
+if (!document.paths?.["/api/v1/identity/recovery"]?.get?.responses?.["302"]) {
+  throw new Error("OpenAPI contract is missing Universal Login recovery redirect.");
 }
 
 const setupPath = "/api/v1/competitions/{competitionId}/setup-draft";

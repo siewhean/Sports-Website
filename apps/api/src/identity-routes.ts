@@ -45,7 +45,6 @@ type CookiePolicy = {
 type OidcFlowPolicy = {
   callbackUri: string;
   flowCookieName: string;
-  hostedRecoveryUrl: string;
   postAuthRedirectUris: readonly string[];
   sealer: IdentityFlowSealer;
 };
@@ -228,6 +227,24 @@ export async function registerIdentityRoutes(
 
   if (options.oidc) {
     const callbackPath = new URL(options.oidc.callbackUri).pathname;
+    const beginAuthorization = async (reply: FastifyReply, returnUri: string, prompt?: "login") => {
+      const oidc = options.oidc;
+      if (!oidc) throw new ApiError(503, "IDENTITY_PROVIDER_UNAVAILABLE", "Identity provider is unavailable");
+      const state = randomState();
+      const nonce = randomNonce();
+      const pkceVerifier = randomPKCECodeVerifier();
+      const pkceChallenge = await calculatePKCECodeChallenge(pkceVerifier);
+      const authorizationUrl = await options.runtime.createAuthorizationUrl({
+        redirectUri: oidc.callbackUri,
+        state,
+        nonce,
+        pkceChallenge,
+        ...(prompt ? { prompt } : {}),
+      });
+      const sealed = oidc.sealer.seal({ state, nonce, pkceVerifier, returnUri });
+      reply.header("Set-Cookie", flowCookie(options.cookie, oidc.flowCookieName, callbackPath, sealed));
+      return reply.redirect(authorizationUrl, 302);
+    };
     app.get<{ Querystring: { return_to?: string } }>(
       "/api/v1/identity/authorize",
       {
@@ -244,19 +261,7 @@ export async function registerIdentityRoutes(
         if (!options.oidc || !fallback)
           throw new ApiError(503, "IDENTITY_PROVIDER_UNAVAILABLE", "Identity provider is unavailable");
         const returnUri = exactAllowedRedirect(request.query.return_to ?? fallback, options.oidc.postAuthRedirectUris);
-        const state = randomState();
-        const nonce = randomNonce();
-        const pkceVerifier = randomPKCECodeVerifier();
-        const pkceChallenge = await calculatePKCECodeChallenge(pkceVerifier);
-        const authorizationUrl = await options.runtime.createAuthorizationUrl({
-          redirectUri: options.oidc.callbackUri,
-          state,
-          nonce,
-          pkceChallenge,
-        });
-        const sealed = options.oidc.sealer.seal({ state, nonce, pkceVerifier, returnUri });
-        reply.header("Set-Cookie", flowCookie(options.cookie, options.oidc.flowCookieName, callbackPath, sealed));
-        return reply.redirect(authorizationUrl, 302);
+        return beginAuthorization(reply, returnUri);
       },
     );
 
@@ -322,13 +327,17 @@ export async function registerIdentityRoutes(
       "/api/v1/identity/recovery",
       {
         schema: {
-          description: "Redirect to the configured provider-hosted recovery experience.",
-          response: { 303: Type.Null() },
+          description: "Start provider-hosted password recovery through the server-owned Universal Login flow.",
+          response: { 302: Type.Null(), 503: apiErrorSchema },
           tags: ["identity"],
         },
         config: { rateLimit: { max: 3, timeWindow: "15 minutes" } },
       },
-      async (_request, reply) => reply.redirect(options.oidc?.hostedRecoveryUrl ?? "/", 303),
+      async (_request, reply) => {
+        const fallback = options.oidc?.postAuthRedirectUris[0];
+        if (!fallback) throw new ApiError(503, "IDENTITY_PROVIDER_UNAVAILABLE", "Identity provider is unavailable");
+        return beginAuthorization(reply, fallback, "login");
+      },
     );
   }
 

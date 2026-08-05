@@ -75,6 +75,7 @@ export class OidcIdentityProvider implements IdentityProviderPort {
       nonce: request.nonce,
       code_challenge: request.pkceChallenge,
       code_challenge_method: "S256",
+      ...(request.prompt ? { prompt: request.prompt } : {}),
     }).href;
   }
 

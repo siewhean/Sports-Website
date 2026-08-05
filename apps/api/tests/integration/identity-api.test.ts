@@ -379,6 +379,10 @@ describe("identity API", () => {
       DATABASE_URL: databaseUrl,
       DEEP_HEALTH_TOKEN: "d".repeat(32),
       IDENTITY_CSRF_HMAC_SECRET: "p".repeat(32),
+      SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+        primary: { version: "v2", secret: "production-scoring-access-rate-limit-secret" },
+        verificationOnly: [],
+      }),
       OTEL_ENABLED: "true",
       OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.matchday.example",
       REDIS_URL: "redis://127.0.0.1:6379",
@@ -491,8 +495,35 @@ describe("identity API", () => {
       ).statusCode,
     ).toBe(404);
     const recovery = await app.inject({ method: "GET", url: "/api/v1/identity/recovery" });
-    expect(recovery.statusCode).toBe(303);
-    expect(recovery.headers.location).toBe("https://identity.matchday.test/recover");
+    expect(recovery.statusCode).toBe(302);
+    const recoveryAuthorization = new URL(recovery.headers.location ?? "");
+    expect(recoveryAuthorization.origin).toBe("https://identity.example.test");
+    expect(recoveryAuthorization.searchParams.get("prompt")).toBe("login");
+    expect(recoveryAuthorization.searchParams.get("state")).toHaveLength(43);
+    expect(recoveryAuthorization.searchParams.get("nonce")).toHaveLength(43);
+    expect(recoveryAuthorization.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(recoveryAuthorization.searchParams.has("client_secret")).toBe(false);
+    const recoverySetCookie = Array.isArray(recovery.headers["set-cookie"])
+      ? recovery.headers["set-cookie"].join("; ")
+      : recovery.headers["set-cookie"];
+    expect(recoverySetCookie).toContain("matchday_oidc=");
+    expect(recoverySetCookie).toContain("HttpOnly");
+    expect(recoverySetCookie).toContain("SameSite=Lax");
+    expect(recoverySetCookie).toContain("Path=/api/v1/identity/callback");
+    const recoveryState = recoveryAuthorization.searchParams.get("state");
+    if (!recoveryState) throw new Error("Expected recovery state");
+    const recoveryCallback = await app.inject({
+      method: "GET",
+      url: `/api/v1/identity/callback?code=recovery-provider-code-12345678&state=${encodeURIComponent(recoveryState)}`,
+      headers: { cookie: cookiePair(recovery.headers["set-cookie"]) },
+    });
+    expect(recoveryCallback.statusCode).toBe(303);
+    expect(recoveryCallback.headers.location).toBe(`${allowedOrigin}/organiser`);
+    const recoveryCallbackSetCookie = Array.isArray(recoveryCallback.headers["set-cookie"])
+      ? recoveryCallback.headers["set-cookie"].join("; ")
+      : recoveryCallback.headers["set-cookie"];
+    expect(recoveryCallbackSetCookie).toContain("Max-Age=0");
+    expect(recoveryCallbackSetCookie).toContain("Path=/api/v1/identity/callback");
     expect(
       (
         await app.inject({

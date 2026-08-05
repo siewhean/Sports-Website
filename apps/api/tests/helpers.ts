@@ -35,7 +35,6 @@ export function oidcEnvironment(appOrigin: string, apiOrigin = appOrigin): NodeJ
     IDENTITY_PROVIDER_EVENT_HMAC_SECRET: "provider-event-test-secret-at-least-32-bytes",
     IDENTITY_COOKIE_SITE: cookieSite,
     IDENTITY_POST_AUTH_REDIRECT_URIS: `${appOrigin}/organiser`,
-    IDENTITY_HOSTED_RECOVERY_URL: "https://identity.matchday.test/recover",
   };
 }
 

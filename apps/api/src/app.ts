@@ -464,7 +464,6 @@ export async function buildApp(options: BuildAppOptions) {
             oidc: {
               callbackUri: oidc.callbackUri,
               flowCookieName: options.config.identity.flowCookieName,
-              hostedRecoveryUrl: oidc.hostedRecoveryUrl,
               postAuthRedirectUris: options.config.identity.postAuthRedirectUris,
               sealer: new IdentityFlowSealer(oidc.flowSealKey),
             },

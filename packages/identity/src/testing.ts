@@ -35,6 +35,8 @@ export class DeterministicIdentityProvider implements IdentityProviderPort {
     url.searchParams.set("state", request.state);
     url.searchParams.set("nonce", request.nonce);
     url.searchParams.set("code_challenge", request.pkceChallenge);
+    url.searchParams.set("code_challenge_method", "S256");
+    if (request.prompt) url.searchParams.set("prompt", request.prompt);
     return url.href;
   }
 

@@ -9,7 +9,7 @@ Create separate staging and production provider tenants or projects. For each en
 1. Register a confidential web client using authorization code and PKCE `S256`; disable implicit and password grants.
 2. Register exactly the value of `IDENTITY_OIDC_CALLBACK_URI`. Its path must be `/api/v1/identity/callback`.
 3. Enable `openid email profile` and ensure the ID token supplies `sub`, `email`, `email_verified`, and either `name` or `preferred_username`. Supply `sid` when provider-session-specific revocation is required.
-4. Configure the provider-hosted reset/passwordless page and record its exact URL as `IDENTITY_HOSTED_RECOVERY_URL`.
+4. Enable the provider-hosted password-recovery screen in Universal Login. The application starts a normal server-owned authorization transaction; users select **Forgot password** within the provider-hosted flow. Do not configure a password-reset ticket URL: tickets are one-time, user-specific credentials.
 5. Configure verified-email enforcement, credential-stuffing protection, failed-sign-in lockout, password/passwordless policy, administrator MFA, and the approved organiser MFA policy.
 6. Configure the provider automation or a narrow bridge to send the signed event contract below on every password change and provider session revocation.
 7. Set `IDENTITY_COOKIE_SITE` to the scheme plus registrable-domain boundary shared by the credentialed frontend and API, such as `https://matchday.example`. Typed startup validation rejects a callback, allowed frontend origin, or post-auth destination outside that boundary, because `SameSite=Strict` application cookies would not work cross-site.
@@ -24,6 +24,7 @@ Before promotion:
 - Run typed configuration validation. Staging/production must refuse `IDENTITY_PROVIDER=disabled` or incomplete OIDC values.
 - Confirm discovery issuer equality and HTTPS authorization, token, and JWKS endpoints.
 - Confirm `/api/v1/identity/authorize` redirects only to the provider and writes a five-minute HttpOnly SameSite=Lax flow cookie.
+- Confirm `/api/v1/identity/recovery` starts the same protected authorization flow with `prompt=login`; password-reset tickets remain entirely within the provider-hosted flow.
 - Confirm a valid callback writes `__Host-matchday_session`, clears callback-scoped `__Secure-matchday_oidc`, and redirects only to an exact configured destination.
 - Reject missing, expired, or tampered flow cookies; state/nonce mismatch; reused authorization codes; invalid signature/issuer/audience/time; and unverified email for a new account. The encrypted flow cookie is stateless and is not itself a replay ledger; replay resistance relies on its short expiry, state/nonce binding, callback-scoped deletion, and the provider's single-use authorization code. Do not claim independent one-time-cookie enforcement.
 - Confirm direct `POST /api/v1/identity/sign-in` and email `POST /api/v1/identity/recovery` return 404 in the OIDC environment.

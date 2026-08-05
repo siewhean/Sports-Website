@@ -30,7 +30,7 @@ All runtime configuration is parsed by `@matchday/config`; application modules m
 | `IDENTITY_PROVIDER_EVENT_HMAC_SECRET`                     | Dedicated 32+ byte server-only key shared only with the narrow signed provider-event bridge.                                                   |
 | `IDENTITY_COOKIE_SITE`                                    | Scheme plus registrable-domain boundary shared by every credentialed frontend origin, callback, and post-auth destination.                     |
 | `IDENTITY_POST_AUTH_REDIRECT_URIS`                        | Comma-separated exact application destinations. Origin-wide or wildcard redirects are not supported.                                           |
-| `IDENTITY_RECOVERY_MODE` / `IDENTITY_HOSTED_RECOVERY_URL` | `hosted` recovery and its exact provider URL. OIDC itself has no reset API.                                                                    |
+| `IDENTITY_RECOVERY_MODE`                                  | Provider-hosted recovery initiated through the server-owned OIDC authorization flow. OIDC itself has no reset API.                             |
 | `EDGE_CACHE_PURGE_ENDPOINT`                               | Exact provider-neutral HTTPS purge endpoint. Required by staging/production workers; embedded credentials, query, and fragments are forbidden. |
 | `EDGE_CACHE_PURGE_BEARER_TOKEN`                           | Worker-only purge credential of at least 32 bytes. Required by staging/production workers, secret-store injected, and never logged.            |
 

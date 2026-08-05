@@ -97,7 +97,6 @@ const rawConfigSchema = z.object({
     .string()
     .default("http://127.0.0.1:3000/organiser,http://localhost:3000/organiser"),
   IDENTITY_RECOVERY_MODE: identityRecoveryModeSchema.default("hosted"),
-  IDENTITY_HOSTED_RECOVERY_URL: optionalUrlSchema,
   EDGE_CACHE_PURGE_ENDPOINT: optionalUrlSchema,
   EDGE_CACHE_PURGE_BEARER_TOKEN: z.preprocess(
     (value) => (value === "" ? undefined : value),
@@ -147,7 +146,6 @@ export type AppConfig = {
       callbackUri: string;
       flowSealKey: string;
       recoveryMode: z.infer<typeof identityRecoveryModeSchema>;
-      hostedRecoveryUrl: string;
       providerEventHmacSecret: string;
       cookieSite: string;
     };
@@ -360,7 +358,6 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       IDENTITY_OIDC_CLIENT_SECRET: parsed.IDENTITY_OIDC_CLIENT_SECRET,
       IDENTITY_OIDC_CALLBACK_URI: parsed.IDENTITY_OIDC_CALLBACK_URI,
       IDENTITY_FLOW_SEAL_KEY: parsed.IDENTITY_FLOW_SEAL_KEY,
-      IDENTITY_HOSTED_RECOVERY_URL: parsed.IDENTITY_HOSTED_RECOVERY_URL,
       IDENTITY_PROVIDER_EVENT_HMAC_SECRET: parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET,
       IDENTITY_COOKIE_SITE: parsed.IDENTITY_COOKIE_SITE,
     };
@@ -388,12 +385,6 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       ),
       flowSealKey,
       recoveryMode: parsed.IDENTITY_RECOVERY_MODE,
-      hostedRecoveryUrl: validatedIdentityUrl(
-        required.IDENTITY_HOSTED_RECOVERY_URL as string,
-        parsed.APP_ENV,
-        "IDENTITY_HOSTED_RECOVERY_URL",
-        { allowQuery: true },
-      ),
       providerEventHmacSecret: required.IDENTITY_PROVIDER_EVENT_HMAC_SECRET as string,
       cookieSite: cookieSite.origin,
     };

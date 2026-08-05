@@ -40,6 +40,7 @@ export type ProviderAuthorizationRequest = {
   state: string;
   nonce: string;
   pkceChallenge: string;
+  prompt?: "login";
 };
 
 export interface IdentityProviderPort {

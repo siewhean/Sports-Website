@@ -20,7 +20,6 @@ const oidcConfig = {
   IDENTITY_PROVIDER_EVENT_HMAC_SECRET: "provider-event-secret-at-least-32-bytes",
   IDENTITY_COOKIE_SITE: "https://matchday.example",
   IDENTITY_POST_AUTH_REDIRECT_URIS: "https://app.matchday.example/organiser",
-  IDENTITY_HOSTED_RECOVERY_URL: "https://identity.matchday.example/recover",
 };
 const edgeCacheConfig = {
   EDGE_CACHE_PURGE_ENDPOINT: "https://edge-bridge.matchday.example/purge",

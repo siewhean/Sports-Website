@@ -35,7 +35,6 @@ export async function generateOpenApiDocument() {
     IDENTITY_PROVIDER_EVENT_HMAC_SECRET: "openapi-provider-event-secret-at-least-32",
     IDENTITY_COOKIE_SITE: "https://matchday.example",
     IDENTITY_POST_AUTH_REDIRECT_URIS: "https://app.matchday.example/organiser",
-    IDENTITY_HOSTED_RECOVERY_URL: "https://identity.matchday.example/recover",
   });
   const identityRuntime = new IdentityApiRuntime(
     new UnavailableIdentityProvider(),
