@@ -27,7 +27,8 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  const requestHost = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
+  if (!cookieHostMatches(requestHost, apiUrl.hostname)) return null;
 
   const cookieStore = await cookies();
   for (const name of sessionCookieNames) {
