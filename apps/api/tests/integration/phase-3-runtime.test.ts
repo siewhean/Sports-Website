@@ -284,6 +284,35 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
     expect(phase3DomainAdapter.hash(value)).toBe(rows[0]?.hash);
   });
   it.each(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const)(
+    "creates %s with a database-verified immutable sport-pack hash",
+    async (sportCode) => {
+      const competition = await runtime.createCompetition(
+        { accountId },
+        {
+          organisationId,
+          name: `${sportCode} hash verification`,
+          slug: `${sportCode.replaceAll("_", "-")}-hash-${randomUUID()}`,
+          sportCode,
+          venue: "Hash Hall",
+          address: "1 Integrity Road",
+          countryCode: "SG",
+          startsOn: "2027-12-01",
+          endsOn: "2027-12-01",
+          timezone: "Asia/Singapore",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+      const pack = required(
+        await client<{ definition: unknown; definition_hash: string }[]>`
+          SELECT definition,definition_hash FROM sport_pack_versions
+          WHERE sport_code=${sportCode} AND status='active'`,
+      );
+      expect(competition.sport_code).toBe(sportCode);
+      expect(phase3DomainAdapter.hash(pack.definition)).toBe(pack.definition_hash);
+    },
+  );
+  it.each(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const)(
     "derives immutable %s standings and recalculates only automatic qualifiers after correction",
     async (sportCode) => {
       const actor = { accountId };
