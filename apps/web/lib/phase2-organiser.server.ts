@@ -3,7 +3,8 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import { demoCompetitionReadPort, phase2Competition, type CompetitionView } from "@/lib/phase2";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches, isOrganiserWorkspacePayload, toOrganiserCompetitionView } from "@/lib/phase2-organiser";
+import { isOrganiserWorkspacePayload, toOrganiserCompetitionView } from "@/lib/phase2-organiser";
+import { requestCanForwardSessionCookie } from "@/lib/phase3-origin";
 
 export type OrganiserCompetitionReadResult =
   | { state: "ready"; competition: CompetitionView }
@@ -27,7 +28,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  if (!requestCanForwardSessionCookie(requestHeaders, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN)) return null;
 
   const cookieStore = await cookies();
   for (const name of sessionCookieNames) {
