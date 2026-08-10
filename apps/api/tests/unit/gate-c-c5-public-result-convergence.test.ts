@@ -73,6 +73,38 @@ describe("C5 public-result convergence executor", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("acquires a fresh writer session just in time for a delayed convergence wave", async () => {
+    const acquireSession = vi.fn(async () => ({
+      sessionId: "wave-session",
+      sessionToken: "wave-token",
+      writerGeneration: 9,
+    }));
+    fetchMock.mockImplementationOnce(async (_url, init) => {
+      expect(new Headers(init?.headers).get("x-scoring-session-id")).toBe("wave-session");
+      expect(new Headers(init?.headers).get("x-writer-generation")).toBe("9");
+      const body = JSON.parse(String(init?.body)) as { client_event_id: string };
+      return json(receipt(body.client_event_id));
+    });
+    fetchMock.mockResolvedValueOnce(
+      json(current(), 200, {
+        etag: '"c4-1-1"',
+        "last-modified": "Mon, 03 Aug 2026 00:00:00 GMT",
+        "cache-control": "public, max-age=30",
+      }),
+    );
+    const executor = createGateCC5PublicResultConvergenceExecutor([
+      {
+        apiOrigin: target.apiOrigin,
+        slug: target.slug,
+        matchId: target.matchId,
+        expectedSequence: target.expectedSequence,
+        acquireSession,
+      },
+    ]);
+    await expect(executor(invocation)).resolves.toEqual({ outcome: "success", correctness: { passed: true } });
+    expect(acquireSession).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when a different aggregate advances the public result version", async () => {
     fetchMock.mockImplementationOnce(async (_url, init) => {
       const body = JSON.parse(String(init?.body));

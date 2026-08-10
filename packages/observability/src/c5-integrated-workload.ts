@@ -6,7 +6,13 @@ import {
   type C5WorkloadOperation,
   type C5WorkloadProfile,
 } from "./workload-profile.js";
-import { executeC5Workload, type C5WorkloadExecutor, type C5WorkloadReceipt } from "./workload-runner.js";
+import {
+  executeC5Workload,
+  type C5WorkloadExecutor,
+  type C5WorkloadReceipt,
+  type C5WorkloadSchedule,
+  type C5WorkloadTiming,
+} from "./workload-runner.js";
 
 const sha256 = /^[a-f0-9]{64}$/u;
 const sourceSha = /^[a-f0-9]{40}$/u;
@@ -82,18 +88,79 @@ export type C5IntegratedWorkloadReceipt = Readonly<{
 export type C5ApprovedWorkloadPlan = Readonly<{
   profile: C5WorkloadProfile;
   minimumSamplesPerOperation: number;
+  maximumSamplesPerOperation: Readonly<Record<C5WorkloadOperation, number>>;
+  maximumSamplesPerWorkerPerSecond: number;
+  convergencePolicy: Readonly<{
+    waveCount: number;
+    samplesPerWave: number;
+  }>;
 }>;
 
-export type C5IntegratedWorkloadExecution = Readonly<{
+type C5IntegratedWorkloadExecutionBase = Readonly<{
   sourceSha: string;
   plan: C5ApprovedWorkloadPlan;
-  maximumSamples: number;
   operationTimeoutMs: number;
-  executors: Readonly<Record<C5WorkloadOperation, C5WorkloadExecutor>>;
   controlledFailureHooks: Readonly<Record<C5ControlledFailure, C5ControlledFailureHook>>;
   postgresqlIdentifier: string;
   redisNamespace: string;
 }>;
+
+export type C5WorkloadResource = Readonly<{
+  executor: C5WorkloadExecutor;
+  close?(): Promise<void>;
+}>;
+
+export type C5IntegratedWorkloadExecution = C5IntegratedWorkloadExecutionBase &
+  (
+    | Readonly<{
+        executors: Readonly<Record<C5WorkloadOperation, C5WorkloadExecutor>>;
+        operationResources?: never;
+      }>
+    | Readonly<{
+        executors?: never;
+        operationResources: Readonly<Record<C5WorkloadOperation, () => Promise<C5WorkloadResource>>>;
+      }>
+  );
+
+export const C5_MINIMUM_SAMPLES_PER_OPERATION = 150;
+export const C5_MAXIMUM_SAMPLES_PER_WORKER_PER_SECOND = 1;
+export const C5_MAXIMUM_SAMPLES_PER_OPERATION = Object.freeze({
+  score_event_acknowledgement: 7_200,
+  public_result_convergence: 300,
+  public_current_conditional_read: 540_000,
+  lease_takeover: 7_200,
+  repair_publication: 18_000,
+}) satisfies Readonly<Record<C5WorkloadOperation, number>>;
+export const C5_CONVERGENCE_POLICY = Object.freeze({ waveCount: 2, samplesPerWave: 150 });
+
+export const C5_APPROVED_PILOT_PROFILE = Object.freeze({
+  profileId: "c5-pilot-2026-001",
+  durationSeconds: 3_600,
+  scorekeeperCount: 2,
+  publicReaderCount: 150,
+  organiserWorkerCount: 5,
+  approval: Object.freeze({
+    owner: "Siew Hean, Tournament Director",
+    approvedAtUtc: "2026-07-04T08:30:00Z",
+    reference: "C5-PILOT-APPROVAL-2026-001",
+  }),
+}) satisfies C5WorkloadProfile;
+
+/** Returns the single hash-bindable workload plan approved for C5 closeout. */
+export function createC5ApprovedPilotWorkloadPlan(
+  profile: C5WorkloadProfile = C5_APPROVED_PILOT_PROFILE,
+): C5ApprovedWorkloadPlan {
+  assertC5WorkloadProfile(profile);
+  const plan: C5ApprovedWorkloadPlan = {
+    profile,
+    minimumSamplesPerOperation: C5_MINIMUM_SAMPLES_PER_OPERATION,
+    maximumSamplesPerOperation: C5_MAXIMUM_SAMPLES_PER_OPERATION,
+    maximumSamplesPerWorkerPerSecond: C5_MAXIMUM_SAMPLES_PER_WORKER_PER_SECOND,
+    convergencePolicy: C5_CONVERGENCE_POLICY,
+  };
+  validatePlan(plan);
+  return plan;
+}
 
 function hash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -113,18 +180,74 @@ function stableJson(value: unknown): string {
 }
 
 function validatePlan(plan: C5ApprovedWorkloadPlan): void {
+  const candidate = record(plan);
+  const profile = record(plan.profile);
+  const approval = profile ? record(profile.approval) : null;
+  if (
+    !candidate ||
+    !exactKeys(candidate, [
+      "profile",
+      "minimumSamplesPerOperation",
+      "maximumSamplesPerOperation",
+      "maximumSamplesPerWorkerPerSecond",
+      "convergencePolicy",
+    ])
+  ) {
+    throw new Error("C5 integrated workload plan has unsupported fields");
+  }
+  if (
+    !profile ||
+    !exactKeys(profile, [
+      "profileId",
+      "durationSeconds",
+      "scorekeeperCount",
+      "publicReaderCount",
+      "organiserWorkerCount",
+      "approval",
+    ]) ||
+    !approval ||
+    !exactKeys(approval, ["owner", "approvedAtUtc", "reference"])
+  ) {
+    throw new Error("C5 integrated workload plan has unsupported profile fields");
+  }
   assertC5WorkloadProfile(plan.profile);
-  if (!Number.isInteger(plan.minimumSamplesPerOperation) || plan.minimumSamplesPerOperation < 10) {
-    throw new Error("C5 integrated workload plan requires at least 10 samples per operation");
+  if (plan.minimumSamplesPerOperation !== C5_MINIMUM_SAMPLES_PER_OPERATION) {
+    throw new Error("C5 integrated workload plan requires exactly 150 minimum samples per operation");
   }
-  const requiredWorkerCoverage = Math.max(
-    plan.profile.scorekeeperCount,
-    plan.profile.publicReaderCount,
-    plan.profile.organiserWorkerCount,
-  );
-  if (plan.minimumSamplesPerOperation < requiredWorkerCoverage) {
-    throw new Error("C5 integrated workload plan requires at least one sample for every configured worker");
+  if (
+    plan.profile.profileId !== C5_APPROVED_PILOT_PROFILE.profileId ||
+    plan.profile.durationSeconds !== 3_600 ||
+    plan.profile.scorekeeperCount !== 2 ||
+    plan.profile.publicReaderCount !== 150 ||
+    plan.profile.organiserWorkerCount !== 5 ||
+    plan.profile.approval.owner !== C5_APPROVED_PILOT_PROFILE.approval.owner ||
+    plan.profile.approval.approvedAtUtc !== C5_APPROVED_PILOT_PROFILE.approval.approvedAtUtc ||
+    plan.profile.approval.reference !== C5_APPROVED_PILOT_PROFILE.approval.reference
+  ) {
+    throw new Error("C5 integrated workload plan does not match the approved pilot profile");
   }
+  if (
+    !exactKeys(record(plan.maximumSamplesPerOperation) ?? {}, C5_WORKLOAD_OPERATIONS) ||
+    C5_WORKLOAD_OPERATIONS.some(
+      (operation) => plan.maximumSamplesPerOperation[operation] !== C5_MAXIMUM_SAMPLES_PER_OPERATION[operation],
+    )
+  ) {
+    throw new Error("C5 integrated workload plan has invalid per-operation sample ceilings");
+  }
+  if (plan.maximumSamplesPerWorkerPerSecond !== C5_MAXIMUM_SAMPLES_PER_WORKER_PER_SECOND) {
+    throw new Error("C5 integrated workload plan requires at most one sample per worker per second");
+  }
+  if (
+    !exactKeys(record(plan.convergencePolicy) ?? {}, ["waveCount", "samplesPerWave"]) ||
+    plan.convergencePolicy.waveCount !== 2 ||
+    plan.convergencePolicy.samplesPerWave !== 150
+  ) {
+    throw new Error("C5 integrated workload plan requires two convergence waves of 150 samples");
+  }
+}
+
+export function assertC5ApprovedWorkloadPlan(plan: C5ApprovedWorkloadPlan): void {
+  validatePlan(plan);
 }
 
 function operationWorkerCount(profile: C5WorkloadProfile, operation: C5WorkloadOperation): number {
@@ -187,6 +310,7 @@ function assertWorkloadReceipt(
   value: unknown,
   operation: C5WorkloadOperation,
   plan: C5ApprovedWorkloadPlan,
+  expectedSourceSha: string,
 ): asserts value is C5WorkloadReceipt {
   const receipt = record(value);
   const summary = receipt ? record(receipt.summary) : null;
@@ -195,7 +319,18 @@ function assertWorkloadReceipt(
     !receipt ||
     !summary ||
     !correctness ||
-    !exactKeys(receipt, ["operation", "workerCount", "timeoutCount", "summary", "correctness"]) ||
+    !exactKeys(receipt, [
+      "operation",
+      "sourceSha",
+      "workerCount",
+      "timeoutCount",
+      "elapsedMs",
+      "scheduledCadenceMs",
+      "convergenceWaveCount",
+      "convergenceSamplesPerWave",
+      "summary",
+      "correctness",
+    ]) ||
     !exactKeys(summary, [
       "sampleCount",
       "successfulCount",
@@ -209,8 +344,12 @@ function assertWorkloadReceipt(
     ]) ||
     !exactKeys(correctness, ["passed"]) ||
     receipt.operation !== operation ||
+    receipt.sourceSha !== expectedSourceSha ||
     receipt.workerCount !== operationWorkerCount(plan.profile, operation) ||
     receipt.timeoutCount !== 0 ||
+    typeof receipt.elapsedMs !== "number" ||
+    !Number.isFinite(receipt.elapsedMs) ||
+    receipt.elapsedMs < plan.profile.durationSeconds * 1_000 ||
     typeof summary.sampleCount !== "number" ||
     !Number.isInteger(summary.sampleCount) ||
     summary.sampleCount < plan.minimumSamplesPerOperation ||
@@ -241,6 +380,23 @@ function assertWorkloadReceipt(
     summary.p95Ms > summary.p99Ms ||
     summary.p99Ms > summary.maxMs ||
     correctness.passed !== true
+  ) {
+    throw new Error(`C5 integrated workload receipt failed ${operation}`);
+  }
+  if (operation === "public_result_convergence") {
+    if (
+      receipt.scheduledCadenceMs !== null ||
+      receipt.convergenceWaveCount !== plan.convergencePolicy.waveCount ||
+      receipt.convergenceSamplesPerWave !== plan.convergencePolicy.samplesPerWave ||
+      summary.sampleCount !== plan.convergencePolicy.waveCount * plan.convergencePolicy.samplesPerWave
+    ) {
+      throw new Error(`C5 integrated workload receipt failed ${operation}`);
+    }
+  } else if (
+    receipt.scheduledCadenceMs !== 1_000 ||
+    receipt.convergenceWaveCount !== 0 ||
+    receipt.convergenceSamplesPerWave !== 0 ||
+    summary.sampleCount > plan.maximumSamplesPerOperation[operation]
   ) {
     throw new Error(`C5 integrated workload receipt failed ${operation}`);
   }
@@ -310,7 +466,7 @@ export function validateC5IntegratedWorkloadReceipt(
     throw new Error("C5 integrated workload receipt is missing operations");
   }
   for (const operation of C5_WORKLOAD_OPERATIONS) {
-    assertWorkloadReceipt(operations[operation], operation, expected.plan);
+    assertWorkloadReceipt(operations[operation], operation, expected.plan, expected.sourceSha);
   }
   if (
     !Array.isArray(receipt.controlled_failures) ||
@@ -333,32 +489,50 @@ export function validateC5IntegratedWorkloadReceipt(
  */
 export async function executeC5IntegratedWorkload(
   input: C5IntegratedWorkloadExecution,
-  now: () => number = () => performance.now(),
+  timing?: C5WorkloadTiming,
 ): Promise<C5IntegratedWorkloadReceipt> {
   if (!sourceSha.test(input.sourceSha)) throw new Error("C5 integrated workload requires a full source SHA");
   validatePlan(input.plan);
-  if (input.maximumSamples < input.plan.minimumSamplesPerOperation) {
-    throw new Error("C5 integrated workload maximum samples is below the approved minimum");
-  }
   assertNonEmpty(input.postgresqlIdentifier, "PostgreSQL identifier");
   assertNonEmpty(input.redisNamespace, "Redis namespace");
+  const now = timing?.now ?? (() => performance.now());
   const startedAt = now();
   // Operations share the same disposable aggregate. Keep their C1-C4 state
   // transitions ordered; each operation retains its own approved worker
   // concurrency through `executeC5Workload`.
   const operationEntries: [C5WorkloadOperation, C5WorkloadReceipt][] = [];
   for (const operation of C5_WORKLOAD_OPERATIONS) {
-    const receipt = await executeC5Workload(
-      {
-        operation,
-        profile: input.plan.profile,
-        maximumSamples: input.maximumSamples,
-        operationTimeoutMs: input.operationTimeoutMs,
-      },
-      input.executors[operation],
-      now,
-    );
-    operationEntries.push([operation, receipt]);
+    const schedule: C5WorkloadSchedule =
+      operation === "public_result_convergence"
+        ? {
+            kind: "convergence_waves",
+            waveCount: input.plan.convergencePolicy.waveCount as 2,
+            samplesPerWave: input.plan.convergencePolicy.samplesPerWave as 150,
+          }
+        : { kind: "cadenced", minimumIntervalMs: 1_000 };
+    const resource = input.operationResources
+      ? await input.operationResources[operation]()
+      : { executor: input.executors[operation] };
+    try {
+      const receipt = await executeC5Workload(
+        {
+          operation,
+          profile: input.plan.profile,
+          sourceSha: input.sourceSha,
+          maximumSamples: input.plan.maximumSamplesPerOperation[operation],
+          operationTimeoutMs: input.operationTimeoutMs,
+          schedule,
+        },
+        resource.executor,
+        timing,
+      );
+      // Stop before starting the next one-hour operation if the current class did
+      // not produce its full exact-SHA certification evidence.
+      assertWorkloadReceipt(receipt, operation, input.plan, input.sourceSha);
+      operationEntries.push([operation, receipt]);
+    } finally {
+      await resource.close?.();
+    }
   }
   const controlledFailures: C5ControlledFailureReceipt[] = [];
   // Fault drills intentionally do not overlap. An interrupted Redis/API/worker

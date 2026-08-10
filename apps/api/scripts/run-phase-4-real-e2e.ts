@@ -24,6 +24,7 @@ import { Phase2Runtime } from "../src/phase-2-runtime.js";
 import {
   createGateCC5ScoreWriteResource,
   GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS,
+  GATE_C_C5_SCORE_WRITE_PASS_VALIDITY_SECONDS,
   issueGateCC5ScoreWriteSessions,
   type GateCC5ScoreWriteResource,
 } from "../src/gate-c-c5-score-write.js";
@@ -33,6 +34,10 @@ import {
   type GateCC5PublicResultConvergenceTarget,
 } from "../src/gate-c-c5-public-result-convergence.js";
 import { createGateCC5LeaseTakeoverExecutor, type GateCC5LeaseSession } from "../src/gate-c-c5-lease-takeover.js";
+import {
+  createGateCC5RepairPublicationExecutor,
+  type GateCC5RepairPublicationLinkage,
+} from "../src/gate-c-c5-repair-publication.js";
 import type { C5WorkloadExecutor } from "@matchday/observability";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
@@ -154,6 +159,15 @@ export type GateCC4CompletedRepair = Readonly<{
 export type GateCC4CompletedRunContext = Readonly<{
   sourceSha: string;
   runNumber: number;
+  /** Raw disposable identifiers are callback-scoped and must be hash-redacted before retention. */
+  postgresqlIdentifier: string;
+  redisNamespace: string;
+  runtimeControls: Readonly<{
+    apiControlId: string;
+    webControlId: string;
+    workerControlId: string;
+    schedulerControlId: string;
+  }>;
   repairs: Readonly<Record<string, GateCC4CompletedRepair>>;
   apiOrigin: string;
   webOrigin: string;
@@ -176,6 +190,7 @@ export type GateCC4CompletedRunContext = Readonly<{
     input: Readonly<{ project: string; sampleCount: number }>,
   ): Promise<C5WorkloadExecutor>;
   createLeaseTakeoverExecutor(input: Readonly<{ project: string; workerCount: number }>): Promise<C5WorkloadExecutor>;
+  createRepairPublicationExecutor(input: Readonly<{ workerCount: number }>): Promise<C5WorkloadExecutor>;
 }>;
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -435,6 +450,19 @@ function connectIsolation(isolation: Isolation): Sql {
         connection: { search_path: `${isolation.schema},public` },
       })
     : postgres(isolation.databaseUrl, { max: 10, onnotice: () => undefined });
+}
+
+async function issueFreshOrganiserCookie(sql: Sql, accountId: string): Promise<string> {
+  const sessionId = randomUUID();
+  const sessionSecret = randomBytes(32).toString("base64url");
+  const now = new Date();
+  await sql`INSERT INTO identity_sessions(
+    id,account_id,secret_hash,created_at,last_seen_at,idle_expires_at,absolute_expires_at
+  ) VALUES(
+    ${sessionId},${accountId},${hashSessionSecret(sessionSecret)},${now},${now},
+    ${new Date(now.getTime() + 30 * 60_000)},${new Date(now.getTime() + 12 * 60 * 60_000)}
+  )`;
+  return `matchday_session=${sessionId}.${sessionSecret}`;
 }
 
 async function seed(sql: Sql, fixtureKey: string): Promise<SeedState> {
@@ -987,10 +1015,11 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     );
     const phase3 = new Phase3Runtime(identitySql, phase3DomainAdapter);
     scheduleQueue = new ScheduleJobQueue({ queueName, redisUrl });
+    const schedulerWorkerId = `phase4-real-e2e-${randomUUID()}`;
     scheduler = new SchedulerRuntime({
       queueName,
       redisUrl,
-      workerId: `phase4-real-e2e-${randomUUID()}`,
+      workerId: schedulerWorkerId,
       store: new PostgresScheduleJobStore(sql),
       // The harness itself runs through tsx, while production runs the built
       // scheduler. Do not make solver startup inherit tsx loader hooks that
@@ -1163,8 +1192,8 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       if (!journey) throw new Error(`C4 browser journey result missing for ${projectName}`);
       await assertGateCC4DatabaseOracle(sql, journey);
     }
-    if (!rateLimitRedis || !redisOwnership) {
-      throw new Error("C4 completion callback requires the active isolated Redis namespace");
+    if (!rateLimitRedis || !redisOwnership || !isolation) {
+      throw new Error("C4 completion callback requires active isolated PostgreSQL and Redis identities");
     }
     const activeRedis = rateLimitRedis;
     const activeRedisOwnership = redisOwnership;
@@ -1369,10 +1398,60 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
             apiOrigin,
             slug: `c5-public-result-${suffix}`,
             matchId: match.id,
-            sessionId: session.session_id,
-            sessionToken: session.session_token,
-            writerGeneration: session.generation,
             expectedSequence: 3,
+            acquireSession: async () => {
+              const pass = await phase2.createAccessPass(
+                actor,
+                competition.id,
+                match.id,
+                {
+                  role: "scorekeeper",
+                  expiresAt: new Date(Date.now() + GATE_C_C5_SCORE_WRITE_PASS_VALIDITY_SECONDS * 1_000).toISOString(),
+                  idempotencyKey: randomUUID(),
+                },
+                randomUUID(),
+              );
+              if (!pass.token) throw new Error("C5 convergence session refresh returned no token");
+              const refreshed = await phase2.exchangeAccess(
+                {
+                  token: pass.token,
+                  expectedMatchId: match.id,
+                  deviceId: randomUUID(),
+                  deviceLabel: "C5 convergence wave",
+                },
+                randomUUID(),
+              );
+              if (refreshed.mode === "writer" && refreshed.generation !== null) {
+                return {
+                  sessionId: refreshed.session_id,
+                  sessionToken: refreshed.session_token,
+                  writerGeneration: refreshed.generation,
+                };
+              }
+              if (refreshed.mode !== "candidate" || refreshed.generation !== null) {
+                throw new Error("C5 convergence refresh did not acquire a writer or candidate session");
+              }
+              const takeover = await phase2.requestTakeover(
+                { sessionId: refreshed.session_id, sessionToken: refreshed.session_token, generation: null },
+                { pendingEventCount: 0, pendingThroughSequence: 3 },
+                randomUUID(),
+              );
+              const approved = await phase2.resolveTakeover(
+                actor,
+                competition.id,
+                takeover.id,
+                { decision: "approve", overrideAcknowledged: false, reason: "C5 convergence wave refresh" },
+                randomUUID(),
+              );
+              if (approved.status !== "approved" || typeof approved.generation !== "number") {
+                throw new Error("C5 convergence session takeover was not approved");
+              }
+              return {
+                sessionId: refreshed.session_id,
+                sessionToken: refreshed.session_token,
+                writerGeneration: approved.generation,
+              };
+            },
           };
         })();
         targets.push(target);
@@ -1410,6 +1489,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
           expectedSequence: 0,
         })),
       );
+      const organiserCookie = await issueFreshOrganiserCookie(activeSql, repair.accountId);
       const executors = await Promise.all(
         writers.map(async (writer, index) => {
           const matchId = candidates[index]!.id;
@@ -1422,7 +1502,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
             apiOrigin,
             webOrigin,
             competitionId: repair.competitionId,
-            organiserCookie: repair.organiserCookie,
+            organiserCookie,
             incumbent,
             createCandidate: async () => {
               const pass = await phase2.createAccessPass(
@@ -1455,6 +1535,79 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       );
       return async (invocation) => executors[invocation.workerIndex % executors.length]!(invocation);
     };
+    const createRepairPublicationExecutor = async ({
+      workerCount,
+    }: Readonly<{ workerCount: number }>): Promise<C5WorkloadExecutor> => {
+      if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > projectNames.length) {
+        throw new Error(
+          `C5 repair-publication worker count must be an integer from 1 to ${String(projectNames.length)}`,
+        );
+      }
+      const targets = await Promise.all(
+        projectNames.slice(0, workerCount).map(async (project) => {
+          const repair = gateCC4Projects[project];
+          if (!repair) throw new Error(`C5 repair-publication project is not part of this isolated run: ${project}`);
+          return {
+            apiOrigin,
+            webOrigin,
+            competitionId: repair.competitionId,
+            slug: repair.slug,
+            correctionTransactionId: repair.correctionTransactionId,
+            organiserCookie: await issueFreshOrganiserCookie(activeSql, repair.accountId),
+            verifyPublication: async (linkage: GateCC5RepairPublicationLinkage) => {
+              const oracle = (
+                await activeSql<
+                  {
+                    receipt_count: number;
+                    projection_link_count: number;
+                    mismatched_projection_count: number;
+                    maximum_projection_version: number;
+                  }[]
+                >`
+                SELECT
+                  count(DISTINCT receipt.id)::integer AS receipt_count,
+                  count(link.public_projection_version_id)::integer AS projection_link_count,
+                  count(link.public_projection_version_id) FILTER (
+                    WHERE projection.schedule_version<>receipt.schedule_version
+                       OR projection.result_version<>receipt.result_version
+                  )::integer AS mismatched_projection_count,
+                  max(projection.projection_version)::integer AS maximum_projection_version
+                FROM schedule_repair_publication_receipts receipt
+                JOIN schedule_repair_publication_projection_versions link
+                  ON link.publication_receipt_id=receipt.id
+                JOIN public_projection_versions projection
+                  ON projection.id=link.public_projection_version_id
+                WHERE receipt.competition_id=${linkage.competitionId}
+                  AND receipt.repair_case_id=${linkage.repairId}
+                  AND receipt.repair_revision_id=${linkage.repairRevisionId}
+                  AND receipt.schedule_revision_id=${linkage.scheduleRevisionId}
+                  AND receipt.schedule_version=${linkage.scheduleVersion}
+                  AND receipt.result_version=${linkage.resultVersion}
+                  AND receipt.analysis_fingerprint=${linkage.analysisFingerprint}
+              `
+              )[0];
+              if (
+                !oracle ||
+                oracle.receipt_count !== 1 ||
+                oracle.projection_link_count < 1 ||
+                oracle.mismatched_projection_count !== 0 ||
+                oracle.maximum_projection_version !== linkage.projectionVersion
+              ) {
+                throw new Error("C5 repair publication SQL linkage oracle failed");
+              }
+            },
+          };
+        }),
+      );
+      // Each worker owns one C4 aggregate and the workload runner never overlaps
+      // invocations for the same worker. A fresh single-target executor permits
+      // the next fenced revision without sharing its consumed-target state.
+      return async (invocation) =>
+        createGateCC5RepairPublicationExecutor([targets[invocation.workerIndex % targets.length]!])({
+          ...invocation,
+          sampleIndex: 0,
+        });
+    };
     const repairs = Object.freeze(
       Object.fromEntries(
         Object.entries(gateCC4Projects).map(([project, repair]) => [
@@ -1472,6 +1625,14 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     await configuration.afterGateCC4Complete?.({
       sourceSha: exactSourceSha,
       runNumber,
+      postgresqlIdentifier: sanitizedIsolationIdentifier(isolation),
+      redisNamespace: `${activeRedisOwnership.queueName}:${activeRedisOwnership.rateLimitNameSpace}`,
+      runtimeControls: {
+        apiControlId: `fastify:${String(process.pid)}:${apiPort}`,
+        webControlId: `process:${String(web.child.pid ?? 0)}:${webPort}`,
+        workerControlId: schedulerWorkerId,
+        schedulerControlId: activeRedisOwnership.queueName,
+      },
       repairs,
       apiOrigin,
       webOrigin,
@@ -1480,6 +1641,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       createPublicCurrentExecutor,
       createPublicResultConvergenceExecutor,
       createLeaseTakeoverExecutor,
+      createRepairPublicationExecutor,
     });
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });

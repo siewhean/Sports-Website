@@ -17,7 +17,8 @@ export type GateCC5ScoreWriteResource = Readonly<{
   close(): Promise<void>;
 }>;
 
-export const GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS = 25 * 60;
+export const GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS = 60 * 60;
+export const GATE_C_C5_SCORE_WRITE_PASS_VALIDITY_SECONDS = 2 * 60 * 60;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const RESOURCE_SETTLEMENT_TIMEOUT_MS = 1_000;
 
@@ -36,7 +37,7 @@ export async function issueGateCC5ScoreWriteSessions(
         target.matchId,
         {
           role: "scorekeeper",
-          expiresAt: new Date(now().getTime() + 30 * 60_000).toISOString(),
+          expiresAt: new Date(now().getTime() + GATE_C_C5_SCORE_WRITE_PASS_VALIDITY_SECONDS * 1_000).toISOString(),
           idempotencyKey: randomUUID(),
         },
         randomUUID(),

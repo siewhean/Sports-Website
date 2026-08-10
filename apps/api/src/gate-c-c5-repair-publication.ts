@@ -5,8 +5,21 @@ export type GateCC5RepairPublicationTarget = Readonly<{
   apiOrigin: string;
   webOrigin: string;
   competitionId: string;
+  slug: string;
   correctionTransactionId: string;
   organiserCookie: string;
+  verifyPublication(receipt: GateCC5RepairPublicationLinkage): Promise<void>;
+}>;
+
+export type GateCC5RepairPublicationLinkage = Readonly<{
+  competitionId: string;
+  repairId: string;
+  repairRevisionId: string;
+  scheduleRevisionId: string;
+  scheduleVersion: number;
+  resultVersion: number;
+  projectionVersion: number;
+  analysisFingerprint: string;
 }>;
 
 type Value = Readonly<Record<string, unknown>>;
@@ -167,11 +180,63 @@ export function createGateCC5RepairPublicationExecutor(
       publication.status !== 200 ||
       receipt?.duplicate !== false ||
       receipt?.repair_id !== repair.repair_id ||
-      receipt?.repair_revision_id !== revisionView.repair_revision_id
+      receipt?.repair_revision_id !== revisionView.repair_revision_id ||
+      receipt?.competition_id !== target.competitionId ||
+      typeof receipt.schedule_revision_id !== "string" ||
+      !Number.isSafeInteger(receipt.schedule_version) ||
+      (receipt.schedule_version as number) < 1 ||
+      !Number.isSafeInteger(receipt.result_version) ||
+      (receipt.result_version as number) < 1 ||
+      !Number.isSafeInteger(receipt.projection_version) ||
+      (receipt.projection_version as number) < 1 ||
+      receipt.analysis_fingerprint !== revisionView.analysis_fingerprint ||
+      typeof receipt.published_at !== "string" ||
+      !Number.isFinite(Date.parse(receipt.published_at))
     ) {
       return {
         outcome: "unexpected_failure",
         correctness: { passed: false, failureCode: `repair_publication_publish_http_${publication.status}` },
+      };
+    }
+    const linkage: GateCC5RepairPublicationLinkage = {
+      competitionId: target.competitionId,
+      repairId: repair.repair_id,
+      repairRevisionId: revisionView.repair_revision_id,
+      scheduleRevisionId: receipt.schedule_revision_id as string,
+      scheduleVersion: receipt.schedule_version as number,
+      resultVersion: receipt.result_version as number,
+      projectionVersion: receipt.projection_version as number,
+      analysisFingerprint: revisionView.analysis_fingerprint,
+    };
+    const publicResponse = await fetch(
+      `${target.apiOrigin}/api/v1/public/competitions/${encodeURIComponent(target.slug)}/current`,
+      { headers: { accept: "application/json" }, signal: invocation.signal },
+    );
+    const publicProjection = await json(publicResponse);
+    const freshness = record(publicProjection?.freshness);
+    const divisionVersions = record(freshness?.division_projection_versions);
+    const projectionVersions = divisionVersions ? Object.values(divisionVersions) : [];
+    if (
+      publicResponse.status !== 200 ||
+      !freshness ||
+      freshness.schedule_version !== linkage.scheduleVersion ||
+      freshness.result_version !== linkage.resultVersion ||
+      freshness.projection_version !== linkage.projectionVersion ||
+      projectionVersions.length === 0 ||
+      projectionVersions.some((version) => !Number.isSafeInteger(version) || (version as number) < 1) ||
+      Math.max(...(projectionVersions as number[])) !== linkage.projectionVersion
+    ) {
+      return {
+        outcome: "unexpected_failure",
+        correctness: { passed: false, failureCode: `repair_publication_projection_http_${publicResponse.status}` },
+      };
+    }
+    try {
+      await target.verifyPublication(linkage);
+    } catch {
+      return {
+        outcome: "unexpected_failure",
+        correctness: { passed: false, failureCode: "repair_publication_linkage_oracle" },
       };
     }
     return { outcome: "success", correctness: { passed: true } };

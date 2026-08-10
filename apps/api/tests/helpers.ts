@@ -13,6 +13,10 @@ export function testConfig(overrides: NodeJS.ProcessEnv = {}) {
     APP_ENV: "test",
     LOG_LEVEL: "silent",
     SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "test-scoring-access-rate-limit-secret",
+    SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+      primary: { version: "v2", secret: "test-scoring-access-rate-limit-key-v2" },
+      verificationOnly: [],
+    }),
     SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "test-scoring-fallback-code-hmac-secret",
     ...overrides,
   });

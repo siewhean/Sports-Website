@@ -42,8 +42,10 @@ async function main(): Promise<void> {
         {
           operation: "public_result_convergence",
           profile,
+          sourceSha,
           maximumSamples,
           operationTimeoutMs,
+          schedule: { kind: "convergence_waves", waveCount: 2, samplesPerWave: 150 },
         },
         executor,
       );

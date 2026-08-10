@@ -6,7 +6,10 @@ const originalFetch = globalThis.fetch;
 beforeEach(() => {
   globalThis.fetch = fetchMock;
 });
-afterEach(() => fetchMock.mockReset());
+afterEach(() => {
+  fetchMock.mockReset();
+  target.verifyPublication.mockClear();
+});
 afterAll(() => {
   globalThis.fetch = originalFetch;
 });
@@ -19,8 +22,10 @@ const target = {
   apiOrigin: "http://127.0.0.1:4101",
   webOrigin: "http://localhost:3103",
   competitionId: "competition",
+  slug: "competition",
   correctionTransactionId: "correction",
   organiserCookie: "session=opaque",
+  verifyPublication: vi.fn(async () => undefined),
 };
 const invocation = {
   operation: "repair_publication" as const,
@@ -45,7 +50,30 @@ describe("C5 repair-publication executor", () => {
       .mockResolvedValueOnce(
         json({ revision: { repair_revision_id: "revision", analysis_fingerprint: "a".repeat(64) } }, 201),
       )
-      .mockResolvedValueOnce(json({ duplicate: false, repair_id: "repair", repair_revision_id: "revision" }));
+      .mockResolvedValueOnce(
+        json({
+          duplicate: false,
+          competition_id: "competition",
+          repair_id: "repair",
+          repair_revision_id: "revision",
+          schedule_revision_id: "schedule-revision",
+          schedule_version: 3,
+          result_version: 4,
+          projection_version: 5,
+          analysis_fingerprint: "a".repeat(64),
+          published_at: "2026-08-10T08:00:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        json({
+          freshness: {
+            schedule_version: 3,
+            result_version: 4,
+            projection_version: 5,
+            division_projection_versions: { division: 5 },
+          },
+        }),
+      );
     const executor = createGateCC5RepairPublicationExecutor([target]);
 
     await expect(executor(invocation)).resolves.toEqual({ outcome: "success", correctness: { passed: true } });
@@ -58,6 +86,61 @@ describe("C5 repair-publication executor", () => {
       status: "ready",
     });
     expect(revision.decisions).toMatchObject([{ decision: "keep_current" }]);
+    expect(target.verifyPublication).toHaveBeenCalledWith({
+      competitionId: "competition",
+      repairId: "repair",
+      repairRevisionId: "revision",
+      scheduleRevisionId: "schedule-revision",
+      scheduleVersion: 3,
+      resultVersion: 4,
+      projectionVersion: 5,
+      analysisFingerprint: "a".repeat(64),
+    });
+  });
+
+  it("fails when canonical public readback does not match the atomic publication receipt", async () => {
+    fetchMock
+      .mockResolvedValueOnce(json({ csrf_token: "csrf" }))
+      .mockResolvedValueOnce(
+        json({
+          repair: { repair_id: "repair" },
+          latest_revision: { repair_revision_id: "parent", analysis_fingerprint: "a".repeat(64) },
+          current_result_version: 3,
+          published_schedule_version: 2,
+          actions: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        json({ revision: { repair_revision_id: "revision", analysis_fingerprint: "a".repeat(64) } }, 201),
+      )
+      .mockResolvedValueOnce(
+        json({
+          duplicate: false,
+          competition_id: "competition",
+          repair_id: "repair",
+          repair_revision_id: "revision",
+          schedule_revision_id: "schedule-revision",
+          schedule_version: 3,
+          result_version: 4,
+          projection_version: 5,
+          analysis_fingerprint: "a".repeat(64),
+          published_at: "2026-08-10T08:00:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        json({
+          freshness: {
+            schedule_version: 3,
+            result_version: 3,
+            projection_version: 5,
+            division_projection_versions: { division: 5 },
+          },
+        }),
+      );
+    const executor = createGateCC5RepairPublicationExecutor([target]);
+    await expect(executor(invocation)).resolves.toMatchObject({
+      correctness: { failureCode: "repair_publication_projection_http_200" },
+    });
   });
 
   it("fails closed when no fresh target remains", async () => {

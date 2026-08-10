@@ -1,13 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { C5WorkloadExecutor } from "@matchday/observability";
 
+export type GateCC5PublicResultConvergenceSession = Readonly<{
+  sessionId: string;
+  sessionToken: string;
+  writerGeneration: number;
+}>;
+
 export type GateCC5PublicResultConvergenceTarget = Readonly<{
   apiOrigin: string;
   slug: string;
   matchId: string;
-  sessionId: string;
-  sessionToken: string;
-  writerGeneration: number;
+  sessionId?: string;
+  sessionToken?: string;
+  writerGeneration?: number;
+  acquireSession?: () => Promise<GateCC5PublicResultConvergenceSession>;
   /** The precondition stream must already be reduced through this sequence. */
   expectedSequence: number;
 }>;
@@ -69,7 +76,7 @@ function exactFreshness(payload: RecordValue, resultVersion: number): "match" | 
   return "match";
 }
 
-function scoringHeaders(target: GateCC5PublicResultConvergenceTarget): HeadersInit {
+function scoringHeaders(target: GateCC5PublicResultConvergenceSession): HeadersInit {
   return {
     "content-type": "application/json",
     "x-scoring-session-id": target.sessionId,
@@ -102,6 +109,16 @@ export function createGateCC5PublicResultConvergenceExecutor(
   targets: readonly GateCC5PublicResultConvergenceTarget[],
 ): C5WorkloadExecutor {
   if (targets.length === 0) throw new Error("C5 public-result convergence requires at least one isolated target");
+  if (
+    targets.some(
+      (target) =>
+        target.acquireSession === undefined &&
+        (typeof target.sessionId !== "string" ||
+          typeof target.sessionToken !== "string" ||
+          typeof target.writerGeneration !== "number"),
+    )
+  )
+    throw new Error("C5 public-result convergence target requires a session factory or complete session");
   const consumed = new Set<number>();
   return async (invocation) => {
     const targetIndex = invocation.sampleIndex;
@@ -113,10 +130,17 @@ export function createGateCC5PublicResultConvergenceExecutor(
       };
     }
     consumed.add(targetIndex);
+    const session = target.acquireSession
+      ? await target.acquireSession()
+      : {
+          sessionId: target.sessionId!,
+          sessionToken: target.sessionToken!,
+          writerGeneration: target.writerGeneration!,
+        };
     const finalisationId = randomUUID();
     const finalisation = await fetch(`${target.apiOrigin}/api/v1/scoring/finalise`, {
       method: "POST",
-      headers: scoringHeaders(target),
+      headers: scoringHeaders(session),
       body: JSON.stringify({ client_event_id: finalisationId, expected_sequence: target.expectedSequence }),
       signal: invocation.signal,
     });

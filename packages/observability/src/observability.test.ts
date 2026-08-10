@@ -25,6 +25,18 @@ import {
 } from "./index.js";
 
 describe("C5 workload summaries", () => {
+  const sourceSha = "a".repeat(40);
+  const virtualTiming = () => {
+    let now = 0;
+    return {
+      now: () => now,
+      waitUntil: async (timestampMs: number) => {
+        now = Math.max(now, timestampMs);
+      },
+      timeoutSignal: (timeoutMs: number) => AbortSignal.timeout(timeoutMs),
+    };
+  };
+
   it("uses deterministic nearest-rank percentiles and separates expected failures", () => {
     const summary = summarizeWorkload([
       { durationMs: 10, outcome: "success" },
@@ -100,8 +112,8 @@ describe("C5 workload summaries", () => {
   });
 
   it("bounds concurrent execution by the approved operation role and propagates correctness failures", async () => {
-    let now = 0;
     const seenWorkers = new Set<number>();
+    const timing = virtualTiming();
     const receipt = await executeC5Workload(
       {
         operation: "repair_publication",
@@ -113,15 +125,16 @@ describe("C5 workload summaries", () => {
           organiserWorkerCount: 2,
           approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
         },
+        sourceSha,
         maximumSamples: 2,
         operationTimeoutMs: 100,
+        schedule: { kind: "cadenced", minimumIntervalMs: 1_000 },
       },
       async ({ workerIndex }) => {
         seenWorkers.add(workerIndex);
-        now += 1;
         return { outcome: "success", correctness: { passed: true } };
       },
-      () => now,
+      timing,
     );
     expect(receipt.workerCount).toBe(2);
     expect(receipt.summary.sampleCount).toBe(2);
@@ -139,11 +152,13 @@ describe("C5 workload summaries", () => {
             organiserWorkerCount: 1,
             approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
           },
+          sourceSha,
           maximumSamples: 1,
           operationTimeoutMs: 100,
+          schedule: { kind: "cadenced", minimumIntervalMs: 1_000 },
         },
         async () => ({ outcome: "expected_failure", correctness: { passed: false, failureCode: "stale_writer" } }),
-        () => 0,
+        virtualTiming(),
       ),
     ).rejects.toThrow("correctness oracle failed: stale_writer");
   });
@@ -160,13 +175,16 @@ describe("C5 workload summaries", () => {
           organiserWorkerCount: 1,
           approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
         },
+        sourceSha,
         maximumSamples: 1,
         operationTimeoutMs: 1,
+        schedule: { kind: "cadenced", minimumIntervalMs: 1_000 },
       },
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
         return { outcome: "success", correctness: { passed: true } };
       },
+      virtualTiming(),
     ).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(C5WorkloadFailureError);
     expect((failure as C5WorkloadFailureError).receipt).toMatchObject({
@@ -187,10 +205,13 @@ describe("C5 workload summaries", () => {
           organiserWorkerCount: 1,
           approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
         },
+        sourceSha,
         maximumSamples: 1,
         operationTimeoutMs: 100,
+        schedule: { kind: "cadenced", minimumIntervalMs: 1_000 },
       },
       async () => ({ outcome: "invalid" as never, correctness: { passed: "true" as never } }),
+      virtualTiming(),
     ).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(C5WorkloadFailureError);
     expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
@@ -210,10 +231,13 @@ describe("C5 workload summaries", () => {
             organiserWorkerCount: 1,
             approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
           },
+          sourceSha,
           maximumSamples: 1,
           operationTimeoutMs: 100,
+          schedule: { kind: "cadenced", minimumIntervalMs: 1_000 },
         },
         async () => ({ outcome: "success", correctness: { passed: false, failureCode: failureCode as never } }),
+        virtualTiming(),
       ).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(C5WorkloadFailureError);
       expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
@@ -233,10 +257,13 @@ describe("C5 workload summaries", () => {
           organiserWorkerCount: 1,
           approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
         },
+        sourceSha,
         maximumSamples: 1,
         operationTimeoutMs: 1,
+        schedule: { kind: "cadenced", minimumIntervalMs: 1_000 },
       },
       async () => new Promise(() => undefined),
+      virtualTiming(),
     ).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(C5WorkloadFailureError);
     expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });

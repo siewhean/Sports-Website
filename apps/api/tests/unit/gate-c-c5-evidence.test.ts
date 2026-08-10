@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { C5ControlledFailure, C5WorkloadOperation } from "@matchday/observability";
+import {
+  createC5ApprovedPilotWorkloadPlan,
+  type C5ControlledFailure,
+  type C5WorkloadOperation,
+} from "@matchday/observability";
 import { describe, expect, it } from "vitest";
 import { c5ReceiptHash, validateGateCC5Receipt } from "../../scripts/gate-c-c5-evidence.js";
 
@@ -15,29 +19,25 @@ const stableJson = (value: unknown): string => {
   }
   return JSON.stringify(value);
 };
-const plan = {
-  profile: {
-    profileId: "pilot-score-writes",
-    durationSeconds: 1,
-    scorekeeperCount: 1,
-    publicReaderCount: 1,
-    organiserWorkerCount: 1,
-    approval: {
-      owner: "platform-ops",
-      approvedAtUtc: "2026-08-04T00:00:00.000Z",
-      reference: "OPS-42",
-    },
-  },
-  minimumSamplesPerOperation: 10,
-} as const;
+const plan = createC5ApprovedPilotWorkloadPlan();
 
 const operation = (name: C5WorkloadOperation, p95Ms: number) => ({
   operation: name,
-  workerCount: 1,
+  sourceSha,
+  workerCount:
+    name === "repair_publication"
+      ? plan.profile.organiserWorkerCount
+      : name === "public_result_convergence" || name === "public_current_conditional_read"
+        ? plan.profile.publicReaderCount
+        : plan.profile.scorekeeperCount,
   timeoutCount: 0,
+  elapsedMs: 3_600_000,
+  scheduledCadenceMs: name === "public_result_convergence" ? null : (1_000 as const),
+  convergenceWaveCount: name === "public_result_convergence" ? (2 as const) : (0 as const),
+  convergenceSamplesPerWave: name === "public_result_convergence" ? (150 as const) : (0 as const),
   summary: {
-    sampleCount: 10,
-    successfulCount: 10,
+    sampleCount: name === "public_result_convergence" ? 300 : 150,
+    successfulCount: name === "public_result_convergence" ? 300 : 150,
     expectedFailureCount: 0,
     unexpectedFailureCount: 0,
     errorRate: 0,
@@ -55,8 +55,8 @@ const receipt = {
   profile_id: plan.profile.profileId,
   approval_reference_sha256: hash(plan.profile.approval.reference),
   workload_plan_sha256: hash(stableJson(plan)),
-  minimum_samples_per_operation: 10,
-  duration_ms: 5_000,
+  minimum_samples_per_operation: 150,
+  duration_ms: 18_000_000,
   operations: {
     score_event_acknowledgement: operation("score_event_acknowledgement", 500),
     public_result_convergence: operation("public_result_convergence", 2_000),

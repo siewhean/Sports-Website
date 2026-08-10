@@ -3,6 +3,7 @@ import {
   createGateCC5ScoreWriteExecutor,
   createGateCC5ScoreWriteResource,
   GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS,
+  GATE_C_C5_SCORE_WRITE_PASS_VALIDITY_SECONDS,
   issueGateCC5ScoreWriteSessions,
 } from "../../src/gate-c-c5-score-write.js";
 
@@ -63,7 +64,7 @@ describe("C5 score-write traffic adapter", () => {
       { accountId: "organiser" },
       "competition",
       "match",
-      expect.objectContaining({ role: "scorekeeper", expiresAt: "2026-08-04T00:30:00.000Z" }),
+      expect.objectContaining({ role: "scorekeeper", expiresAt: "2026-08-04T02:00:00.000Z" }),
       expect.any(String),
     );
     expect(exchangeAccess).toHaveBeenCalledWith(
@@ -74,6 +75,7 @@ describe("C5 score-write traffic adapter", () => {
       expect.objectContaining({ sessionId: "session-1", writerGeneration: 3, expectedSequence: 2 }),
     ]);
     expect(JSON.stringify(sessions)).not.toContain("one-time-token");
+    expect(GATE_C_C5_SCORE_WRITE_PASS_VALIDITY_SECONDS).toBe(7_200);
   });
 
   it("rejects a candidate exchange instead of generating unfenced traffic", async () => {
@@ -169,6 +171,7 @@ describe("C5 score-write traffic adapter", () => {
   });
 
   it("rejects profiles that would outlive the short-lived writer session", async () => {
+    expect(GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS).toBe(3_600);
     await expect(
       createGateCC5ScoreWriteResource([sessions[0]], {
         durationSeconds: GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS + 1,
