@@ -93,12 +93,17 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
       );
       const occurredAt = this.reliableNow();
       const workspaceName = `${account.display_name.trim() || "My"} workspace`;
+      const defaultWorkspaceSlug = `workspace-${actor.accountId}`;
+      const reservedWorkspace = (
+        await tx.unsafe<{ id: string }>(`SELECT id FROM organisations WHERE slug=$1 FOR SHARE`, [defaultWorkspaceSlug])
+      )[0];
+      const workspaceSlug = reservedWorkspace ? `${defaultWorkspaceSlug}-${randomUUID()}` : defaultWorkspaceSlug;
       const organisation = first(
         await tx.unsafe<{ id: string; name: string }>(
           `INSERT INTO organisations(name,slug,created_at,updated_at)
            VALUES($1,$2,$3,$3)
            RETURNING id,name`,
-          [workspaceName, `workspace-${actor.accountId}`, occurredAt],
+          [workspaceName, workspaceSlug, occurredAt],
         ),
         "ORGANISATION_CREATE_FAILED",
         "The organiser workspace could not be created",
@@ -113,11 +118,13 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
         `INSERT INTO audit_events(
            occurred_at,request_id,actor_account_id,actor_type,organisation_id,
            action,target_type,target_id,after_state,metadata
-         ) VALUES($1,$2,$3,'account',$4,'organisation.created','organisation',$4,$5::jsonb,$6::jsonb)`,
+         ) VALUES($1,$2,$3,'account',$4,'organisation.created','organisation',$5,$6::jsonb,$7::jsonb)`,
         [
           occurredAt,
           requestId,
           actor.accountId,
+          organisation.id,
+          organisation.id,
           JSON.stringify({ name: organisation.name, role: "owner" }),
           JSON.stringify({ bootstrap: true }),
         ],
@@ -131,7 +138,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           [
             organisation.id,
             { organisation_id: organisation.id, owner_account_id: actor.accountId, bootstrap: true },
-            `organisation.bootstrap:${actor.accountId}`,
+            `organisation.bootstrap:${actor.accountId}:${organisation.id}`,
             occurredAt,
           ],
         ),
@@ -247,3 +254,4 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     return access.membership_role === "viewer" ? readOnlyDocument(document) : document;
   }
 }
+import { randomUUID } from "node:crypto";

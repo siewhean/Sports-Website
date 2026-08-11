@@ -1,7 +1,7 @@
 # V1 Recovery Audit
 
-Date: 2026-08-11  
-Branch: `v1/simple-working-product`  
+Date: 2026-08-11
+Branch: `v1/simple-working-product`
 Base: `e1722bcb3cd859c4035c20efe498720fdc23e08a`
 
 ## A. Working functionality inventory

@@ -168,6 +168,32 @@ describe("division and entry BFF", () => {
     expect(await response.json()).toMatchObject({ name: "Harbour", seed: 9, status: "active" });
   });
 
+  it("forwards an unseeded entry without converting it into a seeded team", async () => {
+    const body = { name: "Harbour Social", entry_type: "team", seed: null, idempotency_key: idempotencyKey };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/api/v1/identity/me")) return identity();
+      expect(JSON.parse(String(init?.body))).toEqual(body);
+      return Response.json({
+        id: "77df44ed-d7c0-4721-8577-8098285c5591",
+        division_id: divisionId,
+        name: "Harbour Social",
+        entry_type: "team",
+        seed: null,
+        status: "active",
+        revision: 1,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await createEntry(
+      request(`/api/phase3/competitions/${competitionId}/divisions/${divisionId}/entries`, body),
+      { params: Promise.resolve({ competitionId, divisionId }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ name: "Harbour Social", seed: null, status: "active" });
+  });
+
   it("forwards revision-fenced entry edits and deletions through the authenticated boundary", async () => {
     const entryId = "77df44ed-d7c0-4721-8577-8098285c5591";
     const update = { idempotency_key: idempotencyKey, name: "Harbour United", revision: 1, seed: null };

@@ -89,6 +89,13 @@ async function evidenceCounts() {
   );
 }
 
+async function createBootstrapAccount(label: string) {
+  return required(
+    await client<{ id: string }[]>`INSERT INTO accounts(primary_email,display_name,email_verified_at)
+      VALUES(${`${label}-${randomUUID()}@gate-b.test`},${label},now()) RETURNING id`,
+  ).id;
+}
+
 beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
@@ -181,6 +188,84 @@ afterAll(async () => {
 });
 
 describeInfrastructure("Gate B dynamic sport setup runtime", () => {
+  it("creates exactly one durable workspace and recovers from a non-writable legacy membership", async () => {
+    const firstAccountId = await createBootstrapAccount("First workspace");
+    const receipts = await Promise.all([
+      runtime.ensureWritableOrganisation({ accountId: firstAccountId }, randomUUID()),
+      runtime.ensureWritableOrganisation({ accountId: firstAccountId }, randomUUID()),
+    ]);
+    expect(receipts.map((receipt) => receipt.id)).toEqual([receipts[0]!.id, receipts[0]!.id]);
+    expect(receipts.filter((receipt) => receipt.created)).toHaveLength(1);
+    const firstCounts = required(
+      await client<{ organisations: number; memberships: number; audits: number; outbox: number }[]>`
+        SELECT
+          (SELECT count(*)::int FROM organisations WHERE id=${receipts[0]!.id}) organisations,
+          (SELECT count(*)::int FROM organisation_memberships
+           WHERE organisation_id=${receipts[0]!.id} AND account_id=${firstAccountId} AND role='owner' AND status='active') memberships,
+          (SELECT count(*)::int FROM audit_events
+           WHERE target_id=${receipts[0]!.id} AND action='organisation.created') audits,
+          (SELECT count(*)::int FROM outbox_events
+           WHERE aggregate_id=${receipts[0]!.id} AND event_type='organisation.created') outbox`,
+    );
+    expect(firstCounts).toEqual({ organisations: 1, memberships: 1, audits: 1, outbox: 1 });
+
+    const legacyAccountId = await createBootstrapAccount("Legacy viewer");
+    const legacyOwnerId = await createBootstrapAccount("Legacy owner");
+    const legacyOrganisationId = await client.begin(async (tx) => {
+      const legacyOrganisation = required(
+        await tx<{ id: string }[]>`INSERT INTO organisations(name,slug)
+          VALUES('Legacy workspace',${`workspace-${legacyAccountId}`}) RETURNING id`,
+      );
+      await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+        VALUES
+          (${legacyOrganisation.id},${legacyOwnerId},'owner','active'),
+          (${legacyOrganisation.id},${legacyAccountId},'viewer','active')`;
+      return legacyOrganisation.id;
+    });
+    const recovered = await runtime.ensureWritableOrganisation({ accountId: legacyAccountId }, randomUUID());
+    expect(recovered).toMatchObject({ role: "owner", created: true });
+    expect(recovered.id).not.toBe(legacyOrganisationId);
+  });
+
+  it("rolls back workspace creation when its audit or outbox evidence fails", async () => {
+    for (const failure of [
+      { table: "audit_events", trigger: "bootstrap_audit_failure", field: "action", value: "organisation.created" },
+      {
+        table: "outbox_events",
+        trigger: "bootstrap_outbox_failure",
+        field: "event_type",
+        value: "organisation.created",
+      },
+    ] as const) {
+      const bootstrapAccountId = await createBootstrapAccount(failure.trigger);
+      const functionName = `${failure.trigger}_fn`;
+      await client.unsafe(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION '${failure.trigger}'; END;
+      $$`);
+      await client.unsafe(
+        `CREATE TRIGGER ${failure.trigger} BEFORE INSERT ON ${failure.table}
+         FOR EACH ROW WHEN (NEW.${failure.field} = '${failure.value}') EXECUTE FUNCTION ${functionName}()`,
+      );
+      try {
+        await expect(
+          runtime.ensureWritableOrganisation({ accountId: bootstrapAccountId }, randomUUID()),
+        ).rejects.toThrow(failure.trigger);
+      } finally {
+        await client.unsafe(`DROP TRIGGER ${failure.trigger} ON ${failure.table}`);
+        await client.unsafe(`DROP FUNCTION ${functionName}()`);
+      }
+      const rollbackCounts = required(
+        await client<{ organisations: number; memberships: number; audits: number; outbox: number }[]>`
+          SELECT
+            (SELECT count(*)::int FROM organisations WHERE slug=${`workspace-${bootstrapAccountId}`}) organisations,
+            (SELECT count(*)::int FROM organisation_memberships WHERE account_id=${bootstrapAccountId}) memberships,
+            (SELECT count(*)::int FROM audit_events WHERE actor_account_id=${bootstrapAccountId} AND action='organisation.created') audits,
+            (SELECT count(*)::int FROM outbox_events WHERE idempotency_key LIKE ${`organisation.bootstrap:${bootstrapAccountId}:%`}) outbox`,
+      );
+      expect(rollbackCounts).toEqual({ organisations: 0, memberships: 0, audits: 0, outbox: 0 });
+    }
+  });
+
   it("generates immutable multi-metric evidence without changing formats and applies a selection once", async () => {
     const fixture = await createCompetitionFixture("basketball", "Recommendations");
     await client`UPDATE competitions SET plan_tier='organiser_pro' WHERE id=${fixture.competitionId}`;
