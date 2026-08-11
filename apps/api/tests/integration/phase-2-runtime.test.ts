@@ -2277,8 +2277,19 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       LIMIT 1`;
     const target = protectedTarget[0];
     if (!target) throw new Error("Expected automatic G1 rank-one target");
+    const finalisedTarget = await client<{ match_id: string; slot: string; entry_id: string }[]>`
+      SELECT slot.match_id,slot.slot,slot.entry_id
+      FROM advancement_slots slot
+      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
+      WHERE slot.competition_id=${competition.id} AND source.source_group_id='G2' AND source.source_rank=1
+      LIMIT 1`;
+    const finalTarget = finalisedTarget[0];
+    if (!finalTarget) throw new Error("Expected automatic G2 rank-one target");
     await client`UPDATE matches SET state='in_progress' WHERE id=${target.match_id}`;
-    for (const match of groupMatches.filter((candidate) => candidate.graph_pool_id === "G1")) {
+    await client`UPDATE matches SET state='final' WHERE id=${finalTarget.match_id}`;
+    for (const match of groupMatches.filter(
+      (candidate) => candidate.graph_pool_id === "G1" || candidate.graph_pool_id === "G2",
+    )) {
       const initialHomeWins = match.home_seed < match.away_seed;
       await client`INSERT INTO match_result_snapshots
         (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
@@ -2296,6 +2307,11 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       >`SELECT entry_id FROM advancement_slots WHERE match_id=${target.match_id} AND slot=${target.slot}`,
     ).toEqual([{ entry_id: target.entry_id }]);
     expect(
+      await client<
+        { entry_id: string }[]
+      >`SELECT entry_id FROM advancement_slots WHERE match_id=${finalTarget.match_id} AND slot=${finalTarget.slot}`,
+    ).toEqual([{ entry_id: finalTarget.entry_id }]);
+    expect(
       await client<{ reason: string; target_slot_id: string }[]>`
         SELECT reason,target_slot_id FROM advancement_conflicts
         WHERE competition_id=${competition.id} AND result_version=3
@@ -2305,6 +2321,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         expect.objectContaining({
           reason: "downstream_match_started",
           target_slot_id: `${target.match_id}:${target.slot}`,
+        }),
+        expect.objectContaining({
+          reason: "downstream_match_started",
+          target_slot_id: `${finalTarget.match_id}:${finalTarget.slot}`,
         }),
       ]),
     );
