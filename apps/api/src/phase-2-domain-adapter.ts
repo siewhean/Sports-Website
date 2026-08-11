@@ -257,6 +257,14 @@ export const phase2DomainAdapter: Phase2DomainAdapter = {
         version: index + 1,
       }));
     const parsed = formatValue(format);
+    // V1 uses the Phase 3 canonical graph format. It has no legacy `groups`
+    // array for this adapter to resolve; its advancement is already owned by
+    // the graph projection. A round-robin finalisation must still publish its
+    // result and standings rather than failing while attempting a second,
+    // incompatible bracket interpretation.
+    if (!Array.isArray(parsed.groups)) {
+      return { bracket: { matches: [], qualifiedEntryIds: [], championEntryId: null } };
+    }
     const groupRankings = Object.fromEntries(
       parsed.groups.map((group) => {
         const groupEntries = entries.filter((entry) => group.entryIds.includes(entry.id));

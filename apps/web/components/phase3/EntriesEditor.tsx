@@ -1,7 +1,6 @@
 "use client";
 
 import { type FormEvent, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   parseCreatedDivision,
   parseCreatedEntry,
@@ -35,7 +34,6 @@ export function EntriesEditor({
   initialDivisions: readonly EntryEditorDivision[];
   canEdit: boolean;
 }) {
-  const router = useRouter();
   const [divisions, setDivisions] = useState(initialDivisions);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -106,7 +104,6 @@ export function EntriesEditor({
     setDivisions((current) => [...current, division]);
     setMessage(phase3EntriesCopy.divisionCreated);
     form.reset();
-    router.refresh();
   }
 
   async function addEntry(event: FormEvent<HTMLFormElement>, divisionId: string) {
@@ -150,7 +147,6 @@ export function EntriesEditor({
     );
     setMessage(phase3EntriesCopy.entryCreated);
     form.reset();
-    router.refresh();
   }
 
   async function updateEntry(event: FormEvent<HTMLFormElement>, divisionId: string, entryId: string, revision: number) {
@@ -187,7 +183,6 @@ export function EntriesEditor({
       ),
     );
     setMessage(phase3EntriesCopy.entryUpdated);
-    router.refresh();
   }
 
   async function removeEntry(divisionId: string, entryId: string, revision: number) {
@@ -223,7 +218,6 @@ export function EntriesEditor({
       ),
     );
     setMessage(phase3EntriesCopy.entryRemoved);
-    router.refresh();
   }
 
   function openDeleteDialog(deleteRequest: PendingDelete) {

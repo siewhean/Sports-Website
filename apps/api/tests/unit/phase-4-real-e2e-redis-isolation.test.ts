@@ -7,6 +7,9 @@ import {
   assertEmptyOwnedRedisNamespace,
   createRedisOwnership,
   isOwnedRedisKey,
+  resolveHarnessPorts,
+  resolveHarnessProjects,
+  resolveHarnessRunCount,
   sha256Identifier,
   unlinkOwnedRedisKeys,
 } from "../../scripts/run-phase-4-real-e2e.js";
@@ -41,6 +44,38 @@ class FakeRedis {
 }
 
 describe("Phase 4 real E2E Redis ownership", () => {
+  it("uses explicit, valid, non-conflicting ports so parallel worktrees do not contend", () => {
+    expect(resolveHarnessPorts({})).toEqual({ apiPort: 4101, webPort: 3103 });
+    expect(resolveHarnessPorts({ PHASE4_E2E_API_PORT: "4115", PHASE4_E2E_WEB_PORT: "3115" })).toEqual({
+      apiPort: 4115,
+      webPort: 3115,
+    });
+    expect(() => resolveHarnessPorts({ PHASE4_E2E_API_PORT: "not-a-port" })).toThrow(/integer port/);
+    expect(() => resolveHarnessPorts({ PHASE4_E2E_API_PORT: "1023" })).toThrow(/between/);
+    expect(() => resolveHarnessPorts({ PHASE4_E2E_API_PORT: "4115", PHASE4_E2E_WEB_PORT: "4115" })).toThrow(
+      /must be different/,
+    );
+  });
+
+  it("permits a bounded one-run calibration before the required two-run evidence", () => {
+    expect(resolveHarnessRunCount({})).toBe(2);
+    expect(resolveHarnessRunCount({ PHASE4_E2E_RUNS: "1" })).toBe(1);
+    expect(resolveHarnessRunCount({ PHASE4_E2E_RUNS: "2" })).toBe(2);
+    expect(() => resolveHarnessRunCount({ PHASE4_E2E_RUNS: "3" })).toThrow(/must be 1 or 2/);
+  });
+
+  it("limits a calibration to one recognised browser project without changing the evidence default", () => {
+    expect(resolveHarnessProjects({})).toEqual([
+      "phase-4-real-phone-chromium",
+      "phase-4-real-tablet-webkit",
+      "phase-4-real-desktop-chromium",
+    ]);
+    expect(resolveHarnessProjects({ PHASE4_E2E_PROJECT: "phase-4-real-phone-chromium" })).toEqual([
+      "phase-4-real-phone-chromium",
+    ]);
+    expect(() => resolveHarnessProjects({ PHASE4_E2E_PROJECT: "unknown" })).toThrow(/must be one of/);
+  });
+
   it("derives four exact key families from a canonical UUID queue name", () => {
     const ownership = createRedisOwnership(queueName);
 

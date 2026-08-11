@@ -1,6 +1,6 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 type State = {
   apiOrigin: string;
@@ -139,6 +139,13 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
 
   const privatePublic = await page.goto(`/competitions/${slug}`);
   expect(privatePublic?.status()).toBe(404);
+  // The public route must return 404 before publication. Chromium and WebKit
+  // report that deliberately asserted response as a generic console error;
+  // the exact response list below keeps this allowance narrow.
+  allowConsoleFailure(
+    page,
+    /^console\.error: Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
+  );
 
   await page.goto(`/organiser/competitions/${competitionId}/schedule`);
   await expect(page.getByRole("heading", { name: "Balanced schedule", exact: true })).toBeVisible();
@@ -168,7 +175,15 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
 
   await page.goto(`/organiser/competitions/${competitionId}/access`);
   const accessUrl = await issuePass(page, matchId);
+  const exchange = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" && new URL(candidate.url()).pathname === "/api/scoring/access/exchange",
+  );
   await page.goto(accessUrl);
+  expect(
+    (await exchange).status(),
+    "The production web BFF must exchange the rendered pass with the separate API origin",
+  ).toBe(200);
   await expect(page).toHaveURL(`${seed.webOrigin}/score`);
   await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
@@ -178,8 +193,20 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
   const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
   await confirmation.getByLabel("Scorer or participant name").fill("Aisha Tan");
   await confirmation.getByRole("button", { name: /Record goal/ }).click();
+  await page.locator("summary").filter({ hasText: "Match actions" }).click();
+  await page.getByRole("button", { name: "Period change" }).click();
+  const periodChange = page.getByRole("dialog", { name: "Record event: Period change" });
+  await periodChange.getByLabel("period").selectOption("2");
+  await periodChange.getByLabel("Event time").fill("10:00");
+  await periodChange.getByRole("button", { name: "Record event" }).click();
   await page.getByRole("button", { name: "Review final score" }).click();
+  const finalisation = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" && new URL(candidate.url()).pathname === "/api/scoring/finalise",
+  );
   await page.getByRole("button", { name: "Confirm final result" }).click();
+  const finalisationResponse = await finalisation;
+  expect(finalisationResponse.status(), await finalisationResponse.text()).toBe(200);
   await expect(page.getByRole("heading", { name: "Result publication acknowledged" })).toBeVisible();
   await page.getByRole("link", { name: "Open public page" }).click();
   await expect(page).toHaveURL(`${seed.webOrigin}/competitions/${slug}`);

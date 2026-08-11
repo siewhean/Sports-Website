@@ -253,7 +253,7 @@ type CompetitionRow = {
   division_id?: string;
   membership_role?: "owner" | "organiser" | "viewer";
 };
-type EntryRow = { id: string; name: string; seed: number };
+type EntryRow = { id: string; name: string; seed: number | null };
 type FormatRow = { id: string; definition: Record<string, unknown>; revision: number };
 type CanonicalScoreEventRow = {
   id: string;
@@ -1019,7 +1019,9 @@ export class Phase2Runtime {
       );
       if (![8, 16].includes(entries.length))
         throw new ApiError(422, "ENTRY_COUNT_INVALID", "Exactly 8 or 16 entries are required");
-      const generated = this.domain.generateFormat(entries);
+      const generated = this.domain.generateFormat(
+        entries.map((entry, index) => ({ ...entry, seed: entry.seed ?? index + 1 })),
+      );
       const definitionHash = stableHash(generated.definition);
       const existing = await tx.unsafe<{ id: string; revision: number }>(
         `SELECT id,revision FROM format_revisions WHERE division_id=$1 AND definition_hash=$2`,
@@ -3852,7 +3854,12 @@ export class Phase2Runtime {
         version: result.result_version,
       };
     });
-    const rows = calculateStandings(entries, standingsResults, standingsConfig);
+    // V1 and manual entry flows intentionally allow an unseeded entry. The
+    // standings engine requires a numeric final tie-breaker, so mirror the
+    // Phase 3 normalisation and derive a stable fallback from the deterministic
+    // query order instead of passing the database null through at finalisation.
+    const standingsEntries = entries.map((entry, index) => ({ ...entry, seed: entry.seed ?? index + 1 }));
+    const rows = calculateStandings(standingsEntries, standingsResults, standingsConfig);
     const standings = {
       standings: rows,
       explanation: rows.map((row) => ({ entry_id: row.entryId, criteria: row.explanations })),
@@ -3865,7 +3872,7 @@ export class Phase2Runtime {
       ),
       "Format not found",
     );
-    const bracket = this.domain.resolveBracket({ format: format.definition, results, entries });
+    const bracket = this.domain.resolveBracket({ format: format.definition, results, entries: standingsEntries });
     const resolved = bracket.bracket as {
       matches?: readonly { matchId: string; homeEntryId: string | null; awayEntryId: string | null }[];
     };

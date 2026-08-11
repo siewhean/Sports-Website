@@ -25,8 +25,53 @@ import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
 
-const apiPort = 4101;
-const webPort = 3103;
+const defaultApiPort = 4101;
+const defaultWebPort = 3103;
+const minimumUnprivilegedPort = 1024;
+const maximumPort = 65_535;
+const realE2eProjectNames = [
+  "phase-4-real-phone-chromium",
+  "phase-4-real-tablet-webkit",
+  "phase-4-real-desktop-chromium",
+] as const;
+type RealE2eProjectName = (typeof realE2eProjectNames)[number];
+
+export function resolveHarnessPorts(environment: NodeJS.ProcessEnv): { apiPort: number; webPort: number } {
+  const resolvePort = (name: "PHASE4_E2E_API_PORT" | "PHASE4_E2E_WEB_PORT", fallback: number): number => {
+    const raw = environment[name];
+    if (raw === undefined || raw.trim() === "") return fallback;
+    if (!/^\d+$/.test(raw)) throw new Error(`${name} must be an integer port, received ${JSON.stringify(raw)}`);
+    const port = Number(raw);
+    if (!Number.isSafeInteger(port) || port < minimumUnprivilegedPort || port > maximumPort)
+      throw new Error(
+        `${name} must be between ${minimumUnprivilegedPort} and ${maximumPort}, received ${JSON.stringify(raw)}`,
+      );
+    return port;
+  };
+
+  const apiPort = resolvePort("PHASE4_E2E_API_PORT", defaultApiPort);
+  const webPort = resolvePort("PHASE4_E2E_WEB_PORT", defaultWebPort);
+  if (apiPort === webPort) throw new Error("PHASE4_E2E_API_PORT and PHASE4_E2E_WEB_PORT must be different");
+  return { apiPort, webPort };
+}
+
+export function resolveHarnessRunCount(environment: NodeJS.ProcessEnv): 1 | 2 {
+  const raw = environment.PHASE4_E2E_RUNS;
+  if (raw === undefined || raw.trim() === "") return 2;
+  if (raw === "1" || raw === "2") return Number(raw) as 1 | 2;
+  throw new Error(`PHASE4_E2E_RUNS must be 1 or 2, received ${JSON.stringify(raw)}`);
+}
+
+export function resolveHarnessProjects(environment: NodeJS.ProcessEnv): readonly RealE2eProjectName[] {
+  const requested = environment.PHASE4_E2E_PROJECT?.trim();
+  if (!requested) return realE2eProjectNames;
+  if ((realE2eProjectNames as readonly string[]).includes(requested)) return [requested as RealE2eProjectName];
+  throw new Error(
+    `PHASE4_E2E_PROJECT must be one of ${realE2eProjectNames.join(", ")}, received ${JSON.stringify(requested)}`,
+  );
+}
+
+const { apiPort, webPort } = resolveHarnessPorts(process.env);
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
 const webOrigin = `http://localhost:${webPort}`;
 const databasePrefix = "matchday_phase4_e2e_";
@@ -664,7 +709,11 @@ async function assertV1DatabaseOracle(sql: Sql, result: V1BrowserJourneyResult):
   const resultRows = await sql<{ event_type: string; sequence: number }[]>`
     SELECT event_type,sequence FROM canonical_score_events WHERE match_id=${result.matchId} ORDER BY sequence
   `;
-  if (resultRows.length < 2 || resultRows[0]?.event_type !== "goal" || resultRows.at(-1)?.event_type !== "finalised")
+  const expectedEventTypes = ["match_started", "goal", "period_change", "finalisation"];
+  if (
+    JSON.stringify(resultRows.map((row) => row.event_type)) !== JSON.stringify(expectedEventTypes) ||
+    resultRows.some((row, index) => row.sequence !== index + 1)
+  )
     throw new Error(`V1 scoring oracle failed: ${JSON.stringify(resultRows)}`);
   process.stdout.write(`V1 simple journey persistence oracle: ${JSON.stringify(aggregate)}\n`);
 }
@@ -791,11 +840,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       phase2,
     );
     await scheduler.start();
-    const projectNames = [
-      "phase-4-real-phone-chromium",
-      "phase-4-real-tablet-webkit",
-      "phase-4-real-desktop-chromium",
-    ] as const;
+    const projectNames = resolveHarnessProjects(process.env);
     const projects: Record<string, SeedState> = {};
     for (const [index, projectName] of projectNames.entries()) {
       projects[projectName] = await seed(sql, `project-${index + 1}`);
@@ -846,6 +891,10 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     const runtimeEnv: NodeJS.ProcessEnv = {
       ...process.env,
       MATCHDAY_API_BASE_URL: apiOrigin,
+      // The production web BFF seals the scoring-session cookie. This must be
+      // present in the isolated browser journey or it deliberately refuses to
+      // exchange the one-time access fragment before calling the API.
+      SCORING_SESSION_SEAL_KEY: randomBytes(32).toString("base64url"),
       PHASE4_E2E_WEB_BASE_URL: webOrigin,
       PHASE4_E2E_STATE_FILE: stateFile,
       PHASE4_E2E_RESULT_FILE: resultFile,
@@ -863,7 +912,9 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       runtimeEnv,
     );
     await waitFor(`${webOrigin}/`, "production web", web, webBuildId);
-    const probeState = projects[projectNames[0]]!;
+    const firstProjectName = projectNames[0];
+    if (!firstProjectName) throw new Error("At least one real E2E browser project is required");
+    const probeState = projects[firstProjectName]!;
     const formatProbe = await fetch(`${webOrigin}/organiser/competitions/new`, {
       headers: { cookie: probeState.organiserCookie },
     });
@@ -881,7 +932,16 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     await runProcess(
       "Phase 4 real Playwright",
       "pnpm",
-      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", playwrightConfig],
+      [
+        "--filter",
+        "@matchday/web",
+        "exec",
+        "playwright",
+        "test",
+        "--config",
+        playwrightConfig,
+        ...projectNames.flatMap((projectName) => ["--project", projectName]),
+      ],
       runtimeEnv,
       true,
     );
@@ -982,8 +1042,9 @@ async function main(): Promise<void> {
     process.env.PHASE4_E2E_ISOLATION_RECORD_FILE ?? path.join(root, "artifacts/qa/phase4-real-isolation.ndjson");
   await mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
   await writeFile(recordFile, "", { mode: 0o600 });
+  const runCount = resolveHarnessRunCount(process.env);
   await runOnce(1, { recordFile, redisDatabase: 14 });
-  await runOnce(2, { recordFile, redisDatabase: 15 });
+  if (runCount === 2) await runOnce(2, { recordFile, redisDatabase: 15 });
   process.stdout.write(`Phase 4 real E2E isolation records: ${recordFile}\n`);
 }
 
