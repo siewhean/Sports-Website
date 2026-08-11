@@ -60,10 +60,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     super(reliableSql, phase3, enqueue, ai, reliableNow, publicProjection);
   }
 
-  async ensureWritableOrganisation(
-    actor: Phase3Actor,
-    requestId: string,
-  ): Promise<OrganisationBootstrapReceipt> {
+  async ensureWritableOrganisation(actor: Phase3Actor, requestId: string): Promise<OrganisationBootstrapReceipt> {
     if (!this.reliableSql.begin) {
       throw new Error("Organiser workspace provisioning requires a transaction-capable PostgreSQL client");
     }
@@ -121,22 +118,25 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           occurredAt,
           requestId,
           actor.accountId,
-          organisation.id,
           JSON.stringify({ name: organisation.name, role: "owner" }),
           JSON.stringify({ bootstrap: true }),
         ],
       );
-      await tx.unsafe(
-        `INSERT INTO outbox_events(
-           aggregate_type,aggregate_id,event_type,payload,idempotency_key,created_at,available_at
-         ) VALUES('organisation',$1,'organisation.created',$2::jsonb,$3,$4,$4)
-         ON CONFLICT(idempotency_key) DO NOTHING`,
-        [
-          organisation.id,
-          JSON.stringify({ organisation_id: organisation.id, owner_account_id: actor.accountId, bootstrap: true }),
-          `organisation.bootstrap:${actor.accountId}`,
-          occurredAt,
-        ],
+      first(
+        await tx.unsafe<{ id: string }>(
+          `INSERT INTO outbox_events(
+             aggregate_type,aggregate_id,event_type,payload,idempotency_key,created_at,available_at
+           ) VALUES('organisation',$1,'organisation.created',$2::jsonb,$3,$4,$4)
+           RETURNING id`,
+          [
+            organisation.id,
+            { organisation_id: organisation.id, owner_account_id: actor.accountId, bootstrap: true },
+            `organisation.bootstrap:${actor.accountId}`,
+            occurredAt,
+          ],
+        ),
+        "ORGANISATION_OUTBOX_FAILED",
+        "The organiser workspace evidence could not be recorded",
       );
       return { id: organisation.id, name: organisation.name, role: "owner", created: true };
     });

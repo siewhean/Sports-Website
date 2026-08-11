@@ -132,6 +132,36 @@ function runtime() {
 }
 
 describe("Gate B setup route boundary", () => {
+  it("bootstraps a first writable organisation only through an authenticated CSRF-protected mutation", async () => {
+    const gate = runtime();
+    const receipt = { id: organisationId, name: "Gate B", role: "owner" as const, created: true };
+    vi.spyOn(gate, "ensureWritableOrganisation").mockResolvedValue(receipt);
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: identityRuntime(),
+      phase4Runtime: gate,
+    });
+    apps.push(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/organisations/competition-options/bootstrap",
+      headers: mutationHeaders(),
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toEqual(receipt);
+    expect(gate.ensureWritableOrganisation).toHaveBeenCalledWith({ accountId }, expect.any(String));
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/v1/organisations/competition-options/bootstrap",
+      headers: { origin: "http://localhost:3000", cookie: "matchday_session=session-token" },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(gate.ensureWritableOrganisation).toHaveBeenCalledOnce();
+  });
+
   it("authenticates and dispatches strict PATCH and resume commands", async () => {
     const gate = runtime();
     const app = await buildApp({

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cookieHostMatches,
   isOrganiserWorkspacePayload,
@@ -127,6 +127,15 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
 }
 
 describe("organiser competition workspace mapping", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("validates and maps authenticated workspace data without access secrets", () => {
     const payload = workspace();
     expect(isOrganiserWorkspacePayload(payload)).toBe(true);

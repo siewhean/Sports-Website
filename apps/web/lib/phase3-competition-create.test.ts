@@ -4,6 +4,7 @@ import {
   firstInvalidCompetitionCreateField,
   isCompetitionCreateRequest,
   parseCompetitionCreateReceipt,
+  parseCompetitionOrganisationBootstrapReceipt,
   parseCompetitionOrganisationOptions,
   phase3CompetitionSports,
   type CompetitionCreateDraft,
@@ -60,6 +61,16 @@ describe("competition creation contract", () => {
     expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(competitionCreateFieldOrder.indexOf("sport_code"));
   });
 
+  it("allows only a missing organisation when the first-workspace bootstrap is explicit", () => {
+    const withoutOrganisation = { ...validDraft, organisation_id: "" };
+
+    expect(firstInvalidCompetitionCreateField(withoutOrganisation)).toBe("organisation_id");
+    expect(firstInvalidCompetitionCreateField(withoutOrganisation, { allowOrganisationBootstrap: true })).toBeNull();
+    expect(
+      firstInvalidCompetitionCreateField({ ...withoutOrganisation, name: "" }, { allowOrganisationBootstrap: true }),
+    ).toBe("name");
+  });
+
   it("rejects an inverted date range and malformed receipt", () => {
     expect(isCompetitionCreateRequest({ ...validCommand, ends_on: "2027-04-30" })).toBe(false);
     expect(isCompetitionCreateRequest({ ...validCommand, starts_on: "2027-02-30" })).toBe(false);
@@ -81,5 +92,17 @@ describe("competition creation contract", () => {
     expect(parseCompetitionOrganisationOptions([owner])).toEqual([owner]);
     expect(parseCompetitionOrganisationOptions([{ ...owner, role: "viewer" }])).toBeNull();
     expect(parseCompetitionOrganisationOptions([owner, owner])).toBeNull();
+  });
+
+  it("accepts only an exact first-workspace bootstrap receipt", () => {
+    const receipt = {
+      id: validDraft.organisation_id,
+      name: "National Sports",
+      role: "owner",
+      created: true,
+    };
+    expect(parseCompetitionOrganisationBootstrapReceipt(receipt)).toEqual(receipt);
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, extra: true })).toBeNull();
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, created: "true" })).toBeNull();
   });
 });
