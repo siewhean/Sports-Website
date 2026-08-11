@@ -340,6 +340,19 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
     await sql`UPDATE schedule_revisions
       SET status='published',published_at=${publishedAt}
       WHERE id=${schedule.id}`;
+    // This legacy C2 fixture intentionally composes two formats into one
+    // schedule revision. The Phase 2 publish trigger correctly requires a
+    // one-format/one-complete-schedule revision, so it cannot be invoked for
+    // this otherwise-valid historical projection shape. Mark both formats as
+    // published in the fixture state (rather than leaving Women as a draft)
+    // while keeping that production trigger unchanged.
+    await sql.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL session_replication_role = replica");
+      await tx.unsafe(`UPDATE format_revisions SET status='published',published_at=$1 WHERE id = ANY($2::uuid[])`, [
+        publishedAt,
+        [openFormat.id, womenFormat.id],
+      ]);
+    });
     await sql`UPDATE competition_publications
       SET published_schedule_revision_id=${schedule.id},schedule_version=1,
           schedule_published_at=${publishedAt},updated_at=${publishedAt}
@@ -1399,6 +1412,93 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       { event_type: "result.reopened", count: 1 },
     ]);
   }, 20_000);
+
+  it("rolls back reopened-result withdrawal when its audit or outbox evidence cannot be retained", async () => {
+    const world = await createScoringWorld("canoe_polo");
+    const actor = { accountId };
+    const append = async (command: Record<string, unknown>, expectedVersion: number) =>
+      runtime.appendCanonicalScoreEvent(
+        world.auth,
+        { client_event_id: randomUUID(), occurred_at: new Date().toISOString(), ...command },
+        expectedVersion,
+        randomUUID(),
+      );
+    await append({ type: "match_started" }, 0);
+    await append(
+      {
+        type: "goal",
+        team_slot: "home",
+        participant_id: "Player 1",
+        segment_number: 1,
+        manual_time_seconds: 10,
+      },
+      1,
+    );
+    await append({ type: "period_change", segment_number: 2, manual_time_seconds: 0 }, 2);
+    await runtime.finalise(world.auth, randomUUID(), randomUUID(), 3);
+
+    const before = async () => {
+      const [state] = await sql<
+        {
+          match_state: string;
+          stream_version: number;
+          result_version: number;
+          reopen_events: number;
+          reopen_audits: number;
+          reopen_outbox: number;
+        }[]
+      >`
+        SELECT
+          (SELECT state FROM matches WHERE id=${world.match.id}) AS match_state,
+          (SELECT current_version FROM match_score_streams WHERE match_id=${world.match.id})::integer AS stream_version,
+          (SELECT result_version FROM competition_publications WHERE competition_id=${world.competition.id})::integer AS result_version,
+          (SELECT count(*)::integer FROM canonical_score_events
+             WHERE match_id=${world.match.id} AND event_type='match_reopened') AS reopen_events,
+          (SELECT count(*)::integer FROM audit_events
+             WHERE target_id=${world.match.id} AND action='result.reopened') AS reopen_audits,
+          (SELECT count(*)::integer FROM outbox_events
+             WHERE aggregate_id=${world.match.id} AND event_type='result.reopened') AS reopen_outbox
+      `;
+      if (!state) throw new Error("Expected finalised match state");
+      return state;
+    };
+
+    const baseline = await before();
+    const [competition] = await sql<{ slug: string }[]>`SELECT slug FROM competitions WHERE id=${world.competition.id}`;
+    if (!competition) throw new Error("Expected scoring-world competition slug");
+    const publicBaseline = await runtime.publicCompetition(competition.slug);
+    for (const failure of [
+      { table: "audit_events", trigger: "c2_reopen_audit_failure", predicate: "NEW.action='result.reopened'" },
+      { table: "outbox_events", trigger: "c2_reopen_outbox_failure", predicate: "NEW.event_type='result.reopened'" },
+    ] as const) {
+      const functionName = `${failure.trigger}_fn`;
+      await sql.unsafe(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION '${failure.trigger}'; END;
+      $$`);
+      await sql.unsafe(`CREATE TRIGGER ${failure.trigger} BEFORE INSERT ON ${failure.table}
+        FOR EACH ROW WHEN (${failure.predicate}) EXECUTE FUNCTION ${functionName}()`);
+      try {
+        await expect(
+          runtime.reopenCanonicalMatch(
+            actor,
+            world.competition.id,
+            world.match.id,
+            {
+              clientEventId: randomUUID(),
+              reason: "Organiser withdrawal rollback check",
+              expectedAggregateVersion: 4,
+            },
+            randomUUID(),
+          ),
+        ).rejects.toThrow(failure.trigger);
+      } finally {
+        await sql.unsafe(`DROP TRIGGER ${failure.trigger} ON ${failure.table}`);
+        await sql.unsafe(`DROP FUNCTION ${functionName}()`);
+      }
+      expect(await before()).toEqual(baseline);
+      expect(await runtime.publicCompetition(competition.slug)).toEqual(publicBaseline);
+    }
+  });
 
   it("refuses to replay a stream whose frozen sport pack has no matching reducer", async () => {
     const world = await createScoringWorld("basketball");
