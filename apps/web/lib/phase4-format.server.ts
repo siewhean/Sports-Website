@@ -52,6 +52,7 @@ function unavailable(
     organisationId: "",
     sportCode,
     draft: null,
+    revisions: [],
     templates: [],
   };
 }
@@ -293,6 +294,7 @@ export async function getFormatBuilderDocument(input: {
       organisationId: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
       sportCode: input.sportCode,
       draft: demoDraft(input.competitionId, input.divisionId, state === "read-only"),
+      revisions: [],
       templates: [],
     };
   }
@@ -395,6 +397,7 @@ export async function getFormatBuilderDocument(input: {
       organisationId: context.organisationId,
       sportCode: context.sportCode,
       draft: parsed.draft,
+      revisions: parsed.revisions,
       templates,
     };
   } catch {

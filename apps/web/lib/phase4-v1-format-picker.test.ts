@@ -115,12 +115,24 @@ describe("V1 format picker", () => {
     expect(hasAppliedV1Format(selectedDocument)).toBe(true);
     expect(
       hasMaterialisedV1Format(selectedDocument, [
-        { divisionId: "division-a", draftId: "revision-a", materialised: false },
+        { divisionId: "division-a", revisions: [{ revisionId: "revision-a", materialised: false }] },
       ]),
     ).toBe(false);
     expect(
       hasMaterialisedV1Format(selectedDocument, [
-        { divisionId: "division-a", draftId: "revision-a", materialised: true },
+        { divisionId: "division-a", revisions: [{ revisionId: "revision-a", materialised: true }] },
+      ]),
+    ).toBe(true);
+
+    expect(
+      hasMaterialisedV1Format(selectedDocument, [
+        {
+          divisionId: "division-a",
+          revisions: [
+            { revisionId: "an-earlier-published-revision", materialised: true },
+            { revisionId: "revision-a", materialised: true },
+          ],
+        },
       ]),
     ).toBe(true);
   });

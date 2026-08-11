@@ -9,6 +9,7 @@ import {
   parseFormatMaterialisation,
   parseFormatPublication,
   parseFormatValidation,
+  parseFormatWorkspaceResponse,
 } from "./phase4-format";
 
 const document: Phase4FormatBuilderDocument = {
@@ -125,6 +126,34 @@ describe("Phase 4 format web contract", () => {
     expect(
       parseFormatValidation({ valid: true, issues: [], graph_hash: "graph-hash", materialisation: null }),
     ).toBeNull();
+  });
+
+  it("retains published materialisation state from the builder response", () => {
+    expect(
+      parseFormatWorkspaceResponse(
+        {
+          revisions: [
+            {
+              revision_id: "format-revision-a",
+              status: "published",
+              materialised: true,
+            },
+          ],
+          draft: null,
+        },
+        "competition-a",
+        "division-a",
+      ),
+    ).toEqual({
+      revisions: [
+        {
+          revisionId: "format-revision-a",
+          status: "published",
+          materialised: true,
+        },
+      ],
+      draft: null,
+    });
   });
 
   it("strictly accepts materialisation for the requested revision", () => {

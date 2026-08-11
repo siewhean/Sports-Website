@@ -47,8 +47,15 @@ export default async function FormatDesignerPage({
       setup.setup,
       formatDocuments.map((document) => ({
         divisionId: document.divisionId,
-        draftId: document.draft?.draft_id ?? null,
-        materialised: document.draft?.materialised === true,
+        revisions: [
+          ...document.revisions.map((revision) => ({
+            revisionId: revision.revisionId,
+            materialised: revision.materialised,
+          })),
+          ...(document.draft
+            ? [{ revisionId: document.draft.draft_id, materialised: document.draft.materialised === true }]
+            : []),
+        ],
       })),
     );
   const advancedRequested = query.advanced === "1";

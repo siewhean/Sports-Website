@@ -20,11 +20,16 @@ export type FormatBuilderPageDocument = Readonly<{
   organisationId: string;
   sportCode: string;
   draft: Phase4FormatDraftView | null;
+  revisions: FormatBuilderWorkspaceResponse["revisions"];
   templates: readonly Phase4OrganiserTemplateView[];
 }>;
 
 export type FormatBuilderWorkspaceResponse = Readonly<{
-  revisions: readonly unknown[];
+  revisions: readonly {
+    revisionId: string;
+    status: "draft" | "published" | "superseded";
+    materialised: boolean;
+  }[];
   draft: Phase4FormatDraftView | null;
 }>;
 
@@ -266,9 +271,23 @@ export function parseFormatWorkspaceResponse(
 ): FormatBuilderWorkspaceResponse | null {
   const item = record(value);
   if (!item || !Array.isArray(item.revisions) || !("draft" in item)) return null;
-  if (item.draft === null) return { revisions: item.revisions, draft: null };
+  const revisions = item.revisions.map((raw) => {
+    const revision = record(raw);
+    return revision &&
+      typeof revision.revision_id === "string" &&
+      ["draft", "published", "superseded"].includes(String(revision.status)) &&
+      typeof revision.materialised === "boolean"
+      ? {
+          revisionId: revision.revision_id,
+          status: revision.status as "draft" | "published" | "superseded",
+          materialised: revision.materialised,
+        }
+      : null;
+  });
+  if (!revisions.every((revision): revision is NonNullable<typeof revision> => revision !== null)) return null;
+  if (item.draft === null) return { revisions, draft: null };
   const draft = parseFormatDraft(item.draft, competitionId, divisionId);
-  return draft ? { revisions: item.revisions, draft } : null;
+  return draft ? { revisions, draft } : null;
 }
 
 export function parseFormatValidation(value: unknown): Phase4FormatValidationResponse | null {

@@ -59,7 +59,10 @@ export function hasAppliedV1Format(document: Phase4SetupDocument | null | undefi
 
 export function hasMaterialisedV1Format(
   document: Phase4SetupDocument | null | undefined,
-  divisions: readonly { divisionId: string; draftId: string | null; materialised: boolean }[],
+  divisions: readonly {
+    divisionId: string;
+    revisions: readonly { revisionId: string; materialised: boolean }[];
+  }[],
 ): boolean {
   const selectedId = document?.values.format_recommendations?.selected_recommendation_id;
   const selected = selectedId
@@ -69,7 +72,9 @@ export function hasMaterialisedV1Format(
   const statusByDivision = new Map(divisions.map((division) => [division.divisionId, division]));
   return selected.division_formats.every((format) => {
     const status = statusByDivision.get(format.division_id);
-    return Boolean(status && status.draftId === format.format_revision_id && status.materialised);
+    return Boolean(
+      status?.revisions.some((revision) => revision.revisionId === format.format_revision_id && revision.materialised),
+    );
   });
 }
 
