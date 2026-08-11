@@ -8,6 +8,8 @@ import {
   unlinkOwnedRedisKeys,
 } from "../../scripts/run-phase-4-real-e2e.js";
 import { buildApp } from "../../src/app.js";
+import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
+import type { Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -97,5 +99,58 @@ describe("distributed rate limiting", () => {
         })
       ).statusCode,
     ).toBe(200);
+  });
+
+  it("stores scoring-session limiter keys as dedicated HMAC fingerprints", async () => {
+    const config = testConfig({
+      SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "dedicated-scoring-rate-limit-hmac-secret",
+      IDENTITY_CSRF_HMAC_SECRET: "separate-csrf-hmac-secret-that-must-not-be-used",
+      API_TRUSTED_PROXIES: "127.0.0.1",
+    });
+    const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: 1 });
+    const nameSpace = `matchday-test-${randomUUID()}-`;
+    const sessionId = randomUUID();
+    const clientIp = "198.51.100.202";
+    const app = await buildApp({
+      config,
+      probes: healthyProbes,
+      rateLimitNameSpace: nameSpace,
+      rateLimitRedis: new Redis(config.redisUrl, { maxRetriesPerRequest: 1 }),
+      anonymousRateLimitMax: 1,
+      identityRuntime: {
+        authenticate: async () => {
+          throw new Error("Scoring-session requests do not use the organiser session");
+        },
+        verifyCsrfToken: () => false,
+      } as unknown as IdentityApiRuntime,
+      phase2Runtime: {
+        heartbeatScoringSession: async () => ({}),
+      } as unknown as Phase2Runtime,
+    });
+    apps.push(app);
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/scoring/sessions/heartbeat",
+        headers: {
+          "x-forwarded-for": clientIp,
+          "x-scoring-session-id": sessionId,
+          "x-scoring-session-token": "t".repeat(43),
+          "x-writer-generation": "1",
+        },
+        payload: { last_acknowledged_sequence: 0, pending_event_count: 0, pending_through_sequence: 0 },
+      });
+      expect(response.statusCode).toBe(200);
+
+      const keys = await redis.keys(`${nameSpace}*`);
+      expect(keys).toHaveLength(1);
+      expect(keys[0]).toMatch(new RegExp(`^${nameSpace}scoring-session:[a-f0-9]{64}:ip:[a-f0-9]{64}$`));
+      expect(keys[0]).not.toContain(sessionId);
+      expect(keys[0]).not.toContain(clientIp);
+    } finally {
+      const keys = await redis.keys(`${nameSpace}*`);
+      if (keys.length > 0) await redis.unlink(...keys);
+      await redis.quit();
+    }
   });
 });
