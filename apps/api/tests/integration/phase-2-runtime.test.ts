@@ -219,6 +219,34 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(schedule.matches).toHaveLength(16);
     const publishedSchedule = await runtime.publishSchedule(actor, competition.id, schedule.id, randomUUID());
     expect(publishedSchedule.schedule_version).toBe(1);
+    expect(
+      await client<
+        {
+          event_type: string;
+          competition_id: string;
+          projection: string;
+          previous_version: number;
+          published_version: number;
+          publication_state: string;
+        }[]
+      >`
+        SELECT event_type,payload->>'competition_id' AS competition_id,payload->>'projection' AS projection,
+               (payload->>'previous_published_version')::integer AS previous_version,
+               (payload->>'published_version')::integer AS published_version,
+               payload->>'publication_state' AS publication_state
+        FROM outbox_events
+        WHERE aggregate_id=${competition.id} AND event_type='public_projection.published'
+      `,
+    ).toEqual([
+      {
+        event_type: "public_projection.published",
+        competition_id: competition.id,
+        projection: "schedule",
+        previous_version: 0,
+        published_version: 1,
+        publication_state: "published",
+      },
+    ]);
     const publishedCompetition = await client<{ status: string }[]>`
       SELECT status FROM competitions WHERE id=${competition.id}
     `;

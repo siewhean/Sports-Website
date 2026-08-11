@@ -944,6 +944,25 @@ export class GateCC4Runtime {
           result_version: result.resultVersion,
         },
       );
+      await tx.unsafe(
+        `INSERT INTO outbox_events(
+           aggregate_type,aggregate_id,event_type,payload,idempotency_key,created_at,available_at
+         ) VALUES('competition',$1,'public_projection.published',$2::jsonb,$3,$4,$4)
+         ON CONFLICT(idempotency_key) DO NOTHING`,
+        [
+          request.competition_id,
+          {
+            competition_id: request.competition_id,
+            projection: "schedule",
+            previous_published_version: publication.schedule_version,
+            published_version: result.scheduleVersion,
+            publication_state: "published",
+            correlation_id: `edge-purge:${request.competition_id}:schedule:${String(publication.schedule_version)}`,
+          },
+          `edge-purge:${request.competition_id}:schedule:${String(publication.schedule_version)}`,
+          this.now(),
+        ],
+      );
       return receipt;
     });
   }

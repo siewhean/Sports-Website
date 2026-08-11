@@ -14,6 +14,7 @@
     "@matchday/config": "workspace:*",
     "@matchday/edge-cache": "workspace:*",
     "@matchday/jobs": "workspace:*",
-    "@matchday/observability": "workspace:*"
+    "@matchday/observability": "workspace:*",
+    "postgres": "3.4.9"
   }
 }

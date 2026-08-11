@@ -240,6 +240,9 @@ importers:
       '@matchday/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      postgres:
+        specifier: 3.4.9
+        version: 3.4.9
 
   packages/ai:
     dependencies:

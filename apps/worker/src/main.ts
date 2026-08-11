@@ -2,6 +2,7 @@ import { loadConfig } from "@matchday/config";
 import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
+import { createPublicProjectionOutboxDispatcher } from "./public-projection-outbox.js";
 import { resolveWorkerQueuePrefix } from "./queue-configuration.js";
 import { WorkerRuntime, type WorkerMetrics } from "./runtime.js";
 import { workerServiceName } from "./service.js";
@@ -36,6 +37,23 @@ const runtime = new WorkerRuntime({
 
 await runtime.start();
 
+// PostgreSQL is the publication authority. The dispatcher claims the durable
+// outbox row and enqueues a deterministic Redis job before acknowledging the
+// row, so a process crash can only cause a safe duplicate queue attempt.
+const publicProjectionOutbox = createPublicProjectionOutboxDispatcher({
+  databaseUrl: config.databaseUrl,
+  enqueuer: runtime,
+});
+const drainPublicProjectionOutbox = async (): Promise<void> => {
+  try {
+    await publicProjectionOutbox.drainOnce();
+  } catch (error: unknown) {
+    logger.error({ error }, "public projection outbox dispatch failed");
+  }
+};
+await drainPublicProjectionOutbox();
+const publicProjectionOutboxTimer = setInterval(() => void drainPublicProjectionOutbox(), 1_000);
+
 let shuttingDown = false;
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   if (shuttingDown) return;
@@ -43,7 +61,9 @@ const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   logger.info({ signal }, "worker shutdown requested");
   let forceExit = false;
   try {
+    clearInterval(publicProjectionOutboxTimer);
     await runtime.stop();
+    await publicProjectionOutbox.close();
     logger.info("worker stopped");
   } catch (error: unknown) {
     logger.error({ error }, "worker shutdown failed");

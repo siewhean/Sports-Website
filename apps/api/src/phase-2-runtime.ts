@@ -668,6 +668,12 @@ export class Phase2Runtime {
       metadata?: Record<string, unknown>;
       eventType?: string;
       eventPayload?: Record<string, unknown>;
+      edgePurge?: {
+        competitionId: string;
+        projection: "results" | "schedule";
+        previousPublishedVersion: number;
+        publishedVersion: number;
+      };
     },
   ): Promise<void> {
     const occurredAt = this.now();
@@ -714,6 +720,31 @@ export class Phase2Runtime {
         occurredAt,
       ],
     );
+    if (input.edgePurge) {
+      const purge = input.edgePurge;
+      await tx.unsafe(
+        `INSERT INTO outbox_events (
+           aggregate_type, aggregate_id, event_type, payload, idempotency_key, created_at, available_at
+         ) VALUES ($1,$2,'public_projection.published',($3::jsonb #>> '{}')::jsonb,$4,$5,$5)
+         ON CONFLICT (idempotency_key) DO NOTHING`,
+        [
+          "competition",
+          purge.competitionId,
+          JSON.stringify({
+            competition_id: purge.competitionId,
+            projection: purge.projection,
+            previous_published_version: purge.previousPublishedVersion,
+            published_version: purge.publishedVersion,
+            publication_state: "published",
+            correlation_id: `edge-purge:${purge.competitionId}:${purge.projection}:${String(
+              purge.previousPublishedVersion,
+            )}`,
+          }),
+          `edge-purge:${purge.competitionId}:${purge.projection}:${String(purge.previousPublishedVersion)}`,
+          occurredAt,
+        ],
+      );
+    }
   }
 
   private async auditOnly(
@@ -1422,6 +1453,12 @@ export class Phase2Runtime {
         targetId: scheduleRevisionId,
         after: { schedule_version: version },
         eventPayload: { competition_id: competitionId, schedule_version: version },
+        edgePurge: {
+          competitionId,
+          projection: "schedule",
+          previousPublishedVersion: publication.schedule_version,
+          publishedVersion: version,
+        },
       });
       return { competition_id: competitionId, schedule_revision_id: scheduleRevisionId, schedule_version: version };
     });
@@ -4630,6 +4667,12 @@ export class Phase2Runtime {
       reason: input.reason,
       after: { home_score: reduced.homeScore, away_score: reduced.awayScore, result_version: resultVersion },
       eventPayload: { competition_id: match.competition_id, match_id: input.matchId, result_version: resultVersion },
+      edgePurge: {
+        competitionId: match.competition_id,
+        projection: "results",
+        previousPublishedVersion: publication.result_version,
+        publishedVersion: resultVersion,
+      },
     });
     return {
       match_id: input.matchId,
