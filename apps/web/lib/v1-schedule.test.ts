@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ScheduleOption } from "./phase4-schedule";
-import { isAdvancedScheduleView, v1ScheduleObjective, v1ScheduleOption } from "./v1-schedule";
+import type { ScheduleJob, ScheduleOption } from "./phase4-schedule";
+import { isAdvancedScheduleView, v1ScheduleObjective, v1ScheduleOption, v1ScheduleProgress } from "./v1-schedule";
 
 function option(objective: ScheduleOption["objective"]): ScheduleOption {
   return {
@@ -44,4 +44,37 @@ describe("V1 schedule defaults", () => {
     expect(isAdvancedScheduleView("true")).toBe(false);
     expect(isAdvancedScheduleView("1")).toBe(true);
   });
+
+  it.each([
+    ["queued", "creating"],
+    ["running", "creating"],
+    ["cancelling", "creating"],
+    ["failed", "terminal"],
+    ["no_solution", "terminal"],
+    ["stale", "terminal"],
+    ["cancelled", "terminal"],
+  ] as const)("reports %s jobs without a candidate as %s", (status, expected) => {
+    expect(v1ScheduleProgress(job(status))).toBe(expected);
+  });
 });
+
+function job(status: ScheduleJob["status"]): ScheduleJob {
+  return {
+    id: "job",
+    revision: 1,
+    sourceRevision: 1,
+    capacityRevision: 1,
+    status,
+    objective: "balanced",
+    currentBest: null,
+    progressIteration: null,
+    exploredCandidates: 0,
+    progressUpdatedAt: null,
+    cancellationRequestedAt: null,
+    failureClass: null,
+    startedAt: null,
+    completedAt: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}

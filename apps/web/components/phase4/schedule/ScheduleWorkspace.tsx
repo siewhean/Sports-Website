@@ -45,7 +45,7 @@ import {
   type ScheduleObjective,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
-import { v1ScheduleObjective, v1ScheduleOption } from "@/lib/v1-schedule";
+import { v1ScheduleObjective, v1ScheduleOption, v1ScheduleProgress } from "@/lib/v1-schedule";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -1050,9 +1050,14 @@ function JobRail({
 
 function SimpleScheduleStatus({ job }: { job: ScheduleJob | null }) {
   if (!job) return null;
+  const progress = v1ScheduleProgress(job);
   return (
     <p className={styles.simpleStatus} role="status" data-testid="v1-schedule-status">
-      {job.currentBest ? phase4ScheduleCopy.v1ReadyBody : phase4ScheduleCopy.v1Creating}
+      {progress === "ready"
+        ? phase4ScheduleCopy.v1ReadyBody
+        : progress === "creating"
+          ? phase4ScheduleCopy.v1Creating
+          : jobStatusTitle(job)}
     </p>
   );
 }

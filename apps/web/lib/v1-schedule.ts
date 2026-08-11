@@ -1,4 +1,4 @@
-import type { ScheduleOption } from "./phase4-schedule";
+import type { ScheduleJob, ScheduleOption } from "./phase4-schedule";
 
 /**
  * V1 deliberately generates a single balanced schedule.  The richer optimiser
@@ -17,4 +17,10 @@ export function v1ScheduleOption(
 
 export function isAdvancedScheduleView(value: string | undefined): boolean {
   return value === "1";
+}
+
+export function v1ScheduleProgress(job: ScheduleJob | null): "idle" | "creating" | "ready" | "terminal" {
+  if (!job) return "idle";
+  if (job.currentBest) return "ready";
+  return job.status === "queued" || job.status === "running" || job.status === "cancelling" ? "creating" : "terminal";
 }
