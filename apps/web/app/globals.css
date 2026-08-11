@@ -1483,6 +1483,19 @@ body:has(.p2-score-receipt) {
   font-size: 1.1rem;
 }
 
+.p2-score__mode {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px clamp(16px, 4vw, 30px) 0;
+}
+
+.p2-score__mode .p2-score-secondary {
+  min-height: 44px;
+  padding-inline: 0.75rem;
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
 .p2-writer {
   display: flex;
   align-items: center;
@@ -1777,6 +1790,7 @@ body:has(.p2-score-receipt) {
   margin: 0 auto;
   padding: 12px clamp(18px, 5vw, 30px) calc(24px + env(safe-area-inset-bottom));
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid #4a504b;
   border-bottom: 0;
   border-radius: 22px 22px 0 0;
@@ -1795,11 +1809,19 @@ body:has(.p2-score-receipt) {
 }
 
 .p2-goal-sheet__handle {
-  width: 42px;
-  height: 4px;
+  position: relative;
+  width: 64px;
+  height: 24px;
   margin: 0 auto 22px;
+  touch-action: none;
+}
+
+.p2-goal-sheet__handle::before {
+  position: absolute;
+  inset: 10px 11px;
   border-radius: 99px;
   background: #59605a;
+  content: "";
 }
 
 .p2-goal-sheet > header h2,

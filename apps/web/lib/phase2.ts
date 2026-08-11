@@ -437,6 +437,8 @@ export const phase2Copy = {
   recordGoalFor: "Record goal for",
   goalSheetScorerHint: "This name is attached to the goal event and audit record.",
   scoreControlsTitle: "Scoring controls",
+  advancedScoring: "Advanced scoring controls",
+  simpleScoring: "Simple scoring controls",
   scoreControlsReadOnly: "Only the active scoring device can record match events.",
   scoreControlsPending: "Saving the match event…",
   manualTimeOnly: "Enter event times manually. No live match clock is running.",
@@ -506,6 +508,8 @@ export const phase2Machine = {
   singaporeOpenSlug: "singapore-open",
   scoringApiMode: "api" as const,
   scoringDemoMode: "demo" as const,
+  scoreControlsFull: "full" as const,
+  scoreControlsRemote: "remote" as const,
 };
 
 export const canoePoloSettings: ReadonlyArray<readonly [string, string]> = [

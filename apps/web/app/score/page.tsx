@@ -12,10 +12,15 @@ import { SPORT_PACKS, type SportId } from "@matchday/domain";
 
 const DEMO_SPORTS = new Set<SportId>(Object.keys(SPORT_PACKS) as SportId[]);
 
-export default async function ScorePage({ searchParams }: { searchParams: Promise<{ sport?: string }> }) {
+export default async function ScorePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ sport?: string; advanced?: string }>;
+}) {
   if (await isPhase2ScoringRouteEnabled()) {
     const demo = demoFixturesEnabled();
-    const requestedSport = (await searchParams).sport;
+    const requestedSearchParams = await searchParams;
+    const requestedSport = requestedSearchParams.sport;
     const demoSportId =
       demo && DEMO_SPORTS.has(requestedSport as SportId) ? (requestedSport as SportId) : phase2Machine.canoePolo;
     const hasScoringSession = (await cookies()).has(scoringSessionCookieName);
@@ -24,6 +29,7 @@ export default async function ScorePage({ searchParams }: { searchParams: Promis
         mode={demo ? phase2Machine.scoringDemoMode : phase2Machine.scoringApiMode}
         recoverOnLoad={hasScoringSession}
         demoSportId={demoSportId}
+        advancedMode={requestedSearchParams.advanced === "1"}
       />
     );
   }

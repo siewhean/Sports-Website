@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -46,6 +46,7 @@ type PhoneScoringProps = {
   mode?: "api" | "demo";
   recoverOnLoad?: boolean;
   demoSportId?: SportId;
+  advancedMode?: boolean;
 };
 
 const scoreControlsCopy: FiveSportScoreControlsCopy = {
@@ -61,6 +62,8 @@ const scoreControlsCopy: FiveSportScoreControlsCopy = {
   },
   formatActionLabel: (controlLabel, sideLabel) => (sideLabel ? `${controlLabel} ${sideLabel}` : controlLabel),
 };
+
+const sheetDismissThreshold = 80;
 
 function timeSeconds(value: string): number | null {
   const match = /^(\d{1,2}):([0-5]\d)$/.exec(value.trim());
@@ -90,6 +93,7 @@ export function PhoneScoring({
   mode = phase2Machine.scoringApiMode,
   recoverOnLoad = true,
   demoSportId = phase2Machine.canoePolo,
+  advancedMode = false,
 }: PhoneScoringProps) {
   const port = useMemo(() => createScoringCommandPort(mode, demoSportId), [demoSportId, mode]);
   const [phase, setPhase] = useState<ScoringPhase>(phase2Machine.access);
@@ -135,6 +139,7 @@ export function PhoneScoring({
   const actionReturnTargetRef = useRef<HTMLButtonElement | null>(null);
   const scorerInputRef = useRef<HTMLInputElement>(null);
   const actionDialogTitleRef = useRef<HTMLHeadingElement>(null);
+  const sheetDismissStartYRef = useRef<number | null>(null);
   const scoreControlsRef = useRef<HTMLDivElement>(null);
   const finalReviewRef = useRef<HTMLElement>(null);
   const timelineActionRefs = useRef(new Map<string, HTMLLIElement>());
@@ -151,6 +156,7 @@ export function PhoneScoring({
 
   const definition = scorecardDefinition;
   const manualTimeEnabled = definition.fields.some((field) => field.id === "manual_event_time" && field.enabled);
+  const useSimpleCanoeControls = definition.sportId === phase2Machine.canoePolo && !advancedMode;
   const score = { home: scoreState.home, away: scoreState.away };
   const locked = writerState !== "active";
   const writerTitle =
@@ -519,6 +525,25 @@ export function PhoneScoring({
     window.requestAnimationFrame(() => returnTarget?.focus({ preventScroll: true }));
   };
 
+  const beginSheetDismiss = (event: ReactPointerEvent<HTMLElement>) => {
+    if (actionPending || (event.pointerType === "mouse" && event.button !== 0)) return;
+    sheetDismissStartYRef.current = event.clientY;
+  };
+
+  const finishSheetDismiss = (event: ReactPointerEvent<HTMLElement>) => {
+    const startY = sheetDismissStartYRef.current;
+    sheetDismissStartYRef.current = null;
+    if (startY === null || actionPending || event.clientY - startY < sheetDismissThreshold) return;
+    closeActionDialog();
+  };
+
+  const continueSheetDismiss = (event: ReactPointerEvent<HTMLElement>) => {
+    const startY = sheetDismissStartYRef.current;
+    if (startY === null || actionPending || event.clientY - startY < sheetDismissThreshold) return;
+    sheetDismissStartYRef.current = null;
+    closeActionDialog();
+  };
+
   const openActionDialog = (action: ScoreControlAction, trigger: HTMLButtonElement) => {
     actionReturnTargetRef.current = trigger;
     setScorer("");
@@ -789,6 +814,15 @@ export function PhoneScoring({
           </span>
         </div>
       </header>
+      <div className="p2-score__mode">
+        <Link
+          href={advancedMode ? "/score" : "/score?advanced=1"}
+          className="p2-score-secondary"
+          aria-label={advancedMode ? phase2Copy.simpleScoring : phase2Copy.advancedScoring}
+        >
+          {advancedMode ? phase2Copy.simpleScoring : phase2Copy.advancedScoring}
+        </Link>
+      </div>
       {interactionError ? (
         <section ref={interactionErrorRef} className="p2-score-warning" tabIndex={-1}>
           <Warning aria-hidden="true" />
@@ -797,40 +831,42 @@ export function PhoneScoring({
           </div>
         </section>
       ) : null}
-      <section className="p5-scoring-device" aria-labelledby="scoring-device-label">
-        <strong id="scoring-device-label">{t("prototype.fb6eea41124e")}</strong>
-        {editingDeviceLabel ? (
-          <div>
-            <label>
-              <span>{t("prototype.155106be1173")}</span>
-              <input
-                ref={deviceLabelInputRef}
-                value={deviceLabelDraft}
-                onChange={(event) => setDeviceLabelDraft(event.target.value)}
-                maxLength={80}
-              />
-            </label>
-            <button
-              className="p2-score-primary"
-              type="button"
-              disabled={!deviceLabelDraft.trim()}
-              onClick={() => void saveDeviceLabel()}
-            >
-              {t("prototype.1509f561f241")}
-            </button>
-            <button className="p2-score-secondary" type="button" onClick={cancelDeviceLabel}>
-              {phase2Copy.cancel}
-            </button>
-          </div>
-        ) : (
-          <div>
-            <span>{deviceLabel || t("prototype.06c4a77e4b3e")}</span>
-            <button ref={editDeviceButtonRef} className="p2-score-secondary" type="button" onClick={editDeviceLabel}>
-              {t("prototype.0d5e5c1ab863")}
-            </button>
-          </div>
-        )}
-      </section>
+      {advancedMode ? (
+        <section className="p5-scoring-device" aria-labelledby="scoring-device-label">
+          <strong id="scoring-device-label">{t("prototype.fb6eea41124e")}</strong>
+          {editingDeviceLabel ? (
+            <div>
+              <label>
+                <span>{t("prototype.155106be1173")}</span>
+                <input
+                  ref={deviceLabelInputRef}
+                  value={deviceLabelDraft}
+                  onChange={(event) => setDeviceLabelDraft(event.target.value)}
+                  maxLength={80}
+                />
+              </label>
+              <button
+                className="p2-score-primary"
+                type="button"
+                disabled={!deviceLabelDraft.trim()}
+                onClick={() => void saveDeviceLabel()}
+              >
+                {t("prototype.1509f561f241")}
+              </button>
+              <button className="p2-score-secondary" type="button" onClick={cancelDeviceLabel}>
+                {phase2Copy.cancel}
+              </button>
+            </div>
+          ) : (
+            <div>
+              <span>{deviceLabel || t("prototype.06c4a77e4b3e")}</span>
+              <button ref={editDeviceButtonRef} className="p2-score-secondary" type="button" onClick={editDeviceLabel}>
+                {t("prototype.0d5e5c1ab863")}
+              </button>
+            </div>
+          )}
+        </section>
+      ) : null}
       {writerState === "conflict" ? (
         <section className="p2-score-warning" role="alert">
           <Warning />
@@ -869,7 +905,7 @@ export function PhoneScoring({
                             ? phase2Copy.candidateBody
                             : phase2Copy.leaseExpiringBody}
             </p>
-            {writerState === phase2Machine.candidate && !takeoverPending ? (
+            {advancedMode && writerState === phase2Machine.candidate && !takeoverPending ? (
               <button className="p2-score-secondary" type="button" onClick={() => void requestTakeover()}>
                 {phase2Copy.requestTakeover}
               </button>
@@ -991,6 +1027,9 @@ export function PhoneScoring({
                     ? `${definition.segmentLabel} ${scoreState.currentSegment} · ${phase2Copy.manualTime} ${eventTime}`
                     : `${definition.segmentLabel} ${scoreState.currentSegment}`
                 }
+                presentation={
+                  useSimpleCanoeControls ? phase2Machine.scoreControlsRemote : phase2Machine.scoreControlsFull
+                }
                 onActivate={openActionDialog}
               />
             </div>
@@ -1035,7 +1074,7 @@ export function PhoneScoring({
                         </small>
                       ) : null}
                     </span>
-                    {action.reversible && !action.reversed && !locked ? (
+                    {advancedMode && action.reversible && !action.reversed && !locked ? (
                       <button
                         className="p2-score-secondary"
                         type="button"
@@ -1069,8 +1108,13 @@ export function PhoneScoring({
                 event.preventDefault();
                 if (!actionPending) closeActionDialog();
               }}
+              onPointerMove={continueSheetDismiss}
+              onPointerUp={finishSheetDismiss}
+              onPointerCancel={() => {
+                sheetDismissStartYRef.current = null;
+              }}
             >
-              <div className="p2-goal-sheet__handle" aria-hidden="true" />
+              <div className="p2-goal-sheet__handle" aria-hidden="true" onPointerDown={beginSheetDismiss} />
               <header>
                 <p className="p2-eyebrow">{definition.displayName}</p>
                 <h2 id="score-action-title" ref={actionDialogTitleRef} tabIndex={-1}>

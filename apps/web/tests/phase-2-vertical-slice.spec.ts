@@ -75,6 +75,36 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   );
 });
 
+test("default Canoe Polo scoring keeps advanced operations opt-in", async ({ page }) => {
+  await openPhase2Scorekeeper(page);
+
+  const remoteGoals = page.locator('[data-control-id="goal"]');
+  await expect(remoteGoals).toHaveCount(2);
+  await expect(page.locator(".p5-scoring-device")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Advanced scoring controls" })).toBeVisible();
+
+  await page.locator("summary").getByText("Match actions", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Green card Marina Blue" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Advanced scoring controls" }).click();
+  await expect(page.locator(".p5-scoring-device")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Simple scoring controls" })).toBeVisible();
+});
+
+test("the action sheet dismisses from its handle without moving the scorekeeper page", async ({ page }) => {
+  await openPhase2Scorekeeper(page);
+  await page.getByRole("button", { name: "Goal Marina Blue" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
+  await expect(confirmation).toBeVisible();
+
+  const handle = confirmation.locator(".p2-goal-sheet__handle");
+  await handle.dispatchEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientY: 100 });
+  await confirmation.dispatchEvent("pointermove", { pointerId: 1, pointerType: "touch", clientY: 196 });
+
+  await expect(confirmation).toBeHidden();
+  await expect(page.getByRole("button", { name: "Goal Marina Blue" })).toBeVisible();
+});
+
 test("public projection is complete in raw server-rendered HTML", async ({ request }) => {
   const response = await request.get("/competitions/singapore-open");
   expect(response.ok()).toBe(true);

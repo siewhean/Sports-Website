@@ -72,6 +72,63 @@
   gap: 1rem;
 }
 
+.remoteScoreActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.remoteScoreAction {
+  min-width: 0;
+  min-height: 7rem;
+  display: grid;
+  place-content: center;
+  gap: 0.35rem;
+  padding: 1rem;
+  border: 0;
+  border-radius: 0.75rem;
+  background: var(--signal);
+  color: #171a0d;
+  font: inherit;
+  font-size: clamp(1rem, 4vw, 1.25rem);
+  font-weight: 700;
+  text-align: center;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.remoteScoreAction:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.remoteScoreAction:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 3px;
+}
+
+.remoteScoreAction strong {
+  font-size: 0.75em;
+}
+
+.moreActions {
+  border: 1px solid currentColor;
+  border-radius: 0.75rem;
+}
+
+.moreActions > summary {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.moreActions > .groups {
+  padding: 0 0.875rem 0.875rem;
+}
+
 .group {
   min-width: 0;
   margin: 0;
@@ -141,5 +198,9 @@
 
   .actions {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .remoteScoreActions {
+    gap: 0.5rem;
   }
 }

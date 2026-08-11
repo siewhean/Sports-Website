@@ -27,6 +27,7 @@ export type FiveSportScoreControlsProps = Readonly<{
   readOnly: boolean;
   pending: boolean;
   statusMessage?: string | null;
+  presentation?: "full" | "remote";
   onActivate: (action: ScoreControlAction, trigger: HTMLButtonElement) => void;
 }>;
 
@@ -39,12 +40,15 @@ export function FiveSportScoreControls({
   readOnly,
   pending,
   statusMessage,
+  presentation,
   onActivate,
 }: FiveSportScoreControlsProps) {
   const headingId = useId();
   const statusId = useId();
   const groups = buildFiveSportScoreControlGroups(definition);
   const disabled = readOnly || pending;
+  const scoreActions = groups.find((group) => group.kind === "score")?.actions ?? [];
+  const supportingGroups = groups.filter((group) => group.kind !== "score");
 
   const sideLabel = (side: ScoreControlSide | null) =>
     side === "home" ? homeLabel : side === "away" ? awayLabel : null;
@@ -74,33 +78,91 @@ export function FiveSportScoreControls({
         {pending ? copy.pendingNotice : readOnly ? copy.readOnlyNotice : (statusMessage ?? "")}
       </div>
 
-      <div className={styles.groups}>
-        {groups.map((group) => (
-          <fieldset className={styles.group} disabled={disabled} key={group.kind}>
-            <legend>{copy.groupLabels[group.kind]}</legend>
-            <div className={styles.actions}>
-              {group.actions.map((action) => {
-                const target = sideLabel(action.side);
-                return (
-                  <button
-                    type="button"
-                    key={action.key}
-                    className={styles.action}
-                    aria-label={copy.formatActionLabel(action.control.label, target)}
-                    data-control-id={action.control.id}
-                    data-control-kind={action.group}
-                    data-side={action.side ?? "global"}
-                    onClick={(event) => onActivate(action, event.currentTarget)}
-                  >
-                    <span>{action.control.label}</span>
-                    {target ? <strong>{target}</strong> : null}
-                  </button>
-                );
-              })}
-            </div>
-          </fieldset>
-        ))}
-      </div>
+      {presentation === "remote" ? (
+        <>
+          <div className={styles.remoteScoreActions} aria-label={copy.groupLabels.score}>
+            {scoreActions.map((action) => {
+              const target = sideLabel(action.side);
+              return (
+                <button
+                  type="button"
+                  key={action.key}
+                  className={styles.remoteScoreAction}
+                  disabled={disabled}
+                  aria-label={copy.formatActionLabel(action.control.label, target)}
+                  data-control-id={action.control.id}
+                  data-control-kind={action.group}
+                  data-side={action.side ?? "global"}
+                  onClick={(event) => onActivate(action, event.currentTarget)}
+                >
+                  <span>{action.control.label}</span>
+                  {target ? <strong>{target}</strong> : null}
+                </button>
+              );
+            })}
+          </div>
+          {supportingGroups.length ? (
+            <details className={styles.moreActions}>
+              <summary>{copy.groupLabels.operational}</summary>
+              <div className={styles.groups}>
+                {supportingGroups.map((group) => (
+                  <fieldset className={styles.group} disabled={disabled} key={group.kind}>
+                    <legend>{copy.groupLabels[group.kind]}</legend>
+                    <div className={styles.actions}>
+                      {group.actions.map((action) => {
+                        const target = sideLabel(action.side);
+                        return (
+                          <button
+                            type="button"
+                            key={action.key}
+                            className={styles.action}
+                            aria-label={copy.formatActionLabel(action.control.label, target)}
+                            data-control-id={action.control.id}
+                            data-control-kind={action.group}
+                            data-side={action.side ?? "global"}
+                            onClick={(event) => onActivate(action, event.currentTarget)}
+                          >
+                            <span>{action.control.label}</span>
+                            {target ? <strong>{target}</strong> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </>
+      ) : (
+        <div className={styles.groups}>
+          {groups.map((group) => (
+            <fieldset className={styles.group} disabled={disabled} key={group.kind}>
+              <legend>{copy.groupLabels[group.kind]}</legend>
+              <div className={styles.actions}>
+                {group.actions.map((action) => {
+                  const target = sideLabel(action.side);
+                  return (
+                    <button
+                      type="button"
+                      key={action.key}
+                      className={styles.action}
+                      aria-label={copy.formatActionLabel(action.control.label, target)}
+                      data-control-id={action.control.id}
+                      data-control-kind={action.group}
+                      data-side={action.side ?? "global"}
+                      onClick={(event) => onActivate(action, event.currentTarget)}
+                    >
+                      <span>{action.control.label}</span>
+                      {target ? <strong>{target}</strong> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

@@ -48,4 +48,31 @@ describe("Gate C C2 scoring UI source guards", () => {
     expect(styles).toContain("min-height: 48px");
     expect(styles).toContain("@media (max-width: 30rem)");
   });
+
+  it("keeps the default Canoe Polo surface focused while making advanced controls explicit", async () => {
+    const shell = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
+    const controls = await readFile(
+      new URL("../../components/phase5/FiveSportScoreControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const scoreRoute = await readFile(new URL("../../app/score/page.tsx", import.meta.url), "utf8");
+
+    expect(scoreRoute).toContain("advanced?: string");
+    expect(scoreRoute).toContain('advancedMode={requestedSearchParams.advanced === "1"}');
+    expect(shell).toContain(
+      "const useSimpleCanoeControls = definition.sportId === phase2Machine.canoePolo && !advancedMode",
+    );
+    expect(shell).toContain(
+      "useSimpleCanoeControls ? phase2Machine.scoreControlsRemote : phase2Machine.scoreControlsFull",
+    );
+    expect(shell).toContain('{advancedMode ? (\n        <section className="p5-scoring-device"');
+    expect(shell).toContain("advancedMode && writerState === phase2Machine.candidate");
+    expect(shell).toContain("advancedMode && action.reversible");
+    expect(shell).toContain("const beginSheetDismiss");
+    expect(shell).toContain("onPointerDown={beginSheetDismiss}");
+    expect(shell).toContain("onPointerMove={continueSheetDismiss}");
+    expect(controls).toContain('presentation?: "full" | "remote"');
+    expect(controls).toContain("className={styles.remoteScoreAction}");
+    expect(controls).toContain("<details className={styles.moreActions}>");
+  });
 });
