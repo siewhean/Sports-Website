@@ -2421,6 +2421,69 @@ body:has(.p2-score--simple) {
   font-size: 0.62rem;
 }
 
+.p2-public-results {
+  grid-column: 1 / -1;
+  padding: clamp(24px, 3vw, 36px);
+  border-top: 1px solid #aaa89f;
+  background: #f8f6f0;
+}
+
+.p2-public-results h3 {
+  margin: 0 0 18px;
+  font-size: 1rem;
+}
+
+.p2-public-results ol {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.p2-public-results article {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #d7d3c8;
+  background: #fff;
+}
+
+.p2-public-results article > header,
+.p2-public-results article > p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+}
+
+.p2-public-results article > header > span {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.p2-public-results article > header > strong {
+  color: #6d706b;
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.p2-public-results article > p > span {
+  flex: 1;
+  font-size: 0.9rem;
+}
+
+.p2-public-results article > p > span:last-child {
+  text-align: right;
+}
+
+.p2-public-results article > p > strong {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+}
+
 .p2-public-section {
   padding-top: 88px;
   scroll-margin-top: 24px;

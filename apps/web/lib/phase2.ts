@@ -329,6 +329,7 @@ export const phase2Copy = {
   publicTitleSuffix: "Canoe Polo",
   publicLive: "Live",
   publicFinal: "Final",
+  publicLatestResults: "Latest results",
   publicScheduled: "Scheduled",
   results: "Results",
   table: "Table",
