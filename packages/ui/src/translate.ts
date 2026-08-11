@@ -703,6 +703,26 @@ export const prototypeMessages = {
   "prototype.7d9c2feb8c9a": "Loading format designer",
   "prototype.ddaf7c4e576a": "Materialisation replay confirmed for {value1} matches.",
   "prototype.312322978db0": "{value1} matches materialised from the saved graph.",
+  "prototype.133d0cd6b7fb": "Format options could not be prepared.",
+  "prototype.cbc3f7044f8b": "Capacity-fitting format options are ready.",
+  "prototype.0533fc01a330": "The selected format could not be applied.",
+  "prototype.fc509d65d222": "Format saved and fixtures materialised.",
+  "prototype.401665b38dd7": "Format ready",
+  "prototype.987babcd922c":
+    "Your format is saved and fixtures are materialised. Continue to schedule, or make an advanced format change.",
+  "prototype.066a54319cfb": "Advanced format editor",
+  "prototype.09d81fb45d7f": "Choose a format that fits your capacity",
+  "prototype.428e830191c0":
+    "We use your saved entries and match capacity. You can edit the selected format afterwards.",
+  "prototype.7c88d61058c9": "Finding formats…",
+  "prototype.01f27222b25f": "Show format options",
+  "prototype.d8b8392e2c54": "Try again",
+  "prototype.028141a64b8d": "There is no capacity-fitting format yet. Adjust entries or capacity, then try again.",
+  "prototype.2b082ff09bf8": "matches ·",
+  "prototype.236a82b0edb1": "guaranteed per entry ·",
+  "prototype.069d05955c89": "slots available",
+  "prototype.c2c8f03c0e21": "Applying format…",
+  "prototype.f83bcedd3aa7": "Use this format",
 } as const;
 
 export type PrototypeMessageId = keyof typeof prototypeMessages;

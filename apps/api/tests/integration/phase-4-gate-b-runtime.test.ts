@@ -36,7 +36,7 @@ function required<T>(rows: readonly T[]): T {
   return value;
 }
 
-async function createCompetitionFixture(sportCode: SportCode, label: string) {
+async function createCompetitionFixture(sportCode: SportCode, label: string, divisionCount = 1) {
   const competition = await phase3.createCompetition(
     { accountId },
     {
@@ -54,23 +54,32 @@ async function createCompetitionFixture(sportCode: SportCode, label: string) {
     },
     randomUUID(),
   );
-  const fixtureDivisionId = randomUUID();
-  await client`INSERT INTO divisions(id,competition_id,name,team_limit)
-    VALUES(${fixtureDivisionId},${competition.id},'Open',16)`;
-  for (let seed = 1; seed <= 8; seed += 1) {
-    await client`INSERT INTO division_entries(id,division_id,name,seed,status)
-      VALUES(${randomUUID()},${fixtureDivisionId},${`Fixture entry ${seed}`},${seed},'confirmed')`;
-  }
   const settings = required(
     await client<{ pack_version: string }[]>`
       SELECT pack_version FROM competition_sport_settings WHERE competition_id=${competition.id}`,
   );
-  await client`INSERT INTO division_sport_settings(
-      division_id,competition_id,sport_code,pack_version,settings_override,updated_by
-    ) VALUES(${fixtureDivisionId},${competition.id},${sportCode},${settings.pack_version},'{}'::jsonb,${accountId})`;
+  const divisionIds: string[] = [];
+  for (let divisionIndex = 1; divisionIndex <= divisionCount; divisionIndex += 1) {
+    const fixtureDivisionId = randomUUID();
+    divisionIds.push(fixtureDivisionId);
+    await client`INSERT INTO divisions(id,competition_id,name,team_limit)
+      VALUES(${fixtureDivisionId},${competition.id},${divisionIndex === 1 ? "Open" : `Division ${divisionIndex}`},16)`;
+    for (let seed = 1; seed <= 8; seed += 1) {
+      await client`INSERT INTO division_entries(id,division_id,name,seed,status)
+        VALUES(${randomUUID()},${fixtureDivisionId},${`Fixture ${divisionIndex} entry ${seed}`},${seed},'confirmed')`;
+    }
+    await client`INSERT INTO division_sport_settings(
+        division_id,competition_id,sport_code,pack_version,settings_override,updated_by
+      ) VALUES(${fixtureDivisionId},${competition.id},${sportCode},${settings.pack_version},'{}'::jsonb,${accountId})`;
+  }
   await client`INSERT INTO playing_areas(competition_id,name,slot_minutes)
     VALUES(${competition.id},'Default area',${SPORT_PACKS[sportCode].recommendedSlotMinutes})`;
-  return { competitionId: competition.id, divisionId: fixtureDivisionId, packVersion: settings.pack_version };
+  return {
+    competitionId: competition.id,
+    divisionId: divisionIds[0]!,
+    divisionIds,
+    packVersion: settings.pack_version,
+  };
 }
 
 function basicsFor(document: Awaited<ReturnType<ReliableGateBPhase4Runtime["readSetupDraft"]>>, sportCode: SportCode) {
@@ -1259,7 +1268,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
   });
 
   it("rolls back a direct V1 selection when format materialisation evidence fails", async () => {
-    const fixture = await createCompetitionFixture("volleyball", "V1 materialisation rollback");
+    const fixture = await createCompetitionFixture("volleyball", "V1 materialisation rollback", 2);
     await phase3.replaceCapacity(
       { accountId },
       fixture.competitionId,
@@ -1267,7 +1276,12 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         revision: 1,
         areas: [
           {
-            name: "Court",
+            name: "Court one",
+            slotMinutes: SPORT_PACKS.volleyball.recommendedSlotMinutes,
+            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
+          },
+          {
+            name: "Court two",
             slotMinutes: SPORT_PACKS.volleyball.recommendedSlotMinutes,
             availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
           },
@@ -1283,8 +1297,15 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     );
     const selected = recommendations.values.format_recommendations?.recommendations[0];
     if (!selected) throw new Error("Expected a format recommendation");
+    expect(selected.division_formats).toHaveLength(2);
     await client.unsafe(`CREATE FUNCTION v1_materialise_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN RAISE EXCEPTION 'v1 materialisation audit failure'; END;
+      DECLARE audit_count integer;
+      BEGIN
+        audit_count := COALESCE(NULLIF(current_setting('matchday.v1_materialise_audit_count', true), '')::integer, 0) + 1;
+        PERFORM set_config('matchday.v1_materialise_audit_count', audit_count::text, true);
+        IF audit_count = 2 THEN RAISE EXCEPTION 'v1 materialisation audit failure'; END IF;
+        RETURN NEW;
+      END;
     $$`);
     await client.unsafe(`CREATE TRIGGER v1_materialise_audit_failure BEFORE INSERT ON audit_events
       FOR EACH ROW WHEN (NEW.action='format.materialised') EXECUTE FUNCTION v1_materialise_audit_failure()`);

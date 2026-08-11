@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import type { Phase4SetupDocument } from "@matchday/contracts";
-import { opaqueId } from "@matchday/ui";
+import { opaqueId, translate as t } from "@matchday/ui";
 import {
   fittingV1Recommendations,
   parseV1FormatApplication,
@@ -20,26 +20,24 @@ const copy = {
   error: opaqueId("error"),
   post: opaqueId("POST"),
   json: opaqueId("application/json"),
-  prepareError: opaqueId("Format options could not be prepared."),
-  optionsReady: opaqueId("Capacity-fitting format options are ready."),
-  applyError: opaqueId("The selected format could not be applied."),
-  applied: opaqueId("Format saved and fixtures materialised."),
-  selectedTitle: opaqueId("Format ready"),
-  selectedBody: opaqueId(
-    "Your format is saved and fixtures are materialised. Continue to schedule, or make an advanced format change.",
-  ),
-  advanced: opaqueId("Advanced format editor"),
-  title: opaqueId("Choose a format that fits your capacity"),
-  intro: opaqueId("We use your saved entries and match capacity. You can edit the selected format afterwards."),
-  finding: opaqueId("Finding formats…"),
-  show: opaqueId("Show format options"),
-  retry: opaqueId("Try again"),
-  none: opaqueId("There is no capacity-fitting format yet. Adjust entries or capacity, then try again."),
-  matches: opaqueId("matches ·"),
-  guaranteed: opaqueId("guaranteed per entry ·"),
-  slots: opaqueId("slots available"),
-  applyingLabel: opaqueId("Applying format…"),
-  apply: opaqueId("Use this format"),
+  prepareError: t("prototype.133d0cd6b7fb"),
+  optionsReady: t("prototype.cbc3f7044f8b"),
+  applyError: t("prototype.0533fc01a330"),
+  applied: t("prototype.fc509d65d222"),
+  selectedTitle: t("prototype.401665b38dd7"),
+  selectedBody: t("prototype.987babcd922c"),
+  advanced: t("prototype.066a54319cfb"),
+  title: t("prototype.09d81fb45d7f"),
+  intro: t("prototype.428e830191c0"),
+  finding: t("prototype.7c88d61058c9"),
+  show: t("prototype.01f27222b25f"),
+  retry: t("prototype.d8b8392e2c54"),
+  none: t("prototype.028141a64b8d"),
+  matches: t("prototype.2b082ff09bf8"),
+  guaranteed: t("prototype.236a82b0edb1"),
+  slots: t("prototype.069d05955c89"),
+  applyingLabel: t("prototype.c2c8f03c0e21"),
+  apply: t("prototype.f83bcedd3aa7"),
 } as const;
 
 export function V1FormatPicker({

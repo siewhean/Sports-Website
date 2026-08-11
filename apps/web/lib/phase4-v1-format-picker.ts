@@ -44,6 +44,35 @@ export function fittingV1Recommendations(document: Phase4SetupDocument) {
   );
 }
 
+export function hasAppliedV1Format(document: Phase4SetupDocument | null | undefined): boolean {
+  const selectedId = document?.values.format_recommendations?.selected_recommendation_id;
+  if (!selectedId) return false;
+  const selected = document.values.format_recommendations?.recommendations.find(
+    (candidate) => candidate.id === selectedId,
+  );
+  return Boolean(
+    selected &&
+    selected.division_formats.length > 0 &&
+    selected.division_formats.every((format) => format.format_revision_id),
+  );
+}
+
+export function hasMaterialisedV1Format(
+  document: Phase4SetupDocument | null | undefined,
+  divisions: readonly { divisionId: string; draftId: string | null; materialised: boolean }[],
+): boolean {
+  const selectedId = document?.values.format_recommendations?.selected_recommendation_id;
+  const selected = selectedId
+    ? document.values.format_recommendations?.recommendations.find((candidate) => candidate.id === selectedId)
+    : null;
+  if (!selected || selected.division_formats.length !== divisions.length) return false;
+  const statusByDivision = new Map(divisions.map((division) => [division.divisionId, division]));
+  return selected.division_formats.every((format) => {
+    const status = statusByDivision.get(format.division_id);
+    return Boolean(status && status.draftId === format.format_revision_id && status.materialised);
+  });
+}
+
 export function v1FormatScreenState(advancedRequested: boolean, hasAppliedFormat: boolean) {
   if (advancedRequested) return "advanced" as const;
   return hasAppliedFormat ? ("selected" as const) : ("picker" as const);

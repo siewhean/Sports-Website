@@ -148,6 +148,8 @@ export type Phase4FormatRevisionView = Phase4FormatRevisionLineage & {
   readonly division_id: string;
   readonly status: Phase4FormatRevisionStatus;
   readonly definition_hash: string;
+  /** True only after deterministic fixture materialisation has committed. */
+  readonly materialised?: boolean;
   readonly document: Phase4FormatBuilderDocument;
   readonly created_at: string;
   readonly published_at: string | null;
@@ -168,6 +170,8 @@ export type Phase4FormatDraftView = {
   readonly permission: Phase4FormatDraftPermission;
   readonly read_only: boolean;
   readonly definition_hash: string;
+  /** True only after deterministic fixture materialisation has committed. */
+  readonly materialised?: boolean;
   readonly document: Phase4FormatBuilderDocument;
   readonly metrics: {
     readonly match_count: number;

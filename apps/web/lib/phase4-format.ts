@@ -240,6 +240,7 @@ export function parseFormatDraft(
     !["edit", "view"].includes(String(item.permission)) ||
     typeof item.read_only !== "boolean" ||
     typeof item.definition_hash !== "string" ||
+    (item.materialised !== undefined && typeof item.materialised !== "boolean") ||
     !metrics ||
     !integer(metrics.match_count) ||
     !integer(metrics.guaranteed_matches) ||

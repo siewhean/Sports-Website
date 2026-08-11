@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Phase4SetupDocument } from "@matchday/contracts";
-import { fittingV1Recommendations, v1FormatScreenState } from "./phase4-v1-format-picker";
+import {
+  fittingV1Recommendations,
+  hasAppliedV1Format,
+  hasMaterialisedV1Format,
+  v1FormatScreenState,
+} from "./phase4-v1-format-picker";
 
 function setupWithRecommendations(): Phase4SetupDocument {
   return {
@@ -80,5 +85,43 @@ describe("V1 format picker", () => {
     expect(v1FormatScreenState(false, false)).toBe("picker");
     expect(v1FormatScreenState(false, true)).toBe("selected");
     expect(v1FormatScreenState(true, true)).toBe("advanced");
+  });
+
+  it("does not treat an unrelated manual format draft as a completed V1 choice", () => {
+    const document = setupWithRecommendations();
+    expect(hasAppliedV1Format(document)).toBe(false);
+    const recommendations = document.values.format_recommendations!;
+    const selectedDocument = {
+      ...document,
+      values: {
+        ...document.values,
+        format_recommendations: {
+          ...recommendations,
+          selected_recommendation_id: "fits",
+          recommendations: recommendations.recommendations.map((recommendation) =>
+            recommendation.id === "fits"
+              ? {
+                  ...recommendation,
+                  division_formats: recommendation.division_formats.map((format) => ({
+                    ...format,
+                    format_revision_id: "revision-a",
+                  })),
+                }
+              : recommendation,
+          ),
+        },
+      },
+    } as Phase4SetupDocument;
+    expect(hasAppliedV1Format(selectedDocument)).toBe(true);
+    expect(
+      hasMaterialisedV1Format(selectedDocument, [
+        { divisionId: "division-a", draftId: "revision-a", materialised: false },
+      ]),
+    ).toBe(false);
+    expect(
+      hasMaterialisedV1Format(selectedDocument, [
+        { divisionId: "division-a", draftId: "revision-a", materialised: true },
+      ]),
+    ).toBe(true);
   });
 });

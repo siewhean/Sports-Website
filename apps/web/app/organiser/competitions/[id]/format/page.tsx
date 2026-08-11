@@ -6,6 +6,8 @@ import { phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { formatDivisionOptions, selectFormatDivision } from "@/lib/phase4-format-division";
 import { getFormatBuilderDocument } from "@/lib/phase4-format.server";
+import { getAssistedSetupDocument } from "@/lib/phase4-assisted-setup.server";
+import { hasAppliedV1Format, hasMaterialisedV1Format } from "@/lib/phase4-v1-format-picker";
 import { opaqueId } from "@matchday/ui";
 
 export default async function FormatDesignerPage({
@@ -24,14 +26,31 @@ export default async function FormatDesignerPage({
   const divisions = formatDivisionOptions(result.competition.division, result.competition.divisions);
   const selectedDivision = selectFormatDivision(divisions, query.division);
   if (!selectedDivision) notFound();
-  const format = await getFormatBuilderDocument({
-    competitionId: result.competition.id,
-    competitionName: result.competition.name,
-    divisionId: selectedDivision.id,
-    divisionName: selectedDivision.name,
-    sportCode: result.competition.sportCode ?? "",
-    ...(typeof query.state === "string" ? { previewState: query.state } : {}),
-  });
+  const formatDocuments = await Promise.all(
+    divisions.map((division) =>
+      getFormatBuilderDocument({
+        competitionId: result.competition.id,
+        competitionName: result.competition.name,
+        divisionId: division.id,
+        divisionName: division.name,
+        sportCode: result.competition.sportCode ?? "",
+        ...(typeof query.state === "string" ? { previewState: query.state } : {}),
+      }),
+    ),
+  );
+  const format = formatDocuments.find((document) => document.divisionId === selectedDivision.id);
+  if (!format) notFound();
+  const setup = await getAssistedSetupDocument(result.competition.id, result.competition.name);
+  const hasAppliedFormat =
+    hasAppliedV1Format(setup.setup) &&
+    hasMaterialisedV1Format(
+      setup.setup,
+      formatDocuments.map((document) => ({
+        divisionId: document.divisionId,
+        draftId: document.draft?.draft_id ?? null,
+        materialised: document.draft?.materialised === true,
+      })),
+    );
   const advancedRequested = query.advanced === "1";
   const advancedHref = `/organiser/competitions/${encodeURIComponent(result.competition.id)}/format?division=${encodeURIComponent(selectedDivision.id)}&advanced=1`;
   return (
@@ -46,7 +65,7 @@ export default async function FormatDesignerPage({
         ) : (
           <V1FormatPicker
             competitionId={result.competition.id}
-            hasAppliedFormat={Boolean(format.draft?.document)}
+            hasAppliedFormat={hasAppliedFormat}
             advancedHref={advancedHref}
           />
         )

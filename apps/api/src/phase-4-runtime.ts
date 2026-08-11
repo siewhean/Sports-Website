@@ -1500,6 +1500,7 @@ export class Phase4Runtime {
       division_id: row.division_id,
       status: row.status,
       definition_hash: row.definition_hash,
+      materialised: Boolean(row.graph_materialized_at),
       document: { schema_version: 1, graph: graph as Phase4FormatBuilderDocument["graph"], layout },
       created_at: instant(row.created_at)!,
       published_at: instant(row.published_at),
@@ -1524,6 +1525,7 @@ export class Phase4Runtime {
       permission: "edit",
       read_only: row.status !== "draft",
       definition_hash: row.definition_hash,
+      materialised: Boolean(row.graph_materialized_at),
       document: revision.document,
       metrics: {
         match_count: required,
