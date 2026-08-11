@@ -95,6 +95,9 @@ test("V1 schedule uses one balanced flow and keeps advanced controls out of the 
   await expect(page.getByRole("link", { name: "Revision history" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Lock match|Unlock match/ })).toHaveCount(0);
   await expect(page.getByText(/Private draft \d+/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Use schedule" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Generate schedule" })).toHaveCount(0);
+  await expect(page.getByTestId("v1-schedule-status")).toBeVisible();
   await expect(page.getByRole("link", { name: "Move match" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish schedule" })).toBeVisible();
 });

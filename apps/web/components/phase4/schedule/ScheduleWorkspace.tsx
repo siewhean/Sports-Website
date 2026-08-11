@@ -530,17 +530,20 @@ export function ScheduleWorkspace({
         />
       )}
 
-      <JobRail
-        job={job}
-        disabled={disabled}
-        busy={busy}
-        onGenerate={generate}
-        onContinue={continueOptimising}
-        onCancel={cancelJob}
-        onAccept={acceptOption}
-        objective={advanced ? objective : v1ScheduleObjective}
-        advanced={advanced}
-      />
+      {advanced ? (
+        <JobRail
+          job={job}
+          disabled={disabled}
+          busy={busy}
+          onGenerate={generate}
+          onContinue={continueOptimising}
+          onCancel={cancelJob}
+          onAccept={acceptOption}
+          objective={objective}
+        />
+      ) : (
+        <SimpleScheduleStatus job={job} />
+      )}
     </div>
   );
 }
@@ -955,7 +958,6 @@ function JobRail({
   onCancel,
   onAccept,
   objective,
-  advanced,
 }: {
   job: ScheduleJob | null;
   disabled: boolean;
@@ -965,7 +967,6 @@ function JobRail({
   onCancel: () => Promise<void>;
   onAccept: (option: ScheduleOption) => Promise<void>;
   objective: ScheduleObjective;
-  advanced: boolean;
 }) {
   if (!job)
     return (
@@ -973,13 +974,13 @@ function JobRail({
         <div>
           <CalendarBlank />
           <span>
-            <strong>{advanced ? phase4ScheduleCopy.noOptimisation : phase4ScheduleCopy.v1NoSchedule}</strong>
-            <small>{advanced ? phase4ScheduleCopy.generateLatest : phase4ScheduleCopy.v1NoScheduleBody}</small>
+            <strong>{phase4ScheduleCopy.noOptimisation}</strong>
+            <small>{phase4ScheduleCopy.generateLatest}</small>
           </span>
         </div>
         <button type="button" disabled={disabled} onClick={() => void onGenerate()}>
           <Play />
-          {advanced ? phase4ScheduleCopy.generate : phase4ScheduleCopy.v1Generate}
+          {phase4ScheduleCopy.generate}
         </button>
       </footer>
     );
@@ -989,25 +990,15 @@ function JobRail({
       <div>
         {job.currentBest ? <CheckCircle /> : <ArrowsClockwise />}
         <span>
-          <strong>
-            {advanced
-              ? jobStatusTitle(job)
-              : job.currentBest
-                ? phase4ScheduleCopy.v1Ready
-                : phase4ScheduleCopy.v1Creating}
-          </strong>
+          <strong>{jobStatusTitle(job)}</strong>
           <small>
-            {advanced
-              ? job.currentBest
-                ? interpolate(phase4ScheduleCopy.objectiveQuality, {
-                    objective: objectiveLabel(job.objective),
-                    quality: job.currentBest.quality.score,
-                  })
-                : phase4ScheduleCopy.selectedUnchanged
-              : job.currentBest
-                ? phase4ScheduleCopy.v1ReadyBody
-                : phase4ScheduleCopy.v1NoScheduleBody}
-            {advanced && job.exploredCandidates > 0
+            {job.currentBest
+              ? interpolate(phase4ScheduleCopy.objectiveQuality, {
+                  objective: objectiveLabel(job.objective),
+                  quality: job.currentBest.quality.score,
+                })
+              : phase4ScheduleCopy.selectedUnchanged}
+            {job.exploredCandidates > 0
               ? ` ${interpolate(
                   job.exploredCandidates === 1
                     ? phase4ScheduleCopy.candidateExplored
@@ -1019,7 +1010,7 @@ function JobRail({
         </span>
       </div>
       <div className={styles.jobActions}>
-        {advanced && !active && job.currentBest ? (
+        {!active && job.currentBest ? (
           <button type="button" disabled={disabled || busy !== null} onClick={() => void onContinue()}>
             <ArrowsClockwise />
             {phase4ScheduleCopy.continue}
@@ -1028,12 +1019,10 @@ function JobRail({
         {!active ? (
           <button type="button" disabled={disabled || busy !== null} onClick={() => void onGenerate()}>
             <Play />
-            {advanced
-              ? interpolate(phase4ScheduleCopy.generateObjective, { objective: objectiveLabel(objective) })
-              : phase4ScheduleCopy.v1Generate}
+            {interpolate(phase4ScheduleCopy.generateObjective, { objective: objectiveLabel(objective) })}
           </button>
         ) : null}
-        {advanced && active ? (
+        {active ? (
           <button
             type="button"
             disabled={disabled || busy !== null || job.status === phase4ScheduleMachine.cancelling}
@@ -1043,7 +1032,7 @@ function JobRail({
             {job.status === phase4ScheduleMachine.cancelling ? phase4ScheduleCopy.cancelling : phase4ScheduleCopy.stop}
           </button>
         ) : null}
-        {job.currentBest && (advanced || job.currentBest.objective === v1ScheduleObjective) ? (
+        {job.currentBest ? (
           <button
             className={styles.useButton}
             type="button"
@@ -1056,6 +1045,15 @@ function JobRail({
         ) : null}
       </div>
     </footer>
+  );
+}
+
+function SimpleScheduleStatus({ job }: { job: ScheduleJob | null }) {
+  if (!job) return null;
+  return (
+    <p className={styles.simpleStatus} role="status" data-testid="v1-schedule-status">
+      {job.currentBest ? phase4ScheduleCopy.v1ReadyBody : phase4ScheduleCopy.v1Creating}
+    </p>
   );
 }
 
