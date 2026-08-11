@@ -65,6 +65,11 @@ function mutableGraph(graph: FormatGraph): FormatGraph {
 }
 
 const EXPECTED_TEMPLATE_METRICS = {
+  4: [
+    { matchCount: 6, guaranteedMatches: 3, maximumMatches: 3 },
+    { matchCount: 4, guaranteedMatches: 2, maximumMatches: 2 },
+    { matchCount: 3, guaranteedMatches: 1, maximumMatches: 2 },
+  ],
   8: [
     { matchCount: 18, guaranteedMatches: 4, maximumMatches: 5 },
     { matchCount: 16, guaranteedMatches: 3, maximumMatches: 5 },
@@ -113,18 +118,17 @@ describe("Phase 3 format graph generation", () => {
     }
   });
 
-  it.each(defaultFormatEntryCounts)("gives every %i-entry default at least four matches", (entryCount) => {
-    const template = getDefaultFormatTemplate(entryCount);
-    expect(template.strategy).toBe("full_placement");
-    expect(template.metrics.guaranteedMatches).toBeGreaterThanOrEqual(4);
-    expect(template.graph.stages.map((stage) => stage.kind)).toEqual([
-      "group",
-      "single_elimination",
-      "bronze",
-      "placement",
-      "consolation",
-    ]);
-  });
+  it.each(defaultFormatEntryCounts)(
+    "gives every %i-entry default its supported participation guarantee",
+    (entryCount) => {
+      const template = getDefaultFormatTemplate(entryCount);
+      expect(template.strategy).toBe("full_placement");
+      expect(template.metrics.guaranteedMatches).toBeGreaterThanOrEqual(entryCount === 4 ? 3 : 4);
+      expect(template.graph.stages.map((stage) => stage.kind)).toEqual(
+        entryCount === 4 ? ["round_robin"] : ["group", "single_elimination", "bronze", "placement", "consolation"],
+      );
+    },
+  );
 
   it("derives guarantees from the least-served group-rank path", () => {
     const full = createDefaultFormatTemplates(8).find((template) => template.strategy === "full_placement")!;
@@ -153,10 +157,11 @@ describe("Phase 3 format graph generation", () => {
     expect(full.metrics.guaranteedMatches).toBe(4);
   });
 
-  it.each(defaultFormatEntryCounts)("uses every group seed exactly three times for %i entries", (entryCount) => {
+  it.each(defaultFormatEntryCounts)("uses every first-stage seed exactly three times for %i entries", (entryCount) => {
     const graph = getDefaultFormatTemplate(entryCount).graph;
     const seedUses = new Map<number, number>();
-    for (const match of graph.matches.filter((candidate) => candidate.stageId === "groups")) {
+    const firstStageId = entryCount === 4 ? "round-robin" : "groups";
+    for (const match of graph.matches.filter((candidate) => candidate.stageId === firstStageId)) {
       for (const source of [match.home, match.away]) {
         if (source.type === "entry_seed") seedUses.set(source.seed, (seedUses.get(source.seed) ?? 0) + 1);
       }
@@ -408,6 +413,27 @@ describe("Phase 3 capacity-first recommendations", () => {
     expect(result.requiresChanges?.matchCount).toBeGreaterThan(30);
     expect(result.requiresChanges?.capacityStatus).toBe("requires_changes");
     expect(result.requiresChanges?.scheduleFeasibility).toBe("infeasible");
+  });
+
+  it("offers a rank-all, capacity-fitting four-team round robin", () => {
+    const result = recommendCompetitionFormats({
+      sportCode: "canoe_polo",
+      divisions: [{ id: "open", entryCount: 4 }],
+      availableMatchSlots: 6,
+      minimumGuaranteedMatches: 3,
+      rankAllEntries: true,
+      placementRequired: true,
+      priority: "participation",
+    });
+    expect(result.recommendations).toHaveLength(1);
+    expect(result.recommendations[0]).toMatchObject({
+      strategy: "full_placement",
+      matchCount: 6,
+      guaranteedMatches: 3,
+      rankingCoverage: "all_entries",
+      capacityStatus: "tight",
+    });
+    expect(result.recommendations[0]?.divisions[0]?.graph.stages.map((stage) => stage.kind)).toEqual(["round_robin"]);
   });
 
   it("applies every declared preference and rejects incomplete or unsupported inputs", () => {

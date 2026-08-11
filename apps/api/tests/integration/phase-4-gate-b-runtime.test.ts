@@ -36,7 +36,12 @@ function required<T>(rows: readonly T[]): T {
   return value;
 }
 
-async function createCompetitionFixture(sportCode: SportCode, label: string, divisionCount = 1) {
+async function createCompetitionFixture(
+  sportCode: SportCode,
+  label: string,
+  divisionCount = 1,
+  entriesPerDivision = 8,
+) {
   const competition = await phase3.createCompetition(
     { accountId },
     {
@@ -64,7 +69,7 @@ async function createCompetitionFixture(sportCode: SportCode, label: string, div
     divisionIds.push(fixtureDivisionId);
     await client`INSERT INTO divisions(id,competition_id,name,team_limit)
       VALUES(${fixtureDivisionId},${competition.id},${divisionIndex === 1 ? "Open" : `Division ${divisionIndex}`},16)`;
-    for (let seed = 1; seed <= 8; seed += 1) {
+    for (let seed = 1; seed <= entriesPerDivision; seed += 1) {
       await client`INSERT INTO division_entries(id,division_id,name,seed,status)
         VALUES(${randomUUID()},${fixtureDivisionId},${`Fixture ${divisionIndex} entry ${seed}`},${seed},'confirmed')`;
     }
@@ -1225,6 +1230,58 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         `,
       ).count,
     ).toBe(revisions.length);
+  });
+
+  it("lets V1 recommend and materialise a four-team division through the direct route", async () => {
+    const fixture = await createCompetitionFixture("canoe_polo", "V1 four team direct format", 1, 4);
+    await phase3.replaceCapacity(
+      { accountId },
+      fixture.competitionId,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Water court",
+            slotMinutes: SPORT_PACKS.canoe_polo.recommendedSlotMinutes,
+            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    const recommended = await runtime.recommendV1Format(
+      { accountId },
+      fixture.competitionId,
+      `v1-four-team-recommend-${randomUUID()}`,
+      randomUUID(),
+    );
+    const selected = recommended.values.format_recommendations?.recommendations.find(
+      (candidate) =>
+        candidate.capacity_status !== "requires_changes" &&
+        candidate.match_count <= candidate.available_match_slots &&
+        candidate.division_formats.length === 1,
+    );
+    expect(selected).toBeDefined();
+    if (!selected) throw new Error("Expected a fitting four-team V1 format");
+
+    const applied = await runtime.applyV1FormatRecommendation(
+      { accountId },
+      fixture.competitionId,
+      selected.id,
+      `v1-four-team-apply-${randomUUID()}`,
+      randomUUID(),
+    );
+    expect(applied.materialised).toHaveLength(1);
+    expect(applied.materialised[0]?.materialised).toBe(true);
+    expect(applied.materialised[0]?.revision.document.graph.entryCount).toBe(4);
+    expect(
+      required(
+        await client<{ count: number }[]>`
+          SELECT count(*)::int count FROM format_revisions
+          WHERE competition_id=${fixture.competitionId} AND graph_match_count=6
+        `,
+      ).count,
+    ).toBe(1);
   });
 
   it("refreshes V1 format evidence after entries change", async () => {
