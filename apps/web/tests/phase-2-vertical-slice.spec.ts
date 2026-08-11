@@ -28,6 +28,10 @@ test("V1 organiser navigation shows only the primary journey", async ({ page }) 
   await expect(navigation.getByText("Rules", { exact: true })).toHaveCount(0);
   await expect(navigation.getByText("Access", { exact: true })).toHaveCount(0);
   await expect(navigation.getByText("Audit", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Issue scorer access" })).toHaveAttribute(
+    "href",
+    "/organiser/competitions/cmp_sgopen_2026/access",
+  );
 });
 
 test("canonical routes expose the complete 14-step competition slice", async ({ page }) => {

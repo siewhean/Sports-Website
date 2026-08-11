@@ -267,6 +267,10 @@ function ControlRoom({ competition }: { competition: CompetitionView }) {
             </li>
           ))}
         </ol>
+        <Link className="p2-button p2-button--dark" href={`/organiser/competitions/${competition.id}/access`}>
+          {phase2Copy.issueScorerAccess}
+          <ArrowRight aria-hidden="true" />
+        </Link>
       </section>
       <section className="p2-readiness" aria-labelledby="readiness-title">
         <header>

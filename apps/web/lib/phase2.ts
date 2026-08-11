@@ -266,6 +266,7 @@ export const phase2Copy = {
   save: "Save changes",
   continue: "Continue",
   edit: "Edit",
+  issueScorerAccess: "Issue scorer access",
   publish: "Publish competition",
   published: "Published",
   openPublic: "Open public page",
