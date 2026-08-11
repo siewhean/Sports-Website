@@ -16,7 +16,8 @@ export default defineConfig({
   reporter: "list",
   outputDir: process.env.PHASE4_E2E_OUTPUT_DIR,
   use: {
-    baseURL: process.env.PHASE4_E2E_WEB_BASE_URL ?? "http://localhost:3102",
+    baseURL: process.env.PHASE4_E2E_WEB_BASE_URL ?? "https://localhost:3102",
+    ignoreHTTPSErrors: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

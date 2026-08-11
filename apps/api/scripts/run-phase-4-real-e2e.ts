@@ -72,8 +72,9 @@ export function resolveHarnessProjects(environment: NodeJS.ProcessEnv): readonly
 }
 
 const { apiPort, webPort } = resolveHarnessPorts(process.env);
+const httpsProxyPort = webPort + 1;
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
-const webOrigin = `http://localhost:${webPort}`;
+const webOrigin = `https://localhost:${httpsProxyPort}`;
 const databasePrefix = "matchday_phase4_e2e_";
 const schemaPrefix = "test_phase4_e2e_";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -748,6 +749,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
   let sql: Sql | null = null;
   let app: Awaited<ReturnType<typeof buildApp>> | null = null;
   let web: RunningProcess | null = null;
+  let httpsProxy: RunningProcess | null = null;
   let scheduler: SchedulerRuntime | null = null;
   let scheduleQueue: ScheduleJobQueue | null = null;
   let queueName: string | null = null;
@@ -911,11 +913,24 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       ["--filter", "@matchday/web", "start", "--hostname", "127.0.0.1", "--port", String(webPort)],
       runtimeEnv,
     );
-    await waitFor(`${webOrigin}/`, "production web", web, webBuildId);
+    await waitFor(`http://127.0.0.1:${webPort}/`, "production web", web, webBuildId);
+    httpsProxy = startProcess("production web HTTPS proxy", "node", ["apps/web/tests/helpers/https-proxy.mjs"], {
+      ...runtimeEnv,
+      HTTPS_PROXY_UPSTREAM_PORT: String(webPort),
+      HTTPS_PROXY_PORT: String(httpsProxyPort),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (httpsProxy.child.exitCode !== null)
+      throw new Error(
+        `production web HTTPS proxy exited before readiness with code ${String(httpsProxy.child.exitCode)}`,
+      );
     const firstProjectName = projectNames[0];
     if (!firstProjectName) throw new Error("At least one real E2E browser project is required");
     const probeState = projects[firstProjectName]!;
-    const formatProbe = await fetch(`${webOrigin}/organiser/competitions/new`, {
+    // Node's built-in fetch deliberately rejects our throwaway self-signed
+    // browser proxy certificate. The browser journey uses that HTTPS origin;
+    // this build/readiness probe may safely target Next directly.
+    const formatProbe = await fetch(`http://127.0.0.1:${webPort}/organiser/competitions/new`, {
       headers: { cookie: probeState.organiserCookie },
     });
     const formatProbeBody = await formatProbe.text();
@@ -968,6 +983,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
         cleanupErrors.push(new Error(`${label}: ${error instanceof Error ? error.message : String(error)}`));
       }
     };
+    await cleanup("HTTPS proxy shutdown", () => stopProcess(httpsProxy));
     await cleanup("Web shutdown", () => stopProcess(web));
     await cleanup("API shutdown", async () => app?.close());
     await cleanup("Scheduler shutdown", async () => scheduler?.stop());

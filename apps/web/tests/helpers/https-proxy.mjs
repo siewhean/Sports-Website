@@ -2,6 +2,16 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:https";
 import { request as httpRequest } from "node:http";
 
+const upstreamPort = Number(process.env.HTTPS_PROXY_UPSTREAM_PORT ?? "3101");
+const proxyPort = Number(process.env.HTTPS_PROXY_PORT ?? "3100");
+
+if (!Number.isSafeInteger(upstreamPort) || upstreamPort < 1024 || upstreamPort > 65535) {
+  throw new Error("HTTPS_PROXY_UPSTREAM_PORT must be an unprivileged TCP port");
+}
+if (!Number.isSafeInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535) {
+  throw new Error("HTTPS_PROXY_PORT must be an unprivileged TCP port");
+}
+
 const key = execFileSync("openssl", ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"], {
   stdio: ["ignore", "pipe", "ignore"],
 });
@@ -28,10 +38,17 @@ const server = createServer({ key, cert: certificate }, (incoming, outgoing) => 
   const upstream = httpRequest(
     {
       hostname: "127.0.0.1",
-      port: 3101,
+      port: upstreamPort,
       path: incoming.url,
       method: incoming.method,
-      headers: { ...incoming.headers, host: "127.0.0.1:3101", "x-forwarded-proto": "https" },
+      headers: {
+        ...incoming.headers,
+        // Preserve the browser authority. BFF same-origin checks must observe
+        // the HTTPS proxy origin, not the private HTTP upstream.
+        host: incoming.headers.host,
+        "x-forwarded-host": incoming.headers.host,
+        "x-forwarded-proto": "https",
+      },
     },
     (response) => {
       outgoing.writeHead(response.statusCode ?? 502, response.headers);
@@ -57,4 +74,4 @@ function close() {
 
 process.once("SIGINT", close);
 process.once("SIGTERM", close);
-server.listen(3100, "127.0.0.1");
+server.listen(proxyPort, "127.0.0.1");
