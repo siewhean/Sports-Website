@@ -219,7 +219,13 @@ export type ScoringCommandPort = {
   finalizeResult(command: FinalizeResultCommand): Promise<{ receiptId: string; publishedAt: string }>;
 };
 
-export const organiserSections: ReadonlyArray<{ id: OrganiserSection; label: string; short: string }> = [
+export type OrganiserNavigationItem = Readonly<{ id: OrganiserSection; label: string; short: string }>;
+
+/**
+ * All supported organiser routes. Advanced and legacy operational pages remain
+ * addressable even when they are deliberately absent from the V1 navigation.
+ */
+export const organiserSections: ReadonlyArray<OrganiserNavigationItem> = [
   { id: "control-room", label: "Control room", short: "Overview" },
   { id: "setup", label: "Competition setup", short: "Setup" },
   { id: "settings", label: "Canoe Polo rules", short: "Rules" },
@@ -231,6 +237,21 @@ export const organiserSections: ReadonlyArray<{ id: OrganiserSection; label: str
   { id: "publish", label: "Publication", short: "Publish" },
   { id: "access", label: "Scoring access", short: "Access" },
   { id: "audit", label: "Audit log", short: "Audit" },
+];
+
+/**
+ * The V1 path keeps the primary organiser journey legible. The omitted routes
+ * are still valid direct routes for advanced or operational use; hiding them
+ * here must not change routing or authorisation behaviour.
+ */
+export const v1OrganiserSections: ReadonlyArray<OrganiserNavigationItem> = [
+  { id: "control-room", label: "Overview", short: "Overview" },
+  { id: "entries", label: "Teams", short: "Teams" },
+  { id: "capacity", label: "Capacity", short: "Capacity" },
+  { id: "format", label: "Format", short: "Format" },
+  { id: "schedule", label: "Schedule", short: "Schedule" },
+  { id: "results", label: "Results", short: "Results" },
+  { id: "publish", label: "Publish", short: "Publish" },
 ];
 
 export const phase2Copy = {

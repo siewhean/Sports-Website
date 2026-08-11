@@ -12,7 +12,7 @@ import {
   Warning,
 } from "@phosphor-icons/react/dist/ssr";
 import {
-  organiserSections,
+  v1OrganiserSections,
   phase2Competition,
   phase2Copy,
   phase2Machine,
@@ -52,16 +52,8 @@ function sectionMeta(competition: CompetitionView, section: OrganiserSection): {
   return shared[section];
 }
 
-function navigation(competition: CompetitionView) {
-  return organiserSections.map((item) => {
-    if (item.id === "settings")
-      return { ...item, short: t("prototype.74a883a037bc"), label: `${competition.sport} settings` };
-    if (item.id === "entries")
-      return { ...item, short: t("prototype.7cb76b4af12a"), label: t("prototype.10beee7f51f8") };
-    if (item.id === "format")
-      return { ...item, short: t("prototype.2f343666aaa8"), label: t("prototype.675eeee2578b") };
-    return item;
-  });
+function navigation() {
+  return v1OrganiserSections;
 }
 
 export function OrganiserWorkspace({
@@ -129,7 +121,7 @@ export function OrganiserWorkspace({
       ) : null}
       <div className="p2-organiser__layout">
         <nav className="p2-organiser__nav" aria-label={phase2Copy.organiserNav}>
-          {navigation(competition).map((item) => (
+          {navigation().map((item) => (
             <Link
               key={item.id}
               href={item.id === "control-room" ? organiserBase : `${organiserBase}/${item.id}`}

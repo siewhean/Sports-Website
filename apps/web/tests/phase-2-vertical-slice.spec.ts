@@ -9,6 +9,27 @@ import {
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
+test("V1 organiser navigation shows only the primary journey", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open");
+  await dismissConsent(page);
+
+  const navigation = page.getByRole("navigation", { name: "Competition workspace" });
+  await expect(navigation.getByRole("link")).toHaveText([
+    "OverviewOverview",
+    "TeamsTeams",
+    "CapacityCapacity",
+    "FormatFormat",
+    "ScheduleSchedule",
+    "ResultsResults",
+    "PublishPublish",
+    "Back to MATCHDAY",
+  ]);
+  await expect(navigation.getByText("Setup", { exact: true })).toHaveCount(0);
+  await expect(navigation.getByText("Rules", { exact: true })).toHaveCount(0);
+  await expect(navigation.getByText("Access", { exact: true })).toHaveCount(0);
+  await expect(navigation.getByText("Audit", { exact: true })).toHaveCount(0);
+});
+
 test("canonical routes expose the complete 14-step competition slice", async ({ page }) => {
   const routeEvidence = [
     ["/organiser/competitions/singapore-open/setup", "Set the event capacity", "Singapore Open 2026"],
