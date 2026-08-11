@@ -124,6 +124,7 @@ describe("foundation migrations", () => {
         "0031_gate_c_participant_snapshot_fencing.sql",
         "0032_v1_unseeded_schedule_source_mapping.sql",
         "0033_v1_unseeded_schedule_graph_shape_fix.sql",
+        "0034_v1_materialize_direct_entry_sources.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
@@ -326,16 +327,22 @@ describe("foundation migrations", () => {
         const unseededScheduleGraphShapeMigration = forwardMigrations.find(
           ({ name }) => name === "0033_v1_unseeded_schedule_graph_shape_fix.sql",
         );
+        const materialisedDirectEntrySourcesMigration = forwardMigrations.find(
+          ({ name }) => name === "0034_v1_materialize_direct_entry_sources.sql",
+        );
         if (!participantFenceMigration) throw new Error("Expected participant-fencing migration");
         if (!unseededScheduleMigration) throw new Error("Expected unseeded schedule migration");
         if (!unseededScheduleGraphShapeMigration) throw new Error("Expected unseeded schedule graph-shape migration");
+        if (!materialisedDirectEntrySourcesMigration)
+          throw new Error("Expected direct-entry materialisation migration");
         await Promise.all(
           forwardMigrations
             .filter(
               ({ name }) =>
                 name !== participantFenceMigration.name &&
                 name !== unseededScheduleMigration.name &&
-                name !== unseededScheduleGraphShapeMigration.name,
+                name !== unseededScheduleGraphShapeMigration.name &&
+                name !== materialisedDirectEntrySourcesMigration.name,
             )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
@@ -349,7 +356,8 @@ describe("foundation migrations", () => {
             (name) =>
               name !== participantFenceMigration.name &&
               name !== unseededScheduleMigration.name &&
-              name !== unseededScheduleGraphShapeMigration.name,
+              name !== unseededScheduleGraphShapeMigration.name &&
+              name !== materialisedDirectEntrySourcesMigration.name,
           ),
         );
         await sql`UPDATE scheduled_matches
@@ -388,6 +396,17 @@ describe("foundation migrations", () => {
             schema: populatedSchema,
           }),
         ).toMatchObject({ applied: ["0033_v1_unseeded_schedule_graph_shape_fix.sql"] });
+        await writeFile(
+          materialisedDirectEntrySourcesMigration.migrationPath,
+          materialisedDirectEntrySourcesMigration.source,
+        );
+        expect(
+          await migrateDatabase({
+            databaseUrl: config.databaseUrl,
+            migrationsDirectory: copiedDirectory,
+            schema: populatedSchema,
+          }),
+        ).toMatchObject({ applied: ["0034_v1_materialize_direct_entry_sources.sql"] });
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT

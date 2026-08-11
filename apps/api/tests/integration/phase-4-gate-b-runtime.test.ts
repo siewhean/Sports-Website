@@ -1315,6 +1315,26 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         SELECT entry_id FROM phase4_match_possible_entries(${firstMaterialisedMatch.id}) ORDER BY entry_id
       `,
     ).toHaveLength(2);
+    const directMatches = await client<
+      {
+        id: string;
+        home_entry_id: string | null;
+        away_entry_id: string | null;
+        home_name: string | null;
+        away_name: string | null;
+      }[]
+    >`
+      SELECT match.id,match.home_entry_id,match.away_entry_id,home.name AS home_name,away.name AS away_name
+      FROM matches match
+      LEFT JOIN division_entries home ON home.id=match.home_entry_id
+      LEFT JOIN division_entries away ON away.id=match.away_entry_id
+      WHERE match.format_revision_id=${applied.materialised[0]!.revision.revision_id}
+      ORDER BY match.ordinal
+    `;
+    expect(directMatches).toHaveLength(6);
+    expect(
+      directMatches.every((match) => match.home_entry_id && match.away_entry_id && match.home_name && match.away_name),
+    ).toBe(true);
     const competition = required(
       await client<{ revision: number; capacity_revision: number }[]>`
         SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}
