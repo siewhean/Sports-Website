@@ -723,7 +723,11 @@ export class Phase4Runtime {
         },
       },
       requestId,
-      { materialiseSelectedFormat: true },
+      // The direct V1 picker is the organiser's complete format-selection
+      // path. A materialised draft cannot enter the scheduler (which only
+      // accepts published format revisions), so publish the exact selected
+      // revisions in this same transaction.
+      { materialiseSelectedFormat: true, publishSelectedFormat: true },
     );
     if (saved.outcome === "conflict")
       throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format options");
@@ -1018,7 +1022,7 @@ export class Phase4Runtime {
     actor: Phase3Actor,
     setupDraftId: string,
     values: Phase4SetupValues,
-    options: { materialiseSelectedFormat?: boolean } = {},
+    options: { materialiseSelectedFormat?: boolean; publishSelectedFormat?: boolean } = {},
   ): Promise<void> {
     const submitted = values.format_recommendations;
     await this.assertCanonicalSetupStep(tx, access, "capacity", values);
@@ -1150,6 +1154,22 @@ export class Phase4Runtime {
     });
     if (options.materialiseSelectedFormat) {
       for (const format of applied) {
+        // Format-validation evidence includes all previously selected
+        // divisions. Insert and publish one revision at a time so each
+        // immutable evidence record has the capacity claim that is true at
+        // its publication point. The enclosing transaction still makes the
+        // multi-division V1 choice all-or-nothing.
+        if (options.publishSelectedFormat) {
+          await tx.unsafe(
+            `INSERT INTO format_validation_evidence(
+               format_revision_id,definition_hash,valid,graph_acyclic,graph_reachable,slots_unambiguous,
+               deterministic_match_count,available_match_slots,required_match_slots,recommendation_fits_capacity,validated_by
+             )
+             SELECT id,definition_hash,true,true,true,true,0,0,0,true,$2
+             FROM format_revisions WHERE id=$1`,
+            [format.format_revision_id, actor.accountId],
+          );
+        }
         await tx.unsafe(`SELECT phase4_materialize_format_revision($1)`, [format.format_revision_id]);
         await this.evidence(
           tx,
@@ -1161,6 +1181,13 @@ export class Phase4Runtime {
           format.format_revision_id,
           { match_count: format.match_count, source: "v1_recommendation" },
         );
+        if (options.publishSelectedFormat) {
+          await tx.unsafe(`SELECT phase4_publish_format_revision($1,$2,$3)`, [
+            format.format_revision_id,
+            actor.accountId,
+            `v1-format-publish:${format.format_revision_id}`,
+          ]);
+        }
       }
     }
   }
@@ -1344,7 +1371,7 @@ export class Phase4Runtime {
     competitionId: string,
     request: Phase4SetupAutosaveRequest,
     requestId: string,
-    options: { materialiseSelectedFormat?: boolean } = {},
+    options: { materialiseSelectedFormat?: boolean; publishSelectedFormat?: boolean } = {},
   ): Promise<Phase4SetupAutosaveResponse> {
     return this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, competitionId, actor);
