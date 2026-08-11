@@ -243,6 +243,10 @@ importers:
       postgres:
         specifier: 3.4.9
         version: 3.4.9
+    devDependencies:
+      '@matchday/database':
+        specifier: workspace:*
+        version: link:../../packages/database
 
   packages/ai:
     dependencies:

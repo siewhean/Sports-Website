@@ -16,5 +16,8 @@
     "@matchday/jobs": "workspace:*",
     "@matchday/observability": "workspace:*",
     "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "@matchday/database": "workspace:*"
   }
 }
