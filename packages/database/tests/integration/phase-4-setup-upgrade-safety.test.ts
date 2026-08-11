@@ -209,6 +209,7 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0029_gate_c_five_sport_scoring.sql",
           "0030_gate_c_published_schedule_participants.sql",
           "0031_gate_c_participant_snapshot_fencing.sql",
+          "0032_v1_unseeded_schedule_source_mapping.sql",
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,

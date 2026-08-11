@@ -105,6 +105,32 @@ function instant(value: Date | string | null): string | null {
   return value === null ? null : value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+function schedulingEntryIdsBySeed(
+  entries: readonly { id: string; seed: number | null }[],
+  entryCount: number,
+): Record<number, string> {
+  const assigned = new Map<number, string>();
+  const unseeded: string[] = [];
+  for (const entry of entries) {
+    if (entry.seed === null) {
+      unseeded.push(entry.id);
+      continue;
+    }
+    if (!Number.isInteger(entry.seed) || entry.seed < 1 || entry.seed > entryCount || assigned.has(entry.seed))
+      throw new Error(`Invalid explicit entry seed ${entry.seed}`);
+    assigned.set(entry.seed, entry.id);
+  }
+  for (const entryId of unseeded) {
+    const seed = Array.from({ length: entryCount }, (_, index) => index + 1).find(
+      (candidate) => !assigned.has(candidate),
+    );
+    if (seed === undefined) throw new Error("More active entries than format seeds");
+    assigned.set(seed, entryId);
+  }
+  if (assigned.size !== entryCount) throw new Error(`Expected ${entryCount} active entries for the selected format`);
+  return Object.fromEntries(assigned);
+}
+
 function first<T>(rows: readonly T[], code: string, message: string): T {
   const value = rows[0];
   if (!value) throw new ApiError(404, code, message);
@@ -2562,14 +2588,20 @@ export class Phase4Runtime {
     const matches: ScheduleProblem["matches"][number][] = [];
     for (const format of formats) {
       const graph = decoded<FormatGraph>(format.definition);
-      const entries = await tx.unsafe<{ id: string; seed: number }>(
-        `SELECT id,seed FROM division_entries WHERE division_id=$1 AND status IN ('confirmed','active') ORDER BY seed,id`,
+      const entries = await tx.unsafe<{ id: string; seed: number | null }>(
+        `SELECT id,seed FROM division_entries
+         WHERE division_id=$1 AND status IN ('confirmed','active')
+         ORDER BY CASE WHEN seed IS NULL THEN 1 ELSE 0 END,seed,id`,
         [format.division_id],
       );
-      const seedMap = Object.fromEntries(entries.map((entry) => [entry.seed, entry.id]));
       let derived: ReturnType<typeof deriveSchedulingMatches>;
       try {
-        derived = deriveSchedulingMatches(graph, format.division_id, seedMap, durationMinutes);
+        derived = deriveSchedulingMatches(
+          graph,
+          format.division_id,
+          schedulingEntryIdsBySeed(entries, graph.entryCount),
+          durationMinutes,
+        );
       } catch (error: unknown) {
         throw new ApiError(
           422,

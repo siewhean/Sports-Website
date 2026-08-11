@@ -1251,6 +1251,12 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
 
   it("lets V1 publish four-team direct formats that the balanced scheduler can use", async () => {
     const fixture = await createCompetitionFixture("canoe_polo", "V1 four team direct format", 2, 4);
+    const firstDivisionId = fixture.divisionIds[0];
+    if (!firstDivisionId) throw new Error("Expected first V1 fixture division");
+    await client`UPDATE division_entries SET seed=NULL
+      WHERE id IN (
+        SELECT id FROM division_entries WHERE division_id=${firstDivisionId} ORDER BY seed DESC LIMIT 1
+      )`;
     await phase3.replaceCapacity(
       { accountId },
       fixture.competitionId,
