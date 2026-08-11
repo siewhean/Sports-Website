@@ -123,6 +123,7 @@ describe("foundation migrations", () => {
         "0030_gate_c_published_schedule_participants.sql",
         "0031_gate_c_participant_snapshot_fencing.sql",
         "0032_v1_unseeded_schedule_source_mapping.sql",
+        "0033_v1_unseeded_schedule_graph_shape_fix.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
@@ -322,11 +323,20 @@ describe("foundation migrations", () => {
         const unseededScheduleMigration = forwardMigrations.find(
           ({ name }) => name === "0032_v1_unseeded_schedule_source_mapping.sql",
         );
+        const unseededScheduleGraphShapeMigration = forwardMigrations.find(
+          ({ name }) => name === "0033_v1_unseeded_schedule_graph_shape_fix.sql",
+        );
         if (!participantFenceMigration) throw new Error("Expected participant-fencing migration");
         if (!unseededScheduleMigration) throw new Error("Expected unseeded schedule migration");
+        if (!unseededScheduleGraphShapeMigration) throw new Error("Expected unseeded schedule graph-shape migration");
         await Promise.all(
           forwardMigrations
-            .filter(({ name }) => name !== participantFenceMigration.name && name !== unseededScheduleMigration.name)
+            .filter(
+              ({ name }) =>
+                name !== participantFenceMigration.name &&
+                name !== unseededScheduleMigration.name &&
+                name !== unseededScheduleGraphShapeMigration.name,
+            )
             .map(({ migrationPath, source }) => writeFile(migrationPath, source)),
         );
         const upgradedBeforeParticipantFence = await migrateDatabase({
@@ -336,7 +346,10 @@ describe("foundation migrations", () => {
         });
         expect(upgradedBeforeParticipantFence.applied).toEqual(
           forwardMigrationNames.filter(
-            (name) => name !== participantFenceMigration.name && name !== unseededScheduleMigration.name,
+            (name) =>
+              name !== participantFenceMigration.name &&
+              name !== unseededScheduleMigration.name &&
+              name !== unseededScheduleGraphShapeMigration.name,
           ),
         );
         await sql`UPDATE scheduled_matches
@@ -367,6 +380,14 @@ describe("foundation migrations", () => {
             schema: populatedSchema,
           }),
         ).toMatchObject({ applied: ["0032_v1_unseeded_schedule_source_mapping.sql"] });
+        await writeFile(unseededScheduleGraphShapeMigration.migrationPath, unseededScheduleGraphShapeMigration.source);
+        expect(
+          await migrateDatabase({
+            databaseUrl: config.databaseUrl,
+            migrationsDirectory: copiedDirectory,
+            schema: populatedSchema,
+          }),
+        ).toMatchObject({ applied: ["0033_v1_unseeded_schedule_graph_shape_fix.sql"] });
         const [afterUpgrade] = await sql<
           { confirmed_count: number; placeholder_count: number; entry_ids: string[] }[]
         >`SELECT

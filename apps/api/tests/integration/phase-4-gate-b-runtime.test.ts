@@ -1305,6 +1305,16 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         `,
       ).count,
     ).toBe(2);
+    const firstMaterialisedMatch = required(
+      await client<{ id: string }[]>`
+        SELECT id FROM matches WHERE format_revision_id=${applied.materialised[0]!.revision.revision_id} ORDER BY id LIMIT 1
+      `,
+    );
+    expect(
+      await client<{ entry_id: string }[]>`
+        SELECT entry_id FROM phase4_match_possible_entries(${firstMaterialisedMatch.id}) ORDER BY entry_id
+      `,
+    ).toHaveLength(2);
     const competition = required(
       await client<{ revision: number; capacity_revision: number }[]>`
         SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}
@@ -1327,6 +1337,24 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         randomUUID(),
       ),
     ).resolves.toMatchObject({ job: { status: "queued", objective: "balanced" }, enqueued: true });
+    await client`UPDATE schedule_generation_jobs SET status='completed',completed_at=now()
+      WHERE competition_id=${fixture.competitionId} AND status='queued'`;
+    await client`UPDATE division_entries SET status='withdrawn',withdrawal_reason='V1 missing-entry regression'
+      WHERE id IN (SELECT id FROM division_entries WHERE division_id=${firstDivisionId} ORDER BY id LIMIT 1)`;
+    await expect(
+      runtime.generateSchedule(
+        { accountId },
+        fixture.competitionId,
+        {
+          idempotency_key: `v1-four-team-missing-entry-${randomUUID()}`,
+          expected_source_revision: competition.revision,
+          expected_capacity_revision: Number(competition.capacity_revision),
+          objective: "balanced",
+          constraints: ignoredScheduleConstraints(areaId),
+        },
+        randomUUID(),
+      ),
+    ).rejects.toThrow("Expected 4 active entries for the selected format");
   });
 
   it("rolls back every V1 format when publication evidence fails in a later division", async () => {
