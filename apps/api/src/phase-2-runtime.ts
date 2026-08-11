@@ -3867,7 +3867,7 @@ export class Phase2Runtime {
     const format = required(
       await tx.unsafe<{ definition: Record<string, unknown> }>(
         `SELECT fr.definition FROM format_revisions fr
-         WHERE fr.division_id=$1 ORDER BY fr.revision DESC LIMIT 1`,
+         WHERE fr.division_id=$1 AND fr.status='published' ORDER BY fr.revision DESC LIMIT 1`,
         [divisionId],
       ),
       "Format not found",
@@ -3956,10 +3956,18 @@ export class Phase2Runtime {
         await tx.unsafe(
           slot === "home"
             ? `UPDATE matches SET home_entry_id=$2,
-                 state=CASE WHEN $2::uuid IS NOT NULL AND away_entry_id IS NOT NULL THEN 'ready' ELSE state END
+                 state=CASE
+                   WHEN $2::uuid IS NULL THEN 'pending'
+                   WHEN away_entry_id IS NOT NULL THEN 'ready'
+                   ELSE 'pending'
+                 END
                WHERE id=$1 AND state IN ('pending','ready')`
             : `UPDATE matches SET away_entry_id=$2,
-                 state=CASE WHEN home_entry_id IS NOT NULL AND $2::uuid IS NOT NULL THEN 'ready' ELSE state END
+                 state=CASE
+                   WHEN $2::uuid IS NULL THEN 'pending'
+                   WHEN home_entry_id IS NOT NULL THEN 'ready'
+                   ELSE 'pending'
+                 END
                WHERE id=$1 AND state IN ('pending','ready')`,
           [item.matchId, entryId],
         );
@@ -3986,6 +3994,45 @@ export class Phase2Runtime {
         );
       }
     }
+    const resultByMatchId = new Map(results.map((result) => [result.matchId, result]));
+    const canonicalBracketMatches = canonicalResolved
+      .filter((item) => item.stageId !== "groups")
+      .map((item) => {
+        const result = resultByMatchId.get(item.matchId);
+        const winnerEntryId =
+          result && result.homeScore !== result.awayScore
+            ? result.homeScore > result.awayScore
+              ? result.homeEntryId
+              : result.awayEntryId
+            : null;
+        return {
+          matchId: item.matchId,
+          stage: item.stageId,
+          homeEntryId: item.homeEntryId,
+          awayEntryId: item.awayEntryId,
+          winnerEntryId,
+          loserEntryId:
+            winnerEntryId && result
+              ? winnerEntryId === result.homeEntryId
+                ? result.awayEntryId
+                : result.homeEntryId
+              : null,
+          isTerminal: item.isTerminal,
+        };
+      });
+    const canonicalBracket = {
+      matches: canonicalBracketMatches,
+      qualifiedEntryIds: [
+        ...new Set(
+          canonicalBracketMatches
+            .flatMap((match) => [match.homeEntryId, match.awayEntryId])
+            .filter((entryId): entryId is string => entryId !== null),
+        ),
+      ],
+      championEntryId:
+        canonicalBracketMatches.find((match) => match.stage === "championship" && match.isTerminal)?.winnerEntryId ??
+        null,
+    };
     await tx.unsafe(
       `INSERT INTO bracket_snapshots (
          competition_id,division_id,result_version,bracket,conflicts
@@ -3994,7 +4041,7 @@ export class Phase2Runtime {
         competitionId,
         divisionId,
         resultVersion,
-        JSON.stringify(bracket.bracket),
+        JSON.stringify(canonicalBracketMatches.length > 0 ? canonicalBracket : bracket.bracket),
         JSON.stringify(bracket.conflicts ?? []),
       ],
     );
@@ -4007,22 +4054,22 @@ export class Phase2Runtime {
     entries: readonly { id: string; name: string; seed: number }[],
     results: readonly StandingsMatchResult[],
     config: StandingsEngineConfig,
-  ): Promise<readonly { matchId: string; homeEntryId: string | null; awayEntryId: string | null }[]> {
+  ): Promise<
+    readonly {
+      matchId: string;
+      stageId: string;
+      isTerminal: boolean;
+      homeEntryId: string | null;
+      awayEntryId: string | null;
+    }[]
+  > {
     const graphMatches = Array.isArray(definition.matches)
       ? definition.matches.filter(
           (value): value is Record<string, unknown> =>
             value !== null && typeof value === "object" && !Array.isArray(value),
         )
       : [];
-    if (
-      !graphMatches.some(
-        (match) =>
-          (match.home as { type?: unknown } | undefined)?.type === "stage_rank" ||
-          (match.away as { type?: unknown } | undefined)?.type === "stage_rank",
-      )
-    ) {
-      return [];
-    }
+    if (graphMatches.length === 0) return [];
     const persisted = await tx.unsafe<{ id: string; code: string }>(
       `SELECT id,code FROM matches WHERE division_id=$1`,
       [divisionId],
@@ -4030,15 +4077,21 @@ export class Phase2Runtime {
     const idsByCode = new Map(persisted.map((match) => [match.code, match.id]));
     const resultByMatchId = new Map(results.map((result) => [result.matchId, result]));
     const ranks = new Map<string, readonly string[]>();
-    for (const groupId of new Set(
+    const rankKey = (stageId: string, groupId: string) => `${stageId}:${groupId}`;
+    const rankSources = new Map(
       graphMatches
         .flatMap((match) => [match.home, match.away])
         .flatMap((source) => {
-          const value = source as { type?: unknown; groupId?: unknown } | undefined;
-          return value?.type === "stage_rank" && typeof value.groupId === "string" ? [value.groupId] : [];
-        }),
-    )) {
-      const poolMatches = graphMatches.filter((match) => match.poolId === groupId);
+          const value = source as { type?: unknown; stageId?: unknown; groupId?: unknown } | undefined;
+          return value?.type === "stage_rank" && typeof value.stageId === "string" && typeof value.groupId === "string"
+            ? [[value.stageId, value.groupId] as const]
+            : [];
+        })
+        .map((value) => [rankKey(value[0], value[1]), value] as const),
+    );
+    for (const source of rankSources.values()) {
+      const [stageId, groupId] = source;
+      const poolMatches = graphMatches.filter((match) => match.stageId === stageId && match.poolId === groupId);
       const poolCodes = new Set(poolMatches.map((match) => (typeof match.id === "string" ? match.id : "")));
       const poolResults = persisted
         .flatMap((match) => (poolCodes.has(match.code) ? [resultByMatchId.get(match.id)] : []))
@@ -4054,22 +4107,59 @@ export class Phase2Runtime {
       );
       const groupEntries = entries.filter((entry) => groupSeeds.has(entry.seed));
       ranks.set(
-        groupId,
+        rankKey(stageId, groupId),
         calculateStandings(groupEntries, poolResults, config).map((row) => row.entryId),
       );
     }
     return graphMatches.flatMap((match) => {
       const matchId = typeof match.id === "string" ? idsByCode.get(match.id) : undefined;
       if (!matchId) return [];
-      const resolve = (source: unknown) => {
-        const value = source as { type?: unknown; groupId?: unknown; rank?: unknown } | undefined;
-        if (value?.type !== "stage_rank" || typeof value.groupId !== "string" || !Number.isInteger(value.rank))
-          return null;
-        return ranks.get(value.groupId)?.[Number(value.rank) - 1] ?? null;
+      const resolve = (source: unknown): string | null => {
+        const value = source as
+          | {
+              type?: unknown;
+              stageId?: unknown;
+              groupId?: unknown;
+              rank?: unknown;
+              seed?: unknown;
+              matchId?: unknown;
+            }
+          | undefined;
+        if (value?.type === "entry_seed" && Number.isInteger(value.seed))
+          return entries.find((entry) => entry.seed === Number(value.seed))?.id ?? null;
+        if (
+          value?.type === "stage_rank" &&
+          typeof value.stageId === "string" &&
+          typeof value.groupId === "string" &&
+          Number.isInteger(value.rank)
+        )
+          return ranks.get(rankKey(value.stageId, value.groupId))?.[Number(value.rank) - 1] ?? null;
+        if ((value?.type === "winner" || value?.type === "loser") && typeof value.matchId === "string") {
+          const sourceMatchId = idsByCode.get(value.matchId);
+          const result = sourceMatchId ? resultByMatchId.get(sourceMatchId) : undefined;
+          if (!result || result.homeScore === result.awayScore) return null;
+          const winner = result.homeScore > result.awayScore ? result.homeEntryId : result.awayEntryId;
+          if (value.type === "winner") return winner;
+          return winner === result.homeEntryId ? result.awayEntryId : result.homeEntryId;
+        }
+        return null;
       };
       const home = resolve(match.home);
       const away = resolve(match.away);
-      return home !== null || away !== null ? [{ matchId, homeEntryId: home, awayEntryId: away }] : [];
+      return home !== null || away !== null
+        ? [
+            {
+              matchId,
+              stageId: String(match.stageId),
+              isTerminal:
+                typeof match.id === "string" &&
+                Array.isArray(definition.terminalMatchIds) &&
+                definition.terminalMatchIds.includes(match.id),
+              homeEntryId: home,
+              awayEntryId: away,
+            },
+          ]
+        : [];
     });
   }
 
@@ -4149,14 +4239,14 @@ export class Phase2Runtime {
             area_id: string;
             area_name: string;
           }>(
-            `SELECT m.id,m.division_id,m.code,m.stage,sm.home_entry_id,sm.away_entry_id,
+            `SELECT m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
                   sm.starts_at,sm.ends_at,pa.id AS area_id,pa.name AS area_name
            FROM competition_publications cp
            JOIN scheduled_matches sm ON sm.schedule_revision_id=cp.published_schedule_revision_id
            JOIN matches m ON m.id=sm.match_id JOIN playing_areas pa ON pa.id=sm.playing_area_id
-           LEFT JOIN division_entries home ON home.id=sm.home_entry_id
-           LEFT JOIN division_entries away ON away.id=sm.away_entry_id
+           LEFT JOIN division_entries home ON home.id=m.home_entry_id
+           LEFT JOIN division_entries away ON away.id=m.away_entry_id
            WHERE cp.competition_id=$1 ORDER BY sm.starts_at,pa.sort_order,m.ordinal`,
             [competitionId],
           )

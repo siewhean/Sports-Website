@@ -248,6 +248,19 @@ export async function buildApp(options: BuildAppOptions) {
     global: true,
     hook: "preHandler",
     keyGenerator: async (request) => {
+      // Scoring mutations are fenced by an authenticated short-lived session.
+      // Partition their bounded budget by both session and peer address so one
+      // active scorer cannot consume another scorer's allowance behind NAT.
+      // The bearer token is deliberately never used as a Redis key.
+      const scoringSessionId = request.headers["x-scoring-session-id"];
+      const route = request.routeOptions.url || request.url.split("?", 1)[0] || "";
+      if (
+        route.startsWith("/api/v1/scoring/") &&
+        typeof scoringSessionId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scoringSessionId)
+      ) {
+        return `scoring-session:${scoringSessionId}:ip:${request.ip}`;
+      }
       const accountId = options.resolveRateLimitAccountId
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);

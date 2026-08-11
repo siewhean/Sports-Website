@@ -157,7 +157,7 @@ type V1BrowserJourneyResult = {
  * A deliberately fuller V1 proof than the setup/single-result journey above.
  * The browser creates one eight-entry division, completes every group fixture
  * through the scorekeeper surface, then completes an automatically populated
- * championship semi-final.  The ids are only receipts for the database
+ * championship bracket through the final and bronze match. The ids are only receipts for the database
  * oracle; no scoring decision is made outside the rendered application.
  */
 type V1CompetitionJourneyResult = {
@@ -166,7 +166,7 @@ type V1CompetitionJourneyResult = {
   slug: string;
   divisionId: string;
   groupMatchIds: string[];
-  progressedMatchId: string;
+  progressedMatchIds: string[];
 };
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -763,8 +763,8 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
       (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
         WHERE match.competition_id=c.id AND match.graph_stage_id='groups' AND snapshot.state='final') group_finalised,
       (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
-        WHERE match.competition_id=c.id AND match.id=${result.progressedMatchId} AND snapshot.state='final'
-          AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL) progressed_finalised,
+        WHERE match.competition_id=c.id AND match.id = ANY(${sql.array(result.progressedMatchIds)}::uuid[])
+          AND snapshot.state='final' AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL) progressed_finalised,
       (SELECT count(*)::int FROM advancement_slots slot JOIN matches match ON match.id=slot.match_id
         WHERE slot.competition_id=c.id AND match.graph_stage_id='championship'
           AND slot.control='automatic' AND slot.entry_id IS NOT NULL) automatic_qualifiers,
@@ -811,6 +811,52 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
     projectionRecord?.standings !== null;
   const projectionHasBracket =
     currentDivision?.bracket !== null && currentDivision?.bracket !== undefined && projectionRecord?.bracket !== null;
+  const bracketRecord =
+    currentDivision?.bracket && typeof currentDivision.bracket === "object" && !Array.isArray(currentDivision.bracket)
+      ? (currentDivision.bracket as Record<string, unknown>)
+      : null;
+  const bracketPayload =
+    bracketRecord?.bracket && typeof bracketRecord.bracket === "object" && !Array.isArray(bracketRecord.bracket)
+      ? (bracketRecord.bracket as Record<string, unknown>)
+      : bracketRecord;
+  const bracketMatches = Array.isArray(bracketPayload?.matches) ? bracketPayload.matches : [];
+  const projectionHasCanonicalBracket = result.progressedMatchIds.every((matchId) =>
+    bracketMatches.some(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        ((candidate as Record<string, unknown>).matchId === matchId ||
+          (candidate as Record<string, unknown>).match_id === matchId ||
+          (candidate as Record<string, unknown>).id === matchId),
+    ),
+  );
+  const progressedMatches = await sql<{ id: string; home_entry_id: string | null; away_entry_id: string | null }[]>`
+    SELECT id::text AS id,home_entry_id,away_entry_id FROM matches
+    WHERE id = ANY(${sql.array(result.progressedMatchIds)}::uuid[])
+  `;
+  const projectedSchedule = Array.isArray(currentDivision?.schedule) ? currentDivision.schedule : [];
+  const projectionHasProgressedParticipants =
+    progressedMatches.length === result.progressedMatchIds.length &&
+    progressedMatches.every((match) => {
+      const projected = projectedSchedule.find(
+        (candidate): candidate is Record<string, unknown> =>
+          candidate !== null && typeof candidate === "object" && candidate.id === match.id,
+      );
+      const projectedHome =
+        projected?.home && typeof projected.home === "object"
+          ? ((projected.home as Record<string, unknown>).id ?? null)
+          : null;
+      const projectedAway =
+        projected?.away && typeof projected.away === "object"
+          ? ((projected.away as Record<string, unknown>).id ?? null)
+          : null;
+      return (
+        match.home_entry_id !== null &&
+        match.away_entry_id !== null &&
+        projectedHome === match.home_entry_id &&
+        projectedAway === match.away_entry_id
+      );
+    });
   if (
     !aggregate ||
     aggregate.division_count !== 1 ||
@@ -819,14 +865,16 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
     aggregate.exact_formats !== 1 ||
     aggregate.published_schedules !== 1 ||
     aggregate.group_finalised !== 12 ||
-    aggregate.progressed_finalised !== 1 ||
-    aggregate.automatic_qualifiers < 4 ||
+    aggregate.progressed_finalised !== 4 ||
+    aggregate.automatic_qualifiers < 6 ||
     aggregate.unresolved_qualifiers !== 0 ||
     aggregate.standings_snapshots < 1 ||
     aggregate.bracket_snapshots < 1 ||
-    aggregate.public_result_version < 13 ||
+    aggregate.public_result_version < 16 ||
     !projectionHasStandings ||
     !projectionHasBracket ||
+    !projectionHasCanonicalBracket ||
+    !projectionHasProgressedParticipants ||
     JSON.stringify(actualGroupIds.map((row) => row.id)) !== JSON.stringify(expectedGroupIds)
   )
     throw new Error(
@@ -840,6 +888,8 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
               division_keys: currentDivision ? Object.keys(currentDivision).sort() : [],
               projectionHasStandings,
               projectionHasBracket,
+              projectionHasCanonicalBracket,
+              projectionHasProgressedParticipants,
             }
           : null,
       })}`,

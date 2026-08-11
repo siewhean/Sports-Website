@@ -15,7 +15,7 @@ type JourneyReceipt = {
   slug: string;
   divisionId: string;
   groupMatchIds: string[];
-  progressedMatchId: string;
+  progressedMatchIds: string[];
 };
 
 async function state(projectName: string): Promise<State> {
@@ -69,6 +69,22 @@ async function issuePass(page: Page, matchId: string): Promise<string> {
   expect(accessUrl).toMatch(/\/score#access=[A-Za-z0-9_-]{32,}$/);
   await reveal.getByRole("button", { name: "Close" }).click();
   return accessUrl;
+}
+
+async function selectableMatchIds(page: Page): Promise<string[]> {
+  await page.getByRole("button", { name: "Issue pass" }).click();
+  const ids = await page
+    .getByRole("dialog", { name: "Create access pass" })
+    .getByLabel("Match")
+    .locator("option")
+    .evaluateAll((options) =>
+      options
+        .filter((option) => /V1 Squad \d+.*V1 Squad \d+/u.test(option.textContent ?? ""))
+        .map((option) => option.getAttribute("value"))
+        .filter((value): value is string => Boolean(value)),
+    );
+  await page.getByRole("dialog", { name: "Create access pass" }).getByRole("button", { name: "Cancel" }).click();
+  return ids;
 }
 
 async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
@@ -178,15 +194,7 @@ test("browser completes an eight-team Canoe group-to-knockout competition", asyn
   await submit(page, page.getByRole("button", { name: "Publish schedule" }), "POST", "/publish");
 
   await page.goto(`/organiser/competitions/${competitionId}/access`);
-  await page.getByRole("button", { name: "Issue pass" }).click();
-  const matcher = page.getByRole("dialog", { name: "Create access pass" }).getByLabel("Match");
-  const groupMatchIds = await matcher.locator("option").evaluateAll((options) =>
-    options
-      .filter((option) => /V1 Squad \d+.*V1 Squad \d+/u.test(option.textContent ?? ""))
-      .map((option) => option.getAttribute("value"))
-      .filter((value): value is string => Boolean(value)),
-  );
-  await page.getByRole("dialog", { name: "Create access pass" }).getByRole("button", { name: "Cancel" }).click();
+  const groupMatchIds = await selectableMatchIds(page);
   expect(groupMatchIds).toHaveLength(12);
 
   for (const [index, matchId] of groupMatchIds.entries()) {
@@ -202,24 +210,27 @@ test("browser completes an eight-team Canoe group-to-knockout competition", asyn
   await expect(page.getByRole("region", { name: /standings table/i })).toHaveCount(1);
 
   await page.goto(`/organiser/competitions/${competitionId}/access`);
-  await page.getByRole("button", { name: "Issue pass" }).click();
-  const progressionMatchIds = await page
-    .getByRole("dialog", { name: "Create access pass" })
-    .getByLabel("Match")
-    .locator("option")
-    .evaluateAll((options) =>
-      options
-        .filter((option) => /V1 Squad \d+.*V1 Squad \d+/u.test(option.textContent ?? ""))
-        .map((option) => option.getAttribute("value"))
-        .filter((value): value is string => Boolean(value)),
-    );
-  await page.getByRole("dialog", { name: "Create access pass" }).getByRole("button", { name: "Cancel" }).click();
-  const progressedMatchId = progressionMatchIds.find((id) => !groupMatchIds.includes(id));
-  if (!progressedMatchId)
-    throw new Error("No automatically populated championship semi-final was exposed to the organiser");
+  const semiFinalIds = (await selectableMatchIds(page)).filter((id) => !groupMatchIds.includes(id));
+  expect(semiFinalIds, "Both automatic semi-finals must be exposed after all group results").toHaveLength(2);
+  for (const [index, matchId] of semiFinalIds.entries()) {
+    await page.goto(`/organiser/competitions/${competitionId}/access`);
+    await scoreAndFinalise(page, await issuePass(page, matchId), `V1 semi-final scorer ${index + 1}`);
+  }
   await page.goto(`/organiser/competitions/${competitionId}/access`);
-  await scoreAndFinalise(page, await issuePass(page, progressedMatchId), "V1 semi-final scorer");
+  const finalRoundIds = (await selectableMatchIds(page)).filter(
+    (id) => ![...groupMatchIds, ...semiFinalIds].includes(id),
+  );
+  expect(finalRoundIds, "Final and bronze participants must resolve from both semi-final results").toHaveLength(2);
+  for (const [index, matchId] of finalRoundIds.entries()) {
+    await page.goto(`/organiser/competitions/${competitionId}/access`);
+    await scoreAndFinalise(page, await issuePass(page, matchId), index === 0 ? "V1 final scorer" : "V1 bronze scorer");
+  }
+  const progressedMatchIds = [...semiFinalIds, ...finalRoundIds];
 
+  // The organiser shell refreshes its conflict panel after finalisation. Let
+  // that same-origin read settle before changing routes so an intentional test
+  // navigation cannot manufacture a browser-level request-abort failure.
+  await page.waitForTimeout(300);
   await page.goto(`/competitions/${slug}`);
   await expect(page.getByRole("heading", { name: "V1 Eight Team Championship" })).toBeVisible();
   await expect(page.getByRole("table", { name: "Table" })).toBeVisible();
@@ -231,7 +242,7 @@ test("browser completes an eight-team Canoe group-to-knockout competition", asyn
   if (!resultFile) throw new Error("PHASE4_E2E_RESULT_FILE is required");
   await appendFile(
     resultFile,
-    `${JSON.stringify({ project: testInfo.project.name, competitionId, slug, divisionId, groupMatchIds, progressedMatchId } satisfies JourneyReceipt)}\n`,
+    `${JSON.stringify({ project: testInfo.project.name, competitionId, slug, divisionId, groupMatchIds, progressedMatchIds } satisfies JourneyReceipt)}\n`,
     { mode: 0o600 },
   );
 });

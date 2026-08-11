@@ -2248,9 +2248,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       JOIN advancement_slots slot ON slot.match_id=source.match_id AND slot.slot=source.slot
       WHERE source.format_revision_id=${format.id} AND source.source_kind='stage_rank'
       ORDER BY source.source_group_id,source.source_rank`;
-    expect(incompleteSlots.filter((slot) => slot.group_id === "G1")).toEqual(
-      expect.arrayContaining([expect.objectContaining({ entry_id: null })]),
-    );
+    const incompleteG1Slots = incompleteSlots.filter((slot) => slot.group_id === "G1");
+    expect(incompleteG1Slots).toHaveLength(2);
+    expect(incompleteG1Slots.every((slot) => slot.entry_id === null)).toBe(true);
 
     const incompleteHomeWins = incomplete.home_seed < incomplete.away_seed;
     await client`UPDATE matches SET state='final' WHERE id=${incomplete.id}`;
@@ -2268,6 +2268,25 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       ORDER BY slot.match_id,slot.slot`;
     expect(completeSlots).toHaveLength(4);
     expect(completeSlots.every((slot) => slot.entry_id !== null)).toBe(true);
+
+    // A newer draft has a deliberately different topology. Recalculation is
+    // bound to the published revision: a draft must never rewrite the live
+    // qualification slots before it is materialised and published.
+    const draftGraph = createDefaultFormatTemplates(8).find(
+      (template) => template.strategy === "compact_knockout",
+    )?.graph;
+    if (!draftGraph) throw new Error("Expected compact knockout draft graph");
+    await phase3.createFormatRevision(actor, competition.id, divisionId, draftGraph, randomUUID());
+    await client`UPDATE competition_publications SET result_version=3 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(3);
+    expect(
+      await client<{ match_id: string; slot: string; entry_id: string | null }[]>`
+        SELECT slot.match_id,slot.slot,slot.entry_id
+        FROM advancement_slots slot
+        JOIN matches match ON match.id=slot.match_id
+        WHERE slot.competition_id=${competition.id} AND match.graph_stage_id='championship'
+        ORDER BY slot.match_id,slot.slot`,
+    ).toEqual(completeSlots);
 
     const protectedTarget = await client<{ match_id: string; slot: string; entry_id: string }[]>`
       SELECT slot.match_id,slot.slot,slot.entry_id
@@ -2293,14 +2312,29 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       const initialHomeWins = match.home_seed < match.away_seed;
       await client`INSERT INTO match_result_snapshots
         (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
-        VALUES (${match.id},3,2,${initialHomeWins ? 0 : 2},${initialHomeWins ? 2 : 0},'corrected',
+        VALUES (${match.id},4,2,${initialHomeWins ? 0 : 2},${initialHomeWins ? 2 : 0},'corrected',
           ${client.json({
             corrected: true,
             segments: [{ home: initialHomeWins ? 0 : 2, away: initialHomeWins ? 2 : 0 }],
           })})`;
     }
-    await client`UPDATE competition_publications SET result_version=3 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(3);
+    const correctedRankOne = (groupId: string) => {
+      const candidates = new Map<string, number>();
+      for (const match of groupMatches.filter((candidate) => candidate.graph_pool_id === groupId)) {
+        candidates.set(match.home_entry_id, match.home_seed);
+        candidates.set(match.away_entry_id, match.away_seed);
+      }
+      const winner = [...candidates.entries()].sort((left, right) => right[1] - left[1])[0]?.[0];
+      if (!winner) throw new Error(`Expected ${groupId} rank-one candidate after corrected results`);
+      return winner;
+    };
+    // Every G1/G2 final was reversed above. The highest seed therefore wins all
+    // three pool fixtures and is the new rank-one candidate; prove that either
+    // protected target would otherwise change before exercising the fence.
+    expect(correctedRankOne("G1")).not.toBe(target.entry_id);
+    expect(correctedRankOne("G2")).not.toBe(finalTarget.entry_id);
+    await client`UPDATE competition_publications SET result_version=4 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(4);
     expect(
       await client<
         { entry_id: string }[]
@@ -2314,7 +2348,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(
       await client<{ reason: string; target_slot_id: string }[]>`
         SELECT reason,target_slot_id FROM advancement_conflicts
-        WHERE competition_id=${competition.id} AND result_version=3
+        WHERE competition_id=${competition.id} AND result_version=4
         ORDER BY created_at DESC`,
     ).toEqual(
       expect.arrayContaining([
