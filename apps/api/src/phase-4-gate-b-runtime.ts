@@ -112,6 +112,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     competitionId: string,
     request: Phase4SetupAutosaveRequest,
     requestId: string,
+    options: { materialiseSelectedFormat?: boolean } = {},
   ): Promise<Phase4SetupAutosaveResponse> {
     if (request.transition.kind === "save_step" && request.transition.step.step_id === "basics") {
       return this.persistEditableStep(
@@ -124,7 +125,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
         requestId,
       );
     }
-    return super.autosaveSetupDraft(actor, competitionId, request, requestId);
+    return super.autosaveSetupDraft(actor, competitionId, request, requestId, options);
   }
 
   async patchSetupDraft(

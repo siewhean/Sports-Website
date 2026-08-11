@@ -1,15 +1,15 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
-import { ArrowRight, CloudSlash, GridFour, Warning } from "@phosphor-icons/react";
+import { CloudSlash, GridFour, Warning } from "@phosphor-icons/react";
 import type { FormatBuilderPageDocument, FormatEditorState, FormatSurfaceState } from "@/lib/phase4-format";
 import type { FormatDivisionOption } from "@/lib/phase4-format-division";
 import { resolveFormatWorkspaceRenderState } from "@/lib/phase4-format-workspace";
 import { opaqueId, translate as t } from "@matchday/ui";
 import { FormatEditor } from "./FormatDesignerParts";
 import { DesignerSkeleton, DesignerState } from "./FormatDesignerPanels";
+import { V1FormatPicker } from "./V1FormatPicker";
 
 const stateCopy: Record<Exclude<FormatSurfaceState, "ready" | "loading" | "empty">, { title: string; body: string }> = {
   error: { title: t("prototype.825eb58e5ef2"), body: t("prototype.f7664bec2b06") },
@@ -99,12 +99,7 @@ export function FormatDesignerWorkspace({
         icon={<GridFour />}
         title={t("prototype.caa4511dd910")}
         body={t("prototype.d30c489ec255")}
-        action={
-          <Link href={`/organiser/competitions/${page.competitionId}/setup`}>
-            {t("prototype.e2a78250c5f5")}
-            <ArrowRight />
-          </Link>
-        }
+        action={<V1FormatPicker competitionId={page.competitionId} />}
       />
     );
   return (

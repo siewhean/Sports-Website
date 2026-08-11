@@ -181,10 +181,11 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     competitionId: string,
     request: Phase4SetupAutosaveRequest,
     requestId: string,
+    options: { materialiseSelectedFormat?: boolean } = {},
   ): Promise<Phase4SetupAutosaveResponse> {
     if (request.transition.kind === "save_step" && request.transition.step.step_id === "basics")
       await this.assertSetupWrite(actor, competitionId);
-    return super.autosaveSetupDraft(actor, competitionId, request, requestId);
+    return super.autosaveSetupDraft(actor, competitionId, request, requestId, options);
   }
 
   override async patchSetupDraft(

@@ -128,6 +128,8 @@ function runtime() {
   );
   vi.spyOn(gate, "patchSetupDraft").mockResolvedValue({ outcome: "saved", document: document(3) });
   vi.spyOn(gate, "resumeSetupDraft").mockResolvedValue(document(2));
+  vi.spyOn(gate, "recommendV1Format").mockResolvedValue(document(3));
+  vi.spyOn(gate, "applyV1FormatRecommendation").mockResolvedValue({ document: document(4), materialised: [] });
   return gate;
 }
 
@@ -195,6 +197,55 @@ describe("Gate B setup route boundary", () => {
     expect(resume.statusCode).toBe(200);
     expect(resume.json()).toMatchObject({ revision: 2, competition_id: competitionId });
     expect(gate.resumeSetupDraft).toHaveBeenCalledOnce();
+  });
+
+  it("authenticates direct V1 recommendations and rejects malformed commands before dispatch", async () => {
+    const gate = runtime();
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: identityRuntime(),
+      phase4Runtime: gate,
+    });
+    apps.push(app);
+
+    const recommendation = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/v1-format-recommendations`,
+      headers: mutationHeaders(),
+      payload: { idempotency_key: randomUUID() },
+    });
+    expect(recommendation.statusCode).toBe(200);
+    expect(gate.recommendV1Format).toHaveBeenCalledWith(
+      { accountId },
+      competitionId,
+      expect.any(String),
+      expect.any(String),
+    );
+
+    const applied = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/v1-format-recommendations/${randomUUID()}/apply`,
+      headers: mutationHeaders(),
+      payload: { idempotency_key: randomUUID() },
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(gate.applyV1FormatRecommendation).toHaveBeenCalledWith(
+      { accountId },
+      competitionId,
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+    );
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/v1-format-recommendations`,
+      headers: mutationHeaders(),
+      payload: { idempotency_key: randomUUID(), browser_only: true },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(gate.recommendV1Format).toHaveBeenCalledOnce();
   });
 
   it("rejects cross-origin, missing-CSRF, and unknown-field requests before dispatch", async () => {

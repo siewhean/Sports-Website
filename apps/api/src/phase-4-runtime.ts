@@ -593,6 +593,174 @@ export class Phase4Runtime {
     return this.setupDocument(await this.rawSetup(this.sql, competitionId));
   }
 
+  private async refreshV1SetupReferences(actor: Phase3Actor, competitionId: string, requestId: string): Promise<void> {
+    await this.transaction(async (tx) => {
+      const access = await this.competitionAccess(tx, competitionId, actor);
+      await tx.unsafe(`SELECT phase4_refresh_setup_draft_references($1,$2,$3,$4)`, [
+        access.organisation_id,
+        competitionId,
+        actor.accountId,
+        requestId,
+      ]);
+    });
+  }
+
+  /**
+   * V1 keeps the assisted-setup aggregate as the canonical evidence store, but
+   * organisers do not have to visit the assisted-setup UI to use the product
+   * recommendation. This deliberately orchestrates the existing validated
+   * recommendation path instead of inventing a second format-persistence path.
+   */
+  async recommendV1Format(
+    actor: Phase3Actor,
+    competitionId: string,
+    idempotencyKey: string,
+    requestId: string,
+  ): Promise<Phase4SetupDocument> {
+    const createKey = `${idempotencyKey}:setup`;
+    const preferenceKey = `${idempotencyKey}:recommend`;
+    await this.createSetupDraft(actor, competitionId, createKey, requestId);
+    await this.refreshV1SetupReferences(actor, competitionId, requestId);
+    let source = await this.readSetupDraft(actor, competitionId);
+    const preferences = source.values.format_preferences;
+    if (!source.values.capacity || !source.values.entries || !preferences)
+      throw new ApiError(422, "FORMAT_PREREQUISITE_MISSING", "Add entries and capacity before choosing a format");
+    const basics = source.values.basics;
+    const currentEntryCount = source.values.entries.total_entry_count;
+    const currentDivisionCount = source.values.entries.divisions.length;
+    if (basics && (basics.entry_count !== currentEntryCount || basics.division_count !== currentDivisionCount)) {
+      const refreshedBasics = { ...basics, entry_count: currentEntryCount, division_count: currentDivisionCount };
+      const updated = await this.autosaveSetupDraft(
+        actor,
+        competitionId,
+        {
+          expected_revision: source.revision,
+          idempotency_key: `${idempotencyKey}:basics`,
+          transition: { kind: "save_step", step: { step_id: "basics", value: refreshedBasics } },
+        },
+        requestId,
+      );
+      if (updated.outcome !== "saved" && updated.outcome !== "idempotent_replay")
+        throw new ApiError(
+          409,
+          "FORMAT_RECOMMENDATION_CONFLICT",
+          "The competition changed; refresh the format options",
+        );
+      source = updated.document;
+    }
+    const saved = await this.autosaveSetupDraft(
+      actor,
+      competitionId,
+      {
+        expected_revision: source.revision,
+        idempotency_key: preferenceKey,
+        transition: { kind: "save_step", step: { step_id: "format_preferences", value: preferences } },
+      },
+      requestId,
+    );
+    if (saved.outcome === "saved" || saved.outcome === "idempotent_replay") return saved.document;
+    if (saved.outcome === "conflict")
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format options");
+    throw new ApiError(
+      409,
+      "FORMAT_RECOMMENDATION_UNAVAILABLE",
+      "Format options are not editable for this competition",
+    );
+  }
+
+  async applyV1FormatRecommendation(
+    actor: Phase3Actor,
+    competitionId: string,
+    recommendationId: string,
+    idempotencyKey: string,
+    requestId: string,
+  ) {
+    const replay = await this.transaction(async (tx) => {
+      const access = await this.competitionAccess(tx, competitionId, actor, false);
+      const receipt = (
+        await tx.unsafe<{ operation: string; response: SetupRow | string }>(
+          `SELECT operation,response FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
+          [access.organisation_id, `${idempotencyKey}:apply`],
+        )
+      )[0];
+      if (!receipt) return null;
+      if (receipt.operation !== "setup.save")
+        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+      const row = decoded<SetupRow>(receipt.response);
+      const selection = setupValues(row).format_recommendations;
+      if (row.competition_id !== competitionId || selection?.selected_recommendation_id !== recommendationId)
+        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+      return this.setupDocument({ ...row, competition_status: access.status });
+    });
+    if (replay) return this.v1MaterialisedResult(replay, recommendationId);
+    const setup = await this.readSetupDraft(actor, competitionId);
+    const recommendations = setup.values.format_recommendations;
+    if (!recommendations)
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_STALE", "Refresh the capacity-fitting format options first");
+    const selected = recommendations.recommendations.find((candidate) => candidate.id === recommendationId);
+    if (
+      !selected ||
+      selected.capacity_status === "requires_changes" ||
+      selected.match_count > selected.available_match_slots
+    )
+      throw new ApiError(422, "FORMAT_RECOMMENDATION_NOT_FITTING", "Choose one of the capacity-fitting format options");
+    const saved = await this.autosaveSetupDraft(
+      actor,
+      competitionId,
+      {
+        expected_revision: setup.revision,
+        idempotency_key: `${idempotencyKey}:apply`,
+        transition: {
+          kind: "save_step",
+          step: {
+            step_id: "format_recommendations",
+            value: {
+              ...recommendations,
+              selected_recommendation_id: selected.id,
+              acknowledged_capacity_shortfall: false,
+            },
+          },
+        },
+      },
+      requestId,
+      { materialiseSelectedFormat: true },
+    );
+    if (saved.outcome === "conflict")
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format options");
+    if (saved.outcome !== "saved" && saved.outcome !== "idempotent_replay")
+      throw new ApiError(
+        409,
+        "FORMAT_RECOMMENDATION_UNAVAILABLE",
+        `The selected format is no longer editable (${saved.outcome})`,
+      );
+    return this.v1MaterialisedResult(saved.document, recommendationId, saved.outcome === "idempotent_replay");
+  }
+
+  private async v1MaterialisedResult(document: Phase4SetupDocument, recommendationId: string, idempotentReplay = true) {
+    const applied = document.values.format_recommendations;
+    const appliedSelection =
+      applied && [...applied.recommendations].find((candidate) => candidate.id === recommendationId);
+    if (!appliedSelection || appliedSelection.division_formats.some((format) => !format.format_revision_id))
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_STALE", "The selected format could not be applied");
+    const materialisedRows = await this.sql.unsafe<FormatRow>(
+      `SELECT * FROM format_revisions WHERE id = ANY($1::uuid[]) ORDER BY division_id`,
+      [appliedSelection.division_formats.map((format) => format.format_revision_id!)],
+    );
+    if (
+      materialisedRows.length !== appliedSelection.division_formats.length ||
+      materialisedRows.some((row) => !row.graph_materialized_at)
+    )
+      throw new ApiError(409, "FORMAT_MATERIALISATION_INCOMPLETE", "The selected format could not be materialised");
+    const materialised = materialisedRows.map((row) => ({
+      revision: this.formatRevisionView(row),
+      materialised: true as const,
+      match_count: row.graph_match_count,
+      materialisation_hash: row.graph_materialization_hash,
+      idempotent_replay: idempotentReplay,
+    }));
+    return { document, materialised };
+  }
+
   private async generateSetupRecommendations(
     tx: PostgresJsSql,
     access: CompetitionAccess,
@@ -850,6 +1018,7 @@ export class Phase4Runtime {
     actor: Phase3Actor,
     setupDraftId: string,
     values: Phase4SetupValues,
+    options: { materialiseSelectedFormat?: boolean } = {},
   ): Promise<void> {
     const submitted = values.format_recommendations;
     await this.assertCanonicalSetupStep(tx, access, "capacity", values);
@@ -979,6 +1148,21 @@ export class Phase4Runtime {
       scheduling_status: metrics.scheduling_status,
       warning_codes: metrics.warning_codes,
     });
+    if (options.materialiseSelectedFormat) {
+      for (const format of applied) {
+        await tx.unsafe(`SELECT phase4_materialize_format_revision($1)`, [format.format_revision_id]);
+        await this.evidence(
+          tx,
+          actor,
+          access.organisation_id,
+          `v1-format-materialise:${format.format_revision_id}`,
+          "format.materialised",
+          "format_revision",
+          format.format_revision_id,
+          { match_count: format.match_count, source: "v1_recommendation" },
+        );
+      }
+    }
   }
 
   private async assertCanonicalSetupStep(
@@ -1160,6 +1344,7 @@ export class Phase4Runtime {
     competitionId: string,
     request: Phase4SetupAutosaveRequest,
     requestId: string,
+    options: { materialiseSelectedFormat?: boolean } = {},
   ): Promise<Phase4SetupAutosaveResponse> {
     return this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, competitionId, actor);
@@ -1207,7 +1392,7 @@ export class Phase4Runtime {
         const { step_id: stepId, value } = request.transition.step;
         (next as unknown as Record<string, unknown>)[stepId] = value;
         if (stepId === "format_recommendations")
-          await this.applySelectedRecommendation(tx, access, actor, row.id, next);
+          await this.applySelectedRecommendation(tx, access, actor, row.id, next, options);
         const issues = validateAssistedSetupStep(stepId, setupDomainValues(next));
         if (issues.length > 0) throw new ApiError(422, "SETUP_STEP_INVALID", issues[0]!.message);
         await this.assertCanonicalSetupStep(tx, access, stepId, next);

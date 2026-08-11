@@ -1148,4 +1148,170 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       ),
     ).rejects.toMatchObject({ statusCode: 403 });
   });
+
+  it("lets V1 choose and materialise a capacity-fitting format without visiting Assisted Setup", async () => {
+    const fixture = await createCompetitionFixture("badminton", "V1 direct format");
+    await phase3.replaceCapacity(
+      { accountId },
+      fixture.competitionId,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Main court",
+            slotMinutes: SPORT_PACKS.badminton.recommendedSlotMinutes,
+            availability: [
+              { date: "2027-09-01", startTime: "00:00", endTime: "23:30" },
+              { date: "2027-09-02", startTime: "00:00", endTime: "23:30" },
+            ],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    const key = `v1-format-${randomUUID()}`;
+    const recommendations = await runtime.recommendV1Format({ accountId }, fixture.competitionId, key, randomUUID());
+    const fitting = recommendations.values.format_recommendations?.recommendations.find(
+      (candidate) =>
+        candidate.match_count <= candidate.available_match_slots && candidate.capacity_status !== "requires_changes",
+    );
+    expect(fitting).toBeDefined();
+    if (!fitting) throw new Error("Expected a capacity-fitting recommendation");
+
+    const applyKey = `v1-apply-${randomUUID()}`;
+    const applied = await runtime.applyV1FormatRecommendation(
+      { accountId },
+      fixture.competitionId,
+      fitting.id,
+      applyKey,
+      randomUUID(),
+    );
+    expect(applied.document.values.format_recommendations?.selected_recommendation_id).toBe(fitting.id);
+    expect(applied.materialised).toHaveLength(fitting.division_formats.length);
+    expect(applied.materialised.every((result) => result.materialised)).toBe(true);
+    const revisions = await client<{ graph_materialized_at: Date | null; graph_match_count: number | null }[]>`
+      SELECT graph_materialized_at,graph_match_count FROM format_revisions
+      WHERE competition_id=${fixture.competitionId} ORDER BY division_id,revision
+    `;
+    expect(revisions).toHaveLength(fitting.division_formats.length);
+    expect(
+      revisions.every(
+        (revision) => revision.graph_materialized_at && revision.graph_match_count && revision.graph_match_count > 0,
+      ),
+    ).toBe(true);
+    const replay = await runtime.applyV1FormatRecommendation(
+      { accountId },
+      fixture.competitionId,
+      fitting.id,
+      applyKey,
+      randomUUID(),
+    );
+    expect(replay.materialised.map((result) => result.revision.revision_id)).toEqual(
+      applied.materialised.map((result) => result.revision.revision_id),
+    );
+    expect(
+      required(
+        await client<{ count: number }[]>`
+          SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}
+        `,
+      ).count,
+    ).toBe(revisions.length);
+  });
+
+  it("refreshes V1 format evidence after entries change", async () => {
+    const fixture = await createCompetitionFixture("table_tennis", "V1 stale evidence");
+    await phase3.replaceCapacity(
+      { accountId },
+      fixture.competitionId,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Table area",
+            slotMinutes: SPORT_PACKS.table_tennis.recommendedSlotMinutes,
+            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    const initial = await runtime.recommendV1Format(
+      { accountId },
+      fixture.competitionId,
+      `v1-stale-initial-${randomUUID()}`,
+      randomUUID(),
+    );
+    await client`INSERT INTO division_entries(id,division_id,name,seed,status) VALUES
+      (${randomUUID()},${fixture.divisionId},'Late entry 9',9,'confirmed'),
+      (${randomUUID()},${fixture.divisionId},'Late entry 10',10,'confirmed'),
+      (${randomUUID()},${fixture.divisionId},'Late entry 11',11,'confirmed'),
+      (${randomUUID()},${fixture.divisionId},'Late entry 12',12,'confirmed')`;
+    const refreshed = await runtime.recommendV1Format(
+      { accountId },
+      fixture.competitionId,
+      `v1-stale-refresh-${randomUUID()}`,
+      randomUUID(),
+    );
+    expect(refreshed.values.entries?.total_entry_count).toBe(12);
+    expect(refreshed.values.format_recommendations?.recommendation_set_hash).not.toBe(
+      initial.values.format_recommendations?.recommendation_set_hash,
+    );
+  });
+
+  it("rolls back a direct V1 selection when format materialisation evidence fails", async () => {
+    const fixture = await createCompetitionFixture("volleyball", "V1 materialisation rollback");
+    await phase3.replaceCapacity(
+      { accountId },
+      fixture.competitionId,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Court",
+            slotMinutes: SPORT_PACKS.volleyball.recommendedSlotMinutes,
+            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    const recommendations = await runtime.recommendV1Format(
+      { accountId },
+      fixture.competitionId,
+      `v1-rollback-recommend-${randomUUID()}`,
+      randomUUID(),
+    );
+    const selected = recommendations.values.format_recommendations?.recommendations[0];
+    if (!selected) throw new Error("Expected a format recommendation");
+    await client.unsafe(`CREATE FUNCTION v1_materialise_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'v1 materialisation audit failure'; END;
+    $$`);
+    await client.unsafe(`CREATE TRIGGER v1_materialise_audit_failure BEFORE INSERT ON audit_events
+      FOR EACH ROW WHEN (NEW.action='format.materialised') EXECUTE FUNCTION v1_materialise_audit_failure()`);
+    try {
+      await expect(
+        runtime.applyV1FormatRecommendation(
+          { accountId },
+          fixture.competitionId,
+          selected.id,
+          `v1-rollback-apply-${randomUUID()}`,
+          randomUUID(),
+        ),
+      ).rejects.toThrow("v1 materialisation audit failure");
+    } finally {
+      await client.unsafe(`DROP TRIGGER v1_materialise_audit_failure ON audit_events`);
+      await client.unsafe(`DROP FUNCTION v1_materialise_audit_failure()`);
+    }
+    expect(
+      required(
+        await client<{ count: number }[]>`
+          SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}
+        `,
+      ).count,
+    ).toBe(0);
+    expect(
+      (await runtime.readSetupDraft({ accountId }, fixture.competitionId)).values.format_recommendations
+        ?.selected_recommendation_id,
+    ).toBeNull();
+  });
 });

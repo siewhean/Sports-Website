@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { FormatDesignerWorkspace } from "@/components/phase4/format/FormatDesignerWorkspace";
+import { V1FormatPicker } from "@/components/phase4/format/V1FormatPicker";
 import { phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { formatDivisionOptions, selectFormatDivision } from "@/lib/phase4-format-division";
@@ -12,7 +13,7 @@ export default async function FormatDesignerPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ state?: string | string[]; division?: string | string[] }>;
+  searchParams: Promise<{ state?: string | string[]; division?: string | string[]; advanced?: string | string[] }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -31,13 +32,25 @@ export default async function FormatDesignerPage({
     sportCode: result.competition.sportCode ?? "",
     ...(typeof query.state === "string" ? { previewState: query.state } : {}),
   });
+  const advancedRequested = query.advanced === "1";
+  const advancedHref = `/organiser/competitions/${encodeURIComponent(result.competition.id)}/format?division=${encodeURIComponent(selectedDivision.id)}&advanced=1`;
   return (
     <OrganiserWorkspace
       competition={result.competition}
       section={opaqueId("format")}
       layoutMode={opaqueId("format")}
       sectionAction={null}
-      sectionContent={<FormatDesignerWorkspace key={format.divisionId} page={format} divisions={divisions} />}
+      sectionContent={
+        advancedRequested ? (
+          <FormatDesignerWorkspace key={format.divisionId} page={format} divisions={divisions} />
+        ) : (
+          <V1FormatPicker
+            competitionId={result.competition.id}
+            hasAppliedFormat={Boolean(format.draft?.document)}
+            advancedHref={advancedHref}
+          />
+        )
+      }
     />
   );
 }
