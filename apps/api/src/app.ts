@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -33,6 +33,15 @@ import { registerPhase4SetupPatchRoutes } from "./phase-4-setup-patch-routes.js"
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+
+export function scoringSessionRateLimitKey(
+  scoringSessionId: string,
+  clientIp: string,
+  rateLimitHmacSecret: string,
+): string {
+  const fingerprint = (value: string) => createHmac("sha256", rateLimitHmacSecret).update(value, "utf8").digest("hex");
+  return `scoring-session:${fingerprint(`session:${scoringSessionId}`)}:ip:${fingerprint(`ip:${clientIp}`)}`;
+}
 
 const errorSchema = Type.Object({
   error: Type.Object({
@@ -259,7 +268,11 @@ export async function buildApp(options: BuildAppOptions) {
         typeof scoringSessionId === "string" &&
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scoringSessionId)
       ) {
-        return `scoring-session:${scoringSessionId}:ip:${request.ip}`;
+        return scoringSessionRateLimitKey(
+          scoringSessionId,
+          request.ip,
+          options.config.scoringAccess.rateLimitHmacSecret,
+        );
       }
       const accountId = options.resolveRateLimitAccountId
         ? await options.resolveRateLimitAccountId(request)

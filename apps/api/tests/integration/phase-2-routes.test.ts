@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import type { ScoringSessionState } from "@matchday/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildApp } from "../../src/app.js";
+import { buildApp, scoringSessionRateLimitKey } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { ScoringAccessRejectedError, type Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
@@ -118,6 +118,22 @@ function routeRuntime() {
 }
 
 describe("Phase 2 Fastify route boundaries", () => {
+  it("derives scoring rate-limit keys with the dedicated HMAC secret without retaining raw session or IP inputs", () => {
+    const sessionId = randomUUID();
+    const clientIp = "198.51.100.202";
+    const rateLimitSecret = "dedicated-scoring-rate-limit-hmac-secret";
+    const csrfSecret = "independent-csrf-hmac-secret-do-not-use";
+    const fingerprint = (value: string) => createHmac("sha256", rateLimitSecret).update(value, "utf8").digest("hex");
+
+    const key = scoringSessionRateLimitKey(sessionId, clientIp, rateLimitSecret);
+
+    expect(key).toBe(`scoring-session:${fingerprint(`session:${sessionId}`)}:ip:${fingerprint(`ip:${clientIp}`)}`);
+    expect(key).not.toContain(sessionId);
+    expect(key).not.toContain(clientIp);
+    expect(key).not.toContain(csrfSecret);
+    expect(key).not.toBe(scoringSessionRateLimitKey(sessionId, clientIp, csrfSecret));
+  });
+
   it("enforces organiser origin, session and CSRF before mutation and excludes access secrets from reads", async () => {
     const runtime = routeRuntime();
     const app = await buildApp({
