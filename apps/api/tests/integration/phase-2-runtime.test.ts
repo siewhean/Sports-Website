@@ -2275,6 +2275,51 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         WHERE id = ANY(${client.array(completeSlots.filter((slot) => slot.entry_id === null).map((slot) => slot.match_id))}::uuid[])`,
     ).toEqual(expect.arrayContaining([expect.objectContaining({ state: "pending" })]));
 
+    // Finish both semis so the winner/loser-dependent final and bronze slots
+    // become ready, then remove both source results as an organiser reopen
+    // would. Historical snapshots must not keep downstream entrants alive.
+    const semiMatches = await client<{ id: string }[]>`
+      SELECT DISTINCT match.id
+      FROM matches match
+      JOIN advancement_slots slot ON slot.match_id=match.id
+      WHERE match.division_id=${divisionId} AND match.graph_stage_id='championship'
+        AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL
+      ORDER BY match.id`;
+    expect(semiMatches).toHaveLength(2);
+    for (const [index, match] of semiMatches.entries()) {
+      await client`UPDATE matches SET state='final' WHERE id=${match.id}`;
+      await client`INSERT INTO match_result_snapshots
+        (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
+        VALUES (${match.id},3,1,${index === 0 ? 2 : 0},${index === 0 ? 0 : 2},'final',
+          ${client.json({ segments: [{ home: index === 0 ? 2 : 0, away: index === 0 ? 0 : 2 }] })})`;
+    }
+    await client`UPDATE competition_publications SET result_version=3 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(3);
+    const populatedDownstream = await client<{ match_id: string; slot: string; entry_id: string; state: string }[]>`
+      SELECT slot.match_id,slot.slot,slot.entry_id,match.state
+      FROM advancement_slots slot
+      JOIN matches match ON match.id=slot.match_id
+      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
+      WHERE slot.competition_id=${competition.id} AND source.source_kind IN ('winner','loser')
+      ORDER BY slot.match_id,slot.slot`;
+    expect(populatedDownstream).toHaveLength(4);
+    expect(populatedDownstream.every((slot) => slot.entry_id !== null && slot.state === "ready")).toBe(true);
+
+    await client`UPDATE matches SET state='in_progress' WHERE id = ANY(${client.array(semiMatches.map((match) => match.id))}::uuid[])`;
+    await client`UPDATE competition_publications SET result_version=4 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(4);
+    const clearedDownstream = await client<
+      { match_id: string; slot: string; entry_id: string | null; state: string }[]
+    >`
+      SELECT slot.match_id,slot.slot,slot.entry_id,match.state
+      FROM advancement_slots slot
+      JOIN matches match ON match.id=slot.match_id
+      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
+      WHERE slot.competition_id=${competition.id} AND source.source_kind IN ('winner','loser')
+      ORDER BY slot.match_id,slot.slot`;
+    expect(clearedDownstream).toHaveLength(4);
+    expect(clearedDownstream.every((slot) => slot.entry_id === null && slot.state === "pending")).toBe(true);
+
     // A newer draft has a deliberately different topology. Recalculation is
     // bound to the published revision: a draft must never rewrite the live
     // qualification slots before it is materialised and published.
@@ -2283,8 +2328,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     )?.graph;
     if (!draftGraph) throw new Error("Expected compact knockout draft graph");
     await phase3.createFormatRevision(actor, competition.id, divisionId, draftGraph, randomUUID());
-    await client`UPDATE competition_publications SET result_version=3 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(3);
+    await client`UPDATE competition_publications SET result_version=5 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(5);
     expect(
       await client<{ match_id: string; slot: string; entry_id: string | null }[]>`
         SELECT slot.match_id,slot.slot,slot.entry_id
@@ -2318,7 +2363,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       const initialHomeWins = match.home_seed < match.away_seed;
       await client`INSERT INTO match_result_snapshots
         (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
-        VALUES (${match.id},4,2,${initialHomeWins ? 0 : 2},${initialHomeWins ? 2 : 0},'corrected',
+        VALUES (${match.id},6,2,${initialHomeWins ? 0 : 2},${initialHomeWins ? 2 : 0},'corrected',
           ${client.json({
             corrected: true,
             segments: [{ home: initialHomeWins ? 0 : 2, away: initialHomeWins ? 2 : 0 }],
@@ -2339,8 +2384,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     // protected target would otherwise change before exercising the fence.
     expect(correctedRankOne("G1")).not.toBe(target.entry_id);
     expect(correctedRankOne("G2")).not.toBe(finalTarget.entry_id);
-    await client`UPDATE competition_publications SET result_version=4 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(4);
+    await client`UPDATE competition_publications SET result_version=6 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(6);
     expect(
       await client<
         { entry_id: string }[]
@@ -2354,7 +2399,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(
       await client<{ reason: string; target_slot_id: string }[]>`
         SELECT reason,target_slot_id FROM advancement_conflicts
-        WHERE competition_id=${competition.id} AND result_version=4
+        WHERE competition_id=${competition.id} AND result_version=6
         ORDER BY created_at DESC`,
     ).toEqual(
       expect.arrayContaining([

@@ -3805,7 +3805,8 @@ export class Phase2Runtime {
                 snapshot.home_score,snapshot.away_score,snapshot.state,snapshot.result_version,snapshot.snapshot
          FROM matches m
          JOIN match_result_snapshots snapshot ON snapshot.match_id=m.id
-         WHERE m.division_id=$1 AND snapshot.result_version<=$2
+       WHERE m.division_id=$1 AND snapshot.result_version<=$2
+         AND m.state IN ('final','corrected')
            AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
          ORDER BY m.id,snapshot.result_version DESC`,
       [divisionId, resultVersion],
@@ -4183,7 +4184,8 @@ export class Phase2Runtime {
       `SELECT DISTINCT ON (m.id) m.id AS match_id,m.home_entry_id,m.away_entry_id,
               s.home_score,s.away_score,s.state
        FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
-       WHERE m.division_id=$1 AND ($2::integer IS NULL OR s.result_version <= $2)
+       WHERE m.division_id=$1 AND m.state IN ('final','corrected')
+         AND ($2::integer IS NULL OR s.result_version <= $2)
        ORDER BY m.id,s.result_version DESC`,
       [divisionId, maximumResultVersion],
     );
@@ -4277,7 +4279,8 @@ export class Phase2Runtime {
            FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
            JOIN division_entries home ON home.id=m.home_entry_id
            JOIN division_entries away ON away.id=m.away_entry_id
-           WHERE m.competition_id=$1 AND s.result_version <= $2
+           WHERE m.competition_id=$1 AND m.state IN ('final','corrected')
+             AND s.result_version <= $2
            ORDER BY m.id,s.result_version DESC`,
             [competitionId, resultVersion],
           )
