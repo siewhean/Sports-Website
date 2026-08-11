@@ -83,4 +83,12 @@ describe("Gate C C2 scoring UI source guards", () => {
     expect(globalStyles).toContain("overscroll-behavior: contain");
     expect(globalStyles).toContain(".p2-score-history-sheet");
   });
+
+  it("does not prefetch the final-score public route before an operator chooses to leave scoring", async () => {
+    const shell = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
+
+    expect(shell).toMatch(
+      /<Link\s+className="p2-score-primary"\s+href=\{`\/competitions\/\$\{encodeURIComponent\(competitionSlug\)\}`\}\s+prefetch=\{false\}/,
+    );
+  });
 });

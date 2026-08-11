@@ -804,7 +804,11 @@ export function PhoneScoring({
             : `${phase2Copy.finalReceipt}: ${finalReceipt?.receiptId ?? "—"} · ${phase2Copy.publishedLabel} ${finalReceipt?.publishedAt ?? "—"}`}
         </p>
         {competitionSlug ? (
-          <Link className="p2-score-primary" href={`/competitions/${encodeURIComponent(competitionSlug)}`}>
+          <Link
+            className="p2-score-primary"
+            href={`/competitions/${encodeURIComponent(competitionSlug)}`}
+            prefetch={false}
+          >
             {phase2Copy.openPublic}
             <ArrowRight />
           </Link>
