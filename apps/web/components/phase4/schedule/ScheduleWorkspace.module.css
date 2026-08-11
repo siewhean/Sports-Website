@@ -84,6 +84,46 @@
   border-bottom: 1px solid var(--schedule-line);
 }
 
+.simpleCommandBar,
+.simpleOption {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 1rem;
+  border-bottom: 1px solid var(--schedule-line);
+}
+
+.simpleCommandBar p,
+.simpleOption p {
+  margin: 0 0 0.25rem;
+  color: var(--schedule-muted);
+  font-size: 0.82rem;
+}
+
+.simpleCommandBar h3,
+.simpleOption h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.simpleCommandBar button,
+.simpleOption button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 1px solid var(--schedule-signal-dark);
+  border-radius: 0.45rem;
+  background: var(--schedule-signal);
+  padding: 0.62rem 0.9rem;
+  color: var(--schedule-ink);
+  font:
+    650 0.76rem/1.1 var(--font-geist-sans),
+    sans-serif;
+}
+
 .strategy > p,
 .options header p,
 .timeline header p,

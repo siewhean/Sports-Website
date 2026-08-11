@@ -4,13 +4,14 @@ import { ScheduleWorkspace } from "@/components/phase4/schedule/ScheduleWorkspac
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
 import { getScheduleDocument } from "@/lib/phase4-schedule.server";
+import { isAdvancedScheduleView } from "@/lib/v1-schedule";
 
 export default async function SchedulePage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ state?: string; match?: string; notice?: string }>;
+  searchParams: Promise<{ advanced?: string; state?: string; match?: string; notice?: string }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -49,6 +50,7 @@ export default async function SchedulePage({
       }
       sectionContent={
         <ScheduleWorkspace
+          advanced={isAdvancedScheduleView(query.advanced)}
           document={document}
           initialSelectedMatchId={query.match}
           initialNotice={query.notice === phase4ScheduleMachine.moveNotice ? phase4ScheduleMachine.moveNotice : null}

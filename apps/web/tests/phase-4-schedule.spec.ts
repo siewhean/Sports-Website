@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
-const scheduleUrl = "/organiser/competitions/singapore-open/schedule";
+const scheduleBaseUrl = "/organiser/competitions/singapore-open/schedule";
+const scheduleUrl = `${scheduleBaseUrl}?advanced=1`;
 const revisionId = "70000000-0000-4000-8000-000000000004";
 const acceptedRevisionId = "70000000-0000-4000-8000-000000000005";
 const matchId = "30000000-0000-4000-8000-000000000001";
@@ -82,6 +83,21 @@ function revisionResponse({
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
+
+test("V1 schedule uses one balanced flow and keeps advanced controls out of the default route", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/schedule");
+  await dismissConsent(page);
+
+  await expect(page.getByTestId("phase4-schedule")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Balanced schedule", exact: true })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Schedule strategy" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Compare revisions" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Revision history" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Lock match|Unlock match/ })).toHaveCount(0);
+  await expect(page.getByText(/Private draft \d+/)).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Move match" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Publish schedule" })).toBeVisible();
+});
 
 test("schedule exposes measurable alternatives, timeline, inspector and explicit publication", async ({ page }) => {
   let published = false;
@@ -291,7 +307,7 @@ test("move flow validates consequences before sending the optimistic revision", 
       }),
     });
   });
-  await page.goto(`${scheduleUrl}/revisions/${revisionId}/matches/${matchId}/move`);
+  await page.goto(`${scheduleBaseUrl}/revisions/${revisionId}/matches/${matchId}/move`);
   await expect(page.getByTestId("phase4-move-flow")).toBeVisible();
   await expect(page.getByText("Only the selected match changes.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Confirm move" })).toBeEnabled();
@@ -310,10 +326,10 @@ test("schedule state routes remain truthful and non-mutating", async ({ page }) 
     ["permission", "Schedule access required"],
     ["error", "Schedule could not load"],
   ] as const) {
-    await page.goto(`${scheduleUrl}?state=${state}`);
+    await page.goto(`${scheduleUrl}&state=${state}`);
     await expect(page.getByRole("heading", { name: heading })).toBeVisible();
   }
-  await page.goto(`${scheduleUrl}?state=read-only`);
+  await page.goto(`${scheduleUrl}&state=read-only`);
   await expect(page.getByText("Schedule is read only", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish schedule" })).toBeDisabled();
 });

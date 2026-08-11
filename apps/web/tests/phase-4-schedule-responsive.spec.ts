@@ -6,7 +6,7 @@ test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo))
 test.use({ serviceWorkers: "block" });
 
 test("schedule swaps the compressed timeline for a semantic smaller-screen list", async ({ page }, testInfo) => {
-  await page.goto("/organiser/competitions/singapore-open/schedule");
+  await page.goto("/organiser/competitions/singapore-open/schedule?advanced=1");
   await dismissConsent(page);
   const region = page.getByRole("region", { name: "Schedule by playing area and time" });
   const explanation = page.getByText("The timeline is replaced by an ordered schedule on smaller screens.");
@@ -54,7 +54,7 @@ test("schedule uses the semantic list through 900px and the desktop timeline at 
   const explanation = page.getByText("The timeline is replaced by an ordered schedule on smaller screens.");
 
   await page.setViewportSize({ width: 900, height: 900 });
-  await page.goto("/organiser/competitions/singapore-open/schedule");
+  await page.goto("/organiser/competitions/singapore-open/schedule?advanced=1");
   await dismissConsent(page);
   await expect(region).toBeHidden();
   await expect(explanation).toBeVisible();
@@ -163,7 +163,7 @@ test("smaller-screen organiser selects a match, day, available area and valid ti
     });
   });
 
-  await page.goto("/organiser/competitions/singapore-open/schedule");
+  await page.goto("/organiser/competitions/singapore-open/schedule?advanced=1");
   await dismissConsent(page);
   await page.getByRole("button", { name: /SF1, .*Marina Barracudas vs Seletar Paddlers.*Conflict/ }).click();
   await expect(page.getByRole("heading", { name: "SF1" })).toBeVisible();
