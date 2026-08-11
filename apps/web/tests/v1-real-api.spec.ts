@@ -142,7 +142,7 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
 
   await page.goto(`/organiser/competitions/${competitionId}/schedule`);
   await expect(page.getByRole("heading", { name: "Balanced schedule", exact: true })).toBeVisible();
-  await submit(page, page.getByRole("button", { name: "Generate schedule" }), "POST", "/schedule/jobs");
+  await submit(page, page.getByRole("button", { name: "Generate balanced schedule" }), "POST", "/schedule/jobs");
   await expect(page.getByRole("button", { name: "Use schedule" })).toBeVisible({ timeout: 60_000 });
   await submit(page, page.getByRole("button", { name: "Use schedule" }), "POST", "/accept");
   const matchButton = page.locator("button[aria-pressed]").filter({ visible: true }).first();
