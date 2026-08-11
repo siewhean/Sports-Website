@@ -93,6 +93,20 @@ type BrowserJourneyResult = {
   };
 };
 
+type V1BrowserJourneyResult = {
+  project: string;
+  competitionId: string;
+  slug: string;
+  divisionIds: [string, string];
+  matchId: string;
+  moved: {
+    match_id: string;
+    playing_area_id: string;
+    start_epoch_ms: number;
+    end_epoch_ms: number;
+  };
+};
+
 function safeIdentifier(value: string, prefix: string): string {
   if (!value.startsWith(prefix) || !/^[a-z][a-z0-9_]*$/.test(value))
     throw new Error(`Refusing unsafe database identifier: ${value}`);
@@ -561,6 +575,100 @@ async function assertDatabaseOracle(sql: Sql, result: BrowserJourneyResult): Pro
   );
 }
 
+async function assertV1DatabaseOracle(sql: Sql, result: V1BrowserJourneyResult): Promise<void> {
+  const [aggregate] = await sql<
+    {
+      division_count: number;
+      entry_count: number;
+      published_formats: number;
+      materialised_formats: number;
+      published_schedules: number;
+      child_revisions: number;
+      schedule_version: number;
+      result_version: number;
+      finalised_results: number;
+      audit_count: number;
+      outbox_count: number;
+    }[]
+  >`
+    SELECT
+      (SELECT count(*)::int FROM divisions WHERE competition_id=c.id) division_count,
+      (SELECT count(*)::int FROM division_entries entry JOIN divisions division ON division.id=entry.division_id
+        WHERE division.competition_id=c.id AND entry.status IN ('active','confirmed')) entry_count,
+      (SELECT count(*)::int FROM format_revisions WHERE competition_id=c.id AND status='published') published_formats,
+      (SELECT count(*)::int FROM format_revisions format WHERE format.competition_id=c.id AND status='published'
+        AND phase4_materialization_is_exact(format.id)) materialised_formats,
+      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=c.id AND status='published') published_schedules,
+      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=c.id AND parent_revision_id IS NOT NULL) child_revisions,
+      COALESCE((SELECT schedule_version::int FROM competition_publications WHERE competition_id=c.id),0) schedule_version,
+      COALESCE((SELECT result_version::int FROM competition_publications WHERE competition_id=c.id),0) result_version,
+      (SELECT count(*)::int FROM match_result_snapshots snapshot JOIN matches match ON match.id=snapshot.match_id
+        WHERE match.competition_id=c.id AND snapshot.state='final') finalised_results,
+      (SELECT count(*)::int FROM audit_events WHERE organisation_id=c.organisation_id) audit_count,
+      (SELECT count(*)::int FROM outbox_events WHERE aggregate_id=c.id::text
+        OR payload->>'competition_id'=c.id::text) outbox_count
+    FROM competitions c WHERE c.id=${result.competitionId}
+  `;
+  if (
+    !aggregate ||
+    aggregate.division_count !== 2 ||
+    aggregate.entry_count !== 8 ||
+    aggregate.published_formats !== 2 ||
+    aggregate.materialised_formats !== 2 ||
+    aggregate.published_schedules !== 1 ||
+    aggregate.child_revisions < 1 ||
+    aggregate.schedule_version !== 1 ||
+    aggregate.result_version < 1 ||
+    aggregate.finalised_results !== 1 ||
+    aggregate.audit_count < 5 ||
+    aggregate.outbox_count < 5
+  )
+    throw new Error(`V1 aggregate persistence oracle failed: ${JSON.stringify(aggregate)}`);
+
+  const [moved] = await sql<
+    { match_id: string; playing_area_id: string; starts_at: Date | string; ends_at: Date | string }[]
+  >`
+    SELECT scheduled.match_id,scheduled.playing_area_id,scheduled.starts_at,scheduled.ends_at
+    FROM competition_publications publication
+    JOIN scheduled_matches scheduled ON scheduled.schedule_revision_id=publication.published_schedule_revision_id
+    WHERE publication.competition_id=${result.competitionId} AND scheduled.match_id=${result.moved.match_id}
+  `;
+  if (
+    !moved ||
+    moved.playing_area_id !== result.moved.playing_area_id ||
+    new Date(moved.starts_at).getTime() !== result.moved.start_epoch_ms ||
+    new Date(moved.ends_at).getTime() !== result.moved.end_epoch_ms
+  )
+    throw new Error(`V1 moved schedule oracle failed: ${JSON.stringify(moved)}`);
+
+  const [projectionRow] = await sql<{ projection: unknown }[]>`
+    SELECT projection.projection
+    FROM public_competition_projections projection
+    JOIN competition_publications publication ON publication.competition_id=projection.competition_id
+      AND publication.schedule_version=projection.schedule_version
+      AND publication.result_version=projection.result_version
+    WHERE projection.competition_id=${result.competitionId}
+  `;
+  const projection =
+    typeof projectionRow?.projection === "string"
+      ? (JSON.parse(projectionRow.projection) as Record<string, unknown>)
+      : (projectionRow?.projection as Record<string, unknown> | undefined);
+  const divisions = Array.isArray(projection?.divisions) ? projection.divisions : [];
+  const publicMatches = divisions.flatMap((division) =>
+    division && typeof division === "object" && Array.isArray((division as Record<string, unknown>).schedule)
+      ? ((division as Record<string, unknown>).schedule as Array<Record<string, unknown>>)
+      : [],
+  );
+  if (!publicMatches.some((match) => match.id === result.moved.match_id))
+    throw new Error("V1 public projection omitted the moved match");
+  const resultRows = await sql<{ event_type: string; sequence: number }[]>`
+    SELECT event_type,sequence FROM canonical_score_events WHERE match_id=${result.matchId} ORDER BY sequence
+  `;
+  if (resultRows.length < 2 || resultRows[0]?.event_type !== "goal" || resultRows.at(-1)?.event_type !== "finalised")
+    throw new Error(`V1 scoring oracle failed: ${JSON.stringify(resultRows)}`);
+  process.stdout.write(`V1 simple journey persistence oracle: ${JSON.stringify(aggregate)}\n`);
+}
+
 async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promise<void> {
   if (!isolation) return;
   if (isolation.kind === "database") {
@@ -769,22 +877,24 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
           .replaceAll(/\s+/g, " ")
           .slice(0, 4_000)}`,
       );
+    const playwrightConfig = process.env.PHASE4_E2E_PLAYWRIGHT_CONFIG ?? "playwright.phase4-real.config.ts";
     await runProcess(
       "Phase 4 real Playwright",
       "pnpm",
-      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", "playwright.phase4-real.config.ts"],
+      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", playwrightConfig],
       runtimeEnv,
       true,
     );
     const journeyResults = (await readFile(resultFile, "utf8"))
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as BrowserJourneyResult);
+      .map((line) => JSON.parse(line) as BrowserJourneyResult | V1BrowserJourneyResult);
     for (const projectName of projectNames) {
       const state = projects[projectName];
       const journey = journeyResults.find((result) => result.project === projectName);
       if (!state || !journey) throw new Error(`Browser journey result missing for ${projectName}`);
-      await assertDatabaseOracle(sql, journey);
+      if (process.env.PHASE4_E2E_JOURNEY === "v1") await assertV1DatabaseOracle(sql, journey as V1BrowserJourneyResult);
+      else await assertDatabaseOracle(sql, journey as BrowserJourneyResult);
     }
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });

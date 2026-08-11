@@ -2000,6 +2000,11 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(workspace.access_passes.find((entry) => entry.id === legacyFallbackPass.id)).toMatchObject({
       fallback_code_status: "available",
     });
+    expect(workspace.divisions.flatMap((division) => division.entries)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: expect.any(String), name: expect.any(String), revision: expect.any(Number) }),
+      ]),
+    );
     expect(JSON.stringify(workspace.access_passes)).not.toContain(pass.token);
     const retainedDomainEvidence = JSON.stringify(
       await client`

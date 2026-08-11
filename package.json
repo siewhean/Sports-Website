@@ -27,6 +27,7 @@
     "evidence:gate-c-c2:run": "node scripts/run-gate-c-c2-ledger.mjs",
     "test:evidence:gate-c-c2": "node --test scripts/run-gate-c-c2-ledger.test.mjs",
     "test:e2e:phase4:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
+    "test:e2e:v1:real": "PHASE4_E2E_JOURNEY=v1 PHASE4_E2E_PLAYWRIGHT_CONFIG=playwright.v1-real.config.ts pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
     "test:a11y": "pnpm --filter @matchday/web test:a11y",
     "test:visual": "pnpm --filter @matchday/web test:visual",
     "validate:fixtures": "node scripts/validate-canonical-fixtures.mjs",

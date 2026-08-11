@@ -4247,7 +4247,7 @@ export class Phase2Runtime {
       )[0] ?? null;
     const divisions = await this.sql.unsafe<Record<string, unknown>>(
       `SELECT d.id,d.name,d.team_limit,
-              COALESCE(jsonb_agg(jsonb_build_object('id',e.id,'name',e.name,'seed',e.seed,'status',e.status)
+              COALESCE(jsonb_agg(jsonb_build_object('id',e.id,'name',e.name,'seed',e.seed,'status',e.status,'revision',e.revision)
                 ORDER BY e.seed) FILTER (WHERE e.id IS NOT NULL),'[]'::jsonb) AS entries
        FROM divisions d LEFT JOIN division_entries e ON e.division_id=d.id
        WHERE d.competition_id=$1 GROUP BY d.id ORDER BY d.created_at`,
