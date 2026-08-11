@@ -167,6 +167,9 @@ type V1CompetitionJourneyResult = {
   divisionId: string;
   groupMatchIds: string[];
   progressedMatchIds: string[];
+  completedMatchIds?: string[];
+  initialStage?: "groups" | "championship";
+  correctedMatchId?: string;
 };
 
 function safeIdentifier(value: string, prefix: string): string {
@@ -743,8 +746,9 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
       published_formats: number;
       exact_formats: number;
       published_schedules: number;
-      group_finalised: number;
+      opening_finalised: number;
       progressed_finalised: number;
+      completed_finalised: number;
       automatic_qualifiers: number;
       unresolved_qualifiers: number;
       standings_snapshots: number;
@@ -761,10 +765,13 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
         AND phase4_materialization_is_exact(format.id)) exact_formats,
       (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=c.id AND status='published') published_schedules,
       (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
-        WHERE match.competition_id=c.id AND match.graph_stage_id='groups' AND snapshot.state='final') group_finalised,
+        WHERE match.competition_id=c.id AND match.id = ANY(${sql.array(result.groupMatchIds)}::uuid[]) AND snapshot.state='final') opening_finalised,
       (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
         WHERE match.competition_id=c.id AND match.id = ANY(${sql.array(result.progressedMatchIds)}::uuid[])
           AND snapshot.state='final' AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL) progressed_finalised,
+      (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
+        WHERE match.competition_id=c.id AND match.id = ANY(${sql.array(result.completedMatchIds ?? [...result.groupMatchIds, ...result.progressedMatchIds])}::uuid[])
+          AND snapshot.state='final' AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL) completed_finalised,
       (SELECT count(*)::int FROM advancement_slots slot JOIN matches match ON match.id=slot.match_id
         WHERE slot.competition_id=c.id AND match.graph_stage_id='championship'
           AND slot.control='automatic' AND slot.entry_id IS NOT NULL) automatic_qualifiers,
@@ -776,12 +783,20 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
       COALESCE((SELECT result_version::int FROM competition_publications WHERE competition_id=c.id),0) public_result_version
     FROM competitions c WHERE c.id=${result.competitionId}
   `;
-  const expectedGroupIds = [...new Set(result.groupMatchIds)].sort();
-  const actualGroupIds = await sql<{ id: string }[]>`
+  const expectedOpeningIds = [...new Set(result.groupMatchIds)].sort();
+  const actualOpeningIds = await sql<{ id: string }[]>`
     SELECT match.id::text AS id FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
-    WHERE match.competition_id=${result.competitionId} AND match.graph_stage_id='groups' AND snapshot.state='final'
+    WHERE match.competition_id=${result.competitionId} AND match.id = ANY(${sql.array(result.groupMatchIds)}::uuid[]) AND snapshot.state='final'
     ORDER BY match.id::text
   `;
+  const correction = result.correctedMatchId
+    ? await sql<{ reopened: number; corrected: number; reversals: number }[]>`
+        SELECT
+          (SELECT count(*)::int FROM audit_events WHERE target_id=${result.correctedMatchId} AND action='result.reopened') reopened,
+          (SELECT count(*)::int FROM audit_events WHERE target_id=${result.correctedMatchId} AND action='result.corrected') corrected,
+          (SELECT count(*)::int FROM canonical_score_events WHERE match_id=${result.correctedMatchId} AND event_type='reversal') reversals
+      `
+    : [{ reopened: 0, corrected: 0, reversals: 0 }];
   const [currentProjection] = await sql<{ projection: unknown }[]>`
     SELECT projection.projection
     FROM competitions competition
@@ -860,27 +875,33 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
   if (
     !aggregate ||
     aggregate.division_count !== 1 ||
-    aggregate.entry_count !== 8 ||
+    aggregate.entry_count !== (result.initialStage === "championship" ? 16 : 8) ||
     aggregate.published_formats !== 1 ||
     aggregate.exact_formats !== 1 ||
     aggregate.published_schedules !== 1 ||
-    aggregate.group_finalised !== 12 ||
-    aggregate.progressed_finalised !== 4 ||
-    aggregate.automatic_qualifiers < 6 ||
+    aggregate.opening_finalised !== result.groupMatchIds.length ||
+    aggregate.progressed_finalised !== result.progressedMatchIds.length ||
+    aggregate.completed_finalised !==
+      (result.completedMatchIds ?? [...result.groupMatchIds, ...result.progressedMatchIds]).length ||
+    aggregate.automatic_qualifiers < (result.initialStage === "championship" ? 14 : 6) ||
     aggregate.unresolved_qualifiers !== 0 ||
     aggregate.standings_snapshots < 1 ||
     aggregate.bracket_snapshots < 1 ||
-    aggregate.public_result_version < 16 ||
+    aggregate.public_result_version <
+      (result.completedMatchIds ?? [...result.groupMatchIds, ...result.progressedMatchIds]).length ||
     !projectionHasStandings ||
     !projectionHasBracket ||
     !projectionHasCanonicalBracket ||
     !projectionHasProgressedParticipants ||
-    JSON.stringify(actualGroupIds.map((row) => row.id)) !== JSON.stringify(expectedGroupIds)
+    JSON.stringify(actualOpeningIds.map((row) => row.id)) !== JSON.stringify(expectedOpeningIds) ||
+    (result.correctedMatchId !== undefined &&
+      (correction[0]?.reopened !== 1 || correction[0]?.corrected !== 1 || correction[0]?.reversals !== 1))
   )
     throw new Error(
-      `V1 group-to-knockout persistence oracle failed: ${JSON.stringify({
+      `V1 competition persistence oracle failed: ${JSON.stringify({
         aggregate,
-        actualGroupIds,
+        actualOpeningIds,
+        correction: correction[0],
         projection: projectionRecord
           ? {
               keys: Object.keys(projectionRecord).sort(),
@@ -894,7 +915,7 @@ async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1Competition
           : null,
       })}`,
     );
-  process.stdout.write(`V1 group-to-knockout persistence oracle: ${JSON.stringify(aggregate)}\n`);
+  process.stdout.write(`V1 competition persistence oracle: ${JSON.stringify(aggregate)}\n`);
 }
 
 async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promise<void> {

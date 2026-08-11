@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 type State = {
+  apiOrigin: string;
   webOrigin: string;
   organisationId: string;
   fixtureKey: string;
@@ -16,6 +17,9 @@ type JourneyReceipt = {
   divisionId: string;
   groupMatchIds: string[];
   progressedMatchIds: string[];
+  completedMatchIds: string[];
+  initialStage: "groups" | "championship";
+  correctedMatchId: string;
 };
 
 async function state(projectName: string): Promise<State> {
@@ -47,14 +51,47 @@ async function addDivision(page: Page): Promise<string> {
   return id;
 }
 
-async function addEightTeams(page: Page) {
+async function addSixteenTeams(page: Page) {
   const division = page.getByRole("region", { name: "Championship" });
-  for (let index = 1; index <= 8; index += 1) {
+  for (let index = 1; index <= 16; index += 1) {
     const form = division.locator("form").last();
     await form.getByLabel("Entry name").fill(`V1 Squad ${index}`);
     await form.getByLabel("Seed").fill(String(index));
     await submit(page, form.getByRole("button", { name: "Add entry" }), "POST", "/entries");
   }
+}
+
+async function correctOpeningResult(page: Page, competitionId: string, matchId: string) {
+  await page.goto(`/organiser/competitions/${competitionId}/results?match=${matchId}`);
+  await expect(page.getByRole("heading", { name: "Scoring event history" })).toBeVisible();
+  const reopen = page.waitForResponse(
+    (response) => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/reopen"),
+  );
+  await page.getByRole("button", { name: "Reopen for correction" }).click();
+  const reopenDialog = page.getByRole("dialog", { name: "Reopen for correction" });
+  await reopenDialog.getByLabel("Correction reason").fill("Official knockout score-sheet correction");
+  await reopenDialog.getByRole("button", { name: "Reopen match" }).click();
+  expect((await reopen).status()).toBe(200);
+  await expect(reopenDialog).toBeHidden();
+
+  const correction = page.waitForResponse(
+    (response) => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/corrections"),
+  );
+  await page.getByRole("button", { name: "Reverse scoring event" }).click();
+  const correctionDialog = page.getByRole("dialog", { name: "Apply correction and publish result" });
+  await correctionDialog.getByLabel("Event to reverse").selectOption({ index: 1 });
+  await correctionDialog.getByLabel("Add a replacement of this validated action").check();
+  await correctionDialog.getByLabel("Replacement side").selectOption("away");
+  const participant = correctionDialog.getByLabel("Replacement participant name");
+  if (await participant.count()) await participant.fill("V1 correction scorer");
+  await correctionDialog.getByLabel("Correction reason").fill("Official knockout score-sheet correction");
+  await correctionDialog.getByRole("button", { name: "Publish correction" }).click();
+  const correctionResponse = await correction;
+  expect(correctionResponse.status(), await correctionResponse.text()).toBe(200);
+  await expect(correctionDialog).toBeHidden();
+  await expect(
+    page.getByText("Correction finalised and the corrected result published.", { exact: true }),
+  ).toBeVisible();
 }
 
 async function issuePass(page: Page, matchId: string): Promise<string> {
@@ -71,20 +108,60 @@ async function issuePass(page: Page, matchId: string): Promise<string> {
   return accessUrl;
 }
 
-async function selectableMatchIds(page: Page): Promise<string[]> {
+type SelectableMatch = Readonly<{ id: string; label: string }>;
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+async function dependentMatchId(
+  page: Page,
+  seed: State,
+  competitionId: string,
+  sourceMatchId: string,
+): Promise<string> {
+  const response = await page.request.get(
+    `${seed.apiOrigin}/api/v1/competitions/${encodeURIComponent(competitionId)}/schedule-workspace`,
+    { headers: { cookie: seed.organiserCookie } },
+  );
+  expect(response.status(), await response.text()).toBe(200);
+  const payload = record(await response.json());
+  const matches = Array.isArray(payload?.matches) ? payload.matches.map(record).filter(Boolean) : [];
+  const dependent = matches.find(
+    (match) =>
+      typeof match?.id === "string" &&
+      Array.isArray(match.dependency_match_ids) &&
+      match.dependency_match_ids.includes(sourceMatchId),
+  );
+  if (!dependent || typeof dependent.id !== "string") {
+    throw new Error(`Expected a scheduled downstream match for ${sourceMatchId}`);
+  }
+  return dependent.id;
+}
+
+async function selectableMatches(page: Page): Promise<SelectableMatch[]> {
   await page.getByRole("button", { name: "Issue pass" }).click();
-  const ids = await page
+  const matches = await page
     .getByRole("dialog", { name: "Create access pass" })
     .getByLabel("Match")
     .locator("option")
     .evaluateAll((options) =>
       options
         .filter((option) => /V1 Squad \d+.*V1 Squad \d+/u.test(option.textContent ?? ""))
-        .map((option) => option.getAttribute("value"))
-        .filter((value): value is string => Boolean(value)),
+        .flatMap((option) => {
+          const id = option.getAttribute("value");
+          const label = option.textContent?.trim() ?? "";
+          return id ? [{ id, label }] : [];
+        }),
     );
   await page.getByRole("dialog", { name: "Create access pass" }).getByRole("button", { name: "Cancel" }).click();
-  return ids;
+  return matches;
+}
+
+async function selectableMatchIds(page: Page): Promise<string[]> {
+  return (await selectableMatches(page)).map((match) => match.id);
 }
 
 async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
@@ -124,7 +201,7 @@ async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
 
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-test("browser completes an eight-team Canoe group-to-knockout competition", async ({ page, context }, testInfo) => {
+test("browser completes and corrects a sixteen-team Canoe compact knockout", async ({ page, context }, testInfo) => {
   const seed = await state(testInfo.project.name);
   test.setTimeout(600_000);
   await installConsoleGuard(page);
@@ -142,7 +219,7 @@ test("browser completes an eight-team Canoe group-to-knockout competition", asyn
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
   await page.getByLabel("Organisation").selectOption(seed.organisationId);
-  await page.getByLabel("Competition name").fill("V1 Eight Team Championship");
+  await page.getByLabel("Competition name").fill("V1 Sixteen Team Knockout");
   await page.getByLabel("Public address").fill(slug);
   await page.getByLabel("Sport").selectOption("canoe_polo");
   await page.getByLabel("Venue").fill("V1 Championship Arena");
@@ -172,19 +249,16 @@ test("browser completes an eight-team Canoe group-to-knockout competition", asyn
 
   await page.goto(`/organiser/competitions/${competitionId}/entries`);
   const divisionId = await addDivision(page);
-  await addEightTeams(page);
-  await expect(page.getByText("8 / 16").first()).toBeVisible();
+  await addSixteenTeams(page);
+  await expect(page.getByText("16 / 16").first()).toBeVisible();
 
   await page.goto(`/organiser/competitions/${competitionId}/format`);
   await submit(page, page.getByRole("button", { name: "Show format options" }), "POST", "/v1-format-recommendations");
-  const championship = page
-    .getByRole("listitem")
-    .filter({ has: page.getByRole("heading", { name: "Championship focus" }) });
-  // Two complete four-team groups (12 fixtures) feed two semi-finals, a final
-  // and a bronze match. The capacity-valid Championship focus card therefore
-  // has 16 fixtures, while every entrant is still guaranteed three group games.
-  await expect(championship).toContainText("16 matches");
-  await submit(page, championship.getByRole("button", { name: "Use this format" }), "POST", "/apply");
+  const compact = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "Compact knockout" }) });
+  // The selected compact option is a single-elimination 16-team bracket: eight
+  // opening matches, four quarter-finals, two semi-finals, a final and bronze.
+  await expect(compact).toContainText("16 matches");
+  await submit(page, compact.getByRole("button", { name: "Use this format" }), "POST", "/apply");
   await expect(page.getByTestId("v1-format-selected")).toBeVisible();
 
   await page.goto(`/organiser/competitions/${competitionId}/schedule`);
@@ -194,45 +268,79 @@ test("browser completes an eight-team Canoe group-to-knockout competition", asyn
   await submit(page, page.getByRole("button", { name: "Publish schedule" }), "POST", "/publish");
 
   await page.goto(`/organiser/competitions/${competitionId}/access`);
-  const groupMatchIds = await selectableMatchIds(page);
-  expect(groupMatchIds).toHaveLength(12);
+  const openingMatches = await selectableMatches(page);
+  const groupMatchIds = openingMatches.map((match) => match.id);
+  expect(groupMatchIds).toHaveLength(8);
 
   for (const [index, matchId] of groupMatchIds.entries()) {
     await page.goto(`/organiser/competitions/${competitionId}/access`);
-    await scoreAndFinalise(page, await issuePass(page, matchId), `V1 group scorer ${index + 1}`);
+    await scoreAndFinalise(page, await issuePass(page, matchId), `V1 opening scorer ${index + 1}`);
   }
+
+  await page.goto(`/organiser/competitions/${competitionId}/access`);
+  const openingWinner = "V1 Squad 1";
+  const correctedWinner = "V1 Squad 2";
+  const correctedOpeningMatch = openingMatches.find((match) => /\bV1 Squad 1 vs V1 Squad 2\b/u.test(match.label));
+  if (!correctedOpeningMatch) throw new Error("Expected the deterministic V1 Squad 1 versus V1 Squad 2 opening match");
+  const dependentQuarterFinalId = await dependentMatchId(page, seed, competitionId, correctedOpeningMatch.id);
+
+  await page.goto(`/competitions/${slug}`);
+  const publicDependentSchedule = page.locator(`[data-match-id="${dependentQuarterFinalId}"]`).first();
+  await expect(publicDependentSchedule).toContainText(openingWinner);
+  const publicDependentBracket = page.locator(`.p2-public-bracket article[data-match-id="${dependentQuarterFinalId}"]`);
+  await expect(publicDependentBracket).toContainText(openingWinner);
+
+  // Correction is performed through the organiser's rendered control, before
+  // any dependent quarter-final is scored. This proves the canonical resolver
+  // replaces an automatic knockout participant rather than retaining a stale
+  // opening-round winner.
+  await correctOpeningResult(page, competitionId, correctedOpeningMatch.id);
+
+  await page.goto(`/organiser/competitions/${competitionId}/access`);
+  const correctedDependentQuarterFinal = (await selectableMatches(page)).find(
+    (match) => match.id === dependentQuarterFinalId,
+  );
+  expect(correctedDependentQuarterFinal?.label).toContain(correctedWinner);
+  expect(correctedDependentQuarterFinal?.label).not.toContain(openingWinner);
+
+  await page.goto(`/competitions/${slug}`);
+  await expect(page.locator(`[data-match-id="${dependentQuarterFinalId}"]`).first()).toContainText(correctedWinner);
+  await expect(page.locator(`.p2-public-bracket article[data-match-id="${dependentQuarterFinalId}"]`)).toContainText(
+    correctedWinner,
+  );
 
   await page.goto(`/organiser/competitions/${competitionId}/results`);
   await expect(page.getByRole("heading", { name: "Calculated tables" })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("heading", { name: "Advancement decisions" })).toBeVisible();
-  // The capacity-valid championship recommendation is a single eight-team group,
-  // so there is one authoritative table before its automatic knockout rounds.
   await expect(page.getByRole("region", { name: /standings table/i })).toHaveCount(1);
 
-  await page.goto(`/organiser/competitions/${competitionId}/access`);
-  const semiFinalIds = (await selectableMatchIds(page)).filter((id) => !groupMatchIds.includes(id));
-  expect(semiFinalIds, "Both automatic semi-finals must be exposed after all group results").toHaveLength(2);
-  for (const [index, matchId] of semiFinalIds.entries()) {
+  const progressedMatchIds: string[] = [];
+  for (const expectedRoundSize of [4, 2, 2]) {
     await page.goto(`/organiser/competitions/${competitionId}/access`);
-    await scoreAndFinalise(page, await issuePass(page, matchId), `V1 semi-final scorer ${index + 1}`);
+    const round = (await selectableMatchIds(page)).filter(
+      (id) => !groupMatchIds.includes(id) && !progressedMatchIds.includes(id),
+    );
+    expect(round, `Expected ${expectedRoundSize} automatically resolved knockout matches`).toHaveLength(
+      expectedRoundSize,
+    );
+    for (const [index, matchId] of round.entries()) {
+      await page.goto(`/organiser/competitions/${competitionId}/access`);
+      await scoreAndFinalise(
+        page,
+        await issuePass(page, matchId),
+        `V1 knockout scorer ${expectedRoundSize}-${index + 1}`,
+      );
+    }
+    progressedMatchIds.push(...round);
   }
-  await page.goto(`/organiser/competitions/${competitionId}/access`);
-  const finalRoundIds = (await selectableMatchIds(page)).filter(
-    (id) => ![...groupMatchIds, ...semiFinalIds].includes(id),
-  );
-  expect(finalRoundIds, "Final and bronze participants must resolve from both semi-final results").toHaveLength(2);
-  for (const [index, matchId] of finalRoundIds.entries()) {
-    await page.goto(`/organiser/competitions/${competitionId}/access`);
-    await scoreAndFinalise(page, await issuePass(page, matchId), index === 0 ? "V1 final scorer" : "V1 bronze scorer");
-  }
-  const progressedMatchIds = [...semiFinalIds, ...finalRoundIds];
+  expect(progressedMatchIds).toHaveLength(8);
 
   // The organiser shell refreshes its conflict panel after finalisation. Let
   // that same-origin read settle before changing routes so an intentional test
   // navigation cannot manufacture a browser-level request-abort failure.
   await page.waitForTimeout(300);
   await page.goto(`/competitions/${slug}`);
-  await expect(page.getByRole("heading", { name: "V1 Eight Team Championship" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "V1 Sixteen Team Knockout" })).toBeVisible();
   await expect(page.getByRole("table", { name: "Table" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Bracket" })).toBeVisible();
   await expect(page.getByText("V1 Squad 1").first()).toBeVisible();
@@ -242,7 +350,17 @@ test("browser completes an eight-team Canoe group-to-knockout competition", asyn
   if (!resultFile) throw new Error("PHASE4_E2E_RESULT_FILE is required");
   await appendFile(
     resultFile,
-    `${JSON.stringify({ project: testInfo.project.name, competitionId, slug, divisionId, groupMatchIds, progressedMatchIds } satisfies JourneyReceipt)}\n`,
+    `${JSON.stringify({
+      project: testInfo.project.name,
+      competitionId,
+      slug,
+      divisionId,
+      groupMatchIds,
+      progressedMatchIds,
+      completedMatchIds: [...groupMatchIds, ...progressedMatchIds],
+      initialStage: "championship",
+      correctedMatchId: correctedOpeningMatch.id,
+    } satisfies JourneyReceipt)}\n`,
     { mode: 0o600 },
   );
 });

@@ -270,7 +270,7 @@ function PublicDivisionSections({
         </header>
         <div className="p2-public-bracket">
           {bracket.map((match) => (
-            <article key={`${match.round}-${match.fixture}`}>
+            <article key={match.id ?? `${match.round}-${match.fixture}`} data-match-id={match.id}>
               <span>{match.round}</span>
               <h3>{match.fixture}</h3>
               <strong>{match.score}</strong>

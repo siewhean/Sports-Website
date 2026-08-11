@@ -114,6 +114,8 @@ describe("public competition server adapter", () => {
     expect(markup).toContain('aria-labelledby="public-result-title-women"');
     expect(markup).toContain('data-division-id="open"');
     expect(markup).toContain('data-division-id="women"');
+    expect(markup).toContain('class="p2-public-bracket"><article data-match-id="open-match"');
+    expect(markup).toContain('class="p2-public-bracket"><article data-match-id="women-match"');
     const ids = [...markup.matchAll(/\sid="([^"]+)"/gu)].map((match) => match[1]);
     expect(new Set(ids).size).toBe(ids.length);
   });

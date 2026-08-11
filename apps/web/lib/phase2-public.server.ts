@@ -155,8 +155,10 @@ function toDivisionView(
     matches,
     standings: standingsView(divisionProjection.standings),
     bracket: bracketMatches.map((row) => {
-      const match = typeof row.matchId === "string" ? matchesById.get(row.matchId) : undefined;
+      const matchId = typeof row.matchId === "string" ? row.matchId : undefined;
+      const match = matchId ? matchesById.get(matchId) : undefined;
       return {
+        ...(matchId ? { id: matchId } : {}),
         round: typeof row.stage === "string" ? titleCase(row.stage) : (match?.stage ?? "Knockout"),
         fixture: match ? `${match.home} · ${match.away}` : "TBD · TBD",
         score:

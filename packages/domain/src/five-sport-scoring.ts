@@ -434,6 +434,7 @@ function applySportAction(
   pack: SportPack,
   settings: SportPackSettings,
   event: FiveSportScoreEvent,
+  allowHistoricalSegment = false,
 ): void {
   const definition = matchEvent(pack, event.type);
   if (!definition) throw new Error(`Event type ${event.type} is not supported by ${pack.displayName}`);
@@ -484,7 +485,7 @@ function applySportAction(
 
   const number = event.segmentNumber ?? state.currentSegment;
   const current = segment(state, number);
-  if (number !== state.currentSegment) {
+  if (number !== state.currentSegment && !allowHistoricalSegment) {
     throw new Error("Events can only be recorded in the current segment");
   }
   if (current.completed && definition.scoreDelta > 0) {
@@ -630,6 +631,7 @@ export function reduceFiveSportScoreEvents(
   sportId: SportId,
   events: readonly FiveSportScoreEvent[],
   settingsOverride?: SportPackSettings,
+  options?: { readonly historicalSegmentEventIds?: ReadonlySet<string> },
 ): FiveSportScoreState {
   const pack = SPORT_PACKS[sportId];
   const settings = mergedSettings(pack, settingsOverride);
@@ -699,7 +701,7 @@ export function reduceFiveSportScoreEvents(
       continue;
     }
     if (SYSTEM_EVENT_TYPES.has(event.type)) throw new Error(`Unsupported system event ${event.type}`);
-    applySportAction(state, pack, settings, event);
+    applySportAction(state, pack, settings, event, options?.historicalSegmentEventIds?.has(event.eventId) === true);
   }
 
   return snapshot(state, pack);

@@ -17,6 +17,7 @@ import {
   type FiveSportScoreCommand,
   type FiveSportScoreEvent,
   type FiveSportScoreState,
+  type AppliedSportAction,
   type SportId,
   type SportPackSettings,
   type StandingsEngineConfig,
@@ -62,6 +63,93 @@ type ExchangedScoringSession = {
   lease_expires_at: string | null;
   rate_limit: ScoringAccessRateLimitHeaders;
 };
+
+type StagedCorrectionCommand = Readonly<{ id: string; command: FiveSportScoreCommand }>;
+
+/**
+ * The correction endpoint is the only path that can replay a replacement in
+ * an already-completed segment. A replacement is not client-authorised: it
+ * must immediately follow—and exactly reproduce the type, effective segment
+ * and manual timestamp of—one immutable reversal target. This keeps the
+ * exception narrow while ordinary scoring continues through the reducer's
+ * current-segment guard.
+ */
+export function historicalCorrectionReplacementEventIds(
+  commands: readonly FiveSportScoreCommand[],
+  staged: readonly StagedCorrectionCommand[],
+  actions: readonly AppliedSportAction[],
+): ReadonlySet<string> {
+  const actionByEventId = new Map(actions.map((action) => [action.eventId, action]));
+  const stagedIdByClientEventId = new Map(staged.map((item) => [item.command.clientEventId, item.id]));
+  const historicalTargetBySegment = new Map<number, AppliedSportAction[]>();
+  for (const command of commands) {
+    if (command.type !== "reversal" || !command.reversalTargetEventId) continue;
+    const target = actionByEventId.get(command.reversalTargetEventId);
+    if (!target) throw new Error("Correction reversal target is unavailable");
+    historicalTargetBySegment.set(target.segmentNumber, [
+      ...(historicalTargetBySegment.get(target.segmentNumber) ?? []),
+      target,
+    ]);
+  }
+
+  const historicalReplacementIds = new Set<string>();
+  const consumedTargetIds = new Set<string>();
+  for (const [index, command] of commands.entries()) {
+    if (command.type === "reversal" || command.segmentNumber === undefined) continue;
+    const targets = historicalTargetBySegment.get(command.segmentNumber);
+    if (!targets?.length) continue;
+    const preceding = commands[index - 1];
+    const target =
+      preceding?.type === "reversal" && preceding.reversalTargetEventId
+        ? actionByEventId.get(preceding.reversalTargetEventId)
+        : undefined;
+    if (
+      !target ||
+      consumedTargetIds.has(target.eventId) ||
+      target.segmentNumber !== command.segmentNumber ||
+      target.eventType !== command.type ||
+      target.manualTimeSeconds !== (command.manualTimeSeconds ?? null)
+    ) {
+      throw new Error("Historical correction replacement must immediately and exactly follow its reversal target");
+    }
+    const stagedId = stagedIdByClientEventId.get(command.clientEventId);
+    if (!stagedId) throw new Error("Correction replacement was not staged");
+    consumedTargetIds.add(target.eventId);
+    historicalReplacementIds.add(stagedId);
+  }
+  return historicalReplacementIds;
+}
+
+/**
+ * Rehydrate the same narrowly-authorised historical replacements from the
+ * immutable score stream. This is needed whenever a corrected match is read
+ * again: the reducer must replay the original historical segment faithfully,
+ * not treat the now-persisted replacement as an ordinary live score.
+ */
+export function persistedHistoricalCorrectionReplacementEventIds(
+  events: readonly FiveSportScoreEvent[],
+): ReadonlySet<string> {
+  const eventById = new Map(events.map((event) => [event.eventId, event]));
+  const historicalReplacementIds = new Set<string>();
+  for (const [index, reversal] of events.entries()) {
+    if (reversal.type !== "reversal" || !reversal.reversalTargetEventId) continue;
+    const target = eventById.get(reversal.reversalTargetEventId);
+    const replacement = events[index + 1];
+    if (
+      !target ||
+      !replacement ||
+      replacement.type === "reversal" ||
+      target.type !== replacement.type ||
+      target.segmentNumber === undefined ||
+      target.segmentNumber !== replacement.segmentNumber ||
+      (target.manualTimeSeconds ?? null) !== (replacement.manualTimeSeconds ?? null)
+    ) {
+      continue;
+    }
+    historicalReplacementIds.add(replacement.eventId);
+  }
+  return historicalReplacementIds;
+}
 type AccessPassExchangeRow = {
   id: string;
   competition_id: string;
@@ -2157,7 +2245,9 @@ export class Phase2Runtime {
     }
     let state: FiveSportScoreState;
     try {
-      state = reduceFiveSportScoreEvents(stream.sport_code, events, settings);
+      state = reduceFiveSportScoreEvents(stream.sport_code, events, settings, {
+        historicalSegmentEventIds: persistedHistoricalCorrectionReplacementEventIds(events),
+      });
       if (hasLegacyCorrection) {
         const legacy = required(
           await tx.unsafe<{ home_score: number; away_score: number }>(
@@ -3508,7 +3598,23 @@ export class Phase2Runtime {
       }
       let state: FiveSportScoreState;
       try {
-        state = reduceFiveSportScoreEvents(canonical.context.sport_code, logicalEvents, canonical.context.settings);
+        // Older live score commands may omit segment_number because the scorer
+        // records against the then-current period. Resolve the target through
+        // the canonical reducer so a correction replacement is compared with
+        // that effective historical period, rather than only its wire shape.
+        const canonicalState = reduceFiveSportScoreEvents(
+          canonical.context.sport_code,
+          canonical.events,
+          canonical.context.settings,
+        );
+        const historicalSegmentEventIds = historicalCorrectionReplacementEventIds(
+          commands,
+          staged,
+          canonicalState.actions,
+        );
+        state = reduceFiveSportScoreEvents(canonical.context.sport_code, logicalEvents, canonical.context.settings, {
+          historicalSegmentEventIds,
+        });
       } catch (error) {
         throw new ApiError(422, "CORRECTION_INVALID", error instanceof Error ? error.message : "Correction is invalid");
       }

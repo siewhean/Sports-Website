@@ -674,13 +674,23 @@ export class Phase4Runtime {
         );
       source = updated.document;
     }
+    // The direct V1 picker is a compact, single-elimination chooser. Persist
+    // its explicit one-match/champion policy before deriving valid choices.
+    const v1Preferences = {
+      ...preferences,
+      minimum_matches: { per_entry: 1 },
+      ranking: { rank_all_entries: false },
+      placement: { required: false },
+      qualification: { cross_group_allowed: true },
+      priority: { value: "speed" as const },
+    };
     const saved = await this.autosaveSetupDraft(
       actor,
       competitionId,
       {
         expected_revision: source.revision,
         idempotency_key: preferenceKey,
-        transition: { kind: "save_step", step: { step_id: "format_preferences", value: preferences } },
+        transition: { kind: "save_step", step: { step_id: "format_preferences", value: v1Preferences } },
       },
       requestId,
     );
