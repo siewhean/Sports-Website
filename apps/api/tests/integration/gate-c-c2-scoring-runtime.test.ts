@@ -6,8 +6,11 @@ import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildApp } from "../../src/app.js";
+import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { healthyProbes, testConfig } from "../helpers.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -1090,11 +1093,11 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
     expect(
       await sql`SELECT schedule_version,result_version FROM competition_publications
         WHERE competition_id=${competition.id}`,
-    ).toEqual([{ schedule_version: 1, result_version: 2 }]);
+    ).toEqual([{ schedule_version: 1, result_version: 3 }]);
     expect(
       await sql`SELECT schedule_version,result_version FROM public_competition_projections
         WHERE competition_id=${competition.id} ORDER BY result_version DESC LIMIT 1`,
-    ).toEqual([{ schedule_version: 1, result_version: 2 }]);
+    ).toEqual([{ schedule_version: 1, result_version: 3 }]);
     const legacyCorrectionId = randomUUID();
     const legacyClientId = randomUUID();
     await sql`INSERT INTO canonical_score_events(
@@ -1132,6 +1135,270 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: "LEGACY_CORRECTION_REQUIRES_REVIEW" });
   });
+
+  it("withdraws reopened results and fences an automatically assigned downstream scorer through the runtime", async () => {
+    const actor = { accountId };
+    const competitionSlug = `reopen-fence-${randomUUID()}`;
+    const competition = await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Reopen downstream fence cup",
+        slug: competitionSlug,
+        timezone: "Asia/Singapore",
+        startsOn: "2027-05-01",
+        endsOn: "2027-05-01",
+      },
+      randomUUID(),
+    );
+    await sql`UPDATE competition_sport_settings SET
+      pack_version=${SPORT_PACKS.canoe_polo.version},
+      recommended_snapshot=${sql.json(SPORT_PACKS.canoe_polo.recommendedSettings)},
+      settings_override='{}'::jsonb
+      WHERE competition_id=${competition.id}`;
+    const division = await runtime.createDivision(actor, competition.id, { name: "Open", teamLimit: 8 }, randomUUID());
+    await runtime.replaceEntries(
+      actor,
+      competition.id,
+      division.id,
+      Array.from({ length: 8 }, (_, index) => ({ name: `Fence team ${index + 1}`, seed: index + 1 })),
+      randomUUID(),
+    );
+    await runtime.replaceCapacity(
+      actor,
+      competition.id,
+      [
+        {
+          name: "Court 1",
+          windows: [{ startsAt: "2027-05-01T00:00:00.000Z", endsAt: "2027-05-01T12:00:00.000Z" }],
+        },
+      ],
+      randomUUID(),
+    );
+    const format = await runtime.generateFormat(actor, competition.id, division.id, randomUUID());
+    const target = format.matches.find((candidate) => candidate.dependencies.length === 2);
+    if (!target) throw new Error("Expected a two-source automatic downstream match");
+    const firstDependency = target.dependencies[0]!;
+    const sourceMatchIds = target.dependencies.map((dependency) => dependency.sourceMatchId);
+    const schedule = await runtime.generateSchedule(actor, competition.id, format.id, randomUUID());
+    await runtime.publishSchedule(actor, competition.id, schedule.id, randomUUID());
+
+    const finaliseSource = async (matchId: string) => {
+      const pass = await runtime.createAccessPass(
+        actor,
+        competition.id,
+        matchId,
+        {
+          expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+          role: "scorekeeper",
+          idempotencyKey: `reopen-source-${randomUUID()}`,
+        },
+        randomUUID(),
+      );
+      if (!pass.token) throw new Error("Expected one-time source token");
+      const writer = await runtime.exchangeAccess(
+        { token: pass.token, deviceId: randomUUID(), ipAddress: "203.0.113.98" },
+        randomUUID(),
+      );
+      if (!writer.generation) throw new Error("Expected source writer generation");
+      const auth = {
+        sessionId: writer.session_id,
+        sessionToken: writer.session_token,
+        generation: writer.generation,
+      };
+      const start = await runtime.appendCanonicalScoreEvent(
+        auth,
+        { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString() },
+        0,
+        randomUUID(),
+      );
+      const goal = await runtime.appendCanonicalScoreEvent(
+        auth,
+        {
+          client_event_id: randomUUID(),
+          type: "goal",
+          occurred_at: new Date().toISOString(),
+          team_slot: "home",
+          participant_id: "Player 1",
+          segment_number: 1,
+          manual_time_seconds: 10,
+        },
+        start.aggregate_version,
+        randomUUID(),
+      );
+      const period = await runtime.appendCanonicalScoreEvent(
+        auth,
+        {
+          client_event_id: randomUUID(),
+          type: "period_change",
+          occurred_at: new Date().toISOString(),
+          segment_number: 2,
+          manual_time_seconds: 0,
+        },
+        goal.aggregate_version,
+        randomUUID(),
+      );
+      const finalised = await runtime.finalise(auth, randomUUID(), randomUUID(), period.aggregate_version);
+      return { auth, finalised };
+    };
+
+    const finalised = new Set<string>();
+    for (;;) {
+      const [targetState] = await sql<
+        { home_entry_id: string | null; away_entry_id: string | null }[]
+      >`SELECT home_entry_id,away_entry_id FROM matches WHERE id=${target.id}`;
+      if (targetState?.home_entry_id && targetState.away_entry_id) break;
+      const available = await sql<{ id: string }[]>`
+        SELECT id FROM matches
+        WHERE division_id=${division.id}
+          AND id<>${target.id}
+          AND state IN ('pending','ready')
+          AND home_entry_id IS NOT NULL
+          AND away_entry_id IS NOT NULL
+        ORDER BY ordinal,id
+      `;
+      const next = available.find((candidate) => !finalised.has(candidate.id));
+      if (!next) throw new Error("No authoritative source fixture can resolve the downstream match");
+      await finaliseSource(next.id);
+      finalised.add(next.id);
+    }
+    const firstSource = format.matches.find((candidate) => candidate.id === sourceMatchIds[0]);
+    if (!firstSource) throw new Error("Expected first source match");
+    const [resolvedTarget] = await sql<
+      { home_entry_id: string | null; away_entry_id: string | null; state: string }[]
+    >`SELECT home_entry_id,away_entry_id,state FROM matches WHERE id=${target.id}`;
+    expect(resolvedTarget).toMatchObject({ state: "ready" });
+    expect(resolvedTarget?.home_entry_id).not.toBeNull();
+    expect(resolvedTarget?.away_entry_id).not.toBeNull();
+
+    const downstreamPass = await runtime.createAccessPass(
+      actor,
+      competition.id,
+      target.id,
+      {
+        expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+        role: "scorekeeper",
+        idempotencyKey: `reopen-downstream-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    if (!downstreamPass.token) throw new Error("Expected one-time downstream token");
+    const downstreamWriter = await runtime.exchangeAccess(
+      { token: downstreamPass.token, deviceId: randomUUID(), ipAddress: "203.0.113.99" },
+      randomUUID(),
+    );
+    if (!downstreamWriter.generation) throw new Error("Expected downstream writer generation");
+    const downstreamAuth = {
+      sessionId: downstreamWriter.session_id,
+      sessionToken: downstreamWriter.session_token,
+      generation: downstreamWriter.generation,
+    };
+    const publicBeforeReopen = await runtime.publicCompetition(competitionSlug);
+    expect(publicBeforeReopen.results.some((result) => result.id === firstSource.id)).toBe(true);
+    const [publicationBeforeReopen] = await sql<{ result_version: number }[]>`
+      SELECT result_version FROM competition_publications WHERE competition_id=${competition.id}
+    `;
+    if (!publicationBeforeReopen) throw new Error("Expected the current publication version");
+    const expectedWithdrawalVersion = publicationBeforeReopen.result_version + 1;
+
+    const organiserApp = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      phase2Runtime: runtime,
+      identityRuntime: {
+        authenticate: async () => ({
+          account: {
+            id: accountId,
+            primaryEmail: "c2-organiser@example.test",
+            displayName: "C2 organiser",
+            status: "active",
+            emailVerifiedAt: new Date(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          sessionId: "c2-organiser-session",
+          sessionToken: "c2-organiser-session-token",
+          csrfToken: "c2-csrf-token",
+          idleExpiresAt: new Date(Date.now() + 60_000),
+          absoluteExpiresAt: new Date(Date.now() + 60_000),
+        }),
+        verifyCsrfToken: (_token: string, csrf: string) => csrf === "c2-csrf-token",
+      } as unknown as IdentityApiRuntime,
+    });
+    let reopened: { result_version: number; publication_version: number; aggregate_version: number };
+    try {
+      const reopenResponse = await organiserApp.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${competition.id}/matches/${firstSource.id}/reopen`,
+        headers: {
+          origin: "http://127.0.0.1:3000",
+          cookie: "matchday_session=c2-organiser-session-token",
+          "x-csrf-token": "c2-csrf-token",
+        },
+        payload: {
+          client_event_id: randomUUID(),
+          reason: "Organiser is correcting a source result",
+          expected_aggregate_version: 4,
+        },
+      });
+      expect(reopenResponse.statusCode).toBe(200);
+      reopened = reopenResponse.json();
+    } finally {
+      await organiserApp.close();
+    }
+    expect(reopened).toMatchObject({
+      result_version: expectedWithdrawalVersion,
+      publication_version: expectedWithdrawalVersion,
+      aggregate_version: 5,
+    });
+    expect(await sql`SELECT state FROM matches WHERE id=${firstSource.id}`).toEqual([{ state: "in_progress" }]);
+    expect(await sql`SELECT home_entry_id,away_entry_id,state FROM matches WHERE id=${target.id}`).toEqual([
+      firstDependency.slot === "home"
+        ? { home_entry_id: null, away_entry_id: resolvedTarget!.away_entry_id, state: "pending" }
+        : { home_entry_id: resolvedTarget!.home_entry_id, away_entry_id: null, state: "pending" },
+    ]);
+    expect(
+      await sql`SELECT revoked_at IS NOT NULL AS revoked FROM scoring_access_sessions WHERE id=${downstreamAuth.sessionId}`,
+    ).toEqual([{ revoked: true }]);
+    await expect(
+      runtime.appendCanonicalScoreEvent(
+        downstreamAuth,
+        { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString() },
+        0,
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "SCORING_SESSION_REVOKED" });
+    await expect(runtime.finalise(downstreamAuth, randomUUID(), randomUUID(), 0)).rejects.toMatchObject({
+      statusCode: 403,
+      code: "SCORING_SESSION_REVOKED",
+    });
+    const publicAfterReopen = await runtime.publicCompetition(competitionSlug);
+    expect(publicAfterReopen.publication).toEqual({ schedule_version: 1, result_version: expectedWithdrawalVersion });
+    expect(publicAfterReopen.results.some((result) => result.id === firstSource.id)).toBe(false);
+    expect(
+      firstDependency.slot === "home"
+        ? publicAfterReopen.schedule.find((match) => match.id === target.id)?.home.name
+        : publicAfterReopen.schedule.find((match) => match.id === target.id)?.away.name,
+    ).toBe("TBD");
+    expect(
+      await sql`SELECT action,count(*)::integer AS count FROM audit_events
+        WHERE action IN ('result.reopened','advancement.scoring_fenced')
+          AND target_id IN (${firstSource.id},${target.id})
+        GROUP BY action ORDER BY action`,
+    ).toEqual([
+      { action: "advancement.scoring_fenced", count: 1 },
+      { action: "result.reopened", count: 1 },
+    ]);
+    expect(
+      await sql`SELECT event_type,count(*)::integer AS count FROM outbox_events
+        WHERE event_type IN ('result.reopened','advancement.scoring_fenced')
+          AND aggregate_id IN (${firstSource.id},${target.id})
+        GROUP BY event_type ORDER BY event_type`,
+    ).toEqual([
+      { event_type: "advancement.scoring_fenced", count: 1 },
+      { event_type: "result.reopened", count: 1 },
+    ]);
+  }, 20_000);
 
   it("refuses to replay a stream whose frozen sport pack has no matching reducer", async () => {
     const world = await createScoringWorld("basketball");

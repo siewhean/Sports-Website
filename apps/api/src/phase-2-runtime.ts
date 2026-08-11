@@ -2292,11 +2292,21 @@ export class Phase2Runtime {
           };
         }
         const match = required(
-          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
+          await tx.unsafe<{ state: string; home_entry_id: string | null; away_entry_id: string | null }>(
+            `SELECT state,home_entry_id,away_entry_id FROM matches WHERE id=$1 FOR UPDATE`,
+            [session.match_id],
+          ),
           "Match not found",
         );
         if (match.state === "final" || match.state === "corrected") {
           throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+        }
+        if (!match.home_entry_id || !match.away_entry_id) {
+          throw new ApiError(
+            409,
+            "MATCH_PARTICIPANTS_UNRESOLVED",
+            "Scoring is unavailable until authoritative participants are resolved",
+          );
         }
         const existing = await this.canonicalScoreEvents(tx, session.match_id);
         const stream = required(
@@ -2961,14 +2971,22 @@ export class Phase2Runtime {
     requestId: string,
     expectedAggregateVersion?: number,
   ) {
-    const stream = await this.sql.unsafe<{ match_id: string }>(
-      `SELECT stream.match_id
-       FROM scoring_access_sessions session
-       JOIN match_score_streams stream ON stream.match_id=session.match_id
-       WHERE session.id=$1`,
-      [auth.sessionId],
-    );
-    if (!stream[0]) {
+    const hasCanonicalStream = await this.transaction(async (tx) => {
+      const session = await this.authenticateScoringSession(
+        tx,
+        auth.sessionId,
+        auth.sessionToken,
+        auth.generation,
+        false,
+        false,
+      );
+      const stream = await tx.unsafe<{ match_id: string }>(
+        `SELECT match_id FROM match_score_streams WHERE match_id=$1`,
+        [session.match_id],
+      );
+      return Boolean(stream[0]);
+    });
+    if (!hasCanonicalStream) {
       throw new ApiError(
         409,
         "CANONICAL_SCORE_STREAM_REQUIRED",
@@ -3037,11 +3055,21 @@ export class Phase2Runtime {
           };
         }
         const match = required(
-          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
+          await tx.unsafe<{ state: string; home_entry_id: string | null; away_entry_id: string | null }>(
+            `SELECT state,home_entry_id,away_entry_id FROM matches WHERE id=$1 FOR UPDATE`,
+            [session.match_id],
+          ),
           "Match not found",
         );
         if (match.state === "final" || match.state === "corrected") {
           throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+        }
+        if (!match.home_entry_id || !match.away_entry_id) {
+          throw new ApiError(
+            409,
+            "MATCH_PARTICIPANTS_UNRESOLVED",
+            "Finalisation is unavailable until authoritative participants are resolved",
+          );
         }
         const canonical = await this.canonicalScoreState(tx, session.match_id);
         if (expectedAggregateVersion !== undefined && canonical.aggregateVersion !== expectedAggregateVersion) {
@@ -3280,7 +3308,19 @@ export class Phase2Runtime {
         aggregateVersion,
         this.now(),
       ]);
+      // A reopen invalidates the authoritative result immediately.  Leaving the
+      // previous result-version current until a later correction would let the
+      // public projection and automatic advancement continue to advertise a
+      // result that the organiser has explicitly withdrawn.
       await tx.unsafe(`UPDATE matches SET state='in_progress' WHERE id=$1`, [matchId]);
+      const withdrawal = await this.withdrawReopenedResultPublication(tx, {
+        competitionId,
+        divisionId: canonical.context.division_id,
+        matchId,
+        organisationId: competition.organisation_id,
+        actorAccountId: actor.accountId,
+        requestId,
+      });
       await this.evidence(tx, {
         requestId,
         actorAccountId: actor.accountId,
@@ -3289,23 +3329,21 @@ export class Phase2Runtime {
         targetType: "match",
         targetId: matchId,
         reason: input.reason.trim(),
-        after: { aggregate_version: aggregateVersion },
-        eventPayload: { competition_id: competitionId, match_id: matchId, aggregate_version: aggregateVersion },
+        after: { aggregate_version: aggregateVersion, result_version: withdrawal.result_version },
+        eventPayload: {
+          competition_id: competitionId,
+          match_id: matchId,
+          aggregate_version: aggregateVersion,
+          result_version: withdrawal.result_version,
+        },
       });
-      const publication = required(
-        await tx.unsafe<{ result_version: number }>(
-          `SELECT result_version FROM competition_publications WHERE competition_id=$1`,
-          [competitionId],
-        ),
-        "Publication record not found",
-      );
       return {
         match_id: matchId,
         duplicate: false as const,
         aggregate_version: aggregateVersion,
         through_sequence: aggregateVersion,
-        result_version: publication.result_version,
-        publication_version: publication.result_version,
+        result_version: withdrawal.result_version,
+        publication_version: withdrawal.result_version,
         conflicts: [],
       };
     });
@@ -3640,6 +3678,42 @@ export class Phase2Runtime {
       : null;
   }
 
+  private async withdrawReopenedResultPublication(
+    tx: PostgresJsSql,
+    input: {
+      competitionId: string;
+      divisionId: string;
+      matchId: string;
+      organisationId: string;
+      actorAccountId: string;
+      requestId: string;
+    },
+  ) {
+    const publication = required(
+      await tx.unsafe<{ schedule_version: number; result_version: number }>(
+        `SELECT schedule_version,result_version FROM competition_publications WHERE competition_id=$1 FOR UPDATE`,
+        [input.competitionId],
+      ),
+      "Publication record not found",
+    );
+    const resultVersion = publication.result_version + 1;
+    const now = this.now();
+    await tx.unsafe(
+      `UPDATE competition_publications
+       SET result_version=$2,results_published_at=$3,updated_at=$3
+       WHERE competition_id=$1`,
+      [input.competitionId, resultVersion, now],
+    );
+    await this.recalculateDivision(tx, input.competitionId, input.divisionId, resultVersion, {
+      requestId: input.requestId,
+      actorAccountId: input.actorAccountId,
+      organisationId: input.organisationId,
+      sourceMatchId: input.matchId,
+    });
+    await this.writePublicProjection(tx, input.competitionId, publication.schedule_version, resultVersion);
+    return { result_version: resultVersion };
+  }
+
   private async persistResultPublication(
     tx: PostgresJsSql,
     input: {
@@ -3760,6 +3834,12 @@ export class Phase2Runtime {
     competitionId: string,
     divisionId: string,
     resultVersion: number,
+    reopenContext?: {
+      requestId: string;
+      actorAccountId: string;
+      organisationId: string;
+      sourceMatchId: string;
+    },
   ) {
     const entries = await tx.unsafe<EntryRow>(
       `SELECT id,name,seed FROM division_entries
@@ -3925,6 +4005,7 @@ export class Phase2Runtime {
         `Standings snapshot retained ${snapshot.row_count} of ${entries.length} active entries`,
       );
     }
+    const fencedDownstreamMatches = new Set<string>();
     for (const item of [...(resolved.matches ?? []), ...canonicalResolved]) {
       for (const slot of ["home", "away"] as const) {
         const entryId = slot === "home" ? item.homeEntryId : item.awayEntryId;
@@ -3952,6 +4033,19 @@ export class Phase2Runtime {
              VALUES ($1,$2,$3,$4,$5,'downstream_match_started') ON CONFLICT DO NOTHING`,
             [competitionId, divisionId, resultVersion, `phase2:${item.matchId}:${slot}`, `${item.matchId}:${slot}`],
           );
+          if (reopenContext && !fencedDownstreamMatches.has(item.matchId)) {
+            fencedDownstreamMatches.add(item.matchId);
+            await this.fenceReopenedDownstreamMatch(tx, {
+              ...reopenContext,
+              competitionId,
+              divisionId,
+              resultVersion,
+              downstreamMatchId: item.matchId,
+              previousEntryId: current[0]?.entry_id ?? null,
+              proposedEntryId: entryId,
+              reason: "downstream_match_protected",
+            });
+          }
           continue;
         }
         await tx.unsafe(
@@ -3993,6 +4087,19 @@ export class Phase2Runtime {
             this.now(),
           ],
         );
+        if (changed && reopenContext && !fencedDownstreamMatches.has(item.matchId)) {
+          fencedDownstreamMatches.add(item.matchId);
+          await this.fenceReopenedDownstreamMatch(tx, {
+            ...reopenContext,
+            competitionId,
+            divisionId,
+            resultVersion,
+            downstreamMatchId: item.matchId,
+            previousEntryId: current[0]?.entry_id ?? null,
+            proposedEntryId: entryId,
+            reason: "automatic_participant_withdrawn",
+          });
+        }
       }
     }
     const resultByMatchId = new Map(results.map((result) => [result.matchId, result]));
@@ -4046,6 +4153,61 @@ export class Phase2Runtime {
         JSON.stringify(bracket.conflicts ?? []),
       ],
     );
+  }
+
+  private async fenceReopenedDownstreamMatch(
+    tx: PostgresJsSql,
+    input: {
+      requestId: string;
+      actorAccountId: string;
+      organisationId: string;
+      sourceMatchId: string;
+      competitionId: string;
+      divisionId: string;
+      resultVersion: number;
+      downstreamMatchId: string;
+      previousEntryId: string | null;
+      proposedEntryId: string | null;
+      reason: "automatic_participant_withdrawn" | "downstream_match_protected";
+    },
+  ) {
+    const now = this.now();
+    const revokedSessions = await tx.unsafe<{ id: string }>(
+      `UPDATE scoring_access_sessions
+       SET revoked_at=COALESCE(revoked_at,$2)
+       WHERE match_id=$1 AND revoked_at IS NULL
+       RETURNING id`,
+      [input.downstreamMatchId, now],
+    );
+    await tx.unsafe(
+      `UPDATE match_writer_leases
+       SET expires_at=GREATEST(acquired_at + interval '1 microsecond',$2)
+       WHERE match_id=$1 AND expires_at>$2`,
+      [input.downstreamMatchId, now],
+    );
+    await this.evidence(tx, {
+      requestId: `${input.requestId}:reopen-fence:${input.downstreamMatchId}`,
+      actorAccountId: input.actorAccountId,
+      organisationId: input.organisationId,
+      action: "advancement.scoring_fenced",
+      targetType: "match",
+      targetId: input.downstreamMatchId,
+      reason: input.reason,
+      before: { entry_id: input.previousEntryId },
+      after: {
+        entry_id: input.proposedEntryId,
+        source_match_id: input.sourceMatchId,
+        result_version: input.resultVersion,
+        revoked_session_count: revokedSessions.length,
+      },
+      eventPayload: {
+        competition_id: input.competitionId,
+        division_id: input.divisionId,
+        source_match_id: input.sourceMatchId,
+        downstream_match_id: input.downstreamMatchId,
+        result_version: input.resultVersion,
+      },
+    });
   }
 
   private async resolveCanonicalStageRanks(
