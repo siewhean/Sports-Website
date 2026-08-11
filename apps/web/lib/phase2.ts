@@ -371,6 +371,7 @@ export const phase2Copy = {
     "Scoring access could not be verified. Check the code or try again when the service is available.",
   semanticRejected: "This action is not valid for the current match state. Review the details and try again.",
   eventLog: "Match events",
+  closeEvents: "Close match events",
   noEvents: "No events recorded",
   scorer: "Scorer",
   manualTime: "Manual match time",

@@ -61,7 +61,10 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   const scoringControls = page.getByRole("region", { name: "Scoring controls" });
   await expect(scoringControls).toContainText("Marina Blue1");
   await expect(scoringControls).toContainText("Harbour Gold0");
-  await expect(page.locator(".p2-event-log")).toContainText("Aisha Tan");
+  await page.getByRole("button", { name: "Match events" }).click();
+  const eventHistory = page.getByRole("dialog", { name: "Match events" });
+  await expect(eventHistory).toContainText("Aisha Tan");
+  await eventHistory.getByRole("button", { name: "Close match events" }).click();
   await expect(page.getByText("1 event pending sync")).toBeVisible();
 
   await page.getByRole("button", { name: "Review final score" }).click();
@@ -89,6 +92,30 @@ test("default Canoe Polo scoring keeps advanced operations opt-in", async ({ pag
   await page.getByRole("link", { name: "Advanced scoring controls" }).click();
   await expect(page.locator(".p5-scoring-device")).toBeVisible();
   await expect(page.getByRole("link", { name: "Simple scoring controls" })).toBeVisible();
+});
+
+test("default Canoe Polo scoring owns the viewport and reveals event history in a contained sheet", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openPhase2Scorekeeper(page);
+
+  await expect(page.locator(".p2-score--simple")).toBeVisible();
+  await expect(page.locator(".p2-event-log:visible")).toHaveCount(0);
+  const documentMetrics = await page.evaluate(() => ({
+    clientHeight: document.documentElement.clientHeight,
+    scrollHeight: document.documentElement.scrollHeight,
+  }));
+  expect(documentMetrics.scrollHeight).toBeLessThanOrEqual(documentMetrics.clientHeight);
+  await page.evaluate(() => window.scrollTo(0, 200));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+
+  await page.getByRole("button", { name: "Match events" }).click();
+  const history = page.getByRole("dialog", { name: "Match events" });
+  await expect(history).toBeVisible();
+  await expect(history).toContainText("No events recorded");
+  await history.getByRole("button", { name: "Close match events" }).click();
+  await expect(history).toBeHidden();
 });
 
 test("the action sheet dismisses from its handle without moving the scorekeeper page", async ({ page }) => {

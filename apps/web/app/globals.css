@@ -1459,6 +1459,30 @@ body:has(.p2-score-receipt) {
   background: #111412;
 }
 
+html:has(.p2-score--simple),
+body:has(.p2-score--simple) {
+  height: 100%;
+  overflow: hidden;
+}
+
+.p2-score--simple {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+
+.p2-score--simple .p2-event-controls {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.p2-score--simple .p2-event-controls > div[tabindex="-1"] {
+  margin-top: 0;
+}
+
 .p2-score__header {
   display: flex;
   align-items: center;
@@ -2030,6 +2054,87 @@ body:has(.p2-score-receipt) {
   width: calc(100% - clamp(32px, 8vw, 60px));
   margin: 12px clamp(16px, 4vw, 30px) 0;
   box-shadow: 0 16px 42px rgb(0 0 0 / 28%);
+}
+
+.p2-score-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px clamp(16px, 4vw, 30px) calc(10px + env(safe-area-inset-bottom));
+}
+
+.p2-score-actions .p2-score-final {
+  width: auto;
+  margin: 0;
+}
+
+.p2-score-actions .p2-score-secondary {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+}
+
+.p2-score-actions .p2-score-secondary small {
+  color: inherit;
+  font-size: 0.6rem;
+  opacity: 0.72;
+}
+
+.p2-score-history-sheet {
+  position: fixed;
+  inset: auto 0 0;
+  width: min(100%, 820px);
+  max-width: none;
+  max-height: 65dvh;
+  margin: 0 auto;
+  padding: 18px clamp(16px, 4vw, 30px) calc(18px + env(safe-area-inset-bottom));
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #4a504b;
+  border-bottom: 0;
+  border-radius: 22px 22px 0 0;
+  background: #1b1f1c;
+  color: #f1f3ed;
+}
+
+.p2-score-history-sheet::backdrop {
+  background: rgb(5 7 6 / 72%);
+}
+.p2-score-history-sheet > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.p2-score-history-sheet h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.p2-score-history-sheet .p2-score-secondary {
+  min-height: 44px;
+  padding-inline: 0.75rem;
+  font-size: 0.72rem;
+}
+
+.p2-goal-sheet__details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.p2-goal-sheet__details label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.72rem;
+}
+.p2-goal-sheet__details select,
+.p2-goal-sheet__details input {
+  min-height: 48px;
+  border: 1px solid #515751;
+  border-radius: 9px;
+  background: #121512;
+  color: #fff;
 }
 
 .p2-final-review {

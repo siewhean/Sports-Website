@@ -134,8 +134,11 @@ export function PhoneScoring({
   );
   const [reversalReason, setReversalReason] = useState("");
   const [actionPending, setActionPending] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [reversedFocusId, setReversedFocusId] = useState<string | null>(null);
   const actionDialogRef = useRef<HTMLDialogElement>(null);
+  const historyDialogRef = useRef<HTMLDialogElement>(null);
+  const historyReturnTargetRef = useRef<HTMLButtonElement | null>(null);
   const actionReturnTargetRef = useRef<HTMLButtonElement | null>(null);
   const scorerInputRef = useRef<HTMLInputElement>(null);
   const actionDialogTitleRef = useRef<HTMLHeadingElement>(null);
@@ -406,6 +409,13 @@ export function PhoneScoring({
   }, [pendingAction, reversalTarget]);
 
   useEffect(() => {
+    const dialog = historyDialogRef.current;
+    if (!dialog) return;
+    if (historyOpen && !dialog.open) dialog.showModal();
+    if (!historyOpen && dialog.open) dialog.close();
+  }, [historyOpen]);
+
+  useEffect(() => {
     if (phase !== "review") return;
     const frame = window.requestAnimationFrame(() => {
       finalReviewRef.current?.focus({ preventScroll: true });
@@ -551,6 +561,18 @@ export function PhoneScoring({
     setScorerError("");
     setPendingAction(action);
     setReversalTarget(null);
+  };
+
+  const closeHistory = () => {
+    setHistoryOpen(false);
+    const returnTarget = historyReturnTargetRef.current;
+    historyReturnTargetRef.current = null;
+    window.requestAnimationFrame(() => returnTarget?.focus({ preventScroll: true }));
+  };
+
+  const openHistory = (trigger: HTMLButtonElement) => {
+    historyReturnTargetRef.current = trigger;
+    setHistoryOpen(true);
   };
 
   const openReversalDialog = (
@@ -792,7 +814,11 @@ export function PhoneScoring({
   }
 
   return (
-    <main className="p2-score" id="score-main" data-writer-state={writerState}>
+    <main
+      className={`p2-score${useSimpleCanoeControls ? " p2-score--simple" : ""}`}
+      id="score-main"
+      data-writer-state={writerState}
+    >
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
@@ -971,32 +997,34 @@ export function PhoneScoring({
       ) : (
         <>
           <section className="p2-event-controls" aria-label={definition.displayName}>
-            <div className="p2-event-context">
-              <div>
-                <label>
-                  <span>{definition.segmentLabel}</span>
-                  <select value={period} onChange={(event) => setPeriod(event.target.value)} disabled={locked}>
-                    {definition.segments.map((segment) => (
-                      <option key={segment.number} value={segment.number}>
-                        {definition.segmentLabel} {segment.number}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {manualTimeEnabled ? (
+            {!useSimpleCanoeControls ? (
+              <div className="p2-event-context">
+                <div>
                   <label>
-                    <span>{phase2Copy.eventTimeLabel}</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={eventTime}
-                      onChange={(event) => setEventTime(event.target.value)}
-                      disabled={locked}
-                    />
+                    <span>{definition.segmentLabel}</span>
+                    <select value={period} onChange={(event) => setPeriod(event.target.value)} disabled={locked}>
+                      {definition.segments.map((segment) => (
+                        <option key={segment.number} value={segment.number}>
+                          {definition.segmentLabel} {segment.number}
+                        </option>
+                      ))}
+                    </select>
                   </label>
-                ) : null}
+                  {manualTimeEnabled ? (
+                    <label>
+                      <span>{phase2Copy.eventTimeLabel}</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={eventTime}
+                        onChange={(event) => setEventTime(event.target.value)}
+                        disabled={locked}
+                      />
+                    </label>
+                  ) : null}
+                </div>
               </div>
-            </div>
+            ) : null}
             <div ref={scoreControlsRef} role="group" aria-label={phase2Copy.scoreControlsTitle} tabIndex={-1}>
               {definition.scoreMode === "segments" ? (
                 <dl className="p2-segment-score" aria-label={`${definition.segmentLabel} ${scoreState.currentSegment}`}>
@@ -1034,69 +1062,125 @@ export function PhoneScoring({
               />
             </div>
           </section>
-          <section className="p2-event-log" aria-labelledby="event-log-title">
-            <header>
-              <h2 id="event-log-title">{phase2Copy.recentCanonicalEvents}</h2>
-              <span>
-                <Clock />
-                {pendingSync ? phase2Copy.syncPending : phase2Copy.synced}
-              </span>
-            </header>
-            {scoreState.actions.length ? (
-              <ol>
-                {[...scoreState.actions].reverse().map((action) => (
-                  <li
-                    key={action.eventId}
-                    data-event-id={action.eventId}
-                    ref={(element) => {
-                      if (element) timelineActionRefs.current.set(action.eventId, element);
-                      else timelineActionRefs.current.delete(action.eventId);
-                    }}
-                    tabIndex={-1}
-                  >
-                    <time dateTime={action.occurredAt}>
-                      {definition.segmentLabel} {action.segmentNumber}
-                    </time>
-                    <span>
-                      <strong>
-                        {action.label} {action.reversed ? `· ${phase2Copy.reversed}` : ""}
-                      </strong>
-                      <small>
-                        {action.side === phase2Machine.home
-                          ? home
-                          : action.side === phase2Machine.away
-                            ? away
-                            : phase2Copy.incident}
-                      </small>
-                      {action.participantId ? (
+          {advancedMode || !useSimpleCanoeControls ? (
+            <section className="p2-event-log" aria-labelledby="event-log-title">
+              <header>
+                <h2 id="event-log-title">{phase2Copy.recentCanonicalEvents}</h2>
+                <span>
+                  <Clock />
+                  {pendingSync ? phase2Copy.syncPending : phase2Copy.synced}
+                </span>
+              </header>
+              {scoreState.actions.length ? (
+                <ol>
+                  {[...scoreState.actions].reverse().map((action) => (
+                    <li
+                      key={action.eventId}
+                      data-event-id={action.eventId}
+                      ref={(element) => {
+                        if (element) timelineActionRefs.current.set(action.eventId, element);
+                        else timelineActionRefs.current.delete(action.eventId);
+                      }}
+                      tabIndex={-1}
+                    >
+                      <time dateTime={action.occurredAt}>
+                        {definition.segmentLabel} {action.segmentNumber}
+                      </time>
+                      <span>
+                        <strong>
+                          {action.label} {action.reversed ? `· ${phase2Copy.reversed}` : ""}
+                        </strong>
                         <small>
-                          {phase2Copy.scorer}: {action.participantId}
+                          {action.side === phase2Machine.home
+                            ? home
+                            : action.side === phase2Machine.away
+                              ? away
+                              : phase2Copy.incident}
                         </small>
-                      ) : null}
-                    </span>
-                    {advancedMode && action.reversible && !action.reversed && !locked ? (
-                      <button
-                        className="p2-score-secondary"
-                        type="button"
-                        onClick={(event) => openReversalDialog(action, event.currentTarget)}
-                      >
-                        {phase2Copy.reverseEvent}
-                      </button>
-                    ) : (
-                      <span>{action.participantId ?? "—"}</span>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p>{phase2Copy.noEvents}</p>
-            )}
-          </section>
+                        {action.participantId ? (
+                          <small>
+                            {phase2Copy.scorer}: {action.participantId}
+                          </small>
+                        ) : null}
+                      </span>
+                      {advancedMode && action.reversible && !action.reversed && !locked ? (
+                        <button
+                          className="p2-score-secondary"
+                          type="button"
+                          onClick={(event) => openReversalDialog(action, event.currentTarget)}
+                        >
+                          {phase2Copy.reverseEvent}
+                        </button>
+                      ) : (
+                        <span>{action.participantId ?? "—"}</span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p>{phase2Copy.noEvents}</p>
+              )}
+            </section>
+          ) : null}
           {!locked ? (
-            <button className="p2-score-primary p2-score-final" type="button" onClick={() => setPhase("review")}>
-              {phase2Copy.reviewFinal}
-              <ArrowRight />
-            </button>
+            <div className="p2-score-actions">
+              {useSimpleCanoeControls ? (
+                <button
+                  className="p2-score-secondary"
+                  type="button"
+                  aria-label={phase2Copy.eventLog}
+                  onClick={(event) => openHistory(event.currentTarget)}
+                >
+                  <span>{phase2Copy.eventLog}</span>
+                  {pendingSync ? <small>{phase2Copy.syncPending}</small> : null}
+                </button>
+              ) : null}
+              <button className="p2-score-primary p2-score-final" type="button" onClick={() => setPhase("review")}>
+                {phase2Copy.reviewFinal}
+                <ArrowRight />
+              </button>
+            </div>
+          ) : null}
+          {useSimpleCanoeControls ? (
+            <dialog
+              className="p2-score-history-sheet"
+              ref={historyDialogRef}
+              aria-labelledby="event-log-title"
+              onCancel={(event) => {
+                event.preventDefault();
+                closeHistory();
+              }}
+            >
+              <header>
+                <h2 id="event-log-title">{phase2Copy.eventLog}</h2>
+                <button className="p2-score-secondary" type="button" onClick={closeHistory}>
+                  {phase2Copy.closeEvents}
+                </button>
+              </header>
+              <section className="p2-event-log">
+                {scoreState.actions.length ? (
+                  <ol>
+                    {[...scoreState.actions].reverse().map((action) => (
+                      <li key={action.eventId}>
+                        <time dateTime={action.occurredAt}>
+                          {definition.segmentLabel} {action.segmentNumber}
+                        </time>
+                        <span>
+                          <strong>{action.label}</strong>
+                          <small>
+                            {action.participantId
+                              ? `${phase2Copy.scorer}: ${action.participantId}`
+                              : (action.side ?? phase2Copy.incident)}
+                          </small>
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p>{phase2Copy.noEvents}</p>
+                )}
+              </section>
+            </dialog>
           ) : null}
           {pendingAction || reversalTarget ? (
             <dialog
@@ -1150,6 +1234,31 @@ export function PhoneScoring({
                   </div>
                 ) : null}
               </dl>
+              {useSimpleCanoeControls && !reversalTarget ? (
+                <div className="p2-goal-sheet__details">
+                  <label>
+                    <span>{definition.segmentLabel}</span>
+                    <select value={period} onChange={(event) => setPeriod(event.target.value)}>
+                      {definition.segments.map((segment) => (
+                        <option key={segment.number} value={segment.number}>
+                          {definition.segmentLabel} {segment.number}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {manualTimeEnabled ? (
+                    <label>
+                      <span>{phase2Copy.eventTimeLabel}</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={eventTime}
+                        onChange={(event) => setEventTime(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
               {reversalTarget || pendingAction?.control.participantAttribution !== "none" ? (
                 <>
                   <label>

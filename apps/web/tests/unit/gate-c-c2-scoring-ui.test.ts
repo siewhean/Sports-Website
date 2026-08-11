@@ -71,8 +71,16 @@ describe("Gate C C2 scoring UI source guards", () => {
     expect(shell).toContain("const beginSheetDismiss");
     expect(shell).toContain("onPointerDown={beginSheetDismiss}");
     expect(shell).toContain("onPointerMove={continueSheetDismiss}");
+    expect(shell).toContain('className={`p2-score${useSimpleCanoeControls ? " p2-score--simple" : ""}`}');
+    expect(shell).toContain("const openHistory");
+    expect(shell).toContain('className="p2-score-history-sheet"');
     expect(controls).toContain('presentation?: "full" | "remote"');
     expect(controls).toContain("className={styles.remoteScoreAction}");
     expect(controls).toContain("<details className={styles.moreActions}>");
+
+    const globalStyles = await readFile(new URL("../../app/globals.css", import.meta.url), "utf8");
+    expect(globalStyles).toContain(".p2-score--simple");
+    expect(globalStyles).toContain("overscroll-behavior: contain");
+    expect(globalStyles).toContain(".p2-score-history-sheet");
   });
 });
