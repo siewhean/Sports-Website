@@ -336,4 +336,29 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(publicView.body).not.toContain("primary_email");
     expect(publicView.body).not.toContain("session_token");
   });
+
+  it("does not spend the anonymous global budget for authenticated scoring-session traffic", async () => {
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: authenticatedIdentityRuntime(),
+      phase2Runtime: routeRuntime() as unknown as Phase2Runtime,
+      anonymousRateLimitMax: 1,
+    });
+    apps.push(app);
+    const headers = {
+      "x-scoring-session-id": randomUUID(),
+      "x-scoring-session-token": "t".repeat(43),
+      "x-writer-generation": "1",
+    };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const scoring = await app.inject({ method: "GET", url: "/api/v1/scoring/session", headers });
+      expect(scoring.statusCode).toBe(200);
+    }
+
+    const organiserPath = `/api/v1/competitions/${randomUUID()}`;
+    expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(429);
+  });
 });

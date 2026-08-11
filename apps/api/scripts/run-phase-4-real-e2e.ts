@@ -153,6 +153,22 @@ type V1BrowserJourneyResult = {
   };
 };
 
+/**
+ * A deliberately fuller V1 proof than the setup/single-result journey above.
+ * The browser creates one eight-entry division, completes every group fixture
+ * through the scorekeeper surface, then completes an automatically populated
+ * championship semi-final.  The ids are only receipts for the database
+ * oracle; no scoring decision is made outside the rendered application.
+ */
+type V1CompetitionJourneyResult = {
+  project: string;
+  competitionId: string;
+  slug: string;
+  divisionId: string;
+  groupMatchIds: string[];
+  progressedMatchId: string;
+};
+
 function safeIdentifier(value: string, prefix: string): string {
   if (!value.startsWith(prefix) || !/^[a-z][a-z0-9_]*$/.test(value))
     throw new Error(`Refusing unsafe database identifier: ${value}`);
@@ -719,6 +735,118 @@ async function assertV1DatabaseOracle(sql: Sql, result: V1BrowserJourneyResult):
   process.stdout.write(`V1 simple journey persistence oracle: ${JSON.stringify(aggregate)}\n`);
 }
 
+async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1CompetitionJourneyResult): Promise<void> {
+  const [aggregate] = await sql<
+    {
+      division_count: number;
+      entry_count: number;
+      published_formats: number;
+      exact_formats: number;
+      published_schedules: number;
+      group_finalised: number;
+      progressed_finalised: number;
+      automatic_qualifiers: number;
+      unresolved_qualifiers: number;
+      standings_snapshots: number;
+      bracket_snapshots: number;
+      public_result_version: number;
+    }[]
+  >`
+    SELECT
+      (SELECT count(*)::int FROM divisions WHERE competition_id=c.id) division_count,
+      (SELECT count(*)::int FROM division_entries entry JOIN divisions division ON division.id=entry.division_id
+        WHERE division.competition_id=c.id AND entry.status IN ('active','confirmed')) entry_count,
+      (SELECT count(*)::int FROM format_revisions WHERE competition_id=c.id AND status='published') published_formats,
+      (SELECT count(*)::int FROM format_revisions format WHERE format.competition_id=c.id AND status='published'
+        AND phase4_materialization_is_exact(format.id)) exact_formats,
+      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=c.id AND status='published') published_schedules,
+      (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
+        WHERE match.competition_id=c.id AND match.graph_stage_id='groups' AND snapshot.state='final') group_finalised,
+      (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
+        WHERE match.competition_id=c.id AND match.id=${result.progressedMatchId} AND snapshot.state='final'
+          AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL) progressed_finalised,
+      (SELECT count(*)::int FROM advancement_slots slot JOIN matches match ON match.id=slot.match_id
+        WHERE slot.competition_id=c.id AND match.graph_stage_id='championship'
+          AND slot.control='automatic' AND slot.entry_id IS NOT NULL) automatic_qualifiers,
+      (SELECT count(*)::int FROM advancement_slots slot JOIN matches match ON match.id=slot.match_id
+        WHERE slot.competition_id=c.id AND match.graph_stage_id='championship'
+          AND slot.control='automatic' AND slot.entry_id IS NULL) unresolved_qualifiers,
+      (SELECT count(*)::int FROM standings_snapshots WHERE competition_id=c.id) standings_snapshots,
+      (SELECT count(*)::int FROM bracket_snapshots WHERE competition_id=c.id) bracket_snapshots,
+      COALESCE((SELECT result_version::int FROM competition_publications WHERE competition_id=c.id),0) public_result_version
+    FROM competitions c WHERE c.id=${result.competitionId}
+  `;
+  const expectedGroupIds = [...new Set(result.groupMatchIds)].sort();
+  const actualGroupIds = await sql<{ id: string }[]>`
+    SELECT match.id::text AS id FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
+    WHERE match.competition_id=${result.competitionId} AND match.graph_stage_id='groups' AND snapshot.state='final'
+    ORDER BY match.id::text
+  `;
+  const [currentProjection] = await sql<{ projection: unknown }[]>`
+    SELECT projection.projection
+    FROM competitions competition
+    JOIN competition_publications publication ON publication.competition_id=competition.id
+    JOIN public_competition_projections projection
+      ON projection.competition_id=competition.id
+      AND projection.schedule_version=publication.schedule_version
+      AND projection.result_version=publication.result_version
+    WHERE competition.id=${result.competitionId}
+    LIMIT 1
+  `;
+  const projectionValue = currentProjection?.projection;
+  const projectionRecord =
+    typeof projectionValue === "string"
+      ? (JSON.parse(projectionValue) as Record<string, unknown>)
+      : projectionValue && typeof projectionValue === "object" && !Array.isArray(projectionValue)
+        ? (projectionValue as Record<string, unknown>)
+        : null;
+  const divisions = Array.isArray(projectionRecord?.divisions) ? projectionRecord.divisions : [];
+  const currentDivision =
+    divisions.length === 1 && typeof divisions[0] === "object" && divisions[0] !== null
+      ? (divisions[0] as Record<string, unknown>)
+      : null;
+  const projectionHasStandings =
+    currentDivision?.standings !== null &&
+    currentDivision?.standings !== undefined &&
+    projectionRecord?.standings !== null;
+  const projectionHasBracket =
+    currentDivision?.bracket !== null && currentDivision?.bracket !== undefined && projectionRecord?.bracket !== null;
+  if (
+    !aggregate ||
+    aggregate.division_count !== 1 ||
+    aggregate.entry_count !== 8 ||
+    aggregate.published_formats !== 1 ||
+    aggregate.exact_formats !== 1 ||
+    aggregate.published_schedules !== 1 ||
+    aggregate.group_finalised !== 12 ||
+    aggregate.progressed_finalised !== 1 ||
+    aggregate.automatic_qualifiers < 4 ||
+    aggregate.unresolved_qualifiers !== 0 ||
+    aggregate.standings_snapshots < 1 ||
+    aggregate.bracket_snapshots < 1 ||
+    aggregate.public_result_version < 13 ||
+    !projectionHasStandings ||
+    !projectionHasBracket ||
+    JSON.stringify(actualGroupIds.map((row) => row.id)) !== JSON.stringify(expectedGroupIds)
+  )
+    throw new Error(
+      `V1 group-to-knockout persistence oracle failed: ${JSON.stringify({
+        aggregate,
+        actualGroupIds,
+        projection: projectionRecord
+          ? {
+              keys: Object.keys(projectionRecord).sort(),
+              division_count: divisions.length,
+              division_keys: currentDivision ? Object.keys(currentDivision).sort() : [],
+              projectionHasStandings,
+              projectionHasBracket,
+            }
+          : null,
+      })}`,
+    );
+  process.stdout.write(`V1 group-to-knockout persistence oracle: ${JSON.stringify(aggregate)}\n`);
+}
+
 async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promise<void> {
   if (!isolation) return;
   if (isolation.kind === "database") {
@@ -963,12 +1091,14 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     const journeyResults = (await readFile(resultFile, "utf8"))
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as BrowserJourneyResult | V1BrowserJourneyResult);
+      .map((line) => JSON.parse(line) as BrowserJourneyResult | V1BrowserJourneyResult | V1CompetitionJourneyResult);
     for (const projectName of projectNames) {
       const state = projects[projectName];
       const journey = journeyResults.find((result) => result.project === projectName);
       if (!state || !journey) throw new Error(`Browser journey result missing for ${projectName}`);
       if (process.env.PHASE4_E2E_JOURNEY === "v1") await assertV1DatabaseOracle(sql, journey as V1BrowserJourneyResult);
+      else if (process.env.PHASE4_E2E_JOURNEY === "v1-competition")
+        await assertV1CompetitionDatabaseOracle(sql, journey as V1CompetitionJourneyResult);
       else await assertDatabaseOracle(sql, journey as BrowserJourneyResult);
     }
   } catch (error) {

@@ -242,16 +242,30 @@ function scheduleRows(
   }));
 }
 
-type ParticipantSource = { type: string; entryId?: string; groupId?: string; rank?: number; matchId?: string };
+type ParticipantSource = {
+  type: string;
+  entryId?: string;
+  seed?: number;
+  groupId?: string;
+  rank?: number;
+  matchId?: string;
+};
 
 function participantLabel(
   value: unknown,
   entries: ReadonlyMap<string, string>,
+  entriesBySeed: ReadonlyMap<number, string>,
   matchCodes: ReadonlyMap<string, string>,
 ): string {
   const source = record(value) as ParticipantSource | null;
   if (!source) return "TBD";
   if (source.type === "entry" && source.entryId) return entries.get(source.entryId) ?? "TBD";
+  // V1 direct-format graphs keep their stable, portable entry_seed sources in
+  // the published definition. Resolve them against the organiser's current
+  // division snapshot instead of showing a misleading TBD for a scheduled
+  // group fixture whose participants are already known.
+  if (source.type === "entry_seed" && Number.isSafeInteger(source.seed) && (source.seed ?? 0) > 0)
+    return entriesBySeed.get(source.seed!) ?? "TBD";
   if (source.type === "group_rank" && source.groupId && typeof source.rank === "number") {
     return `Group ${source.groupId} #${source.rank}`;
   }
@@ -276,6 +290,13 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
       return id && name ? [[id, name] as const] : [];
     }),
   );
+  const entryNamesBySeed = new Map(
+    entries.flatMap((entry) => {
+      const seed = nonNegativeInteger(entry.seed);
+      const name = string(entry.name);
+      return seed && name ? [[seed, name] as const] : [];
+    }),
+  );
   const formatDefinition = record(payload.current_format?.definition);
   const formatMatches = records(formatDefinition?.matches);
   const matchCodes = new Map(
@@ -287,10 +308,19 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
   const formatById = new Map(
     formatMatches.flatMap((match) => (string(match.id) ? [[string(match.id)!, match] as const] : [])),
   );
+  // A materialised schedule assigns database UUIDs to matches, while the
+  // authored format graph keeps portable match IDs. The stable code links the
+  // two representations for organiser display and scorer-pass selection.
+  const formatByCode = new Map(
+    formatMatches.flatMap((match) => {
+      const code = string(match.code) ?? string(match.id);
+      return code ? [[code, match] as const] : [];
+    }),
+  );
   const schedule = records(payload.private_schedule?.matches);
   const matches: MatchView[] = schedule.map((match) => {
     const id = string(match.match_id) ?? string(match.id) ?? "unknown-match";
-    const formatMatch = formatById.get(id);
+    const formatMatch = formatById.get(id) ?? formatByCode.get(string(match.code) ?? "");
     if (!validPrivateScheduleMatch(match)) {
       throw new Error(`Private schedule match ${id} has an invalid scoring state`);
     }
@@ -306,8 +336,15 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
       stage: titleCase(string(match.stage) ?? "scheduled"),
       time: time(match.starts_at, timezone),
       area: string(match.area) ?? "—",
-      home: participantLabel(formatMatch?.home, entryNames, matchCodes),
-      away: participantLabel(formatMatch?.away, entryNames, matchCodes),
+      // The graph describes potential participants, while materialisation fills
+      // the match slots after an advancement result. Prefer those authoritative
+      // persisted entry IDs so organiser access controls expose resolved rounds.
+      home:
+        entryNames.get(string(match.home_entry_id) ?? "") ??
+        participantLabel(formatMatch?.home, entryNames, entryNamesBySeed, matchCodes),
+      away:
+        entryNames.get(string(match.away_entry_id) ?? "") ??
+        participantLabel(formatMatch?.away, entryNames, entryNamesBySeed, matchCodes),
       ...(homeScore === null ? {} : { homeScore }),
       ...(awayScore === null ? {} : { awayScore }),
       ...(resultVersion === null ? {} : { resultVersion }),

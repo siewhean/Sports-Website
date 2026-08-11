@@ -3,19 +3,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
-import { SPORT_PACKS } from "@matchday/domain";
+import { createDefaultFormatTemplates, SPORT_PACKS } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../../src/app.js";
 import { ApiError } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
+import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 import {
   Phase2Runtime,
   type PersistedScoreEvent,
   type Phase2Actor,
   type ScoringSessionAuth,
 } from "../../src/phase-2-runtime.js";
+import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { NoopScoringAccessRateLimiter } from "../../src/scoring-access-rate-limit.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
@@ -2124,6 +2126,188 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(await client`SELECT count(*)::integer AS count FROM competitions WHERE id=${competition.id}`).toEqual([
       { count: 1 },
     ]);
+  }, 30_000);
+
+  it("resolves complete canonical pools into semis, leaves incomplete pools unresolved, and fences protected targets", async () => {
+    const actor = { accountId };
+    await client`UPDATE sport_pack_versions
+      SET status='active',revision=2,activated_at=now(),activated_by=${accountId}
+      WHERE sport_code='canoe_polo' AND version=${SPORT_PACKS.canoe_polo.version} AND status='draft'`;
+    const phase3 = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
+    const competition = await phase3.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Canonical pool advancement",
+        slug: `canonical-pool-advancement-${randomUUID()}`,
+        sportCode: "canoe_polo",
+        venue: "Pool Hall",
+        address: "8 Match Road",
+        countryCode: "SG",
+        startsOn: "2027-08-01",
+        endsOn: "2027-08-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+    );
+    const createdDivision = await phase3.createDivision(
+      actor,
+      competition.id,
+      { name: "Championship", entryLimit: 8 },
+      randomUUID(),
+      randomUUID(),
+    );
+    const divisionId =
+      createdDivision &&
+      typeof createdDivision === "object" &&
+      "id" in createdDivision &&
+      typeof createdDivision.id === "string"
+        ? createdDivision.id
+        : (() => {
+            throw new Error("Expected created division id");
+          })();
+    await phase3.replaceCapacity(
+      actor,
+      competition.id,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Pool",
+            slotMinutes: 30,
+            availability: [{ date: "2027-08-01", startTime: "08:00", endTime: "20:00" }],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    for (let seed = 1; seed <= 8; seed += 1) {
+      await phase3.mutateEntry(
+        actor,
+        competition.id,
+        divisionId,
+        { action: "create", name: `Pool team ${seed}`, seed },
+        randomUUID(),
+        randomUUID(),
+      );
+    }
+    const graph = createDefaultFormatTemplates(8).find((template) => template.strategy === "championship_focus")?.graph;
+    if (!graph) throw new Error("Expected eight-team championship focus graph");
+    const format = await phase3.createFormatRevision(actor, competition.id, divisionId, graph, randomUUID());
+    await client`SELECT phase4_materialize_format_revision(${format.id})`;
+    await phase3.publishFormat(actor, competition.id, format.id, format.definition_hash, randomUUID());
+
+    const groupMatches = await client<
+      {
+        id: string;
+        graph_pool_id: string;
+        home_entry_id: string;
+        away_entry_id: string;
+        home_seed: number;
+        away_seed: number;
+      }[]
+    >`
+      SELECT match.id,match.graph_pool_id,match.home_entry_id,match.away_entry_id,
+             home.seed::int AS home_seed,away.seed::int AS away_seed
+      FROM matches match
+      JOIN division_entries home ON home.id=match.home_entry_id
+      JOIN division_entries away ON away.id=match.away_entry_id
+      WHERE match.division_id=${divisionId} AND match.graph_stage_id='groups'
+      ORDER BY match.graph_pool_id,match.ordinal`;
+    expect(groupMatches).toHaveLength(12);
+    const incomplete = groupMatches.find((match) => match.graph_pool_id === "G1");
+    if (!incomplete) throw new Error("Expected G1 pool fixture");
+    for (const match of groupMatches.filter((candidate) => candidate.id !== incomplete.id)) {
+      const homeWins = match.home_seed < match.away_seed;
+      await client`UPDATE matches SET state='final' WHERE id=${match.id}`;
+      await client`INSERT INTO match_result_snapshots
+        (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
+        VALUES (${match.id},1,1,${homeWins ? 2 : 0},${homeWins ? 0 : 2},'final',
+          ${client.json({ segments: [{ home: homeWins ? 2 : 0, away: homeWins ? 0 : 2 }] })})`;
+    }
+    await client`UPDATE competition_publications SET result_version=1 WHERE competition_id=${competition.id}`;
+    const invokeRecalculation = async (resultVersion: number) => {
+      await client.begin(async (tx) =>
+        (
+          runtime as unknown as {
+            recalculateDivision(
+              transaction: PostgresJsSql,
+              competitionId: string,
+              divisionId: string,
+              version: number,
+            ): Promise<void>;
+          }
+        ).recalculateDivision(tx as unknown as PostgresJsSql, competition.id, divisionId, resultVersion),
+      );
+    };
+    await invokeRecalculation(1);
+    const incompleteSlots = await client<{ group_id: string; entry_id: string | null }[]>`
+      SELECT source.source_group_id AS group_id,slot.entry_id
+      FROM format_match_sources source
+      JOIN advancement_slots slot ON slot.match_id=source.match_id AND slot.slot=source.slot
+      WHERE source.format_revision_id=${format.id} AND source.source_kind='stage_rank'
+      ORDER BY source.source_group_id,source.source_rank`;
+    expect(incompleteSlots.filter((slot) => slot.group_id === "G1")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ entry_id: null })]),
+    );
+
+    const incompleteHomeWins = incomplete.home_seed < incomplete.away_seed;
+    await client`UPDATE matches SET state='final' WHERE id=${incomplete.id}`;
+    await client`INSERT INTO match_result_snapshots
+      (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
+      VALUES (${incomplete.id},2,1,${incompleteHomeWins ? 2 : 0},${incompleteHomeWins ? 0 : 2},'final',
+        ${client.json({ segments: [{ home: incompleteHomeWins ? 2 : 0, away: incompleteHomeWins ? 0 : 2 }] })})`;
+    await client`UPDATE competition_publications SET result_version=2 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(2);
+    const completeSlots = await client<{ match_id: string; slot: string; entry_id: string | null }[]>`
+      SELECT slot.match_id,slot.slot,slot.entry_id
+      FROM advancement_slots slot
+      JOIN matches match ON match.id=slot.match_id
+      WHERE slot.competition_id=${competition.id} AND match.graph_stage_id='championship'
+      ORDER BY slot.match_id,slot.slot`;
+    expect(completeSlots).toHaveLength(4);
+    expect(completeSlots.every((slot) => slot.entry_id !== null)).toBe(true);
+
+    const protectedTarget = await client<{ match_id: string; slot: string; entry_id: string }[]>`
+      SELECT slot.match_id,slot.slot,slot.entry_id
+      FROM advancement_slots slot
+      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
+      WHERE slot.competition_id=${competition.id} AND source.source_group_id='G1' AND source.source_rank=1
+      LIMIT 1`;
+    const target = protectedTarget[0];
+    if (!target) throw new Error("Expected automatic G1 rank-one target");
+    await client`UPDATE matches SET state='in_progress' WHERE id=${target.match_id}`;
+    for (const match of groupMatches.filter((candidate) => candidate.graph_pool_id === "G1")) {
+      const initialHomeWins = match.home_seed < match.away_seed;
+      await client`INSERT INTO match_result_snapshots
+        (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
+        VALUES (${match.id},3,2,${initialHomeWins ? 0 : 2},${initialHomeWins ? 2 : 0},'corrected',
+          ${client.json({
+            corrected: true,
+            segments: [{ home: initialHomeWins ? 0 : 2, away: initialHomeWins ? 2 : 0 }],
+          })})`;
+    }
+    await client`UPDATE competition_publications SET result_version=3 WHERE competition_id=${competition.id}`;
+    await invokeRecalculation(3);
+    expect(
+      await client<
+        { entry_id: string }[]
+      >`SELECT entry_id FROM advancement_slots WHERE match_id=${target.match_id} AND slot=${target.slot}`,
+    ).toEqual([{ entry_id: target.entry_id }]);
+    expect(
+      await client<{ reason: string; target_slot_id: string }[]>`
+        SELECT reason,target_slot_id FROM advancement_conflicts
+        WHERE competition_id=${competition.id} AND result_version=3
+        ORDER BY created_at DESC`,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: "downstream_match_started",
+          target_slot_id: `${target.match_id}:${target.slot}`,
+        }),
+      ]),
+    );
   }, 30_000);
 
   it("uses opaque namespaced match UUIDs and rejects non-finalisable score streams", () => {

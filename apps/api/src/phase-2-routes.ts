@@ -920,6 +920,7 @@ export async function registerPhase2Routes(
   app.post<{ Headers: ScoringHeaderValues }>(
     "/api/v1/scoring/sessions/transfer",
     {
+      config: { rateLimit: false },
       schema: {
         description:
           "Deprecated self-transfer endpoint. Always rejects; candidates must request organiser-approved takeover.",
@@ -942,6 +943,7 @@ export async function registerPhase2Routes(
   }>(
     "/api/v1/scoring/sessions/heartbeat",
     {
+      config: { rateLimit: false },
       schema: {
         description: "Renew an authoritative scoring session and, for the active writer, its short lease.",
         headers: ScoringHeaders,
@@ -973,6 +975,7 @@ export async function registerPhase2Routes(
   }>(
     "/api/v1/scoring/takeover-requests",
     {
+      config: { rateLimit: false },
       schema: {
         description: "Request organiser approval for a candidate device to take the writer lease.",
         headers: ScoringHeaders,
@@ -1076,6 +1079,7 @@ export async function registerPhase2Routes(
   app.get<{ Headers: ScoringHeaderValues }>(
     "/api/v1/scoring/session",
     {
+      config: { rateLimit: false },
       schema: {
         description:
           "Recover the server-confirmed competition destination, match, score-event stream, writer generation, and expiry without exposing access secrets.",
@@ -1106,6 +1110,7 @@ export async function registerPhase2Routes(
   }>(
     "/api/v1/scoring/events",
     {
+      config: { rateLimit: false },
       schema: {
         description: "Append one canonical, idempotent five-sport score event using the active fencing generation.",
         headers: ScoringHeaders,
@@ -1165,6 +1170,7 @@ export async function registerPhase2Routes(
   app.post<{ Headers: ScoringHeaderValues; Body: { client_event_id: string; expected_sequence: number } }>(
     "/api/v1/scoring/finalise",
     {
+      config: { rateLimit: false },
       schema: {
         description:
           "Atomically finalise the match, recalculate table and bracket, publish results, audit, and enqueue outbox work.",

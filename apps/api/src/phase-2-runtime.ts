@@ -3876,6 +3876,18 @@ export class Phase2Runtime {
     const resolved = bracket.bracket as {
       matches?: readonly { matchId: string; homeEntryId: string | null; awayEntryId: string | null }[];
     };
+    // C4/V1 format materialisation retains portable graph IDs as `matches.code`.
+    // The legacy Canoe adapter only understands its older `groups` format, so
+    // resolve canonical `stage_rank` slots here against the persisted graph and
+    // database match IDs. This keeps advancement authoritative and transactional.
+    const canonicalResolved = await this.resolveCanonicalStageRanks(
+      tx,
+      divisionId,
+      format.definition,
+      standingsEntries,
+      standingsResults,
+      standingsConfig,
+    );
     const provenance = required(
       await tx.unsafe<{ source_hash: string }>(`SELECT phase3_standings_source_hash($1,$2,$3) AS source_hash`, [
         competitionId,
@@ -3912,7 +3924,7 @@ export class Phase2Runtime {
         `Standings snapshot retained ${snapshot.row_count} of ${entries.length} active entries`,
       );
     }
-    for (const item of resolved.matches ?? []) {
+    for (const item of [...(resolved.matches ?? []), ...canonicalResolved]) {
       for (const slot of ["home", "away"] as const) {
         const entryId = slot === "home" ? item.homeEntryId : item.awayEntryId;
         const current = await tx.unsafe<{
@@ -3986,6 +3998,79 @@ export class Phase2Runtime {
         JSON.stringify(bracket.conflicts ?? []),
       ],
     );
+  }
+
+  private async resolveCanonicalStageRanks(
+    tx: PostgresJsSql,
+    divisionId: string,
+    definition: Record<string, unknown>,
+    entries: readonly { id: string; name: string; seed: number }[],
+    results: readonly StandingsMatchResult[],
+    config: StandingsEngineConfig,
+  ): Promise<readonly { matchId: string; homeEntryId: string | null; awayEntryId: string | null }[]> {
+    const graphMatches = Array.isArray(definition.matches)
+      ? definition.matches.filter(
+          (value): value is Record<string, unknown> =>
+            value !== null && typeof value === "object" && !Array.isArray(value),
+        )
+      : [];
+    if (
+      !graphMatches.some(
+        (match) =>
+          (match.home as { type?: unknown } | undefined)?.type === "stage_rank" ||
+          (match.away as { type?: unknown } | undefined)?.type === "stage_rank",
+      )
+    ) {
+      return [];
+    }
+    const persisted = await tx.unsafe<{ id: string; code: string }>(
+      `SELECT id,code FROM matches WHERE division_id=$1`,
+      [divisionId],
+    );
+    const idsByCode = new Map(persisted.map((match) => [match.code, match.id]));
+    const resultByMatchId = new Map(results.map((result) => [result.matchId, result]));
+    const ranks = new Map<string, readonly string[]>();
+    for (const groupId of new Set(
+      graphMatches
+        .flatMap((match) => [match.home, match.away])
+        .flatMap((source) => {
+          const value = source as { type?: unknown; groupId?: unknown } | undefined;
+          return value?.type === "stage_rank" && typeof value.groupId === "string" ? [value.groupId] : [];
+        }),
+    )) {
+      const poolMatches = graphMatches.filter((match) => match.poolId === groupId);
+      const poolCodes = new Set(poolMatches.map((match) => (typeof match.id === "string" ? match.id : "")));
+      const poolResults = persisted
+        .flatMap((match) => (poolCodes.has(match.code) ? [resultByMatchId.get(match.id)] : []))
+        .filter((result): result is StandingsMatchResult => Boolean(result));
+      if (poolResults.length !== poolCodes.size) continue;
+      const groupSeeds = new Set(
+        poolMatches
+          .flatMap((match) => [match.home, match.away])
+          .flatMap((source) => {
+            const value = source as { type?: unknown; seed?: unknown } | undefined;
+            return value?.type === "entry_seed" && Number.isInteger(value.seed) ? [Number(value.seed)] : [];
+          }),
+      );
+      const groupEntries = entries.filter((entry) => groupSeeds.has(entry.seed));
+      ranks.set(
+        groupId,
+        calculateStandings(groupEntries, poolResults, config).map((row) => row.entryId),
+      );
+    }
+    return graphMatches.flatMap((match) => {
+      const matchId = typeof match.id === "string" ? idsByCode.get(match.id) : undefined;
+      if (!matchId) return [];
+      const resolve = (source: unknown) => {
+        const value = source as { type?: unknown; groupId?: unknown; rank?: unknown } | undefined;
+        if (value?.type !== "stage_rank" || typeof value.groupId !== "string" || !Number.isInteger(value.rank))
+          return null;
+        return ranks.get(value.groupId)?.[Number(value.rank) - 1] ?? null;
+      };
+      const home = resolve(match.home);
+      const away = resolve(match.away);
+      return home !== null || away !== null ? [{ matchId, homeEntryId: home, awayEntryId: away }] : [];
+    });
   }
 
   private async resultsForDivision(
@@ -4282,6 +4367,7 @@ export class Phase2Runtime {
           `SELECT sr.id,sr.revision,sr.status,sr.warnings,sr.created_at,sr.published_at,
               COALESCE(jsonb_agg(jsonb_build_object(
                 'match_id',m.id,'code',m.code,'stage',m.stage,'area_id',pa.id,'area',pa.name,
+                'home_entry_id',m.home_entry_id,'away_entry_id',m.away_entry_id,
                 'starts_at',sm.starts_at,'ends_at',sm.ends_at,'state',m.state,
                 'home_score',latest_result.home_score,'away_score',latest_result.away_score,
                 'result_version',latest_result.result_version

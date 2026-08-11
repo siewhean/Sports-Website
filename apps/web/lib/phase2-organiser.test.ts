@@ -221,6 +221,39 @@ describe("organiser competition workspace mapping", () => {
     ]);
   });
 
+  it("resolves published V1 entry-seed sources for scheduled group fixtures", () => {
+    const payload = workspace();
+    const matches = payload.current_format?.definition as { matches: Array<Record<string, unknown>> };
+    matches.matches[0] = {
+      ...matches.matches[0],
+      id: "group-A-r1-m1",
+      code: undefined,
+      home: { type: "entry_seed", seed: 1 },
+      away: { type: "entry_seed", seed: 2 },
+    };
+
+    const view = toOrganiserCompetitionView(payload);
+    expect(view.matches.find((match) => match.id === matchId)).toMatchObject({ home: "North", away: "South" });
+  });
+
+  it("prefers materialised advancement entries over unresolved graph rank sources", () => {
+    const payload = workspace();
+    const matches = payload.current_format?.definition as { matches: Array<Record<string, unknown>> };
+    matches.matches[1] = {
+      ...matches.matches[1],
+      id: "championship-r1-m1",
+      code: undefined,
+      stage: "championship",
+      home: { type: "stage_rank", stageId: "groups", groupId: "G1", rank: 1 },
+      away: { type: "stage_rank", stageId: "groups", groupId: "G2", rank: 1 },
+    };
+    const scheduled = payload.private_schedule?.matches as Array<Record<string, unknown>>;
+    scheduled[1] = { ...scheduled[1], home_entry_id: homeId, away_entry_id: awayId };
+
+    const view = toOrganiserCompetitionView(payload);
+    expect(view.matches.find((match) => match.id === secondMatchId)).toMatchObject({ home: "North", away: "South" });
+  });
+
   it.each([
     ["canoe_polo", "Canoe Polo"],
     ["badminton", "Badminton"],
