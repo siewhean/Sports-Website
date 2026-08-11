@@ -4146,7 +4146,11 @@ export class Phase2Runtime {
       };
       const home = resolve(match.home);
       const away = resolve(match.away);
-      return home !== null || away !== null
+      const hasAutomaticSource = [match.home, match.away].some((source) => {
+        const type = (source as { type?: unknown } | undefined)?.type;
+        return type === "stage_rank" || type === "winner" || type === "loser";
+      });
+      return home !== null || away !== null || hasAutomaticSource
         ? [
             {
               matchId,

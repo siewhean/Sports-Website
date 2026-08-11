@@ -2266,8 +2266,14 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       JOIN matches match ON match.id=slot.match_id
       WHERE slot.competition_id=${competition.id} AND match.graph_stage_id='championship'
       ORDER BY slot.match_id,slot.slot`;
-    expect(completeSlots).toHaveLength(4);
-    expect(completeSlots.every((slot) => slot.entry_id !== null)).toBe(true);
+    expect(completeSlots).toHaveLength(6);
+    expect(completeSlots.filter((slot) => slot.entry_id !== null)).toHaveLength(4);
+    expect(completeSlots.filter((slot) => slot.entry_id === null)).toHaveLength(2);
+    expect(
+      await client<{ state: string }[]>`
+        SELECT state FROM matches
+        WHERE id = ANY(${client.array(completeSlots.filter((slot) => slot.entry_id === null).map((slot) => slot.match_id))}::uuid[])`,
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ state: "pending" })]));
 
     // A newer draft has a deliberately different topology. Recalculation is
     // bound to the published revision: a draft must never rewrite the live
