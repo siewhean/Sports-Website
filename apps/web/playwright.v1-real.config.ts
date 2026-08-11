@@ -18,6 +18,10 @@ export default defineConfig({
   use: {
     baseURL: process.env.PHASE4_E2E_WEB_BASE_URL ?? "https://localhost:3102",
     ignoreHTTPSErrors: true,
+    // Offline/service-worker behaviour has its own C3/C5 browser matrix. The
+    // V1 organiser journey validates the production BFF and must not register
+    // a worker against a throwaway self-signed local certificate.
+    serviceWorkers: "block",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
