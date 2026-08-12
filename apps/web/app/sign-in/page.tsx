@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { SystemStatePage } from "@/components/foundation/SystemStatePage";
 
 export const metadata: Metadata = {
-  title: "Sign in · MATCHDAY",
+  title: "Sign in",
   robots: { index: false, follow: false },
 };
 
@@ -16,6 +16,7 @@ export default function SignInPage() {
       detail="After authentication, MATCHDAY will return you to the organiser workspace."
       actionLabel="Sign in"
       actionHref="/api/v1/identity/authorize"
+      actionNavigation="document"
     />
   );
 }
