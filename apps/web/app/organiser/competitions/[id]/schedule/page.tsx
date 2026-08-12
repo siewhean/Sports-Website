@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
-import { ScheduleWorkspace } from "@/components/phase4/schedule/ScheduleWorkspace";
+import { V1ScheduleWorkspace } from "@/components/phase4/schedule/V1ScheduleWorkspace";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
 import { getScheduleDocument } from "@/lib/phase4-schedule.server";
@@ -49,7 +49,7 @@ export default async function SchedulePage({
               : phase4ScheduleMachine.unavailable
       }
       sectionContent={
-        <ScheduleWorkspace
+        <V1ScheduleWorkspace
           advanced={isAdvancedScheduleView(query.advanced)}
           document={document}
           initialSelectedMatchId={query.match}
