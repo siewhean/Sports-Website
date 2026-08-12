@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 const sessionCookieNames = ["__Host-matchday_session", "matchday_session"] as const;
 
@@ -40,6 +41,7 @@ async function hasAuthenticatedSession(): Promise<boolean> {
 }
 
 export default async function OrganiserLayout({ children }: Readonly<{ children: ReactNode }>) {
+  if (demoFixturesEnabled()) return children;
   if (!(await hasAuthenticatedSession())) redirect("/sign-in");
   return children;
 }
