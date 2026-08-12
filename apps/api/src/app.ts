@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -33,15 +33,6 @@ import { registerPhase4SetupPatchRoutes } from "./phase-4-setup-patch-routes.js"
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
-
-export function scoringSessionRateLimitKey(
-  scoringSessionId: string,
-  clientIp: string,
-  rateLimitHmacSecret: string,
-): string {
-  const fingerprint = (value: string) => createHmac("sha256", rateLimitHmacSecret).update(value, "utf8").digest("hex");
-  return `scoring-session:${fingerprint(`session:${scoringSessionId}`)}:ip:${fingerprint(`ip:${clientIp}`)}`;
-}
 
 const errorSchema = Type.Object({
   error: Type.Object({
@@ -123,6 +114,7 @@ export type BuildAppOptions = {
 export async function buildApp(options: BuildAppOptions) {
   const telemetry = options.telemetry ?? createDisabledApiTelemetry();
   const requestTelemetry = new WeakMap<FastifyRequest, RequestTelemetryHandle>();
+  const deployedEnvironment = options.config.environment !== "local" && options.config.environment !== "test";
   const logger = createLogger(
     {
       environment: options.config.environment,
@@ -225,7 +217,7 @@ export async function buildApp(options: BuildAppOptions) {
     },
   });
 
-  if (options.config.environment !== "production") {
+  if (!deployedEnvironment) {
     await app.register(swaggerUi, { routePrefix: "/docs" });
   }
 
@@ -246,10 +238,7 @@ export async function buildApp(options: BuildAppOptions) {
     },
     crossOriginResourcePolicy: { policy: "same-site" },
     frameguard: { action: "deny" },
-    hsts:
-      options.config.environment === "production"
-        ? { includeSubDomains: true, maxAge: 31_536_000, preload: true }
-        : false,
+    hsts: deployedEnvironment ? { includeSubDomains: true, maxAge: 63_072_000, preload: true } : false,
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
   });
 
@@ -257,23 +246,9 @@ export async function buildApp(options: BuildAppOptions) {
     global: true,
     hook: "preHandler",
     keyGenerator: async (request) => {
-      // Scoring mutations are fenced by an authenticated short-lived session.
-      // Partition their bounded budget by both session and peer address so one
-      // active scorer cannot consume another scorer's allowance behind NAT.
-      // The bearer token is deliberately never used as a Redis key.
-      const scoringSessionId = request.headers["x-scoring-session-id"];
-      const route = request.routeOptions.url || request.url.split("?", 1)[0] || "";
-      if (
-        route.startsWith("/api/v1/scoring/") &&
-        typeof scoringSessionId === "string" &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scoringSessionId)
-      ) {
-        return scoringSessionRateLimitKey(
-          scoringSessionId,
-          request.ip,
-          options.config.scoringAccess.rateLimitHmacSecret,
-        );
-      }
+      // A pre-authentication limiter must use only trusted server-derived identity.
+      // In particular, x-scoring-session-id is attacker-controlled until the scoring
+      // session is authenticated by the route and must never select a fresh bucket.
       const accountId = options.resolveRateLimitAccountId
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);
@@ -296,7 +271,7 @@ export async function buildApp(options: BuildAppOptions) {
 
   app.addHook("onSend", async (request, reply) => {
     reply.header("X-Request-Id", request.id);
-    reply.header("Permissions-Policy", "camera=(self), microphone=(), geolocation=()");
+    reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     const route = request.routeOptions.url || request.url.split("?", 1)[0] || "";
     if (
       route.startsWith("/api/v1/identity/") ||
@@ -411,7 +386,7 @@ export async function buildApp(options: BuildAppOptions) {
     "/health/deep",
     {
       schema: {
-        description: "Internal dependency detail. Production ingress must not expose this route publicly.",
+        description: "Internal dependency detail. Deployed ingress must not expose this route without its secret.",
         headers: Type.Object({ "x-deep-health-token": Type.Optional(Type.String()) }),
         response: { 200: readinessSchema, 404: errorSchema, 503: readinessSchema },
         tags: ["health"],
@@ -420,7 +395,11 @@ export async function buildApp(options: BuildAppOptions) {
     },
     async (request, reply) => {
       const token = request.headers["x-deep-health-token"];
-      if (options.config.deepHealthToken && token !== options.config.deepHealthToken) {
+      const invalidDeployedAccess =
+        deployedEnvironment && (!options.config.deepHealthToken || token !== options.config.deepHealthToken);
+      const invalidLocalAccess =
+        !deployedEnvironment && Boolean(options.config.deepHealthToken) && token !== options.config.deepHealthToken;
+      if (invalidDeployedAccess || invalidLocalAccess) {
         throw new ApiError(404, "ROUTE_NOT_FOUND", "Route not found");
       }
       const dependencies = await dependencyStatus(options.probes);
