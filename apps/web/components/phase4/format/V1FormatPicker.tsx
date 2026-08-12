@@ -15,6 +15,7 @@ import type { V1FormatReadiness } from "@/lib/v1-format-readiness";
 import styles from "./V1FormatPicker.module.css";
 
 type PickerState = "idle" | "loading" | "ready" | "applying" | "error";
+const readyByDefault: V1FormatReadiness = { ready: true, prerequisites: [] };
 const copy = {
   idle: opaqueId("idle"),
   loading: opaqueId("loading"),
@@ -67,21 +68,25 @@ export function V1FormatPicker({
   scheduleHref,
 }: {
   competitionId: string;
-  readiness: V1FormatReadiness;
+  readiness?: V1FormatReadiness;
   hasAppliedFormat?: boolean;
   advancedHref?: string;
-  entriesHref: string;
-  capacityHref: string;
-  scheduleHref: string;
+  entriesHref?: string;
+  capacityHref?: string;
+  scheduleHref?: string;
 }) {
   const router = useRouter();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [state, setState] = useState<PickerState>(copy.idle);
   const [document, setDocument] = useState<Phase4SetupDocument | null>(null);
   const [message, setMessage] = useState("");
+  const effectiveReadiness = readiness ?? readyByDefault;
+  const effectiveEntriesHref = entriesHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/entries`;
+  const effectiveCapacityHref = capacityHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/capacity`;
+  const effectiveScheduleHref = scheduleHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/schedule`;
 
   const recommend = async () => {
-    if (!readiness.ready) return;
+    if (!effectiveReadiness.ready) return;
     setState(copy.loading);
     setMessage("");
     try {
@@ -134,7 +139,7 @@ export function V1FormatPicker({
   };
 
   const options = document ? fittingV1Recommendations(document) : [];
-  const linkFor = (id: "entries" | "capacity") => (id === "entries" ? entriesHref : capacityHref);
+  const linkFor = (id: "entries" | "capacity") => (id === "entries" ? effectiveEntriesHref : effectiveCapacityHref);
 
   if (hasAppliedFormat) {
     return (
@@ -154,7 +159,7 @@ export function V1FormatPicker({
           </div>
         </div>
         <div className={styles.actions}>
-          <Link className={styles.primaryLink} href={scheduleHref}>
+          <Link className={styles.primaryLink} href={effectiveScheduleHref}>
             Continue to schedule <ArrowRight aria-hidden="true" />
           </Link>
           {advancedHref ? (
@@ -167,7 +172,7 @@ export function V1FormatPicker({
     );
   }
 
-  if (!readiness.ready) {
+  if (!effectiveReadiness.ready) {
     return (
       <section className={styles.workspace} aria-labelledby="v1-format-prerequisite-heading" data-testid="v1-format-blocked">
         <header className={styles.heading}>
@@ -183,7 +188,7 @@ export function V1FormatPicker({
           </div>
         </div>
         <ol className={styles.prerequisiteList} aria-label="Format prerequisites">
-          {readiness.prerequisites.map((item) => (
+          {effectiveReadiness.prerequisites.map((item) => (
             <li className={styles.prerequisiteItem} key={item.id} data-ready={item.ready}>
               <span className={styles.prerequisiteIcon}>{item.ready ? <Check aria-hidden="true" /> : null}</span>
               <div>
