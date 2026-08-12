@@ -1,8 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { loadConfig, safeConfigSummary } from "@matchday/config";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
 import { Redis } from "ioredis";
 import postgres from "postgres";
-import { ScheduleJobQueue, schedulerQueueName } from "@matchday/scheduler";
+import {
+  DomainScheduleOptimizer,
+  PostgresScheduleJobStore,
+  ScheduleJobQueue,
+  SchedulerRuntime,
+  schedulerQueueName,
+} from "@matchday/scheduler";
 import { buildApp } from "./app.js";
 import { startServer } from "./lifecycle.js";
 import { PostgresIdentityUnitOfWork } from "./identity-postgres.js";
@@ -54,8 +61,19 @@ const phase2Runtime = new Phase2Runtime(
   config.scoringAccess.fallbackCodeHmacSecret,
 );
 const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
+const queueName = schedulerQueueName(config.environment);
+const inlineScheduler = new SchedulerRuntime({
+  queueName,
+  redisUrl: config.redisUrl,
+  workerId: `api-v1-${process.pid}-${randomUUID()}`,
+  store: new PostgresScheduleJobStore(postgresClient),
+  optimizer: new DomainScheduleOptimizer({ maxIterationsPerRun: 64 }),
+  concurrency: 1,
+  shutdownTimeoutMs: 30_000,
+});
+await inlineScheduler.start();
 const scheduleQueue = new ScheduleJobQueue({
-  queueName: schedulerQueueName(config.environment),
+  queueName,
   redisUrl: config.redisUrl,
 });
 const phase4Runtime = new V1Phase4Runtime(
@@ -76,10 +94,11 @@ const app = await buildApp({
   phase3Runtime,
   phase4Runtime,
   closeIdentityResources: async () => {
-    await Promise.all([scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
+    await Promise.all([inlineScheduler.stop(), scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
   },
 }).catch(async (error: unknown) => {
   await Promise.allSettled([
+    inlineScheduler.stop(),
     rateLimitRedis.quit(),
     scheduleQueue.close(),
     postgresClient.end({ timeout: 1 }),
