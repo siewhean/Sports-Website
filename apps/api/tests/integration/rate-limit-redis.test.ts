@@ -101,15 +101,10 @@ describe("distributed rate limiting", () => {
     ).toBe(200);
   });
 
-  it("stores scoring-session limiter keys as dedicated HMAC fingerprints", async () => {
-    const config = testConfig({
-      SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "dedicated-scoring-rate-limit-hmac-secret",
-      IDENTITY_CSRF_HMAC_SECRET: "separate-csrf-hmac-secret-that-must-not-be-used",
-      API_TRUSTED_PROXIES: "127.0.0.1",
-    });
+  it("does not let an unauthenticated scorer rotate session ids to escape the per-IP limit", async () => {
+    const config = testConfig({ API_TRUSTED_PROXIES: "127.0.0.1" });
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: 1 });
     const nameSpace = `matchday-test-${randomUUID()}-`;
-    const sessionId = randomUUID();
     const clientIp = "198.51.100.202";
     const app = await buildApp({
       config,
@@ -129,24 +124,26 @@ describe("distributed rate limiting", () => {
     });
     apps.push(app);
     try {
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/scoring/sessions/heartbeat",
-        headers: {
-          "x-forwarded-for": clientIp,
-          "x-scoring-session-id": sessionId,
-          "x-scoring-session-token": "t".repeat(43),
-          "x-writer-generation": "1",
-        },
-        payload: { last_acknowledged_sequence: 0, pending_event_count: 0, pending_through_sequence: 0 },
-      });
-      expect(response.statusCode).toBe(200);
+      const request = (sessionId: string) =>
+        app.inject({
+          method: "POST",
+          url: "/api/v1/scoring/sessions/heartbeat",
+          headers: {
+            "x-forwarded-for": clientIp,
+            "x-scoring-session-id": sessionId,
+            "x-scoring-session-token": "t".repeat(43),
+            "x-writer-generation": "1",
+          },
+          payload: { last_acknowledged_sequence: 0, pending_event_count: 0, pending_through_sequence: 0 },
+        });
+
+      expect((await request(randomUUID())).statusCode).toBe(200);
+      const limited = await request(randomUUID());
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json().error.code).toBe("RATE_LIMITED");
 
       const keys = await redis.keys(`${nameSpace}*`);
-      expect(keys).toHaveLength(1);
-      expect(keys[0]).toMatch(new RegExp(`^${nameSpace}scoring-session:[a-f0-9]{64}:ip:[a-f0-9]{64}$`));
-      expect(keys[0]).not.toContain(sessionId);
-      expect(keys[0]).not.toContain(clientIp);
+      expect(keys).toEqual([`${nameSpace}ip:${clientIp}`]);
     } finally {
       const keys = await redis.keys(`${nameSpace}*`);
       if (keys.length > 0) await redis.unlink(...keys);
