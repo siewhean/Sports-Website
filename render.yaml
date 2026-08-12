@@ -1,0 +1,48 @@
+services:
+  - type: web
+    runtime: node
+    name: matchday-v1-api
+    region: singapore
+    branch: v1/simple-working-product
+    autoDeployTrigger: off
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @matchday/api... build
+    startCommand: API_PORT=$PORT pnpm --filter @matchday/api start
+    healthCheckPath: /health/ready
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: NODE_VERSION
+        value: 24.18.0
+      - key: APP_ENV
+        value: staging
+      - key: API_HOST
+        value: 0.0.0.0
+
+  - type: worker
+    runtime: node
+    name: matchday-v1-scheduler
+    region: singapore
+    branch: v1/simple-working-product
+    autoDeployTrigger: off
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @matchday/scheduler... build
+    startCommand: pnpm --filter @matchday/scheduler start
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: NODE_VERSION
+        value: 24.18.0
+      - key: APP_ENV
+        value: staging
+
+  - type: worker
+    runtime: node
+    name: matchday-v1-worker
+    region: singapore
+    branch: v1/simple-working-product
+    autoDeployTrigger: off
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @matchday/worker... build
+    startCommand: pnpm --filter @matchday/worker start
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: NODE_VERSION
+        value: 24.18.0
+      - key: APP_ENV
+        value: staging
