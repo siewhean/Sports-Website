@@ -15,7 +15,7 @@ import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { V1Phase3Runtime } from "./phase-3-v1-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
-import { ReliableGateBPhase4Runtime } from "./phase-4-reliable-runtime.js";
+import { V1Phase4Runtime } from "./phase-4-v1-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const config = loadConfig();
@@ -58,7 +58,7 @@ const scheduleQueue = new ScheduleJobQueue({
   queueName: schedulerQueueName(config.environment),
   redisUrl: config.redisUrl,
 });
-const phase4Runtime = new ReliableGateBPhase4Runtime(
+const phase4Runtime = new V1Phase4Runtime(
   identitySql,
   phase3Runtime,
   scheduleQueue,
