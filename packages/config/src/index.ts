@@ -77,6 +77,18 @@ const rawConfigSchema = z.object({
 
 export type AppEnvironment = z.infer<typeof environmentSchema>;
 
+export type SchedulerConfig = {
+  environment: AppEnvironment;
+  databaseUrl: string;
+  redisUrl: string;
+  logLevel: z.infer<typeof logLevelSchema>;
+  telemetry: {
+    enabled: boolean;
+    endpoint?: string;
+    metricExportIntervalMs: number;
+  };
+};
+
 export type AppConfig = {
   environment: AppEnvironment;
   api: {
@@ -228,6 +240,77 @@ function validatedEdgePurgeUrl(value: string, environment: AppEnvironment): stri
   return url.href;
 }
 
+const schedulerConfigSchema = z.object({
+  APP_ENV: environmentSchema,
+  DATABASE_URL: databaseUrlSchema,
+  REDIS_URL: redisUrlSchema,
+  LOG_LEVEL: logLevelSchema.default("info"),
+  OTEL_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrlSchema,
+  OTEL_METRIC_EXPORT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
+});
+
+function validatedTelemetry(
+  environment: AppEnvironment,
+  enabled: boolean,
+  rawEndpoint: string | undefined,
+  metricExportIntervalMs: number,
+): SchedulerConfig["telemetry"] {
+  let endpoint: string | undefined;
+  if (rawEndpoint) {
+    const url = new URL(rawEndpoint);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
+    }
+    if (environment === "production" && url.protocol !== "https:") {
+      throw new Error("Production OTLP endpoints must use HTTPS");
+    }
+    if (url.username || url.password || url.search || url.hash) {
+      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
+    }
+    endpoint = url.toString().replace(/\/$/, "");
+  }
+  if (enabled && !endpoint) {
+    throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT is required when telemetry is enabled");
+  }
+  if (environment === "production" && !enabled) {
+    throw new Error("OTEL_ENABLED must be true in production");
+  }
+  return {
+    enabled,
+    metricExportIntervalMs,
+    ...(endpoint ? { endpoint } : {}),
+  };
+}
+
+/**
+ * Scheduler processes no HTTP requests or identity flows. Keep its deployment
+ * boundary limited to its queue and persistence dependencies so it cannot
+ * accidentally require (or receive) API/OIDC credentials.
+ */
+export function parseSchedulerConfig(source: NodeJS.ProcessEnv): SchedulerConfig {
+  const parsed = schedulerConfigSchema.parse(source);
+  return {
+    environment: parsed.APP_ENV,
+    databaseUrl: parsed.DATABASE_URL,
+    redisUrl: parsed.REDIS_URL,
+    logLevel: parsed.LOG_LEVEL,
+    telemetry: validatedTelemetry(
+      parsed.APP_ENV,
+      parsed.OTEL_ENABLED,
+      parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
+      parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
+    ),
+  };
+}
+
+export function loadSchedulerConfig(): SchedulerConfig {
+  return parseSchedulerConfig(process.env);
+}
+
 export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   const parsed = rawConfigSchema.parse(source);
   requireProductionValue(parsed.APP_ENV, source, "DATABASE_URL");
@@ -338,23 +421,12 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
   }
 
-  let telemetryEndpoint: string | undefined;
-  if (parsed.OTEL_EXPORTER_OTLP_ENDPOINT) {
-    const url = new URL(parsed.OTEL_EXPORTER_OTLP_ENDPOINT);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
-    }
-    if (parsed.APP_ENV === "production" && url.protocol !== "https:") {
-      throw new Error("Production OTLP endpoints must use HTTPS");
-    }
-    if (url.username || url.password || url.search || url.hash) {
-      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
-    }
-    telemetryEndpoint = url.toString().replace(/\/$/, "");
-  }
-  if (parsed.OTEL_ENABLED && !telemetryEndpoint) {
-    throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT is required when telemetry is enabled");
-  }
+  const telemetry = validatedTelemetry(
+    parsed.APP_ENV,
+    parsed.OTEL_ENABLED,
+    parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
+    parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
+  );
 
   let edgeCache: AppConfig["edgeCache"];
   if (parsed.EDGE_CACHE_PURGE_ENDPOINT && parsed.EDGE_CACHE_PURGE_BEARER_TOKEN) {
@@ -395,11 +467,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       ...(oidc ? { oidc } : {}),
     },
     ...(edgeCache ? { edgeCache } : {}),
-    telemetry: {
-      enabled: parsed.OTEL_ENABLED,
-      metricExportIntervalMs: parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
-      ...(telemetryEndpoint ? { endpoint: telemetryEndpoint } : {}),
-    },
+    telemetry,
   };
 }
 

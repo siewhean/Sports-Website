@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseConfig, safeConfigSummary } from "../src/index.js";
+import { parseConfig, parseSchedulerConfig, safeConfigSummary } from "../src/index.js";
 
 const flowSealKey = Buffer.alloc(32, 7).toString("base64url");
 const oidcConfig = {
@@ -23,6 +23,53 @@ const edgeCacheConfig = {
 };
 
 describe("configuration", () => {
+  describe("scheduler configuration", () => {
+    const scheduler = {
+      APP_ENV: "staging",
+      DATABASE_URL: "postgresql://scheduler:secret@db.internal/matchday",
+      REDIS_URL: "rediss://cache.internal:6379",
+    };
+
+    it("requires only explicit queue and persistence settings outside the API boundary", () => {
+      expect(parseSchedulerConfig(scheduler)).toEqual({
+        environment: "staging",
+        databaseUrl: scheduler.DATABASE_URL,
+        redisUrl: scheduler.REDIS_URL,
+        logLevel: "info",
+        telemetry: { enabled: false, metricExportIntervalMs: 10_000 },
+      });
+    });
+
+    it("does not parse unrelated API, scoring, identity, or edge-purge values", () => {
+      expect(
+        parseSchedulerConfig({
+          ...scheduler,
+          IDENTITY_PROVIDER: "disabled",
+          API_ALLOWED_ORIGINS: "*",
+          EDGE_CACHE_PURGE_ENDPOINT: "https://edge.example.test/purge",
+        }),
+      ).toMatchObject({ environment: "staging" });
+    });
+
+    it.each(["APP_ENV", "DATABASE_URL", "REDIS_URL"])("requires %s", (key) => {
+      const source = { ...scheduler } as Record<string, string>;
+      delete source[key];
+      expect(() => parseSchedulerConfig(source)).toThrow();
+    });
+
+    it("keeps optional telemetry validation", () => {
+      expect(() => parseSchedulerConfig({ ...scheduler, OTEL_ENABLED: "true" })).toThrow("OTEL_EXPORTER_OTLP_ENDPOINT");
+      expect(
+        parseSchedulerConfig({
+          ...scheduler,
+          OTEL_ENABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.test/otlp/",
+          OTEL_METRIC_EXPORT_INTERVAL_MS: "2500",
+        }).telemetry,
+      ).toEqual({ enabled: true, endpoint: "https://collector.example.test/otlp", metricExportIntervalMs: 2_500 });
+    });
+  });
+
   it("provides safe local defaults", () => {
     const config = parseConfig({});
     expect(config.environment).toBe("local");

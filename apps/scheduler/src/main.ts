@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { loadConfig } from "@matchday/config";
+import { loadSchedulerConfig } from "@matchday/config";
 import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
 
 import { DomainScheduleOptimizer } from "./domain-optimizer.js";
@@ -10,7 +10,7 @@ import { schedulerQueueName } from "./queue.js";
 import { SchedulerRuntime } from "./runtime.js";
 import type { SchedulerMetrics } from "./ports.js";
 
-const config = loadConfig();
+const config = loadSchedulerConfig();
 const logger = createLogger({ environment: config.environment, level: config.logLevel, service: "matchday-scheduler" });
 const metricsRuntime = initializeMetrics({ serviceName: "matchday-scheduler" });
 const store = new PostgresScheduleJobStore(config.databaseUrl);

@@ -17,14 +17,15 @@ services:
       - key: API_HOST
         value: 0.0.0.0
 
-  - type: worker
+  - type: web
     runtime: node
     name: matchday-v1-scheduler
     region: singapore
     branch: v1/simple-working-product
     autoDeployTrigger: off
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @matchday/scheduler... build
-    startCommand: pnpm --filter @matchday/scheduler start
+    startCommand: SCHEDULER_HEALTH_HOST=0.0.0.0 SCHEDULER_HEALTH_PORT=$PORT pnpm --filter @matchday/scheduler start
+    healthCheckPath: /health/ready
     maxShutdownDelaySeconds: 60
     envVars:
       - key: NODE_VERSION
