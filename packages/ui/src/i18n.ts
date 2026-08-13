@@ -78,6 +78,7 @@ export const messages = {
     nextAction: "Review schedule warnings",
     createCompetition: "Create competition",
     fixturesTitle: "Upcoming fixtures",
+    fixturesEmptyTitle: "No fixtures yet",
     fixturesEmpty: "Fixtures will appear after the schedule is generated.",
     startTitle: "A clear path from first entry to published result.",
     startSteps: [
@@ -85,7 +86,6 @@ export const messages = {
       "Add teams and playing capacity",
       "Choose a format and publish the schedule",
     ],
-    currentStep: "Current step",
   },
   organiserCreate: {
     title: "Create competition",
@@ -141,7 +141,6 @@ export const messages = {
       "Confirm the scorer and fixture",
       "Record events with a complete audit trail",
     ],
-    currentStep: "Current step",
   },
   public: {
     title: "Singapore Open 2026",
