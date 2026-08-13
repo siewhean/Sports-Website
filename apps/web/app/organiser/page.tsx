@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ArrowRight, CalendarDots, CheckCircle, WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, CalendarDots, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
 import { ActionLink, InlineNotice, StatusLine } from "@/components/foundation/Primitives";
@@ -15,7 +15,7 @@ export default function OrganiserPage() {
       kind="organiser"
       title={messages.organiser.title}
       subtitle={messages.organiser.subtitle}
-      utility={<StatusLine tone="warning">{messages.organiser.liveStatus}</StatusLine>}
+      utility={<StatusLine tone="positive">{messages.organiser.liveStatus}</StatusLine>}
     >
       <section className="operational-heading" aria-labelledby="organiser-summary">
         <p>{messages.organiser.summaryBody}</p>
@@ -33,15 +33,11 @@ export default function OrganiserPage() {
             <li key={step}>
               <span>{String(index + 1).padStart(2, "0")}</span>
               <p>{step}</p>
-              {index === 0 ? (
-                <CheckCircle weight="fill" aria-label={messages.organiser.currentStep} />
-              ) : (
-                <ArrowRight aria-hidden="true" />
-              )}
+              <ArrowRight aria-hidden="true" />
             </li>
           ))}
         </ol>
-        <InlineNotice title={messages.organiser.fixturesEmpty}>
+        <InlineNotice title={messages.organiser.fixturesEmptyTitle}>
           <WarningCircle aria-hidden="true" /> {messages.organiser.fixturesEmpty}
         </InlineNotice>
       </section>

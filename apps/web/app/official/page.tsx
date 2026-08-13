@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ArrowRight, CheckCircle, CloudCheck, DeviceMobileCamera } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, CloudCheck, DeviceMobileCamera } from "@phosphor-icons/react/dist/ssr";
 import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
 import { ActionLink, StatusLine } from "@/components/foundation/Primitives";
@@ -32,11 +32,7 @@ export default function OfficialPage() {
             <li key={step}>
               <span>{String(index + 1).padStart(2, "0")}</span>
               <p>{step}</p>
-              {index === 0 ? (
-                <CheckCircle weight="fill" aria-label={messages.official.currentStep} />
-              ) : (
-                <ArrowRight aria-hidden="true" />
-              )}
+              <ArrowRight aria-hidden="true" />
             </li>
           ))}
         </ol>
