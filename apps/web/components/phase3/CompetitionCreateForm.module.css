@@ -1,18 +1,23 @@
 .form {
   display: grid;
-  gap: 1.25rem;
-  max-width: 54rem;
+  gap: 1.75rem;
+  max-width: 62rem;
 }
 
 .intro {
   max-width: 64ch;
-  color: var(--foundation-ink-muted, #475569);
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 1rem;
+  line-height: 1.65;
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 1.25rem 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--hairline);
 }
 
 .field,
@@ -28,33 +33,47 @@
 
 .field label,
 .wide label {
-  font-weight: 700;
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 740;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .field input,
 .field select,
 .wide input {
   width: 100%;
-  min-height: 2.75rem;
-  border: 1px solid #94a3b8;
-  border-radius: 0.5rem;
-  padding: 0.65rem 0.75rem;
-  color: #0f172a;
-  background: #fff;
+  min-height: 3rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.65rem;
+  padding: 0.7rem 0.85rem;
+  color: var(--ink);
+  background: var(--surface);
   font: inherit;
+  transition:
+    border-color 160ms var(--ease-out),
+    box-shadow 160ms var(--ease-out),
+    background-color 160ms var(--ease-out);
+}
+
+.field input:hover,
+.field select:hover,
+.wide input:hover {
+  border-color: var(--ink-muted);
 }
 
 .field input:focus-visible,
 .field select:focus-visible,
 .wide input:focus-visible,
 .submit:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
 .hint {
   margin: 0;
-  color: #475569;
+  color: var(--ink-muted);
   font-size: 0.875rem;
 }
 
@@ -65,23 +84,35 @@
 }
 
 .summary {
-  border-left: 0.3rem solid #be123c;
-  padding: 0.75rem 1rem;
-  color: #881337;
-  background: #fff1f2;
+  border-left: 0.3rem solid #aa4b39;
+  padding: 0.9rem 1rem;
+  color: #70352a;
+  background: #fff4ef;
+  line-height: 1.5;
 }
 
 .submit {
   justify-self: start;
-  min-height: 2.75rem;
+  min-height: 3rem;
   border: 0;
   border-radius: 999px;
   padding: 0.7rem 1.2rem;
-  color: #fff;
-  background: #172554;
+  color: white;
+  background: var(--ink);
   font: inherit;
   font-weight: 750;
   cursor: pointer;
+  transition:
+    transform 140ms var(--ease-out),
+    background-color 180ms var(--ease-out);
+}
+
+.submit:not(:disabled):hover {
+  background: #303531;
+}
+
+.submit:not(:disabled):active {
+  transform: scale(0.98);
 }
 
 .submit:disabled {
@@ -105,8 +136,39 @@
   cursor: pointer;
 }
 
+.signIn {
+  justify-self: start;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.9rem;
+  min-height: 3rem;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 720;
+  text-decoration: none;
+  transition:
+    transform 140ms var(--ease-out),
+    background-color 180ms var(--ease-out),
+    color 180ms var(--ease-out);
+}
+
+.signIn:hover {
+  background: var(--ink);
+  color: white;
+}
+
+.signIn:active {
+  transform: scale(0.98);
+}
+
+.signIn:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
 .retry:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
