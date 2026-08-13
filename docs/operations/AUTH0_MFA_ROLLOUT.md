@@ -1,5 +1,7 @@
 # Auth0 MFA and WebAuthn rollout
 
+> **Superseded for the high-assurance rollout.** Use `docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md`. The V2 runbook corrects the Auth0 first-login challenge sequencing and keeps enforcement disabled until the organiser assurance gate and OIDC assurance-context request are integrated and tested.
+
 MATCHDAY captures authentication assurance now, but enforcement must stay disabled until the real Auth0 tenant proves the expected signed claims. This runbook is deliberately fail-safe: an existing organiser must not be locked out by deploying the code alone.
 
 ## Application contract
