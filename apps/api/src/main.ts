@@ -37,6 +37,10 @@ function assuranceClaimName(value: string | undefined): string | undefined {
 }
 
 const config = loadConfig();
+const deployedEnvironment = config.environment !== "local" && config.environment !== "test";
+if (deployedEnvironment && !process.env.IDENTITY_ASSURANCE_POLICY) {
+  throw new Error("IDENTITY_ASSURANCE_POLICY must be explicitly configured in deployed environments");
+}
 const assurancePolicy = parseAuthenticationAssurancePolicy(
   process.env.IDENTITY_ASSURANCE_POLICY,
   process.env.IDENTITY_ASSURANCE_MAX_AGE_SECONDS,
