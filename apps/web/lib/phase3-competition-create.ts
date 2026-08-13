@@ -8,6 +8,15 @@ export const phase3CompetitionSports = [
 
 export type Phase3CompetitionSport = (typeof phase3CompetitionSports)[number]["code"];
 
+// Every value here is guaranteed to satisfy isIanaTimeZone below, since both
+// come from the same Intl.supportedValuesOf("timeZone") call. Falls back to
+// just the configured default on a runtime that predates the API, so the
+// timezone select never renders empty.
+export const phase3TimeZones: readonly string[] =
+  typeof Intl.supportedValuesOf === "function"
+    ? [...Intl.supportedValuesOf("timeZone")].sort((a, b) => a.localeCompare(b))
+    : ["Asia/Singapore"];
+
 export const competitionCreateFieldOrder = [
   "organisation_id",
   "name",
