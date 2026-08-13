@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  authenticationAssuranceFromProvider,
-  requireAuthenticationAssurance,
-} from "../src/index.js";
+import { authenticationAssuranceFromProvider, requireAuthenticationAssurance } from "../src/index.js";
 
 const now = new Date("2026-08-14T00:00:00.000Z");
 
@@ -26,8 +23,48 @@ describe("authentication assurance", () => {
     ).toMatchObject({ level: "multi_factor", mfaPerformed: true, phishingResistant: false });
   });
 
+  it("rejects malformed provider-neutral assurance before it can reach persistence", () => {
+    expect(() =>
+      authenticationAssuranceFromProvider({
+        methods: ["x".repeat(65)],
+        acr: null,
+        authenticatedAt: now,
+        phishingResistant: false,
+      }),
+    ).toThrow();
+    expect(() =>
+      authenticationAssuranceFromProvider({
+        methods: ["mfa"],
+        acr: "x".repeat(513),
+        authenticatedAt: now,
+        phishingResistant: false,
+      }),
+    ).toThrow();
+    expect(() =>
+      authenticationAssuranceFromProvider({
+        methods: ["mfa"],
+        acr: null,
+        authenticatedAt: new Date(Number.NaN),
+        phishingResistant: false,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a phishing-resistant flag without standard MFA evidence", () => {
+    expect(() =>
+      authenticationAssuranceFromProvider({
+        methods: ["pwd"],
+        acr: null,
+        authenticatedAt: now,
+        phishingResistant: true,
+      }),
+    ).toThrow();
+  });
+
   it("keeps policy off backward compatible", () => {
-    expect(() => requireAuthenticationAssurance(authenticationAssuranceFromProvider(undefined), { minimum: "off" }, now)).not.toThrow();
+    expect(() =>
+      requireAuthenticationAssurance(authenticationAssuranceFromProvider(undefined), { minimum: "off" }, now),
+    ).not.toThrow();
   });
 
   it("checks configured freshness", () => {
@@ -37,7 +74,11 @@ describe("authentication assurance", () => {
       authenticatedAt: new Date(now.getTime() - 60_000),
       phishingResistant: false,
     });
-    expect(() => requireAuthenticationAssurance(assurance, { minimum: "mfa", maxAuthenticationAgeMs: 120_000 }, now)).not.toThrow();
-    expect(() => requireAuthenticationAssurance(assurance, { minimum: "mfa", maxAuthenticationAgeMs: 30_000 }, now)).toThrow();
+    expect(() =>
+      requireAuthenticationAssurance(assurance, { minimum: "mfa", maxAuthenticationAgeMs: 120_000 }, now),
+    ).not.toThrow();
+    expect(() =>
+      requireAuthenticationAssurance(assurance, { minimum: "mfa", maxAuthenticationAgeMs: 30_000 }, now),
+    ).toThrow();
   });
 });
