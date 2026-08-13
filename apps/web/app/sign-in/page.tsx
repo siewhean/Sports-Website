@@ -6,15 +6,28 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function SignInPage() {
+export default async function SignInPage({
+  searchParams,
+}: Readonly<{ searchParams: Promise<{ reason?: string }> }>) {
+  const { reason } = await searchParams;
+  const stepUpRequired = reason === "step-up";
+
   return (
     <SystemStatePage
       kind="forbidden"
-      code="ORGANISER"
-      title="Sign in to manage competitions"
-      body="Your organiser workspace is private. Sign in before creating, scheduling or scoring a competition."
-      detail="After authentication, MATCHDAY will return you to the organiser workspace."
-      actionLabel="Sign in"
+      code={stepUpRequired ? "VERIFY" : "ORGANISER"}
+      title={stepUpRequired ? "Verify your sign-in to continue" : "Sign in to manage competitions"}
+      body={
+        stepUpRequired
+          ? "This organiser session is valid, but this workspace requires stronger authentication before you continue."
+          : "Your organiser workspace is private. Sign in before creating, scheduling or scoring a competition."
+      }
+      detail={
+        stepUpRequired
+          ? "Continue through the identity provider. MATCHDAY will accept access only after the configured verification requirement is satisfied."
+          : "After authentication, MATCHDAY will return you to the organiser workspace."
+      }
+      actionLabel={stepUpRequired ? "Verify sign-in" : "Sign in"}
       actionHref="/api/v1/identity/authorize"
       actionNavigation="document"
     />
