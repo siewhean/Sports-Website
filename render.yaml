@@ -16,8 +16,8 @@ services:
         value: staging
       - key: API_HOST
         value: 0.0.0.0
-      # Explicitly disabled during the Auth0/WebAuthn migration. Do not delete this key;
-      # change it only after the rollout runbook has proved the required claims.
+      # Explicitly disabled during the Auth0/WebAuthn migration. Do not delete this key or enable it
+      # until both the organiser assurance route gate and the real Auth0 claim flow have passed testing.
       - key: IDENTITY_ASSURANCE_POLICY
         value: off
 
