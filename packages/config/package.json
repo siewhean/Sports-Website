@@ -19,7 +19,6 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
-    "@matchday/identity": "workspace:*",
     "tldts": "7.4.9",
     "zod": "4.4.3"
   }
