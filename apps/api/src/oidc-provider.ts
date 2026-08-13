@@ -19,6 +19,7 @@ import {
   type ProviderClaims,
   type ProviderSignInRequest,
 } from "@matchday/identity";
+import { readOidcAssurance } from "./oidc-assurance.js";
 
 export type OidcProviderOptions = {
   issuer: string;
@@ -28,6 +29,8 @@ export type OidcProviderOptions = {
   allowInsecureLoopback?: boolean;
   fetch?: CustomFetch;
   requestTimeoutMs?: number;
+  assuranceClaimName?: string;
+  maxAuthenticationAgeSeconds?: number;
 };
 
 function safeEndpoint(value: string | undefined, allowInsecureLoopback: boolean): void {
@@ -59,11 +62,18 @@ export class OidcIdentityProvider implements IdentityProviderPort {
   readonly #callbackUri: string;
   readonly #configuration: Configuration;
   readonly #issuer: string;
+  readonly #assuranceClaimName?: string;
+  readonly #maxAuthenticationAgeSeconds?: number;
 
-  constructor(configuration: Configuration, identity: Pick<OidcProviderOptions, "callbackUri" | "issuer">) {
+  constructor(
+    configuration: Configuration,
+    identity: Pick<OidcProviderOptions, "callbackUri" | "issuer" | "assuranceClaimName" | "maxAuthenticationAgeSeconds">,
+  ) {
     this.#configuration = configuration;
     this.#callbackUri = identity.callbackUri;
     this.#issuer = identity.issuer;
+    this.#assuranceClaimName = identity.assuranceClaimName;
+    this.#maxAuthenticationAgeSeconds = identity.maxAuthenticationAgeSeconds;
   }
 
   async createAuthorizationUrl(request: ProviderAuthorizationRequest): Promise<string> {
@@ -75,6 +85,9 @@ export class OidcIdentityProvider implements IdentityProviderPort {
       nonce: request.nonce,
       code_challenge: request.pkceChallenge,
       code_challenge_method: "S256",
+      ...(this.#maxAuthenticationAgeSeconds !== undefined
+        ? { max_age: String(this.#maxAuthenticationAgeSeconds) }
+        : {}),
     }).href;
   }
 
@@ -128,7 +141,18 @@ export class OidcIdentityProvider implements IdentityProviderPort {
         typeof preferredName === "string" && preferredName.trim()
           ? preferredName
           : email.slice(0, Math.max(1, email.indexOf("@")));
-      return { issuer, subject, providerSessionId: providerSessionId ?? null, email, emailVerified, displayName };
+      return {
+        issuer,
+        subject,
+        providerSessionId: providerSessionId ?? null,
+        email,
+        emailVerified,
+        displayName,
+        assurance: readOidcAssurance(
+          claims as unknown as Readonly<Record<string, unknown>>,
+          this.#assuranceClaimName,
+        ),
+      };
     } catch (error) {
       if (error instanceof IdentityError) throw error;
       if (error instanceof ResponseBodyError) {
@@ -144,7 +168,6 @@ export class OidcIdentityProvider implements IdentityProviderPort {
   }
 
   async requestRecovery(): Promise<void> {
-    // Password recovery is deliberately provider-hosted; OIDC has no standard reset API.
     throw new Error("Recovery is provider-hosted.");
   }
 }
@@ -153,6 +176,14 @@ export async function createOidcIdentityProvider(options: OidcProviderOptions): 
   const requestTimeoutMs = options.requestTimeoutMs ?? 5_000;
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 10 || requestTimeoutMs > 30_000) {
     throw new Error("OIDC request timeout must be an integer between 10 and 30000 milliseconds.");
+  }
+  if (
+    options.maxAuthenticationAgeSeconds !== undefined &&
+    (!Number.isInteger(options.maxAuthenticationAgeSeconds) ||
+      options.maxAuthenticationAgeSeconds < 60 ||
+      options.maxAuthenticationAgeSeconds > 86_400)
+  ) {
+    throw new Error("OIDC max authentication age must be an integer between 60 and 86400 seconds.");
   }
   const metadata = {
     client_secret: options.clientSecret,
@@ -190,5 +221,12 @@ export async function createOidcIdentityProvider(options: OidcProviderOptions): 
   if (server.code_challenge_methods_supported && !server.code_challenge_methods_supported.includes("S256")) {
     throw new Error("OIDC provider does not support PKCE S256.");
   }
-  return new OidcIdentityProvider(configuration, { callbackUri: options.callbackUri, issuer: options.issuer });
+  return new OidcIdentityProvider(configuration, {
+    callbackUri: options.callbackUri,
+    issuer: options.issuer,
+    ...(options.assuranceClaimName ? { assuranceClaimName: options.assuranceClaimName } : {}),
+    ...(options.maxAuthenticationAgeSeconds !== undefined
+      ? { maxAuthenticationAgeSeconds: options.maxAuthenticationAgeSeconds }
+      : {}),
+  });
 }
