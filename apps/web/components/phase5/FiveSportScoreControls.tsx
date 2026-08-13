@@ -14,6 +14,7 @@ export type FiveSportScoreControlsCopy = Readonly<{
   manualTimeOnlyNotice: string;
   readOnlyNotice: string;
   pendingNotice: string;
+  secondaryActionsLabel: string;
   groupLabels: Readonly<Record<ScorecardControlKind, string>>;
   formatActionLabel: (controlLabel: string, sideLabel: string | null) => string;
 }>;
@@ -103,7 +104,7 @@ export function FiveSportScoreControls({
           </div>
           {supportingGroups.length ? (
             <details className={styles.moreActions}>
-              <summary>{copy.groupLabels.operational}</summary>
+              <summary aria-label={copy.secondaryActionsLabel}>{copy.secondaryActionsLabel}</summary>
               <div className={styles.groups}>
                 {supportingGroups.map((group) => (
                   <fieldset className={styles.group} disabled={disabled} key={group.kind}>
