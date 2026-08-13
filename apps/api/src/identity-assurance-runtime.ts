@@ -3,30 +3,40 @@ import {
   requireAuthenticationAssurance,
   type AuthenticationAssurance,
   type AuthenticationAssurancePolicy,
+  type Clock,
+  type IdentityProviderPort,
 } from "@matchday/identity";
 import { ApiError } from "./errors.js";
-import { IdentityApiRuntime, type AuthenticatedIdentityApiSession } from "./identity-runtime.js";
+import {
+  IdentityApiRuntime,
+  type AuthenticatedIdentityApiSession,
+  type IdentityPersistenceUnitOfWork,
+} from "./identity-runtime.js";
 
 export type AssuranceAwareSession = AuthenticatedIdentityApiSession & {
   assurance: AuthenticationAssurance;
 };
 
-export class IdentityAssuranceRuntime {
+export class IdentityAssuranceRuntime extends IdentityApiRuntime {
   constructor(
-    private readonly identity: IdentityApiRuntime,
+    provider: IdentityProviderPort,
+    unitOfWork: IdentityPersistenceUnitOfWork,
+    csrfSecret: string,
+    clock: Clock,
     private readonly policy: AuthenticationAssurancePolicy,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
+  ) {
+    super(provider, unitOfWork, csrfSecret, clock);
+  }
 
-  async authenticate(sessionToken: string, requestId: string): Promise<AssuranceAwareSession> {
-    const session = (await this.identity.authenticate(sessionToken, requestId)) as AssuranceAwareSession;
+  override async authenticate(sessionToken: string, requestId: string): Promise<AssuranceAwareSession> {
+    const session = (await super.authenticate(sessionToken, requestId)) as AssuranceAwareSession;
     this.require(session, this.policy);
     return session;
   }
 
   require(session: AssuranceAwareSession, policy: AuthenticationAssurancePolicy): void {
     try {
-      requireAuthenticationAssurance(session.assurance, policy, this.now());
+      requireAuthenticationAssurance(session.assurance, policy, new Date());
     } catch (error) {
       if (error instanceof IdentityError && error.code === "AUTHENTICATION_ASSURANCE_REQUIRED") {
         throw new ApiError(403, "STEP_UP_REQUIRED", "Stronger authentication is required");
