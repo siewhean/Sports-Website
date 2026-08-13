@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 const sessionCookieNames = ["__Host-matchday_session", "matchday_session"] as const;
+type SessionStatus = "authenticated" | "step_up_required" | "unauthenticated";
 
 function identityApiOrigin(): URL | null {
   const configured = (process.env.RENDER_API_ORIGIN ?? process.env.MATCHDAY_API_BASE_URL)?.trim();
@@ -16,15 +17,15 @@ function identityApiOrigin(): URL | null {
   }
 }
 
-async function hasAuthenticatedSession(): Promise<boolean> {
+async function organiserSessionStatus(): Promise<SessionStatus> {
   const cookieStore = await cookies();
   const session = sessionCookieNames
     .map((name) => ({ name, value: cookieStore.get(name)?.value }))
     .find((candidate) => Boolean(candidate.value));
-  if (!session?.value) return false;
+  if (!session?.value) return "unauthenticated";
 
   const apiOrigin = identityApiOrigin();
-  if (!apiOrigin) return false;
+  if (!apiOrigin) return "unauthenticated";
 
   try {
     const response = await fetch(new URL("/api/v1/identity/me", apiOrigin), {
@@ -34,14 +35,21 @@ async function hasAuthenticatedSession(): Promise<boolean> {
         cookie: `${session.name}=${encodeURIComponent(session.value)}`,
       },
     });
-    return response.ok;
+    if (response.ok) return "authenticated";
+    if (response.status === 403) {
+      const payload = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
+      if (payload?.error?.code === "STEP_UP_REQUIRED") return "step_up_required";
+    }
+    return "unauthenticated";
   } catch {
-    return false;
+    return "unauthenticated";
   }
 }
 
 export default async function OrganiserLayout({ children }: Readonly<{ children: ReactNode }>) {
   if (demoFixturesEnabled()) return children;
-  if (!(await hasAuthenticatedSession())) redirect("/sign-in");
+  const status = await organiserSessionStatus();
+  if (status === "step_up_required") redirect("/sign-in?reason=step-up");
+  if (status !== "authenticated") redirect("/sign-in");
   return children;
 }
