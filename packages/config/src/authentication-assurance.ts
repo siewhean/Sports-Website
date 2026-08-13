@@ -1,12 +1,15 @@
-import type { AuthenticationAssuranceMinimum, AuthenticationAssurancePolicy } from "@matchday/identity";
+export type AuthenticationAssurancePolicyConfig = {
+  minimum: "off" | "mfa" | "phishing_resistant";
+  maxAuthenticationAgeMs?: number;
+};
 
-const allowed = new Set<AuthenticationAssuranceMinimum>(["off", "mfa", "phishing_resistant"]);
+const allowed = new Set<AuthenticationAssurancePolicyConfig["minimum"]>(["off", "mfa", "phishing_resistant"]);
 
 export function parseAuthenticationAssurancePolicy(
   value: string | undefined,
   maximumAgeSeconds: string | undefined,
-): AuthenticationAssurancePolicy {
-  const minimum = (value ?? "off") as AuthenticationAssuranceMinimum;
+): AuthenticationAssurancePolicyConfig {
+  const minimum = (value ?? "off") as AuthenticationAssurancePolicyConfig["minimum"];
   if (!allowed.has(minimum)) throw new Error("Invalid authentication assurance policy");
   if (!maximumAgeSeconds) return { minimum };
   const seconds = Number(maximumAgeSeconds);
