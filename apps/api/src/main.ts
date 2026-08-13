@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig, safeConfigSummary } from "@matchday/config";
+import { parseAuthenticationAssurancePolicy } from "@matchday/config/authentication-assurance";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
 import { Redis } from "ioredis";
 import postgres from "postgres";
@@ -13,7 +14,8 @@ import {
 import { buildApp } from "./app.js";
 import { startServer } from "./lifecycle.js";
 import { PostgresIdentityUnitOfWork } from "./identity-postgres.js";
-import { IdentityApiRuntime, UnavailableIdentityProvider } from "./identity-runtime.js";
+import { IdentityAssuranceRuntime } from "./identity-assurance-runtime.js";
+import { UnavailableIdentityProvider } from "./identity-runtime.js";
 import { createOidcIdentityProvider } from "./oidc-provider.js";
 import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
@@ -25,7 +27,28 @@ import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
 import { V1Phase4Runtime } from "./phase-4-v1-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
+function assuranceClaimName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname === "/") {
+    throw new Error("IDENTITY_OIDC_ASSURANCE_CLAIM must be a namespaced HTTPS URI");
+  }
+  return url.href;
+}
+
 const config = loadConfig();
+const assurancePolicy = parseAuthenticationAssurancePolicy(
+  process.env.IDENTITY_ASSURANCE_POLICY,
+  process.env.IDENTITY_ASSURANCE_MAX_AGE_SECONDS,
+);
+const oidcAssuranceClaim = assuranceClaimName(process.env.IDENTITY_OIDC_ASSURANCE_CLAIM);
+if (assurancePolicy.minimum === "phishing_resistant" && !oidcAssuranceClaim) {
+  throw new Error("IDENTITY_OIDC_ASSURANCE_CLAIM is required for phishing-resistant assurance");
+}
+const maxAuthenticationAgeSeconds =
+  assurancePolicy.maxAuthenticationAgeMs === undefined
+    ? undefined
+    : Math.floor(assurancePolicy.maxAuthenticationAgeMs / 1_000);
 const identityProvider = config.identity.oidc
   ? await createOidcIdentityProvider({
       issuer: config.identity.oidc.issuer,
@@ -33,6 +56,8 @@ const identityProvider = config.identity.oidc
       clientSecret: config.identity.oidc.clientSecret,
       callbackUri: config.identity.oidc.callbackUri,
       allowInsecureLoopback: config.environment === "local" || config.environment === "test",
+      ...(oidcAssuranceClaim ? { assuranceClaimName: oidcAssuranceClaim } : {}),
+      ...(maxAuthenticationAgeSeconds !== undefined ? { maxAuthenticationAgeSeconds } : {}),
     })
   : new UnavailableIdentityProvider();
 const telemetry = await startApiTelemetry(config);
@@ -43,11 +68,12 @@ const rateLimitRedis = new Redis(config.redisUrl, {
 });
 const postgresClient = postgres(config.databaseUrl, { max: 10, onnotice: () => undefined });
 const identitySql = postgresClient as unknown as PostgresJsSql;
-const identityRuntime = new IdentityApiRuntime(
+const identityRuntime = new IdentityAssuranceRuntime(
   identityProvider,
   new PostgresIdentityUnitOfWork(identitySql),
   config.identity.csrfHmacSecret,
   systemClock,
+  assurancePolicy,
 );
 const phase2Runtime = new Phase2Runtime(
   identitySql,
@@ -126,7 +152,17 @@ try {
     onCloseError: (error) => app.log.error({ err: error }, "api cleanup failed"),
     onListenError: (error) => app.log.fatal({ err: error }, "api failed to start"),
   });
-  app.log.info({ config: safeConfigSummary(config) }, "api started");
+  app.log.info(
+    {
+      config: safeConfigSummary(config),
+      authentication_assurance: {
+        minimum: assurancePolicy.minimum,
+        max_authentication_age_seconds: maxAuthenticationAgeSeconds ?? null,
+        oidc_assurance_claim_configured: Boolean(oidcAssuranceClaim),
+      },
+    },
+    "api started",
+  );
 } catch {
   process.exitCode = 1;
 }
