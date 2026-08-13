@@ -45,10 +45,12 @@ const assurancePolicy = parseAuthenticationAssurancePolicy(
   process.env.IDENTITY_ASSURANCE_POLICY,
   process.env.IDENTITY_ASSURANCE_MAX_AGE_SECONDS,
 );
-const oidcAssuranceClaim = assuranceClaimName(process.env.IDENTITY_OIDC_ASSURANCE_CLAIM);
-if (assurancePolicy.minimum === "phishing_resistant" && !oidcAssuranceClaim) {
-  throw new Error("IDENTITY_OIDC_ASSURANCE_CLAIM is required for phishing-resistant assurance");
+if (assurancePolicy.minimum !== "off") {
+  throw new Error(
+    "Authentication-assurance enforcement cannot be enabled until the organiser route gate has passed integration testing",
+  );
 }
+const oidcAssuranceClaim = assuranceClaimName(process.env.IDENTITY_OIDC_ASSURANCE_CLAIM);
 const maxAuthenticationAgeSeconds =
   assurancePolicy.maxAuthenticationAgeMs === undefined
     ? undefined
