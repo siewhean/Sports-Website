@@ -14,6 +14,7 @@ For the web application and API, the verification baseline is OWASP ASVS 5.0.0 L
 
 - Deployed environments use OIDC only. No demo, test, direct-exchange, or authentication-bypass path may be enabled outside local/test.
 - Privileged organiser access must use multi-factor authentication. The target for production is phishing-resistant WebAuthn/passkey or security-key authentication through the identity provider, with application-side assurance verification for privileged actions.
+- Successful authentication step-up must issue a fresh application session. A displaced lower-assurance session must not become privileged through replay, policy relaxation, or browser-cookie reuse; its revocation/expiry behavior must be explicitly tested before assurance enforcement is enabled.
 - Every private competition read or mutation re-authorizes the authenticated account against an active organisation membership on the server. Client-supplied organisation, competition, division, match, or role identifiers are never authorization evidence.
 - Browser mutations require same-origin protection and CSRF protection where cookie authentication is used.
 - Session, OIDC-flow, and scoring credentials are never stored in browser localStorage, rendered into pages, written to application logs, or persisted in plaintext server-side.
@@ -26,6 +27,7 @@ For the web application and API, the verification baseline is OWASP ASVS 5.0.0 L
 - Unexpected server failures return generic client errors. Authentication codes, tokens, cookies, database credentials, Redis credentials, and raw OIDC callback URLs must not enter logs or telemetry.
 - Public user-controlled text is rendered through framework escaping. Raw HTML execution, dynamic code evaluation, user-controlled command execution, and user-controlled outbound network destinations require an explicit security review before introduction.
 - Security headers must include CSP, anti-framing protection, nosniff, restrictive permissions policy, referrer policy, and HSTS for deployed HTTPS surfaces.
+- CI workflow actions that execute third-party code are pinned to reviewed immutable commit SHAs; mutable major-version tags alone are not sufficient for security-sensitive release workflows.
 
 ## Release security checks
 
