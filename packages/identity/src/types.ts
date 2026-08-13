@@ -17,6 +17,30 @@ export type ProviderIdentity = {
   lastAuthenticatedAt: Date | null;
 };
 
+export type AuthenticationAssuranceLevel = "single_factor" | "multi_factor" | "phishing_resistant";
+export type AuthenticationAssuranceMinimum = "off" | "mfa" | "phishing_resistant";
+
+export type ProviderAuthenticationAssurance = {
+  methods: readonly string[];
+  acr: string | null;
+  authenticatedAt: Date | null;
+  phishingResistant: boolean;
+};
+
+export type AuthenticationAssurance = {
+  level: AuthenticationAssuranceLevel;
+  methods: readonly string[];
+  acr: string | null;
+  authenticatedAt: Date | null;
+  mfaPerformed: boolean;
+  phishingResistant: boolean;
+};
+
+export type AuthenticationAssurancePolicy = {
+  minimum: AuthenticationAssuranceMinimum;
+  maxAuthenticationAgeMs?: number;
+};
+
 export type ProviderClaims = {
   issuer: string;
   subject: string;
@@ -24,6 +48,7 @@ export type ProviderClaims = {
   email: string;
   emailVerified: boolean;
   displayName: string;
+  assurance?: ProviderAuthenticationAssurance;
 };
 
 export type ProviderSignInRequest = {
@@ -81,6 +106,7 @@ export type SessionRecord = {
   providerIssuer: string | null;
   providerSubject: string | null;
   providerSessionId: string | null;
+  assurance?: AuthenticationAssurance;
 };
 
 export type ProviderSessionRevocation = {
@@ -135,6 +161,7 @@ export type AuthenticatedSession = {
   sessionId: string;
   idleExpiresAt: Date;
   absoluteExpiresAt: Date;
+  assurance: AuthenticationAssurance;
 };
 
 export type SignInResult = AuthenticatedSession & {
