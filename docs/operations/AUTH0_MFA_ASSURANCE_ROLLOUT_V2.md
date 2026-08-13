@@ -6,10 +6,12 @@ This document supersedes the earlier single-Action rollout example for the high-
 
 MATCHDAY can capture, normalize, and persist verified ID-token assurance evidence. The current security branch deliberately refuses startup when `IDENTITY_ASSURANCE_POLICY` is not `off`, because the central organiser assurance gate is not yet integrated and verified.
 
-Do not remove that startup refusal until the missing gate has tests proving both of these properties:
+Do not remove that startup refusal until the missing gate has tests proving all of these properties:
 
 - low-assurance sessions cannot access the private organiser APIs when stronger assurance is required;
-- low-assurance sessions can still sign out and can still be identified for defensive rate limiting.
+- low-assurance sessions can still sign out and can still be identified for defensive rate limiting;
+- successful step-up issues a fresh MATCHDAY application session;
+- the displaced lower-assurance session cannot later regain privileged access through replay or policy relaxation.
 
 ## Assurance semantics
 
@@ -63,6 +65,20 @@ exports.onExecutePostLogin = async (event, api) => {
 
 MATCHDAY intentionally rejects a token where this claim is true but standard `amr` does not also prove MFA.
 
+## Step-up session transition
+
+The browser receiving a stronger Auth0 result is not sufficient by itself. The application must treat step-up as a session transition.
+
+After successful step-up:
+
+1. create a new opaque MATCHDAY session bound to the new assurance evidence;
+2. replace the browser's old session cookie with the new session cookie;
+3. revoke or otherwise make the displaced lower-assurance application session incapable of later privileged reuse;
+4. preserve a non-secret audit trail of the transition without logging either session token;
+5. prove that replaying the displaced session does not recover organiser access, including after a policy change.
+
+Do not mutate an existing low-assurance session row in place to make it privileged. Session rotation keeps the security boundary explicit and gives revocation a clear target.
+
 ## Staging proof before enforcement
 
 Capture no secrets in the evidence. Prove all of the following using a controlled staging account:
@@ -73,16 +89,18 @@ Capture no secrets in the evidence. Prove all of the following using a controlle
 4. malformed assurance claims fail closed;
 5. an insufficient organiser session gets `STEP_UP_REQUIRED` once the route gate is integrated;
 6. that same insufficient session can still sign out;
-7. WebAuthn satisfies the phishing-resistant organiser policy;
-8. non-WebAuthn MFA does not satisfy the phishing-resistant organiser policy;
-9. recovery from a lost primary authenticator works without weakening normal policy;
-10. application logs contain no ID token, authorization code, session token, fallback code, or authenticator secret.
+7. successful step-up rotates the MATCHDAY session;
+8. replay of the displaced lower-assurance session does not regain organiser access;
+9. WebAuthn satisfies the phishing-resistant organiser policy;
+10. non-WebAuthn MFA does not satisfy the phishing-resistant organiser policy;
+11. recovery from a lost primary authenticator works without weakening normal policy;
+12. application logs contain no ID token, authorization code, session token, fallback code, or authenticator secret.
 
 ## Authentication freshness
 
 Do not enable an authentication-age requirement merely because `auth_time` exists. First prove the complete loop:
 
-requested maximum age → provider reauthentication → new verified `auth_time` → server session binding → stale session rejected.
+requested maximum age → provider reauthentication → new verified `auth_time` → new server session binding → displaced-session handling → stale session rejected.
 
 Only after that proof should `IDENTITY_ASSURANCE_MAX_AGE_SECONDS` be used in a deployed environment.
 
@@ -94,11 +112,12 @@ Only after that proof should `IDENTITY_ASSURANCE_MAX_AGE_SECONDS` be used in a d
 4. Prove the real token claims without logging tokens.
 5. Integrate and test the central organiser assurance gate.
 6. Integrate and test the OIDC assurance-context request (`acr_values`).
-7. Remove the temporary startup refusal for non-`off` policies only after steps 1–6 pass.
-8. Enable generic MFA in staging and test allowed/denied cases.
-9. Enable phishing-resistant policy in staging and test WebAuthn versus non-WebAuthn factors.
-10. Test rollback by returning the policy to `off` without changing any other security control.
-11. Only then repeat the reviewed configuration in production.
+7. Integrate and test step-up session rotation/revocation.
+8. Remove the temporary startup refusal for non-`off` policies only after steps 1–7 pass.
+9. Enable generic MFA in staging and test allowed/denied cases.
+10. Enable phishing-resistant policy in staging and test WebAuthn versus non-WebAuthn factors.
+11. Test rollback by returning the policy to `off` without changing any other security control, including proof that displaced lower-assurance sessions do not unexpectedly regain privilege.
+12. Only then repeat the reviewed configuration in production.
 
 ## Rollback rule
 
