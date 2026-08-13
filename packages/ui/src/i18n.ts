@@ -116,6 +116,7 @@ export const messages = {
     address: "Address",
     locality: "City or locality (optional)",
     country: "Country code",
+    countryHint: "Type a country name for suggestions, or enter the two letter code directly.",
     startsOn: "Start date",
     endsOn: "End date",
     timezone: "Time zone",

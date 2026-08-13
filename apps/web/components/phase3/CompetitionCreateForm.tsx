@@ -10,11 +10,13 @@ import {
   parseCompetitionOrganisationOptions,
   phase3CompetitionCreateMachine,
   phase3CompetitionSports,
+  phase3TimeZones,
   type CompetitionCreateDraft,
   type CompetitionCreateField,
   type CompetitionOrganisationOption,
 } from "@/lib/phase3-competition-create";
 import { useCompetitionCreateDraft } from "@/lib/phase3-competition-draft.client";
+import { phase3CountrySuggestions } from "@/lib/phase3-country-codes";
 import styles from "./CompetitionCreateForm.module.css";
 
 const initialDraft = (): CompetitionCreateDraft => ({
@@ -342,11 +344,41 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
         {field(phase3CompetitionCreateMachine.fields.locality, messages.organiserCreate.locality, {
           autoComplete: phase3CompetitionCreateMachine.autocomplete.locality,
         })}
-        {field(phase3CompetitionCreateMachine.fields.countryCode, messages.organiserCreate.country, {
-          required: true,
-          autoComplete: phase3CompetitionCreateMachine.autocomplete.country,
-          maxLength: 2,
-        })}
+        <div className={styles.field}>
+          <label htmlFor={phase3CompetitionCreateMachine.fields.countryCode}>{messages.organiserCreate.country}</label>
+          <input
+            id={phase3CompetitionCreateMachine.fields.countryCode}
+            name={phase3CompetitionCreateMachine.fields.countryCode}
+            list="country-code-suggestions"
+            value={draft.country_code}
+            type="text"
+            required
+            autoComplete={phase3CompetitionCreateMachine.autocomplete.country}
+            maxLength={2}
+            aria-invalid={Boolean(fieldErrors.country_code)}
+            aria-describedby={["country-code-hint", fieldErrors.country_code ? "country_code-error" : undefined]
+              .filter(Boolean)
+              .join(" ")}
+            onChange={(event) =>
+              update(phase3CompetitionCreateMachine.fields.countryCode, event.currentTarget.value.toUpperCase())
+            }
+          />
+          <datalist id="country-code-suggestions">
+            {phase3CountrySuggestions.map((country) => (
+              <option key={country.code} value={country.code}>
+                {country.name}
+              </option>
+            ))}
+          </datalist>
+          <p id="country-code-hint" className={styles.hint}>
+            {messages.organiserCreate.countryHint}
+          </p>
+          {fieldErrors.country_code ? (
+            <p id="country_code-error" className={styles.error}>
+              {fieldErrors.country_code}
+            </p>
+          ) : null}
+        </div>
         {field(phase3CompetitionCreateMachine.fields.startsOn, messages.organiserCreate.startsOn, {
           type: "date",
           required: true,
@@ -355,9 +387,29 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
           type: "date",
           required: true,
         })}
-        {field(phase3CompetitionCreateMachine.fields.timezone, messages.organiserCreate.timezone, {
-          required: true,
-        })}
+        <div className={styles.field}>
+          <label htmlFor={phase3CompetitionCreateMachine.fields.timezone}>{messages.organiserCreate.timezone}</label>
+          <select
+            id={phase3CompetitionCreateMachine.fields.timezone}
+            name={phase3CompetitionCreateMachine.fields.timezone}
+            value={draft.timezone}
+            required
+            aria-invalid={Boolean(fieldErrors.timezone)}
+            aria-describedby={fieldErrors.timezone ? "timezone-error" : undefined}
+            onChange={(event) => update(phase3CompetitionCreateMachine.fields.timezone, event.currentTarget.value)}
+          >
+            {phase3TimeZones.map((zone) => (
+              <option key={zone} value={zone}>
+                {zone}
+              </option>
+            ))}
+          </select>
+          {fieldErrors.timezone ? (
+            <p id="timezone-error" className={styles.error}>
+              {fieldErrors.timezone}
+            </p>
+          ) : null}
+        </div>
         {field(phase3CompetitionCreateMachine.fields.locale, messages.organiserCreate.locale, {
           required: true,
         })}
