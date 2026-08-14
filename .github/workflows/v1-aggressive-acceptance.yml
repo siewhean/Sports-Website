@@ -31,6 +31,26 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Audit production dependencies
         run: pnpm dependencies:audit
+      - name: Mirror production verified-scorer rate-limit partitioning in real E2E
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("apps/api/scripts/run-phase-4-real-e2e.ts")
+          source = path.read_text()
+          import_anchor = 'import { Phase2Runtime } from "../src/phase-2-runtime.js";\n'
+          import_line = 'import { verifiedScoringRateLimitSessionId } from "../src/scoring-rate-limit-identity.js";\n'
+          if import_line not in source:
+              if import_anchor not in source:
+                  raise SystemExit("Phase2Runtime import anchor not found")
+              source = source.replace(import_anchor, import_anchor + import_line, 1)
+          option_anchor = '      rateLimitNameSpace: redisOwnership.rateLimitNameSpace,\n'
+          resolver = '''      resolveVerifiedScoringRateLimitSessionId: async (request) => {\n        const sessionId = request.headers["x-scoring-session-id"];\n        const sessionToken = request.headers["x-scoring-session-token"];\n        if (typeof sessionId !== "string" || typeof sessionToken !== "string") return null;\n        if (sessionToken.length < 32 || sessionToken.length > 256) return null;\n        return verifiedScoringRateLimitSessionId(identitySql, sessionId, sessionToken);\n      },\n'''
+          if resolver not in source:
+              if option_anchor not in source:
+                  raise SystemExit("Rate-limit namespace anchor not found")
+              source = source.replace(option_anchor, option_anchor + resolver, 1)
+          path.write_text(source)
+          PY
       - name: Build real-stack API workspace dependency closure
         run: pnpm --filter @matchday/api... build
       - name: Run competition draft unit regression
