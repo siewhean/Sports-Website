@@ -27,6 +27,8 @@ import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
 import { V1Phase4Runtime } from "./phase-4-v1-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
+const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
+
 function assuranceClaimName(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const url = new URL(value);
@@ -51,6 +53,7 @@ if (assurancePolicy.minimum !== "off") {
   );
 }
 const oidcAssuranceClaim = assuranceClaimName(process.env.IDENTITY_OIDC_ASSURANCE_CLAIM);
+const authorizationAcrValues = assurancePolicy.minimum === "off" ? undefined : ([MFA_ACR] as const);
 const maxAuthenticationAgeSeconds =
   assurancePolicy.maxAuthenticationAgeMs === undefined
     ? undefined
@@ -63,6 +66,7 @@ const identityProvider = config.identity.oidc
       callbackUri: config.identity.oidc.callbackUri,
       allowInsecureLoopback: config.environment === "local" || config.environment === "test",
       ...(oidcAssuranceClaim ? { assuranceClaimName: oidcAssuranceClaim } : {}),
+      ...(authorizationAcrValues ? { authorizationAcrValues } : {}),
       ...(maxAuthenticationAgeSeconds !== undefined ? { maxAuthenticationAgeSeconds } : {}),
     })
   : new UnavailableIdentityProvider();
