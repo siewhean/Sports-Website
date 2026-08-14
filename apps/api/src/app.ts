@@ -105,9 +105,7 @@ export type BuildAppOptions = {
   authenticatedRateLimitMax?: number;
   scoringSessionRateLimitMax?: number;
   resolveRateLimitAccountId?: (request: FastifyRequest) => Promise<string | null> | string | null;
-  resolveVerifiedScoringRateLimitSessionId?: (
-    request: FastifyRequest,
-  ) => Promise<string | null> | string | null;
+  resolveVerifiedScoringRateLimitSessionId?: (request: FastifyRequest) => Promise<string | null> | string | null;
   telemetry?: ApiTelemetry;
   loggerDestination?: Parameters<typeof createLogger>[1];
   identityRuntime?: IdentityApiRuntime;
@@ -279,12 +277,7 @@ export async function buildApp(options: BuildAppOptions) {
         return options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000;
       }
       if (key.startsWith("scoring-session:")) {
-        return (
-          options.scoringSessionRateLimitMax ??
-          options.authenticatedRateLimitMax ??
-          options.rateLimitMax ??
-          1_000
-        );
+        return options.scoringSessionRateLimitMax ?? options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000;
       }
       return options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100;
     },

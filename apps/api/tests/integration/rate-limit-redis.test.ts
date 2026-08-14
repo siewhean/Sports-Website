@@ -72,10 +72,7 @@ describe("distributed rate limiting", () => {
       `bull:${queueName}:meta`,
       `bull:${queueName}.dead-letter:meta`,
       `matchday:job-cancellation:bull:${queueName}:job-1`,
-      `${ownership.rateLimitNameSpace}${anonymousRateLimitKey(
-        "127.0.0.1",
-        config.scoringAccess.rateLimitHmacSecret,
-      )}`,
+      `${ownership.rateLimitNameSpace}${anonymousRateLimitKey("127.0.0.1", config.scoringAccess.rateLimitHmacSecret)}`,
     ];
     try {
       await expect(assertEmptyOwnedRedisNamespace(redis, ownership)).resolves.toBe(0);
@@ -168,9 +165,9 @@ describe("distributed rate limiting", () => {
     });
     apps.push(app);
     try {
-      expect(
-        (await scoringRequest(app, { clientIp, sessionId: randomUUID(), token: "t".repeat(43) })).statusCode,
-      ).toBe(200);
+      expect((await scoringRequest(app, { clientIp, sessionId: randomUUID(), token: "t".repeat(43) })).statusCode).toBe(
+        200,
+      );
       const limited = await scoringRequest(app, { clientIp, sessionId: randomUUID(), token: "x".repeat(43) });
       expect(limited.statusCode).toBe(429);
       expect(limited.json().error.code).toBe("RATE_LIMITED");
@@ -211,24 +208,20 @@ describe("distributed rate limiting", () => {
     });
     apps.push(app);
     try {
-      expect(
-        (await scoringRequest(app, { clientIp, sessionId: firstSession, token: firstToken })).statusCode,
-      ).toBe(200);
-      expect(
-        (await scoringRequest(app, { clientIp, sessionId: secondSession, token: secondToken })).statusCode,
-      ).toBe(200);
-      expect(
-        (await scoringRequest(app, { clientIp, sessionId: firstSession, token: firstToken })).statusCode,
-      ).toBe(429);
+      expect((await scoringRequest(app, { clientIp, sessionId: firstSession, token: firstToken })).statusCode).toBe(
+        200,
+      );
+      expect((await scoringRequest(app, { clientIp, sessionId: secondSession, token: secondToken })).statusCode).toBe(
+        200,
+      );
+      expect((await scoringRequest(app, { clientIp, sessionId: firstSession, token: firstToken })).statusCode).toBe(
+        429,
+      );
 
       const keys = await ownedRateLimitKeys(redis, nameSpace);
       expect(keys).toEqual(
         [
-          `${nameSpace}${scoringSessionRateLimitKey(
-            firstSession,
-            clientIp,
-            config.scoringAccess.rateLimitHmacSecret,
-          )}`,
+          `${nameSpace}${scoringSessionRateLimitKey(firstSession, clientIp, config.scoringAccess.rateLimitHmacSecret)}`,
           `${nameSpace}${scoringSessionRateLimitKey(
             secondSession,
             clientIp,
