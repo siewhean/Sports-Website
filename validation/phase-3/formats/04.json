@@ -1,0 +1,98 @@
+{
+  "entryCount": 4,
+  "templates": [
+    {
+      "strategy": "full_placement",
+      "metrics": { "matchCount": 6, "guaranteedMatches": 3, "maximumMatches": 3 },
+      "stages": [
+        [
+          "round-robin",
+          "round_robin",
+          1,
+          null,
+          [],
+          4,
+          [
+            "round-robin-r1-m1",
+            "round-robin-r1-m2",
+            "round-robin-r2-m1",
+            "round-robin-r2-m2",
+            "round-robin-r3-m1",
+            "round-robin-r3-m2"
+          ]
+        ]
+      ],
+      "matches": [
+        ["round-robin-r1-m1", "round-robin", null, 1, 1, "pool", "s:1", "s:4"],
+        ["round-robin-r1-m2", "round-robin", null, 1, 2, "pool", "s:2", "s:3"],
+        ["round-robin-r2-m1", "round-robin", null, 2, 3, "pool", "s:1", "s:3"],
+        ["round-robin-r2-m2", "round-robin", null, 2, 4, "pool", "s:4", "s:2"],
+        ["round-robin-r3-m1", "round-robin", null, 3, 5, "pool", "s:1", "s:2"],
+        ["round-robin-r3-m2", "round-robin", null, 3, 6, "pool", "s:3", "s:4"]
+      ],
+      "terminals": []
+    },
+    {
+      "strategy": "championship_focus",
+      "metrics": { "matchCount": 4, "guaranteedMatches": 2, "maximumMatches": 2 },
+      "stages": [
+        [
+          "championship",
+          "single_elimination",
+          1,
+          null,
+          [],
+          4,
+          ["championship-r1-m1", "championship-r1-m2", "championship-r2-m1"]
+        ],
+        ["bronze", "bronze", 2, null, [], 2, ["bronze-final"]]
+      ],
+      "matches": [
+        ["championship-r1-m1", "championship", null, 1, 1, "progression", "s:1", "s:2"],
+        ["championship-r1-m2", "championship", null, 1, 2, "progression", "s:3", "s:4"],
+        [
+          "championship-r2-m1",
+          "championship",
+          null,
+          2,
+          3,
+          "championship",
+          "w:championship-r1-m1",
+          "w:championship-r1-m2"
+        ],
+        ["bronze-final", "bronze", null, 1, 4, "classification", "l:championship-r1-m1", "l:championship-r1-m2"]
+      ],
+      "terminals": ["championship-r2-m1", "bronze-final"]
+    },
+    {
+      "strategy": "compact_knockout",
+      "metrics": { "matchCount": 3, "guaranteedMatches": 1, "maximumMatches": 2 },
+      "stages": [
+        [
+          "championship",
+          "single_elimination",
+          1,
+          null,
+          [],
+          4,
+          ["championship-r1-m1", "championship-r1-m2", "championship-r2-m1"]
+        ]
+      ],
+      "matches": [
+        ["championship-r1-m1", "championship", null, 1, 1, "progression", "s:1", "s:2"],
+        ["championship-r1-m2", "championship", null, 1, 2, "progression", "s:3", "s:4"],
+        [
+          "championship-r2-m1",
+          "championship",
+          null,
+          2,
+          3,
+          "championship",
+          "w:championship-r1-m1",
+          "w:championship-r1-m2"
+        ]
+      ],
+      "terminals": ["championship-r2-m1"]
+    }
+  ]
+}

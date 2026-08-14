@@ -89,9 +89,6 @@ export function MarketingHome() {
             <ActionLink href="/organiser" tone="signal">
               {messages.home.primaryAction}
             </ActionLink>
-            <ActionLink href="/competitions/singapore-open" tone="light">
-              {messages.home.secondaryAction}
-            </ActionLink>
           </div>
         </div>
         <div className="marketing-hero__visual" aria-hidden="true">

@@ -5,7 +5,6 @@ import { BrandLink } from "./Primitives";
 const productionRoutes = [
   { href: "/organiser", label: messages.navigation.organiser },
   { href: "/official", label: messages.navigation.official },
-  { href: "/competitions/singapore-open", label: messages.navigation.public },
 ];
 
 export function SiteHeader({ inverse = false }: { inverse?: boolean }) {

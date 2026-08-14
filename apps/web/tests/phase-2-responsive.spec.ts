@@ -29,7 +29,7 @@ test("Phase 2 surfaces reflow at 320 CSS pixels without horizontal overflow", as
   for (const route of [
     "/organiser/competitions/singapore-open",
     "/organiser/competitions/singapore-open/schedule",
-    "/score/m12-access",
+    "/score",
     "/competitions/singapore-open",
   ] as const) {
     await page.goto(route);
@@ -45,7 +45,7 @@ test("Phase 2 surfaces reflow at 320 CSS pixels without horizontal overflow", as
 test("phone scoring keeps visible event actions at least 48 by 48 CSS pixels", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 900 });
   await openPhase2Scorekeeper(page);
-  const controls = page.locator(".p2-goal-controls button, .p2-other-controls button, .p2-score-final");
+  const controls = page.locator("[data-control-id]:visible, .p2-score-final");
   const count = await controls.count();
   expect(count).toBeGreaterThan(0);
   for (let index = 0; index < count; index += 1) {

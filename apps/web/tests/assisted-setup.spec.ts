@@ -1,12 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
-
-async function expectNoBlockingAccessibilityViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(
-    results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
-  ).toEqual([]);
-}
+import { expect, test } from "@playwright/test";
+import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
 
 test("Assisted Setup blocks invalid required fields and focuses the first error", async ({ page }) => {
   await page.goto("/setup");
@@ -114,7 +107,7 @@ test("UI Back and rapid Continue preserve every wizard step", async ({ page }) =
   await expect(page.getByRole("heading", { name: "Basics", exact: true })).toBeVisible();
 });
 
-test("phone navigation, validation, accessibility, and console remain healthy", async ({ page }) => {
+test("@a11y phone navigation and validation meet WCAG A/AA requirements without console errors", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -127,7 +120,7 @@ test("phone navigation, validation, accessibility, and console remain healthy", 
   await page.getByLabel("Competition name").fill("");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByLabel("Competition name")).toBeFocused();
-  await expectNoBlockingAccessibilityViolations(page);
+  await assertNoWcagAOrAaViolations(page);
 
   await page.getByLabel("Competition name").fill("Marina Cup 2026");
   await page.getByRole("button", { name: "Continue" }).click();

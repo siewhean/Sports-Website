@@ -2,12 +2,18 @@ import { defineConfig, devices } from "@playwright/test";
 
 const isCI = Boolean(process.env.CI);
 const webServerEnvironment =
-  "APP_ENV=local MATCHDAY_PHASE2_DATA_MODE=demo MATCHDAY_ALLOW_DEMO_FIXTURES=1 MATCHDAY_FEATURE_SCORING_PHASE2_ROUTE=false";
+  "APP_ENV=local MATCHDAY_PHASE2_DATA_MODE=demo MATCHDAY_ALLOW_DEMO_FIXTURES=1 MATCHDAY_FEATURE_SCORING_PHASE2_ROUTE=true";
 const buildStep = isCI ? "" : `${webServerEnvironment} pnpm build && `;
 
 export default defineConfig({
   testDir: "./tests",
-  testIgnore: ["**/unit/**", "**/phase-2-real-api.spec.ts", "**/phase-4-real-api.spec.ts"],
+  testIgnore: [
+    "**/unit/**",
+    "**/gate-c-access-real.spec.ts",
+    "**/gate-c-c2-real.spec.ts",
+    "**/phase-2-real-api.spec.ts",
+    "**/phase-4-real-api.spec.ts",
+  ],
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
@@ -33,7 +39,7 @@ export default defineConfig({
     {
       name: "phone-webkit",
       testMatch:
-        /phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
+        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
       use: {
         ...devices["iPhone 13"],
         baseURL: "https://127.0.0.1:3100",
@@ -43,7 +49,7 @@ export default defineConfig({
     {
       name: "phone-chromium",
       testMatch:
-        /phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
+        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts/,
       use: { ...devices["Pixel 7"] },
     },
   ],

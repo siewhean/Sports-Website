@@ -1,14 +1,15 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
-import { ArrowRight, CloudSlash, GridFour, Warning } from "@phosphor-icons/react";
+import { useRouter } from "next/navigation";
+import { useMemo, useRef, useState } from "react";
+import { CloudSlash, GridFour, Warning } from "@phosphor-icons/react";
 import type { FormatBuilderPageDocument, FormatEditorState, FormatSurfaceState } from "@/lib/phase4-format";
 import type { FormatDivisionOption } from "@/lib/phase4-format-division";
 import { resolveFormatWorkspaceRenderState } from "@/lib/phase4-format-workspace";
 import { opaqueId, translate as t } from "@matchday/ui";
 import { FormatEditor } from "./FormatDesignerParts";
 import { DesignerSkeleton, DesignerState } from "./FormatDesignerPanels";
+import { V1FormatPicker } from "./V1FormatPicker";
 
 const stateCopy: Record<Exclude<FormatSurfaceState, "ready" | "loading" | "empty">, { title: string; body: string }> = {
   error: { title: t("prototype.825eb58e5ef2"), body: t("prototype.f7664bec2b06") },
@@ -39,9 +40,17 @@ export function FormatDesignerWorkspace({
   page: FormatBuilderPageDocument;
   divisions: readonly FormatDivisionOption[];
 }) {
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const router = useRouter();
+  const refresh = () => {
+    router.refresh();
+    setTimeout(() => {
+      headingRef.current?.focus();
+    }, 0);
+  };
   const [draft, setDraft] = useState(page.draft);
   const [viewState, setViewState] = useState(page.state);
-  const [busy, setBusy] = useState<"validate" | "save" | "materialise" | "template" | null>(null);
+  const [busy, setBusy] = useState<"validate" | "save" | "materialise" | "publish" | "template" | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [showTemplates, setShowTemplates] = useState(false);
   const [templateName, setTemplateName] = useState("");
@@ -76,7 +85,9 @@ export function FormatDesignerWorkspace({
         body={copy.body}
         action={
           viewState === "conflict" ? (
-            <button onClick={() => window.location.reload()}>{t("prototype.4b46950ea4dd")}</button>
+            <button data-testid="phase4-format-conflict-reload" onClick={refresh}>
+              {t("prototype.4b46950ea4dd")}
+            </button>
           ) : undefined
         }
       />
@@ -88,17 +99,14 @@ export function FormatDesignerWorkspace({
         icon={<GridFour />}
         title={t("prototype.caa4511dd910")}
         body={t("prototype.d30c489ec255")}
-        action={
-          <Link href={`/organiser/competitions/${page.competitionId}/setup`}>
-            {t("prototype.e2a78250c5f5")}
-            <ArrowRight />
-          </Link>
-        }
+        action={<V1FormatPicker competitionId={page.competitionId} />}
       />
     );
   return (
     <>
-      <h1 style={hiddenHeadingStyle}>{t("prototype.675eeee2578b")}</h1>
+      <h1 ref={headingRef} tabIndex={-1} style={hiddenHeadingStyle}>
+        {t("prototype.675eeee2578b")}
+      </h1>
       <FormatEditor
         key={draft.draft_id}
         page={page}

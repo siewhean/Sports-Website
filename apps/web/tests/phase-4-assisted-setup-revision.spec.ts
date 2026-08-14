@@ -222,8 +222,13 @@ test("production Assisted Setup resumes, PATCHes in place, then advances with th
 test("rapid Continue interaction after resume does not skip a setup step", async ({ page }) => {
   const resumeBodies: Array<Record<string, unknown>> = [];
   const putBodies: Array<Record<string, unknown>> = [];
+  let releaseResume!: () => void;
+  const resumeGate = new Promise<void>((resolve) => {
+    releaseResume = resolve;
+  });
   await page.route("**/api/phase4/competitions/*/setup-draft/resume", async (route) => {
     resumeBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await resumeGate;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -251,7 +256,11 @@ test("rapid Continue interaction after resume does not skip a setup step", async
   await page.goto(`/organiser/competitions/${competitionId}/setup?step=basics`);
   await dismissConsent(page);
   await expect.poll(() => resumeBodies.length).toBe(1);
-  await page.getByRole("button", { name: /Continue to capacity/i }).dblclick();
+  await expect(page.getByRole("button", { name: /Saving/i })).toBeDisabled();
+  releaseResume();
+  const continueButton = page.getByRole("button", { name: /Continue to capacity/i });
+  await expect(continueButton).toBeEnabled();
+  await continueButton.dblclick();
   await expect(page.getByRole("heading", { name: "Set the event capacity" })).toBeVisible();
   await page.waitForTimeout(150);
   expect(putBodies).toHaveLength(1);

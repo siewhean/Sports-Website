@@ -37,7 +37,7 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
     if (response.status() >= 400) failedResponses.push(`${response.status()} ${response.url()}`);
     if (response.url().includes("/api/scoring/")) scoringResponses.push(`${response.status()} ${response.url()}`);
   });
-  await page.goto(`/score/${encodeURIComponent(state.accessToken)}`);
+  await page.goto(`/score#access=${encodeURIComponent(state.accessToken)}`);
   await dismissConsent(page);
   await expect(page).toHaveURL(`${state.webOrigin}/score`);
   await expect(
@@ -69,13 +69,13 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
   await page.getByRole("button", { name: "Start scoring" }).click();
   await page.getByRole("button", { name: `Goal ${state.homeName}` }).click();
   const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
-  await confirmation.getByLabel("Scorer name").fill("Aisha Tan");
+  await confirmation.getByLabel("Scorer or participant name").fill("Aisha Tan");
   await confirmation.getByRole("button", { name: `Record goal for ${state.homeName}` }).click();
   await expect(page.getByLabel(`${state.homeName} 1`)).toBeVisible();
   await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
 
   await page.reload();
-  await expect(page.getByRole("status")).toContainText("Active scorer");
+  await expect(page.locator(".p2-writer")).toContainText("Active scorer");
   await expect(page.getByLabel(`${state.homeName} 1`)).toBeVisible();
   await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
   const recoveredStorage = await page.evaluate(() => ({

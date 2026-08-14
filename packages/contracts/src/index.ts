@@ -27,6 +27,7 @@ export type ReadinessResponse = HealthResponse & {
 
 export type {
   PublicCompetitionProjection,
+  PublicDivisionProjection,
   PublicMatchResult,
   PublicParticipant,
   PublicScheduledMatch,

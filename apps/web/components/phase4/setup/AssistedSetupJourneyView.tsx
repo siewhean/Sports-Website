@@ -97,6 +97,7 @@ export function AssistedSetupJourneyView({
   onContinue,
   onSelectRecommendation,
   onComplete,
+  onRetry,
 }: {
   document: AssistedSetupPageDocument;
   setup: Phase4SetupDocument | null;
@@ -119,6 +120,7 @@ export function AssistedSetupJourneyView({
   onContinue(): void;
   onSelectRecommendation(id: string, acknowledged: boolean): void;
   onComplete(): void;
+  onRetry(): void;
 }) {
   if (viewState === "loading") return <SetupSkeleton />;
   if (viewState === "empty")
@@ -141,14 +143,19 @@ export function AssistedSetupJourneyView({
         icon={viewState === "offline" ? <CloudSlash aria-hidden="true" /> : <Warning aria-hidden="true" />}
         title={surface.title}
         body={surface.body}
+        assertive
         action={
           viewState === "expired" ? (
             <div className={styles.stateActions}>
-              <button onClick={() => window.location.reload()}>{t("prototype.b2430ebbca75")}</button>
+              <button data-testid="assisted-setup-offline-retry" disabled={commandBusy} onClick={onRetry}>
+                {t("prototype.b2430ebbca75")}
+              </button>
               <Link href={`/organiser/competitions/${document.competitionId}`}>{t("prototype.ab6b40c62c47")}</Link>
             </div>
           ) : viewState === "conflict" ? (
-            <button onClick={() => window.location.reload()}>{t("prototype.4b46950ea4dd")}</button>
+            <button data-testid="assisted-setup-conflict-retry" disabled={commandBusy} onClick={onRetry}>
+              {t("prototype.4b46950ea4dd")}
+            </button>
           ) : null
         }
       />
@@ -241,7 +248,14 @@ export function AssistedSetupJourneyView({
                 disabled={disabled}
               />
             ) : (
-              <InlineEmpty title={copy.setupUnavailable} href="" action={t("prototype.4b46950ea4dd")} />
+              <InlineEmpty
+                title={copy.setupUnavailable}
+                href=""
+                action={t("prototype.4b46950ea4dd")}
+                onReload={onRetry}
+                disabled={commandBusy}
+                actionTestId={opaqueId("assisted-setup-inline-conflict-retry")}
+              />
             )
           ) : null}
           {setup.current_step === "capacity" ? (
@@ -257,7 +271,14 @@ export function AssistedSetupJourneyView({
             preferences ? (
               <PreferencesStep value={preferences} onChange={onPreferences} disabled={disabled} />
             ) : (
-              <InlineEmpty title={copy.setupUnavailable} href="" action={t("prototype.4b46950ea4dd")} />
+              <InlineEmpty
+                title={copy.setupUnavailable}
+                href=""
+                action={t("prototype.4b46950ea4dd")}
+                onReload={onRetry}
+                disabled={commandBusy}
+                actionTestId={opaqueId("assisted-setup-inline-conflict-retry")}
+              />
             )
           ) : null}
           {setup.current_step === "format_recommendations" ? (
@@ -899,7 +920,21 @@ function Field({ id, label, helper, children }: { id?: string; label: string; he
   );
 }
 
-function InlineEmpty({ title, href, action }: { title: string; href: string; action: string }) {
+function InlineEmpty({
+  title,
+  href,
+  action,
+  actionTestId,
+  disabled,
+  onReload,
+}: {
+  title: string;
+  href: string;
+  action: string;
+  actionTestId?: string;
+  disabled?: boolean;
+  onReload?: () => void;
+}) {
   const content = (
     <>
       {action}
@@ -911,7 +946,13 @@ function InlineEmpty({ title, href, action }: { title: string; href: string; act
       <Info />
       <h2>{title}</h2>
       <p>{t("prototype.aa2bdd7e6e23")}</p>
-      {href ? <Link href={href}>{content}</Link> : <button onClick={() => window.location.reload()}>{content}</button>}
+      {href ? (
+        <Link href={href}>{content}</Link>
+      ) : (
+        <button data-testid={actionTestId} disabled={Boolean(disabled)} onClick={onReload}>
+          {content}
+        </button>
+      )}
     </div>
   );
 }
@@ -921,14 +962,20 @@ function SetupState({
   title,
   body,
   action,
+  assertive,
 }: {
   icon: ReactNode;
   title: string;
   body: string;
   action?: ReactNode;
+  assertive?: boolean;
 }) {
   return (
-    <section className={styles.state}>
+    <section
+      className={styles.state}
+      role={assertive ? "alert" : undefined}
+      aria-live={assertive ? "assertive" : undefined}
+    >
       <span>{icon}</span>
       <h1>{title}</h1>
       <p>{body}</p>

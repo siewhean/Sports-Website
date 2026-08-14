@@ -216,7 +216,12 @@ export function generateBalancedCanoePoloFormat(entries: readonly CompetitionEnt
 // deliberately retained because published competitions depend on its IDs and
 // match ordering.
 
-export const defaultFormatEntryCounts = [8, 12, 16, 24, 48] as const;
+/**
+ * The direct organiser journey must support a normal four-team division.  The
+ * larger defaults use a two-or-more-group structure; four teams instead have
+ * a complete round robin as their participation-first format.
+ */
+export const defaultFormatEntryCounts = [4, 8, 12, 16, 24, 48] as const;
 export type DefaultFormatEntryCount = (typeof defaultFormatEntryCounts)[number];
 
 export type FormatStageKind =
@@ -1184,6 +1189,12 @@ function freezeDeep<T>(value: T): Readonly<T> {
 }
 
 function buildFullPlacementGraph(entryCount: DefaultFormatEntryCount): FormatGraph {
+  if (entryCount === 4) {
+    const roundRobin = createRoundRobinFormatGraph(entryCount);
+    const graph: FormatGraph = { ...roundRobin, id: "default-4-full-placement" };
+    assertValidFormatGraph(graph);
+    return freezeDeep(graph) as FormatGraph;
+  }
   const group = buildGroupStage(entryCount, 4);
   const stages: MutableStage[] = [group.stage];
   const matches: FormatGraphMatch[] = [...group.matches];
@@ -1275,6 +1286,10 @@ function buildFullPlacementGraph(entryCount: DefaultFormatEntryCount): FormatGra
 }
 
 function buildChampionshipFocusGraph(entryCount: DefaultFormatEntryCount): FormatGraph {
+  if (entryCount === 4) {
+    const graph = buildCompactKnockoutGraph(entryCount, true);
+    return freezeDeep({ ...graph, id: "default-4-championship-focus" }) as FormatGraph;
+  }
   const full = buildFullPlacementGraph(entryCount);
   const retainedStages = full.stages.filter(
     (stage) => stage.id === "groups" || stage.id === "championship" || stage.id === "bronze",
@@ -1291,7 +1306,7 @@ function buildChampionshipFocusGraph(entryCount: DefaultFormatEntryCount): Forma
   return freezeDeep(graph) as FormatGraph;
 }
 
-function buildCompactKnockoutGraph(entryCount: DefaultFormatEntryCount): FormatGraph {
+function buildCompactKnockoutGraph(entryCount: DefaultFormatEntryCount, includeBronze = true): FormatGraph {
   const sources = Array.from({ length: entryCount }, (_, index): FormatParticipantSource => ({
     type: "entry_seed",
     seed: index + 1,
@@ -1308,7 +1323,7 @@ function buildCompactKnockoutGraph(entryCount: DefaultFormatEntryCount): FormatG
   const stages: MutableStage[] = [bracket.stage];
   const matches: FormatGraphMatch[] = [...bracket.matches];
   const terminals = [bracket.finalMatchId];
-  if (bracket.semifinalMatchIds.length === 2) {
+  if (includeBronze && bracket.semifinalMatchIds.length === 2) {
     const [homeSemi, awaySemi] = bracket.semifinalMatchIds;
     if (!homeSemi || !awaySemi) throw new Error("Championship semifinals are incomplete");
     const bronzeId = "bronze-final";
@@ -1463,7 +1478,7 @@ export function createDefaultFormatTemplates(entryCount: DefaultFormatEntryCount
       strategy: "compact_knockout",
       label: "Compact knockout",
       advantage: "Uses the fewest match slots and reaches a winner quickly.",
-      graph: buildCompactKnockoutGraph(entryCount),
+      graph: buildCompactKnockoutGraph(entryCount, entryCount !== 4),
     },
   ];
   return freezeDeep(
@@ -1592,11 +1607,15 @@ export function recommendCompetitionFormats(
     const purposes = new Set(
       exactDivisions.flatMap((division) => division.graph.matches.map((match) => match.purpose)),
     );
-    const rankingCoverage = purposes.has("classification")
-      ? "all_entries"
-      : purposes.has("placement")
-        ? "podium"
-        : "champion";
+    const everyDivisionHasCompleteRoundRobin = exactDivisions.every((division) =>
+      division.graph.stages.some((stage) => stage.kind === "round_robin" && stage.outputRanks === division.entryCount),
+    );
+    const rankingCoverage =
+      purposes.has("classification") || everyDivisionHasCompleteRoundRobin
+        ? "all_entries"
+        : purposes.has("placement")
+          ? "podium"
+          : "champion";
     const hasKnockout = exactDivisions.every((division) =>
       division.graph.stages.some((stage) => stage.kind === "single_elimination"),
     );

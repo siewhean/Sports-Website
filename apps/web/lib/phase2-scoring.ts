@@ -1,6 +1,13 @@
 "use client";
 
 import {
+  SPORT_PACKS,
+  reduceFiveSportScoreEvents,
+  type FiveSportScoreEvent,
+  type SportId,
+  type SportPackSettings,
+} from "@matchday/domain";
+import {
   phase2Copy,
   phase2Machine,
   type ScoringAccessInput,
@@ -11,7 +18,8 @@ import {
 } from "./phase2";
 
 type ApiSessionState = {
-  competition: { slug: string };
+  competition: { slug: string; sport_code: SportId };
+  sport: { pack_version: string; settings: SportPackSettings };
   match: {
     id: string;
     code: string;
@@ -19,8 +27,44 @@ type ApiSessionState = {
     home: { id: string | null; name: string | null };
     away: { id: string | null; name: string | null };
   };
-  writer: { generation: number; expires_at: string; read_only: boolean };
-  score: { home: number; away: number };
+  access: {
+    mode: "writer" | "candidate" | "viewer" | "transferred";
+    permissions: string[];
+    generation: number | null;
+    lease_expires_at: string | null;
+    expires_at: string;
+    read_only: boolean;
+    takeover_status: "none" | "pending" | "approved" | "denied";
+  };
+  score: {
+    home: number;
+    away: number;
+    lifecycle: "not_started" | "in_progress" | "finalised";
+    current_segment: number;
+    total_points: { home: number; away: number };
+    segment_wins: { home: number; away: number };
+    segments: Array<{
+      number: number;
+      home: number;
+      away: number;
+      completed: boolean;
+      winner: "home" | "away" | null;
+    }>;
+    actions: Array<{
+      event_id: string;
+      client_event_id: string;
+      event_type: string;
+      label: string;
+      side: "home" | "away" | null;
+      participant_id: string | null;
+      segment_number: number;
+      score_delta: number;
+      occurred_at: string;
+      reversed: boolean;
+      reversible: boolean;
+    }>;
+    conflicts: Array<{ code: string; segment_number: number; target_event_id: string }>;
+  };
   through_sequence: number;
   events: Array<{
     client_event_id: string;
@@ -34,24 +78,32 @@ type ApiSessionState = {
 };
 
 export class ScoringTransportError extends Error {
-  constructor(public readonly state: "access" | "conflict" | "unavailable") {
+  constructor(
+    public readonly state: "access" | "conflict" | "expired" | "invalid" | "rate_limited" | "revoked" | "unavailable",
+    public readonly retryAfterSeconds: number | null = null,
+  ) {
     super(state);
     this.name = "ScoringTransportError";
   }
 }
 
 async function responsePayload<T>(response: Response): Promise<T> {
-  if (response.status === 409) throw new ScoringTransportError("conflict");
-  if (!response.ok)
-    throw new ScoringTransportError(
-      response.status === 400 || response.status === 401 || response.status === 403 ? "access" : "unavailable",
-    );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    const state =
+      payload?.error === "conflict" ||
+      payload?.error === "expired" ||
+      payload?.error === "invalid" ||
+      payload?.error === "rate_limited" ||
+      payload?.error === "revoked"
+        ? payload.error
+        : response.status === 400 || response.status === 401 || response.status === 403
+          ? "access"
+          : "unavailable";
+    const retryAfter = Number(response.headers.get("retry-after"));
+    throw new ScoringTransportError(state, Number.isFinite(retryAfter) ? retryAfter : null);
+  }
   return response.json() as Promise<T>;
-}
-
-function manualSeconds(value: string): number {
-  const [minutes = "0", seconds = "0"] = value.split(":");
-  return Math.max(0, Math.min(3599, Number(minutes) * 60 + Number(seconds)));
 }
 
 function manualClock(value: number | null): string {
@@ -75,6 +127,9 @@ function eventType(event: ApiSessionState["events"][number]): string | null {
 }
 
 function sessionView(state: ApiSessionState): ScoringSessionView {
+  if (state.sport.pack_version !== SPORT_PACKS[state.competition.sport_code].version) {
+    throw new ScoringTransportError("unavailable");
+  }
   const reversed = new Set(
     state.events
       .filter((event) => event.type === "goal_reversed" || event.type === "card_reversed")
@@ -86,8 +141,10 @@ function sessionView(state: ApiSessionState): ScoringSessionView {
     return [
       {
         clientEventId: event.client_event_id,
+        expectedSequence: state.through_sequence,
         matchId: state.match.id,
         eventType: type,
+        canonical: true,
         ...(event.team_slot ? { team: event.team_slot } : {}),
         scorer: event.scorer ?? "",
         period: event.manual_period ?? 1,
@@ -97,6 +154,9 @@ function sessionView(state: ApiSessionState): ScoringSessionView {
   });
   return {
     competitionSlug: state.competition.slug,
+    sportId: state.competition.sport_code,
+    sportPackVersion: state.sport.pack_version,
+    sportSettings: state.sport.settings,
     matchId: state.match.id,
     matchLabel: state.match.code,
     stage: state.match.stage,
@@ -104,41 +164,94 @@ function sessionView(state: ApiSessionState): ScoringSessionView {
     away: state.match.away.name ?? "TBD",
     homeScore: state.score.home,
     awayScore: state.score.away,
+    scoreState: {
+      home: state.score.home,
+      away: state.score.away,
+      lifecycle: state.score.lifecycle,
+      currentSegment: state.score.current_segment,
+      totalPoints: state.score.total_points,
+      segmentWins: state.score.segment_wins,
+      segments: state.score.segments,
+      actions: state.score.actions.map((action) => ({
+        eventId: action.event_id,
+        clientEventId: action.client_event_id,
+        eventType: action.event_type,
+        label: action.label,
+        side: action.side,
+        participantId: action.participant_id,
+        segmentNumber: action.segment_number,
+        scoreDelta: action.score_delta,
+        occurredAt: action.occurred_at,
+        reversed: action.reversed,
+        reversible: action.reversible,
+      })),
+      conflicts: state.score.conflicts.map((conflict) => ({
+        code: conflict.code,
+        segmentNumber: conflict.segment_number,
+        targetEventId: conflict.target_event_id,
+      })),
+    },
     events,
-    readOnly: state.writer.read_only,
+    throughSequence: state.through_sequence,
+    mode: state.access.mode,
+    permissions: state.access.permissions,
+    generation: state.access.generation,
+    leaseExpiresAt: state.access.lease_expires_at,
+    expiresAt: state.access.expires_at,
+    takeoverStatus: state.access.takeover_status,
+    readOnly:
+      state.access.read_only || state.access.mode !== "writer" || !state.access.permissions.includes("score:write"),
   };
 }
 
-function appendBody(command: ScoringEventCommand): Record<string, unknown> {
-  const base = {
-    client_event_id: command.clientEventId,
-    team_slot: command.team,
-    scorer: command.scorer,
-    manual_period: command.period,
-    manual_event_seconds: manualSeconds(command.manualTime),
-    occurred_at: new Date().toISOString(),
-  };
-  if (command.eventType === phase2Machine.matchStarted) {
-    return {
-      client_event_id: command.clientEventId,
-      type: phase2Machine.matchStarted,
-      manual_period: command.period,
-      manual_event_seconds: manualSeconds(command.manualTime),
-      payload: {},
-      occurred_at: new Date().toISOString(),
-    };
+export type ScoringWriterAvailability = "active" | "expiring" | "expired";
+
+export function scoringWriterAvailability(
+  session: Pick<ScoringSessionView, "expiresAt" | "leaseExpiresAt" | "mode" | "readOnly">,
+  now: number = Date.now(),
+): ScoringWriterAvailability {
+  const sessionExpiresAt = Date.parse(session.expiresAt);
+  if (!Number.isFinite(sessionExpiresAt) || sessionExpiresAt <= now) return "expired";
+  if (session.mode !== "writer") return "active";
+  const leaseExpiresAt = session.leaseExpiresAt ? Date.parse(session.leaseExpiresAt) : Number.NaN;
+  return session.readOnly || !Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now + 15_000 ? "expiring" : "active";
+}
+
+export function scoringSessionAnnouncement(session: ScoringSessionView, now: number = Date.now()): string {
+  if (session.mode === phase2Machine.writer) {
+    const availability = scoringWriterAvailability(session, now);
+    return availability === phase2Machine.active
+      ? phase2Copy.accessRestored
+      : availability === phase2Machine.expiring
+        ? phase2Copy.leaseExpiring
+        : phase2Copy.sessionExpired;
   }
-  if (command.eventType === phase2Machine.goal) return { ...base, type: "goal_added", payload: {} };
-  if (command.eventType === phase2Machine.timeout) return { ...base, type: "timeout_added", payload: {} };
-  if (command.eventType === phase2Machine.incident)
-    return { ...base, type: "incident_added", payload: { note: command.scorer } };
-  const colour =
-    command.eventType === phase2Machine.greenCard
-      ? "green"
-      : command.eventType === phase2Machine.yellowCard
-        ? "yellow"
-        : "red";
-  return { ...base, type: "card_added", payload: { person_id: command.scorer, colour } };
+  if (session.mode === phase2Machine.candidate) return phase2Copy.candidate;
+  if (session.mode === phase2Machine.transferred) return phase2Copy.transferred;
+  return phase2Copy.readOnly;
+}
+
+export function canonicalSegmentNumber(eventType: string, currentSegment: number, selectedSegment: number): number {
+  return eventType === phase2Machine.overtime ? currentSegment + 1 : selectedSegment;
+}
+
+function appendBody(command: ScoringEventCommand): Record<string, unknown> {
+  if (!command.canonical || !Number.isSafeInteger(command.expectedSequence) || Number(command.expectedSequence) < 0) {
+    throw new ScoringTransportError("unavailable");
+  }
+  return {
+    client_event_id: command.clientEventId,
+    expected_sequence: command.expectedSequence,
+    type: command.eventType,
+    occurred_at: command.occurredAt ?? new Date().toISOString(),
+    ...(command.team ? { team_slot: command.team } : {}),
+    ...(typeof command.participantId === "string" ? { participant_id: command.participantId } : {}),
+    ...(command.unknownParticipant !== undefined ? { unknown_participant: command.unknownParticipant } : {}),
+    ...(command.segmentNumber !== undefined ? { segment_number: command.segmentNumber } : {}),
+    ...(command.manualTimeSeconds !== undefined ? { manual_time_seconds: command.manualTimeSeconds } : {}),
+    ...(command.reversalTargetEventId ? { reversal_target_event_id: command.reversalTargetEventId } : {}),
+    ...(command.reason ? { reason: command.reason } : {}),
+  };
 }
 
 class ApiScoringCommandPort implements ScoringCommandPort {
@@ -146,19 +259,59 @@ class ApiScoringCommandPort implements ScoringCommandPort {
     const response = await fetch("/api/scoring/access/exchange", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(input.token ? { token: input.token } : { shortCode: input.shortCode }),
+      body: JSON.stringify(
+        input.token
+          ? { token: input.token, deviceId: input.device.id, deviceLabel: input.device.label }
+          : { shortCode: input.shortCode, deviceId: input.device.id, deviceLabel: input.device.label },
+      ),
       credentials: "same-origin",
     });
     return sessionView(await responsePayload<ApiSessionState>(response));
   }
 
-  async recoverSession(): Promise<ScoringSessionView | null> {
+  async recoverSession(signal?: AbortSignal): Promise<ScoringSessionView | null> {
     const response = await fetch("/api/scoring/session", {
       cache: "no-store",
       credentials: "same-origin",
+      signal,
     });
-    if (response.status === 401 || response.status === 403) return null;
+    if (response.status === 204 || response.status === 401) return null;
     return sessionView(await responsePayload<ApiSessionState>(response));
+  }
+
+  async heartbeat(
+    input: {
+      lastAcknowledgedSequence: number;
+      pendingEventCount: number;
+      pendingThroughSequence: number | null;
+    },
+    signal?: AbortSignal,
+  ): Promise<ScoringSessionView> {
+    const response = await fetch("/api/scoring/session/heartbeat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        lastAcknowledgedSequence: input.lastAcknowledgedSequence,
+        pendingEventCount: input.pendingEventCount,
+        pendingThroughSequence: input.pendingThroughSequence,
+      }),
+      credentials: "same-origin",
+      signal,
+    });
+    return sessionView(await responsePayload<ApiSessionState>(response));
+  }
+
+  async requestTakeover(input: {
+    pendingEventCount: number;
+    pendingThroughSequence: number | null;
+  }): Promise<{ status: "pending"; requestId: string }> {
+    const response = await fetch("/api/scoring/takeover", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+      credentials: "same-origin",
+    });
+    return responsePayload<{ status: "pending"; requestId: string }>(response);
   }
 
   async appendEvent(command: ScoringEventCommand): Promise<ScoringAppendReceipt> {
@@ -172,12 +325,15 @@ class ApiScoringCommandPort implements ScoringCommandPort {
     return { clientEventId: command.clientEventId, sequence: receipt.sequence, syncState: "acknowledged" };
   }
 
-  async finalizeResult(command: { matchId: string }): Promise<{ receiptId: string; publishedAt: string }> {
+  async finalizeResult(command: {
+    matchId: string;
+    expectedSequence: number;
+  }): Promise<{ receiptId: string; publishedAt: string }> {
     const clientEventId = crypto.randomUUID();
     const response = await fetch("/api/scoring/finalise", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ client_event_id: clientEventId }),
+      body: JSON.stringify({ client_event_id: clientEventId, expected_sequence: command.expectedSequence }),
       credentials: "same-origin",
     });
     const receipt = await responsePayload<{ match_id?: string; result_version?: number }>(response);
@@ -188,22 +344,89 @@ class ApiScoringCommandPort implements ScoringCommandPort {
   }
 }
 
-const demoSession: ScoringSessionView = {
-  competitionSlug: phase2Machine.singaporeOpenSlug,
-  matchId: phase2Machine.matchTwelveId,
-  matchLabel: phase2Copy.matchTwelve,
-  stage: phase2Copy.groupB,
-  home: phase2Copy.marinaBlue,
-  away: phase2Copy.harbourGold,
-  homeScore: 0,
-  awayScore: 0,
-  events: [],
-  readOnly: false,
-};
+export async function refreshScoringSessionAccess(
+  port: Pick<ScoringCommandPort, "heartbeat" | "recoverSession">,
+  input: {
+    lastAcknowledgedSequence: number;
+    pendingEventCount: number;
+    pendingThroughSequence: number | null;
+  },
+  recoverAuthoritatively: boolean,
+  signal?: AbortSignal,
+): Promise<ScoringSessionView | null> {
+  if (recoverAuthoritatively) {
+    const recovered = await port.recoverSession(signal);
+    if (!recovered || recovered.mode !== "writer" || recovered.readOnly) return recovered;
+  }
+  return port.heartbeat(input, signal);
+}
 
 class DemoScoringCommandPort implements ScoringCommandPort {
   private active = false;
   private sequence = 0;
+  private readonly canonicalEvents: FiveSportScoreEvent[] = [];
+
+  constructor(private readonly sportId: SportId) {}
+
+  private session(): ScoringSessionView {
+    const pack = SPORT_PACKS[this.sportId];
+    const reduced = reduceFiveSportScoreEvents(this.sportId, this.canonicalEvents, pack.recommendedSettings);
+    return {
+      competitionSlug: phase2Machine.singaporeOpenSlug,
+      sportId: this.sportId,
+      sportPackVersion: pack.version,
+      sportSettings: pack.recommendedSettings,
+      matchId: phase2Machine.matchTwelveId,
+      matchLabel: phase2Copy.matchTwelve,
+      stage: phase2Copy.groupB,
+      home: phase2Copy.marinaBlue,
+      away: phase2Copy.harbourGold,
+      homeScore: reduced.score.home,
+      awayScore: reduced.score.away,
+      scoreState: {
+        home: reduced.score.home,
+        away: reduced.score.away,
+        lifecycle: reduced.lifecycle,
+        currentSegment: reduced.currentSegment,
+        totalPoints: reduced.totalPoints,
+        segmentWins: reduced.segmentWins,
+        segments: reduced.segments.map((segment) => ({
+          number: segment.number,
+          home: segment.home,
+          away: segment.away,
+          completed: segment.completed,
+          winner: segment.winner,
+        })),
+        actions: reduced.actions.map((action) => ({
+          eventId: action.eventId,
+          clientEventId: action.clientEventId,
+          eventType: action.eventType,
+          label: action.label,
+          side: action.side,
+          participantId: action.participantId,
+          segmentNumber: action.segmentNumber,
+          scoreDelta: action.scoreDelta,
+          occurredAt: action.occurredAt,
+          reversed: action.reversed,
+          reversible: pack.eventTypes.find((event) => event.id === action.eventType)?.reversable ?? false,
+        })),
+        conflicts: reduced.conflicts.map((conflict) => ({
+          code: conflict.code,
+          segmentNumber: conflict.segmentNumber,
+          targetEventId: conflict.targetEventId,
+        })),
+      },
+      events: [],
+      throughSequence: this.sequence,
+      mode: "writer",
+      permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+      generation: 1,
+      leaseExpiresAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:30:00.000Z",
+      takeoverStatus: "none",
+      readOnly: false,
+    };
+  }
 
   async exchangeAccess(input: ScoringAccessInput): Promise<ScoringSessionView> {
     const accepted =
@@ -211,15 +434,47 @@ class DemoScoringCommandPort implements ScoringCommandPort {
       input.token === "demo-phase2-scoring-access-token-000000000001";
     if (!accepted) throw new ScoringTransportError("access");
     this.active = true;
-    return demoSession;
+    return this.session();
   }
 
   async recoverSession(): Promise<ScoringSessionView | null> {
-    return this.active ? demoSession : null;
+    return this.active ? this.session() : null;
+  }
+
+  async heartbeat(): Promise<ScoringSessionView> {
+    return this.session();
+  }
+
+  async requestTakeover(): Promise<{ status: "pending"; requestId: string }> {
+    return { status: "pending", requestId: crypto.randomUUID() };
   }
 
   async appendEvent(command: ScoringEventCommand): Promise<ScoringAppendReceipt> {
     this.sequence += 1;
+    this.canonicalEvents.push({
+      eventId: command.clientEventId,
+      clientEventId: command.clientEventId,
+      matchId: command.matchId,
+      sequence: this.sequence,
+      actorId: "00000000-0000-4000-8000-000000000201",
+      scoringSessionId: "00000000-0000-4000-8000-000000000202",
+      occurredAt: command.occurredAt ?? new Date().toISOString(),
+      type: command.eventType,
+      ...(command.team ? { side: command.team } : {}),
+      ...(command.participantId !== undefined ? { participantId: command.participantId } : {}),
+      ...(command.unknownParticipant !== undefined ? { unknownParticipant: command.unknownParticipant } : {}),
+      ...(command.segmentNumber !== undefined ? { segmentNumber: command.segmentNumber } : {}),
+      ...(command.manualTimeSeconds !== undefined ? { manualTimeSeconds: command.manualTimeSeconds } : {}),
+      ...(command.reversalTargetEventId ? { reversalTargetEventId: command.reversalTargetEventId } : {}),
+      ...(command.reason ? { reason: command.reason } : {}),
+    });
+    try {
+      reduceFiveSportScoreEvents(this.sportId, this.canonicalEvents, SPORT_PACKS[this.sportId].recommendedSettings);
+    } catch (error) {
+      this.canonicalEvents.pop();
+      this.sequence -= 1;
+      throw error;
+    }
     return { clientEventId: command.clientEventId, sequence: this.sequence, syncState: "pending" };
   }
 
@@ -228,6 +483,9 @@ class DemoScoringCommandPort implements ScoringCommandPort {
   }
 }
 
-export function createScoringCommandPort(mode: "api" | "demo"): ScoringCommandPort {
-  return mode === "demo" ? new DemoScoringCommandPort() : new ApiScoringCommandPort();
+export function createScoringCommandPort(
+  mode: "api" | "demo",
+  demoSportId: SportId = "canoe_polo",
+): ScoringCommandPort {
+  return mode === "demo" ? new DemoScoringCommandPort(demoSportId) : new ApiScoringCommandPort();
 }

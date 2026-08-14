@@ -1,3 +1,4 @@
+import { SPORT_PACKS, parseFiveSportScoreCommand, validateSportSettings, type SportId } from "@matchday/domain";
 import {
   expiredScoringSessionCookie,
   InvalidScoringSessionError,
@@ -9,19 +10,7 @@ import {
 import { isScoringAccessToken } from "./scoring-access";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const EVENT_TYPES = new Set([
-  "match_started",
-  "period_changed",
-  "goal_added",
-  "goal_reversed",
-  "card_added",
-  "card_reversed",
-  "timeout_added",
-  "incident_added",
-  "match_reopened",
-]);
-
-type SafeError = "access" | "conflict" | "unavailable";
+type SafeError = "access" | "conflict" | "expired" | "invalid" | "rate_limited" | "revoked" | "unavailable";
 
 function jsonResponse(payload: unknown, status: number, cookie?: string): Response {
   const headers = new Headers({
@@ -35,13 +24,30 @@ function jsonResponse(payload: unknown, status: number, cookie?: string): Respon
   return new Response(JSON.stringify(payload), { status, headers });
 }
 
-function safeError(status: number, clearCookie = false): Response {
-  const state: SafeError = status === 409 ? "conflict" : [400, 401, 403].includes(status) ? "access" : "unavailable";
-  return jsonResponse({ error: state }, status, clearCookie ? expiredScoringSessionCookie() : undefined);
+function safeError(status: number, clearCookie = false, explicitState?: SafeError, sourceHeaders?: Headers): Response {
+  const state: SafeError =
+    explicitState ??
+    (status === 409
+      ? "conflict"
+      : status === 410
+        ? "expired"
+        : status === 429
+          ? "rate_limited"
+          : status === 422
+            ? "invalid"
+            : [400, 401, 403].includes(status)
+              ? "access"
+              : "unavailable");
+  const response = jsonResponse({ error: state }, status, clearCookie ? expiredScoringSessionCookie() : undefined);
+  for (const name of ["ratelimit-limit", "ratelimit-remaining", "ratelimit-reset", "retry-after"]) {
+    const value = sourceHeaders?.get(name);
+    if (value) response.headers.set(name, value);
+  }
+  return response;
 }
 
 function exposedStatus(status: number): number {
-  return [400, 401, 403, 409, 422, 429].includes(status) ? status : 503;
+  return [400, 401, 403, 409, 410, 422, 429].includes(status) ? status : 503;
 }
 
 function sameOriginMutation(request: Request): boolean {
@@ -123,14 +129,15 @@ function cookieValue(request: Request): string | null {
   return null;
 }
 
-function authHeaders(auth: ScoringServerAuth): HeadersInit {
-  return {
+function authHeaders(auth: ScoringServerAuth): Headers {
+  const headers = new Headers({
     accept: "application/json",
     "content-type": "application/json",
     "x-scoring-session-id": auth.sessionId,
     "x-scoring-session-token": auth.sessionToken,
-    "x-writer-generation": String(auth.generation),
-  };
+  });
+  if (auth.generation !== null) headers.set("x-writer-generation", String(auth.generation));
+  return headers;
 }
 
 function authenticatedRequest(request: Request): { auth: ScoringServerAuth; baseUrl: URL } | { response: Response } {
@@ -174,20 +181,147 @@ function eventPayload(value: unknown): Record<string, unknown> {
   return result;
 }
 
+const SPORT_IDS = new Set<unknown>(Object.keys(SPORT_PACKS));
+
+function safeInteger(value: unknown, minimum = 0): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= minimum;
+}
+
+function scorePair(value: unknown): { home: number; away: number } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  return safeInteger(source.home) && safeInteger(source.away)
+    ? { home: Number(source.home), away: Number(source.away) }
+    : null;
+}
+
+function canonicalScoreState(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const pair = scorePair(source);
+  const totalPoints = scorePair(source.total_points);
+  const segmentWins = scorePair(source.segment_wins);
+  if (
+    !pair ||
+    !["not_started", "in_progress", "finalised"].includes(String(source.lifecycle ?? "")) ||
+    !safeInteger(source.current_segment, 1) ||
+    !totalPoints ||
+    !segmentWins ||
+    !Array.isArray(source.segments) ||
+    !Array.isArray(source.actions) ||
+    !Array.isArray(source.conflicts)
+  ) {
+    return null;
+  }
+  const segments: Array<Record<string, unknown>> = [];
+  for (const raw of source.segments) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const segment = raw as Record<string, unknown>;
+    if (
+      !safeInteger(segment.number, 1) ||
+      !safeInteger(segment.home) ||
+      !safeInteger(segment.away) ||
+      typeof segment.completed !== "boolean" ||
+      (segment.winner !== null && segment.winner !== "home" && segment.winner !== "away")
+    ) {
+      return null;
+    }
+    segments.push({
+      number: segment.number,
+      home: segment.home,
+      away: segment.away,
+      completed: segment.completed,
+      winner: segment.winner,
+    });
+  }
+  const actions: Array<Record<string, unknown>> = [];
+  for (const raw of source.actions) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const action = raw as Record<string, unknown>;
+    if (
+      !UUID_PATTERN.test(String(action.event_id ?? "")) ||
+      !UUID_PATTERN.test(String(action.client_event_id ?? "")) ||
+      typeof action.event_type !== "string" ||
+      typeof action.label !== "string" ||
+      (action.side !== null && action.side !== "home" && action.side !== "away") ||
+      (action.participant_id !== null && typeof action.participant_id !== "string") ||
+      !safeInteger(action.segment_number, 1) ||
+      !safeInteger(action.score_delta) ||
+      typeof action.occurred_at !== "string" ||
+      !Number.isFinite(Date.parse(action.occurred_at)) ||
+      typeof action.reversed !== "boolean" ||
+      typeof action.reversible !== "boolean"
+    ) {
+      return null;
+    }
+    actions.push({
+      event_id: action.event_id,
+      client_event_id: action.client_event_id,
+      event_type: action.event_type,
+      label: action.label,
+      side: action.side,
+      participant_id: action.participant_id,
+      segment_number: action.segment_number,
+      score_delta: action.score_delta,
+      occurred_at: action.occurred_at,
+      reversed: action.reversed,
+      reversible: action.reversible,
+    });
+  }
+  const conflicts: Array<Record<string, unknown>> = [];
+  for (const raw of source.conflicts) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const conflict = raw as Record<string, unknown>;
+    if (
+      typeof conflict.code !== "string" ||
+      !safeInteger(conflict.segment_number, 1) ||
+      !UUID_PATTERN.test(String(conflict.target_event_id ?? ""))
+    ) {
+      return null;
+    }
+    conflicts.push({
+      code: conflict.code,
+      segment_number: conflict.segment_number,
+      target_event_id: conflict.target_event_id,
+    });
+  }
+  return {
+    ...pair,
+    lifecycle: source.lifecycle,
+    current_segment: source.current_segment,
+    total_points: totalPoints,
+    segment_wins: segmentWins,
+    segments,
+    actions,
+    conflicts,
+  };
+}
+
 function scoringState(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
   const source = value as Record<string, unknown>;
   const competition = source.competition as Record<string, unknown> | null;
   const match = source.match as Record<string, unknown> | null;
+  const access = source.access as Record<string, unknown> | null;
   const writer = source.writer as Record<string, unknown> | null;
   const score = source.score as Record<string, unknown> | null;
+  const sport = source.sport as Record<string, unknown> | null;
   const home = match?.home as Record<string, unknown> | null;
   const away = match?.away as Record<string, unknown> | null;
   if (
     !competition ||
     typeof competition.slug !== "string" ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(competition.slug) ||
+    !SPORT_IDS.has(competition.sport_code) ||
+    !sport ||
+    typeof sport.pack_version !== "string" ||
+    sport.pack_version !== SPORT_PACKS[competition.sport_code as SportId].version ||
+    !sport.settings ||
+    typeof sport.settings !== "object" ||
+    Array.isArray(sport.settings) ||
+    validateSportSettings(SPORT_PACKS[competition.sport_code as SportId], sport.settings).length > 0 ||
     !match ||
+    !access ||
     !writer ||
     !score ||
     !UUID_PATTERN.test(String(match.id ?? "")) ||
@@ -199,11 +333,15 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     nullableString(home.name, 200) === undefined ||
     nullableString(away.id, 64) === undefined ||
     nullableString(away.name, 200) === undefined ||
-    !Number.isSafeInteger(writer.generation) ||
-    typeof writer.expires_at !== "string" ||
+    !["writer", "candidate", "viewer", "transferred"].includes(String(access.mode ?? "")) ||
+    !Array.isArray(access.permissions) ||
+    !access.permissions.every((permission) => typeof permission === "string") ||
+    (writer.generation !== null && !Number.isSafeInteger(writer.generation)) ||
+    (writer.expires_at !== null && typeof writer.expires_at !== "string") ||
     typeof writer.read_only !== "boolean" ||
-    !Number.isSafeInteger(score.home) ||
-    !Number.isSafeInteger(score.away) ||
+    typeof access.session_expires_at !== "string" ||
+    !["none", "pending", "approved", "denied"].includes(String(source.takeover_status ?? "none")) ||
+    !canonicalScoreState(score) ||
     !Number.isSafeInteger(source.through_sequence) ||
     !Array.isArray(source.events)
   ) {
@@ -236,7 +374,8 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     });
   }
   return {
-    competition: { slug: competition.slug },
+    competition: { slug: competition.slug, sport_code: competition.sport_code },
+    sport: { pack_version: sport.pack_version, settings: sport.settings },
     match: {
       id: match.id,
       code: match.code,
@@ -244,27 +383,78 @@ function scoringState(value: unknown): Record<string, unknown> | null {
       home: { id: home.id, name: home.name },
       away: { id: away.id, name: away.name },
     },
-    writer: {
+    access: {
+      mode: access.mode,
+      permissions: access.permissions,
       generation: writer.generation,
-      expires_at: writer.expires_at,
+      lease_expires_at: writer.expires_at,
+      expires_at: access.session_expires_at,
       read_only: writer.read_only,
+      takeover_status: source.takeover_status ?? "none",
     },
-    score: { home: score.home, away: score.away },
+    score: canonicalScoreState(score),
     through_sequence: source.through_sequence,
     events,
   };
 }
 
-function exchangeInput(value: unknown): { token?: string; short_code?: string } | null {
+function refreshAuthFromState(auth: ScoringServerAuth, state: Record<string, unknown>): ScoringServerAuth | null {
+  const access = state.access;
+  if (!access || typeof access !== "object" || Array.isArray(access)) return null;
+  const source = access as Record<string, unknown>;
+  if (
+    (source.mode !== "writer" &&
+      source.mode !== "candidate" &&
+      source.mode !== "viewer" &&
+      source.mode !== "transferred") ||
+    !Array.isArray(source.permissions) ||
+    !source.permissions.every((permission) => typeof permission === "string") ||
+    (source.generation !== null && !Number.isSafeInteger(source.generation)) ||
+    typeof source.expires_at !== "string" ||
+    (source.lease_expires_at !== null && typeof source.lease_expires_at !== "string")
+  ) {
+    return null;
+  }
+  return {
+    ...auth,
+    mode: source.mode,
+    permissions: source.permissions as string[],
+    generation: source.generation as number | null,
+    expiresAt: source.expires_at,
+    leaseExpiresAt: source.lease_expires_at as string | null,
+  };
+}
+
+function exchangeInput(
+  value: unknown,
+): { token?: string; short_code?: string; device_id: string; device_label?: string } | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
   const token = input.token;
   const shortCode = input.shortCode;
+  const deviceId = input.deviceId;
+  const deviceLabel = input.deviceLabel;
+  if (
+    typeof deviceId !== "string" ||
+    !UUID_PATTERN.test(deviceId) ||
+    (deviceLabel !== undefined &&
+      (typeof deviceLabel !== "string" || deviceLabel.trim().length < 1 || deviceLabel.length > 80))
+  ) {
+    return null;
+  }
   if (isScoringAccessToken(token) && shortCode === undefined) {
-    return { token };
+    return {
+      token,
+      device_id: deviceId,
+      ...(typeof deviceLabel === "string" ? { device_label: deviceLabel.trim() } : {}),
+    };
   }
   if (typeof shortCode === "string" && /^\d{12}$/.test(shortCode) && token === undefined) {
-    return { short_code: shortCode };
+    return {
+      short_code: shortCode,
+      device_id: deviceId,
+      ...(typeof deviceLabel === "string" ? { device_label: deviceLabel.trim() } : {}),
+    };
   }
   return null;
 }
@@ -275,15 +465,22 @@ function exchangedAuth(value: unknown): ScoringServerAuth | null {
   const auth = {
     sessionId: source.session_id,
     sessionToken: source.session_token,
+    mode: source.mode,
+    permissions: source.permissions,
     generation: source.generation,
     matchId: source.match_id,
     expiresAt: source.expires_at,
+    leaseExpiresAt: source.lease_expires_at,
   };
   return typeof auth.sessionId === "string" &&
     typeof auth.sessionToken === "string" &&
-    typeof auth.generation === "number" &&
+    (auth.mode === "writer" || auth.mode === "candidate" || auth.mode === "viewer" || auth.mode === "transferred") &&
+    Array.isArray(auth.permissions) &&
+    auth.permissions.every((permission) => typeof permission === "string") &&
+    (auth.generation === null || typeof auth.generation === "number") &&
     typeof auth.matchId === "string" &&
-    typeof auth.expiresAt === "string"
+    typeof auth.expiresAt === "string" &&
+    (auth.leaseExpiresAt === null || typeof auth.leaseExpiresAt === "string")
     ? (auth as ScoringServerAuth)
     : null;
 }
@@ -291,38 +488,20 @@ function exchangedAuth(value: unknown): ScoringServerAuth | null {
 function appendInput(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
-  const correctionReason = input.correction_reason;
-  const needsCorrectionReason =
-    input.type === "goal_reversed" || input.type === "card_reversed" || input.type === "match_reopened";
-  if (
-    !UUID_PATTERN.test(String(input.client_event_id ?? "")) ||
-    typeof input.type !== "string" ||
-    !EVENT_TYPES.has(input.type) ||
-    (input.team_slot !== undefined && input.team_slot !== "home" && input.team_slot !== "away") ||
-    (input.scorer !== undefined &&
-      (typeof input.scorer !== "string" || input.scorer.length < 1 || input.scorer.length > 120)) ||
-    (input.manual_period !== 1 && input.manual_period !== 2) ||
-    !Number.isInteger(input.manual_event_seconds) ||
-    Number(input.manual_event_seconds) < 0 ||
-    Number(input.manual_event_seconds) > 3_599 ||
-    (correctionReason !== undefined &&
-      (typeof correctionReason !== "string" || correctionReason.trim().length < 3 || correctionReason.length > 500)) ||
-    (needsCorrectionReason && typeof correctionReason !== "string") ||
-    typeof input.occurred_at !== "string" ||
-    !Number.isFinite(Date.parse(input.occurred_at))
-  ) {
-    return null;
-  }
+  const command = parseFiveSportScoreCommand(input);
+  if (!command || !safeInteger(input.expected_sequence)) return null;
   return {
-    client_event_id: input.client_event_id,
-    type: input.type,
-    ...(input.team_slot ? { team_slot: input.team_slot } : {}),
-    ...(input.scorer ? { scorer: input.scorer } : {}),
-    manual_period: input.manual_period,
-    manual_event_seconds: input.manual_event_seconds,
-    payload: eventPayload(input.payload),
-    ...(typeof correctionReason === "string" ? { correction_reason: correctionReason } : {}),
-    occurred_at: input.occurred_at,
+    client_event_id: command.clientEventId,
+    expected_sequence: input.expected_sequence,
+    type: command.type,
+    occurred_at: command.occurredAt,
+    ...(command.side ? { team_slot: command.side } : {}),
+    ...(typeof command.participantId === "string" ? { participant_id: command.participantId } : {}),
+    ...(command.unknownParticipant !== undefined ? { unknown_participant: command.unknownParticipant } : {}),
+    ...(command.segmentNumber !== undefined ? { segment_number: command.segmentNumber } : {}),
+    ...(command.manualTimeSeconds !== undefined ? { manual_time_seconds: command.manualTimeSeconds } : {}),
+    ...(command.reversalTargetEventId ? { reversal_target_event_id: command.reversalTargetEventId } : {}),
+    ...(command.reason ? { reason: command.reason } : {}),
   };
 }
 
@@ -332,6 +511,24 @@ async function upstreamFetch(url: URL, init: RequestInit): Promise<Response | nu
   } catch {
     return null;
   }
+}
+
+async function upstreamSafeError(response: Response, clearCookie = false): Promise<Response> {
+  const payload = await readJson(response);
+  const envelope =
+    payload && typeof payload === "object" && (payload as Record<string, unknown>).error
+      ? ((payload as Record<string, unknown>).error as Record<string, unknown>)
+      : null;
+  const code = envelope && typeof envelope.code === "string" ? envelope.code : "";
+  const state: SafeError | undefined =
+    code === "ACCESS_RATE_LIMITED"
+      ? "rate_limited"
+      : code === "ACCESS_REVOKED" || code === "SCORING_SESSION_REVOKED"
+        ? "revoked"
+        : code === "ACCESS_EXPIRED" || code === "SCORING_SESSION_EXPIRED"
+          ? "expired"
+          : undefined;
+  return safeError(exposedStatus(response.status), clearCookie, state, response.headers);
 }
 
 export async function exchangeScoringSession(request: Request): Promise<Response> {
@@ -354,7 +551,7 @@ export async function exchangeScoringSession(request: Request): Promise<Response
   });
   if (!exchange) return safeError(503);
   if (!exchange.ok) {
-    return safeError(exposedStatus(exchange.status), [401, 403].includes(exchange.status));
+    return upstreamSafeError(exchange, [401, 403, 410, 429].includes(exchange.status));
   }
   const auth = exchangedAuth(await readJson(exchange));
   if (!auth) return safeError(503);
@@ -371,8 +568,8 @@ export async function exchangeScoringSession(request: Request): Promise<Response
   if (!stateResponse) return withCookie(safeError(503), cookie);
   if (!stateResponse.ok) {
     return [401, 403].includes(stateResponse.status)
-      ? safeError(exposedStatus(stateResponse.status), true)
-      : withCookie(safeError(exposedStatus(stateResponse.status)), cookie);
+      ? upstreamSafeError(stateResponse, true)
+      : withCookie(await upstreamSafeError(stateResponse), cookie);
   }
   const state = scoringState(await readJson(stateResponse));
   if (!state) return withCookie(safeError(503), cookie);
@@ -380,6 +577,17 @@ export async function exchangeScoringSession(request: Request): Promise<Response
 }
 
 export async function recoverScoringSession(request: Request): Promise<Response> {
+  if (!cookieValue(request)) {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "cache-control": "private, no-store",
+        pragma: "no-cache",
+        vary: "Cookie",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  }
   const authenticated = authenticatedRequest(request);
   if ("response" in authenticated) return authenticated.response;
   const upstream = await upstreamFetch(new URL("/api/v1/scoring/session", authenticated.baseUrl), {
@@ -387,9 +595,128 @@ export async function recoverScoringSession(request: Request): Promise<Response>
     cache: "no-store",
   });
   if (!upstream) return safeError(503);
-  if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));
+  if (!upstream.ok) return upstreamSafeError(upstream, [401, 403, 410].includes(upstream.status));
   const state = scoringState(await readJson(upstream));
-  return state ? jsonResponse(state, 200) : safeError(503);
+  const sessionSealer = sealer();
+  if (!state || !sessionSealer) return safeError(503);
+  const refreshedAuth = refreshAuthFromState(authenticated.auth, state);
+  if (!refreshedAuth) return safeError(503, true);
+  try {
+    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+  } catch {
+    return safeError(503, true);
+  }
+}
+
+function heartbeatInput(value: unknown): Record<string, number> | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const lastAcknowledgedSequence = source.lastAcknowledgedSequence;
+  const pendingEventCount = source.pendingEventCount;
+  const pendingThroughSequence = source.pendingThroughSequence;
+  if (
+    !Number.isSafeInteger(lastAcknowledgedSequence) ||
+    Number(lastAcknowledgedSequence) < 0 ||
+    !Number.isSafeInteger(pendingEventCount) ||
+    Number(pendingEventCount) < 0 ||
+    (pendingThroughSequence !== null &&
+      (!Number.isSafeInteger(pendingThroughSequence) || Number(pendingThroughSequence) < 0))
+  ) {
+    return null;
+  }
+  return {
+    last_acknowledged_sequence: Number(lastAcknowledgedSequence),
+    pending_event_count: Number(pendingEventCount),
+    pending_through_sequence:
+      pendingThroughSequence === null ? Number(lastAcknowledgedSequence) : Number(pendingThroughSequence),
+  };
+}
+
+export async function heartbeatScoringSession(request: Request): Promise<Response> {
+  if (!sameOriginMutation(request)) return safeError(403);
+  const authenticated = authenticatedRequest(request);
+  if ("response" in authenticated) return authenticated.response;
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return safeError(400);
+  }
+  const input = heartbeatInput(body);
+  if (!input) return safeError(400);
+  const heartbeat = await upstreamFetch(new URL("/api/v1/scoring/sessions/heartbeat", authenticated.baseUrl), {
+    method: "POST",
+    headers: authHeaders(authenticated.auth),
+    body: JSON.stringify(input),
+  });
+  if (!heartbeat) return safeError(503);
+  if (!heartbeat.ok) return upstreamSafeError(heartbeat, [401, 403, 410].includes(heartbeat.status));
+  const heartbeatPayload = await readJson(heartbeat);
+  const heartbeatState =
+    heartbeatPayload && typeof heartbeatPayload === "object" ? (heartbeatPayload as Record<string, unknown>) : null;
+  const refreshedAuth: ScoringServerAuth =
+    heartbeatState &&
+    (heartbeatState.mode === "writer" ||
+      heartbeatState.mode === "candidate" ||
+      heartbeatState.mode === "viewer" ||
+      heartbeatState.mode === "transferred") &&
+    (heartbeatState.generation === null || Number.isSafeInteger(heartbeatState.generation)) &&
+    typeof heartbeatState.session_expires_at === "string" &&
+    (heartbeatState.lease_expires_at === null || typeof heartbeatState.lease_expires_at === "string")
+      ? {
+          ...authenticated.auth,
+          mode: heartbeatState.mode,
+          generation: heartbeatState.generation as number | null,
+          expiresAt: heartbeatState.session_expires_at,
+          leaseExpiresAt: heartbeatState.lease_expires_at as string | null,
+        }
+      : authenticated.auth;
+  const stateResponse = await upstreamFetch(new URL("/api/v1/scoring/session", authenticated.baseUrl), {
+    headers: authHeaders(refreshedAuth),
+    cache: "no-store",
+  });
+  if (!stateResponse) return safeError(503);
+  if (!stateResponse.ok) return upstreamSafeError(stateResponse, [401, 403, 410].includes(stateResponse.status));
+  const state = scoringState(await readJson(stateResponse));
+  const sessionSealer = sealer();
+  if (!state || !sessionSealer) return safeError(503);
+  try {
+    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+  } catch {
+    return safeError(503, true);
+  }
+}
+
+export async function requestScoringTakeover(request: Request): Promise<Response> {
+  if (!sameOriginMutation(request)) return safeError(403);
+  const authenticated = authenticatedRequest(request);
+  if ("response" in authenticated) return authenticated.response;
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return safeError(400);
+  }
+  const input = heartbeatInput({
+    ...(body && typeof body === "object" ? body : {}),
+    lastAcknowledgedSequence: 0,
+  });
+  if (!input) return safeError(400);
+  const takeover = await upstreamFetch(new URL("/api/v1/scoring/takeover-requests", authenticated.baseUrl), {
+    method: "POST",
+    headers: authHeaders(authenticated.auth),
+    body: JSON.stringify({
+      pending_event_count: input.pending_event_count,
+      pending_through_sequence: input.pending_through_sequence ?? 0,
+    }),
+  });
+  if (!takeover) return safeError(503);
+  if (!takeover.ok) return upstreamSafeError(takeover, [401, 403, 410].includes(takeover.status));
+  const payload = await readJson(takeover);
+  const requestId = payload && typeof payload === "object" ? (payload as Record<string, unknown>).id : undefined;
+  return typeof requestId === "string" && UUID_PATTERN.test(requestId)
+    ? jsonResponse({ status: "pending", requestId }, 202)
+    : safeError(503);
 }
 
 export async function appendScoringEvent(request: Request): Promise<Response> {
@@ -412,8 +739,12 @@ export async function appendScoringEvent(request: Request): Promise<Response> {
   if (!upstream) return safeError(503);
   if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));
   const payload = await readJson(upstream);
-  const sequence = payload && typeof payload === "object" ? (payload as Record<string, unknown>).sequence : null;
-  return Number.isSafeInteger(sequence) ? jsonResponse({ sequence }, 200) : safeError(503);
+  const source = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const sequence = source?.sequence;
+  const duplicate = source?.duplicate;
+  return Number.isSafeInteger(sequence) && typeof duplicate === "boolean"
+    ? jsonResponse({ sequence, duplicate }, 200)
+    : safeError(503);
 }
 
 export async function finaliseScoringResult(request: Request): Promise<Response> {
@@ -428,11 +759,15 @@ export async function finaliseScoringResult(request: Request): Promise<Response>
   }
   const clientEventId =
     body && typeof body === "object" ? (body as Record<string, unknown>).client_event_id : undefined;
-  if (typeof clientEventId !== "string" || !UUID_PATTERN.test(clientEventId)) return safeError(400);
+  const expectedSequence =
+    body && typeof body === "object" ? (body as Record<string, unknown>).expected_sequence : undefined;
+  if (typeof clientEventId !== "string" || !UUID_PATTERN.test(clientEventId) || !safeInteger(expectedSequence)) {
+    return safeError(400);
+  }
   const upstream = await upstreamFetch(new URL("/api/v1/scoring/finalise", authenticated.baseUrl), {
     method: "POST",
     headers: authHeaders(authenticated.auth),
-    body: JSON.stringify({ client_event_id: clientEventId }),
+    body: JSON.stringify({ client_event_id: clientEventId, expected_sequence: expectedSequence }),
   });
   if (!upstream) return safeError(503);
   if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));

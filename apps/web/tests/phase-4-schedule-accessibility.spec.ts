@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
 import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
@@ -28,17 +28,14 @@ function contrastRatio(foreground: string, background: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-test("schedule has no serious or critical accessibility violations", async ({ page }) => {
+test("@a11y schedule meets WCAG A/AA requirements", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/schedule");
   await dismissConsent(page);
   await expect(page.getByTestId("phase4-schedule")).toBeVisible();
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(
-    results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
-  ).toEqual([]);
+  await assertNoWcagAOrAaViolations(page);
 });
 
-test("move flow has no serious or critical accessibility violations", async ({ page }) => {
+test("@a11y move flow meets WCAG A/AA requirements", async ({ page }) => {
   await page.route("**/moves/validate", async (route) =>
     route.fulfill({
       status: 200,
@@ -63,10 +60,7 @@ test("move flow has no serious or critical accessibility violations", async ({ p
     "/organiser/competitions/singapore-open/schedule/revisions/70000000-0000-4000-8000-000000000004/matches/30000000-0000-4000-8000-000000000001/move",
   );
   await expect(page.getByTestId("phase4-move-flow")).toBeVisible();
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(
-    results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
-  ).toEqual([]);
+  await assertNoWcagAOrAaViolations(page);
   const stepNumberColors = await page
     .getByTestId("move-step-number")
     .first()
@@ -77,14 +71,11 @@ test("move flow has no serious or critical accessibility violations", async ({ p
   expect(contrastRatio(stepNumberColors.foreground, stepNumberColors.background)).toBeGreaterThanOrEqual(4.5);
 });
 
-test("revision comparison has no serious or critical accessibility violations", async ({ page }) => {
+test("@a11y revision comparison meets WCAG A/AA requirements", async ({ page }) => {
   await page.goto(
     "/organiser/competitions/singapore-open/schedule/compare?left=70000000-0000-4000-8000-000000000003&right=70000000-0000-4000-8000-000000000004",
   );
   await dismissConsent(page);
   await expect(page.getByTestId("phase4-schedule-comparison")).toBeVisible();
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(
-    results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
-  ).toEqual([]);
+  await assertNoWcagAOrAaViolations(page);
 });

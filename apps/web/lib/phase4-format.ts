@@ -20,11 +20,16 @@ export type FormatBuilderPageDocument = Readonly<{
   organisationId: string;
   sportCode: string;
   draft: Phase4FormatDraftView | null;
+  revisions: FormatBuilderWorkspaceResponse["revisions"];
   templates: readonly Phase4OrganiserTemplateView[];
 }>;
 
 export type FormatBuilderWorkspaceResponse = Readonly<{
-  revisions: readonly unknown[];
+  revisions: readonly {
+    revisionId: string;
+    status: "draft" | "published" | "superseded";
+    materialised: boolean;
+  }[];
   draft: Phase4FormatDraftView | null;
 }>;
 
@@ -45,6 +50,21 @@ export type FormatMaterialisationResponse = Readonly<{
   materialised: true;
   match_count: number;
   materialisation_hash: string;
+  idempotent_replay: boolean;
+}>;
+
+export type FormatPublicationResponse = Readonly<{
+  revision_id: string;
+  revision: number;
+  parent_revision_id: string | null;
+  root_revision_id: string;
+  competition_id: string;
+  division_id: string;
+  status: "published";
+  definition_hash: string;
+  document: Phase4FormatBuilderDocument;
+  created_at: string;
+  published_at: string;
   idempotent_replay: boolean;
 }>;
 
@@ -225,6 +245,7 @@ export function parseFormatDraft(
     !["edit", "view"].includes(String(item.permission)) ||
     typeof item.read_only !== "boolean" ||
     typeof item.definition_hash !== "string" ||
+    (item.materialised !== undefined && typeof item.materialised !== "boolean") ||
     !metrics ||
     !integer(metrics.match_count) ||
     !integer(metrics.guaranteed_matches) ||
@@ -250,9 +271,23 @@ export function parseFormatWorkspaceResponse(
 ): FormatBuilderWorkspaceResponse | null {
   const item = record(value);
   if (!item || !Array.isArray(item.revisions) || !("draft" in item)) return null;
-  if (item.draft === null) return { revisions: item.revisions, draft: null };
+  const revisions = item.revisions.map((raw) => {
+    const revision = record(raw);
+    return revision &&
+      typeof revision.revision_id === "string" &&
+      ["draft", "published", "superseded"].includes(String(revision.status)) &&
+      typeof revision.materialised === "boolean"
+      ? {
+          revisionId: revision.revision_id,
+          status: revision.status as "draft" | "published" | "superseded",
+          materialised: revision.materialised,
+        }
+      : null;
+  });
+  if (!revisions.every((revision): revision is NonNullable<typeof revision> => revision !== null)) return null;
+  if (item.draft === null) return { revisions, draft: null };
   const draft = parseFormatDraft(item.draft, competitionId, divisionId);
-  return draft ? { revisions: item.revisions, draft } : null;
+  return draft ? { revisions, draft } : null;
 }
 
 export function parseFormatValidation(value: unknown): Phase4FormatValidationResponse | null {
@@ -310,6 +345,43 @@ export function parseFormatMaterialisation(value: unknown, formatId: string): Fo
   )
     return null;
   return item as unknown as FormatMaterialisationResponse;
+}
+
+export function parseFormatPublication(value: unknown, formatId: string): FormatPublicationResponse | null {
+  const item = record(value);
+  if (
+    !item ||
+    !exactKeys(item, [
+      "revision_id",
+      "revision",
+      "parent_revision_id",
+      "root_revision_id",
+      "competition_id",
+      "division_id",
+      "status",
+      "definition_hash",
+      "document",
+      "created_at",
+      "published_at",
+      "idempotent_replay",
+    ]) ||
+    item.revision_id !== formatId ||
+    !integer(item.revision, 1) ||
+    !(item.parent_revision_id === null || typeof item.parent_revision_id === "string") ||
+    typeof item.root_revision_id !== "string" ||
+    typeof item.competition_id !== "string" ||
+    typeof item.division_id !== "string" ||
+    item.status !== "published" ||
+    typeof item.definition_hash !== "string" ||
+    !parseFormatBuilderDocument(item.document) ||
+    typeof item.created_at !== "string" ||
+    Number.isNaN(Date.parse(item.created_at)) ||
+    typeof item.published_at !== "string" ||
+    Number.isNaN(Date.parse(item.published_at)) ||
+    typeof item.idempotent_replay !== "boolean"
+  )
+    return null;
+  return item as unknown as FormatPublicationResponse;
 }
 
 export function parseOrganiserTemplate(value: unknown, organisationId: string): Phase4OrganiserTemplateView | null {

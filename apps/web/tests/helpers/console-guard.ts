@@ -155,7 +155,7 @@ export async function dismissConsent(page: Page) {
 }
 
 export async function openPhase2Scorekeeper(page: Page) {
-  await page.goto("/score/m12-access");
+  await page.goto("/score");
   await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();

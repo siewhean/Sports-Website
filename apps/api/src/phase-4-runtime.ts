@@ -105,6 +105,32 @@ function instant(value: Date | string | null): string | null {
   return value === null ? null : value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+function schedulingEntryIdsBySeed(
+  entries: readonly { id: string; seed: number | null }[],
+  entryCount: number,
+): Record<number, string> {
+  const assigned = new Map<number, string>();
+  const unseeded: string[] = [];
+  for (const entry of entries) {
+    if (entry.seed === null) {
+      unseeded.push(entry.id);
+      continue;
+    }
+    if (!Number.isInteger(entry.seed) || entry.seed < 1 || entry.seed > entryCount || assigned.has(entry.seed))
+      throw new Error(`Invalid explicit entry seed ${entry.seed}`);
+    assigned.set(entry.seed, entry.id);
+  }
+  for (const entryId of unseeded) {
+    const seed = Array.from({ length: entryCount }, (_, index) => index + 1).find(
+      (candidate) => !assigned.has(candidate),
+    );
+    if (seed === undefined) throw new Error("More active entries than format seeds");
+    assigned.set(seed, entryId);
+  }
+  if (assigned.size !== entryCount) throw new Error(`Expected ${entryCount} active entries for the selected format`);
+  return Object.fromEntries(assigned);
+}
+
 function first<T>(rows: readonly T[], code: string, message: string): T {
   const value = rows[0];
   if (!value) throw new ApiError(404, code, message);
@@ -490,6 +516,28 @@ export class Phase4Runtime {
       );
   }
 
+  private async assertScheduleRevisionLocksCompatible(tx: PostgresJsSql, revisionId: string): Promise<void> {
+    const compatible = (
+      await tx.unsafe<{ compatible: boolean }>(
+        `SELECT NOT EXISTS (
+          SELECT 1
+          FROM schedule_revisions revision
+          JOIN schedule_assignment_locks lock ON lock.competition_id=revision.competition_id
+          LEFT JOIN scheduled_matches assignment
+            ON assignment.schedule_revision_id=revision.id
+           AND assignment.match_id=lock.match_id
+           AND assignment.playing_area_id=lock.playing_area_id
+           AND assignment.starts_at=lock.starts_at
+           AND assignment.ends_at=lock.ends_at
+          WHERE revision.id=$1 AND assignment.match_id IS NULL
+        ) compatible`,
+        [revisionId],
+      )
+    )[0]?.compatible;
+    if (!compatible)
+      throw new ApiError(409, "SCHEDULE_LOCK_CONFLICT", "Current assignment locks do not match this schedule revision");
+  }
+
   private async rawSetup(tx: PostgresJsSql, competitionId: string, lock = false): Promise<SetupRow> {
     return first(
       await tx.unsafe<SetupRow>(
@@ -529,7 +577,7 @@ export class Phase4Runtime {
         completed_at: completedAt[step.id] ?? null,
       })),
       values,
-      permission: "write",
+      permission: readOnly ? "read" : "write",
       read_only: readOnly,
       autosave: {
         status: readOnly ? (row.status === "expired" ? "expired" : "read_only") : "saved",
@@ -569,6 +617,188 @@ export class Phase4Runtime {
   async readSetupDraft(actor: Phase3Actor, competitionId: string): Promise<Phase4SetupDocument> {
     await this.competitionAccess(this.sql, competitionId, actor, false);
     return this.setupDocument(await this.rawSetup(this.sql, competitionId));
+  }
+
+  private async refreshV1SetupReferences(actor: Phase3Actor, competitionId: string, requestId: string): Promise<void> {
+    await this.transaction(async (tx) => {
+      const access = await this.competitionAccess(tx, competitionId, actor);
+      await tx.unsafe(`SELECT phase4_refresh_setup_draft_references($1,$2,$3,$4)`, [
+        access.organisation_id,
+        competitionId,
+        actor.accountId,
+        requestId,
+      ]);
+    });
+  }
+
+  /**
+   * V1 keeps the assisted-setup aggregate as the canonical evidence store, but
+   * organisers do not have to visit the assisted-setup UI to use the product
+   * recommendation. This deliberately orchestrates the existing validated
+   * recommendation path instead of inventing a second format-persistence path.
+   */
+  async recommendV1Format(
+    actor: Phase3Actor,
+    competitionId: string,
+    idempotencyKey: string,
+    requestId: string,
+  ): Promise<Phase4SetupDocument> {
+    const createKey = `${idempotencyKey}:setup`;
+    const preferenceKey = `${idempotencyKey}:recommend`;
+    await this.createSetupDraft(actor, competitionId, createKey, requestId);
+    await this.refreshV1SetupReferences(actor, competitionId, requestId);
+    let source = await this.readSetupDraft(actor, competitionId);
+    const preferences = source.values.format_preferences;
+    if (!source.values.capacity || !source.values.entries || !preferences)
+      throw new ApiError(422, "FORMAT_PREREQUISITE_MISSING", "Add entries and capacity before choosing a format");
+    const basics = source.values.basics;
+    const currentEntryCount = source.values.entries.total_entry_count;
+    const currentDivisionCount = source.values.entries.divisions.length;
+    if (basics && (basics.entry_count !== currentEntryCount || basics.division_count !== currentDivisionCount)) {
+      const refreshedBasics = { ...basics, entry_count: currentEntryCount, division_count: currentDivisionCount };
+      const updated = await this.autosaveSetupDraft(
+        actor,
+        competitionId,
+        {
+          expected_revision: source.revision,
+          idempotency_key: `${idempotencyKey}:basics`,
+          transition: { kind: "save_step", step: { step_id: "basics", value: refreshedBasics } },
+        },
+        requestId,
+      );
+      if (updated.outcome !== "saved" && updated.outcome !== "idempotent_replay")
+        throw new ApiError(
+          409,
+          "FORMAT_RECOMMENDATION_CONFLICT",
+          "The competition changed; refresh the format options",
+        );
+      source = updated.document;
+    }
+    // The direct V1 picker is a compact, single-elimination chooser. Persist
+    // its explicit one-match/champion policy before deriving valid choices.
+    const v1Preferences = {
+      ...preferences,
+      minimum_matches: { per_entry: 1 },
+      ranking: { rank_all_entries: false },
+      placement: { required: false },
+      qualification: { cross_group_allowed: true },
+      priority: { value: "speed" as const },
+    };
+    const saved = await this.autosaveSetupDraft(
+      actor,
+      competitionId,
+      {
+        expected_revision: source.revision,
+        idempotency_key: preferenceKey,
+        transition: { kind: "save_step", step: { step_id: "format_preferences", value: v1Preferences } },
+      },
+      requestId,
+    );
+    if (saved.outcome === "saved" || saved.outcome === "idempotent_replay") return saved.document;
+    if (saved.outcome === "conflict")
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format options");
+    throw new ApiError(
+      409,
+      "FORMAT_RECOMMENDATION_UNAVAILABLE",
+      "Format options are not editable for this competition",
+    );
+  }
+
+  async applyV1FormatRecommendation(
+    actor: Phase3Actor,
+    competitionId: string,
+    recommendationId: string,
+    idempotencyKey: string,
+    requestId: string,
+  ) {
+    const replay = await this.transaction(async (tx) => {
+      const access = await this.competitionAccess(tx, competitionId, actor, false);
+      const receipt = (
+        await tx.unsafe<{ operation: string; response: SetupRow | string }>(
+          `SELECT operation,response FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
+          [access.organisation_id, `${idempotencyKey}:apply`],
+        )
+      )[0];
+      if (!receipt) return null;
+      if (receipt.operation !== "setup.save")
+        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+      const row = decoded<SetupRow>(receipt.response);
+      const selection = setupValues(row).format_recommendations;
+      if (row.competition_id !== competitionId || selection?.selected_recommendation_id !== recommendationId)
+        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+      return this.setupDocument({ ...row, competition_status: access.status });
+    });
+    if (replay) return this.v1MaterialisedResult(replay, recommendationId);
+    const setup = await this.readSetupDraft(actor, competitionId);
+    const recommendations = setup.values.format_recommendations;
+    if (!recommendations)
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_STALE", "Refresh the capacity-fitting format options first");
+    const selected = recommendations.recommendations.find((candidate) => candidate.id === recommendationId);
+    if (
+      !selected ||
+      selected.capacity_status === "requires_changes" ||
+      selected.match_count > selected.available_match_slots
+    )
+      throw new ApiError(422, "FORMAT_RECOMMENDATION_NOT_FITTING", "Choose one of the capacity-fitting format options");
+    const saved = await this.autosaveSetupDraft(
+      actor,
+      competitionId,
+      {
+        expected_revision: setup.revision,
+        idempotency_key: `${idempotencyKey}:apply`,
+        transition: {
+          kind: "save_step",
+          step: {
+            step_id: "format_recommendations",
+            value: {
+              ...recommendations,
+              selected_recommendation_id: selected.id,
+              acknowledged_capacity_shortfall: false,
+            },
+          },
+        },
+      },
+      requestId,
+      // The direct V1 picker is the organiser's complete format-selection
+      // path. A materialised draft cannot enter the scheduler (which only
+      // accepts published format revisions), so publish the exact selected
+      // revisions in this same transaction.
+      { materialiseSelectedFormat: true, publishSelectedFormat: true },
+    );
+    if (saved.outcome === "conflict")
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format options");
+    if (saved.outcome !== "saved" && saved.outcome !== "idempotent_replay")
+      throw new ApiError(
+        409,
+        "FORMAT_RECOMMENDATION_UNAVAILABLE",
+        `The selected format is no longer editable (${saved.outcome})`,
+      );
+    return this.v1MaterialisedResult(saved.document, recommendationId, saved.outcome === "idempotent_replay");
+  }
+
+  private async v1MaterialisedResult(document: Phase4SetupDocument, recommendationId: string, idempotentReplay = true) {
+    const applied = document.values.format_recommendations;
+    const appliedSelection =
+      applied && [...applied.recommendations].find((candidate) => candidate.id === recommendationId);
+    if (!appliedSelection || appliedSelection.division_formats.some((format) => !format.format_revision_id))
+      throw new ApiError(409, "FORMAT_RECOMMENDATION_STALE", "The selected format could not be applied");
+    const materialisedRows = await this.sql.unsafe<FormatRow>(
+      `SELECT * FROM format_revisions WHERE id = ANY($1::uuid[]) ORDER BY division_id`,
+      [appliedSelection.division_formats.map((format) => format.format_revision_id!)],
+    );
+    if (
+      materialisedRows.length !== appliedSelection.division_formats.length ||
+      materialisedRows.some((row) => !row.graph_materialized_at)
+    )
+      throw new ApiError(409, "FORMAT_MATERIALISATION_INCOMPLETE", "The selected format could not be materialised");
+    const materialised = materialisedRows.map((row) => ({
+      revision: this.formatRevisionView(row),
+      materialised: true as const,
+      match_count: row.graph_match_count,
+      materialisation_hash: row.graph_materialization_hash,
+      idempotent_replay: idempotentReplay,
+    }));
+    return { document, materialised };
   }
 
   private async generateSetupRecommendations(
@@ -828,6 +1058,7 @@ export class Phase4Runtime {
     actor: Phase3Actor,
     setupDraftId: string,
     values: Phase4SetupValues,
+    options: { materialiseSelectedFormat?: boolean; publishSelectedFormat?: boolean } = {},
   ): Promise<void> {
     const submitted = values.format_recommendations;
     await this.assertCanonicalSetupStep(tx, access, "capacity", values);
@@ -957,6 +1188,44 @@ export class Phase4Runtime {
       scheduling_status: metrics.scheduling_status,
       warning_codes: metrics.warning_codes,
     });
+    if (options.materialiseSelectedFormat) {
+      for (const format of applied) {
+        // Format-validation evidence includes all previously selected
+        // divisions. Insert and publish one revision at a time so each
+        // immutable evidence record has the capacity claim that is true at
+        // its publication point. The enclosing transaction still makes the
+        // multi-division V1 choice all-or-nothing.
+        if (options.publishSelectedFormat) {
+          await tx.unsafe(
+            `INSERT INTO format_validation_evidence(
+               format_revision_id,definition_hash,valid,graph_acyclic,graph_reachable,slots_unambiguous,
+               deterministic_match_count,available_match_slots,required_match_slots,recommendation_fits_capacity,validated_by
+             )
+             SELECT id,definition_hash,true,true,true,true,0,0,0,true,$2
+             FROM format_revisions WHERE id=$1`,
+            [format.format_revision_id, actor.accountId],
+          );
+        }
+        await tx.unsafe(`SELECT phase4_materialize_format_revision($1)`, [format.format_revision_id]);
+        await this.evidence(
+          tx,
+          actor,
+          access.organisation_id,
+          `v1-format-materialise:${format.format_revision_id}`,
+          "format.materialised",
+          "format_revision",
+          format.format_revision_id,
+          { match_count: format.match_count, source: "v1_recommendation" },
+        );
+        if (options.publishSelectedFormat) {
+          await tx.unsafe(`SELECT phase4_publish_format_revision($1,$2,$3)`, [
+            format.format_revision_id,
+            actor.accountId,
+            `v1-format-publish:${format.format_revision_id}`,
+          ]);
+        }
+      }
+    }
   }
 
   private async assertCanonicalSetupStep(
@@ -1107,47 +1376,29 @@ export class Phase4Runtime {
     }
     if (stepId === "schedule_review" && values.schedule_review) {
       const row = first(
-        await tx.unsafe<{
-          source_revision: number;
-          result_revision: number;
-          assignment_hash: string;
-          option_id: string;
-          revision_status: string;
-        }>(
-          `SELECT (j.input_snapshot->>'source_revision')::int source_revision,
-             o.result_revision,r.assignment_hash,o.id option_id,r.status revision_status
-           FROM schedule_generation_jobs j
-           JOIN schedule_generation_options o ON o.job_id=j.id
-           JOIN schedule_revisions r ON r.source_job_id=j.id AND r.source_option_id=o.id
-           WHERE j.id=$1 AND j.competition_id=$2 AND o.result_revision=$3 AND r.id=$4`,
-          [
-            values.schedule_review.schedule_job_id,
-            access.id,
-            values.schedule_review.selected_result_revision,
-            values.schedule_review.schedule_revision_id,
-          ],
+        await tx.unsafe<{ stale: boolean }>(
+          `SELECT phase4_setup_schedule_evidence_stale(
+             $1,$2::jsonb,$3::jsonb,$4::jsonb,$5::jsonb
+           ) stale`,
+          [access.id, values.capacity, values.settings, values.format_recommendations, values.schedule_review],
         ),
-        "SCHEDULE_OPTION_NOT_FOUND",
-        "Selected schedule option not found",
+        "SCHEDULE_REFERENCE_CHECK_FAILED",
+        "Schedule selection could not be verified",
       );
-      if (
-        row.source_revision !== values.schedule_review.source_revision ||
-        !["ready_for_review", "published"].includes(row.revision_status) ||
-        row.assignment_hash !== values.schedule_review.selected_result_hash
-      )
-        throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Schedule selection is stale");
+      if (row.stale) throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Schedule selection is stale");
     }
-    if (stepId === "review_publish" && values.review_publish?.publication_status === "published") {
+    if (stepId === "review_publish" && values.review_publish) {
       const row = first(
-        await tx.unsafe<{ status: string; assignment_hash: string | null }>(
-          `SELECT status,assignment_hash FROM schedule_revisions WHERE id=$1 AND competition_id=$2`,
-          [values.review_publish.published_schedule_revision_id, access.id],
+        await tx.unsafe<{ stale: boolean }>(
+          `SELECT phase4_setup_publication_evidence_stale(
+             $1,$2::jsonb,$3::jsonb,$4::jsonb,$5::jsonb
+           ) stale`,
+          [access.id, values.capacity, values.settings, values.schedule_review, values.review_publish],
         ),
-        "PUBLISHED_SCHEDULE_NOT_FOUND",
-        "Published schedule not found",
+        "PUBLICATION_REFERENCE_CHECK_FAILED",
+        "Published schedule could not be verified",
       );
-      if (row.status !== "published" || row.assignment_hash !== values.review_publish.selected_schedule_result_hash)
-        throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Published schedule reference is stale");
+      if (row.stale) throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Published schedule reference is stale");
     }
   }
 
@@ -1156,6 +1407,7 @@ export class Phase4Runtime {
     competitionId: string,
     request: Phase4SetupAutosaveRequest,
     requestId: string,
+    options: { materialiseSelectedFormat?: boolean; publishSelectedFormat?: boolean } = {},
   ): Promise<Phase4SetupAutosaveResponse> {
     return this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, competitionId, actor);
@@ -1203,7 +1455,7 @@ export class Phase4Runtime {
         const { step_id: stepId, value } = request.transition.step;
         (next as unknown as Record<string, unknown>)[stepId] = value;
         if (stepId === "format_recommendations")
-          await this.applySelectedRecommendation(tx, access, actor, row.id, next);
+          await this.applySelectedRecommendation(tx, access, actor, row.id, next, options);
         const issues = validateAssistedSetupStep(stepId, setupDomainValues(next));
         if (issues.length > 0) throw new ApiError(422, "SETUP_STEP_INVALID", issues[0]!.message);
         await this.assertCanonicalSetupStep(tx, access, stepId, next);
@@ -1311,6 +1563,7 @@ export class Phase4Runtime {
       division_id: row.division_id,
       status: row.status,
       definition_hash: row.definition_hash,
+      materialised: Boolean(row.graph_materialized_at),
       document: { schema_version: 1, graph: graph as Phase4FormatBuilderDocument["graph"], layout },
       created_at: instant(row.created_at)!,
       published_at: instant(row.published_at),
@@ -1335,6 +1588,7 @@ export class Phase4Runtime {
       permission: "edit",
       read_only: row.status !== "draft",
       definition_hash: row.definition_hash,
+      materialised: Boolean(row.graph_materialized_at),
       document: revision.document,
       metrics: {
         match_count: required,
@@ -1384,15 +1638,21 @@ export class Phase4Runtime {
       const access = await this.competitionAccess(tx, competitionId, actor);
       await this.lockIdempotency(tx, access.organisation_id, input.idempotency_key);
       const division = first(
-        await tx.unsafe<{ team_limit: number }>(
-          `SELECT team_limit FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
+        await tx.unsafe<{ active_entry_count: number }>(
+          `SELECT (
+             SELECT count(*)::int FROM division_entries entry
+             WHERE entry.division_id=division.id AND entry.status IN ('confirmed','active')
+           ) active_entry_count
+           FROM divisions division
+           WHERE division.id=$1 AND division.competition_id=$2
+           FOR UPDATE OF division`,
           [divisionId, competitionId],
         ),
         "DIVISION_NOT_FOUND",
         "Division not found",
       );
-      if (input.document.graph.entryCount !== division.team_limit)
-        throw new ApiError(422, "FORMAT_ENTRY_COUNT_MISMATCH", "Format entry count must match the division limit");
+      if (input.document.graph.entryCount !== division.active_entry_count)
+        throw new ApiError(422, "FORMAT_ENTRY_COUNT_MISMATCH", "Format entry count must match active division entries");
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { competition_id: competitionId, division_id: divisionId, ...input },
@@ -1447,6 +1707,16 @@ export class Phase4Runtime {
         ),
         "FORMAT_SAVE_FAILED",
         "Format could not be saved",
+      );
+      await tx.unsafe(
+        `INSERT INTO format_validation_evidence(
+           format_revision_id,definition_hash,valid,graph_acyclic,graph_reachable,slots_unambiguous,
+           deterministic_match_count,available_match_slots,required_match_slots,recommendation_fits_capacity,validated_by
+         )
+         SELECT id,definition_hash,true,true,true,true,$2,phase3_available_match_slots(competition_id),$2,
+           phase3_available_match_slots(competition_id)>=$2,$3
+         FROM format_revisions WHERE id=$1`,
+        [row.id, validation.materialisation!.match_count, actor.accountId],
       );
       await tx.unsafe(
         `INSERT INTO phase4_mutation_receipts(organisation_id,idempotency_key,operation,request_hash,response)
@@ -2328,14 +2598,20 @@ export class Phase4Runtime {
     const matches: ScheduleProblem["matches"][number][] = [];
     for (const format of formats) {
       const graph = decoded<FormatGraph>(format.definition);
-      const entries = await tx.unsafe<{ id: string; seed: number }>(
-        `SELECT id,seed FROM division_entries WHERE division_id=$1 AND status IN ('confirmed','active') ORDER BY seed,id`,
+      const entries = await tx.unsafe<{ id: string; seed: number | null }>(
+        `SELECT id,seed FROM division_entries
+         WHERE division_id=$1 AND status IN ('confirmed','active')
+         ORDER BY CASE WHEN seed IS NULL THEN 1 ELSE 0 END,seed,id`,
         [format.division_id],
       );
-      const seedMap = Object.fromEntries(entries.map((entry) => [entry.seed, entry.id]));
       let derived: ReturnType<typeof deriveSchedulingMatches>;
       try {
-        derived = deriveSchedulingMatches(graph, format.division_id, seedMap, durationMinutes);
+        derived = deriveSchedulingMatches(
+          graph,
+          format.division_id,
+          schedulingEntryIdsBySeed(entries, graph.entryCount),
+          durationMinutes,
+        );
       } catch (error: unknown) {
         throw new ApiError(
           422,
@@ -3507,6 +3783,7 @@ export class Phase4Runtime {
         if (receipt.operation !== "schedule.lock" || receipt.request_hash !== requestHash)
           throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
       } else {
+        await this.lockScheduleMutation(tx, revision.competition_id);
         await tx.unsafe(
           `SELECT phase4_set_schedule_assignment_lock($1,$2,$3,$4,to_timestamp($5::double precision/1000),to_timestamp($6::double precision/1000),$7,$8)`,
           [
@@ -3584,6 +3861,7 @@ export class Phase4Runtime {
         if (receipt.operation !== "schedule.unlock" || receipt.request_hash !== requestHash)
           throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
       } else {
+        await this.lockScheduleMutation(tx, revision.competition_id);
         await tx.unsafe(`SELECT set_config('matchday.phase4_schedule_lock','on',true)`);
         await tx.unsafe(`DELETE FROM schedule_assignment_locks WHERE competition_id=$1 AND match_id=$2`, [
           revision.competition_id,
@@ -3764,10 +4042,11 @@ export class Phase4Runtime {
       `SELECT m.id,m.division_id,d.name division_name,m.round_number,m.code,m.stage,
         home.name home_name,away.name away_name,m.state,
         COALESCE((SELECT min(slot_minutes) FROM playing_areas WHERE competition_id=m.competition_id),30)::int slot_minutes,
-        COALESCE(jsonb_agg(md.source_match_id ORDER BY md.source_match_id) FILTER (WHERE md.source_match_id IS NOT NULL),'[]') dependency_ids
+        COALESCE(jsonb_agg(dependency.source_match_id ORDER BY dependency.source_match_id)
+          FILTER (WHERE dependency.source_match_id IS NOT NULL),'[]') dependency_ids
        FROM matches m JOIN divisions d ON d.id=m.division_id
        LEFT JOIN division_entries home ON home.id=m.home_entry_id LEFT JOIN division_entries away ON away.id=m.away_entry_id
-       LEFT JOIN match_dependencies md ON md.match_id=m.id
+       LEFT JOIN LATERAL phase4_match_schedule_dependencies(m.id) dependency ON true
        WHERE m.competition_id=$1 AND EXISTS (
          SELECT 1 FROM format_revisions fr WHERE fr.id=m.format_revision_id AND fr.status='published'
        )
@@ -3892,21 +4171,14 @@ export class Phase4Runtime {
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
-      const row = first(
-        await tx.unsafe<{
-          competition_id: string;
-          revision: number;
-          status: string;
-          assignment_hash: string | null;
-          source_job_id: string | null;
-        }>(
-          `SELECT competition_id,revision,status,assignment_hash,source_job_id FROM schedule_revisions WHERE id=$1 FOR UPDATE`,
-          [revisionId],
-        ),
+      const identity = first(
+        await tx.unsafe<{ competition_id: string }>(`SELECT competition_id FROM schedule_revisions WHERE id=$1`, [
+          revisionId,
+        ]),
         "SCHEDULE_REVISION_NOT_FOUND",
         "Schedule revision not found",
       );
-      const access = await this.competitionAccess(tx, row.competition_id, actor);
+      const access = await this.competitionAccess(tx, identity.competition_id, actor);
       await this.lockIdempotency(tx, access.organisation_id, input.idempotency_key);
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
@@ -3925,9 +4197,25 @@ export class Phase4Runtime {
         if (receipt.operation !== "schedule.ready" || receipt.request_hash !== requestHash)
           throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
       } else {
+        await this.lockScheduleMutation(tx, identity.competition_id);
+        const row = first(
+          await tx.unsafe<{
+            competition_id: string;
+            revision: number;
+            status: string;
+            assignment_hash: string | null;
+            source_job_id: string | null;
+          }>(
+            `SELECT competition_id,revision,status,assignment_hash,source_job_id FROM schedule_revisions WHERE id=$1 FOR UPDATE`,
+            [revisionId],
+          ),
+          "SCHEDULE_REVISION_NOT_FOUND",
+          "Schedule revision not found",
+        );
         if (row.revision !== input.expected_revision)
           throw new ApiError(409, "REVISION_CONFLICT", "Schedule revision changed; refresh and retry");
-        if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id);
+        if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id, false);
+        await this.assertScheduleRevisionLocksCompatible(tx, revisionId);
         if (row.status === "draft") {
           if (!row.assignment_hash)
             throw new ApiError(422, "SCHEDULE_ASSIGNMENTS_INCOMPLETE", "Schedule assignments are incomplete");
@@ -3963,15 +4251,14 @@ export class Phase4Runtime {
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
-      const row = first(
-        await tx.unsafe<{ competition_id: string; revision: number; status: string; source_job_id: string | null }>(
-          `SELECT competition_id,revision,status,source_job_id FROM schedule_revisions WHERE id=$1 FOR UPDATE`,
-          [revisionId],
-        ),
+      const identity = first(
+        await tx.unsafe<{ competition_id: string }>(`SELECT competition_id FROM schedule_revisions WHERE id=$1`, [
+          revisionId,
+        ]),
         "SCHEDULE_REVISION_NOT_FOUND",
         "Schedule revision not found",
       );
-      const access = await this.competitionAccess(tx, row.competition_id, actor);
+      const access = await this.competitionAccess(tx, identity.competition_id, actor);
       await this.lockIdempotency(tx, access.organisation_id, input.idempotency_key);
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
@@ -3990,14 +4277,28 @@ export class Phase4Runtime {
         if (receipt.operation !== "schedule.publish" || receipt.request_hash !== requestHash)
           throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
       } else {
+        await this.lockScheduleMutation(tx, identity.competition_id);
+        const row = first(
+          await tx.unsafe<{
+            competition_id: string;
+            revision: number;
+            status: string;
+            source_job_id: string | null;
+          }>(`SELECT competition_id,revision,status,source_job_id FROM schedule_revisions WHERE id=$1 FOR UPDATE`, [
+            revisionId,
+          ]),
+          "SCHEDULE_REVISION_NOT_FOUND",
+          "Schedule revision not found",
+        );
         if (row.revision !== input.expected_revision || row.status !== "ready_for_review")
           throw new ApiError(409, "REVISION_CONFLICT", "Only the current review-ready schedule can be published");
-        if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id);
+        if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id, false);
+        await this.assertScheduleRevisionLocksCompatible(tx, revisionId);
         await tx.unsafe(`SELECT phase4_publish_schedule_revision($1,$2,$3)`, [revisionId, actor.accountId, requestId]);
         await tx.unsafe(
           `UPDATE competitions SET status=CASE WHEN status='draft' THEN 'active' ELSE status END,updated_at=now()
            WHERE id=$1`,
-          [row.competition_id],
+          [identity.competition_id],
         );
         await tx.unsafe(
           `INSERT INTO phase4_mutation_receipts(organisation_id,idempotency_key,operation,request_hash,response)
@@ -4008,7 +4309,7 @@ export class Phase4Runtime {
       const publication = first(
         await tx.unsafe<{ schedule_version: number; result_version: number }>(
           `SELECT schedule_version,result_version FROM competition_publications WHERE competition_id=$1`,
-          [row.competition_id],
+          [identity.competition_id],
         ),
         "PUBLICATION_NOT_FOUND",
         "Publication state not found",
@@ -4017,7 +4318,7 @@ export class Phase4Runtime {
         throw new ApiError(500, "PUBLIC_PROJECTION_UNAVAILABLE", "Public schedule projection is unavailable");
       await this.publicProjection.writePublicProjection(
         tx,
-        row.competition_id,
+        identity.competition_id,
         publication.schedule_version,
         publication.result_version,
       );

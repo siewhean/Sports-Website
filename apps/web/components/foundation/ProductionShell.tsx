@@ -2,10 +2,13 @@ import Link from "next/link";
 import { messages, type ShellKind } from "@matchday/ui";
 import { BrandLink } from "./Primitives";
 
-const organiserLinks = messages.organiser.sections.map((label, index) => ({
-  label,
-  href: index === 0 ? "/organiser" : `/organiser#${label.toLowerCase()}`,
-}));
+// Only "Overview" resolves to a real destination on this shell. The rest of
+// messages.organiser.sections describes the eventual per-competition workflow
+// (Entries, Format, Schedule, Operations, Publish), which lives on its own
+// routed pages under /organiser/competitions/[id]/... once a competition
+// exists. Do not turn those section labels into links here again unless this
+// shell can actually resolve them, or they become dead hash links.
+const organiserLinks = [{ label: messages.organiser.sections[0]!, href: "/organiser" }];
 
 export function ProductionShell({
   kind,

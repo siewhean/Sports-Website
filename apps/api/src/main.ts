@@ -1,8 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { loadConfig, safeConfigSummary } from "@matchday/config";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
 import { Redis } from "ioredis";
 import postgres from "postgres";
-import { ScheduleJobQueue, schedulerQueueName } from "@matchday/scheduler";
+import {
+  DomainScheduleOptimizer,
+  PostgresScheduleJobStore,
+  ScheduleJobQueue,
+  SchedulerRuntime,
+  schedulerQueueName,
+} from "@matchday/scheduler";
 import { buildApp } from "./app.js";
 import { startServer } from "./lifecycle.js";
 import { PostgresIdentityUnitOfWork } from "./identity-postgres.js";
@@ -11,10 +18,11 @@ import { createOidcIdentityProvider } from "./oidc-provider.js";
 import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 import { Phase2Runtime } from "./phase-2-runtime.js";
+import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
-import { Phase3Runtime } from "./phase-3-runtime.js";
+import { V1Phase3Runtime } from "./phase-3-v1-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
-import { ReliableGateBPhase4Runtime } from "./phase-4-reliable-runtime.js";
+import { V1Phase4Runtime } from "./phase-4-v1-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const config = loadConfig();
@@ -41,13 +49,34 @@ const identityRuntime = new IdentityApiRuntime(
   config.identity.csrfHmacSecret,
   systemClock,
 );
-const phase2Runtime = new Phase2Runtime(identitySql, phase2DomainAdapter);
-const phase3Runtime = new Phase3Runtime(identitySql, phase3DomainAdapter);
+const phase2Runtime = new Phase2Runtime(
+  identitySql,
+  phase2DomainAdapter,
+  undefined,
+  new RedisScoringAccessRateLimiter(
+    rateLimitRedis,
+    config.scoringAccess.rateLimitHmacSecret,
+    `matchday:${config.environment}:scoring-access:`,
+  ),
+  config.scoringAccess.fallbackCodeHmacSecret,
+);
+const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
+const queueName = schedulerQueueName(config.environment);
+const inlineScheduler = new SchedulerRuntime({
+  queueName,
+  redisUrl: config.redisUrl,
+  workerId: `api-v1-${process.pid}-${randomUUID()}`,
+  store: new PostgresScheduleJobStore(postgresClient),
+  optimizer: new DomainScheduleOptimizer({ maxIterationsPerRun: 64 }),
+  concurrency: 1,
+  shutdownTimeoutMs: 30_000,
+});
+await inlineScheduler.start();
 const scheduleQueue = new ScheduleJobQueue({
-  queueName: schedulerQueueName(config.environment),
+  queueName,
   redisUrl: config.redisUrl,
 });
-const phase4Runtime = new ReliableGateBPhase4Runtime(
+const phase4Runtime = new V1Phase4Runtime(
   identitySql,
   phase3Runtime,
   scheduleQueue,
@@ -65,10 +94,11 @@ const app = await buildApp({
   phase3Runtime,
   phase4Runtime,
   closeIdentityResources: async () => {
-    await Promise.all([scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
+    await Promise.all([inlineScheduler.stop(), scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
   },
 }).catch(async (error: unknown) => {
   await Promise.allSettled([
+    inlineScheduler.stop(),
     rateLimitRedis.quit(),
     scheduleQueue.close(),
     postgresClient.end({ timeout: 1 }),

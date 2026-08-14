@@ -19,6 +19,16 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test("format designer visual canvas remains horizontally navigable", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/format");
+  await dismissConsent(page);
+  await page.getByRole("button", { name: "Visual", exact: true }).click();
+  const canvas = page.getByTestId("format-canvas");
+  await expect(canvas).toBeVisible();
+  await expect(canvas.getByRole("button", { name: /Group A/ })).toBeVisible();
+  expect(await canvas.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+});
+
 test("recommendation evidence stays accessible without phone overflow", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/setup?step=format_recommendations");
   await dismissConsent(page);

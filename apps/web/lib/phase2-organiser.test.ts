@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cookieHostMatches,
   isOrganiserWorkspacePayload,
@@ -39,8 +39,8 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
         id: divisionId,
         name: "Open",
         entries: [
-          { id: homeId, name: "North", seed: 1 },
-          { id: awayId, name: "South", seed: 2 },
+          { id: homeId, name: "North", seed: 1, status: "active", revision: 1 },
+          { id: awayId, name: "South", seed: 2, status: "active", revision: 1 },
         ],
       },
     ],
@@ -78,6 +78,10 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
           stage: "group",
           area: "Court 1",
           starts_at: "2026-08-01T01:00:00.000Z",
+          state: "corrected",
+          home_score: 4,
+          away_score: 3,
+          result_version: 1,
         },
         {
           match_id: secondMatchId,
@@ -85,6 +89,10 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
           stage: "group",
           area: "Court 2",
           starts_at: "2026-08-01T01:00:00.000Z",
+          state: "in_progress",
+          home_score: 2,
+          away_score: 1,
+          result_version: 1,
         },
       ],
     },
@@ -97,15 +105,37 @@ function workspace(sportCode = "canoe_polo"): OrganiserWorkspacePayload {
       {
         id: "pass-1",
         match_id: matchId,
+        role: "scorekeeper",
         expires_at: "2026-08-01T02:00:00.000Z",
+        revoked_at: null,
+        fallback_code_status: "rotation_required",
         token: "must-not-leak",
         short_code: "must-not-leak",
       },
+      {
+        id: "pass-2",
+        match_id: matchId,
+        role: "viewer",
+        expires_at: "2026-08-01T02:00:00.000Z",
+        revoked_at: "2026-07-20T02:00:00.000Z",
+        fallback_code_status: "unavailable",
+      },
     ],
+    permission: "write",
+    read_only: false,
   };
 }
 
 describe("organiser competition workspace mapping", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("validates and maps authenticated workspace data without access secrets", () => {
     const payload = workspace();
     expect(isOrganiserWorkspacePayload(payload)).toBe(true);
@@ -122,6 +152,7 @@ describe("organiser competition workspace mapping", () => {
       publicationState: "published",
       division: { id: divisionId, name: "Open", teamCount: 2, matchCount: 2 },
       teams: ["North", "South"],
+      canEdit: true,
     });
     expect(view.matches).toEqual(
       expect.arrayContaining([
@@ -130,11 +161,49 @@ describe("organiser competition workspace mapping", () => {
           home: "North",
           away: "South",
           area: "Court 1",
-          status: "scheduled",
+          homeScore: 4,
+          awayScore: 3,
+          status: "final",
+        }),
+        expect.objectContaining({
+          id: secondMatchId,
+          status: "live",
         }),
       ]),
     );
-    expect(view.accessPasses).toEqual([expect.objectContaining({ matchId, displayCode: "••••-••" })]);
+    expect(view.matches.find((match) => match.id === secondMatchId)).toMatchObject({
+      homeScore: 2,
+      awayScore: 1,
+      resultVersion: 1,
+    });
+    expect(view.accessPasses).toEqual([
+      expect.objectContaining({
+        matchId,
+        role: "scorekeeper",
+        displayCode: "••••••••••••",
+        revoked: false,
+        status: "active",
+        fallbackCodeStatus: "rotation_required",
+      }),
+      expect.objectContaining({
+        matchId,
+        role: "viewer",
+        displayCode: "••••••••••••",
+        revoked: true,
+        status: "revoked",
+        fallbackCodeStatus: "unavailable",
+      }),
+    ]);
+    expect(view.divisions).toEqual([
+      {
+        id: divisionId,
+        name: "Open",
+        entries: [
+          { id: homeId, name: "North", seed: 1, status: "active", revision: 1 },
+          { id: awayId, name: "South", seed: 2, status: "active", revision: 1 },
+        ],
+      },
+    ]);
     expect(JSON.stringify(view)).not.toContain("must-not-leak");
     expect(view.accessPasses?.[0]).not.toHaveProperty("scoringHref");
     expect(view.scheduleRows).toEqual([
@@ -150,6 +219,39 @@ describe("organiser competition workspace mapping", () => {
       ["Matches", "2"],
       ["Knockout stages", "—"],
     ]);
+  });
+
+  it("resolves published V1 entry-seed sources for scheduled group fixtures", () => {
+    const payload = workspace();
+    const matches = payload.current_format?.definition as { matches: Array<Record<string, unknown>> };
+    matches.matches[0] = {
+      ...matches.matches[0],
+      id: "group-A-r1-m1",
+      code: undefined,
+      home: { type: "entry_seed", seed: 1 },
+      away: { type: "entry_seed", seed: 2 },
+    };
+
+    const view = toOrganiserCompetitionView(payload);
+    expect(view.matches.find((match) => match.id === matchId)).toMatchObject({ home: "North", away: "South" });
+  });
+
+  it("prefers materialised advancement entries over unresolved graph rank sources", () => {
+    const payload = workspace();
+    const matches = payload.current_format?.definition as { matches: Array<Record<string, unknown>> };
+    matches.matches[1] = {
+      ...matches.matches[1],
+      id: "championship-r1-m1",
+      code: undefined,
+      stage: "championship",
+      home: { type: "stage_rank", stageId: "groups", groupId: "G1", rank: 1 },
+      away: { type: "stage_rank", stageId: "groups", groupId: "G2", rank: 1 },
+    };
+    const scheduled = payload.private_schedule?.matches as Array<Record<string, unknown>>;
+    scheduled[1] = { ...scheduled[1], home_entry_id: homeId, away_entry_id: awayId };
+
+    const view = toOrganiserCompetitionView(payload);
+    expect(view.matches.find((match) => match.id === secondMatchId)).toMatchObject({ home: "North", away: "South" });
   });
 
   it.each([
@@ -200,9 +302,38 @@ describe("organiser competition workspace mapping", () => {
     expect(cookieHostMatches("app.matchday.test.evil:3000", "app.matchday.test")).toBe(false);
   });
 
+  it("projects viewer permission as read only", () => {
+    const payload = workspace();
+    payload.permission = "read";
+    payload.read_only = true;
+    expect(toOrganiserCompetitionView(payload).canEdit).toBe(false);
+  });
+
   it("rejects payloads outside the supported organiser workspace contract", () => {
     expect(isOrganiserWorkspacePayload({ competition: { id: competitionId } })).toBe(false);
     expect(isOrganiserWorkspacePayload(workspace("football"))).toBe(false);
     expect(() => toOrganiserCompetitionView(workspace("football"))).toThrow("missing or unsupported");
+
+    const malformedStatus = workspace();
+    const malformedEntries = malformedStatus.divisions[0]?.entries as Array<Record<string, unknown>>;
+    delete malformedEntries[0]?.status;
+    expect(isOrganiserWorkspacePayload(malformedStatus)).toBe(false);
+
+    const missingPermission = workspace();
+    delete (missingPermission as Partial<OrganiserWorkspacePayload>).permission;
+    expect(isOrganiserWorkspacePayload(missingPermission)).toBe(false);
+
+    const unsupportedMatchState = workspace();
+    (unsupportedMatchState.private_schedule?.matches as Array<Record<string, unknown>>)[0]!.state = "abandoned";
+    expect(isOrganiserWorkspacePayload(unsupportedMatchState)).toBe(false);
+    expect(() => toOrganiserCompetitionView(unsupportedMatchState)).toThrow("invalid scoring state");
+
+    const incompleteFinalScore = workspace();
+    (incompleteFinalScore.private_schedule?.matches as Array<Record<string, unknown>>)[0]!.home_score = null;
+    expect(isOrganiserWorkspacePayload(incompleteFinalScore)).toBe(false);
+
+    const pendingWithRetainedResult = workspace();
+    (pendingWithRetainedResult.private_schedule?.matches as Array<Record<string, unknown>>)[1]!.state = "pending";
+    expect(isOrganiserWorkspacePayload(pendingWithRetainedResult)).toBe(false);
   });
 });

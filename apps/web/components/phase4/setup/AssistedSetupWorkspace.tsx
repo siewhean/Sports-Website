@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -47,7 +48,9 @@ const stateCopy: Record<
 };
 
 export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPageDocument }) {
+  const router = useRouter();
   const [setup, setSetup] = useState(document.setup);
+  const expectedRevisionRef = useRef<number>(document.setup?.revision ?? 1);
   const [viewState, setViewState] = useState(document.state);
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState("");
@@ -69,6 +72,10 @@ export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPa
     headingRef.current?.focus();
   }, [currentStep]);
 
+  useEffect(() => {
+    expectedRevisionRef.current = setup?.revision ?? expectedRevisionRef.current;
+  }, [setup?.revision]);
+
   async function mutate(transition: Parameters<typeof setupAutosaveBody>[1]) {
     if (!setup || busy || readOnly) return null;
     setBusy(true);
@@ -79,33 +86,63 @@ export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPa
         {
           method: opaqueId("PUT"),
           headers: { "content-type": opaqueId("application/json") },
-          body: JSON.stringify(setupAutosaveBody(setup.revision, transition)),
+          body: JSON.stringify(setupAutosaveBody(expectedRevisionRef.current, transition)),
         },
       );
       const parsed = parseAssistedSetupAutosaveResponse(
         await response.json().catch(() => null),
         document.competitionId,
       );
-      if (!response.ok || !parsed) {
-        if (response.status === 401 || response.status === 403) setViewState(opaqueId("permission"));
-        else if (response.status === 409) setViewState(opaqueId("conflict"));
-        else setAnnouncement(t("prototype.599dfa4801a2"));
+      if (!parsed) {
+        setAnnouncement(t("prototype.599dfa4801a2"));
         return null;
       }
-      const next = parsed.outcome === "conflict" ? parsed.current : parsed.document;
-      if (parsed.outcome === "conflict" || parsed.outcome === "idempotency_mismatch") {
-        setSetup(next);
+      if (response.status === 401 || response.status === 403) {
+        setViewState(opaqueId("permission"));
+        return null;
+      }
+      if (response.status === 409) {
+        const next =
+          parsed.outcome === "conflict"
+            ? parsed.current
+            : parsed.outcome === "idempotency_mismatch"
+              ? parsed.document
+              : null;
+        if (next) {
+          setSetup(next);
+          expectedRevisionRef.current = next.revision;
+        }
         setViewState(opaqueId("conflict"));
         return null;
       }
-      if (parsed.outcome === "expired") setViewState(opaqueId("error"));
-      else if (parsed.outcome === "read_only") setViewState(opaqueId("read-only"));
-      else {
-        setSetup(next);
-        setBasics(next.values.basics);
-        setPreferences(next.values.format_preferences);
-        setAnnouncement(phase4SetupCopy.saved);
+      if (!response.ok) {
+        setAnnouncement(t("prototype.599dfa4801a2"));
+        return null;
       }
+
+      const next = parsed.outcome === "conflict" ? parsed.current : parsed.document;
+      if (parsed.outcome === "conflict" || parsed.outcome === "idempotency_mismatch") {
+        setSetup(next);
+        expectedRevisionRef.current = next.revision;
+        setViewState(opaqueId("conflict"));
+        return null;
+      }
+
+      if (parsed.outcome === "expired") {
+        setViewState(opaqueId("error"));
+        return null;
+      }
+
+      if (parsed.outcome === "read_only") {
+        setViewState(opaqueId("read-only"));
+        return null;
+      }
+
+      setSetup(next);
+      expectedRevisionRef.current = next.revision;
+      setBasics(next.values.basics);
+      setPreferences(next.values.format_preferences);
+      setAnnouncement(phase4SetupCopy.saved);
       return next;
     } catch {
       setViewState(opaqueId("offline"));
@@ -127,8 +164,10 @@ export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPa
           body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
         },
       );
-      if (response.ok) window.location.reload();
-      else
+      if (response.ok) {
+        router.refresh();
+        headingRef.current?.focus();
+      } else
         setViewState(response.status === 401 || response.status === 403 ? opaqueId("permission") : opaqueId("error"));
     } catch {
       setViewState(opaqueId("offline"));
@@ -243,9 +282,10 @@ export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPa
         icon={viewState === "offline" ? <CloudSlash aria-hidden="true" /> : <Warning aria-hidden="true" />}
         title={copy.title}
         body={copy.body}
+        assertive
         action={
           viewState === "conflict" ? (
-            <button onClick={() => window.location.reload()}>{t("prototype.4b46950ea4dd")}</button>
+            <button onClick={() => router.refresh()}>{t("prototype.4b46950ea4dd")}</button>
           ) : null
         }
       />
@@ -960,14 +1000,20 @@ function SetupState({
   title,
   body,
   action,
+  assertive,
 }: {
   icon: React.ReactNode;
   title: string;
   body: string;
   action?: React.ReactNode;
+  assertive?: boolean;
 }) {
   return (
-    <section className={styles.state}>
+    <section
+      className={styles.state}
+      role={assertive ? "alert" : undefined}
+      aria-live={assertive ? "assertive" : undefined}
+    >
       <span>{icon}</span>
       <h1>{title}</h1>
       <p>{body}</p>

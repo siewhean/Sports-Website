@@ -17,6 +17,12 @@ import type { Phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 
 export type Phase3Actor = { accountId: string };
 
+export type Phase3OrganisationOption = {
+  id: string;
+  name: string;
+  role: "owner" | "organiser";
+};
+
 export type Phase3CompetitionCreateInput = {
   organisationId: string;
   name: string;
@@ -119,7 +125,9 @@ function decodedJson<T>(value: T | string): T {
 
 function expectDomain<T>(result: DomainCommandResult<T>): T {
   if (result.ok) return result.value;
-  const validation = ["VALIDATION_ERROR", "IMPORT_VALIDATION_FAILED"].includes(result.error.code);
+  const validation = ["VALIDATION_ERROR", "IMPORT_VALIDATION_FAILED", "FREE_ENTRY_LIMIT_REACHED"].includes(
+    result.error.code,
+  );
   throw new ApiError(validation ? 422 : 409, result.error.code, result.error.message);
 }
 
@@ -133,6 +141,47 @@ export class Phase3Runtime {
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     if (!this.sql.begin) throw new Error("Phase 3 mutations require a transaction-capable PostgreSQL client.");
     return this.sql.begin(operation);
+  }
+
+  private async mutationReplay<T>(
+    tx: PostgresJsSql,
+    organisationId: string,
+    idempotencyKey: string,
+    operation: string,
+    input: unknown,
+  ): Promise<T | undefined> {
+    await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+      `${operation}:${organisationId}:${idempotencyKey}`,
+    ]);
+    const requestHash = this.domain.hash(input);
+    const receipt = (
+      await tx.unsafe<{ operation: string; request_hash: string; response: unknown }>(
+        `SELECT operation,request_hash,response
+         FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
+        [organisationId, idempotencyKey],
+      )
+    )[0];
+    if (!receipt) return undefined;
+    if (receipt.operation !== operation || receipt.request_hash !== requestHash) {
+      throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "The idempotency key was already used for a different request");
+    }
+    return decodedJson(receipt.response) as T;
+  }
+
+  private async recordMutationReceipt(
+    tx: PostgresJsSql,
+    organisationId: string,
+    idempotencyKey: string,
+    operation: string,
+    input: unknown,
+    response: unknown,
+  ): Promise<void> {
+    await tx.unsafe(
+      `INSERT INTO phase4_mutation_receipts
+        (organisation_id,idempotency_key,operation,request_hash,response)
+       VALUES ($1,$2,$3,$4,$5::jsonb)`,
+      [organisationId, idempotencyKey, operation, this.domain.hash(input), response],
+    );
   }
 
   /**
@@ -212,6 +261,19 @@ export class Phase3Runtime {
     if (competition.status === "archived") {
       throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
     }
+  }
+
+  async listWritableOrganisations(actor: Phase3Actor): Promise<readonly Phase3OrganisationOption[]> {
+    return this.sql.unsafe<Phase3OrganisationOption>(
+      `SELECT organisation.id,organisation.name,membership.role
+       FROM organisation_memberships membership
+       JOIN organisations organisation ON organisation.id=membership.organisation_id
+       WHERE membership.account_id=$1
+         AND membership.status='active'
+         AND membership.role IN ('owner','organiser')
+       ORDER BY lower(organisation.name),organisation.id`,
+      [actor.accountId],
+    );
   }
 
   private async sportPack(tx: PostgresJsSql, sportCode: Phase3SportCode, version: string): Promise<SportPack> {
@@ -322,11 +384,12 @@ export class Phase3Runtime {
       availability: Phase3AvailabilityInput[];
       replacement_entry_id: string | null;
       replaces_entry_id: string | null;
+      revision: number;
       created_at: Date | string;
       updated_at: Date | string;
     }>(
       `SELECT e.id,e.division_id,e.name,e.entry_type,e.status,e.seed,e.metadata,e.availability,
-              e.replacement_entry_id,e.replaces_entry_id,e.created_at,e.updated_at
+              e.replacement_entry_id,e.replaces_entry_id,e.revision,e.created_at,e.updated_at
        FROM division_entries e JOIN divisions d ON d.id=e.division_id
        WHERE d.competition_id=$1 ORDER BY e.created_at,e.id`,
       [competitionId],
@@ -369,6 +432,7 @@ export class Phase3Runtime {
             type: entry.entry_type,
             status: entry.status === "confirmed" ? "active" : entry.status,
             seed: entry.seed,
+            revision: entry.revision,
             metadata: {
               club:
                 typeof decodedJson(entry.metadata).club === "string"
@@ -578,9 +642,19 @@ export class Phase3Runtime {
     competitionId: string,
     input: { name: string; code?: string; entryLimit: 8 | 12 | 16 | 24 | 48 },
     requestId: string,
+    idempotencyKey: string,
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      const operation = "division.create";
+      const replay = await this.mutationReplay<Record<string, unknown>>(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, input },
+      );
+      if (replay) return replay;
       if (competition.status === "archived")
         throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
       const rows = await tx.unsafe<Record<string, unknown>>(
@@ -603,6 +677,14 @@ export class Phase3Runtime {
         "division.created",
         "division",
         String(division.id),
+        division,
+      );
+      await this.recordMutationReceipt(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, input },
         division,
       );
       return division;
@@ -698,6 +780,16 @@ export class Phase3Runtime {
     );
   }
 
+  private async assertEntriesEditable(tx: PostgresJsSql, competitionId: string, divisionId: string) {
+    const format = (
+      await tx.unsafe<{ id: string }>(
+        `SELECT id FROM format_revisions WHERE competition_id=$1 AND division_id=$2 LIMIT 1 FOR KEY SHARE`,
+        [competitionId, divisionId],
+      )
+    )[0];
+    if (format) throw new ApiError(409, "ENTRY_MUTATION_LOCKED_BY_FORMAT", "Entries are locked after format creation");
+  }
+
   async updateEntry(
     actor: Phase3Actor,
     competitionId: string,
@@ -711,14 +803,28 @@ export class Phase3Runtime {
       availability?: unknown[];
     },
     requestId: string,
+    idempotencyKey: string,
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      const operation = "entry.update";
+      const replay = await this.mutationReplay<Record<string, unknown>>(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, entryId, input },
+      );
+      if (replay) return replay;
       this.assertMutable(competition);
       required(
-        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId]),
+        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`, [
+          divisionId,
+          competitionId,
+        ]),
         "Division not found",
       );
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
       const current = await this.domainCompetition(tx, competitionId);
       expectDomain(
         this.domain.updateEntry(
@@ -737,15 +843,14 @@ export class Phase3Runtime {
         ),
       );
       const rows = await tx.unsafe<Record<string, unknown>>(
-        `UPDATE division_entries SET name=COALESCE($5,name),seed=CASE WHEN $6 THEN $7 ELSE seed END,
-          metadata=COALESCE($8::jsonb,metadata),availability=COALESCE($9::jsonb,availability),revision=revision+1,updated_at=$10
+        `UPDATE division_entries SET name=COALESCE($4,name),seed=CASE WHEN $5 THEN $6::int ELSE seed END,
+          metadata=COALESCE($7::jsonb,metadata),availability=COALESCE($8::jsonb,availability),revision=revision+1,updated_at=$9
          WHERE id=$1 AND division_id=$2 AND revision=$3 AND status IN ('confirmed','active')
          RETURNING id,division_id,name,entry_type,status,seed,metadata,availability,revision`,
         [
           entryId,
           divisionId,
           input.revision,
-          competitionId,
           input.name?.trim() ?? null,
           input.seed !== undefined,
           input.seed ?? null,
@@ -757,29 +862,61 @@ export class Phase3Runtime {
       const entry = rows[0];
       if (!entry) throw new ApiError(409, "REVISION_CONFLICT", "Entry revision or status is stale");
       await this.evidence(tx, actor, competition.organisation_id, requestId, "entry.updated", "entry", entryId, entry);
+      await this.recordMutationReceipt(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, entryId, input },
+        entry,
+      );
       return entry;
     });
   }
 
-  async deleteEntry(actor: Phase3Actor, competitionId: string, divisionId: string, entryId: string, requestId: string) {
+  async deleteEntry(
+    actor: Phase3Actor,
+    competitionId: string,
+    divisionId: string,
+    entryId: string,
+    revision: number,
+    requestId: string,
+    idempotencyKey: string,
+  ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      const operation = "entry.delete";
+      const input = { competitionId, divisionId, entryId, revision };
+      const replay = await this.mutationReplay<{ id: string; deleted: true }>(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        input,
+      );
+      if (replay) return replay;
       this.assertMutable(competition);
       required(
-        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId]),
+        await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`, [
+          divisionId,
+          competitionId,
+        ]),
         "Division not found",
       );
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
       const rows = await tx.unsafe<{ id: string }>(
-        `DELETE FROM division_entries e WHERE e.id=$1 AND e.division_id=$2 AND e.status IN ('confirmed','active')
+        `DELETE FROM division_entries e WHERE e.id=$1 AND e.division_id=$2 AND e.revision=$3 AND e.status IN ('confirmed','active')
          AND e.replacement_entry_id IS NULL AND e.replaces_entry_id IS NULL
          AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.home_entry_id=e.id OR m.away_entry_id=e.id) RETURNING e.id`,
-        [entryId, divisionId],
+        [entryId, divisionId, revision],
       );
-      required(rows, "Entry not found");
+      if (!rows[0]) throw new ApiError(409, "REVISION_CONFLICT", "Entry revision or status is stale");
       await this.evidence(tx, actor, competition.organisation_id, requestId, "entry.deleted", "entry", entryId, {
         id: entryId,
       });
-      return { id: entryId, deleted: true };
+      const result = { id: entryId, deleted: true as const };
+      await this.recordMutationReceipt(tx, competition.organisation_id, idempotencyKey, operation, input, result);
+      return result;
     });
   }
 
@@ -1004,9 +1141,19 @@ export class Phase3Runtime {
       replacementAvailability?: Phase3AvailabilityInput[];
     },
     requestId: string,
+    idempotencyKey: string,
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      const operation = `entry.${input.action}`;
+      const replay = await this.mutationReplay<Record<string, unknown>>(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, input },
+      );
+      if (replay) return replay;
       this.assertMutable(competition);
       required(
         await tx.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`, [
@@ -1015,6 +1162,7 @@ export class Phase3Runtime {
         ]),
         "Division not found",
       );
+      if (input.action === "create") await this.assertEntriesEditable(tx, competitionId, divisionId);
       const current = await this.domainCompetition(tx, competitionId);
       const plan = required(
         await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(`SELECT plan_tier FROM competitions WHERE id=$1`, [
@@ -1153,13 +1301,54 @@ export class Phase3Runtime {
             ? "entry.replaced"
             : "entry.created";
       await this.evidence(tx, actor, competition.organisation_id, requestId, action, "entry", String(entry.id), entry);
+      await this.recordMutationReceipt(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, input },
+        entry,
+      );
       return entry;
     });
   }
 
-  async createCompetition(actor: Phase3Actor, input: Phase3CompetitionCreateInput, requestId: string) {
+  async createCompetition(
+    actor: Phase3Actor,
+    input: Phase3CompetitionCreateInput,
+    requestId: string,
+    idempotencyKey = requestId,
+  ) {
     return this.transaction(async (tx) => {
       await this.organisationAccess(tx, input.organisationId, actor);
+      const requestHash = this.domain.hash(input);
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+        `competition.create:${input.organisationId}:${idempotencyKey}`,
+      ]);
+      const existing = (
+        await tx.unsafe<{ operation: string; request_hash: string; response: unknown }>(
+          `SELECT operation,request_hash,response
+           FROM phase4_mutation_receipts
+           WHERE organisation_id=$1 AND idempotency_key=$2`,
+          [input.organisationId, idempotencyKey],
+        )
+      )[0];
+      if (existing) {
+        if (existing.operation !== "competition.create" || existing.request_hash !== requestHash) {
+          throw new ApiError(
+            409,
+            "IDEMPOTENCY_KEY_REUSED",
+            "The idempotency key was already used for a different competition request",
+          );
+        }
+        return decodedJson(existing.response) as {
+          id: string;
+          status: "draft";
+          sport_code: Phase3SportCode;
+          revision: number;
+          account_default_applied: boolean;
+        };
+      }
       const competitionId = randomUUID();
       expectDomain(
         this.domain.createCompetition(
@@ -1248,13 +1437,20 @@ export class Phase3Runtime {
           sport_code: input.sportCode,
         },
       );
-      return {
+      const response = {
         id: competition.id,
-        status: "draft",
+        status: "draft" as const,
         sport_code: input.sportCode,
         revision: competition.revision,
         account_default_applied: compatibleDefault !== null,
       };
+      await tx.unsafe(
+        `INSERT INTO phase4_mutation_receipts
+          (organisation_id,idempotency_key,operation,request_hash,response)
+         VALUES ($1,$2,'competition.create',$3,$4::jsonb)`,
+        [input.organisationId, idempotencyKey, requestHash, response],
+      );
+      return response;
     });
   }
 

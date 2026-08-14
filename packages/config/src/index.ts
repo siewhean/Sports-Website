@@ -28,6 +28,12 @@ const rawConfigSchema = z.object({
   API_TRUSTED_PROXIES: z.string().default(""),
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
+  SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-scoring-access-rate-key"),
+  SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: z
+    .string()
+    .min(32)
+    .max(1_024)
+    .default("local-test-scoring-fallback-code-key"),
   LOG_LEVEL: logLevelSchema.default("info"),
   DEEP_HEALTH_TOKEN: z.string().min(32).optional(),
   IDENTITY_CSRF_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-csrf-secret-change-me-32"),
@@ -71,6 +77,18 @@ const rawConfigSchema = z.object({
 
 export type AppEnvironment = z.infer<typeof environmentSchema>;
 
+export type SchedulerConfig = {
+  environment: AppEnvironment;
+  databaseUrl: string;
+  redisUrl: string;
+  logLevel: z.infer<typeof logLevelSchema>;
+  telemetry: {
+    enabled: boolean;
+    endpoint?: string;
+    metricExportIntervalMs: number;
+  };
+};
+
 export type AppConfig = {
   environment: AppEnvironment;
   api: {
@@ -81,6 +99,10 @@ export type AppConfig = {
   };
   databaseUrl: string;
   redisUrl: string;
+  scoringAccess: {
+    rateLimitHmacSecret: string;
+    fallbackCodeHmacSecret: string;
+  };
   logLevel: z.infer<typeof logLevelSchema>;
   deepHealthToken?: string;
   identity: {
@@ -218,6 +240,77 @@ function validatedEdgePurgeUrl(value: string, environment: AppEnvironment): stri
   return url.href;
 }
 
+const schedulerConfigSchema = z.object({
+  APP_ENV: environmentSchema,
+  DATABASE_URL: databaseUrlSchema,
+  REDIS_URL: redisUrlSchema,
+  LOG_LEVEL: logLevelSchema.default("info"),
+  OTEL_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrlSchema,
+  OTEL_METRIC_EXPORT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
+});
+
+function validatedTelemetry(
+  environment: AppEnvironment,
+  enabled: boolean,
+  rawEndpoint: string | undefined,
+  metricExportIntervalMs: number,
+): SchedulerConfig["telemetry"] {
+  let endpoint: string | undefined;
+  if (rawEndpoint) {
+    const url = new URL(rawEndpoint);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
+    }
+    if (environment === "production" && url.protocol !== "https:") {
+      throw new Error("Production OTLP endpoints must use HTTPS");
+    }
+    if (url.username || url.password || url.search || url.hash) {
+      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
+    }
+    endpoint = url.toString().replace(/\/$/, "");
+  }
+  if (enabled && !endpoint) {
+    throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT is required when telemetry is enabled");
+  }
+  if (environment === "production" && !enabled) {
+    throw new Error("OTEL_ENABLED must be true in production");
+  }
+  return {
+    enabled,
+    metricExportIntervalMs,
+    ...(endpoint ? { endpoint } : {}),
+  };
+}
+
+/**
+ * Scheduler processes no HTTP requests or identity flows. Keep its deployment
+ * boundary limited to its queue and persistence dependencies so it cannot
+ * accidentally require (or receive) API/OIDC credentials.
+ */
+export function parseSchedulerConfig(source: NodeJS.ProcessEnv): SchedulerConfig {
+  const parsed = schedulerConfigSchema.parse(source);
+  return {
+    environment: parsed.APP_ENV,
+    databaseUrl: parsed.DATABASE_URL,
+    redisUrl: parsed.REDIS_URL,
+    logLevel: parsed.LOG_LEVEL,
+    telemetry: validatedTelemetry(
+      parsed.APP_ENV,
+      parsed.OTEL_ENABLED,
+      parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
+      parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
+    ),
+  };
+}
+
+export function loadSchedulerConfig(): SchedulerConfig {
+  return parseSchedulerConfig(process.env);
+}
+
 export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   const parsed = rawConfigSchema.parse(source);
   requireProductionValue(parsed.APP_ENV, source, "DATABASE_URL");
@@ -318,24 +411,22 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       cookieSite: cookieSite.origin,
     };
   }
+  if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
+    throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET must be explicitly configured outside local/test");
+  }
+  if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET) {
+    throw new Error("SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET must be explicitly configured outside local/test");
+  }
+  if (parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET === parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
+    throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+  }
 
-  let telemetryEndpoint: string | undefined;
-  if (parsed.OTEL_EXPORTER_OTLP_ENDPOINT) {
-    const url = new URL(parsed.OTEL_EXPORTER_OTLP_ENDPOINT);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
-    }
-    if (parsed.APP_ENV === "production" && url.protocol !== "https:") {
-      throw new Error("Production OTLP endpoints must use HTTPS");
-    }
-    if (url.username || url.password || url.search || url.hash) {
-      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
-    }
-    telemetryEndpoint = url.toString().replace(/\/$/, "");
-  }
-  if (parsed.OTEL_ENABLED && !telemetryEndpoint) {
-    throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT is required when telemetry is enabled");
-  }
+  const telemetry = validatedTelemetry(
+    parsed.APP_ENV,
+    parsed.OTEL_ENABLED,
+    parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
+    parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
+  );
 
   let edgeCache: AppConfig["edgeCache"];
   if (parsed.EDGE_CACHE_PURGE_ENDPOINT && parsed.EDGE_CACHE_PURGE_BEARER_TOKEN) {
@@ -358,6 +449,10 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     },
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
+    scoringAccess: {
+      rateLimitHmacSecret: parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET,
+      fallbackCodeHmacSecret: parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    },
     logLevel: parsed.LOG_LEVEL,
     ...(parsed.DEEP_HEALTH_TOKEN ? { deepHealthToken: parsed.DEEP_HEALTH_TOKEN } : {}),
     identity: {
@@ -372,11 +467,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       ...(oidc ? { oidc } : {}),
     },
     ...(edgeCache ? { edgeCache } : {}),
-    telemetry: {
-      enabled: parsed.OTEL_ENABLED,
-      metricExportIntervalMs: parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
-      ...(telemetryEndpoint ? { endpoint: telemetryEndpoint } : {}),
-    },
+    telemetry,
   };
 }
 
@@ -400,6 +491,10 @@ export function safeConfigSummary(config: AppConfig) {
     },
     databaseUrl: redactUrl(config.databaseUrl),
     redisUrl: redactUrl(config.redisUrl),
+    scoringAccess: {
+      rateLimitHmacSecretConfigured: Boolean(config.scoringAccess.rateLimitHmacSecret),
+      fallbackCodeHmacSecretConfigured: Boolean(config.scoringAccess.fallbackCodeHmacSecret),
+    },
     logLevel: config.logLevel,
     deepHealthTokenConfigured: Boolean(config.deepHealthToken),
     identity: {

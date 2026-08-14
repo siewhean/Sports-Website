@@ -7,7 +7,9 @@ import {
   mergeOrganiserTemplate,
   parseFormatBuilderDocument,
   parseFormatMaterialisation,
+  parseFormatPublication,
   parseFormatValidation,
+  parseFormatWorkspaceResponse,
 } from "./phase4-format";
 
 const document: Phase4FormatBuilderDocument = {
@@ -126,6 +128,34 @@ describe("Phase 4 format web contract", () => {
     ).toBeNull();
   });
 
+  it("retains published materialisation state from the builder response", () => {
+    expect(
+      parseFormatWorkspaceResponse(
+        {
+          revisions: [
+            {
+              revision_id: "format-revision-a",
+              status: "published",
+              materialised: true,
+            },
+          ],
+          draft: null,
+        },
+        "competition-a",
+        "division-a",
+      ),
+    ).toEqual({
+      revisions: [
+        {
+          revisionId: "format-revision-a",
+          status: "published",
+          materialised: true,
+        },
+      ],
+      draft: null,
+    });
+  });
+
   it("strictly accepts materialisation for the requested revision", () => {
     const response = {
       revision: {
@@ -149,5 +179,25 @@ describe("Phase 4 format web contract", () => {
     expect(parseFormatMaterialisation(response, "format-revision-a")?.match_count).toBe(1);
     expect(parseFormatMaterialisation({ ...response, extra: true }, "format-revision-a")).toBeNull();
     expect(parseFormatMaterialisation(response, "format-revision-b")).toBeNull();
+  });
+
+  it("strictly accepts publication for the requested revision", () => {
+    const response = {
+      revision_id: "format-revision-a",
+      revision: 2,
+      parent_revision_id: null,
+      root_revision_id: "format-revision-a",
+      competition_id: "competition-a",
+      division_id: "division-a",
+      status: "published",
+      definition_hash: "definition-hash",
+      document,
+      created_at: "2026-07-20T00:00:00.000Z",
+      published_at: "2026-07-20T00:01:00.000Z",
+      idempotent_replay: false,
+    };
+    expect(parseFormatPublication(response, "format-revision-a")?.status).toBe("published");
+    expect(parseFormatPublication({ ...response, extra: true }, "format-revision-a")).toBeNull();
+    expect(parseFormatPublication(response, "format-revision-b")).toBeNull();
   });
 });

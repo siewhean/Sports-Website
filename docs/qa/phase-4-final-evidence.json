@@ -1,0 +1,657 @@
+{
+  "schema_version": 2,
+  "artifact_kind": "gate-b-browser-evidence",
+  "generated_at_utc": "2026-07-27T08:29:04.264Z",
+  "source": {
+    "commit_sha": "4f9202e4e1c546bfef2a23bcfc7e26825c90b314",
+    "branch": "fix/gate-b-local-remediation-20260724-132224",
+    "clean_before_generation": true
+  },
+  "environment": {
+    "operating_system": "Darwin 25.6.0",
+    "architecture": "arm64",
+    "node_version": "v24.18.0",
+    "pnpm_version": "10.33.0",
+    "postgresql_version": "18.4",
+    "redis_version": "8.2.7",
+    "playwright_version": "1.61.1",
+    "chromium_version": "149.0.7827.55",
+    "webkit_version": "26.5"
+  },
+  "commands": [
+    {
+      "id": "node-version",
+      "command": "node --version",
+      "exit_code": 0,
+      "duration_ms": 1382,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/00-node-version.log",
+        "sha256": "8f9258d5e9da5443c42966a661aee09292b49d1c64e718dcc5f72976500bac48",
+        "bytes": 9
+      }
+    },
+    {
+      "id": "pnpm-version",
+      "command": "pnpm --version",
+      "exit_code": 0,
+      "duration_ms": 983,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/01-pnpm-version.log",
+        "sha256": "62c33a14fe98185100efaeadf9bc76d70d6b76f1c026b4f7ead06cd6d417aacf",
+        "bytes": 8
+      }
+    },
+    {
+      "id": "frozen-install",
+      "command": "pnpm install --frozen-lockfile",
+      "exit_code": 0,
+      "duration_ms": 1361,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/02-frozen-install.log",
+        "sha256": "17bcae87607582e7f57e6c72dff057fae019c694a3465b127653190f31920899",
+        "bytes": 1112
+      }
+    },
+    {
+      "id": "lockfile-unchanged",
+      "command": "git diff --exit-code -- pnpm-lock.yaml",
+      "exit_code": 0,
+      "duration_ms": 745,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/03-lockfile-unchanged.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "id": "clean-outputs",
+      "command": "pnpm ci:assert-clean-outputs",
+      "exit_code": 0,
+      "duration_ms": 899,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/04-clean-outputs.log",
+        "sha256": "b10c0ec7a97423ea26e0249fabce700f92d133fcc3a49909e11a15ddaa0f5f67",
+        "bytes": 217
+      }
+    },
+    {
+      "id": "format",
+      "command": "pnpm format:check",
+      "exit_code": 0,
+      "duration_ms": 8080,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/05-format.log",
+        "sha256": "093581a799b03d62a858efc727c937a0e7c113766dfcd616e29c1c18a542c4a5",
+        "bytes": 180
+      }
+    },
+    {
+      "id": "lint",
+      "command": "pnpm lint",
+      "exit_code": 0,
+      "duration_ms": 4349,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/06-lint.log",
+        "sha256": "28047374ae7cdc5ae8d57c3c71df0214a67e9d26a85a93d33d4ac366c4c7576b",
+        "bytes": 1917
+      }
+    },
+    {
+      "id": "typecheck",
+      "command": "pnpm typecheck",
+      "exit_code": 0,
+      "duration_ms": 930,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/07-typecheck.log",
+        "sha256": "a7a9dd4ae2070798b68a5b4df84725bca905038753d4fc68103ee2867e46940b",
+        "bytes": 5438
+      }
+    },
+    {
+      "id": "unit",
+      "command": "pnpm test:unit",
+      "exit_code": 0,
+      "duration_ms": 977,
+      "counts": {
+        "passed": 697,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/08-unit.log",
+        "sha256": "24e6f69c39b199b140185f9b5a752ebb1fcef5242da07cc88ebf83473f99d7a9",
+        "bytes": 25490
+      }
+    },
+    {
+      "id": "migrations",
+      "command": "pnpm db:migrate:check",
+      "exit_code": 0,
+      "duration_ms": 2601,
+      "counts": {
+        "passed": 27,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/09-migrate-check.log",
+        "sha256": "83753e78ad5b4fdd91293e639bb460d15b232ab6119b42d7c76b4930e218bf19",
+        "bytes": 347
+      }
+    },
+    {
+      "id": "backup-restore",
+      "command": "pnpm backup:verify",
+      "exit_code": 0,
+      "duration_ms": 5637,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/10-backup-verify.log",
+        "sha256": "89ba6ec0bc582b334bcf19d9e39e9599cdeb9087c5a9780e0510ce1a8c403f26",
+        "bytes": 1570
+      }
+    },
+    {
+      "id": "integration",
+      "command": "RUN_INFRA_TESTS=1 pnpm test:integration",
+      "exit_code": 0,
+      "duration_ms": 45355,
+      "counts": {
+        "passed": 171,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/11-integration.log",
+        "sha256": "1006ed0596479b8690fbdaa0ee83b174c2d3aa34b851d5b53ade0836714c82ac",
+        "bytes": 16776
+      }
+    },
+    {
+      "id": "fixtures",
+      "command": "pnpm validate:fixtures",
+      "exit_code": 0,
+      "duration_ms": 947,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/12-validate-fixtures.log",
+        "sha256": "55452e2a272bf0b34441f18d6ec5ebe4c87d80593bb3a9fcc60d119418156ba2",
+        "bytes": 225
+      }
+    },
+    {
+      "id": "phase-2",
+      "command": "pnpm validate:phase2",
+      "exit_code": 0,
+      "duration_ms": 866,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/13-validate-phase2.log",
+        "sha256": "62e3719a8ee3b6e8a2d30076507096ef6bd3606f6563f2ebec0a29da0d8635d4",
+        "bytes": 220
+      }
+    },
+    {
+      "id": "phase-3",
+      "command": "pnpm validate:phase3",
+      "exit_code": 0,
+      "duration_ms": 1036,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/14-validate-phase3.log",
+        "sha256": "667079434e4e8e540cd93bbeec2a92d6630712a6cb12d5bc359ecb7e45cb5cfe",
+        "bytes": 254
+      }
+    },
+    {
+      "id": "phase-4",
+      "command": "pnpm validate:phase4",
+      "exit_code": 0,
+      "duration_ms": 849,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/15-validate-phase4.log",
+        "sha256": "c33c91f5d519b45bcb97aaefdbef8140e5732914c72f21c0fdab9400bdef5249",
+        "bytes": 218
+      }
+    },
+    {
+      "id": "openapi",
+      "command": "pnpm openapi:check",
+      "exit_code": 0,
+      "duration_ms": 2211,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/16-openapi.log",
+        "sha256": "afd7c86dc84cb0b9d21b957868eda35208c425970e1a33de7b5d6bf55239259b",
+        "bytes": 312
+      }
+    },
+    {
+      "id": "dependency-audit",
+      "command": "pnpm dependencies:audit",
+      "exit_code": 0,
+      "duration_ms": 1727,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/17-audit.log",
+        "sha256": "ee5cd8f3c775acaa99bace3f4e90baa22a1ea5f30c214b05d4fe6b391b8190e6",
+        "bytes": 173
+      }
+    },
+    {
+      "id": "secret-scan",
+      "command": "pnpm secrets:scan",
+      "exit_code": 0,
+      "duration_ms": 4807,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/18-secrets.log",
+        "sha256": "80eba8d968aa8d63c250aa3166ba3c180575b80c61c5ed50a4b131014392738d",
+        "bytes": 204
+      }
+    },
+    {
+      "id": "build",
+      "command": "pnpm build",
+      "exit_code": 0,
+      "duration_ms": 1203,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/19-build.log",
+        "sha256": "5476aa2e4bfbc76c5f21e748e083818a98dd47f7e18976ae62ba22806ff8a998",
+        "bytes": 11598
+      }
+    },
+    {
+      "id": "deployment-manifest",
+      "command": "pnpm deploy:manifest",
+      "exit_code": 0,
+      "duration_ms": 843,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/20-deploy-manifest.log",
+        "sha256": "d027f9d0d0a38d2efcef48021fb71e9f5a9e0c469d8d2c81e19820585a878a85",
+        "bytes": 233
+      }
+    },
+    {
+      "id": "asset-delivery",
+      "command": "pnpm asset-delivery:verify:origin",
+      "exit_code": 0,
+      "duration_ms": 7616,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/21-asset-origin.log",
+        "sha256": "a2e25eb0f4c607c9044ac4b1dfa5c5ef901c43759ea051eb47484f29aa8d6d8e",
+        "bytes": 228
+      }
+    },
+    {
+      "id": "playwright-install",
+      "command": "pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit",
+      "exit_code": 0,
+      "duration_ms": 1595,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/22-browser-install.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "id": "e2e",
+      "command": "pnpm test:e2e",
+      "exit_code": 0,
+      "duration_ms": 295504,
+      "counts": {
+        "passed": 284,
+        "failed": 0,
+        "skipped": 9
+      },
+      "skip_reasons": [
+        {
+          "reason": "Responsive tests intentionally apply only to their named browser and viewport projects; every required Gate B phone, tablet, and desktop project executed.",
+          "count": 9
+        }
+      ],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/23-e2e.log",
+        "sha256": "7de417aae59998abf4da1f66184c2a5f25ddf33e7f6f02d81ddbf5d54f78b9c9",
+        "bytes": 433672
+      }
+    },
+    {
+      "id": "accessibility",
+      "command": "pnpm test:a11y",
+      "exit_code": 0,
+      "duration_ms": 47544,
+      "counts": {
+        "passed": 68,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/24-a11y.log",
+        "sha256": "3cb516bae62ad38ff844dcf0cd0bbfa0a9cb8bf6b64875de2b470da154c9d239",
+        "bytes": 10859
+      }
+    },
+    {
+      "id": "visual",
+      "command": "pnpm test:visual",
+      "exit_code": 0,
+      "duration_ms": 36507,
+      "counts": {
+        "passed": 57,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/25-visual.log",
+        "sha256": "c5734975ed6d5690aa4ab2bd6c50e35b40125e44f083709c01ffd5a177408d1c",
+        "bytes": 7237
+      }
+    },
+    {
+      "id": "diff-check",
+      "command": "git diff --check",
+      "exit_code": 0,
+      "duration_ms": 662,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/26-diff-check.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "id": "umbrella-check",
+      "command": "pnpm check",
+      "exit_code": 0,
+      "duration_ms": 60275,
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 99
+      },
+      "skip_reasons": [
+        {
+          "reason": "Infrastructure-only tests are intentionally gated when pnpm check runs without RUN_INFRA_TESTS; the canonical RUN_INFRA_TESTS=1 integration command executed all 171 integration tests separately in this same exact-SHA ledger.",
+          "count": 99
+        }
+      ],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/28-check.log",
+        "sha256": "761d05c62599cbf7bd798c0698f35a1ddc82aff718297217f9744a864a94e4e2",
+        "bytes": 66352
+      }
+    },
+    {
+      "id": "focus-state-repeat",
+      "command": "pnpm --filter @matchday/web exec playwright test tests/phase-4-gateb-state-preservation.spec.ts --project=desktop-chromium --repeat-each=5",
+      "exit_code": 0,
+      "duration_ms": 22852,
+      "counts": {
+        "passed": 20,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/27-state-repeat.log",
+        "sha256": "13ba1d68837dc723a768efee59ce0df34c9ff1cfc9e5471c467b79dec81a5ee5",
+        "bytes": 10106
+      }
+    },
+    {
+      "id": "real-journeys",
+      "command": "pnpm test:e2e:phase4:real",
+      "exit_code": 0,
+      "duration_ms": 295504,
+      "counts": {
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0
+      },
+      "skip_reasons": [],
+      "unexpected_skipped": 0,
+      "log": {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/29-real-journeys.log",
+        "sha256": "7de417aae59998abf4da1f66184c2a5f25ddf33e7f6f02d81ddbf5d54f78b9c9",
+        "bytes": 433672
+      }
+    }
+  ],
+  "isolation_runs": [
+    {
+      "run_number": 1,
+      "command_id": "real-journeys",
+      "status": "PASS",
+      "database_identifier": "redacted:postgres-run-1",
+      "redis_namespace_identifier": "redacted:redis-run-1",
+      "redis_namespace_sha256": "39081b4a7e8bc6ebc9d367ed150789ae58c6c19bed015b114c2d8cfbf5a1496e",
+      "initial_owned_key_count": 0,
+      "final_owned_key_count": 0,
+      "unrelated_guard_preserved": true,
+      "browser_projects": ["phone-chromium", "tablet-webkit", "desktop-chromium"]
+    },
+    {
+      "run_number": 2,
+      "command_id": "real-journeys",
+      "status": "PASS",
+      "database_identifier": "redacted:postgres-run-2",
+      "redis_namespace_identifier": "redacted:redis-run-2",
+      "redis_namespace_sha256": "9f1a39fb962500ad71d054f3ed47ee9845cfb59a5d6f97b91b358a9a40d9f2f0",
+      "initial_owned_key_count": 0,
+      "final_owned_key_count": 0,
+      "unrelated_guard_preserved": true,
+      "browser_projects": ["phone-chromium", "tablet-webkit", "desktop-chromium"]
+    }
+  ],
+  "accessibility": {
+    "status": "PASS",
+    "wcag_tags": ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"],
+    "enabled_rules": ["target-size"],
+    "target_size_executed": true,
+    "reports": [
+      {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/24-a11y.log",
+        "sha256": "3cb516bae62ad38ff844dcf0cd0bbfa0a9cb8bf6b64875de2b470da154c9d239",
+        "bytes": 10859
+      }
+    ]
+  },
+  "visual": {
+    "status": "PASS",
+    "artifacts": [
+      {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/logs/25-visual.log",
+        "sha256": "c5734975ed6d5690aa4ab2bd6c50e35b40125e44f083709c01ffd5a177408d1c",
+        "bytes": 7237
+      },
+      {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/visual-baselines.tar.gz",
+        "sha256": "b84468a9aab27e53175447fcc6ac782bf7046bc1c230da1449baf4e8f550ff20",
+        "bytes": 9342844
+      },
+      {
+        "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/playwright-html-report.tar.gz",
+        "sha256": "0e6f028335eb765e0522c58b639cb3bac6ad98e07043e32fb5cb24e90eb1f890",
+        "bytes": 228103
+      }
+    ]
+  },
+  "production_build": {
+    "status": "PASS",
+    "exit_code": 0
+  },
+  "browser_runtime": {
+    "console_errors": 0,
+    "page_errors": 0,
+    "failed_requests": 0
+  },
+  "review": {
+    "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/independent-review.md",
+    "sha256": "54c0a10a63adcf82bed38add6d3ccecc82ff04100053838486f27a61c697649a",
+    "bytes": 11210
+  },
+  "findings": {
+    "p0": 0,
+    "p1": 0
+  },
+  "immutable_publication": {
+    "retention_location": "artifacts/qa/gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/gate-b-evidence-bundle.tar.gz",
+    "evidence_bundle_sha256": "fdc97255d072825e70a70e60afe069b44489f06b6ac4c9cc9d7ff086d3f70b69",
+    "bytes": 9735816,
+    "uri": "artifact://gate-b/4f9202e4e1c546bfef2a23bcfc7e26825c90b314/fdc97255d072825e70a70e60afe069b44489f06b6ac4c9cc9d7ff086d3f70b69"
+  },
+  "final_verdict": "PASS"
+}

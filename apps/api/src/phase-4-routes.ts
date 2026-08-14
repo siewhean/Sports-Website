@@ -43,6 +43,20 @@ function strict<T extends Record<string, TSchema>>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
 }
 
+function rejectUnknownBodyFields(allowed: readonly string[]) {
+  const expected = new Set(allowed);
+  return async (request: FastifyRequest) => {
+    const body = request.body;
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      !Array.isArray(body) &&
+      Object.keys(body).some((field) => !expected.has(field))
+    )
+      throw new ApiError(400, "REQUEST_INVALID", "Request body contains an unknown field");
+  };
+}
+
 function setting<T extends TSchema>(value: T) {
   return strict({ mode: ConstraintMode, value, weight: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000 })) });
 }
@@ -416,6 +430,7 @@ export async function registerPhase4Routes(
   app.post<{ Params: { competitionId: string }; Body: { idempotency_key: string } }>(
     "/api/v1/competitions/:competitionId/setup-draft",
     {
+      preValidation: rejectUnknownBodyFields(["idempotency_key"]),
       schema: {
         ...mutation,
         params: strict({ competitionId: Id }),
@@ -457,6 +472,52 @@ export async function registerPhase4Routes(
         await mutationActor(request),
         request.params.competitionId,
         request.body as Parameters<Phase4Runtime["autosaveSetupDraft"]>[2],
+        request.id,
+      ),
+  );
+
+  const V1FormatRecommendationBody = strict({ idempotency_key: IdempotencyKey });
+  app.post<{ Params: { competitionId: string }; Body: Static<typeof V1FormatRecommendationBody> }>(
+    "/api/v1/competitions/:competitionId/v1-format-recommendations",
+    {
+      preValidation: rejectUnknownBodyFields(["idempotency_key"]),
+      schema: {
+        ...mutation,
+        params: strict({ competitionId: Id }),
+        body: V1FormatRecommendationBody,
+        response: { 200: Json, ...MutationResponses },
+        tags: ["phase4-formats"],
+      },
+    },
+    async (request) =>
+      options.runtime.recommendV1Format(
+        await mutationActor(request),
+        request.params.competitionId,
+        request.body.idempotency_key,
+        request.id,
+      ),
+  );
+  app.post<{
+    Params: { competitionId: string; recommendationId: string };
+    Body: Static<typeof V1FormatRecommendationBody>;
+  }>(
+    "/api/v1/competitions/:competitionId/v1-format-recommendations/:recommendationId/apply",
+    {
+      preValidation: rejectUnknownBodyFields(["idempotency_key"]),
+      schema: {
+        ...mutation,
+        params: strict({ competitionId: Id, recommendationId: Id }),
+        body: V1FormatRecommendationBody,
+        response: { 200: Json, ...MutationResponses },
+        tags: ["phase4-formats"],
+      },
+    },
+    async (request) =>
+      options.runtime.applyV1FormatRecommendation(
+        await mutationActor(request),
+        request.params.competitionId,
+        request.params.recommendationId,
+        request.body.idempotency_key,
         request.id,
       ),
   );

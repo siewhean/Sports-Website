@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
 
 async function rejectOptionalConsent(page: Page) {
   const button = page.getByRole("button", { name: "Reject optional" });
@@ -74,7 +74,8 @@ test("organiser, official and public shells expose role-specific primary actions
   await page.goto("/organiser");
   await rejectOptionalConsent(page);
   await expect(page.getByRole("navigation", { name: "Organiser workspace" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Review schedule warnings" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Create competition" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "A clear path from first entry to published result." })).toBeVisible();
 
   await page.goto("/official");
   await expect(page.getByRole("navigation", { name: "Official workspace" })).toBeVisible();
@@ -193,20 +194,24 @@ for (const route of [
   "/maintenance",
   "/offline",
 ] as const) {
-  test(`${route} has no serious or critical accessibility violations`, async ({ page }) => {
+  test(`@a11y ${route} has no WCAG A or AA accessibility violations`, async ({ page }) => {
     await page.goto(route);
     await rejectOptionalConsent(page);
-    const results = await new AxeBuilder({ page }).analyze();
-    const blocking = results.violations.filter(
-      (violation) => violation.impact === "serious" || violation.impact === "critical",
-    );
-    expect(blocking).toEqual([]);
+    await assertNoWcagAOrAaViolations(page);
   });
 }
 
-test("production shells do not overflow desktop, tablet or phone viewports", async ({ page }) => {
-  for (const route of ["/", "/organiser", "/official", "/competitions/singapore-open", "/maintenance"] as const) {
-    for (const width of [390, 768, 1440]) {
+test("production shells keep layout and primary controls consistent across viewports", async ({ page }) => {
+  for (const route of [
+    "/",
+    "/organiser",
+    "/organiser/competitions/new",
+    "/official",
+    "/score",
+    "/competitions/singapore-open",
+    "/maintenance",
+  ] as const) {
+    for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(route);
       await rejectOptionalConsent(page);
@@ -217,6 +222,16 @@ test("production shells do not overflow desktop, tablet or phone viewports", asy
       expect(dimensions.scrollWidth, `${route} at ${width}px`).toBe(dimensions.clientWidth);
     }
   }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/organiser");
+  await rejectOptionalConsent(page);
+  const organiserRail = page.getByRole("navigation", { name: "Organiser workspace" });
+  const railTargets = organiserRail.locator("a:visible");
+  for (let index = 0; index < (await railTargets.count()); index += 1) {
+    expect((await railTargets.nth(index).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  }
+  await expect(organiserRail.getByText("MATCHDAY")).toBeHidden();
 });
 
 test("desktop, tablet and phone visual baselines", async ({ page }) => {

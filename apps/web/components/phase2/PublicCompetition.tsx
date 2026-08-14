@@ -2,13 +2,24 @@ import Link from "next/link";
 import { ArrowRight, CalendarDots, Clock, Trophy } from "@phosphor-icons/react/dist/ssr";
 import { ConnectivityStatus } from "@/components/foundation/ConnectivityStatus";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
-import { phase2Copy, type CompetitionView } from "@/lib/phase2";
+import { phase2Copy, type CompetitionView, type PublicDivisionView } from "@/lib/phase2";
 
 export function PublicCompetition({ competition }: { competition: CompetitionView }) {
   const publicationVersion = publicPublicationVersion(competition.publicationRevision);
-  const finalMatch = competition.matches.find((match) => match.status === "final");
-  const liveMatch = competition.matches.find((match) => match.status === "live");
-  const nextMatches = competition.matches.filter((match) => match.status === "scheduled");
+  const publicDivisions =
+    competition.publicDivisions && competition.publicDivisions.length > 0
+      ? competition.publicDivisions
+      : [
+          {
+            division: competition.division,
+            teams: competition.teams,
+            areas: competition.areas,
+            matches: competition.matches,
+            standings: competition.standings,
+            bracket: competition.bracket,
+          },
+        ];
+  const hasMultipleDivisions = publicDivisions.length > 1;
 
   return (
     <div className="p2-public">
@@ -32,138 +43,30 @@ export function PublicCompetition({ competition }: { competition: CompetitionVie
         </header>
         <ConnectivityStatus />
         <nav className="p2-public__nav" aria-label={phase2Copy.competitionContext}>
-          <a href="#results">{phase2Copy.results}</a>
-          <a href="#schedule">{phase2Copy.schedule}</a>
-          <a href="#table">{phase2Copy.table}</a>
-          <a href="#bracket">{phase2Copy.bracket}</a>
+          {hasMultipleDivisions ? (
+            publicDivisions.map(({ division }) => (
+              <a href={`#results-${division.id}`} key={division.id}>
+                {division.name}
+              </a>
+            ))
+          ) : (
+            <>
+              <a href="#results">{phase2Copy.results}</a>
+              <a href="#schedule">{phase2Copy.schedule}</a>
+              <a href="#table">{phase2Copy.table}</a>
+              <a href="#bracket">{phase2Copy.bracket}</a>
+            </>
+          )}
         </nav>
-        <section className="p2-public-lead" id="results" aria-labelledby="public-result-title">
-          <h2 id="public-result-title" className="visually-hidden">
-            {phase2Copy.results}
-          </h2>
-          {liveMatch ? (
-            <div className="p2-public-score p2-public-score--live">
-              <header>
-                <span>
-                  <i />
-                  {phase2Copy.publicLive}
-                </span>
-                <strong>
-                  {liveMatch.stage} · {liveMatch.area}
-                </strong>
-              </header>
-              <div>
-                <span>{liveMatch.home}</span>
-                <strong>{liveMatch.homeScore}</strong>
-              </div>
-              <p>
-                <span>{phase2Copy.periodPrefix}2</span>
-                <strong>04:12</strong>
-              </p>
-              <div>
-                <span>{liveMatch.away}</span>
-                <strong>{liveMatch.awayScore}</strong>
-              </div>
-              <small>{phase2Copy.updated}</small>
-            </div>
-          ) : null}
-          {finalMatch ? (
-            <div className="p2-public-score p2-public-score--final">
-              <header>
-                <span>{phase2Copy.publicFinal}</span>
-                <strong>
-                  {finalMatch.label} · {finalMatch.stage}
-                </strong>
-              </header>
-              <div>
-                <span>{finalMatch.home}</span>
-                <strong>{finalMatch.homeScore}</strong>
-              </div>
-              <p>
-                <Trophy weight="light" />
-              </p>
-              <div>
-                <span>{finalMatch.away}</span>
-                <strong>{finalMatch.awayScore}</strong>
-              </div>
-              <small>{competition.publicationRevision}</small>
-            </div>
-          ) : null}
-        </section>
-        <section className="p2-public-section" id="schedule" aria-labelledby="public-next-title">
-          <header>
-            <div>
-              <p>{phase2Copy.schedule}</p>
-              <h2 id="public-next-title">{phase2Copy.nextMatches}</h2>
-            </div>
-            <CalendarDots />
-          </header>
-          <ol className="p2-public-fixtures">
-            {nextMatches.map((match) => (
-              <li key={match.id}>
-                <time>{match.time}</time>
-                <span>{match.area}</span>
-                <strong>
-                  <span>{match.home}</span>
-                  <span className="p2-public-fixtures__versus">{phase2Copy.versus}</span>
-                  <span>{match.away}</span>
-                </strong>
-                <small>{match.stage}</small>
-              </li>
-            ))}
-          </ol>
-        </section>
-        <section className="p2-public-section" id="table" aria-labelledby="public-table-title">
-          <header>
-            <div>
-              <p>{competition.division.name}</p>
-              <h2 id="public-table-title">{phase2Copy.table}</h2>
-            </div>
-            <span>{publicationVersion}</span>
-          </header>
-          <div className="p2-public-table" role="table" aria-label={phase2Copy.table}>
-            <div role="row">
-              <span role="columnheader">#</span>
-              <span role="columnheader">{phase2Copy.team}</span>
-              <span role="columnheader">{phase2Copy.played}</span>
-              <span role="columnheader">{phase2Copy.won}</span>
-              <span role="columnheader">{phase2Copy.difference}</span>
-              <span role="columnheader">{phase2Copy.points}</span>
-            </div>
-            {competition.standings.map((row) => (
-              <div role="row" key={row.team}>
-                <span role="cell">{row.position}</span>
-                <strong role="cell">{row.team}</strong>
-                <span role="cell">{row.played}</span>
-                <span role="cell">{row.won}</span>
-                <span role="cell">{row.difference > 0 ? `+${row.difference}` : row.difference}</span>
-                <strong role="cell">{row.points}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-        <section className="p2-public-section" id="bracket" aria-labelledby="public-bracket-title">
-          <header>
-            <div>
-              <p>{competition.division.name}</p>
-              <h2 id="public-bracket-title">{phase2Copy.bracket}</h2>
-            </div>
-            <Trophy />
-          </header>
-          <div className="p2-public-bracket">
-            {competition.bracket.map((match) => (
-              <article key={`${match.round}-${match.fixture}`}>
-                <span>{match.round}</span>
-                <h3>{match.fixture}</h3>
-                <strong>{match.score}</strong>
-                <small>
-                  <Clock />
-                  {match.state}
-                </small>
-              </article>
-            ))}
-          </div>
-        </section>
+        {publicDivisions.map((division) => (
+          <PublicDivisionSections
+            key={division.division.id}
+            value={division}
+            publicationVersion={publicationVersion}
+            publicationRevision={competition.publicationRevision}
+            uniqueIds={hasMultipleDivisions}
+          />
+        ))}
         <footer className="p2-public-version">
           <div>
             <strong>{publicationVersion}</strong>
@@ -178,6 +81,208 @@ export function PublicCompetition({ competition }: { competition: CompetitionVie
       </main>
       <SiteFooter />
     </div>
+  );
+}
+
+function PublicDivisionSections({
+  value,
+  publicationVersion,
+  publicationRevision,
+  uniqueIds,
+}: {
+  value: PublicDivisionView;
+  publicationVersion: string;
+  publicationRevision: string;
+  uniqueIds: boolean;
+}) {
+  const { division, matches, standings, bracket } = value;
+  const completedMatches = matches.filter((match) => match.status === "final");
+  const finalMatch = completedMatches[0];
+  const liveMatch = matches.find((match) => match.status === "live");
+  const nextMatches = matches.filter((match) => match.status === "scheduled");
+  const sectionId = (name: string) => (uniqueIds ? `${name}-${division.id}` : name);
+  const headingId = (name: string) => (uniqueIds ? `${name}-${division.id}` : name);
+
+  return (
+    <>
+      <section
+        className="p2-public-lead"
+        id={sectionId("results")}
+        aria-labelledby={headingId("public-result-title")}
+        data-division-id={division.id}
+      >
+        <h2 id={headingId("public-result-title")} className="visually-hidden">
+          {uniqueIds ? `${division.name} ${phase2Copy.results}` : phase2Copy.results}
+        </h2>
+        {liveMatch ? (
+          <div className="p2-public-score p2-public-score--live">
+            <header>
+              <span>
+                <i />
+                {phase2Copy.publicLive}
+              </span>
+              <strong>
+                {liveMatch.stage} · {liveMatch.area}
+              </strong>
+            </header>
+            <div>
+              <span>{liveMatch.home}</span>
+              <strong>{liveMatch.homeScore}</strong>
+            </div>
+            <p>
+              <span>{phase2Copy.periodPrefix}2</span>
+              <strong>04:12</strong>
+            </p>
+            <div>
+              <span>{liveMatch.away}</span>
+              <strong>{liveMatch.awayScore}</strong>
+            </div>
+            <small>{phase2Copy.updated}</small>
+          </div>
+        ) : null}
+        {finalMatch ? (
+          <div className="p2-public-score p2-public-score--final">
+            <header>
+              <span>{phase2Copy.publicFinal}</span>
+              <strong>
+                {finalMatch.label} · {finalMatch.stage}
+              </strong>
+            </header>
+            <div>
+              <span>{finalMatch.home}</span>
+              <strong>{finalMatch.homeScore}</strong>
+            </div>
+            <p>
+              <Trophy weight="light" />
+            </p>
+            <div>
+              <span>{finalMatch.away}</span>
+              <strong>{finalMatch.awayScore}</strong>
+            </div>
+            <small>{publicationRevision}</small>
+          </div>
+        ) : null}
+        {completedMatches.length > 0 ? (
+          <div className="p2-public-results">
+            <h3 id={headingId("public-latest-results-title")}>{phase2Copy.publicLatestResults}</h3>
+            <ol aria-labelledby={headingId("public-latest-results-title")}>
+              {completedMatches.map((match) => (
+                <li key={match.id} data-match-id={match.id}>
+                  <article>
+                    <header>
+                      <span>{phase2Copy.publicFinal}</span>
+                      <strong>
+                        {match.label} · {match.stage}
+                      </strong>
+                    </header>
+                    <p>
+                      <span>{match.home}</span>
+                      <strong aria-label={`${match.homeScore ?? 0} to ${match.awayScore ?? 0}`}>
+                        {match.homeScore ?? 0}–{match.awayScore ?? 0}
+                      </strong>
+                      <span>{match.away}</span>
+                    </p>
+                  </article>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
+      </section>
+      <section
+        className="p2-public-section"
+        id={sectionId("schedule")}
+        aria-labelledby={headingId("public-next-title")}
+        data-division-id={division.id}
+      >
+        <header>
+          <div>
+            <p>{uniqueIds ? `${division.name} · ${phase2Copy.schedule}` : phase2Copy.schedule}</p>
+            <h2 id={headingId("public-next-title")}>{phase2Copy.nextMatches}</h2>
+          </div>
+          <CalendarDots />
+        </header>
+        <ol className="p2-public-fixtures">
+          {nextMatches.map((match) => (
+            <li key={match.id} data-match-id={match.id}>
+              <time>{match.time}</time>
+              <span>{match.area}</span>
+              <strong>
+                <span>{match.home}</span>
+                <span className="p2-public-fixtures__versus">{phase2Copy.versus}</span>
+                <span>{match.away}</span>
+              </strong>
+              <small>{match.stage}</small>
+            </li>
+          ))}
+        </ol>
+      </section>
+      <section
+        className="p2-public-section"
+        id={sectionId("table")}
+        aria-labelledby={headingId("public-table-title")}
+        data-division-id={division.id}
+      >
+        <header>
+          <div>
+            <p>{division.name}</p>
+            <h2 id={headingId("public-table-title")}>{phase2Copy.table}</h2>
+          </div>
+          <span>{publicationVersion}</span>
+        </header>
+        <div
+          className="p2-public-table"
+          role="table"
+          aria-label={uniqueIds ? `${division.name} ${phase2Copy.table}` : phase2Copy.table}
+        >
+          <div role="row">
+            <span role="columnheader">#</span>
+            <span role="columnheader">{phase2Copy.team}</span>
+            <span role="columnheader">{phase2Copy.played}</span>
+            <span role="columnheader">{phase2Copy.won}</span>
+            <span role="columnheader">{phase2Copy.difference}</span>
+            <span role="columnheader">{phase2Copy.points}</span>
+          </div>
+          {standings.map((row) => (
+            <div role="row" key={row.team}>
+              <span role="cell">{row.position}</span>
+              <strong role="cell">{row.team}</strong>
+              <span role="cell">{row.played}</span>
+              <span role="cell">{row.won}</span>
+              <span role="cell">{row.difference > 0 ? `+${row.difference}` : row.difference}</span>
+              <strong role="cell">{row.points}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section
+        className="p2-public-section"
+        id={sectionId("bracket")}
+        aria-labelledby={headingId("public-bracket-title")}
+        data-division-id={division.id}
+      >
+        <header>
+          <div>
+            <p>{division.name}</p>
+            <h2 id={headingId("public-bracket-title")}>{phase2Copy.bracket}</h2>
+          </div>
+          <Trophy />
+        </header>
+        <div className="p2-public-bracket">
+          {bracket.map((match) => (
+            <article key={match.id ?? `${match.round}-${match.fixture}`} data-match-id={match.id}>
+              <span>{match.round}</span>
+              <h3>{match.fixture}</h3>
+              <strong>{match.score}</strong>
+              <small>
+                <Clock />
+                {match.state}
+              </small>
+            </article>
+          ))}
+        </div>
+      </section>
+    </>
   );
 }
 

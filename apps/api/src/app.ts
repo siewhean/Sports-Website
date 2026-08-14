@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -33,6 +33,15 @@ import { registerPhase4SetupPatchRoutes } from "./phase-4-setup-patch-routes.js"
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+
+export function scoringSessionRateLimitKey(
+  scoringSessionId: string,
+  clientIp: string,
+  rateLimitHmacSecret: string,
+): string {
+  const fingerprint = (value: string) => createHmac("sha256", rateLimitHmacSecret).update(value, "utf8").digest("hex");
+  return `scoring-session:${fingerprint(`session:${scoringSessionId}`)}:ip:${fingerprint(`ip:${clientIp}`)}`;
+}
 
 const errorSchema = Type.Object({
   error: Type.Object({
@@ -102,6 +111,7 @@ export type BuildAppOptions = {
   authenticatedRateLimitMax?: number;
   resolveRateLimitAccountId?: (request: FastifyRequest) => Promise<string | null> | string | null;
   telemetry?: ApiTelemetry;
+  loggerDestination?: Parameters<typeof createLogger>[1];
   identityRuntime?: IdentityApiRuntime;
   closeIdentityResources?: () => Promise<void>;
   identityProviderEventClock?: Clock;
@@ -113,11 +123,14 @@ export type BuildAppOptions = {
 export async function buildApp(options: BuildAppOptions) {
   const telemetry = options.telemetry ?? createDisabledApiTelemetry();
   const requestTelemetry = new WeakMap<FastifyRequest, RequestTelemetryHandle>();
-  const logger = createLogger({
-    environment: options.config.environment,
-    level: options.config.logLevel,
-    service: "matchday-api",
-  });
+  const logger = createLogger(
+    {
+      environment: options.config.environment,
+      level: options.config.logLevel,
+      service: "matchday-api",
+    },
+    options.loggerDestination,
+  );
   const app = Fastify({
     genReqId(rawRequest) {
       const candidate = rawRequest.headers["x-request-id"];
@@ -138,8 +151,13 @@ export async function buildApp(options: BuildAppOptions) {
     request.routeOptions.url || request.url.split("?", 1)[0] || "unknown";
 
   app.addHook("onRequest", (request, _reply, done) => {
+    const traceparent = request.raw.headers.traceparent;
+    const tracestate = request.raw.headers.tracestate;
     const handle = telemetry.startRequest({
-      headers: request.raw.headers,
+      headers: {
+        ...(typeof traceparent === "string" ? { traceparent } : {}),
+        ...(typeof tracestate === "string" ? { tracestate } : {}),
+      },
       method: request.method,
       path: request.url.split("?", 1)[0] || "/",
       requestId: request.id,
@@ -239,6 +257,23 @@ export async function buildApp(options: BuildAppOptions) {
     global: true,
     hook: "preHandler",
     keyGenerator: async (request) => {
+      // Scoring mutations are fenced by an authenticated short-lived session.
+      // Partition their bounded budget by both session and peer address so one
+      // active scorer cannot consume another scorer's allowance behind NAT.
+      // The bearer token is deliberately never used as a Redis key.
+      const scoringSessionId = request.headers["x-scoring-session-id"];
+      const route = request.routeOptions.url || request.url.split("?", 1)[0] || "";
+      if (
+        route.startsWith("/api/v1/scoring/") &&
+        typeof scoringSessionId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scoringSessionId)
+      ) {
+        return scoringSessionRateLimitKey(
+          scoringSessionId,
+          request.ip,
+          options.config.scoringAccess.rateLimitHmacSecret,
+        );
+      }
       const accountId = options.resolveRateLimitAccountId
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);

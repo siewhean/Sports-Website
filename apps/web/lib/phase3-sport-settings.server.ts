@@ -78,6 +78,7 @@ function documentForState(context: SportSettingsContext, state: SportSettingsSur
     authority: pack.authority,
     definitions: pack.settingsSchema,
     recommended,
+    competitionOverride: {},
     effective: { ...recommended, ...override },
     override,
     mode: Object.keys(override).length ? "customised" : "recommended",
@@ -85,7 +86,10 @@ function documentForState(context: SportSettingsContext, state: SportSettingsSur
     definitionHash: "demo-canoe-polo-draft-1",
     packDefinition: pack,
     canEdit: state === "ready",
-    capabilities: { save: false, saveDefault: false, copyPrevious: false },
+    capabilities:
+      state === "ready"
+        ? { save: true, saveDefault: false, copyPrevious: false }
+        : { save: false, saveDefault: false, copyPrevious: false },
   };
 }
 

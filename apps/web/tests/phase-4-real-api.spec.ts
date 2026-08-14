@@ -1,26 +1,26 @@
 import { appendFile, readFile } from "node:fs/promises";
-import { expect, test, type Page } from "@playwright/test";
-import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 type State = {
   webOrigin: string;
-  competitionId: string;
   organisationId: string;
-  divisionId: string;
+  fixtureKey: string;
+  organiserCookie: string;
+};
+
+type JourneyResult = {
+  project: string;
+  competitionId: string;
   slug: string;
-  formatRevisionId: string;
-  scheduleJobId: string;
-  scheduleJobRevision: number;
-  scheduleOptionId: string;
-  moveTarget: {
+  divisionIds: [string, string];
+  moved: {
     match_id: string;
-    match_code: string;
     playing_area_id: string;
     slot_id: string;
     start_epoch_ms: number;
     end_epoch_ms: number;
   };
-  organiserCookie: string;
 };
 
 async function state(projectName: string): Promise<State> {
@@ -32,189 +32,397 @@ async function state(projectName: string): Promise<State> {
   return fixture;
 }
 
-function waitForDocument(page: Page, pathname: string) {
-  return {
-    response: page.waitForResponse(
-      (response) => response.request().resourceType() === "document" && new URL(response.url()).pathname === pathname,
-    ),
-    loaded: page.waitForEvent("load"),
+async function submitAndWait(page: Page, button: Locator, method: string, suffix: string) {
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === method && new URL(candidate.url()).pathname.endsWith(suffix),
+  );
+  await button.click();
+  const received = await response;
+  if (received.status() >= 400) {
+    throw new Error(`${method} ${suffix} returned ${received.status()}: ${await received.text()}`);
+  }
+  return received;
+}
+
+async function createDivision(page: Page, name: string, code: string): Promise<string> {
+  await page.getByLabel("Division name").fill(name);
+  await page.getByLabel("Division code").fill(code);
+  const response = await submitAndWait(page, page.getByRole("button", { name: "Add division" }), "POST", "/divisions");
+  const payload = (await response.json()) as { division?: { id?: string }; id?: string };
+  const id = payload.division?.id ?? payload.id;
+  if (!id) throw new Error(`Division creation response omitted id: ${JSON.stringify(payload)}`);
+  await expect(page.getByRole("heading", { name })).toBeVisible();
+  return id;
+}
+
+async function addEntries(page: Page, divisionName: string, prefix: string) {
+  const division = page.getByRole("region", { name: divisionName });
+  for (let seed = 1; seed <= 8; seed += 1) {
+    await division.getByLabel("Entry name").fill(`${prefix} ${seed}`);
+    await division.getByLabel("Seed").fill(String(seed));
+    await submitAndWait(page, division.getByRole("button", { name: "Add entry" }), "POST", "/entries");
+  }
+}
+
+async function publishDivisionFormat(page: Page, competitionId: string, divisionId: string, label: string) {
+  await page.goto(`/organiser/competitions/${competitionId}/format?division=${divisionId}`);
+  await expect(page.getByTestId("phase4-format-designer")).toBeVisible();
+  await page.getByRole("button", { name: "Manual", exact: true }).click();
+  const stageName = page.getByLabel("Stage name").first();
+  await stageName.fill(label);
+  await page.getByRole("button", { name: "Visual", exact: true }).click();
+  await expect(page.getByTestId("format-canvas").getByText(label, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Manual", exact: true }).click();
+  await expect(stageName).toHaveValue(label);
+  await page.getByRole("button", { name: "Validate graph" }).click();
+  await expect(page.getByText(/Format valid\. \d+ matches can be materialised\./)).toBeVisible();
+  await submitAndWait(page, page.getByRole("button", { name: "Save", exact: true }), "PUT", "/format-builder");
+  await expect(page.getByText(/Draft revision \d+ saved\./)).toBeVisible();
+  await submitAndWait(page, page.getByRole("button", { name: "Materialise" }), "POST", "/materialise");
+  await expect(page.getByText(/materialised/i)).toBeVisible();
+  await submitAndWait(page, page.getByRole("button", { name: "Publish format" }), "POST", "/publish");
+  await expect(page.getByText("Format published. It is now available to deterministic scheduling.")).toBeVisible();
+}
+
+async function generateObjective(page: Page, objective: "Fastest" | "Balanced" | "Rest-focused") {
+  const objectiveValue = {
+    Fastest: "fastest",
+    Balanced: "balanced",
+    "Rest-focused": "rest_focused",
+  }[objective];
+  await page.getByRole("radio", { name: objective, exact: true }).click();
+  const generateButton = page.getByRole("button", { name: `Generate ${objective}`, exact: true }).first();
+  await expect(generateButton).toBeVisible();
+  const response = await submitAndWait(page, generateButton, "POST", "/schedule/jobs");
+  expect(response.request().postDataJSON()).toMatchObject({ objective: objectiveValue });
+  const jobRail = page.locator("footer[data-job-status]");
+  await expect(jobRail).toBeVisible();
+  await expect(jobRail).toHaveAttribute("data-job-status", /queued|running|valid_best_found|completed/);
+  await expect(
+    page.getByRole("button", { name: `Use ${objective}`, exact: true }).first(),
+    "Schedule option was not rendered by the browser-owned job status flow",
+  ).toBeVisible({ timeout: 60_000 });
+}
+
+async function selectValidMoveSlot(page: Page, initialResponse: Awaited<ReturnType<Page["waitForResponse"]>>) {
+  const confirm = page.getByRole("button", { name: "Confirm move" });
+  const readValidation = async (response: Awaited<ReturnType<Page["waitForResponse"]>>) => {
+    const payload = (await response.json()) as { validation?: { valid?: boolean } };
+    return payload.validation?.valid === true;
   };
+  if (await readValidation(initialResponse)) {
+    await expect(confirm).toBeEnabled();
+    return;
+  }
+
+  const showAll = page.getByRole("button", { name: /Show all \d+ times/ });
+  if (await showAll.isVisible()) await showAll.click();
+  const choices = page.getByTestId("move-slot-choices").locator('input[type="radio"]:not([disabled])');
+  const count = await choices.count();
+  for (let index = 0; index < count; index += 1) {
+    const choice = choices.nth(index);
+    if (await choice.isChecked()) continue;
+    const validationResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/moves/validate"),
+    );
+    await choice.check();
+    if (await readValidation(await validationResponse)) {
+      await expect(confirm).toBeEnabled();
+      return;
+    }
+  }
+  throw new Error("No server-validated move slot was available in the rendered mobile-semantic choices");
 }
 
 test.afterEach(async ({ page }, testInfo) => {
   await assertConsoleGuard(page, testInfo);
 });
 
-test("real organiser setup, template, scheduler, move and publication journey", async ({ page, context }, testInfo) => {
+test("browser owns the complete Gate B organiser journey", async ({ page, context }, testInfo) => {
+  test.setTimeout(180_000);
   const seed = await state(testInfo.project.name);
   await installConsoleGuard(page);
   const failedResponses: string[] = [];
   page.on("response", (response) => {
-    if (response.status() >= 400) failedResponses.push(`${response.status()} ${response.url()}`);
+    if (response.status() >= 400)
+      failedResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
   });
   const [cookieName, cookieValue] = seed.organiserCookie.split("=", 2) as [string, string];
   await context.addCookies([
     { name: cookieName, value: cookieValue, url: seed.webOrigin, httpOnly: true, sameSite: "Lax" },
   ]);
 
-  await page.goto(`/organiser/competitions/${seed.competitionId}/format`);
+  const slug = `browser-owned-${seed.fixtureKey}`;
+  await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
-  await expect(page.getByTestId("phase4-format-designer")).toBeVisible();
-  const saveButton = page.getByRole("button", { name: "Save", exact: true });
-  if (testInfo.project.name === "phase-4-real-tablet-webkit") {
-    const manualMode = page.getByRole("button", { name: "Manual", exact: true });
-    await expect(manualMode).toHaveAttribute("aria-pressed", "false");
-    await manualMode.click();
-    await expect(manualMode).toHaveAttribute("aria-pressed", "true");
-    const stageName = page.getByLabel("Stage name").first();
-    await expect(stageName).toBeEnabled();
-    await stageName.fill("Browser knockout");
-    await expect(stageName).toHaveValue("Browser knockout");
-  } else {
-    await page.getByRole("button", { name: "Manual", exact: true }).click();
-    const stageName = page.getByLabel("Stage name").first();
-    await stageName.fill("Browser knockout");
-    await expect(stageName).toHaveValue("Browser knockout");
-  }
-  await expect(saveButton).toBeEnabled();
-  const formatValidationRequest = page.waitForRequest(
-    (request) => request.method() === "POST" && request.url().includes(`/format-builder/validate`),
-  );
-  await page.getByRole("button", { name: "Validate graph" }).click();
-  await formatValidationRequest;
-  await expect(page.getByText(/Format valid\. \d+ matches can be materialised\./)).toBeVisible();
-  await expect(saveButton).toBeEnabled();
-  const saveResponse = page.waitForResponse(
-    (response) => response.request().method() === "PUT" && response.url().endsWith(`/format-builder`),
-  );
-  await saveButton.click();
-  expect((await saveResponse).status()).toBe(200);
-  await expect(page.getByText(/Draft revision \d+ saved/)).toBeVisible();
-  await page.getByRole("button", { name: "Templates" }).click();
-  await page.getByLabel("New template name").fill("Real browser template");
-  await page.getByRole("button", { name: "Save template" }).click();
-  await expect(page.getByText("Template “Real browser template” saved.")).toBeVisible();
-
-  await page.goto(`/organiser/competitions/${seed.competitionId}/setup`);
-  await expect(page.getByRole("heading", { name: "Start assisted setup" })).toBeVisible();
-  const createResponse = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.url().endsWith(`/setup-draft`),
-  );
-  const initialResumeResponse = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.url().endsWith(`/setup-draft/resume`),
-  );
-  await page.getByRole("button", { name: "Start setup" }).click();
-  expect((await createResponse).status()).toBe(200);
-  expect((await initialResumeResponse).status()).toBe(200);
-  await expect(page.getByLabel("Competition name")).toHaveValue("Phase 4 Real E2E Cup");
-
-  const resumeResponse = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.url().endsWith(`/setup-draft/resume`),
-  );
-  await page.reload();
-  expect((await resumeResponse).status()).toBe(200);
-  const patchResponse = page.waitForResponse(
-    (response) => response.request().method() === "PATCH" && response.url().endsWith(`/setup-draft`),
-  );
+  await page.getByLabel("Organisation").selectOption(seed.organisationId);
   await page.getByLabel("Competition name").fill("Phase 4 Browser Verified Cup");
-  expect((await patchResponse).status()).toBe(200);
-  await expect(page.getByText("Draft saved").first()).toBeVisible();
-
-  const unpublished = await context.request.get(`${seed.webOrigin}/competitions/${seed.slug}`);
-  expect(unpublished.status(), "A private accepted schedule must not appear publicly").toBe(404);
-
-  await page.goto(`/organiser/competitions/${seed.competitionId}/schedule`);
-  await expect(page.getByTestId("phase4-schedule")).toBeVisible();
-  const generatedResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith(`/competitions/${seed.competitionId}/schedule/jobs`),
+  await page.getByLabel("Public address").fill(slug);
+  await page.getByLabel("Sport").selectOption("canoe_polo");
+  await page.getByLabel("Venue").fill("Real E2E Arena");
+  await page.getByLabel("Address", { exact: true }).fill("4 Integration Road");
+  await page.getByLabel("Locality").fill("Singapore");
+  await page.getByLabel("Country code").fill("SG");
+  await page.getByLabel("Start date").fill("2027-08-01");
+  await page.getByLabel("End date").fill("2027-08-02");
+  await page.getByLabel("Time zone").fill("Asia/Singapore");
+  await page.getByLabel("Locale").fill("en-SG");
+  await submitAndWait(
+    page,
+    page.getByRole("button", { name: "Create competition" }),
+    "POST",
+    "/api/phase3/competitions",
   );
-  await page.getByRole("button", { name: "Generate schedule" }).click();
-  expect((await generatedResponse).status()).toBe(200);
-  await expect(page.getByRole("button", { name: "Use Balanced" }).first()).toBeVisible({ timeout: 30_000 });
-  const schedulePath = `/organiser/competitions/${seed.competitionId}/schedule`;
-  const acceptedDocument = waitForDocument(page, schedulePath);
-  await page.getByRole("button", { name: "Use Balanced" }).first().click();
-  expect((await acceptedDocument.response).status()).toBe(200);
-  await acceptedDocument.loaded;
-  await page
-    .getByRole("button", { name: new RegExp(`^${seed.moveTarget.match_code},`) })
+  await page.waitForURL(/\/organiser\/competitions\/[0-9a-f-]+\/setup$/);
+  const competitionId = /\/competitions\/([0-9a-f-]+)\//.exec(page.url())?.[1];
+  if (!competitionId) throw new Error(`Could not read created competition id from ${page.url()}`);
+  await expect(page.getByRole("button", { name: "Start setup" })).toBeVisible();
+
+  await page.goto(`/organiser/competitions/${competitionId}/settings`);
+  const settings = page.getByTestId("phase3-settings");
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "Canoe Polo", exact: true })).toBeVisible();
+  await expect(settings.locator("dt").filter({ hasText: "Pack version" })).toBeVisible();
+
+  await page.goto(`/organiser/competitions/${competitionId}/capacity`);
+  const area = page.locator("fieldset").first();
+  await area.getByLabel("Area name").fill("Court 1");
+  await expect(area.getByLabel("Match slot (minutes)")).toHaveValue("30");
+  await area.getByLabel("Date").first().fill("2027-08-01");
+  await area.getByLabel("Starts", { exact: true }).first().fill("08:00");
+  await area.getByLabel("Ends", { exact: true }).first().fill("18:00");
+  await area.getByRole("button", { name: "Add window" }).click();
+  await area.getByLabel("Date").nth(1).fill("2027-08-02");
+  await area.getByLabel("Starts", { exact: true }).nth(1).fill("08:00");
+  await area.getByLabel("Ends", { exact: true }).nth(1).fill("18:00");
+  await page.getByRole("button", { name: "Add playing area" }).click();
+  const secondArea = page.locator("fieldset").nth(1);
+  await secondArea.getByLabel("Area name").fill("Court 2");
+  await secondArea.getByLabel("Date").first().fill("2027-08-01");
+  await secondArea.getByLabel("Starts", { exact: true }).first().fill("08:00");
+  await secondArea.getByLabel("Ends", { exact: true }).first().fill("18:00");
+  await secondArea.getByRole("button", { name: "Add window" }).click();
+  await secondArea.getByLabel("Date").nth(1).fill("2027-08-02");
+  await secondArea.getByLabel("Starts", { exact: true }).nth(1).fill("08:00");
+  await secondArea.getByLabel("Ends", { exact: true }).nth(1).fill("18:00");
+  await submitAndWait(page, page.getByRole("button", { name: "Save capacity" }), "PUT", "/capacity");
+  await expect(page.getByText("Saved").first()).toBeVisible();
+
+  await page.goto(`/organiser/competitions/${competitionId}/entries`);
+  const openId = await createDivision(page, "Open", "OPEN");
+  const womenId = await createDivision(page, "Women", "WOMEN");
+  await addEntries(page, "Open", "Open Team");
+  await addEntries(page, "Women", "Women Team");
+  await expect(page.getByText("16 / 16").first()).toBeVisible();
+  const rejected = page.getByRole("region", { name: "Open" });
+  await rejected.getByLabel("Entry name").fill("Rejected Team 17");
+  await rejected.getByLabel("Seed").fill("9");
+  allowConsoleFailure(
+    page,
+    /^console\.error: Failed to load resource: the server responded with a status of 422 \(Unprocessable (?:Content|Entity)\)$/,
+  );
+  const limitResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith("/entries"),
+  );
+  await rejected.getByRole("button", { name: "Add entry" }).click();
+  expect((await limitResponse).status()).toBe(422);
+  await expect(page.getByText("Free plan permits at most 16 active entries across all divisions.")).toBeVisible();
+
+  await page.goto(`/organiser/competitions/${competitionId}/setup`);
+  await page.getByRole("button", { name: "Start setup" }).click();
+  await page.waitForLoadState("load");
+  await expect(page.getByTestId("phase4-assisted-setup")).toBeVisible();
+  await expect(page.getByLabel("Competition name")).toHaveValue("Phase 4 Browser Verified Cup");
+  await expect(page.getByLabel("Sport")).toHaveValue("canoe_polo");
+  const currentSetupStep = page.getByTestId("phase4-assisted-setup").locator("li[data-current='true'] strong");
+  for (const next of [
+    { label: "capacity", step: "capacity" },
+    { label: "settings", step: "settings" },
+    { label: "entries", step: "entries" },
+    { label: "preferences", step: "format_preferences" },
+  ] as const) {
+    const continueButton = page.getByRole("button", { name: new RegExp(`Continue to ${next.label}`, "i") });
+    await expect(continueButton).toBeVisible({ timeout: 15_000 });
+    const mutation = page.waitForResponse(
+      (response) => response.request().method() === "PUT" && response.url().endsWith("/setup-draft"),
+    );
+    await continueButton.click();
+    const response = await mutation;
+    const payload = (await response.json()) as {
+      outcome?: string;
+      document?: { current_step?: string };
+      current?: { current_step?: string };
+    };
+    expect(response.status(), `Setup transition to ${next.step}: ${JSON.stringify(payload)}`).toBe(200);
+    expect(payload.outcome, `Setup transition to ${next.step}: ${JSON.stringify(payload)}`).toBe("saved");
+    expect(payload.document?.current_step, `Setup transition to ${next.step}: ${JSON.stringify(payload)}`).toBe(
+      next.step,
+    );
+    await expect(currentSetupStep).toHaveText(new RegExp(`^${next.label}$`, "i"), { timeout: 30_000 });
+  }
+  await page.getByLabel("Minimum matches per entry").fill("2");
+  await page.getByRole("radio", { name: /Participation/ }).check();
+  const recommendationMutation = page.waitForResponse(
+    (response) => response.request().method() === "PUT" && response.url().endsWith("/setup-draft"),
+  );
+  await page.getByRole("button", { name: /Continue to recommendations/i }).click();
+  const recommendationResponse = await recommendationMutation;
+  const recommendationPayload = (await recommendationResponse.json()) as {
+    outcome?: string;
+    document?: {
+      current_step?: string;
+      values?: { format_recommendations?: { recommendations?: unknown[]; requires_changes?: unknown } | null };
+    };
+  };
+  expect(recommendationResponse.status(), `Recommendation transition: ${JSON.stringify(recommendationPayload)}`).toBe(
+    200,
+  );
+  expect(recommendationPayload.outcome, `Recommendation transition: ${JSON.stringify(recommendationPayload)}`).toBe(
+    "saved",
+  );
+  expect(
+    recommendationPayload.document?.current_step,
+    `Recommendation transition: ${JSON.stringify(recommendationPayload)}`,
+  ).toBe("format_recommendations");
+  expect(
+    (recommendationPayload.document?.values?.format_recommendations?.recommendations?.length ?? 0) +
+      (recommendationPayload.document?.values?.format_recommendations?.requires_changes ? 1 : 0),
+    `Recommendation transition: ${JSON.stringify(recommendationPayload)}`,
+  ).toBeGreaterThan(0);
+  const recommendation = page
+    .getByRole("article")
+    .filter({ has: page.getByRole("heading", { name: "Championship focus" }) })
+    .getByRole("button", { name: "Select format" });
+  await expect(recommendation).toBeEnabled();
+  const selectionMutation = page.waitForResponse(
+    (response) => response.request().method() === "PUT" && response.url().endsWith("/setup-draft"),
+  );
+  await recommendation.click();
+  const selectionResponse = await selectionMutation;
+  const selectionPayload = (await selectionResponse.json()) as {
+    outcome?: string;
+    document?: {
+      current_step?: string;
+      values?: { format_recommendations?: { selected_recommendation_id?: string | null } | null };
+    };
+  };
+  expect(selectionResponse.status(), `Format selection: ${JSON.stringify(selectionPayload)}`).toBe(200);
+  expect(
+    selectionPayload.document?.values?.format_recommendations?.selected_recommendation_id,
+    `Format selection: ${JSON.stringify(selectionPayload)}`,
+  ).toEqual(expect.any(String));
+  expect(selectionPayload.document?.current_step, `Format selection: ${JSON.stringify(selectionPayload)}`).toBe(
+    "schedule_review",
+  );
+
+  await publishDivisionFormat(page, competitionId, openId, "Browser Open stage");
+  await publishDivisionFormat(page, competitionId, womenId, "Browser Women stage");
+
+  allowConsoleFailure(
+    page,
+    /^console\.error: Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
+  );
+  const unpublishedResponse = await page.goto(`/competitions/${slug}`);
+  expect(unpublishedResponse?.status(), "Private schedule work must not be public").toBe(404);
+  await expect(page.getByRole("heading", { name: "That page is not on the schedule" })).toBeVisible();
+
+  await page.goto(`/organiser/competitions/${competitionId}/schedule`);
+  await generateObjective(page, "Fastest");
+  await generateObjective(page, "Balanced");
+  await generateObjective(page, "Rest-focused");
+  await expect(page.getByRole("button", { name: "Use Fastest" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use Balanced" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use Rest-focused" })).toBeVisible();
+  await submitAndWait(page, page.getByRole("button", { name: "Use Balanced" }), "POST", "/accept");
+
+  const matchButtons = page.locator("button[aria-pressed]").filter({ visible: true });
+  await matchButtons.first().click();
+  await submitAndWait(page, page.getByRole("button", { name: "Lock match" }), "POST", "/locks");
+  await expect(page.getByRole("button", { name: "Unlock match" })).toBeVisible();
+  const movableMatch = page
+    .locator('button[aria-pressed][aria-label^="championship-r2-m1,"]')
     .filter({ visible: true })
-    .click();
-  await expect(page.getByRole("link", { name: "Move" })).toBeVisible();
-  const stillPrivate = await context.request.get(`${seed.webOrigin}/competitions/${seed.slug}`);
-  expect(stillPrivate.status(), "An unpublished moved revision must remain private").toBe(404);
+    .first();
+  const initialMoveValidation = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/moves/validate"),
+  );
+  await movableMatch.click();
+  await expect(movableMatch).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "championship-r2-m1" })).toBeVisible();
   await page.getByRole("link", { name: "Move" }).click();
   await expect(page.getByTestId("phase4-move-flow")).toBeVisible();
-  const confirmMove = page.getByRole("button", { name: "Confirm move" });
-  const showAllTimes = page.getByRole("button", { name: /Show all \d+ times/ });
-  if (await showAllTimes.isVisible()) await showAllTimes.click();
-  const targetSlot = page
-    .getByTestId("move-slot-choices")
-    .locator(`input[type="radio"][value="${seed.moveTarget.slot_id}"]`);
-  await expect(targetSlot).toBeVisible();
-  await expect(targetSlot).toBeEnabled();
-  if (!(await targetSlot.isChecked())) {
-    const moveValidationRequest = page.waitForRequest(
-      (request) => request.method() === "POST" && request.url().endsWith(`/moves/validate`),
-    );
-    await targetSlot.check();
-    expect((await moveValidationRequest).postDataJSON()).toEqual({
-      match_id: seed.moveTarget.match_id,
-      playing_area_id: seed.moveTarget.playing_area_id,
-      slot_id: seed.moveTarget.slot_id,
-      start_epoch_ms: seed.moveTarget.start_epoch_ms,
-      end_epoch_ms: seed.moveTarget.end_epoch_ms,
-    });
-  }
-  await expect(confirmMove).toBeEnabled();
-  const moveRequest = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith(`/moves`));
-  const movedDocument = waitForDocument(page, schedulePath);
-  await confirmMove.click();
-  const browserMove = (await moveRequest).postDataJSON() as Record<string, unknown>;
-  const capturedTarget = {
-    match_id: browserMove.match_id,
-    playing_area_id: browserMove.playing_area_id,
-    slot_id: browserMove.slot_id,
-    start_epoch_ms: browserMove.start_epoch_ms,
-    end_epoch_ms: browserMove.end_epoch_ms,
-  };
-  expect(capturedTarget).toEqual({
-    match_id: seed.moveTarget.match_id,
-    playing_area_id: seed.moveTarget.playing_area_id,
-    slot_id: seed.moveTarget.slot_id,
-    start_epoch_ms: seed.moveTarget.start_epoch_ms,
-    end_epoch_ms: seed.moveTarget.end_epoch_ms,
-  });
-  const resultFile = process.env.PHASE4_E2E_RESULT_FILE;
-  if (!resultFile) throw new Error("PHASE4_E2E_RESULT_FILE is required");
-  await appendFile(resultFile, `${JSON.stringify({ project: testInfo.project.name, target: capturedTarget })}\n`, {
-    mode: 0o600,
-  });
-  expect((await movedDocument.response).status()).toBe(200);
-  await movedDocument.loaded;
-  await expect(page).toHaveURL(`/organiser/competitions/${seed.competitionId}/schedule`);
-  const publishResponse = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.url().endsWith(`/publish`),
+  await selectValidMoveSlot(page, await initialMoveValidation);
+  const moveRequest = page.waitForRequest(
+    (request) => request.method() === "POST" && new URL(request.url()).pathname.endsWith("/moves"),
   );
-  const publishedDocument = waitForDocument(page, schedulePath);
-  await page.getByRole("button", { name: "Publish schedule" }).click();
-  expect((await publishResponse).status()).toBe(200);
-  expect((await publishedDocument.response).status()).toBe(200);
-  await publishedDocument.loaded;
+  await page.getByRole("button", { name: "Confirm move" }).click();
+  const moved = (await moveRequest).postDataJSON() as JourneyResult["moved"];
+  await page.waitForURL(new RegExp(`/organiser/competitions/${competitionId}/schedule`));
+  await page.getByRole("link", { name: "Compare revisions" }).click();
+  await expect(page.getByRole("heading", { name: /Compare revisions/i })).toBeVisible();
+  await page.goBack();
+  await submitAndWait(page, page.getByRole("button", { name: "Publish schedule" }), "POST", "/publish");
 
-  await page.goto(`/competitions/${seed.slug}`);
+  await page.goto(`/organiser/competitions/${competitionId}/setup`);
+  const reviewMutation = page.waitForResponse(
+    (response) => response.request().method() === "PUT" && response.url().endsWith("/setup-draft"),
+  );
+  await page.getByRole("button", { name: /Continue to review/i }).click();
+  const reviewResponse = await reviewMutation;
+  const reviewPayload = (await reviewResponse.json()) as {
+    outcome?: string;
+    document?: { current_step?: string };
+  };
+  expect(reviewResponse.status(), `Review transition: ${JSON.stringify(reviewPayload)}`).toBe(200);
+  expect(reviewPayload.outcome, `Review transition: ${JSON.stringify(reviewPayload)}`).toBe("saved");
+  expect(reviewPayload.document?.current_step, `Review transition: ${JSON.stringify(reviewPayload)}`).toBe(
+    "review_publish",
+  );
+  const completionMutation = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      response.url().endsWith("/setup-draft") &&
+      response.request().postData()?.includes('"kind":"complete"') === true,
+  );
+  await page.getByRole("button", { name: "Publish competition" }).click();
+  const completionResponse = await completionMutation;
+  const completionPayload = (await completionResponse.json()) as {
+    outcome?: string;
+    document?: { status?: string };
+  };
+  expect(completionResponse.status(), `Setup completion: ${JSON.stringify(completionPayload)}`).toBe(200);
+  expect(completionPayload.outcome, `Setup completion: ${JSON.stringify(completionPayload)}`).toBe("saved");
+  expect(completionPayload.document?.status, `Setup completion: ${JSON.stringify(completionPayload)}`).toBe(
+    "completed",
+  );
+  await expect(page.getByText("This setup is read only").first()).toBeVisible();
+
+  await page.goto(`/competitions/${slug}`);
   await expect(page.getByRole("heading", { name: "Phase 4 Browser Verified Cup" })).toBeVisible();
-  await expect(page.getByText("Schedule 1 · Results 0").first()).toBeVisible();
-  const publishedTime = new Intl.DateTimeFormat("en-SG", {
+  const publicTime = new Intl.DateTimeFormat("en-SG", {
     timeZone: "Asia/Singapore",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(seed.moveTarget.start_epoch_ms);
-  const publishedMovedFixture = page.locator(".p2-public-fixtures > li").filter({ hasText: publishedTime });
-  await expect(publishedMovedFixture).toHaveCount(1);
-  await expect(publishedMovedFixture).toContainText("Court 1");
-  expect(failedResponses).toEqual([]);
+  }).format(moved.start_epoch_ms);
+  const publicMovedMatch = page.locator(`.p2-public-fixtures > li[data-match-id="${moved.match_id}"]`);
+  await expect(publicMovedMatch).toHaveCount(1);
+  await expect(publicMovedMatch.getByText(publicTime, { exact: true })).toBeVisible();
+
+  const resultFile = process.env.PHASE4_E2E_RESULT_FILE;
+  if (!resultFile) throw new Error("PHASE4_E2E_RESULT_FILE is required");
+  const result: JourneyResult = {
+    project: testInfo.project.name,
+    competitionId,
+    slug,
+    divisionIds: [openId, womenId],
+    moved,
+  };
+  await appendFile(resultFile, `${JSON.stringify(result)}\n`, { mode: 0o600 });
+  expect(failedResponses).toEqual([
+    `422 POST ${seed.webOrigin}/api/phase3/competitions/${competitionId}/divisions/${openId}/entries`,
+    `404 GET ${seed.webOrigin}/competitions/${slug}`,
+  ]);
 });

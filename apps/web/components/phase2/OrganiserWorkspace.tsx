@@ -5,17 +5,14 @@ import {
   ArrowRight,
   CalendarDots,
   Check,
-  Clock,
-  Copy,
   Gauge,
   LockKey,
-  QrCode,
   ShieldCheck,
   UsersThree,
   Warning,
 } from "@phosphor-icons/react/dist/ssr";
 import {
-  organiserSections,
+  v1OrganiserSections,
   phase2Competition,
   phase2Copy,
   phase2Machine,
@@ -24,6 +21,7 @@ import {
   type SurfaceState,
 } from "@/lib/phase2";
 import { SurfaceStatePanel } from "./SurfaceState";
+import { AccessPassManager } from "@/components/phase5/AccessPassManager";
 
 function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
   const shared: Record<OrganiserSection, { title: string; intro: string }> = {
@@ -54,16 +52,8 @@ function sectionMeta(competition: CompetitionView, section: OrganiserSection): {
   return shared[section];
 }
 
-function navigation(competition: CompetitionView) {
-  return organiserSections.map((item) => {
-    if (item.id === "settings")
-      return { ...item, short: t("prototype.74a883a037bc"), label: `${competition.sport} settings` };
-    if (item.id === "entries")
-      return { ...item, short: t("prototype.7cb76b4af12a"), label: t("prototype.10beee7f51f8") };
-    if (item.id === "format")
-      return { ...item, short: t("prototype.2f343666aaa8"), label: t("prototype.675eeee2578b") };
-    return item;
-  });
+function navigation() {
+  return v1OrganiserSections;
 }
 
 export function OrganiserWorkspace({
@@ -78,6 +68,7 @@ export function OrganiserWorkspace({
   syncLabel,
   syncState,
   layoutMode = opaqueId("default"),
+  accessApiEnabled = false,
 }: {
   competition?: CompetitionView;
   section?: OrganiserSection;
@@ -90,6 +81,7 @@ export function OrganiserWorkspace({
   syncLabel?: string;
   syncState?: "saved" | "local" | "unavailable" | "offline" | "conflict" | "read-only";
   layoutMode?: "default" | "setup" | "format";
+  accessApiEnabled?: boolean;
 }) {
   const fallbackMeta = sectionMeta(competition, section);
   const meta = {
@@ -99,7 +91,9 @@ export function OrganiserWorkspace({
   const organiserBase = `/organiser/competitions/${competition.id}`;
   const content =
     state === "ready" ? (
-      (sectionContent ?? <SectionContent competition={competition} section={section} />)
+      (sectionContent ?? (
+        <SectionContent competition={competition} section={section} accessApiEnabled={accessApiEnabled} />
+      ))
     ) : (
       <SurfaceStatePanel state={state} />
     );
@@ -127,7 +121,7 @@ export function OrganiserWorkspace({
       ) : null}
       <div className="p2-organiser__layout">
         <nav className="p2-organiser__nav" aria-label={phase2Copy.organiserNav}>
-          {navigation(competition).map((item) => (
+          {navigation().map((item) => (
             <Link
               key={item.id}
               href={item.id === "control-room" ? organiserBase : `${organiserBase}/${item.id}`}
@@ -170,7 +164,15 @@ export function OrganiserWorkspace({
   );
 }
 
-function SectionContent({ competition, section }: { competition: CompetitionView; section: OrganiserSection }) {
+function SectionContent({
+  competition,
+  section,
+  accessApiEnabled,
+}: {
+  competition: CompetitionView;
+  section: OrganiserSection;
+  accessApiEnabled: boolean;
+}) {
   switch (section) {
     case "control-room":
       return <ControlRoom competition={competition} />;
@@ -191,7 +193,7 @@ function SectionContent({ competition, section }: { competition: CompetitionView
     case "publish":
       return <Publish competition={competition} />;
     case "access":
-      return <Access competition={competition} />;
+      return <Access competition={competition} accessApiEnabled={accessApiEnabled} />;
     case "audit":
       return <Audit competition={competition} />;
   }
@@ -265,6 +267,10 @@ function ControlRoom({ competition }: { competition: CompetitionView }) {
             </li>
           ))}
         </ol>
+        <Link className="p2-button p2-button--dark" href={`/organiser/competitions/${competition.id}/access`}>
+          {phase2Copy.issueScorerAccess}
+          <ArrowRight aria-hidden="true" />
+        </Link>
       </section>
       <section className="p2-readiness" aria-labelledby="readiness-title">
         <header>
@@ -466,47 +472,15 @@ function Publish({ competition }: { competition: CompetitionView }) {
   );
 }
 
-function Access({ competition }: { competition: CompetitionView }) {
+function Access({ competition, accessApiEnabled }: { competition: CompetitionView; accessApiEnabled: boolean }) {
   return (
-    <section className="p2-access">
-      <header>
-        <QrCode />
-        <div>
-          <h2>{phase2Copy.accessPasses}</h2>
-          <p>{phase2Copy.accessPassesBody}</p>
-        </div>
-        <button className="p2-button p2-button--dark" type="button">
-          {phase2Copy.issuePass}
-        </button>
-      </header>
-      {competition.matches.slice(0, 3).map((match) => {
-        const accessPass = competition.accessPasses?.find((pass) => pass.matchId === match.id);
-        return (
-          <div key={match.id}>
-            <span>
-              <strong>{match.label}</strong>
-              <small>
-                {match.home} · {match.away}
-              </small>
-            </span>
-            <code>{accessPass?.displayCode ?? "••••-••"}</code>
-            <span>
-              <Clock />
-              {phase2Copy.expires} {accessPass?.expiresAt ?? match.time}
-            </span>
-            {accessPass?.scoringHref ? (
-              <Link href={accessPass.scoringHref} aria-label={`${phase2Copy.openScoringPrefix} ${match.label}`}>
-                <Copy />
-              </Link>
-            ) : (
-              <span aria-hidden="true">
-                <Copy />
-              </span>
-            )}
-          </div>
-        );
-      })}
-    </section>
+    <AccessPassManager
+      competitionId={competition.id}
+      matches={competition.matches}
+      initialPasses={competition.accessPasses ?? []}
+      canEdit={competition.canEdit ?? false}
+      enableRemoteTakeovers={accessApiEnabled}
+    />
   );
 }
 

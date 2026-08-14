@@ -342,6 +342,63 @@ export function parseStandingsSnapshot(
     !iso(item.created_at)
   )
     return null;
+  const advancementSlots = hasPersistedAdvancement
+    ? (item.advancement_slots as unknown[]).map((value) => parsePersistedSlot(value, item.result_version as number))
+    : [];
+  const advancementConflicts = hasPersistedAdvancement
+    ? (item.advancement_conflicts as unknown[]).map((value) =>
+        parsePersistedConflict(value, item.result_version as number),
+      )
+    : [];
+  if (advancementSlots.some((slot) => !slot) || advancementConflicts.some((conflict) => !conflict)) return null;
+
+  const genericRows = Array.isArray(item.standings) ? item.standings.map(parseRow) : null;
+  const genericExplanation = Array.isArray(item.explanation) ? item.explanation : null;
+  if (genericRows && genericExplanation) {
+    const validExplanation =
+      genericRows.every(Boolean) &&
+      genericExplanation.length === genericRows.length &&
+      genericExplanation.every((value, index) => {
+        const entry = record(value);
+        const criteria = entry?.criteria;
+        return (
+          entry !== null &&
+          exact(entry, ["entry_id", "criteria"]) &&
+          entry.entry_id === genericRows[index]?.entryId &&
+          Array.isArray(criteria) &&
+          criteria.map(parseTrace).every(Boolean)
+        );
+      });
+    if (!validExplanation) return null;
+    const group: StandingsGroup = {
+      snapshotId: item.id as string,
+      competitionId,
+      divisionId,
+      groupId: "division",
+      resultVersion: item.result_version as number,
+      configVersion: item.settings_version as string,
+      calculatedAt: item.created_at as string,
+      fingerprint: item.snapshot_fingerprint as string,
+      rows: genericRows as StandingsRow[],
+    };
+    return {
+      id: item.id as string,
+      competitionId,
+      divisionId,
+      resultVersion: item.result_version as number,
+      groups: { division: group },
+      crossGroup: [],
+      configVersion: item.settings_version as string,
+      groupCount: 1,
+      sourceResultHash: item.source_result_hash as string,
+      settingsVersion: item.settings_version as string,
+      snapshotFingerprint: item.snapshot_fingerprint as string,
+      createdAt: item.created_at as string,
+      advancementSlots: advancementSlots as AdvancementSlot[],
+      advancementConflicts: advancementConflicts as AdvancementConflict[],
+    };
+  }
+
   const standings = record(item.standings);
   const explanation = record(item.explanation);
   const groupsValue = record(standings?.groups);
@@ -366,15 +423,6 @@ export function parseStandingsSnapshot(
     crossGroup.some((row) => !row)
   )
     return null;
-  const advancementSlots = hasPersistedAdvancement
-    ? (item.advancement_slots as unknown[]).map((value) => parsePersistedSlot(value, item.result_version as number))
-    : [];
-  const advancementConflicts = hasPersistedAdvancement
-    ? (item.advancement_conflicts as unknown[]).map((value) =>
-        parsePersistedConflict(value, item.result_version as number),
-      )
-    : [];
-  if (advancementSlots.some((slot) => !slot) || advancementConflicts.some((conflict) => !conflict)) return null;
   return {
     id: item.id as string,
     competitionId,

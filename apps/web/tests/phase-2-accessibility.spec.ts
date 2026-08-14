@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
 import {
   assertConsoleGuard,
   dismissConsent,
@@ -10,34 +10,29 @@ import {
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-async function expectNoBlockingAxeViolations(page: Page) {
-  const results = await new AxeBuilder({ page }).analyze();
-  const blocking = results.violations.filter(
-    (violation) => violation.impact === "serious" || violation.impact === "critical",
-  );
-  expect(blocking).toEqual([]);
-}
-
-test("organiser workflow has no serious or critical accessibility violations", async ({ page }) => {
+test("@a11y organiser workflow has no WCAG A or AA accessibility violations", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/schedule");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { name: "Schedule", exact: true })).toBeVisible();
-  await expectNoBlockingAxeViolations(page);
+  await assertNoWcagAOrAaViolations(page);
 });
 
-test("scorer goal-confirmation interaction has no serious or critical accessibility violations", async ({ page }) => {
+test("@a11y scorer goal-confirmation interaction has no WCAG A or AA accessibility violations", async ({ page }) => {
   await openPhase2Scorekeeper(page);
   await page.getByRole("button", { name: "Goal Marina Blue" }).click();
   const dialog = page.getByRole("dialog", { name: "Confirm goal" });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Scorer name").fill("Aisha Tan");
-  await expectNoBlockingAxeViolations(page);
+  await dialog.getByLabel("Scorer or participant name").fill("Aisha Tan");
+  await assertNoWcagAOrAaViolations(page);
 });
 
-test("public results, table and bracket have no serious or critical accessibility violations", async ({ page }) => {
+test("@a11y public results, table and bracket have no WCAG A or AA accessibility violations", async ({ page }) => {
   await page.goto("/competitions/singapore-open");
   await dismissConsent(page);
+  const latestResults = page.getByRole("list", { name: "Latest results" });
+  await expect(page.getByRole("heading", { name: "Latest results" })).toBeVisible();
+  await expect(latestResults.getByRole("listitem")).toHaveCount(1);
   await page.getByRole("link", { name: "Table", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Table" })).toBeVisible();
-  await expectNoBlockingAxeViolations(page);
+  await assertNoWcagAOrAaViolations(page);
 });

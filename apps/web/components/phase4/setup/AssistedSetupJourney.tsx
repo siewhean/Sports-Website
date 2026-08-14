@@ -42,10 +42,12 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   const router = useRouter();
   const [setup, setSetupState] = useState(document.setup);
   const setupRef = useRef(document.setup);
+  const expectedRevisionRef = useRef(document.setup?.revision ?? 1);
   const [viewState, setViewStateState] = useState(document.state);
   const viewStateRef = useRef(document.state);
-  const [commandBusy, setCommandBusy] = useState(false);
-  const commandLockRef = useRef(false);
+  const [commandBusy, setCommandBusy] = useState(Boolean(document.resumeRequired));
+  const [resumePending, setResumePending] = useState(Boolean(document.resumeRequired));
+  const commandLockRef = useRef(Boolean(document.resumeRequired));
   const [autosaving, setAutosaving] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [basics, setBasicsState] = useState<BasicsDraft | null>(() => document.setup?.values.basics ?? null);
@@ -100,12 +102,13 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   }, []);
 
   const applyServerDocument = useCallback(
-    (next: Phase4SetupDocument, sentStep?: Phase4SetupStepValue) => {
+    (next: Phase4SetupDocument, sentStep?: Phase4SetupStepValue, preserveDraftValues = false) => {
+      expectedRevisionRef.current = next.revision;
       setSetup(next);
       setViewState(
         next.status === "expired" ? opaqueId("expired") : next.read_only ? opaqueId("read-only") : opaqueId("ready"),
       );
-      if (!sentStep) {
+      if (!sentStep && !preserveDraftValues) {
         basicsRef.current = next.values.basics;
         setBasicsState(next.values.basics);
         preferencesRef.current = next.values.format_preferences;
@@ -146,12 +149,32 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
           await response.json().catch(() => null),
           document.competitionId,
         );
-        if (!response.ok || !parsed) {
+        if (!parsed) {
           if (response.status === 401 || response.status === 403) setViewState(opaqueId("permission"));
           else if (response.status === 409) setViewState(opaqueId("conflict"));
           else setAnnouncement(copy.autosaveError);
           return null;
         }
+
+        if (parsed.outcome === "conflict") {
+          applyServerDocument(parsed.current, sentStep);
+          setViewState(opaqueId("conflict"));
+          return null;
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          if (parsed.outcome === "read_only") {
+            setViewState(opaqueId("read-only"));
+          } else {
+            setViewState(opaqueId("permission"));
+          }
+          return null;
+        }
+        if (response.status === 409) {
+          setViewState(opaqueId("conflict"));
+          return null;
+        }
+
         const next = setupMutationDocument(parsed);
         if (!setupMutationSucceeded(parsed)) {
           setSetup(next);
@@ -175,7 +198,10 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   );
 
   const resumeSetupDraft = useCallback(async (): Promise<Phase4SetupDocument | null> => {
-    if (!document.resumeRequired || resumeStartedRef.current || readOnlyNow()) return setupRef.current;
+    if (!document.resumeRequired || resumeStartedRef.current || readOnlyNow()) {
+      setResumePending(false);
+      return setupRef.current;
+    }
     resumeStartedRef.current = true;
     resumeKeyRef.current ??= crypto.randomUUID();
     commandLockRef.current = true;
@@ -206,6 +232,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
       } finally {
         commandLockRef.current = false;
         setCommandBusy(false);
+        setResumePending(false);
       }
     });
   }, [applyServerDocument, document.competitionId, document.resumeRequired, enqueue, readOnlyNow, setViewState]);
@@ -225,7 +252,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
       setAutosaving(true);
       setAnnouncement(phase4SetupCopy.saving);
       try {
-        return await sendMutation("PATCH", setupPatchBody(current.revision, latest), latest);
+        return await sendMutation("PATCH", setupPatchBody(expectedRevisionRef.current, latest), latest);
       } finally {
         setAutosaving(false);
       }
@@ -243,21 +270,24 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
         setAnnouncement(copy.incomplete);
         return null;
       }
-      return sendMutation("PUT", setupAutosaveBody(source.revision, { kind: "save_step", step }), step);
+      return sendMutation("PUT", setupAutosaveBody(expectedRevisionRef.current, { kind: "save_step", step }), step);
     });
   }, [clearAutosaveTimer, enqueue, readOnlyNow, sendMutation]);
 
-  const withCommandLock = useCallback(async (operation: () => Promise<void>) => {
-    if (commandLockRef.current) return;
-    commandLockRef.current = true;
-    setCommandBusy(true);
-    try {
-      await operation();
-    } finally {
-      commandLockRef.current = false;
-      setCommandBusy(false);
-    }
-  }, []);
+  const withCommandLock = useCallback(
+    async (operation: () => Promise<void>) => {
+      if ((document.resumeRequired && !resumeStartedRef.current) || commandLockRef.current) return;
+      commandLockRef.current = true;
+      setCommandBusy(true);
+      try {
+        await operation();
+      } finally {
+        commandLockRef.current = false;
+        setCommandBusy(false);
+      }
+    },
+    [document.resumeRequired],
+  );
 
   const goTo = useCallback(
     async (target: Phase4SetupStepId) =>
@@ -276,7 +306,10 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
         await enqueue(async () => {
           const current = setupRef.current;
           if (!current) return null;
-          return sendMutation("PUT", setupAutosaveBody(current.revision, { kind: "go_to_step", step_id: target }));
+          return sendMutation(
+            "PUT",
+            setupAutosaveBody(expectedRevisionRef.current, { kind: "go_to_step", step_id: target }),
+          );
         });
       }),
     [enqueue, patchLatestEditableStep, saveCurrentStep, sendMutation, withCommandLock],
@@ -301,7 +334,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
         await enqueue(async () => {
           const latest = setupRef.current;
           if (!latest) return null;
-          return sendMutation("PUT", setupAutosaveBody(latest.revision, { kind: "save_step", step }), step);
+          return sendMutation("PUT", setupAutosaveBody(expectedRevisionRef.current, { kind: "save_step", step }), step);
         });
       }),
     [enqueue, readOnlyNow, sendMutation, withCommandLock],
@@ -318,7 +351,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
           if (!latest?.values.review_publish) return null;
           return sendMutation(
             "PUT",
-            setupAutosaveBody(latest.revision, {
+            setupAutosaveBody(expectedRevisionRef.current, {
               kind: "complete",
               review: latest.values.review_publish,
             }),
@@ -447,7 +480,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   useEffect(() => {
     clearAutosaveTimer();
     const current = setupRef.current;
-    if (!current || readOnly || (document.resumeRequired && !resumeStartedRef.current)) return;
+    if (!current || readOnly || resumePending) return;
     const step = patchableSetupStep(current.current_step, basics, preferences);
     if (!step || setupValuesEqual(current.values[step.step_id], step.value)) return;
     autosaveTimerRef.current = setTimeout(() => {
@@ -462,16 +495,59 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
     patchLatestEditableStep,
     preferences,
     readOnly,
+    resumePending,
   ]);
 
+  const reloadSetupState = useCallback(async () => {
+    const key = crypto.randomUUID();
+    const response = await fetch(
+      `/api/phase4/competitions/${encodeURIComponent(document.competitionId)}/setup-draft/resume`,
+      {
+        method: opaqueId("POST"),
+        headers: { "content-type": opaqueId("application/json") },
+        body: JSON.stringify({ idempotency_key: key }),
+      },
+    );
+    const next = parseAssistedSetupDocument(await response.json().catch(() => null), document.competitionId);
+    if (!response.ok || !next) {
+      if (response.status === 401 || response.status === 403) {
+        setViewState(opaqueId("permission"));
+      } else if (response.status === 409) {
+        setViewState(opaqueId("conflict"));
+      } else {
+        setViewState(opaqueId("error"));
+      }
+      return null;
+    }
+    applyServerDocument(next, undefined, true);
+    return next;
+  }, [applyServerDocument, document.competitionId, setViewState]);
+
   useEffect(() => clearAutosaveTimer, [clearAutosaveTimer]);
+
+  const retry = useCallback(() => {
+    if (commandLockRef.current) return;
+    setViewState(opaqueId("ready"));
+    setAnnouncement("");
+    setCommandBusy(true);
+    commandLockRef.current = true;
+    void reloadSetupState()
+      .catch(() => {
+        setViewState(opaqueId("error"));
+      })
+      .finally(() => {
+        commandLockRef.current = false;
+        setCommandBusy(false);
+        window.requestAnimationFrame(() => headingRef.current?.focus());
+      });
+  }, [reloadSetupState, setViewState]);
 
   return (
     <AssistedSetupJourneyView
       document={document}
       setup={setup}
       viewState={viewState}
-      commandBusy={commandBusy}
+      commandBusy={commandBusy || resumePending}
       autosaving={autosaving}
       announcement={announcement}
       basics={basics}
@@ -489,6 +565,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
       onContinue={() => void continueToNext()}
       onSelectRecommendation={(id, acknowledged) => void selectRecommendation(id, acknowledged)}
       onComplete={() => void completeSetup()}
+      onRetry={retry}
     />
   );
 }

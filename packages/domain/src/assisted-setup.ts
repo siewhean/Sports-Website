@@ -550,12 +550,11 @@ export function validateAssistedSetupStep(
     const selected = candidates.find(
       (recommendation) => recommendation.id === recommendations?.selectedRecommendationId,
     );
-    if (
-      !selected ||
-      value.selectedRecommendationId !== selected.id ||
-      value.formatRevisionId !== selected.formatRevisionId ||
-      value.formatDefinitionHash !== selected.definitionHash
-    )
+    // The effective schedule may reference a manually edited child of the
+    // recommendation revision. The API/database lineage validator proves that
+    // ancestry; this pure structural validator can only require the selected
+    // recommendation identity and complete effective-format references.
+    if (!selected || value.selectedRecommendationId !== selected.id)
       result.push(issue("stale_format", "schedule_review.format", "Schedule source must match the selected format"));
     if (values.capacity && value.capacityRevision !== values.capacity.revision)
       result.push(issue("stale_capacity", "schedule_review.capacity_revision", "Capacity changed before scheduling"));

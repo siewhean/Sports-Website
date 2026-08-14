@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseConfig, safeConfigSummary } from "../src/index.js";
+import { parseConfig, parseSchedulerConfig, safeConfigSummary } from "../src/index.js";
 
 const flowSealKey = Buffer.alloc(32, 7).toString("base64url");
 const oidcConfig = {
+  SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "scoring-access-rate-limit-secret-32",
+  SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "scoring-access-fallback-code-secret-32",
   API_ALLOWED_ORIGINS: "https://app.matchday.example",
   IDENTITY_PROVIDER: "oidc",
   IDENTITY_OIDC_ISSUER: "https://identity.matchday.example",
@@ -21,6 +23,53 @@ const edgeCacheConfig = {
 };
 
 describe("configuration", () => {
+  describe("scheduler configuration", () => {
+    const scheduler = {
+      APP_ENV: "staging",
+      DATABASE_URL: "postgresql://scheduler:secret@db.internal/matchday",
+      REDIS_URL: "rediss://cache.internal:6379",
+    };
+
+    it("requires only explicit queue and persistence settings outside the API boundary", () => {
+      expect(parseSchedulerConfig(scheduler)).toEqual({
+        environment: "staging",
+        databaseUrl: scheduler.DATABASE_URL,
+        redisUrl: scheduler.REDIS_URL,
+        logLevel: "info",
+        telemetry: { enabled: false, metricExportIntervalMs: 10_000 },
+      });
+    });
+
+    it("does not parse unrelated API, scoring, identity, or edge-purge values", () => {
+      expect(
+        parseSchedulerConfig({
+          ...scheduler,
+          IDENTITY_PROVIDER: "disabled",
+          API_ALLOWED_ORIGINS: "*",
+          EDGE_CACHE_PURGE_ENDPOINT: "https://edge.example.test/purge",
+        }),
+      ).toMatchObject({ environment: "staging" });
+    });
+
+    it.each(["APP_ENV", "DATABASE_URL", "REDIS_URL"])("requires %s", (key) => {
+      const source = { ...scheduler } as Record<string, string>;
+      delete source[key];
+      expect(() => parseSchedulerConfig(source)).toThrow();
+    });
+
+    it("keeps optional telemetry validation", () => {
+      expect(() => parseSchedulerConfig({ ...scheduler, OTEL_ENABLED: "true" })).toThrow("OTEL_EXPORTER_OTLP_ENDPOINT");
+      expect(
+        parseSchedulerConfig({
+          ...scheduler,
+          OTEL_ENABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.test/otlp/",
+          OTEL_METRIC_EXPORT_INTERVAL_MS: "2500",
+        }).telemetry,
+      ).toEqual({ enabled: true, endpoint: "https://collector.example.test/otlp", metricExportIntervalMs: 2_500 });
+    });
+  });
+
   it("provides safe local defaults", () => {
     const config = parseConfig({});
     expect(config.environment).toBe("local");
@@ -28,6 +77,8 @@ describe("configuration", () => {
     expect(config.api.trustedProxies).toEqual([]);
     expect(config.telemetry).toEqual({ enabled: false, metricExportIntervalMs: 10_000 });
     expect(config.identity).toMatchObject({ sessionCookieName: "matchday_session", secureCookies: false });
+    expect(config.scoringAccess.rateLimitHmacSecret).toHaveLength(34);
+    expect(config.scoringAccess.fallbackCodeHmacSecret).toHaveLength(36);
   });
 
   it("requires explicit production dependencies and health protection", () => {
@@ -160,6 +211,55 @@ describe("configuration", () => {
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-secret-at-least-16");
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain(flowSealKey);
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain("provider-event-secret-at-least-32-bytes");
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(oidcConfig.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET);
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(
+      oidcConfig.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    );
+  });
+
+  it("requires and redacts a dedicated scoring access rate-limit HMAC secret outside local/test", () => {
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        ...oidcConfig,
+        SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: undefined,
+      }),
+    ).toThrow("SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET");
+    const config = parseConfig({
+      APP_ENV: "staging",
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...oidcConfig,
+    });
+    expect(safeConfigSummary(config).scoringAccess.rateLimitHmacSecretConfigured).toBe(true);
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(oidcConfig.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET);
+  });
+
+  it("requires and redacts a dedicated fallback-code HMAC secret outside local/test", () => {
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        ...oidcConfig,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: undefined,
+      }),
+    ).toThrow("SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET");
+    const config = parseConfig({
+      APP_ENV: "staging",
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...oidcConfig,
+    });
+    expect(safeConfigSummary(config).scoringAccess.fallbackCodeHmacSecretConfigured).toBe(true);
+    expect(JSON.stringify(safeConfigSummary(config))).not.toContain(
+      oidcConfig.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    );
+    expect(() =>
+      parseConfig({
+        APP_ENV: "test",
+        SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "shared-scoring-access-hmac-secret",
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "shared-scoring-access-hmac-secret",
+      }),
+    ).toThrow("must be different");
   });
 
   it("requires a complete OIDC provider outside local/test", () => {

@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
+import type { ScoringSessionState } from "@matchday/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildApp } from "../../src/app.js";
+import { buildApp, scoringSessionRateLimitKey } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
-import type { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { ScoringAccessRejectedError, type Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -37,28 +38,54 @@ function routeRuntime() {
       competition: { id: randomUUID(), name: "Singapore Open" },
       access_passes: [{ id: randomUUID(), expires_at: "2026-08-01T00:00:00.000Z", revoked_at: null }],
     })),
-    scoringSessionState: vi.fn(async () => ({
-      competition: { slug: "singapore-open" },
-      match: {
-        id: randomUUID(),
-        code: "group-A-r1-m1",
-        stage: "group",
-        state: "in_progress",
-        home: { id: randomUUID(), name: "Marina Blue" },
-        away: { id: randomUUID(), name: "Harbour Gold" },
-      },
-      writer: { generation: 1, expires_at: "2026-08-01T00:00:00.000Z", read_only: false },
-      score: { home: 1, away: 0 },
-      through_sequence: 2,
-      events: [],
-    })),
+    scoringSessionState: vi.fn(
+      async () =>
+        ({
+          competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+          sport: {
+            pack_version: "phase2-canoe-polo-v1",
+            settings: { period_count: 2, period_duration_minutes: 10 },
+          },
+          match: {
+            id: randomUUID(),
+            code: "group-A-r1-m1",
+            stage: "group",
+            state: "in_progress",
+            home: { id: randomUUID(), name: "Marina Blue" },
+            away: { id: randomUUID(), name: "Harbour Gold" },
+          },
+          access: {
+            mode: "writer",
+            permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+            session_expires_at: "2026-08-01T00:00:00.000Z",
+          },
+          writer: { generation: 1, expires_at: "2026-08-01T00:00:00.000Z", read_only: false },
+          score: {
+            home: 1,
+            away: 0,
+            lifecycle: "in_progress",
+            current_segment: 1,
+            total_points: { home: 1, away: 0 },
+            segment_wins: { home: 0, away: 0 },
+            segments: [{ number: 1, home: 1, away: 0, completed: false, winner: null }],
+            actions: [],
+            conflicts: [],
+          },
+          aggregate_version: 2,
+          through_sequence: 2,
+          events: [],
+        }) satisfies ScoringSessionState,
+    ),
     exchangeAccess: vi.fn(async () => ({
       session_id: randomUUID(),
       session_token: "s".repeat(43),
       match_id: randomUUID(),
       generation: 1,
       expires_at: "2026-08-01T00:00:00.000Z",
+      rate_limit: { limit: 5, remaining: 5, resetSeconds: 600 },
     })),
+    listTakeoverRequests: vi.fn(async () => []),
+    expireTakeoverRequests: vi.fn(async () => ({ expired_count: 1 })),
     publicCompetition: vi.fn(async () => ({
       competition: {
         id: randomUUID(),
@@ -70,7 +97,16 @@ function routeRuntime() {
         ends_on: "2026-08-01",
         status: "active",
       },
-      division: { id: randomUUID(), name: "Open" },
+      divisions: [
+        {
+          division: { id: "00000000-0000-4000-8000-000000000301", name: "Open" },
+          schedule: [],
+          results: [],
+          standings: null,
+          bracket: null,
+        },
+      ],
+      division: { id: "00000000-0000-4000-8000-000000000301", name: "Open" },
       publication: { schedule_version: 1, result_version: 2 },
       schedule: [],
       results: [],
@@ -82,6 +118,22 @@ function routeRuntime() {
 }
 
 describe("Phase 2 Fastify route boundaries", () => {
+  it("derives scoring rate-limit keys with the dedicated HMAC secret without retaining raw session or IP inputs", () => {
+    const sessionId = randomUUID();
+    const clientIp = "198.51.100.202";
+    const rateLimitSecret = "dedicated-scoring-rate-limit-hmac-secret";
+    const csrfSecret = "independent-csrf-hmac-secret-do-not-use";
+    const fingerprint = (value: string) => createHmac("sha256", rateLimitSecret).update(value, "utf8").digest("hex");
+
+    const key = scoringSessionRateLimitKey(sessionId, clientIp, rateLimitSecret);
+
+    expect(key).toBe(`scoring-session:${fingerprint(`session:${sessionId}`)}:ip:${fingerprint(`ip:${clientIp}`)}`);
+    expect(key).not.toContain(sessionId);
+    expect(key).not.toContain(clientIp);
+    expect(key).not.toContain(csrfSecret);
+    expect(key).not.toBe(scoringSessionRateLimitKey(sessionId, clientIp, csrfSecret));
+  });
+
   it("enforces organiser origin, session and CSRF before mutation and excludes access secrets from reads", async () => {
     const runtime = routeRuntime();
     const app = await buildApp({
@@ -142,25 +194,63 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(created.statusCode).toBe(201);
     expect(runtime.createCompetition).toHaveBeenCalledOnce();
 
+    const competitionId = randomUUID();
     const workspace = await app.inject({
       method: "GET",
-      url: `/api/v1/competitions/${randomUUID()}`,
+      url: `/api/v1/competitions/${competitionId}`,
       headers: { cookie: "matchday_session=session-token" },
     });
     expect(workspace.statusCode).toBe(200);
     expect(workspace.body).not.toContain("session_token");
     expect(workspace.body).not.toContain("short_code");
     expect(workspace.body).not.toContain('"token"');
+
+    const takeoverList = await app.inject({
+      method: "GET",
+      url: `/api/v1/competitions/${competitionId}/takeover-requests`,
+      headers: { cookie: "matchday_session=session-token" },
+    });
+    expect(takeoverList.statusCode).toBe(200);
+    expect(runtime.listTakeoverRequests).toHaveBeenCalledOnce();
+    expect(runtime.expireTakeoverRequests).not.toHaveBeenCalled();
+    const expired = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/takeover-requests/expire`,
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        cookie: "matchday_session=session-token",
+        "x-csrf-token": "csrf-ok",
+      },
+    });
+    expect(expired.statusCode).toBe(200);
+    expect(expired.json()).toEqual({ expired_count: 1 });
+    expect(runtime.expireTakeoverRequests).toHaveBeenCalledOnce();
   });
 
-  it("validates scoring headers, throttles access exchange, and leaves the public projection unauthenticated", async () => {
+  it("validates scoring headers, exposes access-limit headers, and leaves the public projection unauthenticated", async () => {
     const runtime = routeRuntime();
+    const retainedLogLines: string[] = [];
+    const telemetryInputs: unknown[] = [];
+    const telemetry = {
+      startRequest: vi.fn((input: unknown) => {
+        telemetryInputs.push(input);
+        return {
+          correlation: Object.freeze({ requestId: "route-test" }),
+          run: <T>(callback: () => T) => callback(),
+          reportError: vi.fn(async () => undefined),
+          finish: vi.fn(),
+        };
+      }),
+      shutdown: vi.fn(async () => undefined),
+    };
     const app = await buildApp({
       config: testConfig(),
       probes: healthyProbes,
       identityRuntime: authenticatedIdentityRuntime(),
       phase2Runtime: runtime as unknown as Phase2Runtime,
       anonymousRateLimitMax: 100,
+      telemetry,
+      loggerDestination: { write: (line: string) => retainedLogLines.push(line) },
     });
     apps.push(app);
     expect((await app.inject({ method: "GET", url: "/api/v1/scoring/session" })).statusCode).toBe(400);
@@ -175,28 +265,123 @@ describe("Phase 2 Fastify route boundaries", () => {
     });
     expect(scoring.statusCode).toBe(200);
     expect(scoring.headers["cache-control"]).toBe("no-store, private");
-    expect(scoring.json()).toMatchObject({ competition: { slug: "singapore-open" } });
+    expect(scoring.json()).toMatchObject({
+      competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+      sport: { pack_version: "phase2-canoe-polo-v1" },
+      aggregate_version: 2,
+    });
 
+    const rawAccessToken = "q".repeat(43);
+    const rawDeviceId = "d".repeat(43);
+    const rawClientNetworkInput = "198.51.100.201";
+    const returnedScoringSessionToken = "s".repeat(43);
+    const rawFallbackCode = "012345678901";
     const exchange = () =>
       app.inject({
         method: "POST",
         url: "/api/v1/scoring/access/exchange",
-        payload: { token: "q".repeat(43) },
+        headers: { "x-forwarded-for": rawClientNetworkInput },
+        payload: { token: rawAccessToken, device_id: rawDeviceId },
       });
-    for (let attempt = 0; attempt < 5; attempt += 1) expect((await exchange()).statusCode).toBe(200);
-    const limited = await exchange();
-    expect(limited.statusCode).toBe(429);
-    expect(limited.json().error.code).toBe("RATE_LIMITED");
+    runtime.exchangeAccess.mockRejectedValueOnce(
+      new ScoringAccessRejectedError(403, "ACCESS_DENIED", "Access is invalid", {
+        limit: 5,
+        remaining: 4,
+        resetSeconds: 600,
+      }),
+    );
+    const invalidExchange = await exchange();
+    expect(invalidExchange.statusCode).toBe(403);
+    expect(invalidExchange.headers["ratelimit-limit"]).toBe("5");
+    expect(invalidExchange.headers["ratelimit-remaining"]).toBe("4");
+    expect(invalidExchange.headers["ratelimit-reset"]).toBe("600");
+    expect(invalidExchange.headers["retry-after"]).toBeUndefined();
+    const exchanged = await exchange();
+    expect(exchanged.statusCode).toBe(200);
+    expect(exchanged.headers["set-cookie"]).toBeUndefined();
+    expect(exchanged.headers["ratelimit-limit"]).toBe("5");
+    expect(exchanged.headers["ratelimit-remaining"]).toBe("5");
+    const fallbackExchange = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      headers: { "x-forwarded-for": rawClientNetworkInput },
+      payload: { short_code: rawFallbackCode, device_id: rawDeviceId },
+    });
+    expect(fallbackExchange.statusCode).toBe(200);
+    expect(fallbackExchange.headers["set-cookie"]).toBeUndefined();
+    const tooLongDeviceLabel = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      payload: { token: "q".repeat(43), device_id: "d".repeat(43), device_label: "x".repeat(81) },
+    });
+    expect(tooLongDeviceLabel.statusCode).toBe(400);
+    const maximumDeviceLabel = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/access/exchange",
+      payload: { token: "q".repeat(43), device_id: "d".repeat(43), device_label: "x".repeat(80) },
+    });
+    expect(maximumDeviceLabel.statusCode).toBe(200);
+    expect(runtime.exchangeAccess).toHaveBeenLastCalledWith(
+      expect.objectContaining({ deviceLabel: "x".repeat(80) }),
+      expect.any(String),
+    );
+    const retainedTransportEvidence = JSON.stringify({
+      logs: retainedLogLines,
+      telemetry: telemetryInputs,
+      cookies: [exchanged.headers["set-cookie"], fallbackExchange.headers["set-cookie"]],
+    });
+    for (const secret of [
+      rawAccessToken,
+      rawFallbackCode,
+      returnedScoringSessionToken,
+      rawDeviceId,
+      rawClientNetworkInput,
+    ]) {
+      expect(retainedTransportEvidence).not.toContain(secret);
+    }
 
     const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
     expect(publicView.statusCode).toBe(200);
     expect(publicView.headers["cache-control"]).toContain("public");
     expect(publicView.json()).toMatchObject({
       competition: { name: "Singapore Open", status: "active" },
+      divisions: [{ division: { name: "Open" }, schedule: [], results: [] }],
       division: { name: "Open" },
       publication: { schedule_version: 1, result_version: 2 },
     });
     expect(publicView.body).not.toContain("primary_email");
     expect(publicView.body).not.toContain("session_token");
+  });
+
+  it("bounds scoring traffic by the authenticated session and peer address without consuming organiser traffic", async () => {
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: authenticatedIdentityRuntime(),
+      phase2Runtime: routeRuntime() as unknown as Phase2Runtime,
+      anonymousRateLimitMax: 1,
+    });
+    apps.push(app);
+    const headers = {
+      "x-scoring-session-id": randomUUID(),
+      "x-scoring-session-token": "t".repeat(43),
+      "x-writer-generation": "1",
+    };
+
+    expect((await app.inject({ method: "GET", url: "/api/v1/scoring/session", headers })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/scoring/session", headers })).statusCode).toBe(429);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/scoring/session",
+          headers: { ...headers, "x-scoring-session-id": randomUUID() },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const organiserPath = `/api/v1/competitions/${randomUUID()}`;
+    expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(429);
   });
 });

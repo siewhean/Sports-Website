@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { interpolate } from "@matchday/ui";
 import {
@@ -21,6 +22,7 @@ import {
   formatScheduleDay,
   formatScheduleTime,
   moveSlotsForMatch,
+  parseScheduleMoveResponse,
   phase4ScheduleCopy,
   phase4ScheduleMachine,
   type MoveConsequence,
@@ -43,6 +45,7 @@ const emptyConsequences: MoveConsequence = {
 };
 
 export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocument; match: ScheduleMatch }) {
+  const router = useRouter();
   const current = assignmentForMatch(document.currentRevision, match.id);
   const moveSlots = useMemo(() => moveSlotsForMatch(document, match.id), [document, match.id]);
   const days = useMemo(
@@ -63,7 +66,6 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   const [validatingSlotId, setValidatingSlotId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const canEdit = document.canEdit && document.currentRevision?.status !== "expired";
   const currentRevisionId = document.currentRevision?.id;
 
@@ -179,8 +181,15 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
         setError(commandErrorMessage(response.status, responseErrorCode(payload)));
         return;
       }
-      setMessage(phase4ScheduleCopy.moved);
-      window.location.assign(`/organiser/competitions/${document.competitionId}/schedule`);
+      const moved = parseScheduleMoveResponse(payload);
+      if (!moved) {
+        setError(phase4ScheduleCopy.malformed);
+        return;
+      }
+      const query = new URLSearchParams({ match: match.id, notice: phase4ScheduleMachine.moveNotice });
+      router.replace(`/organiser/competitions/${document.competitionId}/schedule?${query.toString()}`, {
+        scroll: false,
+      });
     } catch {
       setError(phase4ScheduleCopy.offlineBody);
     } finally {
@@ -191,8 +200,8 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
   const consequences = displayedValidation?.consequences ?? emptyConsequences;
   return (
     <main className={styles.page} data-testid="phase4-move-flow">
-      <p className={styles.live} aria-live="polite">
-        {message || (validating ? phase4ScheduleCopy.validating : error)}
+      <p className={styles.live} aria-live="polite" aria-atomic="true">
+        {validating ? phase4ScheduleCopy.validating : error}
       </p>
       <header className={styles.topbar}>
         <Link href={`/organiser/competitions/${document.competitionId}/schedule`}>

@@ -197,6 +197,28 @@ test.describe("authoritative format round trip", () => {
         }),
       });
     });
+    await page.route("**/api/phase4/format-revisions/*/publish", async (route) => {
+      expect(route.request().url()).toContain("6b3f7665-c8cd-47e5-b243-fae28f56f6fe");
+      expect(typeof (route.request().postDataJSON() as Record<string, unknown>).idempotency_key).toBe("string");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          revision_id: "6b3f7665-c8cd-47e5-b243-fae28f56f6fe",
+          revision: 7,
+          parent_revision_id: "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed",
+          root_revision_id: "59245771-cf60-4f50-977d-ed558e6eb147",
+          competition_id: "singapore-open",
+          division_id: "open-division",
+          status: "published",
+          definition_hash: graphHash,
+          document: savedDocument,
+          created_at: "2026-07-22T08:00:00.000Z",
+          published_at: "2026-07-22T08:01:00.000Z",
+          idempotent_replay: false,
+        }),
+      });
+    });
 
     await page.goto("/organiser/competitions/singapore-open/format");
     await dismissConsent(page);
@@ -221,6 +243,9 @@ test.describe("authoritative format round trip", () => {
     await page.getByRole("button", { name: "Materialise matches" }).focus();
     await page.keyboard.press("Enter");
     await expect(page.getByText(/16 matches materialised/)).toBeVisible();
+    await page.getByRole("button", { name: "Publish format" }).click();
+    await expect(page.getByText("Format published. It is now available to deterministic scheduling.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Publish format" })).toBeDisabled();
   });
 
   test("template creation appears immediately and version two replaces the same picker row", async ({ page }) => {

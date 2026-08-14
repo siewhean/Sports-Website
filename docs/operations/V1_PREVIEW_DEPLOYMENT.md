@@ -1,0 +1,9 @@
+# V1 isolated preview deployment
+
+`render.yaml` defines an isolated V1 API, scheduler, and worker. It never enables automatic deploys and contains no credentials. Render must be pointed at the exact approved branch or commit, with a separate PostgreSQL database and Redis namespace. Before accepting a preview, manually deploy all three services from one recorded commit, set the web `MATCHDAY_BUILD_ID`, and retain the three Render deployment IDs plus the API `/health/ready` and same-host proxied `/api/v1/status` receipts.
+
+The web deployment owns the only browser-facing HTTPS hostname. Configure its server-only `RENDER_API_ORIGIN` with the Render API HTTPS origin; the checked-in Next rewrite proxies only `/api/v1/*`. Set `MATCHDAY_API_BASE_URL` to that same browser hostname, never to the direct Render hostname. This preserves the host-only session cookie across the OIDC callback and organiser BFF.
+
+Before the first start, inject the validated staging variables from [ENVIRONMENTS.md](ENVIRONMENTS.md) through the provider secret store. The API and worker use their full typed contracts. The scheduler has a deliberately narrower typed contract: only `APP_ENV`, `DATABASE_URL`, and `REDIS_URL` are required; `LOG_LEVEL` and OTEL settings are optional. It must not receive API, scoring, identity, or edge-purge credentials. Only the worker receives `EDGE_CACHE_PURGE_ENDPOINT` and `EDGE_CACHE_PURGE_BEARER_TOKEN`. Run `pnpm db:migrate` once as a controlled release action before API start; do not run migrations from the scheduler or worker.
+
+The scheduler is a Render web service solely so the free plan can probe its `/health/ready` endpoint; it receives no browser traffic and remains outside the Vercel rewrite. The worker is a background worker and has no inbound health URL, so prove its liveness from structured health logs and queue/Redis receipts. Keep the API `/health/deep` endpoint private and supply `DEEP_HEALTH_TOKEN` only to the verification path.
