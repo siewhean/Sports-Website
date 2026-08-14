@@ -7,6 +7,7 @@ settings:
 overrides:
   '@fastify/swagger-ui>@fastify/static': 10.1.2
   fastify>find-my-way: 9.7.0
+  '@fastify/ajv-compiler>fast-uri': 3.1.5
   fast-json-stringify>fast-uri: 4.1.2
   json-schema-resolver>fast-uri: 3.1.5
   minimatch@10.2.5>brace-expansion: 5.0.9
@@ -3852,7 +3853,7 @@ snapshots:
     dependencies:
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
-      fast-uri: 3.1.4
+      fast-uri: 3.1.5
 
   '@fastify/cors@11.3.0':
     dependencies:
