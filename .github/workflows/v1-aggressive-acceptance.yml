@@ -58,6 +58,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Audit production dependencies
         run: pnpm dependencies:audit
+      - name: Build database workspace dependency closure
+        run: pnpm --filter @matchday/database... build
       - name: Verify migrations
         run: pnpm db:migrate:check
       - name: Run competition draft unit regression
