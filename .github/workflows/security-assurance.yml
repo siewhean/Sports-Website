@@ -141,6 +141,8 @@ jobs:
           --no-file-parallelism
       - name: Run Redis scoring rate-limit integration tests
         run: pnpm --filter @matchday/api exec vitest run tests/integration/rate-limit-redis.test.ts --no-file-parallelism
+      - name: Run Phase 2 scoring rate-limit route regression
+        run: pnpm --filter @matchday/api exec vitest run tests/integration/phase-2-routes.test.ts --no-file-parallelism
       - name: Build API and web
         run: |
           pnpm --filter @matchday/api build
