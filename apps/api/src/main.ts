@@ -21,6 +21,7 @@ import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 import { Phase2Runtime } from "./phase-2-runtime.js";
 import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
+import { verifiedScoringRateLimitSessionId } from "./scoring-rate-limit-identity.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { V1Phase3Runtime } from "./phase-3-v1-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
@@ -28,6 +29,7 @@ import { V1Phase4Runtime } from "./phase-4-v1-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
+const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function assuranceClaimName(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -119,6 +121,13 @@ const app = await buildApp({
   config,
   probes: createDependencyProbes(config),
   rateLimitRedis,
+  resolveVerifiedScoringRateLimitSessionId: async (request) => {
+    const sessionId = request.headers["x-scoring-session-id"];
+    const sessionToken = request.headers["x-scoring-session-token"];
+    if (typeof sessionId !== "string" || typeof sessionToken !== "string") return null;
+    if (!canonicalUuidPattern.test(sessionId) || sessionToken.length < 32 || sessionToken.length > 256) return null;
+    return verifiedScoringRateLimitSessionId(identitySql, sessionId, sessionToken);
+  },
   telemetry,
   identityRuntime,
   phase2Runtime,
