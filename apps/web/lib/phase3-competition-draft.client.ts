@@ -51,6 +51,10 @@ export function useCompetitionCreateDraft(
   }, [storageKey]);
 
   useEffect(() => {
+    storageReadyRef.current = false;
+    const emptyDraft = initialDraft();
+    draftRef.current = emptyDraft;
+    setDraftState(emptyDraft);
     try {
       const raw = window.localStorage.getItem(storageKey);
       if (raw) {
@@ -67,7 +71,7 @@ export function useCompetitionCreateDraft(
     } finally {
       storageReadyRef.current = true;
     }
-  }, [storageKey]);
+  }, [initialDraft, storageKey]);
 
   useEffect(() => {
     const saveBeforeLeaving = () => {
