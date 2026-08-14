@@ -54,12 +54,7 @@ export class V1Phase4Runtime extends ReliableGateBPhase4Runtime {
         throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format page");
       }
 
-      return super.recommendV1Format(
-        actor,
-        competitionId,
-        `${idempotencyKey.slice(0, 150)}:v1-retry`,
-        requestId,
-      );
+      return super.recommendV1Format(actor, competitionId, `${idempotencyKey.slice(0, 150)}:v1-retry`, requestId);
     }
   }
 }

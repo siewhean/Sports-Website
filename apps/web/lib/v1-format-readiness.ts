@@ -20,9 +20,7 @@ export function v1FormatReadiness(setup: Phase4SetupDocument | null | undefined)
   );
 
   const capacity = setup?.values.capacity;
-  const capacityReady = Boolean(
-    capacity && capacity.area_ids.length > 0 && capacity.effective.availableMatchSlots > 0,
-  );
+  const capacityReady = Boolean(capacity && capacity.area_ids.length > 0 && capacity.effective.availableMatchSlots > 0);
 
   const prerequisites: readonly V1FormatPrerequisite[] = [
     {
