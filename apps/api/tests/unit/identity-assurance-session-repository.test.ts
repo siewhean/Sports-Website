@@ -46,10 +46,14 @@ describe("PostgresAssuranceSessionRepository", () => {
     expect(sessionInsertIndex).toBeGreaterThanOrEqual(0);
     expect(assuranceInsertIndex).toBeGreaterThan(sessionInsertIndex);
     expect(assuranceInsertIndex).toBe(calls.length - 1);
-    expect(calls[assuranceInsertIndex]?.params).toMatchObject([
+    expect(calls[assuranceInsertIndex]?.params).toEqual([
       "00000000-0000-4000-8000-000000000001",
       "phishing_resistant",
       ["pwd", "mfa"],
+      "https://matchday.example/assurance/phishing-resistant",
+      new Date("2026-08-13T23:59:00.000Z"),
+      true,
+      true,
     ]);
   });
 
