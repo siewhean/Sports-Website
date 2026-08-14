@@ -13,6 +13,8 @@ import type { AppConfig } from "@matchday/config";
 import { IdentityError, systemClock, type Clock } from "@matchday/identity";
 import { createLogger } from "@matchday/observability";
 import { ApiError } from "./errors.js";
+import { IdentityAssuranceRequestContext } from "./identity-assurance-request-context.js";
+import { IdentityAssuranceRuntime } from "./identity-assurance-runtime.js";
 import { IdentityFlowSealer } from "./identity-flow.js";
 import { IdentityProviderEventVerifier } from "./identity-provider-events.js";
 import {
@@ -136,7 +138,10 @@ export async function buildApp(options: BuildAppOptions) {
   }).withTypeProvider<TypeBoxTypeProvider>();
   let identityRequests: IdentityRequestContext | undefined;
   if (options.identityRuntime) {
-    identityRequests = createIdentityRequestContext(options.identityRuntime, options.config.identity.sessionCookieName);
+    identityRequests =
+      options.identityRuntime instanceof IdentityAssuranceRuntime
+        ? new IdentityAssuranceRequestContext(options.identityRuntime, options.config.identity.sessionCookieName)
+        : createIdentityRequestContext(options.identityRuntime, options.config.identity.sessionCookieName);
   }
 
   const requestRoute = (request: FastifyRequest): string =>
