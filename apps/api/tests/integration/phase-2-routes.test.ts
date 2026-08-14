@@ -354,7 +354,7 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(publicView.body).not.toContain("session_token");
   });
 
-  it("bounds scoring traffic by the authenticated session and peer address without consuming organiser traffic", async () => {
+  it("does not let unverified scoring ids escape the anonymous budget or consume organiser traffic", async () => {
     const app = await buildApp({
       config: testConfig(),
       probes: healthyProbes,
@@ -379,7 +379,7 @@ describe("Phase 2 Fastify route boundaries", () => {
           headers: { ...headers, "x-scoring-session-id": randomUUID() },
         })
       ).statusCode,
-    ).toBe(200);
+    ).toBe(429);
 
     const organiserPath = `/api/v1/competitions/${randomUUID()}`;
     expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(401);
