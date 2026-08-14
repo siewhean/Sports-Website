@@ -6,7 +6,11 @@ import {
   InMemoryAuditRepository,
   InMemorySessionRepository,
 } from "@matchday/identity/testing";
-import { IdentityApiRuntime, type IdentityPersistenceUnitOfWork } from "../../src/identity-runtime.js";
+import {
+  IdentityApiRuntime,
+  type IdentityPersistencePorts,
+  type IdentityPersistenceUnitOfWork,
+} from "../../src/identity-runtime.js";
 
 const now = new Date("2026-08-14T00:00:00.000Z");
 const clock: Clock = { now: () => now };
@@ -16,16 +20,23 @@ const request = {
   pkceVerifier: "v".repeat(43),
 };
 
+function inMemoryUnitOfWork(
+  accounts: InMemoryAccountRepository,
+  sessions: InMemorySessionRepository,
+  audit: InMemoryAuditRepository,
+): IdentityPersistenceUnitOfWork {
+  return {
+    async run<T>(operation: (ports: IdentityPersistencePorts) => Promise<T>): Promise<T> {
+      return operation({ accounts, sessions, audit });
+    },
+  };
+}
+
 describe("browser session replacement", () => {
   it("revokes the displaced session when reauthentication issues a stronger session", async () => {
     const accounts = new InMemoryAccountRepository();
     const sessions = new InMemorySessionRepository();
     const audit = new InMemoryAuditRepository();
-    const unitOfWork: IdentityPersistenceUnitOfWork = {
-      async run<T>(operation: Parameters<IdentityPersistenceUnitOfWork["run"]>[0]): Promise<T> {
-        return operation({ accounts, sessions, audit }) as Promise<T>;
-      },
-    };
     const provider = new DeterministicIdentityProvider({
       issuer: "https://identity.example.test",
       subject: "organiser-subject",
@@ -42,7 +53,7 @@ describe("browser session replacement", () => {
     });
     const runtime = new IdentityApiRuntime(
       provider,
-      unitOfWork,
+      inMemoryUnitOfWork(accounts, sessions, audit),
       "session-replacement-test-csrf-secret-at-least-32-bytes",
       clock,
     );
@@ -89,11 +100,6 @@ describe("browser session replacement", () => {
     const accounts = new InMemoryAccountRepository();
     const sessions = new InMemorySessionRepository();
     const audit = new InMemoryAuditRepository();
-    const unitOfWork: IdentityPersistenceUnitOfWork = {
-      async run<T>(operation: Parameters<IdentityPersistenceUnitOfWork["run"]>[0]): Promise<T> {
-        return operation({ accounts, sessions, audit }) as Promise<T>;
-      },
-    };
     const provider = new DeterministicIdentityProvider({
       issuer: "https://identity.example.test",
       subject: "fresh-subject",
@@ -104,7 +110,7 @@ describe("browser session replacement", () => {
     });
     const runtime = new IdentityApiRuntime(
       provider,
-      unitOfWork,
+      inMemoryUnitOfWork(accounts, sessions, audit),
       "session-replacement-test-csrf-secret-at-least-32-bytes",
       clock,
     );
