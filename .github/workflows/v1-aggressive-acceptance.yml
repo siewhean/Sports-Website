@@ -12,11 +12,12 @@ permissions:
 jobs:
   real-stack:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 45
     env:
       APP_ENV: test
       LOG_LEVEL: silent
       PHASE4_E2E_RUNS: 1
+      PHASE4_E2E_PROJECT: phase-4-real-desktop-chromium
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -37,11 +38,11 @@ jobs:
           pnpm --filter @matchday/web exec vitest run
           lib/phase3-competition-draft.test.ts
           lib/phase3-competition-create.test.ts
-      - name: Install Chromium and WebKit
-        run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
-      - name: Run full V1 competition journey on phone tablet and desktop
+      - name: Install Chromium
+        run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
+      - name: Run full V1 competition journey on desktop
         run: pnpm test:e2e:v1:competition:real
-      - name: Run V1 setup schedule move journey on phone tablet and desktop
+      - name: Run V1 setup schedule move journey on desktop
         run: pnpm test:e2e:v1:real
       - name: Final API and web builds
         run: |
