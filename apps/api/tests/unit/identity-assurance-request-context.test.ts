@@ -19,17 +19,17 @@ class StubAssuranceRuntime extends IdentityAssuranceRuntime {
   signedOut = false;
 
   constructor(private readonly session: AuthenticatedIdentityApiSession) {
-    const provider = {
+    const provider: IdentityProviderPort = {
       exchangeAuthorizationCode: async () => {
         throw new Error("unused provider exchange");
       },
       requestRecovery: async () => undefined,
-    } as IdentityProviderPort;
-    const unitOfWork = {
-      run: async () => {
+    };
+    const unitOfWork: IdentityPersistenceUnitOfWork = {
+      async run<T>(): Promise<T> {
         throw new Error("unused identity unit of work");
       },
-    } as IdentityPersistenceUnitOfWork;
+    };
     super(provider, unitOfWork, "assurance-context-test-csrf-secret-at-least-32-bytes", clock, { minimum: "mfa" });
   }
 
@@ -74,6 +74,12 @@ function lowAssuranceSession(): AuthenticatedIdentityApiSession {
   } as AuthenticatedIdentityApiSession;
 }
 
+function allowedOrigin(config: ReturnType<typeof testConfig>): string {
+  const origin = config.api.allowedOrigins[0];
+  if (!origin) throw new Error("Test configuration requires an allowed origin");
+  return origin;
+}
+
 describe("assurance-aware identity request context", () => {
   it("requires step-up for organiser identity reads", async () => {
     const config = testConfig();
@@ -102,7 +108,7 @@ describe("assurance-aware identity request context", () => {
       url: "/api/v1/identity/sign-out",
       headers: {
         cookie: `${config.identity.sessionCookieName}=opaque-session`,
-        origin: config.api.allowedOrigins[0],
+        origin: allowedOrigin(config),
         "x-csrf-token": "valid-csrf",
       },
     });
