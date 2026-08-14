@@ -25,12 +25,7 @@ export function authenticationAssuranceFromProvider(
   if (evidence.methods.length > 16) invalidEvidence();
 
   const methods = evidence.methods.map((method) => {
-    if (
-      typeof method !== "string" ||
-      method.length < 1 ||
-      method.length > 64 ||
-      /[\u0000-\u001f\u007f]/.test(method)
-    ) {
+    if (typeof method !== "string" || method.length < 1 || method.length > 64 || /[\u0000-\u001f\u007f]/.test(method)) {
       invalidEvidence();
     }
     return method;

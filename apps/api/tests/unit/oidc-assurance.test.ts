@@ -18,15 +18,12 @@ describe("OIDC assurance claims", () => {
     expect(() => readOidcAssurance({ amr: ["pwd"], [claim]: true }, claim, now)).toThrow(IdentityError);
   });
 
-  it.each([
-    { amr: "mfa" },
-    { amr: [1] },
-    { acr: 42 },
-    { auth_time: "now" },
-    { [claim]: "true" },
-  ])("rejects malformed assurance evidence %#", (claims) => {
-    expect(() => readOidcAssurance(claims, claim, now)).toThrow(IdentityError);
-  });
+  it.each([{ amr: "mfa" }, { amr: [1] }, { acr: 42 }, { auth_time: "now" }, { [claim]: "true" }])(
+    "rejects malformed assurance evidence %#",
+    (claims) => {
+      expect(() => readOidcAssurance(claims, claim, now)).toThrow(IdentityError);
+    },
+  );
 
   it("normalizes auth_time from the verified ID token", () => {
     const authenticatedAt = new Date(now.getTime() - 60_000);

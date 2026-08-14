@@ -3,10 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AuthenticationAssurancePolicy, Clock, IdentityProviderPort } from "@matchday/identity";
 import { buildApp } from "../../src/app.js";
 import { IdentityAssuranceRuntime } from "../../src/identity-assurance-runtime.js";
-import type {
-  AuthenticatedIdentityApiSession,
-  IdentityPersistenceUnitOfWork,
-} from "../../src/identity-runtime.js";
+import type { AuthenticatedIdentityApiSession, IdentityPersistenceUnitOfWork } from "../../src/identity-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];

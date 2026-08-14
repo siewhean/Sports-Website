@@ -61,12 +61,7 @@ export type AuthenticatedIdentityApiSession = Omit<IdentityApiSession, "sessionT
   sessionToken: string;
 };
 
-const replaceableSessionErrors = new Set([
-  "INVALID_SESSION",
-  "SESSION_REVOKED",
-  "SESSION_EXPIRED",
-  "ACCOUNT_INACTIVE",
-]);
+const replaceableSessionErrors = new Set(["INVALID_SESSION", "SESSION_REVOKED", "SESSION_EXPIRED", "ACCOUNT_INACTIVE"]);
 
 export class IdentityApiRuntime {
   readonly #clock: Clock;

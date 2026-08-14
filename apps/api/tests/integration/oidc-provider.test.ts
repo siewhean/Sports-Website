@@ -105,9 +105,7 @@ describe("OidcIdentityProvider", () => {
       callbackUri: "http://127.0.0.1:4000/api/v1/identity/callback",
       allowInsecureLoopback: true,
       ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
-      ...(assurance?.authorizationAcrValues
-        ? { authorizationAcrValues: assurance.authorizationAcrValues }
-        : {}),
+      ...(assurance?.authorizationAcrValues ? { authorizationAcrValues: assurance.authorizationAcrValues } : {}),
       ...(assurance?.maxAuthenticationAgeSeconds !== undefined
         ? { maxAuthenticationAgeSeconds: assurance.maxAuthenticationAgeSeconds }
         : {}),

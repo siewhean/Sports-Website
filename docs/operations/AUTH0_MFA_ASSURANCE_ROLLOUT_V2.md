@@ -52,15 +52,11 @@ const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
 
 exports.onExecutePostLogin = async (event, api) => {
   const requestedAcrs = event.transaction?.acr_values ?? [];
-  const matchdayRequestedMfa =
-    event.client?.client_id === MATCHDAY_CLIENT_ID && requestedAcrs.includes(MFA_ACR);
+  const matchdayRequestedMfa = event.client?.client_id === MATCHDAY_CLIENT_ID && requestedAcrs.includes(MFA_ACR);
 
   if (!matchdayRequestedMfa) return;
 
-  api.authentication.challengeWithAny([
-    { type: "webauthn-platform" },
-    { type: "webauthn-roaming" },
-  ]);
+  api.authentication.challengeWithAny([{ type: "webauthn-platform" }, { type: "webauthn-roaming" }]);
 };
 ```
 
@@ -77,10 +73,7 @@ const STRONG_FACTORS = new Set(["webauthn-platform", "webauthn-roaming"]);
 exports.onExecutePostLogin = async (event, api) => {
   const methods = event.authentication?.methods ?? [];
   const phishingResistant = methods.some(
-    (method) =>
-      method.name === "mfa" &&
-      typeof method.type === "string" &&
-      STRONG_FACTORS.has(method.type),
+    (method) => method.name === "mfa" && typeof method.type === "string" && STRONG_FACTORS.has(method.type),
   );
 
   api.idToken.setCustomClaim(CLAIM, phishingResistant);

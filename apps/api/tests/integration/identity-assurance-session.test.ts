@@ -160,11 +160,13 @@ describe("database-backed authentication assurance", () => {
     });
     expect(strongMe.statusCode, strongMe.body).toBe(200);
 
-    const assuranceRows = await sql.unsafe<{
-      assurance_level: string;
-      mfa_performed: boolean;
-      phishing_resistant: boolean;
-    }[]>(
+    const assuranceRows = await sql.unsafe<
+      {
+        assurance_level: string;
+        mfa_performed: boolean;
+        phishing_resistant: boolean;
+      }[]
+    >(
       `SELECT assurance_level, mfa_performed, phishing_resistant
        FROM identity_session_assurance WHERE session_id=$1`,
       [strongSessionId],

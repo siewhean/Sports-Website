@@ -23,7 +23,10 @@ export function readOidcAssurance(
   methods = [...new Set(methods)];
 
   const rawAcr = claims.acr;
-  if (rawAcr !== undefined && (typeof rawAcr !== "string" || rawAcr.length > 512 || /[\u0000-\u001f\u007f]/.test(rawAcr))) {
+  if (
+    rawAcr !== undefined &&
+    (typeof rawAcr !== "string" || rawAcr.length > 512 || /[\u0000-\u001f\u007f]/.test(rawAcr))
+  ) {
     invalid();
   }
   const acr = typeof rawAcr === "string" ? rawAcr : null;

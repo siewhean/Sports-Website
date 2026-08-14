@@ -104,9 +104,7 @@ export class OidcIdentityProvider implements IdentityProviderPort {
       nonce: request.nonce,
       code_challenge: request.pkceChallenge,
       code_challenge_method: "S256",
-      ...(this.#authorizationAcrValues.length > 0
-        ? { acr_values: this.#authorizationAcrValues.join(" ") }
-        : {}),
+      ...(this.#authorizationAcrValues.length > 0 ? { acr_values: this.#authorizationAcrValues.join(" ") } : {}),
       ...(this.#maxAuthenticationAgeSeconds !== undefined
         ? { max_age: String(this.#maxAuthenticationAgeSeconds) }
         : {}),
@@ -170,10 +168,7 @@ export class OidcIdentityProvider implements IdentityProviderPort {
         email,
         emailVerified,
         displayName,
-        assurance: readOidcAssurance(
-          claims as unknown as Readonly<Record<string, unknown>>,
-          this.#assuranceClaimName,
-        ),
+        assurance: readOidcAssurance(claims as unknown as Readonly<Record<string, unknown>>, this.#assuranceClaimName),
       };
     } catch (error) {
       if (error instanceof IdentityError) throw error;
