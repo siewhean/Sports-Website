@@ -7,6 +7,7 @@ CREATE TABLE identity_session_assurance (
   mfa_performed boolean NOT NULL,
   phishing_resistant boolean NOT NULL,
   CHECK (cardinality(authentication_methods) <= 16),
+  CHECK (mfa_performed = ('mfa' = ANY(authentication_methods))),
   CHECK (acr IS NULL OR char_length(acr) <= 512),
   CHECK (
     (assurance_level = 'single_factor' AND NOT mfa_performed AND NOT phishing_resistant)
