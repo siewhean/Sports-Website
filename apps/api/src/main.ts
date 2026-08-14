@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig, safeConfigSummary } from "@matchday/config";
+import { parseAuthenticationAssurancePolicy } from "@matchday/config/authentication-assurance";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
 import { Redis } from "ioredis";
 import postgres from "postgres";
@@ -13,19 +14,47 @@ import {
 import { buildApp } from "./app.js";
 import { startServer } from "./lifecycle.js";
 import { PostgresIdentityUnitOfWork } from "./identity-postgres.js";
-import { IdentityApiRuntime, UnavailableIdentityProvider } from "./identity-runtime.js";
+import { IdentityAssuranceRuntime } from "./identity-assurance-runtime.js";
+import { UnavailableIdentityProvider } from "./identity-runtime.js";
 import { createOidcIdentityProvider } from "./oidc-provider.js";
 import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 import { Phase2Runtime } from "./phase-2-runtime.js";
 import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
+import { verifiedScoringRateLimitSessionId } from "./scoring-rate-limit-identity.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { V1Phase3Runtime } from "./phase-3-v1-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
 import { V1Phase4Runtime } from "./phase-4-v1-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
+const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
+const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assuranceClaimName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname === "/") {
+    throw new Error("IDENTITY_OIDC_ASSURANCE_CLAIM must be a namespaced HTTPS URI");
+  }
+  return url.href;
+}
+
 const config = loadConfig();
+const deployedEnvironment = config.environment !== "local" && config.environment !== "test";
+if (deployedEnvironment && !process.env.IDENTITY_ASSURANCE_POLICY) {
+  throw new Error("IDENTITY_ASSURANCE_POLICY must be explicitly configured in deployed environments");
+}
+const assurancePolicy = parseAuthenticationAssurancePolicy(
+  process.env.IDENTITY_ASSURANCE_POLICY,
+  process.env.IDENTITY_ASSURANCE_MAX_AGE_SECONDS,
+);
+const oidcAssuranceClaim = assuranceClaimName(process.env.IDENTITY_OIDC_ASSURANCE_CLAIM);
+const authorizationAcrValues = assurancePolicy.minimum === "off" ? undefined : ([MFA_ACR] as const);
+const maxAuthenticationAgeSeconds =
+  assurancePolicy.maxAuthenticationAgeMs === undefined
+    ? undefined
+    : Math.floor(assurancePolicy.maxAuthenticationAgeMs / 1_000);
 const identityProvider = config.identity.oidc
   ? await createOidcIdentityProvider({
       issuer: config.identity.oidc.issuer,
@@ -33,6 +62,9 @@ const identityProvider = config.identity.oidc
       clientSecret: config.identity.oidc.clientSecret,
       callbackUri: config.identity.oidc.callbackUri,
       allowInsecureLoopback: config.environment === "local" || config.environment === "test",
+      ...(oidcAssuranceClaim ? { assuranceClaimName: oidcAssuranceClaim } : {}),
+      ...(authorizationAcrValues ? { authorizationAcrValues } : {}),
+      ...(maxAuthenticationAgeSeconds !== undefined ? { maxAuthenticationAgeSeconds } : {}),
     })
   : new UnavailableIdentityProvider();
 const telemetry = await startApiTelemetry(config);
@@ -43,11 +75,12 @@ const rateLimitRedis = new Redis(config.redisUrl, {
 });
 const postgresClient = postgres(config.databaseUrl, { max: 10, onnotice: () => undefined });
 const identitySql = postgresClient as unknown as PostgresJsSql;
-const identityRuntime = new IdentityApiRuntime(
+const identityRuntime = new IdentityAssuranceRuntime(
   identityProvider,
   new PostgresIdentityUnitOfWork(identitySql),
   config.identity.csrfHmacSecret,
   systemClock,
+  assurancePolicy,
 );
 const phase2Runtime = new Phase2Runtime(
   identitySql,
@@ -88,6 +121,13 @@ const app = await buildApp({
   config,
   probes: createDependencyProbes(config),
   rateLimitRedis,
+  resolveVerifiedScoringRateLimitSessionId: async (request) => {
+    const sessionId = request.headers["x-scoring-session-id"];
+    const sessionToken = request.headers["x-scoring-session-token"];
+    if (typeof sessionId !== "string" || typeof sessionToken !== "string") return null;
+    if (!canonicalUuidPattern.test(sessionId) || sessionToken.length < 32 || sessionToken.length > 256) return null;
+    return verifiedScoringRateLimitSessionId(identitySql, sessionId, sessionToken);
+  },
   telemetry,
   identityRuntime,
   phase2Runtime,
@@ -126,7 +166,17 @@ try {
     onCloseError: (error) => app.log.error({ err: error }, "api cleanup failed"),
     onListenError: (error) => app.log.fatal({ err: error }, "api failed to start"),
   });
-  app.log.info({ config: safeConfigSummary(config) }, "api started");
+  app.log.info(
+    {
+      config: safeConfigSummary(config),
+      authentication_assurance: {
+        minimum: assurancePolicy.minimum,
+        max_authentication_age_seconds: maxAuthenticationAgeSeconds ?? null,
+        oidc_assurance_claim_configured: Boolean(oidcAssuranceClaim),
+      },
+    },
+    "api started",
+  );
 } catch {
   process.exitCode = 1;
 }

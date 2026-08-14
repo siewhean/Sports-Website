@@ -2,10 +2,10 @@ import {
   PostgresAccountRepository,
   PostgresAuditRepository,
   PostgresJsQueryAdapter,
-  PostgresSessionRepository,
   type PostgresJsSql,
 } from "@matchday/identity";
 import type { IdentityPersistencePorts, IdentityPersistenceUnitOfWork } from "./identity-runtime.js";
+import { PostgresAssuranceSessionRepository } from "./identity-assurance-session-repository.js";
 
 export class PostgresIdentityUnitOfWork implements IdentityPersistenceUnitOfWork {
   constructor(private readonly sql: PostgresJsSql) {}
@@ -15,7 +15,7 @@ export class PostgresIdentityUnitOfWork implements IdentityPersistenceUnitOfWork
     return this.sql.begin(async (transaction) =>
       operation({
         accounts: new PostgresAccountRepository(transaction),
-        sessions: new PostgresSessionRepository(transaction),
+        sessions: new PostgresAssuranceSessionRepository(transaction),
         audit: new PostgresAuditRepository(new PostgresJsQueryAdapter(transaction)),
       }),
     );

@@ -1,9 +1,11 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { unauthenticatedAssurance } from "./assurance.js";
 import { IdentityError } from "./errors.js";
 import type {
   Account,
   AccountRepository,
   AuthenticatedSession,
+  AuthenticationAssurance,
   Clock,
   OpaqueTokenGenerator,
   SessionRecord,
@@ -68,11 +70,17 @@ export class SessionService {
 
   async issue(
     account: Account,
-    provider: { issuer: string; subject: string; providerSessionId: string | null } | null = null,
+    provider: {
+      issuer: string;
+      subject: string;
+      providerSessionId: string | null;
+      assurance?: AuthenticationAssurance;
+    } | null = null,
   ) {
     const now = this.clock.now();
     const id = this.tokens.sessionId();
     const secret = this.tokens.secret();
+    const assurance = provider?.assurance ?? { ...unauthenticatedAssurance, methods: [] };
     const session: SessionRecord = {
       id,
       accountId: account.id,
@@ -85,6 +93,7 @@ export class SessionService {
       providerIssuer: provider?.issuer ?? null,
       providerSubject: provider?.subject ?? null,
       providerSessionId: provider?.providerSessionId ?? null,
+      assurance,
     };
     await this.sessions.create(session);
     return {
@@ -92,6 +101,7 @@ export class SessionService {
       sessionId: id,
       idleExpiresAt: session.idleExpiresAt,
       absoluteExpiresAt: session.absoluteExpiresAt,
+      assurance,
     };
   }
 
@@ -119,7 +129,13 @@ export class SessionService {
     );
     const touched = await this.sessions.touch({ sessionId: session.id, lastSeenAt: now, idleExpiresAt });
     if (!touched) throw new IdentityError("SESSION_REVOKED", "The session has been revoked.");
-    return { account, sessionId: session.id, idleExpiresAt, absoluteExpiresAt: session.absoluteExpiresAt };
+    return {
+      account,
+      sessionId: session.id,
+      idleExpiresAt,
+      absoluteExpiresAt: session.absoluteExpiresAt,
+      assurance: session.assurance ?? { ...unauthenticatedAssurance, methods: [] },
+    };
   }
 
   async signOut(token: string): Promise<void> {

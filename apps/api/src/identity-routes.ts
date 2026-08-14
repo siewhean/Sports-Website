@@ -299,6 +299,7 @@ export async function registerIdentityRoutes(
         ) {
           throw new ApiError(401, "AUTHENTICATION_REQUIRED", "Authentication required");
         }
+        const previousSessionToken = parseCookie(request.headers.cookie, options.cookie.name);
         const session = await options.runtime.signIn(
           {
             authorizationCode: request.query.code,
@@ -309,6 +310,7 @@ export async function registerIdentityRoutes(
             expectedNonce: flow.nonce,
           },
           request.id,
+          previousSessionToken ?? undefined,
         );
         reply.header("Set-Cookie", [
           sessionCookie(options.cookie, session.sessionToken, session.absoluteExpiresAt),
@@ -436,6 +438,7 @@ export async function registerIdentityRoutes(
       async (request, reply) => {
         requireAllowedOrigin(request, options.allowedOrigins);
         requireAllowedRedirectUri(request.body.redirect_uri, options.allowedOrigins);
+        const previousSessionToken = parseCookie(request.headers.cookie, options.cookie.name);
         const session = await options.runtime.signIn(
           {
             authorizationCode: request.body.authorization_code,
@@ -443,6 +446,7 @@ export async function registerIdentityRoutes(
             pkceVerifier: request.body.pkce_verifier,
           },
           request.id,
+          previousSessionToken ?? undefined,
         );
         reply.header("Set-Cookie", sessionCookie(options.cookie, session.sessionToken, session.absoluteExpiresAt));
         return sessionPayload(session);
@@ -484,7 +488,7 @@ export async function registerIdentityRoutes(
       schema: {
         description: "Read the authenticated account profile and per-session CSRF token.",
         security: [{ sessionCookie: [] }],
-        response: { 200: authenticatedSessionSchema, 401: apiErrorSchema },
+        response: { 200: authenticatedSessionSchema, 401: apiErrorSchema, 403: apiErrorSchema },
         tags: ["identity"],
       },
     },
