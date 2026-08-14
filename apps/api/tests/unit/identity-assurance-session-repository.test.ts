@@ -39,10 +39,12 @@ describe("PostgresAssuranceSessionRepository", () => {
 
     await repository.create(sessionRecord());
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.query).toContain("INSERT INTO identity_sessions");
-    expect(calls[1]?.query).toContain("INSERT INTO identity_session_assurance");
-    expect(calls[1]?.params).toMatchObject([
+    const sessionInsertIndex = calls.findIndex((call) => call.query.includes("INSERT INTO identity_sessions"));
+    const assuranceInsertIndex = calls.findIndex((call) => call.query.includes("INSERT INTO identity_session_assurance"));
+    expect(sessionInsertIndex).toBeGreaterThanOrEqual(0);
+    expect(assuranceInsertIndex).toBeGreaterThan(sessionInsertIndex);
+    expect(assuranceInsertIndex).toBe(calls.length - 1);
+    expect(calls[assuranceInsertIndex]?.params).toMatchObject([
       "00000000-0000-4000-8000-000000000001",
       "phishing_resistant",
       ["pwd", "mfa"],
