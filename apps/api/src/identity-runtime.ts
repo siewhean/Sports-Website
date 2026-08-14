@@ -8,6 +8,7 @@ import {
   type Account,
   type AccountRepository,
   type AuditAppendPort,
+  type AuthenticationAssurance,
   type Clock,
   type IdentityProviderPort,
   type ProviderClaims,
@@ -53,11 +54,19 @@ export type IdentityApiSession = {
   csrfToken: string;
   idleExpiresAt: Date;
   absoluteExpiresAt: Date;
+  assurance: AuthenticationAssurance;
 };
 
 export type AuthenticatedIdentityApiSession = Omit<IdentityApiSession, "sessionToken"> & {
   sessionToken: string;
 };
+
+const replaceableSessionErrors = new Set([
+  "INVALID_SESSION",
+  "SESSION_REVOKED",
+  "SESSION_EXPIRED",
+  "ACCOUNT_INACTIVE",
+]);
 
 export class IdentityApiRuntime {
   readonly #clock: Clock;
@@ -88,7 +97,11 @@ export class IdentityApiRuntime {
     }
   }
 
-  async signIn(request: ProviderSignInRequest, requestId: string): Promise<IdentityApiSession> {
+  async signIn(
+    request: ProviderSignInRequest,
+    requestId: string,
+    previousSessionToken?: string,
+  ): Promise<IdentityApiSession> {
     let claims: ProviderClaims;
     try {
       claims = await this.#provider.exchangeAuthorizationCode(request);
@@ -98,9 +111,24 @@ export class IdentityApiRuntime {
     }
     return this.#unitOfWork.run(async (ports) => {
       const sessions = new SessionService(ports.sessions, ports.accounts, this.#clock);
+      let displacedSession: Awaited<ReturnType<SessionService["authenticate"]>> | null = null;
+      if (previousSessionToken) {
+        try {
+          displacedSession = await sessions.authenticate(previousSessionToken);
+        } catch (error) {
+          if (!(error instanceof IdentityError) || !replaceableSessionErrors.has(error.code)) throw error;
+        }
+      }
+
       const identity = new IdentityService(new FixedClaimsProvider(claims), ports.accounts, sessions, this.#clock);
       const result = await identity.signIn(request);
-      await new AuditWriter(ports.audit).write({
+
+      if (displacedSession && previousSessionToken) {
+        await sessions.signOut(previousSessionToken);
+      }
+
+      const audit = new AuditWriter(ports.audit);
+      await audit.write({
         requestId,
         actorAccountId: result.account.id,
         actorType: "account",
@@ -111,9 +139,25 @@ export class IdentityApiRuntime {
         reason: null,
         beforeState: null,
         afterState: { sessionId: result.sessionId },
-        metadata: { newAccount: result.isNewAccount },
+        metadata: { newAccount: result.isNewAccount, replacedBrowserSession: Boolean(displacedSession) },
         occurredAt: this.#clock.now(),
       });
+      if (displacedSession) {
+        await audit.write({
+          requestId,
+          actorAccountId: displacedSession.account.id,
+          actorType: "account",
+          organisationId: null,
+          action: "identity.session.revoked",
+          targetType: "identity_session",
+          targetId: displacedSession.sessionId,
+          reason: "session_replaced",
+          beforeState: { revoked: false },
+          afterState: { revoked: true },
+          metadata: { replacementSessionId: result.sessionId },
+          occurredAt: this.#clock.now(),
+        });
+      }
       return { ...result, csrfToken: this.deriveCsrfToken(result.sessionToken) };
     });
   }
