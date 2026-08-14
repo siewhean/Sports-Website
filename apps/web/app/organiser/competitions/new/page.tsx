@@ -13,10 +13,13 @@ export const metadata: Metadata = {
 
 export default async function CompetitionCreatePage() {
   const demo = demoFixturesEnabled();
-  const session = demo ? null : await readCurrentIdentitySession();
-  if (session?.status === "step_up_required") redirect("/sign-in?reason=step-up");
-  if (!demo && session?.status !== "authenticated") redirect("/sign-in");
-  const draftOwnerId = demo ? "demo-fixtures" : session!.identity.accountId;
+  let draftOwnerId = "demo-fixtures";
+  if (!demo) {
+    const session = await readCurrentIdentitySession();
+    if (session.status === "step_up_required") redirect("/sign-in?reason=step-up");
+    if (session.status !== "authenticated") redirect("/sign-in");
+    draftOwnerId = session.identity.accountId;
+  }
 
   return (
     <ProductionShell
