@@ -14,9 +14,11 @@ on:
       - "apps/api/src/oidc-*.ts"
       - "apps/api/src/scoring-rate-limit-identity.ts"
       - "apps/api/tests/integration/phase-2-routes.test.ts"
+      - "apps/api/tests/integration/rate-limit-redis.test.ts"
       - "apps/api/tests/**/*assurance*.test.ts"
       - "apps/api/tests/**/*oidc-provider*.test.ts"
       - "apps/api/tests/**/*session-replacement*.test.ts"
+      - "apps/api/tests/unit/scoring-rate-limit-identity.test.ts"
       - "apps/web/app/organiser/layout.tsx"
       - "apps/web/app/sign-in/page.tsx"
       - "packages/config/src/authentication-assurance.ts"
@@ -44,6 +46,15 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 20
@@ -84,10 +95,12 @@ jobs:
           apps/api/tests/integration/identity-assurance-session.test.ts
           apps/api/tests/integration/oidc-provider.test.ts
           apps/api/tests/integration/phase-2-routes.test.ts
+          apps/api/tests/integration/rate-limit-redis.test.ts
           apps/api/tests/unit/identity-assurance-request-context.test.ts
           apps/api/tests/unit/identity-assurance-session-repository.test.ts
           apps/api/tests/unit/identity-session-replacement.test.ts
           apps/api/tests/unit/oidc-assurance.test.ts
+          apps/api/tests/unit/scoring-rate-limit-identity.test.ts
           apps/web/app/organiser/layout.tsx
           apps/web/app/sign-in/page.tsx
           docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md
@@ -110,13 +123,14 @@ jobs:
         run: pnpm --filter @matchday/config exec vitest run tests/authentication-assurance.test.ts
       - name: Build API workspace dependency closure for focused tests
         run: pnpm --filter @matchday/api... build
-      - name: Run focused API assurance unit tests
+      - name: Run focused API security unit tests
         run: >-
           pnpm --filter @matchday/api exec vitest run
           tests/unit/oidc-assurance.test.ts
           tests/unit/identity-assurance-request-context.test.ts
           tests/unit/identity-session-replacement.test.ts
           tests/unit/identity-assurance-session-repository.test.ts
+          tests/unit/scoring-rate-limit-identity.test.ts
       - name: Check database migrations
         run: pnpm db:migrate:check
       - name: Run database-backed assurance integration tests
@@ -125,6 +139,8 @@ jobs:
           tests/integration/oidc-provider.test.ts
           tests/integration/identity-assurance-session.test.ts
           --no-file-parallelism
+      - name: Run Redis scoring rate-limit integration tests
+        run: pnpm --filter @matchday/api exec vitest run tests/integration/rate-limit-redis.test.ts --no-file-parallelism
       - name: Build API and web
         run: |
           pnpm --filter @matchday/api build
