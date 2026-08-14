@@ -32,6 +32,7 @@ import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import { registerPhase4Routes } from "./phase-4-routes.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
 import { registerPhase4SetupPatchRoutes } from "./phase-4-setup-patch-routes.js";
+import { anonymousRateLimitKey, scoringSessionRateLimitKey } from "./scoring-rate-limit-identity.js";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -102,7 +103,11 @@ export type BuildAppOptions = {
   rateLimitMax?: number;
   anonymousRateLimitMax?: number;
   authenticatedRateLimitMax?: number;
+  scoringSessionRateLimitMax?: number;
   resolveRateLimitAccountId?: (request: FastifyRequest) => Promise<string | null> | string | null;
+  resolveVerifiedScoringRateLimitSessionId?: (
+    request: FastifyRequest,
+  ) => Promise<string | null> | string | null;
   telemetry?: ApiTelemetry;
   loggerDestination?: Parameters<typeof createLogger>[1];
   identityRuntime?: IdentityApiRuntime;
@@ -251,18 +256,38 @@ export async function buildApp(options: BuildAppOptions) {
     global: true,
     hook: "preHandler",
     keyGenerator: async (request) => {
-      // A pre-authentication limiter must use only trusted server-derived identity.
-      // In particular, x-scoring-session-id is attacker-controlled until the scoring
-      // session is authenticated by the route and must never select a fresh bucket.
       const accountId = options.resolveRateLimitAccountId
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);
-      return accountId ? `account:${accountId}` : `ip:${request.ip}`;
+      if (accountId) return `account:${accountId}`;
+
+      if (requestRoute(request).startsWith("/api/v1/scoring/") && options.resolveVerifiedScoringRateLimitSessionId) {
+        const scoringSessionId = await options.resolveVerifiedScoringRateLimitSessionId(request);
+        if (scoringSessionId) {
+          return scoringSessionRateLimitKey(
+            scoringSessionId,
+            request.ip,
+            options.config.scoringAccess.rateLimitHmacSecret,
+          );
+        }
+      }
+
+      return anonymousRateLimitKey(request.ip, options.config.scoringAccess.rateLimitHmacSecret);
     },
-    max: async (_request, key) =>
-      key.startsWith("account:")
-        ? (options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000)
-        : (options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100),
+    max: async (_request, key) => {
+      if (key.startsWith("account:")) {
+        return options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000;
+      }
+      if (key.startsWith("scoring-session:")) {
+        return (
+          options.scoringSessionRateLimitMax ??
+          options.authenticatedRateLimitMax ??
+          options.rateLimitMax ??
+          1_000
+        );
+      }
+      return options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100;
+    },
     ...(options.rateLimitRedis ? { redis: options.rateLimitRedis } : {}),
     ...(options.rateLimitNameSpace ? { nameSpace: options.rateLimitNameSpace } : {}),
     timeWindow: "1 minute",
