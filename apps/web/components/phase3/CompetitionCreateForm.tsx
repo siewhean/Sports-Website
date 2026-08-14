@@ -14,6 +14,7 @@ import {
   type CompetitionCreateField,
   type CompetitionOrganisationOption,
 } from "@/lib/phase3-competition-create";
+import { useCompetitionCreateDraft } from "@/lib/phase3-competition-draft.client";
 import styles from "./CompetitionCreateForm.module.css";
 
 const initialDraft = (): CompetitionCreateDraft => ({
@@ -46,9 +47,9 @@ function upstreamMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-export function CompetitionCreateForm() {
+export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }) {
   const router = useRouter();
-  const [draft, setDraft] = useState(initialDraft);
+  const { draft, setDraft, clearDraft } = useCompetitionCreateDraft(draftOwnerId, initialDraft);
   const [organisations, setOrganisations] = useState<CompetitionOrganisationOption[]>([]);
   const [organisationsLoading, setOrganisationsLoading] = useState(true);
   const [organisationsError, setOrganisationsError] = useState("");
@@ -96,7 +97,7 @@ export function CompetitionCreateForm() {
       }
     })();
     return () => controller.abort();
-  }, [organisationLoadAttempt]);
+  }, [organisationLoadAttempt, setDraft]);
 
   function update(field: CompetitionCreateField, value: string) {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -170,6 +171,7 @@ export function CompetitionCreateForm() {
         requestAnimationFrame(() => errorRef.current?.focus());
         return;
       }
+      clearDraft();
       setAnnouncement(messages.organiserCreate.created);
       router.push(`/organiser/competitions/${encodeURIComponent(receipt.id)}/setup`);
     } catch {
