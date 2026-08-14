@@ -108,6 +108,8 @@ jobs:
         run: pnpm --filter @matchday/identity test:unit
       - name: Run config assurance tests
         run: pnpm --filter @matchday/config exec vitest run tests/authentication-assurance.test.ts
+      - name: Build API workspace dependency closure for focused tests
+        run: pnpm --filter @matchday/api... build
       - name: Run focused API assurance unit tests
         run: >-
           pnpm --filter @matchday/api exec vitest run
