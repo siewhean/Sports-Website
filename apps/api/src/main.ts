@@ -47,11 +47,6 @@ const assurancePolicy = parseAuthenticationAssurancePolicy(
   process.env.IDENTITY_ASSURANCE_POLICY,
   process.env.IDENTITY_ASSURANCE_MAX_AGE_SECONDS,
 );
-if (assurancePolicy.minimum !== "off") {
-  throw new Error(
-    "Authentication-assurance enforcement cannot be enabled until the organiser route gate has passed integration testing",
-  );
-}
 const oidcAssuranceClaim = assuranceClaimName(process.env.IDENTITY_OIDC_ASSURANCE_CLAIM);
 const authorizationAcrValues = assurancePolicy.minimum === "off" ? undefined : ([MFA_ACR] as const);
 const maxAuthenticationAgeSeconds =
