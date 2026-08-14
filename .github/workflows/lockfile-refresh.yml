@@ -1,0 +1,35 @@
+name: Lockfile Refresh
+
+on:
+  pull_request:
+    branches:
+      - v1/simple-working-product
+    paths:
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/lockfile-refresh.yml
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
+      - name: Generate lockfile from committed manifests
+        run: pnpm install --lockfile-only --no-frozen-lockfile
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: patched-pnpm-lock
+          path: pnpm-lock.yaml
+          if-no-files-found: error
