@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
 import { CompetitionCreateForm } from "@/components/phase3/CompetitionCreateForm";
-import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+import { demoCompetitionDraftOwnerId, demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export const metadata: Metadata = {
@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 
 export default async function CompetitionCreatePage() {
   const demo = demoFixturesEnabled();
-  let draftOwnerId = "demo-fixtures";
+  let draftOwnerId = demoCompetitionDraftOwnerId;
   if (!demo) {
     const session = await readCurrentIdentitySession();
     if (session.status === "step_up_required") redirect("/sign-in?reason=step-up");
