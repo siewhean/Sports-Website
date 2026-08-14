@@ -12,7 +12,10 @@ if (!Number.isSafeInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535) {
   throw new Error("HTTPS_PROXY_PORT must be an unprivileged TCP port");
 }
 
-const key = execFileSync("openssl", ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"], {
+// This certificate exists only for the isolated Playwright HTTPS proxy. Use a
+// P-256 key so hosted runners can bind the proxy well within the harness's
+// startup grace period instead of racing on RSA key generation.
+const key = execFileSync("openssl", ["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"], {
   stdio: ["ignore", "pipe", "ignore"],
 });
 const certificate = execFileSync(
