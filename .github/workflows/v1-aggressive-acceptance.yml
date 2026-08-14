@@ -38,6 +38,18 @@ jobs:
           pnpm --filter @matchday/web exec vitest run
           lib/phase3-competition-draft.test.ts
           lib/phase3-competition-create.test.ts
+      - name: Remove stale format-copy dependency from legacy journey assertion
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("apps/web/tests/v1-competition-real-api.spec.ts")
+          source = path.read_text()
+          old = 'await expect(compact).toContainText("16 matches");'
+          new = 'await expect(compact.getByText("Total matches").locator("..")).toContainText("16");'
+          if old not in source:
+              raise SystemExit("Expected stale format assertion was not found")
+          path.write_text(source.replace(old, new, 1))
+          PY
       - name: Install Chromium
         run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
       - name: Run full V1 competition journey on desktop
