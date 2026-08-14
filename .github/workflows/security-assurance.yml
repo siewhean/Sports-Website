@@ -1,6 +1,7 @@
 name: Security Assurance
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - v1/simple-working-product
