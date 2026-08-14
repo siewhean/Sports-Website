@@ -7,6 +7,7 @@ on:
       - v1/simple-working-product
     paths:
       - ".github/workflows/security-assurance.yml"
+      - "render.yaml"
       - "package.json"
       - "pnpm-lock.yaml"
       - "apps/api/src/app.ts"
@@ -81,6 +82,7 @@ jobs:
       - name: Check security-slice formatting
         run: >-
           pnpm exec prettier --check
+          render.yaml
           apps/api/src/app.ts
           apps/api/src/identity-assurance-request-context.ts
           apps/api/src/identity-assurance-runtime.ts
@@ -133,6 +135,10 @@ jobs:
           tests/unit/scoring-rate-limit-identity.test.ts
       - name: Check database migrations
         run: pnpm db:migrate:check
+      - name: Prove deployment migration command is idempotent
+        run: |
+          pnpm --filter @matchday/database db:migrate
+          pnpm --filter @matchday/database db:migrate
       - name: Run database-backed assurance integration tests
         run: >-
           pnpm --filter @matchday/api exec vitest run

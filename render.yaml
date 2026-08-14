@@ -6,7 +6,9 @@ services:
     branch: v1/simple-working-product
     autoDeployTrigger: commit
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @matchday/api... build
-    startCommand: API_PORT=$PORT pnpm --filter @matchday/api start
+    # Migrations are checksum-verified, transactional, idempotent, and protected by a PostgreSQL
+    # advisory lock. Fail the deployment before serving traffic if the required schema cannot advance.
+    startCommand: pnpm --filter @matchday/database db:migrate && API_PORT=$PORT pnpm --filter @matchday/api start
     healthCheckPath: /health/ready
     maxShutdownDelaySeconds: 60
     envVars:
