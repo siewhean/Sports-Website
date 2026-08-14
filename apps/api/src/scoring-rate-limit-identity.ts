@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 
 function secretHash(value: string): Buffer {
@@ -7,6 +7,17 @@ function secretHash(value: string): Buffer {
 
 function equalHash(left: Buffer, right: Buffer): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function rateLimitFingerprint(secret: string, value: string): string {
+  return createHmac("sha256", secret).update(value, "utf8").digest("hex");
+}
+
+export function scoringSessionRateLimitKey(sessionId: string, clientIp: string, hmacSecret: string): string {
+  return `scoring-session:${rateLimitFingerprint(hmacSecret, `session:${sessionId}`)}:ip:${rateLimitFingerprint(
+    hmacSecret,
+    `ip:${clientIp}`,
+  )}`;
 }
 
 /**
