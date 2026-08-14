@@ -105,6 +105,19 @@ const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const supportedSports = new Set<Phase3CompetitionSport>(phase3CompetitionSports.map(({ code }) => code));
 
+// Derives a slug candidate from a competition name. Always satisfies
+// slugPattern above (lowercase, digits, single hyphens between groups, no
+// leading/trailing hyphen), so callers never need to re-validate the result.
+export function slugifyCompetitionName(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

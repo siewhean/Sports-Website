@@ -11,6 +11,7 @@ import {
   phase3CompetitionCreateMachine,
   phase3CompetitionSports,
   phase3TimeZones,
+  slugifyCompetitionName,
   type CompetitionCreateDraft,
   type CompetitionCreateField,
   type CompetitionOrganisationOption,
@@ -62,6 +63,7 @@ export function CompetitionCreateForm() {
   const formRef = useRef<HTMLFormElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
+  const slugEditedRef = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -101,8 +103,18 @@ export function CompetitionCreateForm() {
   }, [organisationLoadAttempt]);
 
   function update(field: CompetitionCreateField, value: string) {
-    setDraft((current) => ({ ...current, [field]: value }));
-    setFieldErrors((current) => ({ ...current, [field]: undefined }));
+    if (field === phase3CompetitionCreateMachine.fields.slug) slugEditedRef.current = true;
+    const derivingSlug = field === phase3CompetitionCreateMachine.fields.name && !slugEditedRef.current;
+    setDraft((current) => ({
+      ...current,
+      [field]: value,
+      ...(derivingSlug ? { slug: slugifyCompetitionName(value) } : {}),
+    }));
+    setFieldErrors((current) => ({
+      ...current,
+      [field]: undefined,
+      ...(derivingSlug ? { [phase3CompetitionCreateMachine.fields.slug]: undefined } : {}),
+    }));
     setCommandError("");
     setAnnouncement("");
   }

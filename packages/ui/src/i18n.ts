@@ -102,7 +102,7 @@ export const messages = {
     organiserRole: "Organiser",
     name: "Competition name",
     slug: "Public address",
-    slugHint: "Use lowercase letters, numbers and hyphens.",
+    slugHint: "Filled in from the competition name. Edit it any time, lowercase letters, numbers and hyphens only.",
     sport: "Sport",
     chooseSport: "Choose a sport",
     sports: {

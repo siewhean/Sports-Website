@@ -7,6 +7,7 @@ import {
   parseCompetitionOrganisationBootstrapReceipt,
   parseCompetitionOrganisationOptions,
   phase3CompetitionSports,
+  slugifyCompetitionName,
   type CompetitionCreateDraft,
 } from "./phase3-competition-create";
 
@@ -104,5 +105,15 @@ describe("competition creation contract", () => {
     expect(parseCompetitionOrganisationBootstrapReceipt(receipt)).toEqual(receipt);
     expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, extra: true })).toBeNull();
     expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, created: "true" })).toBeNull();
+  });
+
+  it("derives a slug that the field's own validation always accepts", () => {
+    expect(slugifyCompetitionName("National Open 2027!")).toBe("national-open-2027");
+    expect(slugifyCompetitionName("Café  de Paris")).toBe("cafe-de-paris");
+    expect(slugifyCompetitionName("  --Leading and trailing--  ")).toBe("leading-and-trailing");
+    expect(slugifyCompetitionName("a".repeat(200))).toHaveLength(120);
+    expect(isCompetitionCreateRequest({ ...validCommand, slug: slugifyCompetitionName("New Zealand Masters") })).toBe(
+      true,
+    );
   });
 });
