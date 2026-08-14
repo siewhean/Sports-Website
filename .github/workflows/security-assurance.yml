@@ -11,6 +11,8 @@ on:
       - "apps/api/src/app.ts"
       - "apps/api/src/identity-*.ts"
       - "apps/api/src/oidc-*.ts"
+      - "apps/api/src/scoring-rate-limit-identity.ts"
+      - "apps/api/tests/integration/phase-2-routes.test.ts"
       - "apps/api/tests/**/*assurance*.test.ts"
       - "apps/api/tests/**/*oidc-provider*.test.ts"
       - "apps/api/tests/**/*session-replacement*.test.ts"
@@ -77,8 +79,10 @@ jobs:
           apps/api/src/main.ts
           apps/api/src/oidc-assurance.ts
           apps/api/src/oidc-provider.ts
+          apps/api/src/scoring-rate-limit-identity.ts
           apps/api/tests/integration/identity-assurance-session.test.ts
           apps/api/tests/integration/oidc-provider.test.ts
+          apps/api/tests/integration/phase-2-routes.test.ts
           apps/api/tests/unit/identity-assurance-request-context.test.ts
           apps/api/tests/unit/identity-assurance-session-repository.test.ts
           apps/api/tests/unit/identity-session-replacement.test.ts
