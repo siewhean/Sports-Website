@@ -68,16 +68,24 @@ export const messages = {
   },
   organiser: {
     title: "Competition control",
-    subtitle: "Singapore Open · 12–14 September 2026",
+    subtitle: "Create, prepare and run one competition at a time.",
     navLabel: "Organiser workspace",
     sections: ["Overview", "Entries", "Format", "Schedule", "Operations", "Publish"],
-    liveStatus: "Draft schedule",
-    summaryTitle: "Today’s operational picture",
-    summaryBody: "Resolve the two schedule warnings before publishing revision 4.",
+    liveStatus: "Workspace ready",
+    summaryTitle: "Start with the competition, not the spreadsheet.",
+    summaryBody:
+      "Create the event first. Then add entries, confirm capacity and publish a schedule your officials can trust.",
     nextAction: "Review schedule warnings",
     createCompetition: "Create competition",
     fixturesTitle: "Upcoming fixtures",
     fixturesEmpty: "Fixtures will appear after the schedule is generated.",
+    startTitle: "A clear path from first entry to published result.",
+    startSteps: [
+      "Create the competition",
+      "Add teams and playing capacity",
+      "Choose a format and publish the schedule",
+    ],
+    currentStep: "Current step",
   },
   organiserCreate: {
     title: "Create competition",
@@ -126,6 +134,14 @@ export const messages = {
     accessAction: "Open match access",
     status: "Ready for match assignment",
     offlineReady: "Offline event queue ready",
+    accessGuide:
+      "Use the match link or access code issued by an organiser. Your score sheet opens only for the fixture you are assigned.",
+    accessSteps: [
+      "Open the assigned match",
+      "Confirm the scorer and fixture",
+      "Record events with a complete audit trail",
+    ],
+    currentStep: "Current step",
   },
   public: {
     title: "Singapore Open 2026",

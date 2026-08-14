@@ -22,7 +22,9 @@
 .eyebrow {
   margin: 0;
   color: var(--format-muted);
-  font: 650 0.68rem/1.2 var(--font-geist-mono), monospace;
+  font:
+    650 0.68rem/1.2 var(--font-geist-mono),
+    monospace;
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
@@ -221,7 +223,9 @@
 .optionIndex {
   margin: 0 0 0.35rem;
   color: var(--format-muted);
-  font: 650 0.65rem/1.2 var(--font-geist-mono), monospace;
+  font:
+    650 0.65rem/1.2 var(--font-geist-mono),
+    monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -265,7 +269,9 @@
 
 .metrics dd {
   margin: 0.3rem 0 0;
-  font: 650 0.9rem/1.2 var(--font-geist-mono), monospace;
+  font:
+    650 0.9rem/1.2 var(--font-geist-mono),
+    monospace;
   font-variant-numeric: tabular-nums;
 }
 

@@ -54,6 +54,7 @@ const scoreControlsCopy: FiveSportScoreControlsCopy = {
   manualTimeOnlyNotice: phase2Copy.manualTimeOnly,
   readOnlyNotice: phase2Copy.scoreControlsReadOnly,
   pendingNotice: phase2Copy.scoreControlsPending,
+  secondaryActionsLabel: phase2Copy.moreMatchActions,
   groupLabels: {
     score: phase2Copy.scoreGroup,
     segment_completion: phase2Copy.segmentGroup,

@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
-import { CalendarDots, WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, CalendarDots, CheckCircle, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
 import { ActionLink, InlineNotice, StatusLine } from "@/components/foundation/Primitives";
-import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 export const metadata: Metadata = {
   title: messages.organiser.title,
@@ -22,14 +21,26 @@ export default function OrganiserPage() {
         <p>{messages.organiser.summaryBody}</p>
         <h2 id="organiser-summary">{messages.organiser.summaryTitle}</h2>
         <ActionLink href="/organiser/competitions/new">{messages.organiser.createCompetition}</ActionLink>
-        {demoFixturesEnabled() ? <ActionLink href="/format">{messages.organiser.nextAction}</ActionLink> : null}
       </section>
       <div className="operational-divider" />
-      <section className="operational-list" aria-labelledby="fixtures-title">
-        <div>
+      <section className="operational-start" aria-labelledby="start-title">
+        <div className="operational-start__heading">
           <CalendarDots aria-hidden="true" />
-          <h2 id="fixtures-title">{messages.organiser.fixturesTitle}</h2>
+          <h2 id="start-title">{messages.organiser.startTitle}</h2>
         </div>
+        <ol>
+          {messages.organiser.startSteps.map((step, index) => (
+            <li key={step}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <p>{step}</p>
+              {index === 0 ? (
+                <CheckCircle weight="fill" aria-label={messages.organiser.currentStep} />
+              ) : (
+                <ArrowRight aria-hidden="true" />
+              )}
+            </li>
+          ))}
+        </ol>
         <InlineNotice title={messages.organiser.fixturesEmpty}>
           <WarningCircle aria-hidden="true" /> {messages.organiser.fixturesEmpty}
         </InlineNotice>
