@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { opaqueId, translate as t } from "@matchday/ui";
+import { opaqueId, translate as t, type PrototypeMessageId } from "@matchday/ui";
 import {
   ArrowRight,
   CalendarDots,
@@ -23,6 +23,18 @@ import {
 import { SurfaceStatePanel } from "./SurfaceState";
 import { AccessPassManager } from "@/components/phase5/AccessPassManager";
 
+// Named aliases for a handful of packages/ui/src/translate.ts catalogue ids
+// used below. The catalogue keeps its own hash-style ids (it may be synced
+// from an external string source), this map just gives the call sites in
+// this file something readable to point at instead of an opaque hash.
+const workspaceCopyIds = {
+  entriesTitle: "prototype.10beee7f51f8",
+  entriesIntro: "prototype.2a3b50533f9f",
+  formatTitle: "prototype.675eeee2578b",
+  formatIntro: "prototype.db67c10aa708",
+  scheduleIntro: "prototype.e94338d24608",
+} as const satisfies Record<string, PrototypeMessageId>;
+
 function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
   const shared: Record<OrganiserSection, { title: string; intro: string }> = {
     "control-room": { title: phase2Copy.controlTitle, intro: phase2Copy.controlIntro },
@@ -32,17 +44,17 @@ function sectionMeta(competition: CompetitionView, section: OrganiserSection): {
       intro: `Review the pinned ${competition.sport} pack and customise the settings used by this competition.`,
     },
     entries: {
-      title: t("prototype.10beee7f51f8"),
-      intro: t("prototype.2a3b50533f9f"),
+      title: t(workspaceCopyIds.entriesTitle),
+      intro: t(workspaceCopyIds.entriesIntro),
     },
     capacity: { title: phase2Copy.capacityTitle, intro: phase2Copy.capacityIntro },
     format: {
-      title: t("prototype.675eeee2578b"),
-      intro: t("prototype.db67c10aa708"),
+      title: t(workspaceCopyIds.formatTitle),
+      intro: t(workspaceCopyIds.formatIntro),
     },
     schedule: {
       title: phase2Copy.scheduleTitle,
-      intro: t("prototype.e94338d24608"),
+      intro: t(workspaceCopyIds.scheduleIntro),
     },
     results: { title: phase2Copy.resultsTitle, intro: phase2Copy.resultsIntro },
     publish: { title: phase2Copy.publishTitle, intro: phase2Copy.publishIntro },
@@ -391,7 +403,7 @@ function Format({ competition }: { competition: CompetitionView }) {
     );
   }
   return (
-    <section className="p2-format" aria-label={t("prototype.675eeee2578b")}>
+    <section className="p2-format" aria-label={t(workspaceCopyIds.formatTitle)}>
       <div className="p2-groups">
         <Stage title={phase2Copy.groupA} meta={phase2Copy.fourTeamsSixMatches} />
         <Stage title={phase2Copy.groupB} meta={phase2Copy.fourTeamsSixMatches} />
