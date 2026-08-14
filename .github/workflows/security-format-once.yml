@@ -1,0 +1,72 @@
+name: Security Format Once
+
+on:
+  pull_request:
+    branches:
+      - v1/simple-working-product
+    paths:
+      - .github/workflows/security-format-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format-security-slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format only security-owned files
+        run: >-
+          pnpm exec prettier --write
+          apps/api/src/identity-runtime.ts
+          apps/api/src/oidc-assurance.ts
+          apps/api/src/oidc-provider.ts
+          apps/api/tests/integration/identity-assurance-session.test.ts
+          apps/api/tests/integration/oidc-provider.test.ts
+          apps/api/tests/unit/identity-assurance-request-context.test.ts
+          apps/api/tests/unit/oidc-assurance.test.ts
+          apps/web/app/sign-in/page.tsx
+          docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md
+          packages/identity/src/assurance.ts
+      - name: Commit only security formatting
+        run: |
+          if git diff --quiet -- \
+            apps/api/src/identity-runtime.ts \
+            apps/api/src/oidc-assurance.ts \
+            apps/api/src/oidc-provider.ts \
+            apps/api/tests/integration/identity-assurance-session.test.ts \
+            apps/api/tests/integration/oidc-provider.test.ts \
+            apps/api/tests/unit/identity-assurance-request-context.test.ts \
+            apps/api/tests/unit/oidc-assurance.test.ts \
+            apps/web/app/sign-in/page.tsx \
+            docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md \
+            packages/identity/src/assurance.ts; then
+            echo "Security slice already formatted."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/api/src/identity-runtime.ts \
+            apps/api/src/oidc-assurance.ts \
+            apps/api/src/oidc-provider.ts \
+            apps/api/tests/integration/identity-assurance-session.test.ts \
+            apps/api/tests/integration/oidc-provider.test.ts \
+            apps/api/tests/unit/identity-assurance-request-context.test.ts \
+            apps/api/tests/unit/oidc-assurance.test.ts \
+            apps/web/app/sign-in/page.tsx \
+            docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md \
+            packages/identity/src/assurance.ts
+          git commit -m "style(security): format assurance slice"
+          git push origin HEAD:${GITHUB_HEAD_REF}
