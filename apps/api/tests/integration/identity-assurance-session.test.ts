@@ -108,7 +108,7 @@ describe("database-backed authentication assurance", () => {
     const app = await buildApp({ config, probes: healthyProbes, identityRuntime: strictRuntime });
     apps.push(app);
 
-    provider.claims.assurance = undefined;
+    delete provider.claims.assurance;
     const low = await signIn(app);
     const lowMe = await app.inject({ method: "GET", url: "/api/v1/identity/me", headers: { cookie: low.cookie } });
     expect(lowMe.statusCode).toBe(403);
