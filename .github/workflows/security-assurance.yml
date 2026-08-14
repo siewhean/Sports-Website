@@ -88,7 +88,6 @@ jobs:
           docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md
           packages/config/src/authentication-assurance.ts
           packages/config/tests/authentication-assurance.test.ts
-          packages/database/migrations/0035_identity_authentication_assurance.sql
           packages/identity/src/assurance.ts
           packages/identity/src/identity.ts
           packages/identity/src/session.ts
