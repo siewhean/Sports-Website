@@ -1,0 +1,77 @@
+name: V1 Aggressive Acceptance
+
+on:
+  push:
+    branches:
+      - qa/v1-aggressive-acceptance-20260814
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: matchday
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      LOG_LEVEL: silent
+      RUN_INFRA_TESTS: 1
+      MATCHDAY_PHASE2_DATA_MODE: api
+      PHASE4_E2E_RUNS: 1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@10.33.0
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies
+        run: pnpm dependencies:audit
+      - name: Verify migrations
+        run: pnpm db:migrate:check
+      - name: Run competition draft unit regression
+        run: >-
+          pnpm --filter @matchday/web exec vitest run
+          lib/phase3-competition-draft.test.ts
+          lib/phase3-competition-create.test.ts
+      - name: Install Chromium and WebKit
+        run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
+      - name: Run full V1 competition journey on phone tablet and desktop
+        run: pnpm test:e2e:v1:competition:real
+      - name: Run V1 setup schedule move journey on phone tablet and desktop
+        run: pnpm test:e2e:v1:real
+      - name: Final API and web builds
+        run: |
+          pnpm --filter @matchday/api build
+          pnpm --filter @matchday/web build
