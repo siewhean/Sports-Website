@@ -1,9 +1,10 @@
 import { createHmac, randomUUID } from "node:crypto";
 import type { ScoringSessionState } from "@matchday/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildApp, scoringSessionRateLimitKey } from "../../src/app.js";
+import { buildApp } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { ScoringAccessRejectedError, type Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { scoringSessionRateLimitKey } from "../../src/scoring-rate-limit-identity.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
