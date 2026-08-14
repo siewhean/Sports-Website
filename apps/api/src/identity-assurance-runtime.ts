@@ -1,7 +1,6 @@
 import {
   IdentityError,
   requireAuthenticationAssurance,
-  type AuthenticationAssurance,
   type AuthenticationAssurancePolicy,
   type Clock,
   type IdentityProviderPort,
@@ -12,10 +11,6 @@ import {
   type AuthenticatedIdentityApiSession,
   type IdentityPersistenceUnitOfWork,
 } from "./identity-runtime.js";
-
-export type AssuranceAwareSession = AuthenticatedIdentityApiSession & {
-  assurance: AuthenticationAssurance;
-};
 
 export class IdentityAssuranceRuntime extends IdentityApiRuntime {
   constructor(
@@ -34,12 +29,8 @@ export class IdentityAssuranceRuntime extends IdentityApiRuntime {
 
   require(session: AuthenticatedIdentityApiSession, policy: AuthenticationAssurancePolicy): void {
     if (policy.minimum === "off") return;
-    const assurance = (session as AssuranceAwareSession).assurance;
-    if (!assurance) {
-      throw new ApiError(403, "STEP_UP_REQUIRED", "Stronger authentication is required");
-    }
     try {
-      requireAuthenticationAssurance(assurance, policy, this.assuranceClock.now());
+      requireAuthenticationAssurance(session.assurance, policy, this.assuranceClock.now());
     } catch (error) {
       if (error instanceof IdentityError && error.code === "AUTHENTICATION_ASSURANCE_REQUIRED") {
         throw new ApiError(403, "STEP_UP_REQUIRED", "Stronger authentication is required");
