@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Phase4SetupDocument } from "@matchday/contracts";
-import { v1FormatReadiness } from "./v1-format-readiness";
+import { v1CanonicalFormatReadiness, v1FormatReadiness } from "./v1-format-readiness";
 
 function setupWith(values: Partial<Phase4SetupDocument["values"]>): Phase4SetupDocument {
   return {
@@ -114,5 +114,47 @@ describe("v1FormatReadiness", () => {
       }),
     );
     expect(readiness.ready).toBe(true);
+  });
+
+  it("uses the direct V1 entries and capacity state when no Assisted Setup draft exists", () => {
+    const readiness = v1CanonicalFormatReadiness({
+      divisions: [
+        {
+          entries: [
+            { status: "active" },
+            { status: "confirmed" },
+            { status: "removed" },
+          ],
+        },
+      ],
+      capacity: { areaCount: 1, availableMatchSlots: 16 },
+    });
+
+    expect(readiness.ready).toBe(true);
+    expect(readiness.prerequisites).toEqual([
+      {
+        id: "entries",
+        label: "Entries",
+        detail: "2 entries are ready across 1 division.",
+        ready: true,
+      },
+      {
+        id: "capacity",
+        label: "Capacity",
+        detail: "16 match slots are available.",
+        ready: true,
+      },
+    ]);
+  });
+
+  it("keeps direct V1 readiness blocked if a canonical division has fewer than two active entries", () => {
+    const readiness = v1CanonicalFormatReadiness({
+      divisions: [{ entries: [{ status: "active" }, { status: "confirmed" }] }, { entries: [{ status: "active" }] }],
+      capacity: { areaCount: 1, availableMatchSlots: 16 },
+    });
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.prerequisites.find((item) => item.id === "entries")?.ready).toBe(false);
+    expect(readiness.prerequisites.find((item) => item.id === "capacity")?.ready).toBe(true);
   });
 });
