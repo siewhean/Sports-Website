@@ -7,7 +7,17 @@ const productionRoutes = [
   { href: "/official", label: messages.navigation.official },
 ];
 
-export function SiteHeader({ inverse = false }: { inverse?: boolean }) {
+type SiteHeaderViewer = Readonly<{
+  displayName: string;
+}>;
+
+export function SiteHeader({
+  inverse = false,
+  viewer = null,
+}: {
+  inverse?: boolean;
+  viewer?: SiteHeaderViewer | null;
+}) {
   return (
     <header className={`site-header${inverse ? " site-header--inverse" : ""}`}>
       <BrandLink inverse={inverse} />
@@ -19,7 +29,7 @@ export function SiteHeader({ inverse = false }: { inverse?: boolean }) {
         ))}
       </nav>
       <Link className="site-header__access" href="/organiser">
-        {messages.navigation.signIn}
+        {viewer?.displayName ?? messages.navigation.signIn}
       </Link>
     </header>
   );
