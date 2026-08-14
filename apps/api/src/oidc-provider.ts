@@ -31,6 +31,7 @@ export type OidcProviderOptions = {
   requestTimeoutMs?: number;
   assuranceClaimName?: string;
   maxAuthenticationAgeSeconds?: number;
+  authorizationAcrValues?: readonly string[];
 };
 
 function safeEndpoint(value: string | undefined, allowInsecureLoopback: boolean): void {
@@ -58,22 +59,40 @@ function isProviderUnavailableClientError(error: ClientError): boolean {
   return typeof error.code === "string" && providerUnavailableClientErrorCodes.has(error.code);
 }
 
+function validatedAcrValues(values: readonly string[] | undefined): readonly string[] {
+  if (!values) return [];
+  if (values.length < 1 || values.length > 8) throw new Error("OIDC acr_values must contain between 1 and 8 entries.");
+  const normalized = values.map((value) => value.trim());
+  for (const value of normalized) {
+    if (value.length < 1 || value.length > 512 || /[\u0000-\u0020\u007f]/.test(value)) {
+      throw new Error("OIDC acr_values contains an invalid entry.");
+    }
+  }
+  if (new Set(normalized).size !== normalized.length) throw new Error("OIDC acr_values must not contain duplicates.");
+  return normalized;
+}
+
 export class OidcIdentityProvider implements IdentityProviderPort {
   readonly #callbackUri: string;
   readonly #configuration: Configuration;
   readonly #issuer: string;
   readonly #assuranceClaimName?: string;
   readonly #maxAuthenticationAgeSeconds?: number;
+  readonly #authorizationAcrValues: readonly string[];
 
   constructor(
     configuration: Configuration,
-    identity: Pick<OidcProviderOptions, "callbackUri" | "issuer" | "assuranceClaimName" | "maxAuthenticationAgeSeconds">,
+    identity: Pick<
+      OidcProviderOptions,
+      "callbackUri" | "issuer" | "assuranceClaimName" | "maxAuthenticationAgeSeconds" | "authorizationAcrValues"
+    >,
   ) {
     this.#configuration = configuration;
     this.#callbackUri = identity.callbackUri;
     this.#issuer = identity.issuer;
     this.#assuranceClaimName = identity.assuranceClaimName;
     this.#maxAuthenticationAgeSeconds = identity.maxAuthenticationAgeSeconds;
+    this.#authorizationAcrValues = validatedAcrValues(identity.authorizationAcrValues);
   }
 
   async createAuthorizationUrl(request: ProviderAuthorizationRequest): Promise<string> {
@@ -85,6 +104,9 @@ export class OidcIdentityProvider implements IdentityProviderPort {
       nonce: request.nonce,
       code_challenge: request.pkceChallenge,
       code_challenge_method: "S256",
+      ...(this.#authorizationAcrValues.length > 0
+        ? { acr_values: this.#authorizationAcrValues.join(" ") }
+        : {}),
       ...(this.#maxAuthenticationAgeSeconds !== undefined
         ? { max_age: String(this.#maxAuthenticationAgeSeconds) }
         : {}),
@@ -185,6 +207,7 @@ export async function createOidcIdentityProvider(options: OidcProviderOptions): 
   ) {
     throw new Error("OIDC max authentication age must be an integer between 60 and 86400 seconds.");
   }
+  const authorizationAcrValues = validatedAcrValues(options.authorizationAcrValues);
   const metadata = {
     client_secret: options.clientSecret,
     redirect_uris: [options.callbackUri],
@@ -228,5 +251,6 @@ export async function createOidcIdentityProvider(options: OidcProviderOptions): 
     ...(options.maxAuthenticationAgeSeconds !== undefined
       ? { maxAuthenticationAgeSeconds: options.maxAuthenticationAgeSeconds }
       : {}),
+    ...(authorizationAcrValues.length > 0 ? { authorizationAcrValues } : {}),
   });
 }
