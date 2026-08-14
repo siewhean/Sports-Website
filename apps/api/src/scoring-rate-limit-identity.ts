@@ -13,6 +13,10 @@ function rateLimitFingerprint(secret: string, value: string): string {
   return createHmac("sha256", secret).update(value, "utf8").digest("hex");
 }
 
+export function anonymousRateLimitKey(clientIp: string, hmacSecret: string): string {
+  return `ip:${rateLimitFingerprint(hmacSecret, `ip:${clientIp}`)}`;
+}
+
 export function scoringSessionRateLimitKey(sessionId: string, clientIp: string, hmacSecret: string): string {
   return `scoring-session:${rateLimitFingerprint(hmacSecret, `session:${sessionId}`)}:ip:${rateLimitFingerprint(
     hmacSecret,
@@ -21,17 +25,9 @@ export function scoringSessionRateLimitKey(sessionId: string, clientIp: string, 
 }
 
 /**
- * NOT WIRED INTO THE GLOBAL LIMITER YET.
- *
- * This helper is the narrow credential-verification boundary intended for the
- * independently QA-approved refined limiter. Until `app.ts` uses it, the live
- * branch still has the conservative peer-IP pre-authentication bucket. Its
- * presence here must not be treated as proof that per-session buckets are active.
- *
- * When integrated, this resolves only a trusted identity for rate-limit
- * partitioning. It is not an authorization decision: scoring routes must still
- * perform their normal match, permission, writer-generation, lease, and
- * competition checks afterwards.
+ * Resolve only a trusted identity for rate-limit partitioning. This is not an
+ * authorization decision: scoring routes still perform their normal match,
+ * permission, writer-generation, lease, and competition checks afterwards.
  */
 export async function verifiedScoringRateLimitSessionId(
   sql: PostgresJsSql,
