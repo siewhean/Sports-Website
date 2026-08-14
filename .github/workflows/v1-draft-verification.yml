@@ -6,6 +6,7 @@ on:
       - v1/simple-working-product
     paths:
       - ".github/workflows/v1-draft-verification.yml"
+      - "apps/web/playwright.v1-draft.config.ts"
       - "apps/web/app/organiser/competitions/new/page.tsx"
       - "apps/web/components/phase3/CompetitionCreateForm.tsx"
       - "apps/web/lib/phase3-competition-draft*.ts"
@@ -48,5 +49,5 @@ jobs:
           CI: "1"
         run: >-
           pnpm --filter @matchday/web exec playwright test
-          tests/v1-competition-create-draft.spec.ts
+          --config=playwright.v1-draft.config.ts
           --project=desktop-chromium
