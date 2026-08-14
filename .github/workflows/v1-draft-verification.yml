@@ -1,0 +1,52 @@
+name: V1 Draft Verification
+
+on:
+  pull_request:
+    branches:
+      - v1/simple-working-product
+    paths:
+      - ".github/workflows/v1-draft-verification.yml"
+      - "apps/web/app/organiser/competitions/new/page.tsx"
+      - "apps/web/components/phase3/CompetitionCreateForm.tsx"
+      - "apps/web/lib/phase3-competition-draft*.ts"
+      - "apps/web/tests/v1-competition-create-draft.spec.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  draft-persistence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@10.33.0
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run draft storage unit tests
+        run: >-
+          pnpm --filter @matchday/web exec vitest run
+          lib/phase3-competition-draft.test.ts
+          lib/phase3-competition-create.test.ts
+      - name: Build the demo-backed web app
+        run: >-
+          APP_ENV=local
+          MATCHDAY_PHASE2_DATA_MODE=demo
+          MATCHDAY_ALLOW_DEMO_FIXTURES=1
+          MATCHDAY_FEATURE_SCORING_PHASE2_ROUTE=true
+          pnpm --filter @matchday/web build
+      - name: Install Chromium
+        run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
+      - name: Run leave-and-return browser regression
+        env:
+          CI: "1"
+        run: >-
+          pnpm --filter @matchday/web exec playwright test
+          tests/v1-competition-create-draft.spec.ts
+          --project=desktop-chromium
