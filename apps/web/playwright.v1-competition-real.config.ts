@@ -8,7 +8,7 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests",
-  testMatch: /v1-competition-real-api\.spec\.ts/,
+  testMatch: [/v1-create-persistence-real\.spec\.ts/, /v1-competition-real-api\.spec\.ts/],
   fullyParallel: false,
   workers: 1,
   timeout: 600_000,
