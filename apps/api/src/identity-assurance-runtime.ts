@@ -29,21 +29,11 @@ export class IdentityAssuranceRuntime extends IdentityApiRuntime {
   }
 
   requireConfiguredAssurance(session: AuthenticatedIdentityApiSession): void {
-    const assurance = (session as AssuranceAwareSession).assurance;
-    if (!assurance) {
-      throw new ApiError(403, "STEP_UP_REQUIRED", "Stronger authentication is required");
-    }
-    try {
-      requireAuthenticationAssurance(assurance, this.policy, this.assuranceClock.now());
-    } catch (error) {
-      if (error instanceof IdentityError && error.code === "AUTHENTICATION_ASSURANCE_REQUIRED") {
-        throw new ApiError(403, "STEP_UP_REQUIRED", "Stronger authentication is required");
-      }
-      throw error;
-    }
+    this.require(session, this.policy);
   }
 
   require(session: AuthenticatedIdentityApiSession, policy: AuthenticationAssurancePolicy): void {
+    if (policy.minimum === "off") return;
     const assurance = (session as AssuranceAwareSession).assurance;
     if (!assurance) {
       throw new ApiError(403, "STEP_UP_REQUIRED", "Stronger authentication is required");
