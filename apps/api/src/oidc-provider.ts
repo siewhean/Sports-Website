@@ -168,10 +168,7 @@ export class OidcIdentityProvider implements IdentityProviderPort {
         email,
         emailVerified,
         displayName,
-        assurance: readOidcAssurance(
-          claims as unknown as Readonly<Record<string, unknown>>,
-          this.#assuranceClaimName,
-        ),
+        assurance: readOidcAssurance(claims as unknown as Readonly<Record<string, unknown>>, this.#assuranceClaimName),
       };
     } catch (error) {
       if (error instanceof IdentityError) throw error;
