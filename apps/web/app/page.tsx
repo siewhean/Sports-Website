@@ -15,9 +15,6 @@ export const metadata: Metadata = {
 
 export default async function Home() {
   const session = await readCurrentIdentitySession();
-  return (
-    <MarketingHome
-      viewer={session.status === "authenticated" ? { displayName: session.identity.displayName } : null}
-    />
-  );
+  const viewer = session.status === "authenticated" ? { displayName: session.identity.displayName } : null;
+  return <MarketingHome viewer={viewer} />;
 }
