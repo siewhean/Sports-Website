@@ -76,8 +76,8 @@ export class OidcIdentityProvider implements IdentityProviderPort {
   readonly #callbackUri: string;
   readonly #configuration: Configuration;
   readonly #issuer: string;
-  readonly #assuranceClaimName?: string;
-  readonly #maxAuthenticationAgeSeconds?: number;
+  readonly #assuranceClaimName: string | undefined;
+  readonly #maxAuthenticationAgeSeconds: number | undefined;
   readonly #authorizationAcrValues: readonly string[];
 
   constructor(
@@ -168,7 +168,10 @@ export class OidcIdentityProvider implements IdentityProviderPort {
         email,
         emailVerified,
         displayName,
-        assurance: readOidcAssurance(claims as unknown as Readonly<Record<string, unknown>>, this.#assuranceClaimName),
+        assurance: readOidcAssurance(
+          claims as unknown as Readonly<Record<string, unknown>>,
+          this.#assuranceClaimName,
+        ),
       };
     } catch (error) {
       if (error instanceof IdentityError) throw error;
