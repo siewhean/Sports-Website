@@ -1,9 +1,5 @@
 import { ApiError } from "./errors.js";
-import {
-  Phase3Runtime,
-  type Phase3Actor,
-  type Phase3CompetitionCreateInput,
-} from "./phase-3-runtime.js";
+import { Phase3Runtime, type Phase3Actor, type Phase3CompetitionCreateInput } from "./phase-3-runtime.js";
 
 type PostgresErrorLike = Readonly<{
   code?: unknown;

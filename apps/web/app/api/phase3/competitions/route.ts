@@ -67,7 +67,10 @@ export async function POST(request: NextRequest) {
   });
 
   if (response.status !== 500) return response;
-  const payload: unknown = await response.clone().json().catch(() => null);
+  const payload: unknown = await response
+    .clone()
+    .json()
+    .catch(() => null);
   const upstreamError = isRecord(payload) && isRecord(payload.error) ? payload.error : null;
   if (upstreamError?.code !== "INTERNAL_ERROR") return response;
 

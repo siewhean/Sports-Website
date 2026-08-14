@@ -54,7 +54,8 @@ function recommendationError(status: number, payload: unknown): string {
   if (error.code === "FORMAT_PREREQUISITE_MISSING" || error.code === "SETUP_PREREQUISITE_MISSING") {
     return "Entries or capacity changed. Complete those setup pages, then return here to choose a format.";
   }
-  if (status === 409) return "The competition changed while formats were being prepared. Refresh the page and try again.";
+  if (status === 409)
+    return "The competition changed while formats were being prepared. Refresh the page and try again.";
   return error.message ?? copy.prepareError;
 }
 
@@ -143,7 +144,11 @@ export function V1FormatPicker({
 
   if (hasAppliedFormat) {
     return (
-      <section className={styles.workspace} aria-labelledby="v1-format-selected-heading" data-testid="v1-format-selected">
+      <section
+        className={styles.workspace}
+        aria-labelledby="v1-format-selected-heading"
+        data-testid="v1-format-selected"
+      >
         <header className={styles.heading}>
           <p className={styles.eyebrow}>Competition format</p>
           <h2 ref={headingRef} id="v1-format-selected-heading" tabIndex={-1}>
@@ -174,11 +179,17 @@ export function V1FormatPicker({
 
   if (!effectiveReadiness.ready) {
     return (
-      <section className={styles.workspace} aria-labelledby="v1-format-prerequisite-heading" data-testid="v1-format-blocked">
+      <section
+        className={styles.workspace}
+        aria-labelledby="v1-format-prerequisite-heading"
+        data-testid="v1-format-blocked"
+      >
         <header className={styles.heading}>
           <p className={styles.eyebrow}>Competition format</p>
           <h2 id="v1-format-prerequisite-heading">Finish setup before choosing a format</h2>
-          <p>MATCHDAY needs your teams and available match capacity before it can recommend a format that actually fits.</p>
+          <p>
+            MATCHDAY needs your teams and available match capacity before it can recommend a format that actually fits.
+          </p>
         </header>
         <div className={styles.blockedIntro} role="status">
           <WarningCircle aria-hidden="true" />
@@ -214,7 +225,10 @@ export function V1FormatPicker({
         <h2 ref={headingRef} id="v1-format-picker-heading" tabIndex={-1}>
           Choose a format that fits your competition
         </h2>
-        <p>MATCHDAY uses the entries and playing time you already saved. Review the options, then choose one to create the fixtures used by Schedule.</p>
+        <p>
+          MATCHDAY uses the entries and playing time you already saved. Review the options, then choose one to create
+          the fixtures used by Schedule.
+        </p>
       </header>
 
       <div className={styles.readyBar}>
@@ -223,14 +237,23 @@ export function V1FormatPicker({
           <p>Generate only formats that fit the competition information currently saved.</p>
         </div>
         {state === copy.idle || state === copy.loading || state === copy.error ? (
-          <button className={styles.primaryButton} type="button" onClick={() => void recommend()} disabled={state === copy.loading}>
+          <button
+            className={styles.primaryButton}
+            type="button"
+            onClick={() => void recommend()}
+            disabled={state === copy.loading}
+          >
             {state === copy.loading ? copy.finding : state === copy.error ? copy.retry : copy.show}
           </button>
         ) : null}
       </div>
 
       {message ? (
-        <p className={state === copy.error ? styles.error : styles.eyebrow} aria-live="polite" role={state === copy.error ? "alert" : "status"}>
+        <p
+          className={state === copy.error ? styles.error : styles.eyebrow}
+          aria-live="polite"
+          role={state === copy.error ? "alert" : "status"}
+        >
           {message}
         </p>
       ) : null}
@@ -267,7 +290,12 @@ export function V1FormatPicker({
                     <dd>{option.available_match_slots}</dd>
                   </div>
                 </dl>
-                <button className={styles.primaryButton} type="button" disabled={state === copy.applying} onClick={() => void apply(option.id)}>
+                <button
+                  className={styles.primaryButton}
+                  type="button"
+                  disabled={state === copy.applying}
+                  onClick={() => void apply(option.id)}
+                >
                   {state === copy.applying ? copy.applyingLabel : copy.apply}
                 </button>
               </li>

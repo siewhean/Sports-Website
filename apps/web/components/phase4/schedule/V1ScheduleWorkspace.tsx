@@ -100,12 +100,11 @@ export function V1ScheduleWorkspace({
 
   return (
     <>
-      {recoveryState === "restoring" ? (
-        <p role="status">Restoring your generated schedule as a saved draft…</p>
-      ) : null}
+      {recoveryState === "restoring" ? <p role="status">Restoring your generated schedule as a saved draft…</p> : null}
       {recoveryState === "failed" ? (
         <p role="alert">
-          A generated schedule is still available, but MATCHDAY could not restore it automatically. Use “Use this schedule” below to save it as a draft.
+          A generated schedule is still available, but MATCHDAY could not restore it automatically. Use “Use this
+          schedule” below to save it as a draft.
         </p>
       ) : null}
       <ScheduleWorkspace
