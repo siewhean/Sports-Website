@@ -6,4 +6,4 @@ The V1 production branch is `v1/simple-working-product`.
 
 Latest verified acceptance: direct Format readiness, all-field draft persistence, signed-in home state, schedule generation/move/publish, scoring/correction, knockout advancement and public results passed on 2026-08-14.
 
-Production deployment retry: accepted V1 Format readiness merge.
+Production deployment retry: accepted V1 Format readiness merge after provider cooldown.
