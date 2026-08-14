@@ -1,50 +1,74 @@
 # Auth0 MFA assurance rollout — V2
 
-This document supersedes the earlier single-Action rollout example for the high-assurance path. Keep `IDENTITY_ASSURANCE_POLICY=off` until the application route gate, OIDC assurance-context request, and real Auth0 claims have all passed staging tests.
+This document supersedes the earlier single-Action rollout example for the high-assurance path. Keep `IDENTITY_ASSURANCE_POLICY=off` until the application route gate, session replacement, OIDC assurance request, and real Auth0 claims have all passed staging tests.
 
-## Current application state
+## Application contract
 
-MATCHDAY can capture, normalize, and persist verified ID-token assurance evidence. The current security branch deliberately refuses startup when `IDENTITY_ASSURANCE_POLICY` is not `off`, because the central organiser assurance gate is not yet integrated and verified.
+MATCHDAY accepts authentication assurance only from claims in the ID token already verified by the existing Authorization Code + PKCE flow.
 
-Do not remove that startup refusal until the missing gate has tests proving all of these properties:
+Standard OIDC `amr` containing `mfa` means generic MFA only. It does not prove that the factor was phishing resistant. MATCHDAY's phishing-resistant classification requires both:
 
-- low-assurance sessions cannot access the private organiser APIs when stronger assurance is required;
-- low-assurance sessions can still sign out and can still be identified for defensive rate limiting;
-- successful step-up issues a fresh MATCHDAY application session;
-- the displaced lower-assurance session cannot later regain privileged access through replay or policy relaxation.
-
-## Assurance semantics
-
-Standard OIDC `amr` containing `mfa` means generic MFA only. It does not prove that the factor was phishing resistant.
-
-MATCHDAY's phishing-resistant classification requires both:
-
-1. standard verified ID-token `amr` containing `mfa`; and
-2. a namespaced boolean ID-token claim set only after Auth0 observed a completed WebAuthn MFA factor.
+1. verified `amr` containing `mfa`; and
+2. a namespaced boolean ID-token claim set only after Auth0 reports a completed WebAuthn MFA factor.
 
 Recommended claim:
 
 `https://v1-preview.poladex.shop/claims/phishing-resistant`
 
-Recommended application-specific assurance context:
+Configure the API with the exact same value in `IDENTITY_OIDC_ASSURANCE_CLAIM`.
 
-`https://v1-preview.poladex.shop/assurance/phishing-resistant`
+For any enabled MATCHDAY assurance policy, the application sends Auth0's documented multi-factor authentication context:
 
-For generic MFA, use Auth0's documented multi-factor assurance context where applicable.
+`http://schemas.openid.net/pape/policies/2007/06/multi-factor`
 
-## Use two ordered Post-Login Actions
+as `acr_values` on the authorization request. If authentication freshness is configured, MATCHDAY also sends `max_age` and later verifies the signed `auth_time` claim before granting organiser access.
 
-Do not use one Action that starts MFA and immediately assumes the newly completed method is visible in the same execution.
+## Prepare Auth0 while MATCHDAY enforcement is off
 
-Use two Actions in the Login flow.
+1. Keep `IDENTITY_ASSURANCE_POLICY=off` in MATCHDAY.
+2. Establish the production Auth0 custom domain first if one will be used. WebAuthn credentials are relying-party-domain sensitive; do not casually move an enrolled production population to a different login domain later.
+3. In Auth0 Dashboard > Security > Multi-factor Auth, enable the WebAuthn factors intended for MATCHDAY (`webauthn-platform` and/or `webauthn-roaming`).
+4. Enable **Customize MFA Factors using Actions**.
+5. Use a tenant MFA policy such as **Always** as a defence-in-depth backup so failure to execute the custom challenge Action does not silently remove MFA.
+6. Before using `challengeWith` or `challengeWithAny`, enrol the controlled staging organiser in at least one requested WebAuthn factor. Auth0 fails the authentication transaction if none of the requested factors is both enabled and enrolled.
+7. Establish and test a recovery procedure before enforcing WebAuthn. A recovery factor is for account recovery, not an automatic downgrade of the normal phishing-resistant organiser policy.
+8. Enrol at least two appropriate authenticators for high-value administrator accounts where operationally practical.
 
-### Action 1 — challenge
+Do not switch MATCHDAY enforcement on merely because Auth0's dashboard shows MFA enabled. The application must prove the resulting signed token evidence.
 
-Inspect the requested assurance context from the transaction and invoke Auth0's current authentication challenge API. For phishing-resistant MATCHDAY access, challenge only supported WebAuthn factors such as platform or roaming WebAuthn. Do not silently downgrade a phishing-resistant request to OTP, SMS, email, or push.
+## Use two ordered Login / Post-Login Actions
 
-### Action 2 — stamp evidence
+Auth0 updates `event.authentication.methods` when an Action begins. After an Action requests an MFA challenge, the flow pauses while the user completes it. The result of that challenge is therefore inspected in the **next** Action.
 
-Place this Action after the challenge Action. It inspects the authentication methods that Auth0 reports as completed and stamps a namespaced boolean ID-token claim.
+Place these Actions in this order in the Login flow.
+
+### Action 1 — require MATCHDAY WebAuthn
+
+Scope this Action to the MATCHDAY application client and to authorization requests that asked for the MFA ACR. Replace the placeholder client ID with the reviewed MATCHDAY Auth0 client ID during tenant configuration.
+
+```js
+const MATCHDAY_CLIENT_ID = "REPLACE_WITH_REVIEWED_MATCHDAY_CLIENT_ID";
+const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
+
+exports.onExecutePostLogin = async (event, api) => {
+  const requestedAcrs = event.transaction?.acr_values ?? [];
+  const matchdayRequestedMfa =
+    event.client?.client_id === MATCHDAY_CLIENT_ID && requestedAcrs.includes(MFA_ACR);
+
+  if (!matchdayRequestedMfa) return;
+
+  api.authentication.challengeWithAny([
+    { type: "webauthn-platform" },
+    { type: "webauthn-roaming" },
+  ]);
+};
+```
+
+Do not silently fall back from this high-assurance challenge to SMS, email, OTP, or push. If the organiser is not enrolled in an allowed WebAuthn factor, fix enrolment or follow the reviewed recovery procedure.
+
+### Action 2 — stamp signed phishing-resistant evidence
+
+Place this Action immediately after Action 1. It reads the completed factor type now visible in `event.authentication.methods` and stamps the namespaced ID-token claim.
 
 ```js
 const CLAIM = "https://v1-preview.poladex.shop/claims/phishing-resistant";
@@ -63,64 +87,80 @@ exports.onExecutePostLogin = async (event, api) => {
 };
 ```
 
-MATCHDAY intentionally rejects a token where this claim is true but standard `amr` does not also prove MFA.
+MATCHDAY intentionally rejects a token where this claim is `true` but standard verified `amr` does not also contain `mfa`.
 
-## Step-up session transition
+## Step-up is a MATCHDAY session replacement
 
-The browser receiving a stronger Auth0 result is not sufficient by itself. The application must treat step-up as a session transition.
+A stronger Auth0 result is not sufficient by itself. The application session must transition as well.
 
-After successful step-up:
+After successful reauthentication in the same browser:
 
-1. create a new opaque MATCHDAY session bound to the new assurance evidence;
-2. replace the browser's old session cookie with the new session cookie;
-3. revoke or otherwise make the displaced lower-assurance application session incapable of later privileged reuse;
-4. preserve a non-secret audit trail of the transition without logging either session token;
-5. prove that replaying the displaced session does not recover organiser access, including after a policy change.
+1. create a new opaque MATCHDAY session bound to the newly verified assurance evidence;
+2. revoke the valid MATCHDAY session cookie that initiated the reauthentication;
+3. replace the browser cookie with the new session cookie only after the server-side transition succeeds;
+4. record non-secret audit evidence identifying session IDs, never session tokens;
+5. never mutate a low-assurance session row in place to make it privileged.
 
-Do not mutate an existing low-assurance session row in place to make it privileged. Session rotation keeps the security boundary explicit and gives revocation a clear target.
+Other legitimate devices are not automatically revoked by this browser-session replacement. Provider password/session revocation and the existing account/session controls remain separate mechanisms.
 
 ## Staging proof before enforcement
 
 Capture no secrets in the evidence. Prove all of the following using a controlled staging account:
 
-1. ordinary non-MFA login receives no elevated assurance;
-2. generic OTP/push/SMS MFA can satisfy generic MFA but does not set the phishing-resistant claim;
-3. completed WebAuthn MFA sets both standard MFA evidence and the namespaced phishing-resistant claim;
-4. malformed assurance claims fail closed;
-5. an insufficient organiser session gets `STEP_UP_REQUIRED` once the route gate is integrated;
-6. that same insufficient session can still sign out;
-7. successful step-up rotates the MATCHDAY session;
-8. replay of the displaced lower-assurance session does not regain organiser access;
-9. WebAuthn satisfies the phishing-resistant organiser policy;
-10. non-WebAuthn MFA does not satisfy the phishing-resistant organiser policy;
-11. recovery from a lost primary authenticator works without weakening normal policy;
-12. application logs contain no ID token, authorization code, session token, fallback code, or authenticator secret.
+1. ordinary login while MATCHDAY policy is `off` receives no accidental elevated assurance;
+2. a MATCHDAY authorization request with assurance enabled contains the expected `acr_values` and, if configured, `max_age`;
+3. the Auth0 challenge Action runs only for the reviewed MATCHDAY client and requested MFA context;
+4. a user without an enrolled requested WebAuthn factor fails closed rather than falling back to a weaker factor;
+5. completed WebAuthn MFA produces standard `amr` containing `mfa` and the namespaced phishing-resistant claim set to `true`;
+6. generic/non-WebAuthn MFA never sets the phishing-resistant claim to `true`;
+7. malformed assurance claims fail authentication;
+8. an insufficient organiser session gets `STEP_UP_REQUIRED` once application enforcement is enabled;
+9. that same insufficient session can still sign out;
+10. defensive rate-limit attribution can still identify a valid low-assurance account without granting organiser access;
+11. successful step-up creates a new MATCHDAY session and revokes the displaced browser session;
+12. replay of the displaced session cannot regain organiser access, including after returning policy to `off`;
+13. WebAuthn satisfies the phishing-resistant organiser policy;
+14. non-WebAuthn MFA does not satisfy the phishing-resistant organiser policy;
+15. recovery from a lost primary authenticator works without weakening the normal policy;
+16. application logs contain no ID token, authorization code, session token, scoring credential, fallback code, or authenticator secret.
 
 ## Authentication freshness
 
-Do not enable an authentication-age requirement merely because `auth_time` exists. First prove the complete loop:
+Do not enable `IDENTITY_ASSURANCE_MAX_AGE_SECONDS` merely because `auth_time` exists. Prove the complete loop first:
 
-requested maximum age → provider reauthentication → new verified `auth_time` → new server session binding → displaced-session handling → stale session rejected.
+requested `max_age` → provider reauthentication → new verified `auth_time` → new server session binding → displaced-session revocation → stale session rejected.
 
-Only after that proof should `IDENTITY_ASSURANCE_MAX_AGE_SECONDS` be used in a deployed environment.
+Only after that proof should authentication-age enforcement be used in a deployed environment.
 
 ## Rollout order
 
 1. Keep MATCHDAY policy `off`.
-2. Configure Auth0 WebAuthn and recovery factors.
-3. Deploy the two ordered Auth0 Actions.
-4. Prove the real token claims without logging tokens.
-5. Integrate and test the central organiser assurance gate.
-6. Integrate and test the OIDC assurance-context request (`acr_values`).
-7. Integrate and test step-up session rotation/revocation.
-8. Remove the temporary startup refusal for non-`off` policies only after steps 1–7 pass.
-9. Enable generic MFA in staging and test allowed/denied cases.
-10. Enable phishing-resistant policy in staging and test WebAuthn versus non-WebAuthn factors.
-11. Test rollback by returning the policy to `off` without changing any other security control, including proof that displaced lower-assurance sessions do not unexpectedly regain privilege.
+2. Configure Auth0 WebAuthn, recovery, the Actions customization toggle, and the reviewed tenant MFA policy.
+3. Enrol the controlled staging organiser in the requested WebAuthn factor(s).
+4. Deploy Action 1 followed by Action 2.
+5. Prove the real token claims without logging tokens.
+6. Run MATCHDAY's organiser assurance boundary tests under the pinned Node/pnpm toolchain.
+7. Run the OIDC `acr_values` / `max_age` integration tests.
+8. Run the browser-session replacement/replay tests.
+9. Remove the temporary startup refusal for non-`off` policies only after steps 1–8 pass.
+10. Enable `IDENTITY_ASSURANCE_POLICY=phishing_resistant` in staging and run the full authenticated organiser journey.
+11. Test rollback by returning policy to `off` and prove that displaced low-assurance sessions remain revoked.
 12. Only then repeat the reviewed configuration in production.
+
+The runtime retains a generic `mfa` policy for controlled compatibility/testing, but the production high-assurance target is WebAuthn-backed `phishing_resistant`. Do not spend V1 effort inventing a provider-specific weaker-factor policy unless a real product requirement justifies that complexity.
 
 ## Rollback rule
 
-If assurance enforcement causes an unexpected lockout, set `IDENTITY_ASSURANCE_POLICY=off` and redeploy. Do not weaken CSRF, tenant authorization, OIDC state/nonce/PKCE checks, cookie security, provider issuer validation, or session revocation as a workaround.
+If assurance enforcement causes an unexpected lockout, set `IDENTITY_ASSURANCE_POLICY=off` and redeploy. Do not weaken CSRF, tenant authorization, OIDC state/nonce/PKCE checks, cookie security, provider issuer validation, session revocation, or scoring controls as a workaround.
 
-Use current official Auth0 documentation during the real tenant rollout because factor availability and Action APIs are provider configuration that may change over time.
+## Provider references
+
+During real tenant configuration, verify the current official Auth0 documentation for:
+
+- step-up authentication for web applications and the MFA `acr_values` context;
+- `challengeWith` / `challengeWithAny` behavior;
+- the rule that challenge results are visible through `event.authentication.methods` in the next Action;
+- WebAuthn factor names and enrolment requirements;
+- MFA tenant policy and Actions customization settings.
+
+Provider behavior and tenant features can change; the repository runbook is not a substitute for checking the current Auth0 documentation at rollout time.
