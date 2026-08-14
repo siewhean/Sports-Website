@@ -120,11 +120,7 @@ describe("v1FormatReadiness", () => {
     const readiness = v1CanonicalFormatReadiness({
       divisions: [
         {
-          entries: [
-            { status: "active" },
-            { status: "confirmed" },
-            { status: "removed" },
-          ],
+          entries: [{ status: "active" }, { status: "confirmed" }, { status: "removed" }],
         },
       ],
       capacity: { areaCount: 1, availableMatchSlots: 16 },
