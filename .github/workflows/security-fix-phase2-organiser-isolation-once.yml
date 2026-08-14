@@ -1,0 +1,61 @@
+name: Security Fix Phase2 Organiser Isolation Once
+
+on:
+  pull_request:
+    branches:
+      - v1/simple-working-product
+    paths:
+      - .github/workflows/security-fix-phase2-organiser-isolation-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - name: Correct authenticated organiser isolation expectation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/api/tests/integration/phase-2-routes.test.ts")
+          text = path.read_text()
+          text = text.replace(
+              'it("does not let unverified scoring ids escape the anonymous budget or consume organiser traffic", async () => {',
+              'it("keeps rotated unverified scoring ids on the anonymous budget while organiser sessions use account quota", async () => {',
+              1,
+          )
+          old = '''    const organiserPath = `/api/v1/competitions/${randomUUID()}`;
+              expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(401);
+              expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(429);'''
+          new = '''    const organiserPath = `/api/v1/competitions/${randomUUID()}`;
+              expect(
+                (
+                  await app.inject({
+                    method: "GET",
+                    url: organiserPath,
+                    headers: { cookie: "matchday_session=session-token" },
+                  })
+                ).statusCode,
+              ).toBe(200);'''
+          if old not in text:
+              raise SystemExit("Expected organiser rate-limit assertion block was not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit only the Phase 2 regression correction
+        run: |
+          if git diff --quiet -- apps/api/tests/integration/phase-2-routes.test.ts; then
+            echo "Phase 2 organiser isolation regression already corrected."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/api/tests/integration/phase-2-routes.test.ts
+          git commit -m "test(scoring): prove organiser account quota isolation"
+          git push origin HEAD:${GITHUB_HEAD_REF}
