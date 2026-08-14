@@ -40,7 +40,9 @@ describe("PostgresAssuranceSessionRepository", () => {
     await repository.create(sessionRecord());
 
     const sessionInsertIndex = calls.findIndex((call) => call.query.includes("INSERT INTO identity_sessions"));
-    const assuranceInsertIndex = calls.findIndex((call) => call.query.includes("INSERT INTO identity_session_assurance"));
+    const assuranceInsertIndex = calls.findIndex((call) =>
+      call.query.includes("INSERT INTO identity_session_assurance"),
+    );
     expect(sessionInsertIndex).toBeGreaterThanOrEqual(0);
     expect(assuranceInsertIndex).toBeGreaterThan(sessionInsertIndex);
     expect(assuranceInsertIndex).toBe(calls.length - 1);
