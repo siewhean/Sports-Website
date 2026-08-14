@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Clock, IdentityProviderPort } from "@matchday/identity";
+import type { AuthenticationAssurancePolicy, Clock, IdentityProviderPort } from "@matchday/identity";
 import { buildApp } from "../../src/app.js";
 import { IdentityAssuranceRuntime } from "../../src/identity-assurance-runtime.js";
 import type {
@@ -18,7 +18,10 @@ const clock: Clock = { now: () => now };
 class StubAssuranceRuntime extends IdentityAssuranceRuntime {
   signedOut = false;
 
-  constructor(private readonly session: AuthenticatedIdentityApiSession) {
+  constructor(
+    private readonly session: AuthenticatedIdentityApiSession,
+    policy: AuthenticationAssurancePolicy = { minimum: "mfa" },
+  ) {
     const provider: IdentityProviderPort = {
       exchangeAuthorizationCode: async () => {
         throw new Error("unused provider exchange");
@@ -30,7 +33,7 @@ class StubAssuranceRuntime extends IdentityAssuranceRuntime {
         throw new Error("unused identity unit of work");
       },
     };
-    super(provider, unitOfWork, "assurance-context-test-csrf-secret-at-least-32-bytes", clock, { minimum: "mfa" });
+    super(provider, unitOfWork, "assurance-context-test-csrf-secret-at-least-32-bytes", clock, policy);
   }
 
   override async authenticate(): Promise<AuthenticatedIdentityApiSession> {
@@ -71,13 +74,31 @@ function lowAssuranceSession(): AuthenticatedIdentityApiSession {
       mfaPerformed: false,
       phishingResistant: false,
     },
-  } as AuthenticatedIdentityApiSession;
+  };
+}
+
+function strongAssuranceSession(): AuthenticatedIdentityApiSession {
+  return {
+    ...lowAssuranceSession(),
+    assurance: {
+      level: "phishing_resistant",
+      methods: ["pwd", "mfa"],
+      acr: "http://schemas.openid.net/pape/policies/2007/06/multi-factor",
+      authenticatedAt: now,
+      mfaPerformed: true,
+      phishingResistant: true,
+    },
+  };
 }
 
 function allowedOrigin(config: ReturnType<typeof testConfig>): string {
   const origin = config.api.allowedOrigins[0];
   if (!origin) throw new Error("Test configuration requires an allowed origin");
   return origin;
+}
+
+function sessionCookie(config: ReturnType<typeof testConfig>): string {
+  return `${config.identity.sessionCookieName}=opaque-session`;
 }
 
 describe("assurance-aware identity request context", () => {
@@ -90,11 +111,42 @@ describe("assurance-aware identity request context", () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/identity/me",
-      headers: { cookie: `${config.identity.sessionCookieName}=opaque-session` },
+      headers: { cookie: sessionCookie(config) },
     });
 
     expect(response.statusCode).toBe(403);
     expect(response.json().error.code).toBe("STEP_UP_REQUIRED");
+  });
+
+  it("keeps policy off backward compatible for a valid single-factor session", async () => {
+    const config = testConfig();
+    const runtime = new StubAssuranceRuntime(lowAssuranceSession(), { minimum: "off" });
+    const app = await buildApp({ config, probes: healthyProbes, identityRuntime: runtime });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/identity/me",
+      headers: { cookie: sessionCookie(config) },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().account.primary_email).toBe("organiser@example.test");
+  });
+
+  it("allows a phishing-resistant session through the phishing-resistant policy", async () => {
+    const config = testConfig();
+    const runtime = new StubAssuranceRuntime(strongAssuranceSession(), { minimum: "phishing_resistant" });
+    const app = await buildApp({ config, probes: healthyProbes, identityRuntime: runtime });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/identity/me",
+      headers: { cookie: sessionCookie(config) },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
   });
 
   it("still allows a valid low-assurance session to revoke itself", async () => {
@@ -107,7 +159,7 @@ describe("assurance-aware identity request context", () => {
       method: "POST",
       url: "/api/v1/identity/sign-out",
       headers: {
-        cookie: `${config.identity.sessionCookieName}=opaque-session`,
+        cookie: sessionCookie(config),
         origin: allowedOrigin(config),
         "x-csrf-token": "valid-csrf",
       },
@@ -129,7 +181,7 @@ describe("assurance-aware identity request context", () => {
       authenticatedRateLimitMax: 2,
     });
     apps.push(app);
-    const headers = { cookie: `${config.identity.sessionCookieName}=opaque-session` };
+    const headers = { cookie: sessionCookie(config) };
 
     expect((await app.inject({ method: "GET", url: "/api/v1/status", headers })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/v1/status", headers })).statusCode).toBe(200);
