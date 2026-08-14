@@ -84,10 +84,5 @@ export function v1CanonicalFormatReadiness(input: V1CanonicalFormatReadinessInpu
       division.entries?.filter((entry) => entry.status === "active" || entry.status === "confirmed").length ?? 0,
   );
   const totalEntryCount = divisionEntryCounts.reduce((total, count) => total + count, 0);
-  return readiness(
-    divisionEntryCounts,
-    totalEntryCount,
-    input.capacity.areaCount,
-    input.capacity.availableMatchSlots,
-  );
+  return readiness(divisionEntryCounts, totalEntryCount, input.capacity.areaCount, input.capacity.availableMatchSlots);
 }
