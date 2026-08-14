@@ -1,0 +1,55 @@
+name: Security Fix Phase2 Rate Limit Once
+
+on:
+  pull_request:
+    branches:
+      - v1/simple-working-product
+    paths:
+      - .github/workflows/security-fix-phase2-rate-limit-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - name: Update only the stale unverified-session expectation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/api/tests/integration/phase-2-routes.test.ts")
+          text = path.read_text()
+          old_title = 'it("bounds scoring traffic by the authenticated session and peer address without consuming organiser traffic", async () => {'
+          new_title = 'it("does not let unverified scoring ids escape the anonymous budget or consume organiser traffic", async () => {'
+          if old_title not in text:
+              raise SystemExit("Expected Phase 2 rate-limit test title was not found")
+          text = text.replace(old_title, new_title, 1)
+
+          marker = 'headers: { ...headers, "x-scoring-session-id": randomUUID() },'
+          marker_index = text.find(marker)
+          if marker_index < 0:
+              raise SystemExit("Expected rotated scoring-session request was not found")
+          assertion_index = text.find(").toBe(200);", marker_index)
+          if assertion_index < 0:
+              raise SystemExit("Expected vulnerable 200 assertion was not found")
+          text = text[:assertion_index] + ").toBe(429);" + text[assertion_index + len(").toBe(200);"):]
+          path.write_text(text)
+          PY
+      - name: Commit only the Phase 2 regression update
+        run: |
+          if git diff --quiet -- apps/api/tests/integration/phase-2-routes.test.ts; then
+            echo "Phase 2 regression already updated."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/api/tests/integration/phase-2-routes.test.ts
+          git commit -m "test(scoring): keep unverified ids on anonymous quota"
+          git push origin HEAD:${GITHUB_HEAD_REF}
