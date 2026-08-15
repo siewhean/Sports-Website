@@ -174,7 +174,11 @@ export function V1ScheduleWorkspace({
   return (
     <>
       {diagnostic ? (
-        <section role="alert" data-testid="v1-schedule-job-diagnostic" aria-label={v1ScheduleProductionCopy.jobDiagnosticLabel}>
+        <section
+          role="alert"
+          data-testid="v1-schedule-job-diagnostic"
+          aria-label={v1ScheduleProductionCopy.jobDiagnosticLabel}
+        >
           <strong>{diagnosticTitle}</strong>
           <p>{diagnostic}</p>
           <p>
