@@ -55,19 +55,22 @@ function diagnosticBody(job: ScheduleJob): string | null {
 
 function latestComparableJob(value: unknown, document: ScheduleDocument): ScheduleJob | null {
   if (!Array.isArray(value)) return null;
-  return (
-    value
-      .map((candidate) => parseScheduleJobView(candidate))
-      .filter((candidate): candidate is ScheduleJob => candidate !== null)
-      .filter(
-        (candidate) =>
-          candidate.sourceRevision === document.sourceRevision &&
-          candidate.capacityRevision === document.capacityRevision,
-      )
-      .sort(
-        (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id),
-      )[0] ?? null
-  );
+  const jobs: ScheduleJob[] = [];
+  for (const candidate of value) {
+    const job = parseScheduleJobView(candidate);
+    if (
+      job &&
+      job.sourceRevision === document.sourceRevision &&
+      job.capacityRevision === document.capacityRevision
+    ) {
+      jobs.push(job);
+    }
+  }
+  jobs.sort((left, right) => {
+    const updated = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    return updated || right.id.localeCompare(left.id);
+  });
+  return jobs[0] ?? null;
 }
 
 export function V1ScheduleWorkspace({
@@ -168,28 +171,25 @@ export function V1ScheduleWorkspace({
   }, [recoverableOption, router]);
 
   const diagnostic = observedJob ? diagnosticBody(observedJob) : null;
+  const diagnosticTitle = observedJob?.status === "no_solution" ? "No schedule found" : "Schedule optimisation failed";
 
   return (
     <>
       {diagnostic ? (
         <section role="alert" data-testid="v1-schedule-job-diagnostic" aria-label="Schedule job diagnostic">
-          <strong>
-            {observedJob?.status === "no_solution" ? "No schedule found" : "Schedule optimisation failed"}
-          </strong>
+          <strong>{diagnosticTitle}</strong>
           <p>{diagnostic}</p>
           <p>
             Job <code>{observedJob?.id}</code>
             {observedJob?.failureClass ? (
-              <>
+              <span>
                 {" "}· failure class <code>{observedJob.failureClass}</code>
-              </>
+              </span>
             ) : null}
           </p>
         </section>
       ) : null}
-      {recoveryState === "restoring" ? (
-        <p role="status">Restoring your generated schedule as a saved draft…</p>
-      ) : null}
+      {recoveryState === "restoring" ? <p role="status">Restoring your generated schedule as a saved draft…</p> : null}
       {recoveryState === "failed" ? (
         <p role="alert">
           A generated schedule is still available, but MATCHDAY could not restore it automatically. Use “Use this
