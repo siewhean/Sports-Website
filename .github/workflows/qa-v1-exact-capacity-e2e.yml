@@ -11,7 +11,7 @@ permissions:
 
 # QA-only production-equivalent acceptance. Product source is inherited from
 # fix/v1-tight-capacity-scheduler-results-publish; this branch adds only harness
-# fidelity and browser assertions.
+# fidelity and browser assertions. This run uses semantic format metrics.
 jobs:
   exact-capacity:
     runs-on: ubuntu-latest
