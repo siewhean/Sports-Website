@@ -87,6 +87,20 @@ function routeRuntime() {
     })),
     listTakeoverRequests: vi.fn(async () => []),
     expireTakeoverRequests: vi.fn(async () => ({ expired_count: 1 })),
+    publicCompetitions: vi.fn(async () => ({
+      competitions: [
+        {
+          id: randomUUID(),
+          name: "Singapore Open",
+          slug: "singapore-open",
+          sport_code: "canoe_polo",
+          timezone: "Asia/Singapore",
+          starts_on: "2026-08-01",
+          ends_on: "2026-08-01",
+          status: "active",
+        },
+      ],
+    })),
     publicCompetition: vi.fn(async () => ({
       competition: {
         id: randomUUID(),
@@ -340,6 +354,13 @@ describe("Phase 2 Fastify route boundaries", () => {
     ]) {
       expect(retainedTransportEvidence).not.toContain(secret);
     }
+
+    const publicListing = await app.inject({ method: "GET", url: "/api/v1/public/competitions" });
+    expect(publicListing.statusCode).toBe(200);
+    expect(publicListing.headers["cache-control"]).toContain("public");
+    expect(publicListing.json()).toMatchObject({
+      competitions: [{ name: "Singapore Open", slug: "singapore-open", status: "active" }],
+    });
 
     const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
     expect(publicView.statusCode).toBe(200);

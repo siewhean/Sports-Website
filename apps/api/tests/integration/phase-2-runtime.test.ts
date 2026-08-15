@@ -715,6 +715,28 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(publicResult.publication).toEqual({ schedule_version: 1, result_version: 1 });
     expect(publicResult.competition).toMatchObject({ name: "Singapore Open", status: "active" });
     expect(publicResult.division).toMatchObject({ id: division.id, name: "Open" });
+    await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Draft Cup",
+        slug: "draft-cup-unpublished",
+        timezone: "Asia/Singapore",
+        startsOn: "2026-09-01",
+        endsOn: "2026-09-01",
+      },
+      randomUUID(),
+    );
+    const listing = await runtime.publicCompetitions();
+    const listedSlugs = listing.competitions.map((entry) => entry.slug);
+    expect(listedSlugs).toContain("singapore-open-phase-2");
+    expect(listedSlugs).not.toContain("draft-cup-unpublished");
+    expect(listing.competitions.find((entry) => entry.slug === "singapore-open-phase-2")).toMatchObject({
+      name: "Singapore Open",
+      status: "active",
+      sport_code: "canoe_polo",
+      timezone: "Asia/Singapore",
+    });
     expect(publicResult.schedule[0]).toMatchObject({
       home: { name: expect.stringMatching(/^Team /) },
       away: { name: expect.stringMatching(/^Team /) },
