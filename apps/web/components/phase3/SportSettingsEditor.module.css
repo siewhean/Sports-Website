@@ -1,5 +1,5 @@
 .p3-settings {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   min-width: 0;
   color: var(--ink);
 }
@@ -59,7 +59,7 @@
   padding: 4px;
   border: 1px solid var(--p3-line);
   border-radius: 10px;
-  background: #ebe8df;
+  background: var(--surface-subtle);
 }
 
 .p3-settings-context nav a {
@@ -142,7 +142,7 @@
   min-height: 28px;
   padding: 2px 9px;
   border-radius: 999px;
-  background: #e5e4de;
+  background: var(--surface-subtle);
   font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 700;
@@ -154,11 +154,11 @@
 }
 
 .p3-mode--recommended {
-  background: color-mix(in srgb, var(--signal) 30%, white);
+  background: color-mix(in srgb, var(--signal) 30%, var(--surface));
 }
 
 .p3-mode--customised {
-  background: #e5e4de;
+  background: var(--surface-subtle);
 }
 
 .p3-text-action {
@@ -220,7 +220,7 @@
   height: 48px;
   min-height: 48px;
   padding: 0 12px;
-  border: 1px solid #aaa99f;
+  border: 1px solid var(--hairline);
   border-radius: 7px;
   background: var(--surface);
   color: var(--ink);
@@ -430,16 +430,16 @@
 }
 
 .p3-state {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 20px;
   max-width: 760px;
   margin: 48px 0;
   padding: 28px;
-  border: 1px solid #c59d37;
+  border: 1px solid var(--warning);
   border-left: 5px solid var(--warning);
-  background: #fffaf0;
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
 }
 
 .p3-state--compact {
@@ -458,7 +458,7 @@
 }
 
 .p3-skeleton {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   display: grid;
   gap: 28px;
   min-height: 60vh;
@@ -489,7 +489,7 @@
 .p3-skeleton-context > span {
   display: block;
   border-radius: 5px;
-  background: #e4e1d8;
+  background: var(--hairline);
   animation: p3-skeleton-pulse 1.4s ease-in-out infinite alternate;
 }
 
@@ -510,7 +510,7 @@
   .p3-field--ordered button:hover:not(:disabled),
   .p3-toggle-target:hover,
   .p3-settings-context nav a:hover {
-    background: rgb(23 25 24 / 6%);
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
   }
 
   .p3-button:hover:not(:disabled) {
