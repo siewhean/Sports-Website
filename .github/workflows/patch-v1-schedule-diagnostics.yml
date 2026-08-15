@@ -1,0 +1,100 @@
+name: Patch V1 Schedule Diagnostics
+
+on:
+  push:
+    branches:
+      - fix/v1-tight-capacity-scheduler-results-publish
+    paths:
+      - .github/workflows/patch-v1-schedule-diagnostics.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@10.33.0
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Patch runtime integration assertion and safe failure reference
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime_test = Path('apps/api/tests/integration/phase-4-runtime.test.ts')
+          text = runtime_test.read_text()
+          old = '''    expect(workspace.generation.capacity_revision).toBeTypeOf("number");
+              expect(workspace.matches).toEqual([]);'''
+          # Handle repository indentation exactly as checked out.
+          if old not in text:
+              old = '''    expect(workspace.generation.capacity_revision).toBeTypeOf("number");
+    expect(workspace.matches).toEqual([]);'''
+          new = '''    expect(workspace.generation.capacity_revision).toBeTypeOf("number");
+    expect(workspace.generation.constraints.maximum_matches_per_day).toEqual({
+      mode: "preferred",
+      value: { matches: 4 },
+      weight: 4,
+    });
+    expect(workspace.matches).toEqual([]);'''
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one schedule-workspace assertion anchor, found {text.count(old)}')
+          runtime_test.write_text(text.replace(old, new))
+
+          schedule = Path('apps/web/components/phase4/schedule/ScheduleWorkspace.tsx')
+          text = schedule.read_text()
+          old = ''': progress === "creating"
+          ? phase4ScheduleCopy.v1Creating
+          : jobStatusTitle(job)}'''
+          new = ''': progress === "creating"
+          ? phase4ScheduleCopy.v1Creating
+          : job.status === "failed"
+            ? jobStatusMessage(job)
+            : jobStatusTitle(job)}'''
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one simple schedule status anchor, found {text.count(old)}')
+          text = text.replace(old, new)
+          old = '''function jobStatusMessage(job: ScheduleJob): string {
+  return `${jobStatusTitle(job)}. ${job.currentBest ? phase4ScheduleCopy.bestAvailable : phase4ScheduleCopy.selectedUnchanged}`;
+}'''
+          new = '''function jobStatusMessage(job: ScheduleJob): string {
+  const outcome = `${jobStatusTitle(job)}. ${job.currentBest ? phase4ScheduleCopy.bestAvailable : phase4ScheduleCopy.selectedUnchanged}`;
+  if (job.status !== "failed") return outcome;
+  const failureReference = job.failureClass ? `${job.failureClass} · ${job.id}` : job.id;
+  return `${outcome} ${phase4ScheduleCopy.status}: ${failureReference}.`;
+}'''
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one job status message function, found {text.count(old)}')
+          schedule.write_text(text.replace(old, new))
+          PY
+      - name: Format touched source
+        run: |
+          pnpm exec prettier --write \
+            apps/scheduler/src/solver-thread.mjs \
+            apps/scheduler/tests/unit/domain-optimizer.test.ts \
+            packages/domain/tests/v1-tight-capacity-schedule.test.ts \
+            apps/api/tests/integration/phase-4-runtime.test.ts \
+            apps/web/lib/v1-publication-readiness.ts \
+            apps/web/lib/v1-publication-readiness.test.ts \
+            apps/web/components/phase3/V1ResultsWorkspace.tsx \
+            apps/web/components/phase3/V1PublishWorkspace.tsx \
+            'apps/web/app/organiser/competitions/[id]/[section]/page.tsx' \
+            apps/web/components/phase4/schedule/ScheduleWorkspace.tsx
+      - name: Remove temporary patch workflows
+        run: |
+          git rm -f .github/workflows/patch-v1-schedule-default.yml
+          git rm -f .github/workflows/patch-v1-schedule-diagnostics.yml
+      - name: Commit reviewable source changes
+        run: |
+          git config user.name "matchday-v1-bot"
+          git config user.email "65327039+siewhean@users.noreply.github.com"
+          git add apps packages .github/workflows
+          git diff --cached --check
+          git commit -m "test(v1): verify schedule defaults and failure diagnostics"
+          git push origin HEAD:fix/v1-tight-capacity-scheduler-results-publish
