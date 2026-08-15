@@ -68,6 +68,13 @@ function latestComparableJob(value: unknown, document: ScheduleDocument): Schedu
   return jobs[0] ?? null;
 }
 
+function newestJob(left: ScheduleJob | null, right: ScheduleJob | null): ScheduleJob | null {
+  if (!left) return right;
+  if (!right) return left;
+  const updated = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  return updated > 0 || (updated === 0 && right.id.localeCompare(left.id) > 0) ? right : left;
+}
+
 export function V1ScheduleWorkspace({
   advanced = false,
   document,
@@ -84,9 +91,8 @@ export function V1ScheduleWorkspace({
   const [recoveryState, setRecoveryState] = useState<"idle" | "restoring" | "failed">(
     v1ScheduleProductionMachine.recoveryIdle,
   );
-  const [observedJob, setObservedJob] = useState<ScheduleJob | null>(document.activeJob);
-
-  useEffect(() => setObservedJob(document.activeJob), [document.activeJob]);
+  const [polledJob, setPolledJob] = useState<ScheduleJob | null>(null);
+  const observedJob = useMemo(() => newestJob(document.activeJob, polledJob), [document.activeJob, polledJob]);
 
   useEffect(() => {
     if (advanced || document.currentRevision || !document.canEdit) return;
@@ -99,7 +105,7 @@ export function V1ScheduleWorkspace({
         );
         if (!live || !response.ok) return;
         const latest = latestComparableJob(await response.json().catch(() => null), document);
-        if (live && latest) setObservedJob(latest);
+        if (live && latest) setPolledJob(latest);
       } catch {
         // The primary schedule workspace owns command/network errors. This
         // secondary read exists only to surface safe terminal diagnostics.
