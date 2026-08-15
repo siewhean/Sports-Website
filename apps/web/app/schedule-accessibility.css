@@ -1,0 +1,16 @@
+[data-testid="phase4-schedule"] [data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--ink));
+  color: var(--ink);
+}
+
+[data-testid="phase4-schedule"] [data-tone="warning"] > svg {
+  color: color-mix(in srgb, var(--warning) 60%, var(--ink));
+}
+
+[data-testid="phase4-schedule"] > [role="alert"] {
+  color: var(--ink);
+}
+
+[data-testid="phase4-schedule"] > [role="alert"] > svg {
+  color: var(--danger);
+}
