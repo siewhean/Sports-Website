@@ -7,6 +7,7 @@ RUN_SUFFIX="$(date -u +%s)_$$_${RANDOM}"
 SOURCE_DB="matchday_backup_test_${RUN_SUFFIX}"
 RESTORE_DB="matchday_restore_test_${RUN_SUFFIX}"
 BACKUP_FILE="/tmp/${SOURCE_DB}.dump"
+BACKUP_DIRECTORY=""
 MODE="${BACKUP_VERIFY_MODE:-docker}"
 DIRECT_ADMIN_DATABASE_URL="${BACKUP_VERIFY_ADMIN_DATABASE_URL:-postgresql:///postgres}"
 DIRECT_CLIENT_IMAGE="${BACKUP_VERIFY_DIRECT_CLIENT_IMAGE:-}"
@@ -65,10 +66,18 @@ NODE
 
 direct_postgres_tool() {
   if [[ -n "$DIRECT_CLIENT_IMAGE" ]]; then
-    docker run --rm --network host --volume /tmp:/tmp "$DIRECT_CLIENT_IMAGE" "$@"
+    docker run --rm --network host --volume "$BACKUP_DIRECTORY:/work" "$DIRECT_CLIENT_IMAGE" "$@"
     return
   fi
   "$@"
+}
+
+direct_backup_file() {
+  if [[ -n "$DIRECT_CLIENT_IMAGE" ]]; then
+    printf '/work/%s.dump' "$SOURCE_DB"
+    return
+  fi
+  printf '%s' "$BACKUP_FILE"
 }
 
 assert_disposable_database_name() {
@@ -91,6 +100,9 @@ cleanup() {
     direct_postgres_tool dropdb --if-exists --force --maintenance-db="$maintenance_url" "$SOURCE_DB" >/dev/null 2>&1 || true
     direct_postgres_tool dropdb --if-exists --force --maintenance-db="$maintenance_url" "$RESTORE_DB" >/dev/null 2>&1 || true
     rm -f "$BACKUP_FILE"
+    if [[ -n "$BACKUP_DIRECTORY" ]]; then
+      rm -rf "$BACKUP_DIRECTORY"
+    fi
     return
   fi
   postgres_exec dropdb --if-exists --force -U matchday "$SOURCE_DB" >/dev/null 2>&1 || true
@@ -106,6 +118,8 @@ fi
 
 cleanup
 if [[ "$MODE" == "direct" ]]; then
+  BACKUP_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/matchday-backup-verify.XXXXXX")"
+  BACKUP_FILE="$BACKUP_DIRECTORY/${SOURCE_DB}.dump"
   maintenance_url="$(direct_maintenance_url)"
   direct_postgres_tool createdb --maintenance-db="$maintenance_url" "$SOURCE_DB"
   export DATABASE_URL="$(direct_database_url "$SOURCE_DB")"
@@ -119,9 +133,9 @@ pnpm --dir "$ROOT_DIR" db:migrate
 
 if [[ "$MODE" == "direct" ]]; then
   direct_exec "$SOURCE_DB" "INSERT INTO accounts (id, primary_email, display_name, status) VALUES ('00000000-0000-4000-8000-000000000001', 'restore-check@example.test', 'Restore Check', 'active');" >/dev/null
-  direct_postgres_tool pg_dump --dbname="$(direct_database_url "$SOURCE_DB")" --format=custom --file="$BACKUP_FILE"
+  direct_postgres_tool pg_dump --dbname="$(direct_database_url "$SOURCE_DB")" --format=custom --file="$(direct_backup_file)"
   direct_postgres_tool createdb --maintenance-db="$maintenance_url" "$RESTORE_DB"
-  direct_postgres_tool pg_restore --dbname="$(direct_database_url "$RESTORE_DB")" --exit-on-error "$BACKUP_FILE"
+  direct_postgres_tool pg_restore --dbname="$(direct_database_url "$RESTORE_DB")" --exit-on-error "$(direct_backup_file)"
   source_count="$(direct_postgres_tool psql --dbname="$(direct_database_url "$SOURCE_DB")" --tuples-only --no-align --command="SELECT count(*) FROM accounts;")"
   restore_count="$(direct_postgres_tool psql --dbname="$(direct_database_url "$RESTORE_DB")" --tuples-only --no-align --command="SELECT count(*) FROM accounts;")"
   source_fingerprint="$(direct_postgres_tool psql --dbname="$(direct_database_url "$SOURCE_DB")" --tuples-only --no-align --command="SELECT md5(string_agg(id::text || ':' || primary_email, ',' ORDER BY id)) FROM accounts;")"
