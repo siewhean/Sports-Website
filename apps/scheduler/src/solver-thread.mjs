@@ -4,12 +4,27 @@ import { evaluateScheduleQuality, generateScheduleCandidates, validateSchedule }
 
 if (parentPort === null) throw new Error("Schedule solver thread requires a parent port");
 
+function isPlacementDeadEnd(error) {
+  return error instanceof Error && error.message.startsWith("No valid slot remains for match ");
+}
+
 try {
   if (workerData.operation === "generate") {
-    const candidates = generateScheduleCandidates(workerData.problem, {
-      startIteration: workerData.iteration,
-      maxIterations: 1,
-    });
+    let candidates;
+    try {
+      candidates = generateScheduleCandidates(workerData.problem, {
+        startIteration: workerData.iteration,
+        maxIterations: 1,
+      });
+    } catch (error) {
+      // A greedy search variation can legitimately paint itself into a corner
+      // even when another deterministic variation is feasible. That is a
+      // search miss, not corrupted persisted input and not a worker crash.
+      // Return zero candidates so DomainScheduleOptimizer can try the next
+      // iteration. Strict input validation still happens before the worker.
+      if (isPlacementDeadEnd(error)) candidates = [];
+      else throw error;
+    }
     const result = candidates.map((candidate) => ({
       candidate,
       validation: validateSchedule(workerData.problem, candidate.assignments),
