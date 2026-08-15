@@ -106,7 +106,8 @@ test("36 full-placement fixtures schedule, publish, and expose truthful result r
   await page.goto(`/organiser/competitions/${competitionId}/format`);
   await submit(page, page.getByRole("button", { name: "Show format options" }), "POST", "/v1-format-recommendations");
   const fullPlacement = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "Full placement" }) });
-  await expect(fullPlacement).toContainText("36 matches");
+  await expect(fullPlacement.getByText("Total matches", { exact: true })).toBeVisible();
+  await expect(fullPlacement.getByText("36", { exact: true })).toBeVisible();
   await submit(page, fullPlacement.getByRole("button", { name: "Use this format" }), "POST", "/apply");
 
   await page.goto(`/organiser/competitions/${competitionId}/schedule`);
