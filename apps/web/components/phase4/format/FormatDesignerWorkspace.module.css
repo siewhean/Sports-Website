@@ -1,7 +1,7 @@
 .designer {
-  --chrome: #141716;
-  --chrome-soft: #202321;
-  --chrome-line: #3b3e3c;
+  --chrome: var(--event-canvas);
+  --chrome-soft: var(--event-surface);
+  --chrome-line: var(--event-line);
   display: grid;
   grid-template-rows: 68px minmax(0, 1fr) 64px;
   min-height: 100dvh;
@@ -56,10 +56,10 @@
   min-height: 28px;
   margin-top: 2px;
   padding: 2px 26px 2px 7px;
-  border: 1px solid #565a57;
+  border: 1px solid var(--chrome-line);
   border-radius: 4px;
-  background: #202321;
-  color: #d6d8d5;
+  background: var(--chrome-soft);
+  color: var(--surface);
   font-size: 0.7rem;
 }
 .divisionSelect:focus-visible {
@@ -75,9 +75,9 @@
   grid-template-columns: 1fr 1fr;
   width: 250px;
   padding: 3px;
-  border: 1px solid #4a4d4b;
+  border: 1px solid var(--chrome-line);
   border-radius: 7px;
-  background: #202321;
+  background: var(--chrome-soft);
 }
 .modeSwitch button {
   display: flex;
@@ -88,7 +88,7 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #d6d8d5;
+  color: var(--surface);
   font-size: 0.78rem;
   font-weight: 650;
 }
@@ -125,7 +125,7 @@
 .commandActions button {
   min-height: 44px;
   padding: 0 16px;
-  border: 1px solid #4a4d4b;
+  border: 1px solid var(--chrome-line);
   border-radius: 5px;
   color: var(--surface);
   font-size: 0.76rem;
@@ -142,7 +142,7 @@
 .iconCommand {
   width: 44px;
   padding: 0 !important;
-  background: #222522;
+  background: var(--chrome-soft);
 }
 .commandActions button:disabled {
   opacity: 0.46;
@@ -156,8 +156,8 @@
   align-items: center;
   min-height: 44px;
   padding: 0 18px;
-  border-bottom: 1px solid #d9b15a;
-  background: #fff8e8;
+  border-bottom: 1px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
   font-size: 0.76rem;
 }
 .banner + .body {
@@ -216,7 +216,7 @@
   place-items: center;
   width: 38px;
   height: 38px;
-  border: 1px solid #444846;
+  border: 1px solid var(--chrome-line);
   border-radius: 4px;
   color: var(--signal);
 }
@@ -248,7 +248,7 @@
   gap: 10px;
   margin-top: 30px;
   padding: 13px;
-  border: 1px solid #454846;
+  border: 1px solid var(--chrome-line);
   color: #b7bbb7;
   font-size: 0.66rem;
   line-height: 1.45;
@@ -273,7 +273,7 @@
   min-height: 100%;
   overflow: auto;
   background-color: var(--canvas);
-  background-image: radial-gradient(circle, #c7c8c2 0.8px, transparent 0.8px);
+  background-image: radial-gradient(circle, var(--hairline) 0.8px, transparent 0.8px);
   background-size: 17px 17px;
 }
 .connections {
@@ -286,12 +286,12 @@
 }
 .connections path {
   fill: none;
-  stroke: #62665f;
+  stroke: var(--ink-muted);
   stroke-width: 2.5;
   marker-end: url(#phase4-arrow);
 }
 .connections marker path {
-  fill: #62665f;
+  fill: var(--ink-muted);
 }
 .stageNode {
   position: absolute;
@@ -303,7 +303,7 @@
   height: 132px;
   padding: 0;
   overflow: visible;
-  border: 1px solid #767a74;
+  border: 1px solid var(--hairline);
   border-radius: 6px;
   background: var(--surface);
   color: var(--ink);
@@ -316,7 +316,7 @@
 }
 .stageNode[data-selected="true"] {
   border: 2px solid var(--signal-strong);
-  box-shadow: 0 0 0 2px rgb(183 220 34 / 20%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal) 20%, transparent);
 }
 .stageNode header {
   display: grid;
@@ -354,7 +354,7 @@
   bottom: 15px;
   width: 14px;
   height: 14px;
-  border: 2px solid #4d514c;
+  border: 2px solid var(--ink-muted);
   border-radius: 50%;
   background: var(--canvas);
 }
@@ -431,17 +431,17 @@
   width: 100%;
   min-height: 44px;
   padding: 9px 10px;
-  border: 1px solid #555956;
+  border: 1px solid var(--chrome-line);
   border-radius: 4px;
-  background: #252826;
+  background: var(--chrome-soft);
   color: var(--surface);
   font: inherit;
 }
 .inspectorForm label[data-issue="true"] input {
-  border-color: #f0b84b;
+  border-color: var(--warning);
 }
 .inspectorForm label small {
-  color: #f4c96e;
+  color: var(--warning);
   font-size: 0.66rem;
   font-weight: 450;
 }
@@ -451,7 +451,7 @@
   align-items: center;
   justify-content: center;
   min-height: 44px;
-  border: 1px solid #696d69;
+  border: 1px solid var(--chrome-line);
   background: transparent;
   color: var(--surface);
 }
@@ -570,7 +570,7 @@
   width: 100%;
   min-height: 44px;
   padding: 8px 9px;
-  border: 1px solid #a7aaa4;
+  border: 1px solid var(--hairline);
   background: var(--surface);
   color: var(--ink);
   font-size: 0.75rem;
@@ -596,7 +596,7 @@
 .validationBar > div:first-child > svg {
   width: 24px;
   height: 24px;
-  color: #d4b05f;
+  color: var(--warning);
 }
 .validationBar[data-valid="true"] > div:first-child > svg {
   color: var(--signal);
@@ -623,7 +623,7 @@
 .validationActions button {
   min-height: 44px;
   padding: 0 14px;
-  border: 1px solid #515451;
+  border: 1px solid var(--chrome-line);
   background: transparent;
   color: var(--surface);
   font-size: 0.72rem;
@@ -686,7 +686,7 @@
   height: 20px;
 }
 .dialog input {
-  border-color: #9b9f99;
+  border-color: var(--hairline);
   background: var(--surface);
   color: var(--ink);
 }
