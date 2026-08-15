@@ -3993,7 +3993,7 @@ export class Phase4Runtime {
     const featuredAreaId = areaRows[0]?.id ?? "00000000-0000-4000-8000-000000000000";
     const defaultConstraints: ScheduleConstraints = {
       minimum_rest: { mode: "preferred", value: { minutes: 60 }, weight: 4 },
-      maximum_matches_per_day: { mode: "required", value: { matches: 4 } },
+      maximum_matches_per_day: { mode: "preferred", value: { matches: 4 }, weight: 4 },
       preferred_final_time: {
         mode: "preferred",
         value: { target_start_epoch_ms: finalTarget, tolerance_minutes: 30 },
