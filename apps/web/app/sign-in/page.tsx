@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
+import { translate as t } from "@matchday/ui";
 import { BrandLink } from "@/components/foundation/Primitives";
 import styles from "./SignInPage.module.css";
 
 export const metadata: Metadata = {
-  title: "Sign in",
+  title: t("prototype.bfd402b2f6f3"),
   robots: { index: false, follow: false },
 };
 
@@ -18,19 +19,11 @@ export default async function SignInPage({ searchParams }: Readonly<{ searchPara
         <BrandLink />
       </header>
       <section className={styles.content} aria-labelledby="sign-in-title">
-        <h1 id="sign-in-title">{stepUpRequired ? "Verify your sign-in to continue" : "Sign in to manage competitions"}</h1>
-        <p className={styles.lede}>
-          {stepUpRequired
-            ? "This organiser session is valid, but this workspace requires stronger authentication before you continue."
-            : "Your organiser workspace is private. Sign in before creating, scheduling or scoring a competition."}
-        </p>
-        <p className={styles.detail}>
-          {stepUpRequired
-            ? "Continue through the identity provider. MATCHDAY will accept access only after the configured verification requirement is satisfied."
-            : "After authentication, MATCHDAY will return you to the organiser workspace."}
-        </p>
+        <h1 id="sign-in-title">{stepUpRequired ? t("prototype.ee7db0c90f4c") : t("prototype.dca582f9f5bb")}</h1>
+        <p className={styles.lede}>{stepUpRequired ? t("prototype.2bb79c0209d5") : t("prototype.d4eb4782174e")}</p>
+        <p className={styles.detail}>{stepUpRequired ? t("prototype.e6a8b1ba653e") : t("prototype.7183e990a8f5")}</p>
         <a className={styles.action} href="/api/v1/identity/authorize">
-          <span>{stepUpRequired ? "Verify sign-in" : "Sign in"}</span>
+          <span>{stepUpRequired ? t("prototype.7c00476e6d90") : t("prototype.bfd402b2f6f3")}</span>
           <ArrowRight aria-hidden="true" />
         </a>
       </section>

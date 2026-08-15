@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Gauge, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
+import { translate as t } from "@matchday/ui";
 import {
   capacityMutationBody,
   parseCapacityResponse,
@@ -348,9 +349,7 @@ function WindowGroup({
                 <span>
                   {phase3CapacityCopy.crossMidnight}
                   <br />
-                  <small id={crossMidnightHelpId}>
-                    Turn this on when the end time is after midnight, for example 20:00 to 01:00.
-                  </small>
+                  <small id={crossMidnightHelpId}>{t("prototype.813643f18b43")}</small>
                 </span>
               </label>
               <button

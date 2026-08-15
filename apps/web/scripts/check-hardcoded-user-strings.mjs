@@ -34,6 +34,8 @@ const structuralAttributes = new Set([
   "d",
   "weight",
   "autoComplete",
+  "list",
+  "actionNavigation",
   "autoCapitalize",
   "inputMode",
   "kind",
@@ -206,7 +208,10 @@ function isRenderedMachineLiteral(node, source) {
       return true;
     }
   }
-  if (ts.isPropertyAssignment(node.parent) && ["id", "kind", "type", "value"].includes(propertyName(node, source))) {
+  if (
+    ts.isPropertyAssignment(node.parent) &&
+    ["code", "id", "kind", "type", "value"].includes(propertyName(node, source))
+  ) {
     return true;
   }
   if (nonUserCallNames.has(callName(node, source))) return true;
@@ -262,7 +267,8 @@ function isMachineLiteral(node, source) {
     }
     if (ts.isPropertyAssignment(ancestor)) {
       const name = ancestor.name.getText(source).replace(/^['"]|['"]$/g, "");
-      if (["id", "kind", "type", "team", "sync", "resolution", "value", "clearProps"].includes(name)) return true;
+      if (["code", "id", "kind", "type", "team", "sync", "resolution", "value", "clearProps"].includes(name))
+        return true;
     }
     if (ts.isCallExpression(ancestor)) {
       if (isMachineCall(ancestor.expression, source)) return true;
@@ -276,6 +282,7 @@ function isMachineLiteral(node, source) {
     if (
       [
         "dateStyle",
+        "code",
         "display",
         "id",
         "kind",

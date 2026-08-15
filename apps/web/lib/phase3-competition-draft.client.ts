@@ -53,15 +53,13 @@ export function useCompetitionCreateDraft(
   useEffect(() => {
     storageReadyRef.current = false;
     const emptyDraft = initialDraft();
-    draftRef.current = emptyDraft;
-    setDraftState(emptyDraft);
+    let nextDraft = emptyDraft;
     try {
       const raw = window.localStorage.getItem(storageKey);
       if (raw) {
         const restored = parseCompetitionCreateDraft(raw);
         if (restored) {
-          draftRef.current = restored;
-          setDraftState(restored);
+          nextDraft = restored;
         } else {
           window.localStorage.removeItem(storageKey);
         }
@@ -69,8 +67,16 @@ export function useCompetitionCreateDraft(
     } catch {
       // Treat browser persistence as best effort; server-side validation remains authoritative.
     } finally {
+      draftRef.current = nextDraft;
       storageReadyRef.current = true;
     }
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setDraftState(nextDraft);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [initialDraft, storageKey]);
 
   useEffect(() => {

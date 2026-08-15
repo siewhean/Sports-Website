@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { ArrowRight, CalendarDots } from "@phosphor-icons/react/dist/ssr";
+import { translate as t } from "@matchday/ui";
 import { InlineNotice } from "@/components/foundation/Primitives";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 import { phase2Copy, type CompetitionSummaryView } from "@/lib/phase2";
 import styles from "./PublicCompetitionsList.module.css";
 
 const statusLabels: Record<CompetitionSummaryView["status"], string> = {
-  active: "Active",
-  completed: "Completed",
-  archived: "Archived",
+  active: t("prototype.92340695899b"),
+  completed: t("prototype.22a970d2e5b1"),
+  archived: t("prototype.bdb86505f806"),
 };
 
 export function PublicCompetitionsList({ competitions }: { competitions: CompetitionSummaryView[] }) {
@@ -24,18 +25,18 @@ export function PublicCompetitionsList({ competitions }: { competitions: Competi
             <h1>{phase2Copy.publicListTitle}</h1>
             <p>{phase2Copy.publicListIntro}</p>
           </div>
-          <dl className={styles.followGuide} aria-label="What you can follow in each competition">
+          <dl className={styles.followGuide} aria-label={t("prototype.35d3447355e9")}>
             <div>
-              <dt>Schedule</dt>
-              <dd>Published fixtures and start times</dd>
+              <dt>{t("prototype.f4830a1dae29")}</dt>
+              <dd>{t("prototype.ad58797f3416")}</dd>
             </div>
             <div>
-              <dt>Results</dt>
-              <dd>Live and final match scores</dd>
+              <dt>{t("prototype.219c4a6c86a7")}</dt>
+              <dd>{t("prototype.14a3ee805424")}</dd>
             </div>
             <div>
-              <dt>Standings</dt>
-              <dd>Table positions as results land</dd>
+              <dt>{t("prototype.c7342049e69b")}</dt>
+              <dd>{t("prototype.21a980b8febb")}</dd>
             </div>
           </dl>
         </header>
@@ -48,7 +49,11 @@ export function PublicCompetitionsList({ competitions }: { competitions: Competi
           <ol className={styles.board}>
             {competitions.map((competition, index) => (
               <li key={competition.id}>
-                <Link className={styles.row} data-status={competition.status} href={`/competitions/${competition.slug}`}>
+                <Link
+                  className={styles.row}
+                  data-status={competition.status}
+                  href={`/competitions/${competition.slug}`}
+                >
                   <span className={styles.index} aria-hidden="true">
                     {String(index + 1).padStart(2, "0")}
                   </span>
@@ -65,7 +70,7 @@ export function PublicCompetitionsList({ competitions }: { competitions: Competi
                     {statusLabels[competition.status]}
                   </span>
                   <span className={styles.destination}>
-                    <span>Schedule · results · standings</span>
+                    <span>{t("prototype.75e5907f069f")}</span>
                     <ArrowRight aria-hidden="true" />
                   </span>
                 </Link>

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { opaqueId, translate as t } from "@matchday/ui";
 import {
   phase4ScheduleMachine,
   type ScheduleDocument,
@@ -17,6 +18,11 @@ const activeStatuses = new Set<ScheduleJobStatus>([
   phase4ScheduleMachine.best,
   phase4ScheduleMachine.cancelling,
 ]);
+const recoveryMachine = {
+  idle: opaqueId("idle"),
+  restoring: opaqueId("restoring"),
+  failed: opaqueId("failed"),
+} as const;
 
 function assignmentFingerprint(option: ScheduleOption): string {
   return JSON.stringify(
@@ -45,7 +51,7 @@ export function V1ScheduleWorkspace({
 }) {
   const router = useRouter();
   const attemptedRecoveryRef = useRef<string | null>(null);
-  const [recoveryState, setRecoveryState] = useState<"idle" | "restoring" | "failed">("idle");
+  const [recoveryState, setRecoveryState] = useState<"idle" | "restoring" | "failed">(recoveryMachine.idle);
 
   const recoverableOption = useMemo(() => {
     if (advanced || document.currentRevision || !document.canEdit) return null;
@@ -64,7 +70,7 @@ export function V1ScheduleWorkspace({
     attemptedRecoveryRef.current = key;
 
     let live = true;
-    setRecoveryState("restoring");
+    setRecoveryState(recoveryMachine.restoring);
 
     void (async () => {
       try {
@@ -82,14 +88,14 @@ export function V1ScheduleWorkspace({
 
         if (!live) return;
         if (!response.ok) {
-          setRecoveryState("failed");
+          setRecoveryState(recoveryMachine.failed);
           return;
         }
 
-        setRecoveryState("idle");
+        setRecoveryState(recoveryMachine.idle);
         router.refresh();
       } catch {
-        if (live) setRecoveryState("failed");
+        if (live) setRecoveryState(recoveryMachine.failed);
       }
     })();
 
@@ -100,13 +106,8 @@ export function V1ScheduleWorkspace({
 
   return (
     <>
-      {recoveryState === "restoring" ? <p role="status">Restoring your generated schedule as a saved draft…</p> : null}
-      {recoveryState === "failed" ? (
-        <p role="alert">
-          A generated schedule is still available, but MATCHDAY could not restore it automatically. Use “Use this
-          schedule” below to save it as a draft.
-        </p>
-      ) : null}
+      {recoveryState === recoveryMachine.restoring ? <p role="status">{t("prototype.6523982b0541")}</p> : null}
+      {recoveryState === recoveryMachine.failed ? <p role="alert">{t("prototype.000ac935b6a9")}</p> : null}
       <ScheduleWorkspace
         advanced={advanced}
         document={document}

@@ -37,6 +37,28 @@ const copy = {
   none: t("prototype.028141a64b8d"),
   applyingLabel: t("prototype.c2c8f03c0e21"),
   apply: t("prototype.f83bcedd3aa7"),
+  prerequisitesChanged: t("prototype.534727adcf70"),
+  preparationChanged: t("prototype.21188b3c83ff"),
+  format: t("prototype.675eeee2578b"),
+  fixturesReady: t("prototype.3a0616051748"),
+  materialised: t("prototype.372d1baf3b68"),
+  continueToSchedule: t("prototype.3cdacc08fd08"),
+  finishSetup: t("prototype.380508dcb9bf"),
+  readinessBody: t("prototype.f8a571bb1fc5"),
+  completeSetup: t("prototype.52227c712366"),
+  returnToFormat: t("prototype.b84dcbc3e1e3"),
+  prerequisites: t("prototype.8d478bc40b3d"),
+  goTo: t("prototype.a8aa078b7ea6"),
+  pickerTitle: t("prototype.8edfbae782e1"),
+  pickerBody: t("prototype.ae122944be4b"),
+  readyTitle: t("prototype.0368c23692fd"),
+  readyBody: t("prototype.6650f3b35035"),
+  availableFormats: t("prototype.33811c2dbd9e"),
+  availableFormatsBody: t("prototype.f2817b90af81"),
+  option: t("prototype.45aaacba7ea1"),
+  totalMatches: t("prototype.b556e5c45b4e"),
+  guaranteedMatches: t("prototype.4b9c79ade388"),
+  availableSlots: t("prototype.b35e91492eb6"),
 } as const;
 
 function errorDetails(payload: unknown): { code: string | null; message: string | null } {
@@ -52,10 +74,9 @@ function errorDetails(payload: unknown): { code: string | null; message: string 
 function recommendationError(status: number, payload: unknown): string {
   const error = errorDetails(payload);
   if (error.code === "FORMAT_PREREQUISITE_MISSING" || error.code === "SETUP_PREREQUISITE_MISSING") {
-    return "Entries or capacity changed. Complete those setup pages, then return here to choose a format.";
+    return copy.prerequisitesChanged;
   }
-  if (status === 409)
-    return "The competition changed while formats were being prepared. Refresh the page and try again.";
+  if (status === 409) return copy.preparationChanged;
   return error.message ?? copy.prepareError;
 }
 
@@ -150,7 +171,7 @@ export function V1FormatPicker({
         data-testid="v1-format-selected"
       >
         <header className={styles.heading}>
-          <p className={styles.eyebrow}>Competition format</p>
+          <p className={styles.eyebrow}>{copy.format}</p>
           <h2 ref={headingRef} id="v1-format-selected-heading" tabIndex={-1}>
             {copy.selectedTitle}
           </h2>
@@ -159,13 +180,13 @@ export function V1FormatPicker({
         <div className={styles.successPanel} role="status">
           <CheckCircle aria-hidden="true" />
           <div>
-            <h3>Fixtures are ready for scheduling</h3>
-            <p>Your selected format has been saved and materialised into matches.</p>
+            <h3>{copy.fixturesReady}</h3>
+            <p>{copy.materialised}</p>
           </div>
         </div>
         <div className={styles.actions}>
           <Link className={styles.primaryLink} href={effectiveScheduleHref}>
-            Continue to schedule <ArrowRight aria-hidden="true" />
+            {copy.continueToSchedule} <ArrowRight aria-hidden="true" />
           </Link>
           {advancedHref ? (
             <Link className={styles.secondaryLink} href={advancedHref}>
@@ -185,20 +206,18 @@ export function V1FormatPicker({
         data-testid="v1-format-blocked"
       >
         <header className={styles.heading}>
-          <p className={styles.eyebrow}>Competition format</p>
-          <h2 id="v1-format-prerequisite-heading">Finish setup before choosing a format</h2>
-          <p>
-            MATCHDAY needs your teams and available match capacity before it can recommend a format that actually fits.
-          </p>
+          <p className={styles.eyebrow}>{copy.format}</p>
+          <h2 id="v1-format-prerequisite-heading">{copy.finishSetup}</h2>
+          <p>{copy.readinessBody}</p>
         </header>
         <div className={styles.blockedIntro} role="status">
           <WarningCircle aria-hidden="true" />
           <div>
-            <h3>Complete the missing setup below</h3>
-            <p>You can return to Format as soon as both items are ready. Your existing competition work is kept.</p>
+            <h3>{copy.completeSetup}</h3>
+            <p>{copy.returnToFormat}</p>
           </div>
         </div>
-        <ol className={styles.prerequisiteList} aria-label="Format prerequisites">
+        <ol className={styles.prerequisiteList} aria-label={copy.prerequisites}>
           {effectiveReadiness.prerequisites.map((item) => (
             <li className={styles.prerequisiteItem} key={item.id} data-ready={item.ready}>
               <span className={styles.prerequisiteIcon}>{item.ready ? <Check aria-hidden="true" /> : null}</span>
@@ -208,7 +227,7 @@ export function V1FormatPicker({
               </div>
               {item.ready ? null : (
                 <Link className={styles.prerequisiteLink} href={linkFor(item.id)}>
-                  Go to {item.label} <ArrowRight aria-hidden="true" />
+                  {copy.goTo} {item.label} <ArrowRight aria-hidden="true" />
                 </Link>
               )}
             </li>
@@ -221,20 +240,17 @@ export function V1FormatPicker({
   return (
     <section className={styles.workspace} aria-labelledby="v1-format-picker-heading" data-testid="v1-format-picker">
       <header className={styles.heading}>
-        <p className={styles.eyebrow}>Competition format</p>
+        <p className={styles.eyebrow}>{copy.format}</p>
         <h2 ref={headingRef} id="v1-format-picker-heading" tabIndex={-1}>
-          Choose a format that fits your competition
+          {copy.pickerTitle}
         </h2>
-        <p>
-          MATCHDAY uses the entries and playing time you already saved. Review the options, then choose one to create
-          the fixtures used by Schedule.
-        </p>
+        <p>{copy.pickerBody}</p>
       </header>
 
       <div className={styles.readyBar}>
         <div>
-          <h3>Entries and capacity are ready</h3>
-          <p>Generate only formats that fit the competition information currently saved.</p>
+          <h3>{copy.readyTitle}</h3>
+          <p>{copy.readyBody}</p>
         </div>
         {state === copy.idle || state === copy.loading || state === copy.error ? (
           <button
@@ -263,30 +279,32 @@ export function V1FormatPicker({
         <div>
           <div className={styles.optionsHeader}>
             <div>
-              <h3>Available formats</h3>
-              <p>Compare match volume and guaranteed play before selecting.</p>
+              <h3>{copy.availableFormats}</h3>
+              <p>{copy.availableFormatsBody}</p>
             </div>
           </div>
           <ol className={styles.optionList}>
             {options.map((option, index) => (
               <li className={styles.option} key={option.id}>
                 <div>
-                  <p className={styles.optionIndex}>Option {index + 1}</p>
+                  <p className={styles.optionIndex}>
+                    {copy.option} {index + 1}
+                  </p>
                   <h4>{option.name}</h4>
                   <p className={styles.structure}>{option.structure}</p>
                   <p className={styles.advantage}>{option.advantage}</p>
                 </div>
                 <dl className={styles.metrics}>
                   <div>
-                    <dt>Total matches</dt>
+                    <dt>{copy.totalMatches}</dt>
                     <dd>{option.match_count}</dd>
                   </div>
                   <div>
-                    <dt>Guaranteed / entry</dt>
+                    <dt>{copy.guaranteedMatches}</dt>
                     <dd>{option.guaranteed_matches}</dd>
                   </div>
                   <div>
-                    <dt>Slots available</dt>
+                    <dt>{copy.availableSlots}</dt>
                     <dd>{option.available_match_slots}</dd>
                   </div>
                 </dl>
