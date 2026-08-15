@@ -131,7 +131,8 @@ export function V1ScheduleWorkspace({
   useEffect(() => {
     if (!recoverableOption) return;
 
-    const key = `${recoverableOption.jobId}:${recoverableOption.id}:${recoverableOption.jobRevision}:${assignmentFingerprint(recoverableOption)}`;
+    const key =
+      `${recoverableOption.jobId}:${recoverableOption.id}:${recoverableOption.jobRevision}:${assignmentFingerprint(recoverableOption)}`;
     if (attemptedRecoveryRef.current === key) return;
     attemptedRecoveryRef.current = key;
 
