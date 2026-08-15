@@ -27,6 +27,8 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - name: Install frozen dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build API workspace dependency closure
+        run: pnpm --filter @matchday/api... build
       - name: Install Chromium
         run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
       - name: Run exact-capacity real-stack journey
@@ -49,6 +51,8 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - name: Install frozen dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build API workspace dependency closure
+        run: pnpm --filter @matchday/api... build
       - name: Install Chromium
         run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
       - name: Run completed tournament results/publish journey
