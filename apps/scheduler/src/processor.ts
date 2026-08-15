@@ -31,12 +31,7 @@ export type ScheduleProcessorOptions = Readonly<{
 
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_CANCELLATION_POLL_MS = 250;
-// Dense but valid V1 schedules can legitimately need more than one second for
-// a solver worker operation on shared production compute. Cancellation remains
-// independently polled and aborts the worker thread immediately, so this bound
-// protects against runaway solver work without making cancellation wait 5s.
-const DEFAULT_MAX_YIELD_INTERVAL_MS = 5_000;
-const MAX_YIELD_INTERVAL_MS = 10_000;
+const DEFAULT_MAX_YIELD_INTERVAL_MS = 1_000;
 
 export class ScheduleJobProcessor {
   readonly #options: Required<Pick<ScheduleProcessorOptions, "leaseMs" | "cancellationPollMs" | "maxYieldIntervalMs">> &
@@ -54,9 +49,9 @@ export class ScheduleJobProcessor {
     if (
       !Number.isInteger(maxYieldIntervalMs) ||
       maxYieldIntervalMs < cancellationPollMs ||
-      maxYieldIntervalMs > MAX_YIELD_INTERVAL_MS
+      maxYieldIntervalMs > 1_000
     ) {
-      throw new Error(`maxYieldIntervalMs must be an integer from cancellationPollMs to ${MAX_YIELD_INTERVAL_MS}`);
+      throw new Error("maxYieldIntervalMs must be an integer from cancellationPollMs to 1000");
     }
     this.#options = { ...options, leaseMs, cancellationPollMs, maxYieldIntervalMs };
   }
@@ -266,90 +261,111 @@ export class ScheduleJobProcessor {
     }
   }
 
-  private callMetric(callback: (metrics: SchedulerMetrics) => void) {
-    if (this.#options.metrics) callback(this.#options.metrics);
+  private callMetric(operation: (metrics: SchedulerMetrics) => void): void {
+    if (this.#options.metrics === undefined) return;
+    try {
+      operation(this.#options.metrics);
+    } catch {
+      // Exporter failures cannot change persisted scheduler outcomes.
+    }
   }
+}
+
+function validateClaim(payload: ScheduleQueuePayload, claim: ClaimedScheduleJob): void {
+  if (
+    claim.jobId !== payload.jobId ||
+    claim.competitionId !== payload.competitionId ||
+    claim.input.job_id !== payload.jobId ||
+    claim.input.competition_id !== payload.competitionId ||
+    claim.inputHash !== payload.inputHash ||
+    deterministicJsonHash(claim.input) !== claim.inputHash
+  ) {
+    throw new SchedulerInvariantError("Persisted schedule input does not match its immutable queue identity");
+  }
+  if (!Number.isInteger(claim.continuationIteration) || claim.continuationIteration < 0 || !claim.fenceToken) {
+    throw new SchedulerInvariantError("Invalid schedule persistence claim");
+  }
+}
+
+function normalizeCandidate(candidate: ScheduleCandidate, claim: ClaimedScheduleJob): ScheduleCandidate {
+  if (!Number.isInteger(candidate.iteration) || candidate.iteration < 0) {
+    throw new SchedulerInvariantError("Schedule candidate iteration must be a non-negative integer");
+  }
+  if (
+    candidate.result.schema_version !== 1 ||
+    candidate.result.job_id !== claim.jobId ||
+    candidate.result.source_revision !== claim.input.source_revision ||
+    candidate.result.status !== "valid" ||
+    candidate.result.quality?.valid !== true
+  ) {
+    throw new SchedulerInvariantError("Optimizer yielded a candidate with mismatched identity or invalid status");
+  }
+  const assignmentIds = candidate.result.assignments.map((assignment) => assignment.match_id);
+  if (new Set(assignmentIds).size !== assignmentIds.length) {
+    throw new SchedulerInvariantError("Optimizer yielded duplicate match assignments");
+  }
+  const normalizedResult: ScheduleJobResult = {
+    ...candidate.result,
+    result_revision: 0,
+    assignment_hash: deterministicJsonHash(candidate.result.assignments),
+  };
+  return { iteration: candidate.iteration, result: normalizedResult };
 }
 
 export function isStrictImprovement(candidate: ScheduleJobResult, current: ScheduleJobResult | null): boolean {
-  if (candidate.status !== "valid" || candidate.quality === null || !candidate.quality.valid) return false;
-  if (current === null || current.quality === null || !current.quality.valid) return true;
+  if (candidate.status !== "valid" || candidate.quality?.valid !== true) return false;
+  if (current === null || current.quality === null) return true;
+  if (candidate.quality.score !== current.quality.score) {
+    return candidate.quality.score > current.quality.score;
+  }
+  if (candidate.quality.preferred_penalty !== current.quality.preferred_penalty) {
+    return candidate.quality.preferred_penalty < current.quality.preferred_penalty;
+  }
   if (candidate.quality.objective !== current.quality.objective) return false;
-  const candidateKey = qualityKey(candidate);
-  const currentKey = qualityKey(current);
-  for (let index = 0; index < candidateKey.length; index += 1) {
-    if (candidateKey[index]! < currentKey[index]!) return true;
-    if (candidateKey[index]! > currentKey[index]!) return false;
+  switch (candidate.quality.objective) {
+    case "fastest":
+      if (candidate.quality.makespan_minutes !== current.quality.makespan_minutes) {
+        return candidate.quality.makespan_minutes < current.quality.makespan_minutes;
+      }
+      break;
+    case "rest_focused": {
+      const candidateRest = candidate.quality.minimum_rest_minutes ?? Number.POSITIVE_INFINITY;
+      const currentRest = current.quality.minimum_rest_minutes ?? Number.POSITIVE_INFINITY;
+      if (candidateRest !== currentRest) return candidateRest > currentRest;
+      break;
+    }
+    case "balanced": {
+      if (candidate.quality.maximum_matches_per_entry_day !== current.quality.maximum_matches_per_entry_day) {
+        return candidate.quality.maximum_matches_per_entry_day < current.quality.maximum_matches_per_entry_day;
+      }
+      const candidateFinalDelta = candidate.quality.preferred_final_delta_minutes ?? Number.NEGATIVE_INFINITY;
+      const currentFinalDelta = current.quality.preferred_final_delta_minutes ?? Number.NEGATIVE_INFINITY;
+      if (candidateFinalDelta !== currentFinalDelta) return candidateFinalDelta < currentFinalDelta;
+      if (candidate.quality.makespan_minutes !== current.quality.makespan_minutes) {
+        return candidate.quality.makespan_minutes < current.quality.makespan_minutes;
+      }
+      break;
+    }
   }
-  return candidate.assignment_hash < current.assignment_hash;
+  return candidate.assignment_hash.localeCompare(current.assignment_hash) < 0;
 }
 
-function qualityKey(result: ScheduleJobResult): number[] {
-  const quality = result.quality!;
-  if (quality.objective === "fastest") {
-    return [quality.makespan_minutes, quality.preferred_penalty, -quality.minimum_rest_minutes!];
-  }
-  if (quality.objective === "rest_focused") {
-    return [-quality.minimum_rest_minutes!, quality.makespan_minutes, quality.preferred_penalty];
-  }
-  return [quality.preferred_penalty, quality.makespan_minutes, -quality.minimum_rest_minutes!];
-}
-
-function normalizeCandidate(candidate: ScheduleCandidate, claimed: ClaimedScheduleJob): ScheduleCandidate {
-  const result = candidate.result;
-  if (result.schema_version !== 1 || result.job_id !== claimed.jobId || result.source_revision !== claimed.input.source_revision) {
-    throw new SchedulerInvariantError("Optimizer candidate provenance does not match the claimed job");
-  }
-  if (result.status !== "valid" || result.quality === null || !result.quality.valid) {
-    throw new SchedulerInvariantError("Optimizer produced an invalid checkpoint candidate");
-  }
-  if (result.quality.objective !== claimed.input.objective) {
-    throw new SchedulerInvariantError("Optimizer candidate objective does not match the claimed job");
-  }
-  return {
-    iteration: candidate.iteration,
-    result: {
-      ...result,
-      assignment_hash: deterministicJsonHash(result.assignments),
-    },
-  };
-}
-
-function validateClaim(payload: ScheduleQueuePayload, claimed: ClaimedScheduleJob): void {
-  if (
-    claimed.jobId !== payload.jobId ||
-    claimed.competitionId !== payload.competitionId ||
-    claimed.inputHash !== payload.inputHash ||
-    claimed.correlationId !== payload.correlationId ||
-    claimed.input.job_id !== payload.jobId ||
-    claimed.input.competition_id !== payload.competitionId
-  ) {
-    throw new SchedulerInvariantError("Claimed schedule job does not match queue payload");
-  }
-  const expectedInputHash = deterministicJsonHash(claimed.input);
-  if (expectedInputHash !== claimed.inputHash) {
-    throw new SchedulerInvariantError("Persisted schedule input hash does not match canonical input");
-  }
-}
-
-async function nextWithDeadline<T>(
-  iterator: AsyncIterator<T>,
-  deadlineMs: number,
+async function nextWithDeadline(
+  iterator: AsyncIterator<ScheduleCandidate>,
+  timeoutMs: number,
   abort: AbortController,
-): Promise<IteratorResult<T>> {
+): Promise<IteratorResult<ScheduleCandidate>> {
   let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new SolverYieldDeadlineError(timeoutMs);
+      abort.abort(error);
+      reject(error);
+    }, timeoutMs);
+    timer.unref();
+  });
   try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          const error = new SolverYieldDeadlineError(deadlineMs);
-          abort.abort(error);
-          reject(error);
-        }, deadlineMs);
-        timer.unref();
-      }),
-    ]);
+    return await Promise.race([iterator.next(), deadline]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
