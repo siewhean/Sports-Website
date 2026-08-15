@@ -9,9 +9,15 @@ RESTORE_DB="matchday_restore_test_${RUN_SUFFIX}"
 BACKUP_FILE="/tmp/${SOURCE_DB}.dump"
 MODE="${BACKUP_VERIFY_MODE:-docker}"
 DIRECT_ADMIN_DATABASE_URL="${BACKUP_VERIFY_ADMIN_DATABASE_URL:-postgresql:///postgres}"
+DIRECT_CLIENT_IMAGE="${BACKUP_VERIFY_DIRECT_CLIENT_IMAGE:-}"
 
 if [[ "$MODE" != "docker" && "$MODE" != "direct" ]]; then
   echo "BACKUP_VERIFY_MODE must be docker or direct" >&2
+  exit 2
+fi
+
+if [[ -n "$DIRECT_CLIENT_IMAGE" && ! "$DIRECT_CLIENT_IMAGE" =~ ^postgres:[0-9]+(\.[0-9]+)?-alpine$ ]]; then
+  echo "BACKUP_VERIFY_DIRECT_CLIENT_IMAGE must be a pinned PostgreSQL Alpine image." >&2
   exit 2
 fi
 
@@ -57,6 +63,14 @@ process.stdout.write(url.toString());
 NODE
 }
 
+direct_postgres_tool() {
+  if [[ -n "$DIRECT_CLIENT_IMAGE" ]]; then
+    docker run --rm --network host --volume /tmp:/tmp "$DIRECT_CLIENT_IMAGE" "$@"
+    return
+  fi
+  "$@"
+}
+
 assert_disposable_database_name() {
   if [[ ! "$1" =~ ^matchday_(backup|restore)_test_[0-9]+_[0-9]+_[0-9]+$ ]]; then
     echo "Refusing to operate on a non-disposable verification database." >&2
@@ -65,7 +79,7 @@ assert_disposable_database_name() {
 }
 
 direct_exec() {
-  psql --dbname="$(direct_database_url "$1")" --set=ON_ERROR_STOP=1 --command="$2"
+  direct_postgres_tool psql --dbname="$(direct_database_url "$1")" --set=ON_ERROR_STOP=1 --command="$2"
 }
 
 cleanup() {
@@ -74,8 +88,8 @@ cleanup() {
   if [[ "$MODE" == "direct" ]]; then
     local maintenance_url
     maintenance_url="$(direct_maintenance_url)"
-    dropdb --if-exists --force --maintenance-db="$maintenance_url" "$SOURCE_DB" >/dev/null 2>&1 || true
-    dropdb --if-exists --force --maintenance-db="$maintenance_url" "$RESTORE_DB" >/dev/null 2>&1 || true
+    direct_postgres_tool dropdb --if-exists --force --maintenance-db="$maintenance_url" "$SOURCE_DB" >/dev/null 2>&1 || true
+    direct_postgres_tool dropdb --if-exists --force --maintenance-db="$maintenance_url" "$RESTORE_DB" >/dev/null 2>&1 || true
     rm -f "$BACKUP_FILE"
     return
   fi
@@ -93,7 +107,7 @@ fi
 cleanup
 if [[ "$MODE" == "direct" ]]; then
   maintenance_url="$(direct_maintenance_url)"
-  createdb --maintenance-db="$maintenance_url" "$SOURCE_DB"
+  direct_postgres_tool createdb --maintenance-db="$maintenance_url" "$SOURCE_DB"
   export DATABASE_URL="$(direct_database_url "$SOURCE_DB")"
 else
   postgres_exec createdb -U matchday "$SOURCE_DB"
@@ -105,13 +119,13 @@ pnpm --dir "$ROOT_DIR" db:migrate
 
 if [[ "$MODE" == "direct" ]]; then
   direct_exec "$SOURCE_DB" "INSERT INTO accounts (id, primary_email, display_name, status) VALUES ('00000000-0000-4000-8000-000000000001', 'restore-check@example.test', 'Restore Check', 'active');" >/dev/null
-  pg_dump --dbname="$(direct_database_url "$SOURCE_DB")" --format=custom --file="$BACKUP_FILE"
-  createdb --maintenance-db="$maintenance_url" "$RESTORE_DB"
-  pg_restore --dbname="$(direct_database_url "$RESTORE_DB")" --exit-on-error "$BACKUP_FILE"
-  source_count="$(psql --dbname="$(direct_database_url "$SOURCE_DB")" --tuples-only --no-align --command="SELECT count(*) FROM accounts;")"
-  restore_count="$(psql --dbname="$(direct_database_url "$RESTORE_DB")" --tuples-only --no-align --command="SELECT count(*) FROM accounts;")"
-  source_fingerprint="$(psql --dbname="$(direct_database_url "$SOURCE_DB")" --tuples-only --no-align --command="SELECT md5(string_agg(id::text || ':' || primary_email, ',' ORDER BY id)) FROM accounts;")"
-  restore_fingerprint="$(psql --dbname="$(direct_database_url "$RESTORE_DB")" --tuples-only --no-align --command="SELECT md5(string_agg(id::text || ':' || primary_email, ',' ORDER BY id)) FROM accounts;")"
+  direct_postgres_tool pg_dump --dbname="$(direct_database_url "$SOURCE_DB")" --format=custom --file="$BACKUP_FILE"
+  direct_postgres_tool createdb --maintenance-db="$maintenance_url" "$RESTORE_DB"
+  direct_postgres_tool pg_restore --dbname="$(direct_database_url "$RESTORE_DB")" --exit-on-error "$BACKUP_FILE"
+  source_count="$(direct_postgres_tool psql --dbname="$(direct_database_url "$SOURCE_DB")" --tuples-only --no-align --command="SELECT count(*) FROM accounts;")"
+  restore_count="$(direct_postgres_tool psql --dbname="$(direct_database_url "$RESTORE_DB")" --tuples-only --no-align --command="SELECT count(*) FROM accounts;")"
+  source_fingerprint="$(direct_postgres_tool psql --dbname="$(direct_database_url "$SOURCE_DB")" --tuples-only --no-align --command="SELECT md5(string_agg(id::text || ':' || primary_email, ',' ORDER BY id)) FROM accounts;")"
+  restore_fingerprint="$(direct_postgres_tool psql --dbname="$(direct_database_url "$RESTORE_DB")" --tuples-only --no-align --command="SELECT md5(string_agg(id::text || ':' || primary_email, ',' ORDER BY id)) FROM accounts;")"
 else
   postgres_exec psql -v ON_ERROR_STOP=1 -U matchday -d "$SOURCE_DB" -c \
     "INSERT INTO accounts (id, primary_email, display_name, status) VALUES ('00000000-0000-4000-8000-000000000001', 'restore-check@example.test', 'Restore Check', 'active');" >/dev/null

@@ -68,7 +68,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test:unit
       - run: pnpm db:migrate:check
-      - run: BACKUP_VERIFY_MODE=direct BACKUP_VERIFY_ADMIN_DATABASE_URL=postgres://matchday:matchday@127.0.0.1:5432/postgres pnpm backup:verify
+      - run: BACKUP_VERIFY_MODE=direct BACKUP_VERIFY_ADMIN_DATABASE_URL=postgres://matchday:matchday@127.0.0.1:5432/postgres BACKUP_VERIFY_DIRECT_CLIENT_IMAGE=postgres:18.4-alpine pnpm backup:verify
       - run: pnpm test:integration
       - run: pnpm validate:fixtures
       - run: pnpm --filter @matchday/api openapi:generate
