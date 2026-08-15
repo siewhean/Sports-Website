@@ -7,6 +7,7 @@ import {
   type ConstraintSetting,
   type ScheduleProblem,
   type SchedulingConstraints,
+  type SchedulingMatch,
   type SchedulingSlot,
 } from "../src/index.js";
 
@@ -48,20 +49,29 @@ function exactSlots(count: number, areas: number): SchedulingSlot[] {
   });
 }
 
-function fullPlacementDivision(divisionId: string, prefix: string) {
+function materialisedFullPlacementDivision(divisionId: string, prefix: string): SchedulingMatch[] {
   const template = createDefaultFormatTemplates(8).find((candidate) => candidate.strategy === "full_placement");
   if (!template) throw new Error("8-entry full-placement template is missing");
-  return deriveSchedulingMatches(
+  const derived = deriveSchedulingMatches(
     template.graph,
     divisionId,
-    Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, `${prefix}-${index + 1}`])),
+    Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, `${prefix}-entry-${index + 1}`])),
     30,
   );
+  const materialisedIds = new Map(derived.map((match, index) => [match.id, `${prefix}-match-${index + 1}`]));
+  return derived.map((match) => ({
+    ...match,
+    id: materialisedIds.get(match.id)!,
+    dependencyMatchIds: match.dependencyMatchIds.map((dependencyId) => materialisedIds.get(dependencyId)!),
+  }));
 }
 
 describe("V1 exact-capacity full-placement scheduling", () => {
   it("finds a valid schedule for two 8-entry full-placement divisions with exactly one slot per fixture", () => {
-    const matches = [...fullPlacementDivision("open", "open"), ...fullPlacementDivision("women", "women")];
+    const matches = [
+      ...materialisedFullPlacementDivision("open", "open"),
+      ...materialisedFullPlacementDivision("women", "women"),
+    ];
     expect(matches).toHaveLength(36);
     const problem: ScheduleProblem = {
       timeZone: "Asia/Singapore",
