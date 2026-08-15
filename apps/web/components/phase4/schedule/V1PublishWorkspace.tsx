@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ActionLink } from "@/components/foundation/Primitives";
-import { parseSchedulePublishReceipt, phase4ScheduleMachine, type ScheduleDocument } from "@/lib/phase4-schedule";
+import { parseSchedulePublishResponse, phase4ScheduleMachine, type ScheduleDocument } from "@/lib/phase4-schedule";
 import {
   v1ScheduleBlockingConflictMessage,
   v1ScheduleProductionCopy,
@@ -20,12 +20,10 @@ export function V1PublishWorkspace({
   const [status, setStatus] = useState<"idle" | "publishing" | "published" | "stale" | "failed">("idle");
   const [message, setMessage] = useState("");
   const revision = document.currentRevision;
-  const blocking = document.violations.filter(
-    (violation) => violation.severity === phase4ScheduleMachine.required || violation.severity === "hard",
-  ).length;
+  const blocking = revision?.violations.filter((violation) => violation.severity !== "preferred").length ?? 0;
 
   async function publish() {
-    if (!revision || !document.canEdit || blocking > 0 || status === "publishing") return;
+    if (!revision || !document.canPublish || blocking > 0 || status === "publishing") return;
     setStatus("publishing");
     setMessage("");
     try {
@@ -52,14 +50,14 @@ export function V1PublishWorkspace({
         setMessage(v1ScheduleProductionCopy.publishFailed);
         return;
       }
-      const receipt = parseSchedulePublishReceipt(await response.json().catch(() => null));
-      if (!receipt) {
+      const published = parseSchedulePublishResponse(await response.json().catch(() => null));
+      if (!published) {
         setStatus("failed");
         setMessage(v1ScheduleProductionCopy.malformedPublish);
         return;
       }
       setStatus("published");
-      setMessage(v1SchedulePublishedMessage(receipt.publishedRevision));
+      setMessage(v1SchedulePublishedMessage(published.revision));
       router.refresh();
     } catch {
       setStatus("failed");
@@ -67,7 +65,11 @@ export function V1PublishWorkspace({
     }
   }
 
-  if (document.state === phase4ScheduleMachine.unavailable || document.state === phase4ScheduleMachine.offline) {
+  if (
+    document.state === phase4ScheduleMachine.offline ||
+    document.state === phase4ScheduleMachine.error ||
+    document.state === phase4ScheduleMachine.loading
+  ) {
     return (
       <section className="p2-data-section" aria-labelledby="v1-publish-unavailable-title">
         <h2 id="v1-publish-unavailable-title">{v1ScheduleProductionCopy.publicationUnavailableTitle}</h2>
@@ -114,13 +116,13 @@ export function V1PublishWorkspace({
         </div>
       </dl>
       {blocking > 0 ? <p role="alert">{v1ScheduleBlockingConflictMessage(blocking)}</p> : null}
-      {!document.canEdit ? <p role="status">{v1ScheduleProductionCopy.publishPermission}</p> : null}
+      {!document.canPublish ? <p role="status">{v1ScheduleProductionCopy.publishPermission}</p> : null}
       {message ? <p role={status === "failed" || status === "stale" ? "alert" : "status"}>{message}</p> : null}
       <div className="p2-section-actions">
         <button
           type="button"
           className="p2-action-primary"
-          disabled={!document.canEdit || blocking > 0 || status === "publishing"}
+          disabled={!document.canPublish || blocking > 0 || status === "publishing"}
           onClick={() => void publish()}
         >
           {status === "publishing" ? v1ScheduleProductionCopy.publishing : v1ScheduleProductionCopy.publishSchedule}
