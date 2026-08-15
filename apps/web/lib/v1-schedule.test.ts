@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ScheduleJob, ScheduleOption } from "./phase4-schedule";
-import { isAdvancedScheduleView, v1ScheduleObjective, v1ScheduleOption, v1ScheduleProgress } from "./v1-schedule";
+import {
+  isAdvancedScheduleView,
+  isV1ScheduleOptimising,
+  v1ScheduleObjective,
+  v1ScheduleOption,
+  v1ScheduleProgress,
+} from "./v1-schedule";
 
 function option(objective: ScheduleOption["objective"]): ScheduleOption {
   return {
@@ -56,6 +62,20 @@ describe("V1 schedule defaults", () => {
   ] as const)("reports %s jobs without a candidate as %s", (status, expected) => {
     expect(v1ScheduleProgress(job(status))).toBe(expected);
   });
+
+  it.each(["queued", "running", "valid_best_found", "cancelling"] as const)(
+    "keeps the V1 optimiser indicator visible while a %s job is active",
+    (status) => {
+      expect(isV1ScheduleOptimising(job(status))).toBe(true);
+    },
+  );
+
+  it.each(["completed", "failed", "no_solution", "stale", "cancelled"] as const)(
+    "removes the V1 optimiser indicator after a %s job is terminal",
+    (status) => {
+      expect(isV1ScheduleOptimising(job(status))).toBe(false);
+    },
+  );
 });
 
 function job(status: ScheduleJob["status"]): ScheduleJob {

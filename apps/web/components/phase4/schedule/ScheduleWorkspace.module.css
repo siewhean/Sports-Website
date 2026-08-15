@@ -95,9 +95,17 @@
 }
 
 .simpleStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   margin: 0;
   color: var(--schedule-muted);
   font-size: 0.82rem;
+}
+
+.simpleStatusSpinner {
+  flex: 0 0 auto;
+  animation: schedule-spinner 0.8s linear infinite;
 }
 
 .simpleCommandBar p,
@@ -724,9 +732,21 @@ button:disabled {
   outline-offset: 3px;
 }
 
+@keyframes schedule-spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @keyframes schedule-shimmer {
   to {
     background-position: -240% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .simpleStatusSpinner {
+    animation: none;
   }
 }
 

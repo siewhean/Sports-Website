@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import { translate as t } from "@matchday/ui";
 import { SystemStatePage } from "@/components/foundation/SystemStatePage";
 
 export const metadata: Metadata = {
-  title: "Sign in",
+  title: t("prototype.bfd402b2f6f3"),
   robots: { index: false, follow: false },
 };
 
@@ -14,18 +15,10 @@ export default async function SignInPage({ searchParams }: Readonly<{ searchPara
     <SystemStatePage
       kind="forbidden"
       code={stepUpRequired ? "VERIFY" : "ORGANISER"}
-      title={stepUpRequired ? "Verify your sign-in to continue" : "Sign in to manage competitions"}
-      body={
-        stepUpRequired
-          ? "This organiser session is valid, but this workspace requires stronger authentication before you continue."
-          : "Your organiser workspace is private. Sign in before creating, scheduling or scoring a competition."
-      }
-      detail={
-        stepUpRequired
-          ? "Continue through the identity provider. MATCHDAY will accept access only after the configured verification requirement is satisfied."
-          : "After authentication, MATCHDAY will return you to the organiser workspace."
-      }
-      actionLabel={stepUpRequired ? "Verify sign-in" : "Sign in"}
+      title={stepUpRequired ? t("prototype.ee7db0c90f4c") : t("prototype.dca582f9f5bb")}
+      body={stepUpRequired ? t("prototype.2bb79c0209d5") : t("prototype.d4eb4782174e")}
+      detail={stepUpRequired ? t("prototype.e6a8b1ba653e") : t("prototype.7183e990a8f5")}
+      actionLabel={stepUpRequired ? t("prototype.7c00476e6d90") : t("prototype.bfd402b2f6f3")}
       actionHref="/api/v1/identity/authorize"
       actionNavigation="document"
     />

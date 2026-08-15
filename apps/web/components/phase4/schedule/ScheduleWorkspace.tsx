@@ -9,6 +9,7 @@ import {
   ArrowsLeftRight,
   CalendarBlank,
   CheckCircle,
+  CircleNotch,
   Clock,
   HourglassMedium,
   LockKey,
@@ -45,7 +46,7 @@ import {
   type ScheduleObjective,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
-import { v1ScheduleObjective, v1ScheduleOption, v1ScheduleProgress } from "@/lib/v1-schedule";
+import { isV1ScheduleOptimising, v1ScheduleObjective, v1ScheduleOption, v1ScheduleProgress } from "@/lib/v1-schedule";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -1051,13 +1052,23 @@ function JobRail({
 function SimpleScheduleStatus({ job }: { job: ScheduleJob | null }) {
   if (!job) return null;
   const progress = v1ScheduleProgress(job);
-  return (
-    <p className={styles.simpleStatus} role="status" data-testid="v1-schedule-status">
-      {progress === "ready"
+  const isOptimising = isV1ScheduleOptimising(job);
+  const message =
+    isOptimising || progress === "terminal"
+      ? jobStatusTitle(job)
+      : progress === "ready"
         ? phase4ScheduleCopy.v1ReadyBody
-        : progress === "creating"
-          ? phase4ScheduleCopy.v1Creating
-          : jobStatusTitle(job)}
+        : phase4ScheduleCopy.v1Creating;
+  return (
+    <p
+      className={styles.simpleStatus}
+      role="status"
+      aria-live="polite"
+      aria-busy={isOptimising || undefined}
+      data-testid="v1-schedule-status"
+    >
+      {isOptimising ? <CircleNotch className={styles.simpleStatusSpinner} aria-hidden="true" /> : null}
+      <span data-testid={isOptimising ? "v1-schedule-optimising" : undefined}>{message}</span>
     </p>
   );
 }

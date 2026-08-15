@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowClockwise, ArrowRight, LockKey, Plugs, WarningCircle } from "@phosphor-icons/react/dist/ssr";
+import { opaqueId } from "@matchday/ui";
 import { ActionLink, BrandLink } from "./Primitives";
 
 const iconByKind = {
@@ -19,7 +20,7 @@ export function SystemStatePage({
   detail,
   actionLabel,
   actionHref,
-  actionNavigation = "client",
+  actionNavigation = opaqueId("client") as "client",
   action,
 }: Readonly<{
   kind: keyof typeof iconByKind;

@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { translate as t } from "@matchday/ui";
 import { forwardPhase3Mutation, jsonBody } from "@/lib/phase3-settings-command.server";
 import {
   isCompetitionCreateRequest,
@@ -78,8 +79,7 @@ export async function POST(request: NextRequest) {
     {
       error: {
         code: "COMPETITION_CREATE_FAILED",
-        message:
-          "Competition could not be created. The competition URL may already be in use. Try a different URL and submit again.",
+        message: t("prototype.ba5d9c34e7d6"),
         ...(typeof upstreamError.request_id === "string" ? { request_id: upstreamError.request_id } : {}),
       },
     },
