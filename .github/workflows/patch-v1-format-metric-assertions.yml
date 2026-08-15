@@ -1,0 +1,31 @@
+name: Patch V1 Format Metric Assertions
+
+on:
+  push:
+    branches:
+      - qa/v1-exact-capacity-full-placement-e2e
+    paths:
+      - .github/workflows/patch-v1-format-metric-assertions.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Apply semantic metric assertions
+        run: python scripts/tmp-v1-format-metric-assertions.py
+      - name: Remove temporary patch tooling
+        run: |
+          git rm .github/workflows/patch-v1-format-metric-assertions.yml
+          git rm scripts/tmp-v1-format-metric-assertions.py
+      - name: Commit QA-only correction
+        run: |
+          git config user.name "matchday-v1-bot"
+          git config user.email "65327039+siewhean@users.noreply.github.com"
+          git add apps/web/tests .github/workflows scripts
+          git diff --cached --check
+          git commit -m "test(v1): assert format counts by semantic metric"
+          git push origin HEAD:qa/v1-exact-capacity-full-placement-e2e
