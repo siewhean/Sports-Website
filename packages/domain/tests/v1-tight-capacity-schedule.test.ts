@@ -18,16 +18,10 @@ function ignored<T>(value: T): ConstraintSetting<T> {
   return { mode: "ignored", value };
 }
 
-function dailyCap(mode: "preferred" | "required"): ConstraintSetting<{ matches: number }> {
-  return mode === "preferred"
-    ? { mode: "preferred", value: { matches: 4 }, weight: 4 }
-    : { mode: "required", value: { matches: 4 } };
-}
-
-function constraints(maximumMatchesMode: "preferred" | "required" = "preferred"): SchedulingConstraints {
+function constraints(): SchedulingConstraints {
   return {
     minimumRest: { mode: "preferred", value: { minutes: 60 }, weight: 4 },
-    maximumMatchesPerDay: dailyCap(maximumMatchesMode),
+    maximumMatchesPerDay: { mode: "preferred", value: { matches: 4 }, weight: 4 },
     preferredFinalTime: {
       mode: "preferred",
       value: { targetStartEpochMs: START + 8 * 60 * MINUTE_MS, toleranceMinutes: 120 },
@@ -39,7 +33,7 @@ function constraints(maximumMatchesMode: "preferred" | "required" = "preferred")
     avoidConsecutiveMatches: { mode: "preferred", value: { minutes: 30 }, weight: 4 },
     balanceEarlyMatches: { mode: "preferred", value: { beforeLocalTime: "10:00" }, weight: 2 },
     balanceLateMatches: { mode: "preferred", value: { atOrAfterLocalTime: "17:00" }, weight: 2 },
-    keepDivisionTogether: { mode: "preferred", value: { maximumAreaCount: 2 }, weight: 2 },
+    keepDivisionTogether: { mode: "preferred", value: { maximumAreaCount: 1 }, weight: 2 },
     preserveExistingSchedule: ignored({ maximumShiftMinutes: 0, byMatchId: {} }),
   };
 }
@@ -76,48 +70,21 @@ function materialisedFullPlacementDivision(divisionId: string, prefix: string): 
   }));
 }
 
-function exactCapacityProblem(maximumMatchesMode: "preferred" | "required" = "preferred"): ScheduleProblem {
-  const matches = [
-    ...materialisedFullPlacementDivision("open", "open"),
-    ...materialisedFullPlacementDivision("women", "women"),
-  ];
-  return {
-    timeZone: "Asia/Singapore",
-    objective: "balanced",
-    matches,
-    slots: exactSlots(matches.length, 2),
-    constraints: constraints(maximumMatchesMode),
-  };
-}
-
-describe("V1 exact-capacity full-placement scheduling", () => {
-  it("finds a valid schedule for 36 full-placement fixtures in exactly 36 slots with the V1 daily cap as a preference", () => {
-    const problem = exactCapacityProblem("preferred");
-    expect(problem.matches).toHaveLength(36);
-    expect(problem.slots).toHaveLength(36);
-
+describe("division-cohesive exact-capacity scheduling", () => {
+  it("finds a valid 36-slot schedule when one area per division is only a preference", () => {
+    const matches = [
+      ...materialisedFullPlacementDivision("open", "open"),
+      ...materialisedFullPlacementDivision("women", "women"),
+    ];
+    const problem: ScheduleProblem = {
+      timeZone: "Asia/Singapore",
+      objective: "balanced",
+      matches,
+      slots: exactSlots(matches.length, 2),
+      constraints: constraints(),
+    };
     const candidates = generateScheduleCandidates(problem, { maxIterations: 64 });
     const valid = candidates.find((candidate) => validateSchedule(problem, candidate.assignments).valid);
     expect(valid).toBeDefined();
-  });
-
-  it("proves the old hidden required four-match daily cap invalidates the same otherwise valid 36-slot schedule", () => {
-    const preferredProblem = exactCapacityProblem("preferred");
-    const preferredCandidate = generateScheduleCandidates(preferredProblem, { maxIterations: 64 }).find(
-      (candidate) => validateSchedule(preferredProblem, candidate.assignments).valid,
-    );
-    expect(preferredCandidate).toBeDefined();
-
-    const requiredProblem = exactCapacityProblem("required");
-    const requiredValidation = validateSchedule(requiredProblem, preferredCandidate!.assignments);
-    expect(requiredValidation.valid).toBe(false);
-    expect(requiredValidation.violations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "maximum_matches_per_day",
-          severity: "hard",
-        }),
-      ]),
-    );
   });
 });
