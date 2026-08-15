@@ -3,6 +3,7 @@ import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { CapacityEditor } from "@/components/phase3/CapacityEditor";
 import { EntriesEditor } from "@/components/phase3/EntriesEditor";
 import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
+import { V1PublishWorkspace } from "@/components/phase4/schedule/V1PublishWorkspace";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase3CapacityCopy, phase3CapacityMachine } from "@/lib/phase3-capacity";
@@ -10,6 +11,8 @@ import { getCapacityDocument } from "@/lib/phase3-capacity.server";
 import { phase3EntriesCopy, phase3EntriesMachine, totalActiveEntries } from "@/lib/phase3-entries";
 import { phase3ResultsCopy, phase3ResultsMachine, resultVersionLabel } from "@/lib/phase3-results";
 import { getResultsDocument } from "@/lib/phase3-results.server";
+import { phase4ScheduleMachine } from "@/lib/phase4-schedule";
+import { getScheduleDocument } from "@/lib/phase4-schedule.server";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 export default async function CompetitionSectionPage({
@@ -124,6 +127,33 @@ export default async function CompetitionSectionPage({
             enableRemoteOperations={!demoFixturesEnabled()}
           />
         }
+      />
+    );
+  }
+  if (section === "publish") {
+    const schedule = await getScheduleDocument({
+      competitionId: result.competition.id,
+      competitionName: result.competition.name,
+      timeZone: result.competition.timezone,
+      publicationRevision: result.competition.publicationRevision,
+      ...(query.state ? { previewState: query.state } : {}),
+    });
+    return (
+      <OrganiserWorkspace
+        competition={result.competition}
+        section="publish"
+        sectionAction={null}
+        syncLabel={schedule.currentRevision ? `Schedule revision ${schedule.currentRevision.revision}` : "No schedule revision"}
+        syncState={
+          schedule.state === phase4ScheduleMachine.offline
+            ? phase4ScheduleMachine.offline
+            : schedule.state === phase4ScheduleMachine.readOnly
+              ? phase4ScheduleMachine.readOnly
+              : schedule.state === phase4ScheduleMachine.ready
+                ? phase4ScheduleMachine.saved
+                : phase4ScheduleMachine.unavailable
+        }
+        sectionContent={<V1PublishWorkspace document={schedule} competitionSlug={result.competition.slug} />}
       />
     );
   }
