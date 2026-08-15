@@ -3,6 +3,8 @@ import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { CapacityEditor } from "@/components/phase3/CapacityEditor";
 import { EntriesEditor } from "@/components/phase3/EntriesEditor";
 import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
+import { V1PublishWorkspace } from "@/components/phase3/V1PublishWorkspace";
+import { V1ResultsWorkspace } from "@/components/phase3/V1ResultsWorkspace";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase3CapacityCopy, phase3CapacityMachine } from "@/lib/phase3-capacity";
@@ -117,13 +119,29 @@ export default async function CompetitionSectionPage({
                   : phase3ResultsMachine.unavailable
         }
         sectionContent={
-          <ResultsWorkspace
-            document={results}
-            matches={result.competition.matches}
-            initialMatchId={query.match}
-            enableRemoteOperations={!demoFixturesEnabled()}
-          />
+          <V1ResultsWorkspace competition={result.competition}>
+            <ResultsWorkspace
+              document={results}
+              matches={result.competition.matches}
+              initialMatchId={query.match}
+              enableRemoteOperations={!demoFixturesEnabled()}
+            />
+          </V1ResultsWorkspace>
         }
+      />
+    );
+  }
+  if (section === "publish") {
+    return (
+      <OrganiserWorkspace
+        competition={result.competition}
+        section="publish"
+        sectionAction={null}
+        pageTitle={phase2Copy.publishTitle}
+        pageIntro={phase2Copy.publishIntro}
+        syncLabel={result.competition.publishedVersionLabel ?? phase2Copy.notPublished}
+        syncState={result.competition.publicationState === "published" ? "saved" : "unavailable"}
+        sectionContent={<V1PublishWorkspace competition={result.competition} />}
       />
     );
   }
