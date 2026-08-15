@@ -1,0 +1,42 @@
+name: QA V1 Schedule Results Publish
+
+on:
+  push:
+    branches:
+      - fix/v1-tight-capacity-scheduler-results-publish
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@10.33.0
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Formatting
+        run: pnpm exec prettier --check apps/scheduler/src/solver-thread.mjs apps/scheduler/tests/unit/domain-optimizer.test.ts packages/domain/tests/v1-tight-capacity-schedule.test.ts apps/web/lib/v1-publication-readiness.ts apps/web/lib/v1-publication-readiness.test.ts apps/web/components/phase3/V1ResultsWorkspace.tsx apps/web/components/phase3/V1PublishWorkspace.tsx 'apps/web/app/organiser/competitions/[id]/[section]/page.tsx'
+      - name: Domain exact-capacity regression
+        run: pnpm --filter @matchday/domain exec vitest run tests/v1-tight-capacity-schedule.test.ts --reporter=verbose
+      - name: Scheduler unit regressions
+        run: pnpm --filter @matchday/scheduler test:unit
+      - name: Publication readiness unit tests
+        run: pnpm --filter @matchday/web exec vitest run lib/v1-publication-readiness.test.ts --reporter=verbose
+      - name: Scheduler typecheck
+        run: pnpm --filter @matchday/scheduler typecheck
+      - name: Web typecheck
+        run: pnpm --filter @matchday/web typecheck
+      - name: Scheduler build
+        run: pnpm --filter @matchday/scheduler build
+      - name: Web production build
+        run: pnpm --filter @matchday/web build
