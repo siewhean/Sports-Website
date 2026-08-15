@@ -209,7 +209,7 @@
   padding-top: 40px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 767px) {
   .main {
     width: min(calc(100% - 32px), 1280px);
     padding: 48px 0 88px;

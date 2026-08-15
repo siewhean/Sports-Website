@@ -79,7 +79,7 @@
   outline-offset: 3px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 767px) {
   .page {
     padding: 18px;
   }
