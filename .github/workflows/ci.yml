@@ -63,7 +63,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm ci:assert-clean-outputs
       - run: pnpm dependencies:audit
-      - run: pnpm format:check
+      - name: Print exact Prettier diff for V1 schedule diagnostics
+        run: |
+          cp apps/web/components/phase4/schedule/V1ScheduleWorkspace.tsx /tmp/V1ScheduleWorkspace.before.tsx
+          pnpm exec prettier --write apps/web/components/phase4/schedule/V1ScheduleWorkspace.tsx
+          git --no-pager diff --no-index -- /tmp/V1ScheduleWorkspace.before.tsx apps/web/components/phase4/schedule/V1ScheduleWorkspace.tsx || true
+          exit 1
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test:unit
