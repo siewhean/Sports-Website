@@ -247,9 +247,7 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   await page.goto(`/organiser/competitions/${competitionId}/format`);
   await submit(page, page.getByRole("button", { name: "Show format options" }), "POST", "/v1-format-recommendations");
   const compact = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "Compact knockout" }) });
-  const totalMatchesMetric = compact.locator("div").filter({
-    has: compact.getByText("Total matches", { exact: true }),
-  });
+  const totalMatchesMetric = compact.getByText("Total matches", { exact: true }).locator("..");
   await expect(totalMatchesMetric.locator("dd")).toHaveText("16");
   await submit(page, compact.getByRole("button", { name: "Use this format" }), "POST", "/apply");
   await expect(page.getByTestId("v1-format-selected")).toBeVisible();
