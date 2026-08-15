@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer } from "node:https";
 import { request as httpRequest } from "node:http";
 
@@ -12,27 +15,47 @@ if (!Number.isSafeInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535) {
   throw new Error("HTTPS_PROXY_PORT must be an unprivileged TCP port");
 }
 
-const key = execFileSync("openssl", ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"], {
-  stdio: ["ignore", "pipe", "ignore"],
-});
-const certificate = execFileSync(
-  "openssl",
-  [
-    "req",
-    "-new",
-    "-x509",
-    "-sha256",
-    "-days",
-    "1",
-    "-subj",
-    "/CN=127.0.0.1",
-    "-addext",
-    "subjectAltName=IP:127.0.0.1,DNS:localhost",
-    "-key",
-    "/dev/stdin",
-  ],
-  { input: key, stdio: ["pipe", "pipe", "ignore"] },
-);
+// The QA proxy must be ready inside the runner's short startup grace period.
+// Generate a throwaway P-256 certificate through files instead of piping a
+// freshly generated RSA key through /dev/stdin; the latter is both slower and
+// unreliable on hosted Linux OpenSSL builds. These credentials are local-only,
+// live for one day and are deleted immediately after being read into memory.
+const certificateDirectory = mkdtempSync(join(tmpdir(), "matchday-https-proxy-"));
+const keyPath = join(certificateDirectory, "key.pem");
+const certificatePath = join(certificateDirectory, "cert.pem");
+try {
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-new",
+      "-x509",
+      "-newkey",
+      "ec",
+      "-pkeyopt",
+      "ec_paramgen_curve:P-256",
+      "-nodes",
+      "-sha256",
+      "-days",
+      "1",
+      "-subj",
+      "/CN=127.0.0.1",
+      "-addext",
+      "subjectAltName=IP:127.0.0.1,DNS:localhost",
+      "-keyout",
+      keyPath,
+      "-out",
+      certificatePath,
+    ],
+    { stdio: ["ignore", "ignore", "ignore"] },
+  );
+} catch {
+  rmSync(certificateDirectory, { recursive: true, force: true });
+  throw new Error("Playwright HTTPS proxy could not create its temporary certificate");
+}
+const key = readFileSync(keyPath);
+const certificate = readFileSync(certificatePath);
+rmSync(certificateDirectory, { recursive: true, force: true });
 
 const server = createServer({ key, cert: certificate }, (incoming, outgoing) => {
   const upstream = httpRequest(
