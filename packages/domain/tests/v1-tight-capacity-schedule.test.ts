@@ -76,7 +76,10 @@ function materialisedFullPlacementDivision(divisionId: string, prefix: string): 
   }));
 }
 
-function exactCapacityProblem(maximumMatchesMode: "preferred" | "required" = "preferred"): ScheduleProblem {
+function exactCapacityProblem(
+  maximumMatchesMode: "preferred" | "required" = "preferred",
+  slotCount = 36,
+): ScheduleProblem {
   const matches = [
     ...materialisedFullPlacementDivision("open", "open"),
     ...materialisedFullPlacementDivision("women", "women"),
@@ -85,39 +88,35 @@ function exactCapacityProblem(maximumMatchesMode: "preferred" | "required" = "pr
     timeZone: "Asia/Singapore",
     objective: "balanced",
     matches,
-    slots: exactSlots(matches.length, 2),
+    slots: exactSlots(slotCount, 2),
     constraints: constraints(maximumMatchesMode),
   };
 }
 
 describe("V1 exact-capacity full-placement scheduling", () => {
-  it("finds a valid schedule for 36 full-placement fixtures in exactly 36 slots with the V1 daily cap as a preference", () => {
-    const problem = exactCapacityProblem("preferred");
+  it("constructs a valid 36-fixture schedule in one worker iteration with exactly 36 slots", () => {
+    const problem = exactCapacityProblem();
     expect(problem.matches).toHaveLength(36);
     expect(problem.slots).toHaveLength(36);
 
-    const candidates = generateScheduleCandidates(problem, { maxIterations: 64 });
-    const valid = candidates.find((candidate) => validateSchedule(problem, candidate.assignments).valid);
-    expect(valid).toBeDefined();
+    const first = generateScheduleCandidates(problem, { maxIterations: 1 });
+    const replay = generateScheduleCandidates(problem, { maxIterations: 1 });
+    expect(first).toEqual(replay);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.assignments).toHaveLength(36);
+    expect(new Set(first[0]!.assignments.map((assignment) => assignment.slotId)).size).toBe(36);
+    expect(validateSchedule(problem, first[0]!.assignments).valid).toBe(true);
   });
 
-  it("proves the old hidden required four-match daily cap invalidates the same otherwise valid 36-slot schedule", () => {
-    const preferredProblem = exactCapacityProblem("preferred");
-    const preferredCandidate = generateScheduleCandidates(preferredProblem, { maxIterations: 64 }).find(
-      (candidate) => validateSchedule(preferredProblem, candidate.assignments).valid,
-    );
-    expect(preferredCandidate).toBeDefined();
-
+  it("keeps an explicitly required four-match daily cap fail-closed as no solution instead of a worker failure", () => {
     const requiredProblem = exactCapacityProblem("required");
-    const requiredValidation = validateSchedule(requiredProblem, preferredCandidate!.assignments);
-    expect(requiredValidation.valid).toBe(false);
-    expect(requiredValidation.violations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "maximum_matches_per_day",
-          severity: "hard",
-        }),
-      ]),
-    );
+    expect(() => generateScheduleCandidates(requiredProblem, { maxIterations: 1 })).not.toThrow();
+    expect(generateScheduleCandidates(requiredProblem, { maxIterations: 1 })).toEqual([]);
+  });
+
+  it("returns no solution instead of failing when 36 fixtures have only 35 slots", () => {
+    const insufficient = exactCapacityProblem("preferred", 35);
+    expect(() => generateScheduleCandidates(insufficient, { maxIterations: 1 })).not.toThrow();
+    expect(generateScheduleCandidates(insufficient, { maxIterations: 1 })).toEqual([]);
   });
 });
