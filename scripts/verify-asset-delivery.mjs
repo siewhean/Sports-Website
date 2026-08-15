@@ -148,7 +148,9 @@ function assertAssetBytes(manifestAsset, bytes) {
 async function waitUntilReady(url, childProcess, getOutput) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (childProcess.exitCode !== null) throw new Error(`Web server exited before readiness:\n${getOutput()}`);
+    if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
+      throw new Error(`Web server exited before readiness:\n${getOutput()}`);
+    }
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
       if (response.ok) {
@@ -166,34 +168,55 @@ async function waitUntilReady(url, childProcess, getOutput) {
 async function terminateChildTree(childProcess) {
   if (childProcess === undefined) return;
 
-  if (childProcess.exitCode === null) {
-    signalChildTree(childProcess, "SIGTERM");
-    await waitForExit(childProcess, 5_000);
-  }
-  if (childProcess.exitCode === null) {
-    signalChildTree(childProcess, "SIGKILL");
-    await waitForExit(childProcess, 1_000);
+  if (process.platform !== "win32" && childProcess.pid !== undefined) {
+    signalProcessGroup(childProcess.pid, "SIGTERM");
+    await waitForProcessGroupExit(childProcess.pid, 5_000);
+    if (processGroupExists(childProcess.pid)) {
+      signalProcessGroup(childProcess.pid, "SIGKILL");
+      await waitForProcessGroupExit(childProcess.pid, 1_000);
+    }
+  } else {
+    if (childProcess.exitCode === null && childProcess.signalCode === null) {
+      childProcess.kill("SIGTERM");
+      await waitForExit(childProcess, 5_000);
+    }
+    if (childProcess.exitCode === null && childProcess.signalCode === null) {
+      childProcess.kill("SIGKILL");
+      await waitForExit(childProcess, 1_000);
+    }
   }
 
   childProcess.stdout?.destroy();
   childProcess.stderr?.destroy();
 }
 
-function signalChildTree(childProcess, signal) {
-  if (process.platform !== "win32" && childProcess.pid !== undefined) {
-    try {
-      process.kill(-childProcess.pid, signal);
-      return;
-    } catch (error) {
-      if (error?.code !== "ESRCH") throw error;
-    }
+function signalProcessGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
   }
+}
 
-  if (childProcess.exitCode === null) childProcess.kill(signal);
+function processGroupExists(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && processGroupExists(pid)) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 async function waitForExit(childProcess, timeoutMs) {
-  if (childProcess.exitCode !== null) return;
+  if (childProcess.exitCode !== null || childProcess.signalCode !== null) return;
   await Promise.race([
     new Promise((resolve) => childProcess.once("exit", resolve)),
     new Promise((resolve) => setTimeout(resolve, timeoutMs)),
