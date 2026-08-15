@@ -7,6 +7,11 @@
   color: color-mix(in srgb, var(--warning) 60%, var(--ink));
 }
 
+[data-testid="phase4-schedule"] > [role="note"] p,
+[data-testid="phase4-schedule"] > [role="alert"] p {
+  color: var(--ink);
+}
+
 [data-testid="phase4-schedule"] > [role="alert"] {
   color: var(--ink);
 }
