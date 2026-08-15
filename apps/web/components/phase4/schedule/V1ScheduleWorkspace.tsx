@@ -11,6 +11,7 @@ import {
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
 import { v1ScheduleOption } from "@/lib/v1-schedule";
+import { v1ScheduleProductionCopy, v1ScheduleProductionMachine } from "@/lib/v1-schedule-production";
 import { ScheduleWorkspace } from "./ScheduleWorkspace";
 
 const activeStatuses = new Set<ScheduleJobStatus>([
@@ -35,21 +36,19 @@ function assignmentFingerprint(option: ScheduleOption): string {
 }
 
 function diagnosticBody(job: ScheduleJob): string | null {
-  if (job.status === "no_solution") {
-    return "No feasible schedule was found for the persisted constraints and capacity. This is a solver outcome, not a scheduler runtime crash.";
-  }
+  if (job.status === "no_solution") return v1ScheduleProductionCopy.noSolutionDiagnostic;
   if (job.status !== "failed") return null;
   switch (job.failureClass) {
     case "timeout":
-      return "The optimiser exceeded its bounded solver-step deadline. This is a scheduler runtime timeout, not a capacity rejection.";
+      return v1ScheduleProductionCopy.timeoutDiagnostic;
     case "transient":
-      return "The scheduler exhausted its retries after a transient runtime failure. Capacity and format should not be changed to hide this failure.";
+      return v1ScheduleProductionCopy.transientDiagnostic;
     case "invalid_input":
-      return "The persisted scheduling input failed strict validation. Review the job input boundary instead of changing capacity.";
+      return v1ScheduleProductionCopy.invalidInputDiagnostic;
     case "permanent":
-      return "The scheduler encountered a non-retryable runtime failure.";
+      return v1ScheduleProductionCopy.permanentDiagnostic;
     default:
-      return "The scheduler failed before it could create a usable schedule revision.";
+      return v1ScheduleProductionCopy.failedDiagnostic;
   }
 }
 
@@ -82,7 +81,9 @@ export function V1ScheduleWorkspace({
 }) {
   const router = useRouter();
   const attemptedRecoveryRef = useRef<string | null>(null);
-  const [recoveryState, setRecoveryState] = useState<"idle" | "restoring" | "failed">("idle");
+  const [recoveryState, setRecoveryState] = useState<"idle" | "restoring" | "failed">(
+    v1ScheduleProductionMachine.recoveryIdle,
+  );
   const [observedJob, setObservedJob] = useState<ScheduleJob | null>(document.activeJob);
 
   useEffect(() => setObservedJob(document.activeJob), [document.activeJob]);
@@ -132,7 +133,7 @@ export function V1ScheduleWorkspace({
     attemptedRecoveryRef.current = key;
 
     let live = true;
-    setRecoveryState("restoring");
+    setRecoveryState(v1ScheduleProductionMachine.recoveryRestoring);
 
     void (async () => {
       try {
@@ -150,14 +151,14 @@ export function V1ScheduleWorkspace({
 
         if (!live) return;
         if (!response.ok) {
-          setRecoveryState("failed");
+          setRecoveryState(v1ScheduleProductionMachine.recoveryFailed);
           return;
         }
 
-        setRecoveryState("idle");
+        setRecoveryState(v1ScheduleProductionMachine.recoveryIdle);
         router.refresh();
       } catch {
-        if (live) setRecoveryState("failed");
+        if (live) setRecoveryState(v1ScheduleProductionMachine.recoveryFailed);
       }
     })();
 
@@ -167,31 +168,37 @@ export function V1ScheduleWorkspace({
   }, [recoverableOption, router]);
 
   const diagnostic = observedJob ? diagnosticBody(observedJob) : null;
-  const diagnosticTitle = observedJob?.status === "no_solution" ? "No schedule found" : "Schedule optimisation failed";
+  const diagnosticTitle =
+    observedJob?.status === "no_solution"
+      ? v1ScheduleProductionCopy.noScheduleFound
+      : v1ScheduleProductionCopy.optimisationFailed;
 
   return (
     <>
       {diagnostic ? (
-        <section role="alert" data-testid="v1-schedule-job-diagnostic" aria-label="Schedule job diagnostic">
+        <section
+          role="alert"
+          data-testid="v1-schedule-job-diagnostic"
+          aria-label={v1ScheduleProductionCopy.jobDiagnosticLabel}
+        >
           <strong>{diagnosticTitle}</strong>
           <p>{diagnostic}</p>
           <p>
-            Job <code>{observedJob?.id}</code>
+            {v1ScheduleProductionCopy.job} <code>{observedJob?.id}</code>
             {observedJob?.failureClass ? (
               <span>
                 {" "}
-                · failure class <code>{observedJob.failureClass}</code>
+                {v1ScheduleProductionCopy.failureClass} <code>{observedJob.failureClass}</code>
               </span>
             ) : null}
           </p>
         </section>
       ) : null}
-      {recoveryState === "restoring" ? <p role="status">Restoring your generated schedule as a saved draft…</p> : null}
-      {recoveryState === "failed" ? (
-        <p role="alert">
-          A generated schedule is still available, but MATCHDAY could not restore it automatically. Use “Use this
-          schedule” below to save it as a draft.
-        </p>
+      {recoveryState === v1ScheduleProductionMachine.recoveryRestoring ? (
+        <p role="status">{v1ScheduleProductionCopy.restoring}</p>
+      ) : null}
+      {recoveryState === v1ScheduleProductionMachine.recoveryFailed ? (
+        <p role="alert">{v1ScheduleProductionCopy.recoveryFailed}</p>
       ) : null}
       <ScheduleWorkspace
         advanced={advanced}
