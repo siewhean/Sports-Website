@@ -89,9 +89,7 @@ async function correctOpeningResult(page: Page, competitionId: string, matchId: 
   const correctionResponse = await correction;
   expect(correctionResponse.status(), await correctionResponse.text()).toBe(200);
   await expect(correctionDialog).toBeHidden();
-  await expect(
-    page.getByText("Correction finalised and the corrected result published.", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Correction finalised and the corrected result published.", { exact: true })).toBeVisible();
 }
 
 async function issuePass(page: Page, matchId: string): Promise<string> {
@@ -180,8 +178,6 @@ async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
   const confirm = page.getByRole("dialog", { name: "Confirm goal" });
   await confirm.getByLabel("Scorer or participant name").fill(scorer);
   await confirm.getByRole("button", { name: /Record goal/ }).click();
-  // Canoe Polo has two required periods. Complete the scorer's rendered
-  // period-transition control before asking the server to finalise.
   await page.locator("summary").filter({ hasText: "Match actions" }).click();
   await page.getByRole("button", { name: "Period change" }).click();
   const periodChange = page.getByRole("dialog", { name: "Record event: Period change" });
@@ -189,8 +185,7 @@ async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
   await periodChange.getByLabel("Event time").fill("10:00");
   await periodChange.getByRole("button", { name: "Record event" }).click();
   const finalise = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" && new URL(response.url()).pathname === "/api/scoring/finalise",
+    (response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/scoring/finalise",
   );
   await page.getByRole("button", { name: "Review final score" }).click();
   await page.getByRole("button", { name: "Confirm final result" }).click();
@@ -207,13 +202,10 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   await installConsoleGuard(page);
   const failedResponses: string[] = [];
   page.on("response", (response) => {
-    if (response.status() >= 400)
-      failedResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
+    if (response.status() >= 400) failedResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
   });
   const [cookieName, cookieValue] = seed.organiserCookie.split("=", 2) as [string, string];
-  await context.addCookies([
-    { name: cookieName, value: cookieValue, url: seed.webOrigin, httpOnly: true, sameSite: "Lax" },
-  ]);
+  await context.addCookies([{ name: cookieName, value: cookieValue, url: seed.webOrigin, httpOnly: true, sameSite: "Lax" }]);
 
   const slug = `v1-championship-${seed.fixtureKey}`;
   await page.goto("/organiser/competitions/new");
@@ -255,8 +247,6 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   await page.goto(`/organiser/competitions/${competitionId}/format`);
   await submit(page, page.getByRole("button", { name: "Show format options" }), "POST", "/v1-format-recommendations");
   const compact = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "Compact knockout" }) });
-  // The selected compact option is a single-elimination 16-team bracket: eight
-  // opening matches, four quarter-finals, two semi-finals, a final and bronze.
   await expect(compact).toContainText("16 matches");
   await submit(page, compact.getByRole("button", { name: "Use this format" }), "POST", "/apply");
   await expect(page.getByTestId("v1-format-selected")).toBeVisible();
@@ -290,24 +280,16 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   const publicDependentBracket = page.locator(`.p2-public-bracket article[data-match-id="${dependentQuarterFinalId}"]`);
   await expect(publicDependentBracket).toContainText(openingWinner);
 
-  // Correction is performed through the organiser's rendered control, before
-  // any dependent quarter-final is scored. This proves the canonical resolver
-  // replaces an automatic knockout participant rather than retaining a stale
-  // opening-round winner.
   await correctOpeningResult(page, competitionId, correctedOpeningMatch.id);
 
   await page.goto(`/organiser/competitions/${competitionId}/access`);
-  const correctedDependentQuarterFinal = (await selectableMatches(page)).find(
-    (match) => match.id === dependentQuarterFinalId,
-  );
+  const correctedDependentQuarterFinal = (await selectableMatches(page)).find((match) => match.id === dependentQuarterFinalId);
   expect(correctedDependentQuarterFinal?.label).toContain(correctedWinner);
   expect(correctedDependentQuarterFinal?.label).not.toContain(openingWinner);
 
   await page.goto(`/competitions/${slug}`);
   await expect(page.locator(`[data-match-id="${dependentQuarterFinalId}"]`).first()).toContainText(correctedWinner);
-  await expect(page.locator(`.p2-public-bracket article[data-match-id="${dependentQuarterFinalId}"]`)).toContainText(
-    correctedWinner,
-  );
+  await expect(page.locator(`.p2-public-bracket article[data-match-id="${dependentQuarterFinalId}"]`)).toContainText(correctedWinner);
 
   await page.goto(`/organiser/competitions/${competitionId}/results`);
   await expect(page.getByRole("heading", { name: "Calculated tables" })).toBeVisible({ timeout: 60_000 });
@@ -320,25 +302,24 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
     const round = (await selectableMatchIds(page)).filter(
       (id) => !groupMatchIds.includes(id) && !progressedMatchIds.includes(id),
     );
-    expect(round, `Expected ${expectedRoundSize} automatically resolved knockout matches`).toHaveLength(
-      expectedRoundSize,
-    );
+    expect(round, `Expected ${expectedRoundSize} automatically resolved knockout matches`).toHaveLength(expectedRoundSize);
     for (const [index, matchId] of round.entries()) {
       await page.goto(`/organiser/competitions/${competitionId}/access`);
-      await scoreAndFinalise(
-        page,
-        await issuePass(page, matchId),
-        `V1 knockout scorer ${expectedRoundSize}-${index + 1}`,
-      );
+      await scoreAndFinalise(page, await issuePass(page, matchId), `V1 knockout scorer ${expectedRoundSize}-${index + 1}`);
     }
     progressedMatchIds.push(...round);
   }
   expect(progressedMatchIds).toHaveLength(8);
 
-  // The organiser shell refreshes its conflict panel after finalisation. Let
-  // that same-origin read settle before changing routes so an intentional test
-  // navigation cannot manufacture a browser-level request-abort failure.
   await page.waitForTimeout(300);
+  await page.goto(`/organiser/competitions/${competitionId}/results`);
+  const completedProgress = page.locator("section").filter({ has: page.getByRole("heading", { name: "Results" }) }).first();
+  await expect(completedProgress).toContainText("16 / 16");
+
+  await page.goto(`/organiser/competitions/${competitionId}/publish`);
+  await expect(page.getByRole("button", { name: /create revision/i })).toHaveCount(0);
+  await expect(page.locator(`a[href="/competitions/${slug}"]`)).toBeVisible();
+
   await page.goto(`/competitions/${slug}`);
   await expect(page.getByRole("heading", { name: "V1 Sixteen Team Knockout" })).toBeVisible();
   await expect(page.getByRole("table", { name: "Table" })).toBeVisible();
