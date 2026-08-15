@@ -41,6 +41,24 @@ describe("DomainScheduleOptimizer", () => {
     );
   });
 
+  it("treats an ordinary placement dead end as no candidate instead of invalid persisted input", async () => {
+    const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 3, workerExecArgv: [] });
+    const input = impossibleRestInput();
+    optimizer.validateInput(input);
+
+    await expect(
+      collect(
+        optimizer.optimize({
+          input,
+          seed: null,
+          startIteration: 0,
+          signal: new AbortController().signal,
+          maxYieldIntervalMs: 1_000,
+        }),
+      ),
+    ).resolves.toEqual([]);
+  });
+
   it("recomputes quality and violations instead of trusting forged solver provenance", async () => {
     const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 1 });
     const input = solvableInput();
@@ -143,6 +161,49 @@ function solvableInput(): ScheduleJobInput {
         value: { target_start_epoch_ms: start, tolerance_minutes: 30 },
       },
       featured_playing_area: { mode: "ignored", value: { area_id: "area-1", match_ids: [] } },
+    },
+  };
+}
+
+function impossibleRestInput(): ScheduleJobInput {
+  const base = solvableInput();
+  const start = base.slots[0]!.start_epoch_ms;
+  return {
+    ...base,
+    matches: [
+      {
+        match_id: "match-1",
+        division_id: "division-1",
+        duration_minutes: 30,
+        dependency_match_ids: [],
+        possible_entry_ids: ["entry-1", "entry-2"],
+        official_ids: [],
+        is_championship_final: false,
+      },
+      {
+        match_id: "match-2",
+        division_id: "division-1",
+        duration_minutes: 30,
+        dependency_match_ids: ["match-1"],
+        possible_entry_ids: ["entry-1", "entry-2"],
+        official_ids: [],
+        is_championship_final: true,
+      },
+    ],
+    slots: [0, 1].map((offset) => ({
+      slot_id: `tight-slot-${offset + 1}`,
+      interval_id: "tight-interval",
+      area_id: "area-1",
+      start_epoch_ms: start + offset * 30 * 60_000,
+      end_epoch_ms: start + (offset + 1) * 30 * 60_000,
+    })),
+    constraints: {
+      ...base.constraints,
+      minimum_rest: { mode: "required", value: { minutes: 30 } },
+      preferred_final_time: {
+        mode: "ignored",
+        value: { target_start_epoch_ms: start, tolerance_minutes: 30 },
+      },
     },
   };
 }
