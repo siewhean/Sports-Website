@@ -1,0 +1,39 @@
+name: Patch V1 Schedule Default
+
+on:
+  push:
+    branches:
+      - fix/v1-tight-capacity-scheduler-results-publish
+    paths:
+      - .github/workflows/patch-v1-schedule-default.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Replace only the hidden hard daily cap
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('apps/api/src/phase-4-runtime.ts')
+          text = path.read_text()
+          old = '      maximum_matches_per_day: { mode: "required", value: { matches: 4 } },'
+          new = '      maximum_matches_per_day: { mode: "preferred", value: { matches: 4 }, weight: 4 },'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected exactly one default daily-cap definition, found {count}')
+          path.write_text(text.replace(old, new))
+          PY
+      - name: Commit exact source change
+        run: |
+          git config user.name "matchday-v1-bot"
+          git config user.email "65327039+siewhean@users.noreply.github.com"
+          git add apps/api/src/phase-4-runtime.ts
+          git diff --cached --check
+          git commit -m "fix(v1): make default daily match cap a preference"
+          git push origin HEAD:fix/v1-tight-capacity-scheduler-results-publish
