@@ -1154,7 +1154,7 @@
   font: inherit;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 767px) {
   .p5-access > div,
   .p5-takeovers li,
   .p5-access-history li,
@@ -2885,7 +2885,7 @@ body:has(.p2-score--simple) {
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 767px) {
   .p2-organiser__topbar {
     grid-template-columns: 1fr auto;
     min-height: 68px;
