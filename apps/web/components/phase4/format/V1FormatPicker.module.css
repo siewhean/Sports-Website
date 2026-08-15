@@ -1,27 +1,21 @@
 .workspace {
-  --format-ink: #171918;
-  --format-muted: #626761;
-  --format-line: #d4d6cf;
-  --format-soft: #f5f5ef;
-  --format-signal: #b7dc22;
-  --format-signal-dark: #789700;
   display: grid;
   gap: 1.5rem;
   width: min(100%, 1080px);
   margin: 0 auto;
-  color: var(--format-ink);
+  color: var(--ink);
 }
 
 .heading {
   display: grid;
   gap: 0.45rem;
   padding-bottom: 1.35rem;
-  border-bottom: 1px solid var(--format-line);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .eyebrow {
   margin: 0;
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font:
     650 0.68rem/1.2 var(--font-geist-mono),
     monospace;
@@ -40,7 +34,7 @@
 .heading > p:last-child {
   max-width: 720px;
   margin: 0.15rem 0 0;
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font-size: 0.92rem;
   line-height: 1.55;
 }
@@ -53,7 +47,7 @@
   align-items: flex-start;
   justify-content: space-between;
   padding: 1rem 0;
-  border-bottom: 1px solid var(--format-line);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .blockedIntro,
@@ -70,11 +64,11 @@
 }
 
 .blockedIntro > svg {
-  color: #a45b12;
+  color: var(--warning);
 }
 
 .successPanel > svg {
-  color: var(--format-signal-dark);
+  color: var(--signal-strong);
 }
 
 .readyBar h3,
@@ -88,7 +82,7 @@
 .blockedIntro p,
 .successPanel p {
   margin: 0.3rem 0 0;
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font-size: 0.82rem;
   line-height: 1.5;
 }
@@ -111,9 +105,9 @@
 
 .primaryButton,
 .primaryLink {
-  border: 1px solid var(--format-signal-dark);
-  background: var(--format-signal);
-  color: var(--format-ink);
+  border: 1px solid var(--signal-strong);
+  background: var(--signal);
+  color: var(--ink);
 }
 
 .primaryButton:disabled {
@@ -123,9 +117,9 @@
 
 .secondaryLink,
 .prerequisiteLink {
-  border: 1px solid #a8aaa4;
+  border: 1px solid var(--hairline);
   background: transparent;
-  color: var(--format-ink);
+  color: var(--ink);
 }
 
 .prerequisiteList {
@@ -133,7 +127,7 @@
   gap: 0;
   margin: 0;
   padding: 0;
-  border-top: 1px solid var(--format-line);
+  border-top: 1px solid var(--hairline);
   list-style: none;
 }
 
@@ -144,7 +138,7 @@
   align-items: center;
   min-height: 82px;
   padding: 0.85rem 0;
-  border-bottom: 1px solid var(--format-line);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .prerequisiteIcon {
@@ -152,15 +146,15 @@
   place-items: center;
   width: 30px;
   height: 30px;
-  border: 1px solid #a8aaa4;
+  border: 1px solid var(--hairline);
   border-radius: 50%;
-  color: var(--format-muted);
+  color: var(--ink-muted);
 }
 
 .prerequisiteItem[data-ready="true"] .prerequisiteIcon {
-  border-color: var(--format-signal-dark);
-  background: var(--format-signal);
-  color: var(--format-ink);
+  border-color: var(--signal-strong);
+  background: var(--signal);
+  color: var(--ink);
 }
 
 .prerequisiteItem strong {
@@ -170,7 +164,7 @@
 
 .prerequisiteItem p {
   margin: 0.25rem 0 0;
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font-size: 0.78rem;
   line-height: 1.45;
 }
@@ -178,8 +172,8 @@
 .error {
   margin: 0;
   padding: 0.85rem 0;
-  border-block: 1px solid #c98d83;
-  color: #8a3026;
+  border-block: 1px solid var(--danger);
+  color: var(--danger);
   font-size: 0.83rem;
   font-weight: 620;
 }
@@ -198,7 +192,7 @@
 
 .optionsHeader p {
   margin: 0.3rem 0 0;
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font-size: 0.8rem;
 }
 
@@ -207,7 +201,7 @@
   gap: 0;
   margin: 0;
   padding: 0;
-  border-top: 1px solid var(--format-line);
+  border-top: 1px solid var(--hairline);
   list-style: none;
 }
 
@@ -217,12 +211,12 @@
   gap: clamp(1rem, 2.5vw, 2.2rem);
   align-items: center;
   padding: 1.25rem 0;
-  border-bottom: 1px solid var(--format-line);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .optionIndex {
   margin: 0 0 0.35rem;
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font:
     650 0.65rem/1.2 var(--font-geist-mono),
     monospace;
@@ -237,14 +231,14 @@
 
 .structure {
   margin: 0.35rem 0 0;
-  color: var(--format-ink);
+  color: var(--ink);
   font-size: 0.8rem;
   line-height: 1.45;
 }
 
 .advantage {
   margin: 0.25rem 0 0;
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font-size: 0.75rem;
   line-height: 1.45;
 }
@@ -258,11 +252,11 @@
 .metrics > div {
   min-width: 0;
   padding: 0 0.8rem;
-  border-left: 1px solid var(--format-line);
+  border-left: 1px solid var(--hairline);
 }
 
 .metrics dt {
-  color: var(--format-muted);
+  color: var(--ink-muted);
   font-size: 0.65rem;
   line-height: 1.25;
 }
