@@ -143,7 +143,9 @@ export default async function CompetitionSectionPage({
         competition={result.competition}
         section="publish"
         sectionAction={null}
-        syncLabel={schedule.currentRevision ? `Schedule revision ${schedule.currentRevision.revision}` : "No schedule revision"}
+        syncLabel={
+          schedule.currentRevision ? `Schedule revision ${schedule.currentRevision.revision}` : "No schedule revision"
+        }
         syncState={
           schedule.state === phase4ScheduleMachine.offline
             ? phase4ScheduleMachine.offline
