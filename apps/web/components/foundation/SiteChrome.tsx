@@ -3,6 +3,7 @@ import { messages } from "@matchday/ui";
 import { BrandLink } from "./Primitives";
 
 const productionRoutes = [
+  { href: "/competitions", label: messages.navigation.public },
   { href: "/organiser", label: messages.navigation.organiser },
   { href: "/official", label: messages.navigation.official },
 ];

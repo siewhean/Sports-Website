@@ -1,9 +1,14 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { PublicCompetitionProjection, PublicDivisionProjection, PublicMatchResult } from "@matchday/contracts";
+import type {
+  PublicCompetitionProjection,
+  PublicCompetitionSummary,
+  PublicDivisionProjection,
+  PublicMatchResult,
+} from "@matchday/contracts";
 import { PublicCompetition } from "@/components/phase2/PublicCompetition";
-import { toCompetitionView } from "./phase2-public.server";
+import { toCompetitionSummaryView, toCompetitionView } from "./phase2-public.server";
 
 function division(id: string, name: string, team: string, matchId: string, startsAt: string): PublicDivisionProjection {
   return {
@@ -159,5 +164,44 @@ describe("public competition server adapter", () => {
     expect(markup).toContain("Comets");
     expect(markup).toContain('aria-label="5 to 3"');
     expect(markup).toContain('aria-label="4 to 4"');
+  });
+});
+
+describe("public competition summary mapper", () => {
+  function summary(overrides: Partial<PublicCompetitionSummary> = {}): PublicCompetitionSummary {
+    return {
+      id: "competition",
+      name: "Singapore Open",
+      slug: "singapore-open",
+      sport_code: "canoe_polo",
+      timezone: "Asia/Singapore",
+      starts_on: "2027-01-01",
+      ends_on: "2027-01-02",
+      status: "active",
+      ...overrides,
+    };
+  }
+
+  it("maps a sport code to its display name and formats the date range", () => {
+    const view = toCompetitionSummaryView(summary());
+    expect(view).toEqual({
+      id: "competition",
+      slug: "singapore-open",
+      name: "Singapore Open",
+      sport: "Canoe Polo",
+      dateLabel: "1 January 2027–2 January 2027",
+      status: "active",
+    });
+  });
+
+  it("formats a single-day competition as one date, not a range", () => {
+    const view = toCompetitionSummaryView(summary({ starts_on: "2027-03-05", ends_on: "2027-03-05" }));
+    expect(view.dateLabel).toBe("5 March 2027");
+  });
+
+  it("carries the status through unchanged for each possible value", () => {
+    for (const status of ["active", "completed", "archived"] as const) {
+      expect(toCompetitionSummaryView(summary({ status })).status).toBe(status);
+    }
   });
 });

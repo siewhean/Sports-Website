@@ -97,8 +97,18 @@ export type CompetitionView = {
   canEdit?: boolean;
 };
 
+export type CompetitionSummaryView = {
+  id: string;
+  slug: string;
+  name: string;
+  sport: string;
+  dateLabel: string;
+  status: "active" | "completed" | "archived";
+};
+
 export type CompetitionReadPort = {
   getBySlug(slug: string): Promise<CompetitionView | null>;
+  list(): Promise<CompetitionSummaryView[]>;
 };
 
 export type ScoringEventCommand = {
@@ -270,6 +280,10 @@ export const phase2Copy = {
   publish: "Publish competition",
   published: "Published",
   openPublic: "Open public page",
+  publicListTitle: "Competitions",
+  publicListIntro: "Schedules and results for every competition that has been published.",
+  publicListEmptyBody:
+    "No competitions have been published yet. Check back once an organiser publishes a schedule or result.",
   setupTitle: "Competition setup",
   setupIntro: "Confirm the event identity before building its division and match plan.",
   settingsTitle: "Canoe Polo rules",
@@ -705,6 +719,18 @@ export const phase2Competition: CompetitionView = {
 export const demoCompetitionReadPort: CompetitionReadPort = {
   async getBySlug(slug) {
     return slug === phase2Competition.slug ? phase2Competition : null;
+  },
+  async list() {
+    return [
+      {
+        id: phase2Competition.id,
+        slug: phase2Competition.slug,
+        name: phase2Competition.name,
+        sport: phase2Competition.sport,
+        dateLabel: phase2Competition.dateLabel,
+        status: "active",
+      },
+    ];
   },
 };
 
