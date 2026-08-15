@@ -19,6 +19,8 @@ jobs:
     env:
       PHASE4_E2E_JOURNEY: v1-competition
       PHASE4_E2E_PLAYWRIGHT_CONFIG: playwright.v1-exact-capacity.config.ts
+      PHASE4_E2E_PROJECT: phase-4-real-desktop-chromium
+      PHASE4_E2E_RUNS: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -43,6 +45,8 @@ jobs:
     env:
       PHASE4_E2E_JOURNEY: v1-competition
       PHASE4_E2E_PLAYWRIGHT_CONFIG: playwright.v1-competition-desktop.config.ts
+      PHASE4_E2E_PROJECT: phase-4-real-desktop-chromium
+      PHASE4_E2E_RUNS: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
