@@ -26,7 +26,11 @@ const runtime = new SchedulerRuntime({
   processor: {
     leaseMs: integerEnvironment("SCHEDULER_LEASE_MS", 30_000, 5_000, 300_000),
     cancellationPollMs: integerEnvironment("SCHEDULER_CANCELLATION_POLL_MS", 250, 10, 1_000),
-    maxYieldIntervalMs: integerEnvironment("SCHEDULER_MAX_YIELD_MS", 1_000, 10, 1_000),
+    // This is a bounded solver-step deadline, not the cancellation polling
+    // interval. Worker-thread cancellation remains responsive through the
+    // AbortSignal while tight schedules get enough CPU time to produce a
+    // candidate on production-sized inputs.
+    maxYieldIntervalMs: integerEnvironment("SCHEDULER_MAX_YIELD_MS", 30_000, 10, 120_000),
   },
   shutdownTimeoutMs: integerEnvironment("SCHEDULER_SHUTDOWN_TIMEOUT_MS", 30_000, 1_000, 300_000),
   metrics: createSchedulerMetrics(metricsRuntime),
