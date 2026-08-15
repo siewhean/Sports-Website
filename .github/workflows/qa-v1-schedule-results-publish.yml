@@ -20,22 +20,16 @@ jobs:
           POSTGRES_DB: matchday
           POSTGRES_USER: matchday
           POSTGRES_PASSWORD: matchday
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U matchday -d matchday"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 20
+          --health-interval 2s --health-timeout 3s --health-retries 20
       redis:
         image: redis:8.2-alpine
-        ports:
-          - 6379:6379
+        ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 20
+          --health-interval 2s --health-timeout 3s --health-retries 20
     env:
       APP_ENV: test
       DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
@@ -44,16 +38,14 @@ jobs:
       RUN_INFRA_TESTS: 1
       MATCHDAY_PHASE2_DATA_MODE: api
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version-file: .nvmrc
-      - name: Install pinned pnpm
-        run: npm install --global pnpm@10.33.0
-      - name: Install frozen dependencies
-        run: pnpm install --frozen-lockfile
+      - run: npm install --global pnpm@10.33.0
+      - run: pnpm install --frozen-lockfile
       - name: Production dependency audit
         run: pnpm dependencies:audit
       - name: Formatting
@@ -61,33 +53,36 @@ jobs:
           pnpm exec prettier --check
           apps/api/src/phase-4-runtime.ts
           apps/api/tests/integration/phase-4-runtime.test.ts
-          apps/scheduler/src/solver-thread.mjs
           apps/scheduler/tests/unit/domain-optimizer.test.ts
+          packages/domain/src/schedule-constraints.ts
           packages/domain/tests/v1-tight-capacity-schedule.test.ts
+          apps/web/app/api/phase4/competitions/[competitionId]/schedule/jobs/route.ts
+          apps/web/app/organiser/competitions/[id]/[section]/page.tsx
+          apps/web/components/phase3/V1ResultsWorkspace.tsx
+          apps/web/components/phase4/schedule/ScheduleWorkspace.tsx
+          apps/web/components/phase4/schedule/V1ScheduleWorkspace.tsx
+          apps/web/components/phase4/schedule/V1PublishWorkspace.tsx
           apps/web/lib/v1-publication-readiness.ts
           apps/web/lib/v1-publication-readiness.test.ts
-          apps/web/components/phase3/V1ResultsWorkspace.tsx
-          apps/web/components/phase3/V1PublishWorkspace.tsx
-          apps/web/app/organiser/competitions/[id]/[section]/page.tsx
-          apps/web/components/phase4/schedule/ScheduleWorkspace.tsx
+          apps/web/lib/v1-schedule-production.ts
       - name: Build API workspace dependency closure
         run: pnpm --filter @matchday/api... build
       - name: Apply database migrations
         run: pnpm --filter @matchday/database db:migrate
-      - name: Domain exact-capacity regressions
+      - name: Exact-capacity domain regression
         run: pnpm --filter @matchday/domain exec vitest run tests/v1-tight-capacity-schedule.test.ts --reporter=verbose
       - name: Scheduler unit regressions
         run: pnpm --filter @matchday/scheduler test:unit
-      - name: Phase 4 runtime default constraint integration
+      - name: Phase 4 runtime integration
         run: pnpm --filter @matchday/api exec vitest run tests/integration/phase-4-runtime.test.ts --reporter=verbose
-      - name: Publication readiness unit tests
+      - name: Publication readiness tests
         run: pnpm --filter @matchday/web exec vitest run lib/v1-publication-readiness.test.ts --reporter=verbose
-      - name: Typecheck API scheduler and web
+      - name: Typecheck
         run: |
           pnpm --filter @matchday/api typecheck
           pnpm --filter @matchday/scheduler typecheck
           pnpm --filter @matchday/web typecheck
-      - name: Build API scheduler and web
+      - name: Build production workspaces
         run: |
           pnpm --filter @matchday/api build
           pnpm --filter @matchday/scheduler build
