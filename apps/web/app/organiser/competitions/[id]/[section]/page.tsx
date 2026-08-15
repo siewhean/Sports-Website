@@ -13,6 +13,11 @@ import { phase3ResultsCopy, phase3ResultsMachine, resultVersionLabel } from "@/l
 import { getResultsDocument } from "@/lib/phase3-results.server";
 import { phase4ScheduleMachine } from "@/lib/phase4-schedule";
 import { getScheduleDocument } from "@/lib/phase4-schedule.server";
+import {
+  v1ScheduleProductionCopy,
+  v1ScheduleProductionMachine,
+  v1ScheduleRevisionLabel,
+} from "@/lib/v1-schedule-production";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 export default async function CompetitionSectionPage({
@@ -130,7 +135,7 @@ export default async function CompetitionSectionPage({
       />
     );
   }
-  if (section === "publish") {
+  if (section === v1ScheduleProductionMachine.publishSection) {
     const schedule = await getScheduleDocument({
       competitionId: result.competition.id,
       competitionName: result.competition.name,
@@ -141,10 +146,12 @@ export default async function CompetitionSectionPage({
     return (
       <OrganiserWorkspace
         competition={result.competition}
-        section="publish"
+        section={v1ScheduleProductionMachine.publishSection}
         sectionAction={null}
         syncLabel={
-          schedule.currentRevision ? `Schedule revision ${schedule.currentRevision.revision}` : "No schedule revision"
+          schedule.currentRevision
+            ? v1ScheduleRevisionLabel(schedule.currentRevision.revision)
+            : v1ScheduleProductionCopy.noScheduleRevision
         }
         syncState={
           schedule.state === phase4ScheduleMachine.offline
