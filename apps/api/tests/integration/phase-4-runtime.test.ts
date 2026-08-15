@@ -154,6 +154,11 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
 
     expect(workspace.competition.id).toBe(scheduleCompetition.id);
     expect(workspace.generation.capacity_revision).toBeTypeOf("number");
+    expect(workspace.generation.constraints.maximum_matches_per_day).toEqual({
+      mode: "preferred",
+      value: { matches: 4 },
+      weight: 4,
+    });
     expect(workspace.matches).toEqual([]);
   });
 

@@ -38,7 +38,10 @@ export function V1ResultsWorkspace({
           </div>
         </dl>
         <div className="p2-readiness">
-          <span className={`p2-status-dot ${readiness.tournamentComplete ? "is-positive" : "is-warning"}`} aria-hidden="true" />
+          <span
+            className={`p2-status-dot ${readiness.tournamentComplete ? "is-positive" : "is-warning"}`}
+            aria-hidden="true"
+          />
           <strong>{readiness.tournamentComplete ? phase2Copy.allReady : phase2Copy.resultsIntro}</strong>
         </div>
       </section>

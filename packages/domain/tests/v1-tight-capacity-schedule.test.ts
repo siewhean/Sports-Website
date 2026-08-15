@@ -103,8 +103,8 @@ describe("V1 exact-capacity full-placement scheduling", () => {
 
   it("proves the old hidden required four-match daily cap invalidates the same otherwise valid 36-slot schedule", () => {
     const preferredProblem = exactCapacityProblem("preferred");
-    const preferredCandidate = generateScheduleCandidates(preferredProblem, { maxIterations: 64 }).find((candidate) =>
-      validateSchedule(preferredProblem, candidate.assignments).valid,
+    const preferredCandidate = generateScheduleCandidates(preferredProblem, { maxIterations: 64 }).find(
+      (candidate) => validateSchedule(preferredProblem, candidate.assignments).valid,
     );
     expect(preferredCandidate).toBeDefined();
 

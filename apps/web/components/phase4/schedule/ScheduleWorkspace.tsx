@@ -1057,7 +1057,9 @@ function SimpleScheduleStatus({ job }: { job: ScheduleJob | null }) {
         ? phase4ScheduleCopy.v1ReadyBody
         : progress === "creating"
           ? phase4ScheduleCopy.v1Creating
-          : jobStatusTitle(job)}
+          : job.status === "failed"
+            ? jobStatusMessage(job)
+            : jobStatusTitle(job)}
     </p>
   );
 }
@@ -1086,7 +1088,10 @@ function jobStatusTitle(job: ScheduleJob): string {
 }
 
 function jobStatusMessage(job: ScheduleJob): string {
-  return `${jobStatusTitle(job)}. ${job.currentBest ? phase4ScheduleCopy.bestAvailable : phase4ScheduleCopy.selectedUnchanged}`;
+  const outcome = `${jobStatusTitle(job)}. ${job.currentBest ? phase4ScheduleCopy.bestAvailable : phase4ScheduleCopy.selectedUnchanged}`;
+  if (job.status !== "failed") return outcome;
+  const failureReference = job.failureClass ? `${job.failureClass} · ${job.id}` : job.id;
+  return `${outcome} ${phase4ScheduleCopy.status}: ${failureReference}.`;
 }
 
 function ScheduleEmpty({
