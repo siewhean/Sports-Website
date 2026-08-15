@@ -21,7 +21,7 @@ describe("production scheduling capacity regressions", () => {
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0]?.result.assignments).toHaveLength(36);
-    expect(new Set(candidates[0]?.result.assignments.map((assignment) => assignment.slot_id))).toHaveLength(36);
+    expect(new Set(candidates[0]?.result.assignments.map((assignment) => assignment.slot_id)).size).toBe(36);
     expect(candidates[0]?.result.quality?.valid).toBe(true);
     expect(await optimizer.verifyCandidate(input, candidates[0]!.result)).not.toBeNull();
   });
