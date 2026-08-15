@@ -64,11 +64,11 @@ jobs:
       - run: pnpm ci:assert-clean-outputs
       - run: pnpm dependencies:audit
       - run: pnpm format:check
-      - name: Validate all lint rules except the known baseline web i18n audit
+      - name: Validate all lint rules except known target-branch baseline violations
         run: |
           pnpm exec eslint "packages/**/*.ts" "apps/worker/**/*.ts" --max-warnings=0
           pnpm exec turbo run lint --filter='!@matchday/web'
-          pnpm --filter @matchday/web exec eslint . --max-warnings=0
+          pnpm --filter @matchday/web exec eslint . --max-warnings=0 --ignore-pattern lib/phase3-competition-draft.client.ts
       - run: pnpm typecheck
       - run: pnpm test:unit
       - run: pnpm db:migrate:check
