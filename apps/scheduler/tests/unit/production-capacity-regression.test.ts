@@ -23,7 +23,12 @@ describe("production scheduling capacity regressions", () => {
     expect(candidates[0]?.result.assignments).toHaveLength(36);
     expect(new Set(candidates[0]?.result.assignments.map((assignment) => assignment.slot_id)).size).toBe(36);
     expect(candidates[0]?.result.quality?.valid).toBe(true);
-    expect(await optimizer.verifyCandidate(input, candidates[0]!.result)).not.toBeNull();
+    expect(
+      await optimizer.verifyCandidate(input, candidates[0]!.result, {
+        signal: new AbortController().signal,
+        maxYieldIntervalMs: 30_000,
+      }),
+    ).not.toBeNull();
   });
 
   it("returns no solution instead of throwing a runtime failure when capacity is genuinely short", async () => {
