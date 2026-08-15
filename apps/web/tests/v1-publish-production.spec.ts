@@ -52,9 +52,12 @@ test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
 test("V1 Publish page performs the real schedule publication mutation", async ({ page }) => {
-  let requestBody: Record<string, unknown> | null = null;
+  let expectedRevision: number | null = null;
+  let idempotencyKey: unknown = null;
   await page.route("**/api/phase4/schedule/revisions/*/publish", async (route) => {
-    requestBody = route.request().postDataJSON() as Record<string, unknown>;
+    const requestBody = route.request().postDataJSON() as Record<string, unknown>;
+    expectedRevision = typeof requestBody.expected_revision === "number" ? requestBody.expected_revision : null;
+    idempotencyKey = requestBody.idempotency_key;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(publishedEnvelope()) });
   });
 
@@ -69,9 +72,8 @@ test("V1 Publish page performs the real schedule publication mutation", async ({
   await expect(publish).toBeEnabled();
   await publish.click();
 
-  await expect.poll(() => requestBody).not.toBeNull();
-  expect(requestBody?.expected_revision).toBe(4);
-  expect(typeof requestBody?.idempotency_key).toBe("string");
+  await expect.poll(() => expectedRevision).toBe(4);
+  expect(typeof idempotencyKey).toBe("string");
   await expect(page.getByRole("status")).toContainText("Schedule revision 4 is now public.");
   await expect(page.getByRole("link", { name: "Open public competition" })).toBeVisible();
 });
