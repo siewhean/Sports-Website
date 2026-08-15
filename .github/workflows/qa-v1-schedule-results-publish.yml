@@ -12,7 +12,37 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: matchday
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      LOG_LEVEL: silent
+      RUN_INFRA_TESTS: 1
+      MATCHDAY_PHASE2_DATA_MODE: api
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -24,19 +54,39 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - name: Install frozen dependencies
         run: pnpm install --frozen-lockfile
+      - name: Production dependency audit
+        run: pnpm dependencies:audit
       - name: Formatting
-        run: pnpm exec prettier --check apps/scheduler/src/solver-thread.mjs apps/scheduler/tests/unit/domain-optimizer.test.ts packages/domain/tests/v1-tight-capacity-schedule.test.ts apps/web/lib/v1-publication-readiness.ts apps/web/lib/v1-publication-readiness.test.ts apps/web/components/phase3/V1ResultsWorkspace.tsx apps/web/components/phase3/V1PublishWorkspace.tsx 'apps/web/app/organiser/competitions/[id]/[section]/page.tsx'
-      - name: Domain exact-capacity regression
+        run: >-
+          pnpm exec prettier --check
+          apps/api/src/phase-4-runtime.ts
+          apps/api/tests/integration/phase-4-runtime.test.ts
+          apps/scheduler/src/solver-thread.mjs
+          apps/scheduler/tests/unit/domain-optimizer.test.ts
+          packages/domain/tests/v1-tight-capacity-schedule.test.ts
+          apps/web/lib/v1-publication-readiness.ts
+          apps/web/lib/v1-publication-readiness.test.ts
+          apps/web/components/phase3/V1ResultsWorkspace.tsx
+          apps/web/components/phase3/V1PublishWorkspace.tsx
+          apps/web/app/organiser/competitions/[id]/[section]/page.tsx
+          apps/web/components/phase4/schedule/ScheduleWorkspace.tsx
+      - name: Apply database migrations
+        run: pnpm --filter @matchday/database db:migrate
+      - name: Domain exact-capacity regressions
         run: pnpm --filter @matchday/domain exec vitest run tests/v1-tight-capacity-schedule.test.ts --reporter=verbose
       - name: Scheduler unit regressions
         run: pnpm --filter @matchday/scheduler test:unit
+      - name: Phase 4 runtime default constraint integration
+        run: pnpm --filter @matchday/api exec vitest run tests/integration/phase-4-runtime.test.ts --reporter=verbose
       - name: Publication readiness unit tests
         run: pnpm --filter @matchday/web exec vitest run lib/v1-publication-readiness.test.ts --reporter=verbose
-      - name: Scheduler typecheck
-        run: pnpm --filter @matchday/scheduler typecheck
-      - name: Web typecheck
-        run: pnpm --filter @matchday/web typecheck
-      - name: Scheduler build
-        run: pnpm --filter @matchday/scheduler build
-      - name: Web production build
-        run: pnpm --filter @matchday/web build
+      - name: Typecheck API scheduler and web
+        run: |
+          pnpm --filter @matchday/api typecheck
+          pnpm --filter @matchday/scheduler typecheck
+          pnpm --filter @matchday/web typecheck
+      - name: Build API scheduler and web
+        run: |
+          pnpm --filter @matchday/api build
+          pnpm --filter @matchday/scheduler build
+          pnpm --filter @matchday/web build
