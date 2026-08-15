@@ -70,6 +70,8 @@ jobs:
           apps/web/components/phase3/V1PublishWorkspace.tsx
           apps/web/app/organiser/competitions/[id]/[section]/page.tsx
           apps/web/components/phase4/schedule/ScheduleWorkspace.tsx
+      - name: Build API workspace dependency closure
+        run: pnpm --filter @matchday/api... build
       - name: Apply database migrations
         run: pnpm --filter @matchday/database db:migrate
       - name: Domain exact-capacity regressions
