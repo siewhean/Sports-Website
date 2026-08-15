@@ -58,11 +58,7 @@ function latestComparableJob(value: unknown, document: ScheduleDocument): Schedu
   const jobs: ScheduleJob[] = [];
   for (const candidate of value) {
     const job = parseScheduleJobView(candidate);
-    if (
-      job &&
-      job.sourceRevision === document.sourceRevision &&
-      job.capacityRevision === document.capacityRevision
-    ) {
+    if (job && job.sourceRevision === document.sourceRevision && job.capacityRevision === document.capacityRevision) {
       jobs.push(job);
     }
   }
@@ -131,8 +127,7 @@ export function V1ScheduleWorkspace({
   useEffect(() => {
     if (!recoverableOption) return;
 
-    const key =
-      `${recoverableOption.jobId}:${recoverableOption.id}:${recoverableOption.jobRevision}:${assignmentFingerprint(recoverableOption)}`;
+    const key = `${recoverableOption.jobId}:${recoverableOption.id}:${recoverableOption.jobRevision}:${assignmentFingerprint(recoverableOption)}`;
     if (attemptedRecoveryRef.current === key) return;
     attemptedRecoveryRef.current = key;
 
@@ -184,7 +179,8 @@ export function V1ScheduleWorkspace({
             Job <code>{observedJob?.id}</code>
             {observedJob?.failureClass ? (
               <span>
-                {" "}· failure class <code>{observedJob.failureClass}</code>
+                {" "}
+                · failure class <code>{observedJob.failureClass}</code>
               </span>
             ) : null}
           </p>
