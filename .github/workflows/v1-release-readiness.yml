@@ -2,7 +2,7 @@ name: V1 Release Readiness
 
 on:
   push:
-    branches: [v1/simple-working-product]
+    branches: [qa/v1-scheduler-runtime-candidate-20260816]
 
 concurrency:
   group: v1-release-readiness-${{ github.ref }}
