@@ -31,7 +31,13 @@ export type ScheduleProcessorOptions = Readonly<{
 
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_CANCELLATION_POLL_MS = 250;
-const DEFAULT_MAX_YIELD_INTERVAL_MS = 1_000;
+// Candidate generation happens in an abortable worker thread. The previous
+// one-second deadline conflated cancellation responsiveness with solver CPU
+// time and caused valid, tight production schedules to be retried until they
+// were dead-lettered. Cancellation is still observed by the independent poll
+// loop, so allow a realistic bounded solver step without weakening stop time.
+const DEFAULT_MAX_YIELD_INTERVAL_MS = 30_000;
+const MAX_YIELD_INTERVAL_MS = 120_000;
 
 export class ScheduleJobProcessor {
   readonly #options: Required<Pick<ScheduleProcessorOptions, "leaseMs" | "cancellationPollMs" | "maxYieldIntervalMs">> &
@@ -49,9 +55,9 @@ export class ScheduleJobProcessor {
     if (
       !Number.isInteger(maxYieldIntervalMs) ||
       maxYieldIntervalMs < cancellationPollMs ||
-      maxYieldIntervalMs > 1_000
+      maxYieldIntervalMs > MAX_YIELD_INTERVAL_MS
     ) {
-      throw new Error("maxYieldIntervalMs must be an integer from cancellationPollMs to 1000");
+      throw new Error(`maxYieldIntervalMs must be an integer from cancellationPollMs to ${MAX_YIELD_INTERVAL_MS}`);
     }
     this.#options = { ...options, leaseMs, cancellationPollMs, maxYieldIntervalMs };
   }
