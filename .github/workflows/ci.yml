@@ -84,7 +84,7 @@ jobs:
             apps/api/openapi.generated.json
             artifacts/deployment-manifest.json
           if-no-files-found: error
-      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e
       - run: pnpm test:a11y
       - run: pnpm test:visual
