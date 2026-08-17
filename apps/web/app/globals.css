@@ -1397,9 +1397,9 @@
 
 .p2-score-secondary {
   min-height: 54px;
-  border-color: #555b56;
+  border: 1px solid #555b56;
   border-radius: var(--radius);
-  background: transparent;
+  background: #252b27;
   color: #f1f3ed;
 }
 
