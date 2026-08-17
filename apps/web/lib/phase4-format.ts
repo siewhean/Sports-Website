@@ -319,6 +319,7 @@ export function parseFormatMaterialisation(value: unknown, formatId: string): Fo
       "division_id",
       "status",
       "definition_hash",
+      "materialised",
       "document",
       "created_at",
       "published_at",
@@ -331,6 +332,7 @@ export function parseFormatMaterialisation(value: unknown, formatId: string): Fo
     typeof revision.division_id !== "string" ||
     !["draft", "published", "superseded"].includes(String(revision.status)) ||
     typeof revision.definition_hash !== "string" ||
+    typeof revision.materialised !== "boolean" ||
     !parseFormatBuilderDocument(revision.document) ||
     typeof revision.created_at !== "string" ||
     Number.isNaN(Date.parse(revision.created_at)) ||
@@ -360,6 +362,7 @@ export function parseFormatPublication(value: unknown, formatId: string): Format
       "division_id",
       "status",
       "definition_hash",
+      "materialised",
       "document",
       "created_at",
       "published_at",

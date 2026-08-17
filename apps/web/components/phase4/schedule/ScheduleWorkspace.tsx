@@ -939,7 +939,7 @@ function MatchInspector({
           {assignment ? (
             <Link
               className={styles.moveLink}
-              href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
+              href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move${advanced ? "?advanced=1" : ""}`}
             >
               {phase4ScheduleCopy.move}
             </Link>
