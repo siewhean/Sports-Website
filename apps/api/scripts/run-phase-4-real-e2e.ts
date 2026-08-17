@@ -966,12 +966,14 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
   process.once("SIGINT", markInterrupted);
   process.once("SIGTERM", markInterrupted);
   try {
-    await runProcess(
-      "local infrastructure",
-      "docker",
-      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
-      process.env,
-    );
+    if (!process.env.CI) {
+      await runProcess(
+        "local infrastructure",
+        "docker",
+        ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
+        process.env,
+      );
+    }
     rateLimitRedis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
     queueName = `matchday-phase4-real-e2e-${randomUUID()}`;
     redisOwnership = createRedisOwnership(queueName);

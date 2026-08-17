@@ -1049,12 +1049,14 @@ async function main(): Promise<void> {
   process.once("SIGINT", markInterrupted);
   process.once("SIGTERM", markInterrupted);
   try {
-    await runProcess(
-      "local PostgreSQL",
-      "docker",
-      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
-      process.env,
-    );
+    if (!process.env.CI) {
+      await runProcess(
+        "local PostgreSQL",
+        "docker",
+        ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
+        process.env,
+      );
+    }
     isolation = await prepareIsolation(admin);
     sql = connectIsolation(isolation);
     const state = await seed(sql, isolation);
