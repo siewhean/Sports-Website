@@ -1647,6 +1647,7 @@ export class Phase3Runtime {
         [divisionId, competitionId],
       );
       required(division, "Division not found");
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
       let candidate = await this.domainCompetition(tx, competitionId);
       const plan = required(
         await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(`SELECT plan_tier FROM competitions WHERE id=$1`, [
