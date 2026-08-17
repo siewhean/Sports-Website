@@ -22,7 +22,7 @@ export function isExpectedTeardownFontCancellation(input: {
   requestUrl: string;
   resourceType: string;
 }): boolean {
-  if (input.failure !== "cancelled" || input.resourceType !== "font") return false;
+  if (!["cancelled", "Load request cancelled"].includes(input.failure) || input.resourceType !== "font") return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -37,7 +37,7 @@ export function isExpectedTeardownServiceWorkerCancellation(input: {
   pageUrl: string;
   requestUrl: string;
 }): boolean {
-  if (input.failure !== "cancelled") return false;
+  if (!["cancelled", "Load request cancelled"].includes(input.failure)) return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -54,7 +54,7 @@ export function isExpectedTeardownStaticAssetCancellation(input: {
   resourceType: string;
 }): boolean {
   if (
-    !["cancelled", "net::ERR_ABORTED"].includes(input.failure) ||
+    !["cancelled", "net::ERR_ABORTED", "Load request cancelled"].includes(input.failure) ||
     !["script", "stylesheet"].includes(input.resourceType)
   )
     return false;
@@ -90,7 +90,7 @@ export function installConsoleGuard(page: Page) {
     const url = request.url();
     // Next cancels speculative RSC prefetches and active polling requests when navigation makes them stale.
     if (
-      (failure === "net::ERR_ABORTED" || failure === "cancelled") &&
+      (failure === "net::ERR_ABORTED" || failure === "cancelled" || failure === "Load request cancelled") &&
       (url.includes("_rsc=") || url.includes("/takeover-requests"))
     )
       return;
