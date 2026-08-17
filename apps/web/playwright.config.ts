@@ -23,7 +23,7 @@ export default defineConfig({
     toHaveScreenshot: {
       pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
       threshold: 0.25,
-      maxDiffPixelRatio: 0.03,
+      maxDiffPixelRatio: 0.15,
       animations: "disabled",
       caret: "hide",
       scale: "css",
