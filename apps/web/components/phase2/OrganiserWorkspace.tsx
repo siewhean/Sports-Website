@@ -23,6 +23,10 @@ import {
 import { SurfaceStatePanel } from "./SurfaceState";
 import { AccessPassManager } from "@/components/phase5/AccessPassManager";
 
+// Named aliases for a handful of packages/ui/src/translate.ts catalogue ids
+// used below. The catalogue keeps its own hash-style ids (it may be synced
+// from an external string source), this map just gives the call sites in
+// this file something readable to point at instead of an opaque hash.
 function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
   const shared: Record<OrganiserSection, { title: string; intro: string }> = {
     "control-room": { title: phase2Copy.controlTitle, intro: phase2Copy.controlIntro },

@@ -1,10 +1,10 @@
 .workspace {
-  --schedule-ink: #171918;
-  --schedule-muted: #646863;
-  --schedule-line: #d3d4ce;
-  --schedule-paper: #f7f6f0;
-  --schedule-signal: #b7dc22;
-  --schedule-signal-dark: #789700;
+  --schedule-ink: var(--ink);
+  --schedule-muted: var(--ink-muted);
+  --schedule-line: var(--hairline);
+  --schedule-paper: var(--canvas);
+  --schedule-signal: var(--signal);
+  --schedule-signal-dark: var(--signal-strong);
   display: grid;
   gap: 1.15rem;
   color: var(--schedule-ink);
@@ -37,7 +37,7 @@
   align-items: flex-start;
   padding: 0.85rem 0;
   border-block: 1px solid var(--schedule-line);
-  color: #484b46;
+  color: var(--schedule-muted);
 }
 
 .statusRail > svg,
@@ -60,14 +60,14 @@
 }
 
 .statusRail[data-tone="warning"] {
-  border-color: #e0aa70;
-  color: #9a4c0a;
+  border-color: var(--warning);
+  color: var(--warning);
 }
 
 .statusRail[data-tone="danger"],
 .commandError {
-  border-color: #c98d83;
-  color: #8a3026;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .commandError {
@@ -95,17 +95,9 @@
 }
 
 .simpleStatus {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
   margin: 0;
   color: var(--schedule-muted);
   font-size: 0.82rem;
-}
-
-.simpleStatusSpinner {
-  flex: 0 0 auto;
-  animation: schedule-spinner 0.8s linear infinite;
 }
 
 .simpleCommandBar p,
@@ -154,7 +146,7 @@
 .strategy > div {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  border: 1px solid #a9aaa4;
+  border: 1px solid var(--schedule-line);
   border-radius: 0.45rem;
   overflow: hidden;
 }
@@ -166,10 +158,10 @@
   justify-content: center;
   gap: 0.45rem;
   border: 0;
-  border-right: 1px solid #a9aaa4;
-  background: #fff;
+  border-right: 1px solid var(--schedule-line);
+  background: var(--surface);
   padding: 0.55rem 0.7rem;
-  color: #383a37;
+  color: var(--schedule-ink);
   font:
     600 0.74rem/1.1 var(--font-geist-sans),
     sans-serif;
@@ -184,7 +176,7 @@
 
 .strategy button[aria-checked="true"] {
   background: var(--schedule-signal);
-  color: #171918;
+  color: var(--schedule-ink);
 }
 
 .strategy svg,
@@ -369,7 +361,7 @@
   min-height: 1.55rem;
   place-items: center;
   border-radius: 50%;
-  background: #dedfd8;
+  background: var(--surface-subtle);
   font:
     650 0.68rem/1 var(--font-geist-mono),
     monospace;
@@ -448,7 +440,7 @@
 
 .axis time {
   padding: 0.6rem 0.35rem;
-  border-left: 1px solid #e1e2dc;
+  border-left: 1px solid var(--schedule-line);
   font:
     530 0.63rem/1 var(--font-geist-mono),
     monospace;
@@ -479,7 +471,7 @@
 
 .areaTrack {
   position: relative;
-  background-image: linear-gradient(to right, #e3e3dd 0 1px, transparent 1px);
+  background-image: linear-gradient(to right, var(--schedule-line) 0 1px, transparent 1px);
   background-repeat: repeat-x;
 }
 
@@ -488,9 +480,9 @@
   top: 14px;
   min-height: 84px;
   overflow: hidden;
-  border: 1px solid #aeb0a7;
+  border: 1px solid var(--schedule-line);
   border-radius: 0.35rem;
-  background: #fff;
+  background: var(--surface);
   padding: 0.55rem;
   color: var(--schedule-ink);
   text-align: left;
@@ -504,7 +496,7 @@
 }
 
 .matchBlock[data-conflict="true"] {
-  border-color: #c9473a;
+  border-color: var(--danger);
 }
 
 .matchBlock span,
@@ -663,7 +655,7 @@
   margin-inline: -2rem;
   padding: 0.75rem 2rem max(0.75rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--schedule-line);
-  background: rgb(247 246 240 / 96%);
+  background: color-mix(in srgb, var(--schedule-paper) 96%, transparent);
   backdrop-filter: blur(10px);
 }
 
@@ -706,7 +698,7 @@
 
 .skeleton span {
   min-height: 4rem;
-  background: linear-gradient(90deg, #e8e7e1 30%, #f4f3ed 50%, #e8e7e1 70%);
+  background: linear-gradient(90deg, var(--hairline) 30%, var(--surface-subtle) 50%, var(--hairline) 70%);
   background-size: 240% 100%;
   animation: schedule-shimmer 1.4s ease-in-out infinite;
 }
@@ -732,21 +724,9 @@ button:disabled {
   outline-offset: 3px;
 }
 
-@keyframes schedule-spinner {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @keyframes schedule-shimmer {
   to {
     background-position: -240% 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .simpleStatusSpinner {
-    animation: none;
   }
 }
 
@@ -901,7 +881,7 @@ button:disabled {
   }
 
   .semanticTimeline li[data-conflict="true"] {
-    box-shadow: inset 3px 0 #c9473a;
+    box-shadow: inset 3px 0 var(--danger);
     padding-left: 0.7rem;
   }
 
@@ -930,7 +910,7 @@ button:disabled {
   .strategy button {
     justify-content: flex-start;
     border-right: 0;
-    border-bottom: 1px solid #a9aaa4;
+    border-bottom: 1px solid var(--schedule-line);
     padding-inline: 1rem;
   }
 

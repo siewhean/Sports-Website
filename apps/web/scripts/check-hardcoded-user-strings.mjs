@@ -22,7 +22,6 @@ const structuralAttributes = new Set([
   "src",
   "key",
   "htmlFor",
-  "list",
   "dateTime",
   "min",
   "max",
@@ -35,6 +34,7 @@ const structuralAttributes = new Set([
   "d",
   "weight",
   "autoComplete",
+  "list",
   "actionNavigation",
   "autoCapitalize",
   "inputMode",
@@ -210,7 +210,7 @@ function isRenderedMachineLiteral(node, source) {
   }
   if (
     ts.isPropertyAssignment(node.parent) &&
-    ["id", "kind", "type", "value", "code", "actionNavigation"].includes(propertyName(node, source))
+    ["code", "id", "kind", "type", "value"].includes(propertyName(node, source))
   ) {
     return true;
   }
@@ -267,20 +267,7 @@ function isMachineLiteral(node, source) {
     }
     if (ts.isPropertyAssignment(ancestor)) {
       const name = ancestor.name.getText(source).replace(/^['"]|['"]$/g, "");
-      if (
-        [
-          "id",
-          "kind",
-          "type",
-          "team",
-          "sync",
-          "resolution",
-          "value",
-          "clearProps",
-          "code",
-          "actionNavigation",
-        ].includes(name)
-      )
+      if (["code", "id", "kind", "type", "team", "sync", "resolution", "value", "clearProps"].includes(name))
         return true;
     }
     if (ts.isCallExpression(ancestor)) {
@@ -295,6 +282,7 @@ function isMachineLiteral(node, source) {
     if (
       [
         "dateStyle",
+        "code",
         "display",
         "id",
         "kind",

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { translate as t } from "@matchday/ui";
 import {
   parseScheduleJobView,
   phase4ScheduleMachine,
@@ -92,10 +93,18 @@ export function V1ScheduleWorkspace({
     v1ScheduleProductionMachine.recoveryIdle,
   );
   const [polledJob, setPolledJob] = useState<ScheduleJob | null>(null);
-  const observedJob = useMemo(() => newestJob(document.activeJob, polledJob), [document.activeJob, polledJob]);
+  const comparablePolledJob =
+    polledJob?.sourceRevision === document.sourceRevision && polledJob.capacityRevision === document.capacityRevision
+      ? polledJob
+      : null;
+  const observedJob = useMemo(
+    () => newestJob(document.activeJob, comparablePolledJob),
+    [document.activeJob, comparablePolledJob],
+  );
+  const observedJobIsTerminal = observedJob !== null && !activeStatuses.has(observedJob.status);
 
   useEffect(() => {
-    if (advanced || document.currentRevision || !document.canEdit) return;
+    if (advanced || document.currentRevision || !document.canEdit || observedJobIsTerminal) return;
     let live = true;
     const poll = async () => {
       try {
@@ -117,7 +126,7 @@ export function V1ScheduleWorkspace({
       live = false;
       window.clearInterval(timer);
     };
-  }, [advanced, document]);
+  }, [advanced, document, observedJobIsTerminal]);
 
   const recoverableOption = useMemo(() => {
     if (advanced || document.currentRevision || !document.canEdit) return null;
@@ -178,6 +187,7 @@ export function V1ScheduleWorkspace({
     observedJob?.status === "no_solution"
       ? v1ScheduleProductionCopy.noScheduleFound
       : v1ScheduleProductionCopy.optimisationFailed;
+  const workspaceKey = `${document.sourceRevision}:${document.capacityRevision}:${document.currentRevision?.id ?? "unsaved"}`;
 
   return (
     <>
@@ -201,12 +211,13 @@ export function V1ScheduleWorkspace({
         </section>
       ) : null}
       {recoveryState === v1ScheduleProductionMachine.recoveryRestoring ? (
-        <p role="status">{v1ScheduleProductionCopy.restoring}</p>
+        <p role="status">{t("prototype.6523982b0541")}</p>
       ) : null}
       {recoveryState === v1ScheduleProductionMachine.recoveryFailed ? (
-        <p role="alert">{v1ScheduleProductionCopy.recoveryFailed}</p>
+        <p role="alert">{t("prototype.000ac935b6a9")}</p>
       ) : null}
       <ScheduleWorkspace
+        key={workspaceKey}
         advanced={advanced}
         document={document}
         initialSelectedMatchId={initialSelectedMatchId}

@@ -6,9 +6,9 @@
 .usage,
 .createDivision,
 .division {
-  border: 1px solid var(--p2-line, #d9d4ca);
+  border: 1px solid var(--hairline);
   border-radius: 1rem;
-  background: #fff;
+  background: var(--surface);
   padding: 1rem;
 }
 
@@ -36,7 +36,7 @@
 
 .usage progress {
   width: 100%;
-  accent-color: #1d4d3e;
+  accent-color: var(--success);
 }
 
 .createDivision,
@@ -58,7 +58,7 @@
 .createDivision select,
 .createEntry input {
   min-height: 2.75rem;
-  border: 1px solid #8d8a83;
+  border: 1px solid var(--hairline);
   border-radius: 0.5rem;
   padding: 0.55rem 0.7rem;
   font: inherit;
@@ -69,8 +69,8 @@
   min-height: 2.75rem;
   border: 0;
   border-radius: 0.5rem;
-  background: #173d34;
-  color: #fff;
+  background: var(--ink);
+  color: var(--surface);
   padding: 0.6rem 1rem;
   font: inherit;
   font-weight: 700;
@@ -110,7 +110,7 @@
   grid-template-columns: 2rem 1fr auto;
   gap: 0.75rem;
   align-items: center;
-  border-top: 1px solid #ece8e0;
+  border-top: 1px solid var(--hairline);
   padding-top: 0.45rem;
 }
 
@@ -127,14 +127,14 @@
 
 .readOnly {
   margin: 0;
-  border-left: 0.25rem solid #7a6c2f;
-  background: #fff8d8;
+  border-left: 0.25rem solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
   padding: 0.75rem 1rem;
   font-weight: 650;
 }
 
 .error {
-  color: #a62920;
+  color: var(--danger);
 }
 
 @media (max-width: 820px) {

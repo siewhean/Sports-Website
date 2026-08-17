@@ -79,15 +79,15 @@
 
 .error {
   margin: 0;
-  color: #9f1239;
+  color: var(--danger);
   font-weight: 650;
 }
 
 .summary {
-  border-left: 0.3rem solid #aa4b39;
+  border-left: 0.3rem solid var(--danger);
   padding: 0.9rem 1rem;
-  color: #70352a;
-  background: #fff4ef;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
   line-height: 1.5;
 }
 
@@ -97,7 +97,7 @@
   border: 0;
   border-radius: 999px;
   padding: 0.7rem 1.2rem;
-  color: white;
+  color: var(--surface);
   background: var(--ink);
   font: inherit;
   font-weight: 750;
@@ -108,7 +108,7 @@
 }
 
 .submit:not(:disabled):hover {
-  background: #303531;
+  background: color-mix(in srgb, var(--ink) 88%, var(--surface));
 }
 
 .submit:not(:disabled):active {
@@ -128,7 +128,7 @@
   justify-self: start;
   border: 0;
   padding: 0;
-  color: #172554;
+  color: var(--ink);
   background: transparent;
   font: inherit;
   font-weight: 750;
@@ -155,7 +155,7 @@
 
 .signIn:hover {
   background: var(--ink);
-  color: white;
+  color: var(--surface);
 }
 
 .signIn:active {

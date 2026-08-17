@@ -6,6 +6,7 @@ import { ConsentManager } from "@/components/foundation/ConsentManager";
 import { ServiceWorkerRegistration } from "@/components/foundation/ServiceWorkerRegistration";
 import { messages } from "@matchday/ui";
 import "./globals.css";
+import "./schedule-accessibility.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://matchday.example"),
