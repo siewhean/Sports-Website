@@ -2447,7 +2447,6 @@ export class Phase3Runtime {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       this.assertMutable(competition);
-      await tx.unsafe(`SELECT id FROM competitions WHERE id=$1 FOR UPDATE`, [competitionId]);
       const validation = this.domain.validateFormat(graph);
       if (!validation.valid) throw new ApiError(422, "FORMAT_INVALID", "Format graph is invalid");
       const hash = this.domain.hash(graph);
