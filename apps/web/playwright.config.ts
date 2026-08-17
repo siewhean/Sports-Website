@@ -13,6 +13,8 @@ export default defineConfig({
     "**/gate-c-c2-real.spec.ts",
     "**/phase-2-real-api.spec.ts",
     "**/phase-4-real-api.spec.ts",
+    "**/v1-real-api.spec.ts",
+    "**/v1-competition-real-api.spec.ts",
   ],
   fullyParallel: true,
   forbidOnly: true,

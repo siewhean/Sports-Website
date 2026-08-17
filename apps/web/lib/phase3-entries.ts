@@ -159,16 +159,16 @@ export function parseCreatedEntry(value: unknown, expectedDivisionId?: string): 
     (expectedDivisionId !== undefined && item.division_id !== expectedDivisionId) ||
     typeof item.name !== "string" ||
     (item.status !== "active" && item.status !== "confirmed") ||
-    !(item.seed === null || integer(item.seed, 1)) ||
-    !integer(item.revision, 1)
+    !(item.seed === null || item.seed === undefined || integer(item.seed, 1)) ||
+    !(item.revision === undefined || integer(item.revision, 1))
   )
     return null;
   return {
     id: item.id,
     name: item.name,
-    seed: item.seed as number | null,
+    seed: (item.seed as number | null) ?? null,
     status: item.status,
-    revision: item.revision as number,
+    revision: integer(item.revision, 1) ? (item.revision as number) : 1,
   };
 }
 

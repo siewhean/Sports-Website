@@ -582,8 +582,8 @@ export const phase2Competition: CompetitionView = {
   lastUpdated: "12 Sep, 10:24 SGT",
   division: { id: "open", name: "Open division", teamCount: 8, matchCount: 16 },
   divisions: [
-    { id: "open", name: "Open division" },
-    { id: "women", name: "Women's division" },
+    { id: "open", name: "Open division", entries: [] },
+    { id: "women", name: "Women's division", entries: [] },
   ],
   teams: [
     "Marina Blue",

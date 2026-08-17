@@ -180,8 +180,12 @@ button:focus-visible {
 }
 .checkbox input {
   width: 44px;
+  min-width: 44px;
   height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
   margin: 0;
+  cursor: pointer;
   accent-color: var(--signal-strong);
 }
 .primaryButton,

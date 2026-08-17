@@ -19,8 +19,8 @@ const sports = [
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-async function openScoring(page: Page, sportId: string) {
-  await page.goto(`/score?sport=${sportId}`);
+async function openScoring(page: Page, sportId: string, advanced = true) {
+  await page.goto(`/score?sport=${sportId}${advanced ? "&advanced=1" : ""}`);
   await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();
@@ -102,7 +102,7 @@ test("@a11y 320px reflow keeps Basketball controls reachable with 48px targets",
 });
 
 test("phone secondary scoring actions do not intercept final review", async ({ page }) => {
-  await openScoring(page, "canoe_polo");
+  await openScoring(page, "canoe_polo", false);
 
   const secondaryActions = page.locator("details");
   await expect(secondaryActions.getByText("More match actions", { exact: true })).toBeVisible();
