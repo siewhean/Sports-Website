@@ -1,0 +1,36 @@
+name: Promote certified V1 preview
+
+on:
+  push:
+    branches: [v1/simple-working-product]
+    paths:
+      - .github/workflows/vercel-promote-certified.yml
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: team_EqEVvtYJl1XlrsIvRj266qnq
+      VERCEL_PROJECT_ID: prj_3y6T5b9aTxy1o6PbpGeK2vGiTkMk
+    steps:
+      - name: Require Vercel deployment token
+        shell: bash
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::Repository secret VERCEL_TOKEN is not configured."
+            exit 1
+          fi
+      - name: Promote certified deployment
+        shell: bash
+        run: |
+          npx --yes vercel@latest promote \
+            https://sports-website-owyltbb1n-siewheans-projects.vercel.app \
+            --yes \
+            --token="$VERCEL_TOKEN" \
+            --scope=siewheans-projects \
+            --timeout=5m
