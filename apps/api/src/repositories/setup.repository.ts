@@ -13,7 +13,7 @@ export class SetupRepository {
     const lockClause = lock === "for_update" ? " FOR UPDATE OF d" : lock === "for_share" ? " FOR SHARE OF d" : "";
 
     const rows = await executor.unsafe<SetupDraftRecord>(
-      `SELECT d.id, d.organisation_id, d.competition_id, c.status AS competition_status,
+      `SELECT d.id, d.schema_version, d.organisation_id, d.competition_id, c.status AS competition_status,
               d.status, d.revision, d.current_step, d.completed_steps, d.steps, d.validation,
               d.created_at, d.updated_at, d.expires_at, d.completed_at
        FROM setup_drafts d

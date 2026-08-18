@@ -160,6 +160,17 @@ export class Phase3Runtime {
     this.scheduleRepo = new ScheduleRepository(sql);
   }
 
+  get repositories() {
+    return {
+      competition: this.competitionRepo,
+      organisation: this.organisationRepo,
+      division: this.divisionRepo,
+      setup: this.setupRepo,
+      format: this.formatRepo,
+      schedule: this.scheduleRepo,
+    };
+  }
+
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     if (!this.sql.begin) throw new Error("Phase 3 mutations require a transaction-capable PostgreSQL client.");
     return this.sql.begin(operation);
@@ -185,7 +196,11 @@ export class Phase3Runtime {
     )[0];
     if (!receipt) return undefined;
     if (receipt.operation !== operation || receipt.request_hash !== requestHash) {
-      throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "The idempotency key was already used for a different request");
+      throw new ApiError(
+        409,
+        ErrorCode.IDEMPOTENCY_KEY_REUSED,
+        "The idempotency key was already used for a different request",
+      );
     }
     return decodedJson(receipt.response) as T;
   }
@@ -218,19 +233,14 @@ export class Phase3Runtime {
     const row = required(
       await database.unsafe<{ required_match_slots: number }>(
         `SELECT COALESCE(sum(jsonb_array_length(selected.definition->'matches')),0)::int AS required_match_slots
-         FROM divisions d
-         CROSS JOIN LATERAL (
-           SELECT fr.definition
-           FROM format_revisions fr
-           LEFT JOIN format_validation_evidence e ON e.format_revision_id=fr.id
-           WHERE fr.competition_id=d.competition_id AND fr.division_id=d.id
-             AND (fr.status='published' OR (fr.validation_contract='phase3' AND e.valid))
-           ORDER BY (fr.status='published') DESC,
-                    CASE WHEN fr.status='published' THEN fr.published_at END DESC NULLS LAST,
-                    fr.revision DESC,fr.id DESC
-           LIMIT 1
+         FROM (
+           SELECT DISTINCT ON (d.id) f.definition
+           FROM divisions d
+           LEFT JOIN format_revisions f ON f.division_id=d.id
+           WHERE d.competition_id=$1 AND ($2::uuid IS NULL OR d.id<>$2::uuid)
+           ORDER BY d.id, (f.status='published') DESC, f.revision DESC
          ) selected
-         WHERE d.competition_id=$1 AND ($2::uuid IS NULL OR d.id<>$2::uuid)`,
+         WHERE selected.definition IS NOT NULL`,
         [competitionId, excludedDivisionId ?? null],
       ),
       "Competition capacity could not be calculated",
@@ -252,7 +262,7 @@ export class Phase3Runtime {
        WHERE c.id=$1 AND m.account_id=$2 AND m.status='active' AND m.role=ANY($3::text[])`,
       [id, actor.accountId, roles],
     );
-    if (!rows[0]) throw new ApiError(403, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+    if (!rows[0]) throw new ApiError(403, ErrorCode.COMPETITION_ACCESS_DENIED, "Competition access denied");
     return rows[0];
   }
 
@@ -268,7 +278,7 @@ export class Phase3Runtime {
          AND (expires_at IS NULL OR expires_at > $2)`,
       [actor.accountId, this.now()],
     );
-    if (!rows[0]) throw new ApiError(403, "PLATFORM_ADMIN_REQUIRED", "Platform administrator access required");
+    if (!rows[0]) throw new ApiError(403, ErrorCode.PLATFORM_ADMIN_REQUIRED, "Platform administrator access required");
   }
 
   private context(actor: Phase3Actor): competitionDomain.CommandContext {
@@ -277,7 +287,7 @@ export class Phase3Runtime {
 
   private assertMutable(competition: { status: string }): void {
     if (competition.status === "archived") {
-      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
     }
   }
 
@@ -1355,7 +1365,7 @@ export class Phase3Runtime {
         if (existing.operation !== "competition.create" || existing.request_hash !== requestHash) {
           throw new ApiError(
             409,
-            "IDEMPOTENCY_KEY_REUSED",
+            ErrorCode.IDEMPOTENCY_KEY_REUSED,
             "The idempotency key was already used for a different competition request",
           );
         }

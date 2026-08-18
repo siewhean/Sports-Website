@@ -33,7 +33,7 @@ export class OrganisationRepository {
   async hasActiveRole(
     organisationId: string,
     accountId: string,
-    roles: readonly string[] = ["owner", "organiser"],
+    roles: readonly string[],
     executor: SqlExecutor = this.sql,
   ): Promise<boolean> {
     const rows = await executor.unsafe<{ exists: boolean }>(

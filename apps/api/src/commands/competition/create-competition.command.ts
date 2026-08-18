@@ -1,5 +1,6 @@
 import type { Command, CommandHandler } from "../types.js";
 import type { CompetitionRepository } from "../../repositories/competition.repository.js";
+import type { SqlExecutor } from "../../repositories/types.js";
 import { ApiError, ErrorCode } from "../../errors.js";
 
 export type CreateCompetitionPayload = {
@@ -31,35 +32,50 @@ export class CreateCompetitionHandler implements CommandHandler<
 > {
   constructor(private readonly competitionRepo: CompetitionRepository) {}
 
-  async execute(command: CreateCompetitionCommand): Promise<{ id: string; slug: string; revision: number }> {
+  async execute(
+    command: CreateCompetitionCommand,
+    executor?: SqlExecutor,
+  ): Promise<{ id: string; slug: string; revision: number }> {
     const { payload } = command;
-    const exists = await this.competitionRepo.existsBySlug(payload.slug);
+    const cleanName = payload.name.trim();
+    const cleanSlug = payload.slug.trim().toLowerCase();
+
+    if (executor) {
+      await executor.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+        `competition-slug:${payload.organisationId}:${cleanSlug}`,
+      ]);
+    }
+
+    const exists = await this.competitionRepo.existsBySlug(cleanSlug, undefined, executor);
     if (exists) {
-      throw new ApiError(409, ErrorCode.COMPETITION_SLUG_TAKEN, `Competition slug '${payload.slug}' is already in use`);
+      throw new ApiError(409, ErrorCode.COMPETITION_SLUG_TAKEN, `Competition slug '${cleanSlug}' is already in use`);
     }
 
     const competitionId = payload.id ?? crypto.randomUUID();
-    const result = await this.competitionRepo.create({
-      id: competitionId,
-      organisationId: payload.organisationId,
-      createdBy: payload.createdBy,
-      name: payload.name,
-      slug: payload.slug,
-      sportCode: payload.sportCode,
-      venue: payload.venue ?? "",
-      address: payload.address ?? "",
-      locality: payload.locality ?? null,
-      countryCode: payload.countryCode ?? "SG",
-      startsOn: payload.startsOn ?? new Date().toISOString().slice(0, 10),
-      endsOn: payload.endsOn ?? new Date().toISOString().slice(0, 10),
-      timezone: payload.timezone ?? "Asia/Singapore",
-      locale: payload.locale ?? "en-SG",
-      status: payload.status ?? "draft",
-    });
+    const result = await this.competitionRepo.create(
+      {
+        id: competitionId,
+        organisationId: payload.organisationId,
+        createdBy: payload.createdBy,
+        name: cleanName,
+        slug: cleanSlug,
+        sportCode: payload.sportCode,
+        venue: payload.venue?.trim() ?? "",
+        address: payload.address?.trim() ?? "",
+        locality: payload.locality?.trim() || null,
+        countryCode: payload.countryCode ?? "SG",
+        startsOn: payload.startsOn ?? new Date().toISOString().slice(0, 10),
+        endsOn: payload.endsOn ?? new Date().toISOString().slice(0, 10),
+        timezone: payload.timezone ?? "Asia/Singapore",
+        locale: payload.locale ?? "en-SG",
+        status: payload.status ?? "draft",
+      },
+      executor,
+    );
 
     return {
       id: result.id,
-      slug: payload.slug,
+      slug: cleanSlug,
       revision: result.revision,
     };
   }

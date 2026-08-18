@@ -2,7 +2,7 @@ import type { SqlExecutor, LockMode, ScheduleRevisionRecord } from "./types.js";
 
 export { type ScheduleRevisionRecord };
 
-const SCHEDULE_COLUMNS = `id, competition_id, revision, status, input_hash, warnings, created_by, created_at, published_at`;
+const SCHEDULE_COLUMNS = `id, competition_id, format_revision_id, revision, status, input_hash, warnings, created_by, created_at, published_at`;
 
 export class ScheduleRepository {
   constructor(private readonly sql: SqlExecutor) {}

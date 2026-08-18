@@ -139,8 +139,12 @@ function schedulingEntryIdsBySeed(
   return Object.fromEntries(assigned);
 }
 
-function first<T>(rows: readonly T[], code: string, message: string): T {
-  const value = rows[0];
+function first<T>(
+  rows: readonly T[] | T[] | null | undefined,
+  code: string = ErrorCode.NOT_FOUND,
+  message = "Not found",
+): T {
+  const value = rows?.[0];
   if (!value) throw new ApiError(404, code, message);
   return value;
 }
@@ -148,18 +152,19 @@ function first<T>(rows: readonly T[], code: string, message: string): T {
 function mapPgError(error: unknown): never {
   const message = error instanceof Error ? error.message : "";
   if (/idempotency key/i.test(message))
-    throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+    throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
   if (/schedule_generation_jobs_one_active_competition|duplicate key.*schedule_generation_jobs/i.test(message))
-    throw new ApiError(409, "ACTIVE_SCHEDULE_JOB", "A schedule job is already active");
+    throw new ApiError(409, ErrorCode.ACTIVE_SCHEDULE_JOB, "A schedule job is already active");
   if (/revision conflict|immediately preceding|expected.*revision/i.test(message))
-    throw new ApiError(409, "REVISION_CONFLICT", "The resource changed; refresh and retry");
+    throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "The resource changed; refresh and retry");
   if (/archived format templates/i.test(message))
-    throw new ApiError(409, "TEMPLATE_ARCHIVED", "Archived format templates cannot be applied");
-  if (/archived/i.test(message)) throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+    throw new ApiError(409, ErrorCode.TEMPLATE_ARCHIVED, "Archived format templates cannot be applied");
+  if (/archived/i.test(message))
+    throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
   if (/permission|access|active member|tenant/i.test(message))
-    throw new ApiError(403, "ACCESS_DENIED", "Access denied");
+    throw new ApiError(403, ErrorCode.ACCESS_DENIED, "Access denied");
   if (/invalid|requires|must|cannot|stale/i.test(message))
-    throw new ApiError(422, "DOMAIN_VALIDATION_FAILED", "Request violates the current competition state");
+    throw new ApiError(422, ErrorCode.DOMAIN_VALIDATION_FAILED, "Request violates the current competition state");
   throw error;
 }
 
@@ -397,12 +402,13 @@ export class Phase4Runtime {
     private readonly now: () => Date = () => new Date(),
     private readonly publicProjection?: Phase4PublicProjectionPort,
   ) {
-    this.competitionRepo = new CompetitionRepository(sql);
-    this.organisationRepo = new OrganisationRepository(sql);
-    this.divisionRepo = new DivisionRepository(sql);
-    this.setupRepo = new SetupRepository(sql);
-    this.formatRepo = new FormatRepository(sql);
-    this.scheduleRepo = new ScheduleRepository(sql);
+    const repos = phase3.repositories;
+    this.competitionRepo = repos.competition;
+    this.organisationRepo = repos.organisation;
+    this.divisionRepo = repos.division;
+    this.setupRepo = repos.setup;
+    this.formatRepo = repos.format;
+    this.scheduleRepo = repos.schedule;
   }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -566,8 +572,8 @@ export class Phase4Runtime {
 
   private async rawSetup(tx: PostgresJsSql, competitionId: string, lock = false): Promise<SetupRow> {
     const draft = await this.setupRepo.findByCompetitionId(competitionId, lock ? "for_update" : "none", tx);
-    if (!draft) throw new ApiError(404, "SETUP_DRAFT_NOT_FOUND", "Setup draft not found");
-    return draft as unknown as SetupRow;
+    if (!draft) throw new ApiError(404, ErrorCode.SETUP_DRAFT_NOT_FOUND, "Setup draft not found");
+    return draft as SetupRow;
   }
 
   private setupDocument(row: SetupRow): Phase4SetupDocument {
@@ -670,7 +676,11 @@ export class Phase4Runtime {
     let source = await this.readSetupDraft(actor, competitionId);
     const preferences = source.values.format_preferences;
     if (!source.values.capacity || !source.values.entries || !preferences)
-      throw new ApiError(422, "FORMAT_PREREQUISITE_MISSING", "Add entries and capacity before choosing a format");
+      throw new ApiError(
+        422,
+        ErrorCode.FORMAT_PREREQUISITE_MISSING,
+        "Add entries and capacity before choosing a format",
+      );
     const basics = source.values.basics;
     const currentEntryCount = source.values.entries.total_entry_count;
     const currentDivisionCount = source.values.entries.divisions.length;
@@ -689,7 +699,7 @@ export class Phase4Runtime {
       if (updated.outcome !== "saved" && updated.outcome !== "idempotent_replay")
         throw new ApiError(
           409,
-          "FORMAT_RECOMMENDATION_CONFLICT",
+          ErrorCode.FORMAT_RECOMMENDATION_CONFLICT,
           "The competition changed; refresh the format options",
         );
       source = updated.document;
@@ -716,10 +726,14 @@ export class Phase4Runtime {
     );
     if (saved.outcome === "saved" || saved.outcome === "idempotent_replay") return saved.document;
     if (saved.outcome === "conflict")
-      throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format options");
+      throw new ApiError(
+        409,
+        ErrorCode.FORMAT_RECOMMENDATION_CONFLICT,
+        "The competition changed; refresh the format options",
+      );
     throw new ApiError(
       409,
-      "FORMAT_RECOMMENDATION_UNAVAILABLE",
+      ErrorCode.FORMAT_RECOMMENDATION_CONFLICT,
       "Format options are not editable for this competition",
     );
   }
@@ -741,25 +755,33 @@ export class Phase4Runtime {
       )[0];
       if (!receipt) return null;
       if (receipt.operation !== "setup.save")
-        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+        throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       const row = decoded<SetupRow>(receipt.response);
       const selection = setupValues(row).format_recommendations;
       if (row.competition_id !== competitionId || selection?.selected_recommendation_id !== recommendationId)
-        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+        throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       return this.setupDocument({ ...row, competition_status: access.status });
     });
     if (replay) return this.v1MaterialisedResult(replay, recommendationId);
     const setup = await this.readSetupDraft(actor, competitionId);
     const recommendations = setup.values.format_recommendations;
     if (!recommendations)
-      throw new ApiError(409, "FORMAT_RECOMMENDATION_STALE", "Refresh the capacity-fitting format options first");
+      throw new ApiError(
+        409,
+        ErrorCode.FORMAT_RECOMMENDATION_STALE,
+        "Refresh the capacity-fitting format options first",
+      );
     const selected = recommendations.recommendations.find((candidate) => candidate.id === recommendationId);
     if (
       !selected ||
       selected.capacity_status === "requires_changes" ||
       selected.match_count > selected.available_match_slots
     )
-      throw new ApiError(422, "FORMAT_RECOMMENDATION_NOT_FITTING", "Choose one of the capacity-fitting format options");
+      throw new ApiError(
+        422,
+        ErrorCode.FORMAT_RECOMMENDATION_NOT_FITTING,
+        "Choose one of the capacity-fitting format options",
+      );
     const saved = await this.autosaveSetupDraft(
       actor,
       competitionId,
@@ -802,10 +824,8 @@ export class Phase4Runtime {
       applied && [...applied.recommendations].find((candidate) => candidate.id === recommendationId);
     if (!appliedSelection || appliedSelection.division_formats.some((format) => !format.format_revision_id))
       throw new ApiError(409, "FORMAT_RECOMMENDATION_STALE", "The selected format could not be applied");
-    const materialisedRows = await this.sql.unsafe<FormatRow>(
-      `SELECT * FROM format_revisions WHERE id = ANY($1::uuid[]) ORDER BY division_id`,
-      [appliedSelection.division_formats.map((format) => format.format_revision_id!)],
-    );
+    const formatIds = appliedSelection.division_formats.map((format) => format.format_revision_id!);
+    const materialisedRows = (await this.formatRepo.findByIds(formatIds, this.sql)) as FormatRow[];
     if (
       materialisedRows.length !== appliedSelection.division_formats.length ||
       materialisedRows.some((row) => !row.graph_materialized_at)
@@ -1132,12 +1152,11 @@ export class Phase4Runtime {
       throw new ApiError(409, "RECOMMENDATION_EVIDENCE_NOT_FOUND", "Recommendation evidence is stale");
     const applied = [];
     for (const evidence of evidenceRows) {
-      const latest = (
-        await tx.unsafe<FormatRow>(
-          `SELECT * FROM format_revisions WHERE division_id=$1 ORDER BY revision DESC,id DESC LIMIT 1 FOR UPDATE`,
-          [evidence.division_id],
-        )
-      )[0];
+      const latest = (await this.formatRepo.findLatestByDivisionId(
+        evidence.division_id,
+        "for_update",
+        tx,
+      )) as FormatRow | null;
       const latestLayoutMatches = latest
         ? Boolean(
             (
@@ -1633,7 +1652,7 @@ export class Phase4Runtime {
 
   async readFormatBuilder(actor: Phase3Actor, competitionId: string, divisionId: string) {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    const rows = (await this.formatRepo.listByDivisionId(divisionId, this.sql)) as unknown as FormatRow[];
+    const rows = (await this.formatRepo.listByDivisionId(divisionId, this.sql)) as FormatRow[];
     const draft = rows.find((row) => row.status === "draft") ?? null;
     return {
       revisions: rows.map((row) => this.formatRevisionView(row)),
@@ -1687,18 +1706,11 @@ export class Phase4Runtime {
         if (receipt.operation !== "format.save" || receipt.request_hash !== requestHash)
           throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
         const response = decoded<{ revision_id: string }>(receipt.response);
-        return first(
-          await tx.unsafe<FormatRow>(`SELECT * FROM format_revisions WHERE id=$1`, [response.revision_id]),
-          "FORMAT_NOT_FOUND",
-          "Format not found",
-        );
+        const formatRow = await this.formatRepo.findById(response.revision_id, "none", tx);
+        if (!formatRow) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
+        return formatRow as FormatRow;
       }
-      const latest = (
-        await tx.unsafe<FormatRow>(
-          `SELECT * FROM format_revisions WHERE division_id=$1 ORDER BY revision DESC,id DESC LIMIT 1 FOR UPDATE`,
-          [divisionId],
-        )
-      )[0];
+      const latest = (await this.formatRepo.findLatestByDivisionId(divisionId, "for_update", tx)) as FormatRow | null;
       if (
         (latest?.id ?? null) !== input.draft_id ||
         (latest?.revision ?? null) !== input.expected_revision ||
@@ -1752,18 +1764,15 @@ export class Phase4Runtime {
 
   async materialiseFormat(actor: Phase3Actor, formatId: string, idempotencyKey: string, requestId: string) {
     return this.transaction(async (tx) => {
-      const row = first(
-        await tx.unsafe<FormatRow>(`SELECT * FROM format_revisions WHERE id=$1 FOR UPDATE`, [formatId]),
-        "FORMAT_NOT_FOUND",
-        "Format not found",
-      );
+      const row = (await this.formatRepo.findById(formatId, "for_update", tx)) as FormatRow | null;
+      if (!row) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
       const access = await this.competitionAccess(tx, row.competition_id, actor);
       await this.lockIdempotency(tx, access.organisation_id, idempotencyKey);
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { format_revision_id: formatId },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -1774,13 +1783,13 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "format.materialise" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
         const count = row.graph_materialized_at
           ? row.graph_match_count!
           : first(
               await tx.unsafe<{ count: number }>(`SELECT phase4_materialize_format_revision($1) count`, [formatId]),
-              "FORMAT_MATERIALISATION_FAILED",
+              ErrorCode.FORMAT_MATERIALISATION_FAILED,
               "Format could not be materialised",
             ).count;
         await tx.unsafe(
@@ -1798,11 +1807,8 @@ export class Phase4Runtime {
           { match_count: count },
         );
       }
-      const refreshed = first(
-        await tx.unsafe<FormatRow>(`SELECT * FROM format_revisions WHERE id=$1`, [formatId]),
-        "FORMAT_NOT_FOUND",
-        "Format not found",
-      );
+      const refreshed = (await this.formatRepo.findById(formatId, "none", tx)) as FormatRow | null;
+      if (!refreshed) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
       return {
         revision: this.formatRevisionView(refreshed),
         materialised: true,
@@ -1815,18 +1821,15 @@ export class Phase4Runtime {
 
   async publishFormat(actor: Phase3Actor, formatId: string, idempotencyKey: string, requestId: string) {
     return this.transaction(async (tx) => {
-      let row = first(
-        await tx.unsafe<FormatRow>(`SELECT * FROM format_revisions WHERE id=$1 FOR UPDATE`, [formatId]),
-        "FORMAT_NOT_FOUND",
-        "Format not found",
-      );
+      let row = (await this.formatRepo.findById(formatId, "for_update", tx)) as FormatRow | null;
+      if (!row) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
       const access = await this.competitionAccess(tx, row.competition_id, actor);
       await this.lockIdempotency(tx, access.organisation_id, idempotencyKey);
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { format_revision_id: formatId },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -1837,7 +1840,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "format.publish" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
         if (!row.graph_materialized_at) await tx.unsafe(`SELECT phase4_materialize_format_revision($1)`, [formatId]);
         await tx.unsafe(`SELECT phase4_publish_format_revision($1,$2,$3)`, [formatId, actor.accountId, requestId]);
@@ -1846,11 +1849,8 @@ export class Phase4Runtime {
           [access.organisation_id, idempotencyKey, requestHash, { format_revision_id: formatId }],
         );
       }
-      row = first(
-        await tx.unsafe<FormatRow>(`SELECT * FROM format_revisions WHERE id=$1`, [formatId]),
-        "FORMAT_NOT_FOUND",
-        "Format not found",
-      );
+      row = (await this.formatRepo.findById(formatId, "none", tx)) as FormatRow | null;
+      if (!row) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
       return { ...this.formatRevisionView(row), idempotent_replay: Boolean(receipt) };
     });
   }
@@ -2180,18 +2180,15 @@ export class Phase4Runtime {
         if (receipt.operation !== "template.apply" || receipt.request_hash !== requestHash)
           throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
         const response = decoded<{ revision_id: string }>(receipt.response);
-        return first(
-          await tx.unsafe<FormatRow>(`SELECT * FROM format_revisions WHERE id=$1`, [response.revision_id]),
-          "FORMAT_NOT_FOUND",
-          "Format not found",
-        );
+        const formatRow = await this.formatRepo.findById(response.revision_id, "none", tx);
+        if (!formatRow) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
+        return formatRow as FormatRow;
       }
-      const latest = (
-        await tx.unsafe<FormatRow>(
-          `SELECT * FROM format_revisions WHERE division_id=$1 AND competition_id=$2 ORDER BY revision DESC LIMIT 1 FOR UPDATE`,
-          [input.division_id, input.competition_id],
-        )
-      )[0];
+      const latest = (await this.formatRepo.findLatestByDivisionId(
+        input.division_id,
+        "for_update",
+        tx,
+      )) as FormatRow | null;
       if ((latest?.revision ?? null) !== input.expected_format_revision)
         throw new ApiError(409, "REVISION_CONFLICT", "Format changed; refresh and retry");
       const row = first(

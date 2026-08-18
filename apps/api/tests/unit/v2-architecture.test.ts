@@ -21,7 +21,8 @@ describe("V2 Architecture: Repository Layer", () => {
     const mockSql = vi
       .fn()
       .mockResolvedValueOnce([{ id: "cmp_123", name: "Spring Cup", slug: "spring-cup" }])
-      .mockResolvedValueOnce([{ exists: true }]);
+      .mockResolvedValueOnce([{ exists: true }])
+      .mockResolvedValueOnce([]); // null path for non-existent ID
     const executor = { unsafe: mockSql } as unknown as SqlExecutor;
     const repo = new CompetitionRepository(executor);
 
@@ -35,6 +36,9 @@ describe("V2 Architecture: Repository Layer", () => {
       "spring-cup",
       "cmp_123",
     ]);
+
+    const nonExistent = await repo.findById("cmp_missing");
+    expect(nonExistent).toBeNull();
   });
 
   it("CompetitionRepository creates new competition record with exact parameters", async () => {
@@ -96,42 +100,75 @@ describe("V2 Architecture: Repository Layer", () => {
     ]);
   });
 
-  it("DivisionRepository queries entry counts", async () => {
-    const mockSql = createMockSql([{ count: "16" }]);
-    const repo = new DivisionRepository(mockSql);
+  it("DivisionRepository queries entry counts and returns null when division is missing", async () => {
+    const mockSql = vi
+      .fn()
+      .mockResolvedValueOnce([{ count: "16" }])
+      .mockResolvedValueOnce([]);
+    const executor = { unsafe: mockSql } as unknown as SqlExecutor;
+    const repo = new DivisionRepository(executor);
 
     const count = await repo.getEntryCount("div_456");
     expect(count).toBe(16);
-    expect(mockSql.unsafe).toHaveBeenCalledWith(expect.stringContaining("WHERE division_id = $1"), ["div_456"]);
+    expect(mockSql).toHaveBeenCalledWith(expect.stringContaining("WHERE division_id = $1"), ["div_456"]);
+
+    const missing = await repo.findById("div_non_existent");
+    expect(missing).toBeNull();
   });
 
-  it("SetupRepository queries by competition ID with locking", async () => {
-    const mockSql = createMockSql([{ id: "setup_1", competition_id: "cmp_1", revision: 2 }]);
-    const repo = new SetupRepository(mockSql);
+  it("SetupRepository queries by competition ID with locking and handles missing drafts", async () => {
+    const mockSql = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: "setup_1", schema_version: 1, competition_id: "cmp_1", revision: 2 }])
+      .mockResolvedValueOnce([]);
+    const executor = { unsafe: mockSql } as unknown as SqlExecutor;
+    const repo = new SetupRepository(executor);
 
     const draft = await repo.findByCompetitionId("cmp_1", "for_update");
-    expect(draft).toEqual({ id: "setup_1", competition_id: "cmp_1", revision: 2 });
-    expect(mockSql.unsafe).toHaveBeenCalledWith(expect.stringContaining("FOR UPDATE OF d"), ["cmp_1"]);
+    expect(draft).toEqual({ id: "setup_1", schema_version: 1, competition_id: "cmp_1", revision: 2 });
+    expect(mockSql).toHaveBeenCalledWith(expect.stringContaining("FOR UPDATE OF d"), ["cmp_1"]);
+
+    const missing = await repo.findByCompetitionId("cmp_missing");
+    expect(missing).toBeNull();
   });
 
-  it("FormatRepository finds published revisions and lists by division", async () => {
-    const mockSql = createMockSql([{ id: "fmt_1", division_id: "div_1", status: "published" }]);
-    const repo = new FormatRepository(mockSql);
+  it("FormatRepository finds published revisions, lists by division, and batches by IDs", async () => {
+    const mockSql = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: "fmt_1", division_id: "div_1", status: "published" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: "fmt_1", division_id: "div_1" },
+        { id: "fmt_2", division_id: "div_2" },
+      ]);
+    const executor = { unsafe: mockSql } as unknown as SqlExecutor;
+    const repo = new FormatRepository(executor);
 
     const fmt = await repo.findPublishedByDivisionId("div_1");
     expect(fmt?.status).toBe("published");
-    expect(mockSql.unsafe).toHaveBeenCalledWith(expect.stringContaining("status = 'published'"), ["div_1"]);
+    expect(mockSql).toHaveBeenCalledWith(expect.stringContaining("status = 'published'"), ["div_1"]);
+
+    const missing = await repo.findById("fmt_missing");
+    expect(missing).toBeNull();
+
+    const batched = await repo.findByIds(["fmt_1", "fmt_2"]);
+    expect(batched).toHaveLength(2);
+    expect(mockSql).toHaveBeenCalledWith(expect.stringContaining("WHERE id = ANY($1::uuid[])"), [["fmt_1", "fmt_2"]]);
   });
 
-  it("ScheduleRepository acquires schedule mutation advisory lock with prefix", async () => {
-    const mockSql = createMockSql([]);
-    const repo = new ScheduleRepository(mockSql);
+  it("ScheduleRepository acquires schedule mutation advisory lock with prefix and handles missing schedule", async () => {
+    const mockSql = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const executor = { unsafe: mockSql } as unknown as SqlExecutor;
+    const repo = new ScheduleRepository(executor);
 
     await repo.acquireScheduleLock("cmp_789", "phase4-schedule");
-    expect(mockSql.unsafe).toHaveBeenCalledWith(expect.stringContaining("pg_advisory_xact_lock"), [
+    expect(mockSql).toHaveBeenCalledWith(expect.stringContaining("pg_advisory_xact_lock"), [
       "phase4-schedule",
       "cmp_789",
     ]);
+
+    const missing = await repo.findLatestPublished("cmp_missing");
+    expect(missing).toBeNull();
   });
 });
 
@@ -182,5 +219,31 @@ describe("V2 Architecture: Command Handlers", () => {
       expect(apiErr.statusCode).toBe(409);
       expect(apiErr.code).toBe("COMPETITION_SLUG_TAKEN");
     }
+  });
+
+  it("CreateCompetitionHandler executes with transaction executor and advisory locking", async () => {
+    const mockSql = vi
+      .fn()
+      .mockResolvedValueOnce([]) // advisory lock
+      .mockResolvedValueOnce([{ exists: false }]) // slug check
+      .mockResolvedValueOnce([{ id: "cmp_tx", revision: 1 }]); // insert
+    const executor = { unsafe: mockSql } as unknown as SqlExecutor;
+    const repo = new CompetitionRepository(executor);
+    const handler = new CreateCompetitionHandler(repo);
+
+    const command = new CreateCompetitionCommand({
+      id: "cmp_tx",
+      organisationId: "org_1",
+      createdBy: "acc_1",
+      name: "Transactional Comp",
+      slug: "tx-comp",
+      sportCode: "canoe_polo",
+    });
+
+    const result = await handler.execute(command, executor);
+    expect(result.id).toBe("cmp_tx");
+    expect(mockSql).toHaveBeenCalledWith(expect.stringContaining("pg_advisory_xact_lock"), [
+      "competition-slug:org_1:tx-comp",
+    ]);
   });
 });
