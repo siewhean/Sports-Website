@@ -12,7 +12,7 @@ import type { ApiErrorEnvelope, DependencyStatus, HealthStatus } from "@matchday
 import type { AppConfig } from "@matchday/config";
 import { IdentityError, systemClock, type Clock } from "@matchday/identity";
 import { createLogger } from "@matchday/observability";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import { IdentityAssuranceRequestContext } from "./identity-assurance-request-context.js";
 import { IdentityAssuranceRuntime } from "./identity-assurance-runtime.js";
 import { IdentityFlowSealer } from "./identity-flow.js";
@@ -423,7 +423,7 @@ export async function buildApp(options: BuildAppOptions) {
       const invalidLocalAccess =
         !deployedEnvironment && Boolean(options.config.deepHealthToken) && token !== options.config.deepHealthToken;
       if (invalidDeployedAccess || invalidLocalAccess) {
-        throw new ApiError(404, "ROUTE_NOT_FOUND", "Route not found");
+        throw new ApiError(404, ErrorCode.ROUTE_NOT_FOUND, "Route not found");
       }
       const dependencies = await dependencyStatus(options.probes);
       const ready = Object.values(dependencies).every(Boolean);

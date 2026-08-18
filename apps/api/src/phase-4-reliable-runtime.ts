@@ -7,7 +7,7 @@ import type {
 } from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import type { Phase4AiOptions, Phase4PublicProjectionPort } from "./phase-4-runtime.js";
@@ -33,7 +33,7 @@ export type OrganisationBootstrapReceipt = WritableOrganisation & {
   created: boolean;
 };
 
-function first<T>(rows: readonly T[], code: string, message: string): T {
+function first<T>(rows: readonly T[], code: ApiErrorCode = ErrorCode.NOT_FOUND, message = "Not found"): T {
   const row = rows[0];
   if (!row) throw new ApiError(404, code, message);
   return row;
@@ -170,9 +170,9 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   private async assertSetupWrite(actor: Phase3Actor, competitionId: string): Promise<ReadAccess> {
     const access = await this.readAccess(this.reliableSql, actor, competitionId);
     if (access.membership_role === "viewer")
-      throw new ApiError(403, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+      throw new ApiError(403, ErrorCode.COMPETITION_ACCESS_DENIED, "Competition access denied");
     if (access.status === "archived")
-      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
     return access;
   }
 
@@ -223,7 +223,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
         return readOnlyDocument(phase4SetupDocumentFromStorage(row));
       }
       if (access.status === "archived")
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
       const resumed = first(
         await tx.unsafe<{ value: Phase4SetupStorageRow | string }>(
           `SELECT phase4_resume_setup_draft($1,$2,$3,$4,$5) value`,

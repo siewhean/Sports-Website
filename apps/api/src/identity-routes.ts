@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { calculatePKCECodeChallenge, randomNonce, randomPKCECodeVerifier, randomState } from "openid-client";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import { IdentityFlowSealer, identityFlowTtlMs } from "./identity-flow.js";
 import { IdentityProviderEventVerifier, type IdentityProviderRevocationEvent } from "./identity-provider-events.js";
 import {
@@ -138,7 +138,7 @@ function expiredFlowCookie(policy: CookiePolicy, name: string, callbackPath: str
 function requireAllowedOrigin(request: FastifyRequest, allowedOrigins: readonly string[]): void {
   const origin = request.headers.origin;
   if (typeof origin !== "string" || !allowedOrigins.includes(origin)) {
-    throw new ApiError(403, "ORIGIN_REJECTED", "Request origin is not allowed");
+    throw new ApiError(403, ErrorCode.ORIGIN_REJECTED, "Request origin is not allowed");
   }
 }
 
@@ -154,7 +154,7 @@ function requireAllowedRedirectUri(value: string, allowedOrigins: readonly strin
       (redirect.protocol === "http:" && (redirect.hostname === "127.0.0.1" || redirect.hostname === "localhost"))
     )
   ) {
-    throw new ApiError(400, "REDIRECT_URI_REJECTED", "Redirect URI is not allowed");
+    throw new ApiError(400, ErrorCode.REDIRECT_URI_REJECTED, "Redirect URI is not allowed");
   }
 }
 
@@ -163,10 +163,10 @@ function exactAllowedRedirect(value: string, allowed: readonly string[]): string
   try {
     canonical = new URL(value).href;
   } catch {
-    throw new ApiError(400, "REDIRECT_URI_REJECTED", "Redirect URI is not allowed");
+    throw new ApiError(400, ErrorCode.REDIRECT_URI_REJECTED, "Redirect URI is not allowed");
   }
   if (!allowed.includes(canonical)) {
-    throw new ApiError(400, "REDIRECT_URI_REJECTED", "Redirect URI is not allowed");
+    throw new ApiError(400, ErrorCode.REDIRECT_URI_REJECTED, "Redirect URI is not allowed");
   }
   return canonical;
 }
@@ -185,7 +185,7 @@ export class IdentityRequestContext {
     const token = parseCookie(request.headers.cookie, this.cookieName);
     const result = token
       ? this.runtime.authenticate(token, request.id)
-      : Promise.reject(new ApiError(401, "AUTHENTICATION_REQUIRED", "Authentication required"));
+      : Promise.reject(new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Authentication required"));
     this.authenticated.set(request, result);
     return result;
   }
@@ -221,7 +221,7 @@ export async function registerIdentityRoutes(
     const session = await options.requests.authenticate(request);
     const csrf = request.headers["x-csrf-token"];
     if (typeof csrf !== "string" || !options.runtime.verifyCsrfToken(session.sessionToken, csrf)) {
-      throw new ApiError(403, "CSRF_INVALID", "CSRF validation failed");
+      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
     }
     return session;
   };
@@ -242,7 +242,7 @@ export async function registerIdentityRoutes(
       async (request, reply) => {
         const fallback = options.oidc?.postAuthRedirectUris[0];
         if (!options.oidc || !fallback)
-          throw new ApiError(503, "IDENTITY_PROVIDER_UNAVAILABLE", "Identity provider is unavailable");
+          throw new ApiError(503, ErrorCode.IDENTITY_PROVIDER_UNAVAILABLE, "Identity provider is unavailable");
         const returnUri = exactAllowedRedirect(request.query.return_to ?? fallback, options.oidc.postAuthRedirectUris);
         const state = randomState();
         const nonce = randomNonce();
@@ -285,10 +285,11 @@ export async function registerIdentityRoutes(
         config: { rateLimit: { max: 10, timeWindow: "15 minutes" } },
       },
       async (request, reply) => {
-        if (!options.oidc) throw new ApiError(503, "IDENTITY_PROVIDER_UNAVAILABLE", "Identity provider is unavailable");
+        if (!options.oidc)
+          throw new ApiError(503, ErrorCode.IDENTITY_PROVIDER_UNAVAILABLE, "Identity provider is unavailable");
         reply.header("Set-Cookie", expiredFlowCookie(options.cookie, options.oidc.flowCookieName, callbackPath));
         const sealed = parseCookie(request.headers.cookie, options.oidc.flowCookieName);
-        if (!sealed) throw new ApiError(401, "AUTHENTICATION_REQUIRED", "Authentication required");
+        if (!sealed) throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Authentication required");
         const flow = options.oidc.sealer.open(sealed);
         exactAllowedRedirect(flow.returnUri, options.oidc.postAuthRedirectUris);
         if (
@@ -297,7 +298,7 @@ export async function registerIdentityRoutes(
           !request.query.state ||
           !options.oidc.sealer.stateMatches(flow.state, request.query.state)
         ) {
-          throw new ApiError(401, "AUTHENTICATION_REQUIRED", "Authentication required");
+          throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Authentication required");
         }
         const previousSessionToken = parseCookie(request.headers.cookie, options.cookie.name);
         const session = await options.runtime.signIn(
@@ -378,7 +379,7 @@ export async function registerIdentityRoutes(
         const policy = options.providerEvents;
         const supplied = request.headers["x-matchday-provider-signature"];
         if (!policy || typeof supplied !== "string") {
-          throw new ApiError(401, "PROVIDER_EVENT_REJECTED", "Provider event authentication failed");
+          throw new ApiError(401, ErrorCode.PROVIDER_EVENT_REJECTED, "Provider event authentication failed");
         }
         const event: IdentityProviderRevocationEvent = {
           eventId: request.body.event_id,
@@ -392,7 +393,7 @@ export async function registerIdentityRoutes(
         try {
           occurredAt = policy.verifier.verify(event, supplied);
         } catch {
-          throw new ApiError(401, "PROVIDER_EVENT_REJECTED", "Provider event authentication failed");
+          throw new ApiError(401, ErrorCode.PROVIDER_EVENT_REJECTED, "Provider event authentication failed");
         }
         await options.runtime.revokeProviderSessions(
           {

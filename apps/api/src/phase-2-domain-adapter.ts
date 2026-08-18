@@ -25,8 +25,8 @@ function stableUuid(namespace: string, localId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function formatValue(value: Record<string, unknown>): BalancedCanoePoloFormat {
-  return (typeof value === "string" ? JSON.parse(value) : value) as unknown as BalancedCanoePoloFormat;
+function formatValue(value: Record<string, unknown> | string): BalancedCanoePoloFormat {
+  return (typeof value === "string" ? JSON.parse(value) : value) as BalancedCanoePoloFormat;
 }
 
 function mapSource(source: MatchParticipantSource, ids: ReadonlyMap<string, string>): MatchParticipantSource {
@@ -219,7 +219,7 @@ export const phase2DomainAdapter: Phase2DomainAdapter = {
       homeScore: state.scoreByTeam[match.homeEntryId] ?? 0,
       awayScore: state.scoreByTeam[match.awayEntryId] ?? 0,
       state: "final",
-      snapshot: state as unknown as Record<string, unknown>,
+      snapshot: state as Record<string, unknown>,
     };
   },
 

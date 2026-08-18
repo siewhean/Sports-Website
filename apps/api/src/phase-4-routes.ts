@@ -1,6 +1,6 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
@@ -53,7 +53,7 @@ function rejectUnknownBodyFields(allowed: readonly string[]) {
       !Array.isArray(body) &&
       Object.keys(body).some((field) => !expected.has(field))
     )
-      throw new ApiError(400, "REQUEST_INVALID", "Request body contains an unknown field");
+      throw new ApiError(400, ErrorCode.REQUEST_INVALID, "Request body contains an unknown field");
   };
 }
 
@@ -417,11 +417,11 @@ export async function registerPhase4Routes(
   const mutationActor = async (request: FastifyRequest): Promise<Phase3Actor> => {
     const origin = request.headers.origin;
     if (typeof origin !== "string" || !options.allowedOrigins.includes(origin))
-      throw new ApiError(403, "ORIGIN_REJECTED", "Request origin is not allowed");
+      throw new ApiError(403, ErrorCode.ORIGIN_REJECTED, "Request origin is not allowed");
     const session = await options.identityRequests.authenticate(request);
     const csrf = request.headers["x-csrf-token"];
     if (typeof csrf !== "string" || !options.identityRuntime.verifyCsrfToken(session.sessionToken, csrf))
-      throw new ApiError(403, "CSRF_INVALID", "CSRF validation failed");
+      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
     return { accountId: session.account.id };
   };
   const read = { security: [{ sessionCookie: [] }], response: { 200: Json, ...ReadResponses } };
@@ -1051,7 +1051,7 @@ export async function registerPhase4Routes(
     },
     async (request) => {
       if (!options.deepHealthToken || request.headers["x-deep-health-token"] !== options.deepHealthToken)
-        throw new ApiError(404, "ROUTE_NOT_FOUND", "Route not found");
+        throw new ApiError(404, ErrorCode.ROUTE_NOT_FOUND, "Route not found");
       const maintenance = await options.runtime.runScheduleMaintenance(request.id);
       const queueRecovery = await options.runtime.recoverQueuedScheduleJobs();
       return { ...maintenance, queue_recovery: queueRecovery };

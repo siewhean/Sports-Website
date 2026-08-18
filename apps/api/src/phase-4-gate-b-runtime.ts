@@ -11,7 +11,7 @@ import type {
 import { deriveAssistedSetupProgress, validateAssistedSetupStep } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import { Phase4Runtime, type Phase4AiOptions, type Phase4PublicProjectionPort } from "./phase-4-runtime.js";
 import {
@@ -45,7 +45,7 @@ type ActivePack = {
   definition_hash: string;
 };
 
-function first<T>(rows: readonly T[], code: string, message: string): T {
+function first<T>(rows: readonly T[], code: ApiErrorCode = ErrorCode.NOT_FOUND, message = "Not found"): T {
   const row = rows[0];
   if (!row) throw new ApiError(404, code, message);
   return row;
@@ -55,15 +55,16 @@ function mapGateBError(error: unknown): never {
   if (error instanceof ApiError) throw error;
   const message = error instanceof Error ? error.message : "";
   if (/idempotency key/i.test(message))
-    throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+    throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
   if (/revision conflict|immediately preceding|expected.*revision/i.test(message))
-    throw new ApiError(409, "REVISION_CONFLICT", "The setup changed; refresh and retry");
-  if (/archived/i.test(message)) throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+    throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "The setup changed; refresh and retry");
+  if (/archived/i.test(message))
+    throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
   if (/locked after the first match|sport is locked/i.test(message))
-    throw new ApiError(409, "COMPETITION_SPORT_LOCKED", "The sport cannot change after the first match starts");
-  if (/permission|access|member/i.test(message)) throw new ApiError(403, "ACCESS_DENIED", "Access denied");
+    throw new ApiError(409, ErrorCode.COMPETITION_SPORT_LOCKED, "The sport cannot change after the first match starts");
+  if (/permission|access|member/i.test(message)) throw new ApiError(403, ErrorCode.ACCESS_DENIED, "Access denied");
   if (/invalid|requires|must|cannot|stale|unsupported/i.test(message))
-    throw new ApiError(422, "DOMAIN_VALIDATION_FAILED", "Request violates the current competition state");
+    throw new ApiError(422, ErrorCode.DOMAIN_VALIDATION_FAILED, "Request violates the current setup state");
   throw error;
 }
 
@@ -91,7 +92,7 @@ function savedCompletedAt(document: ReturnType<typeof phase4SetupDocumentFromSto
 function recommendedSlot(definition: JsonObject, sportCode: string): number {
   const value = Number(definition.recommendedSlotMinutes);
   if (!Number.isSafeInteger(value) || value <= 0)
-    throw new ApiError(422, "SPORT_PACK_INVALID", `The active ${sportCode} pack has no valid recommended slot`);
+    throw new ApiError(422, ErrorCode.SPORT_PACK_INVALID, `The active ${sportCode} pack has no valid recommended slot`);
   return value;
 }
 
@@ -159,7 +160,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
       "Competition access denied",
     );
     if (access.status === "archived")
-      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
     return access;
   }
 
@@ -239,9 +240,9 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     requestId: string,
   ): Promise<void> {
     const basics = next.basics;
-    if (!basics) throw new ApiError(422, "SETUP_STEP_INVALID", "Basics are required");
+    if (!basics) throw new ApiError(422, ErrorCode.SETUP_STEP_INVALID, "Basics are required");
     const issues = validateAssistedSetupStep("basics", phase4SetupDomainValues(next));
-    if (issues.length > 0) throw new ApiError(422, "SETUP_STEP_INVALID", issues[0]!.message);
+    if (issues.length > 0) throw new ApiError(422, ErrorCode.SETUP_STEP_INVALID, issues[0]!.message);
 
     const oldBasics = previous.basics;
     const sportChanged = access.sport_code !== basics.sport_code;
@@ -412,18 +413,18 @@ export class GateBPhase4Runtime extends Phase4Runtime {
 
         const previous = phase4SetupValuesFromStorage(row);
         const next = structuredClone(previous) as MutableSetupValues;
-        (next as unknown as Record<string, unknown>)[step.step_id] = step.value;
+        (next as Record<string, unknown>)[step.step_id] = step.value;
         if (step.step_id === "basics") await this.applyCanonicalBasics(tx, actor, access, previous, next, requestId);
         else {
           const issues = validateAssistedSetupStep(step.step_id, phase4SetupDomainValues(next));
-          if (issues.length > 0) throw new ApiError(422, "SETUP_STEP_INVALID", issues[0]!.message);
+          if (issues.length > 0) throw new ApiError(422, ErrorCode.SETUP_STEP_INVALID, issues[0]!.message);
         }
 
         const progress = deriveAssistedSetupProgress(phase4SetupDomainValues(next));
         const targetStep = mode === "patch" ? row.current_step : nextStepAfter(step.step_id);
         const selected = progress.steps.find((item) => item.id === targetStep);
         if (!selected || selected.prerequisiteStepIds.some((id) => !progress.completedSteps.includes(id)))
-          throw new ApiError(422, "SETUP_PREREQUISITE_MISSING", "Complete prerequisite setup steps first");
+          throw new ApiError(422, ErrorCode.SETUP_PREREQUISITE_MISSING, "Complete prerequisite setup steps first");
         const completedAt = savedCompletedAt(current);
         for (const id of progress.completedSteps) completedAt[id] ??= this.gateNow().toISOString();
         const validation = {

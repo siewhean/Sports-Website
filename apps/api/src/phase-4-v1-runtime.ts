@@ -1,4 +1,4 @@
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "./phase-4-reliable-runtime.js";
 
@@ -51,7 +51,11 @@ export class V1Phase4Runtime extends ReliableGateBPhase4Runtime {
       );
 
       if (saved.outcome !== "saved" && saved.outcome !== "idempotent_replay") {
-        throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format page");
+        throw new ApiError(
+          409,
+          ErrorCode.FORMAT_RECOMMENDATION_CONFLICT,
+          "The competition changed; refresh the format page",
+        );
       }
 
       return super.recommendV1Format(actor, competitionId, `${idempotencyKey.slice(0, 150)}:v1-retry`, requestId);

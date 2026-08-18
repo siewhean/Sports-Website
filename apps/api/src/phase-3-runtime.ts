@@ -22,6 +22,7 @@ import {
   FormatRepository,
   ScheduleRepository,
 } from "./repositories/index.js";
+import { CreateCompetitionCommand, CreateCompetitionHandler } from "./commands/index.js";
 
 export type Phase3Actor = { accountId: string };
 
@@ -123,7 +124,7 @@ type DomainCommandResult<T> = competitionDomain.CommandResult<T>;
 
 function required<T>(rows: readonly T[], message: string): T {
   const value = rows[0];
-  if (!value) throw new ApiError(404, "NOT_FOUND", message);
+  if (!value) throw new ApiError(404, ErrorCode.NOT_FOUND, message);
   return value;
 }
 
@@ -146,6 +147,7 @@ export class Phase3Runtime {
   private readonly setupRepo: SetupRepository;
   private readonly formatRepo: FormatRepository;
   private readonly scheduleRepo: ScheduleRepository;
+  private readonly createCompetitionHandler: CreateCompetitionHandler;
 
   constructor(
     private readonly sql: PostgresJsSql,
@@ -158,6 +160,7 @@ export class Phase3Runtime {
     this.setupRepo = new SetupRepository(sql);
     this.formatRepo = new FormatRepository(sql);
     this.scheduleRepo = new ScheduleRepository(sql);
+    this.createCompetitionHandler = new CreateCompetitionHandler(this.competitionRepo);
   }
 
   get repositories() {
@@ -334,7 +337,7 @@ export class Phase3Runtime {
         ),
         "Sport pack state not found",
       ).count;
-      if (count > 0) throw new ApiError(409, "SPORT_PACK_NOT_ACTIVE", "No active sport pack version exists");
+      if (count > 0) throw new ApiError(409, ErrorCode.SPORT_PACK_NOT_ACTIVE, "No active sport pack version exists");
       const bootstrap = this.domain.sportPack(sportCode);
       const bootstrapHash = this.domain.hash(bootstrap);
       await tx.unsafe(
@@ -357,7 +360,7 @@ export class Phase3Runtime {
     }
     const pack = decodedJson(row.definition);
     if (this.domain.validateSportPack(pack).length || this.domain.hash(pack) !== row.definition_hash) {
-      throw new ApiError(409, "SPORT_PACK_CORRUPT", "The active sport pack failed immutable validation");
+      throw new ApiError(409, ErrorCode.SPORT_PACK_CORRUPT, "The active sport pack failed immutable validation");
     }
     return { ...row, pack };
   }
@@ -542,7 +545,7 @@ export class Phase3Runtime {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       if (competition.status === "archived" && input.action !== "restore")
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
       const current = await this.domainCompetition(tx, competitionId);
       const context = this.context(actor);
       const patch = input.patch ?? (input.name === undefined ? {} : { name: input.name });
@@ -622,7 +625,8 @@ export class Phase3Runtime {
         ],
       );
       const result = rows[0];
-      if (!result) throw new ApiError(409, "REVISION_CONFLICT", "Competition revision or lifecycle state is stale");
+      if (!result)
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Competition revision or lifecycle state is stale");
       if (input.action === "update" && patch.sportCode !== undefined && patch.sportCode !== current.sport) {
         const pack = this.domain.sportPack(patch.sportCode);
         const packHash = this.domain.hash(pack);
@@ -684,7 +688,7 @@ export class Phase3Runtime {
       );
       if (replay) return replay;
       if (competition.status === "archived")
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
       const rows = await tx.unsafe<Record<string, unknown>>(
         `INSERT INTO divisions (competition_id,name,code,team_limit) VALUES ($1,$2,$3,$4)
          RETURNING id,competition_id,name,code,team_limit,revision`,
@@ -738,7 +742,7 @@ export class Phase3Runtime {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       if (competition.status === "archived")
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
       const rows = await tx.unsafe<Record<string, unknown>>(
         `UPDATE divisions SET name=COALESCE($4,name),code=CASE WHEN $5 THEN $6 ELSE code END,
            team_limit=COALESCE($7,team_limit),revision=revision+1,updated_at=$8
@@ -755,7 +759,7 @@ export class Phase3Runtime {
         ],
       );
       const division = rows[0];
-      if (!division) throw new ApiError(409, "REVISION_CONFLICT", "Division revision is stale");
+      if (!division) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Division revision is stale");
       await this.evidence(
         tx,
         actor,
@@ -815,7 +819,8 @@ export class Phase3Runtime {
         [competitionId, divisionId],
       )
     )[0];
-    if (format) throw new ApiError(409, "ENTRY_MUTATION_LOCKED_BY_FORMAT", "Entries are locked after format creation");
+    if (format)
+      throw new ApiError(409, ErrorCode.ENTRY_MUTATION_LOCKED_BY_FORMAT, "Entries are locked after format creation");
   }
 
   async updateEntry(
@@ -888,7 +893,7 @@ export class Phase3Runtime {
         ],
       );
       const entry = rows[0];
-      if (!entry) throw new ApiError(409, "REVISION_CONFLICT", "Entry revision or status is stale");
+      if (!entry) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Entry revision or status is stale");
       await this.evidence(tx, actor, competition.organisation_id, requestId, "entry.updated", "entry", entryId, entry);
       await this.recordMutationReceipt(
         tx,
@@ -938,7 +943,7 @@ export class Phase3Runtime {
          AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.home_entry_id=e.id OR m.away_entry_id=e.id) RETURNING e.id`,
         [entryId, divisionId, revision],
       );
-      if (!rows[0]) throw new ApiError(409, "REVISION_CONFLICT", "Entry revision or status is stale");
+      if (!rows[0]) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Entry revision or status is stale");
       await this.evidence(tx, actor, competition.organisation_id, requestId, "entry.deleted", "entry", entryId, {
         id: entryId,
       });
@@ -1010,7 +1015,7 @@ export class Phase3Runtime {
       settings.division_override ? decodedJson(settings.division_override) : {},
     );
     if (effective.issues.length > 0)
-      throw new ApiError(409, "SPORT_SETTINGS_INVALID", "Pinned sport settings are not valid for withdrawal");
+      throw new ApiError(409, ErrorCode.SPORT_SETTINGS_INVALID, "Pinned sport settings are not valid for withdrawal");
     const engineConfig = this.domain.standingsConfig(pack, effective.effective);
 
     const entryRows = await tx.unsafe<{
@@ -1416,8 +1421,8 @@ export class Phase3Runtime {
       const settingsOverride = compatibleDefault
         ? this.domain.settingsDifference(compatibleDefault, pack.recommendedSettings)
         : {};
-      const competition = await this.competitionRepo.create(
-        {
+      const competition = await this.createCompetitionHandler.execute(
+        new CreateCompetitionCommand({
           id: competitionId,
           organisationId: input.organisationId,
           createdBy: actor.accountId,
@@ -1433,7 +1438,7 @@ export class Phase3Runtime {
           timezone: input.timezone,
           locale: input.locale,
           status: "draft",
-        },
+        }),
         tx,
       );
 
@@ -1501,7 +1506,7 @@ export class Phase3Runtime {
         [competitionId, input.revision, input.status, this.now()],
       );
       const result = rows[0];
-      if (!result) throw new ApiError(409, "REVISION_CONFLICT", "Competition revision is stale");
+      if (!result) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Competition revision is stale");
       await this.evidence(
         tx,
         actor,
@@ -1523,7 +1528,8 @@ export class Phase3Runtime {
         `DELETE FROM competitions WHERE id=$1 AND status='draft' AND first_match_started_at IS NULL RETURNING id`,
         [competitionId],
       );
-      if (!rows[0]) throw new ApiError(409, "LIFECYCLE_CONFLICT", "Only unstarted draft competitions can be deleted");
+      if (!rows[0])
+        throw new ApiError(409, ErrorCode.LIFECYCLE_CONFLICT, "Only unstarted draft competitions can be deleted");
       await this.evidence(
         tx,
         actor,
@@ -1886,7 +1892,7 @@ export class Phase3Runtime {
       override,
     );
     if (resolved.issues.length) {
-      throw new ApiError(409, "SETTINGS_CORRUPT", "Persisted sport settings do not satisfy their pinned pack");
+      throw new ApiError(409, ErrorCode.SETTINGS_CORRUPT, "Persisted sport settings do not satisfy their pinned pack");
     }
     return {
       competition_id: row.competition_id,
@@ -1937,7 +1943,7 @@ export class Phase3Runtime {
         "Sport settings not found",
       );
       if (settings.pack_version !== input.packVersion) {
-        throw new ApiError(409, "REVISION_CONFLICT", "Sport pack version is stale");
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Sport pack version is stale");
       }
       const pack = await this.sportPack(tx, competition.sport_code, settings.pack_version);
       const recommended = decodedJson(settings.recommended_snapshot);
@@ -1945,7 +1951,7 @@ export class Phase3Runtime {
       const resolved = input.divisionId
         ? this.domain.resolveSettings(pack, recommended, competitionOverride, input.override)
         : this.domain.resolveSettings(pack, recommended, input.override);
-      if (resolved.issues.length) throw new ApiError(422, "SETTINGS_INVALID", "Sport settings are invalid");
+      if (resolved.issues.length) throw new ApiError(422, ErrorCode.SETTINGS_INVALID, "Sport settings are invalid");
       const id = input.divisionId ?? competitionId;
       const updated = input.divisionId
         ? await tx.unsafe<{ revision: number }>(
@@ -1958,7 +1964,7 @@ export class Phase3Runtime {
              WHERE competition_id=$1 AND revision=$5 AND pack_version=$6 RETURNING revision`,
             [id, input.override, actor.accountId, this.now(), input.revision, input.packVersion],
           );
-      if (!updated[0]) throw new ApiError(409, "REVISION_CONFLICT", "Sport settings revision is stale");
+      if (!updated[0]) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Sport settings revision is stale");
       await this.evidence(
         tx,
         actor,
@@ -2001,7 +2007,7 @@ export class Phase3Runtime {
     return this.transaction(async (tx) => {
       const pack = await this.sportPack(tx, sportCode, input.packVersion);
       const issues = this.domain.validateSettings(pack, input.settings);
-      if (issues.length) throw new ApiError(422, "SETTINGS_INVALID", "Sport settings are invalid");
+      if (issues.length) throw new ApiError(422, ErrorCode.SETTINGS_INVALID, "Sport settings are invalid");
       const rows = await tx.unsafe<Record<string, unknown>>(
         `INSERT INTO account_sport_defaults (account_id,sport_code,source_pack_version,settings,updated_at)
          VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (account_id,sport_code) DO UPDATE SET
@@ -2161,7 +2167,7 @@ export class Phase3Runtime {
       )[0];
       if (replay) return { ...decodedJson(replay.after_state), idempotent_replay: true };
       const issues = this.domain.validateSportPack(definition);
-      if (issues.length) throw new ApiError(422, "SPORT_PACK_INVALID", "Sport pack definition is invalid");
+      if (issues.length) throw new ApiError(422, ErrorCode.SPORT_PACK_INVALID, "Sport pack definition is invalid");
       const pack = definition as SportPack;
       const hash = this.domain.hash(pack);
       const row = (
@@ -2174,7 +2180,7 @@ export class Phase3Runtime {
           [pack.sportId, pack.version, pack.schemaVersion, pack, hash, actor.accountId],
         )
       )[0];
-      if (!row) throw new ApiError(409, "SPORT_PACK_VERSION_CONFLICT", "Sport pack version already exists");
+      if (!row) throw new ApiError(409, ErrorCode.SPORT_PACK_VERSION_CONFLICT, "Sport pack version already exists");
       const result = { ...row, idempotent_replay: false };
       await this.evidence(
         tx,
@@ -2220,7 +2226,7 @@ export class Phase3Runtime {
         )
       )[0];
       if ((currentActive?.version ?? null) !== expectedActiveVersion) {
-        throw new ApiError(409, "SPORT_PACK_ACTIVE_VERSION_CONFLICT", "The current active sport pack changed");
+        throw new ApiError(409, ErrorCode.SPORT_PACK_ACTIVE_VERSION_CONFLICT, "The current active sport pack changed");
       }
       const target = required(
         await tx.unsafe<{ definition: SportPack; definition_hash: string; status: string; revision: number }>(
@@ -2235,10 +2241,10 @@ export class Phase3Runtime {
         this.domain.validateSportPack(targetDefinition).length ||
         this.domain.hash(targetDefinition) !== target.definition_hash
       ) {
-        throw new ApiError(409, "SPORT_PACK_CORRUPT", "The sport pack failed immutable validation");
+        throw new ApiError(409, ErrorCode.SPORT_PACK_CORRUPT, "The sport pack failed immutable validation");
       }
       if (target.status !== "draft" || target.revision !== revision) {
-        throw new ApiError(409, "SPORT_PACK_REVISION_CONFLICT", "Sport pack revision or state is stale");
+        throw new ApiError(409, ErrorCode.SPORT_PACK_REVISION_CONFLICT, "Sport pack revision or state is stale");
       }
       if (currentActive) {
         await tx.unsafe(
@@ -2268,7 +2274,8 @@ export class Phase3Runtime {
           [sportCode, version, revision, actor.accountId, this.now()],
         )
       )[0];
-      if (!row) throw new ApiError(409, "SPORT_PACK_REVISION_CONFLICT", "Sport pack revision or state is stale");
+      if (!row)
+        throw new ApiError(409, ErrorCode.SPORT_PACK_REVISION_CONFLICT, "Sport pack revision or state is stale");
       const result = { ...row, previous_active_version: currentActive?.version ?? null, idempotent_replay: false };
       await this.evidence(
         tx,
@@ -2323,12 +2330,16 @@ export class Phase3Runtime {
         "Competition not found",
       );
       if (full.capacity_revision !== input.revision) {
-        throw new ApiError(409, "CAPACITY_REVISION_CONFLICT", "Capacity revision is stale");
+        throw new ApiError(409, ErrorCode.CAPACITY_REVISION_CONFLICT, "Capacity revision is stale");
       }
       const timezone = input.timezone ?? full.capacity_timezone ?? full.timezone;
       const slotDurations = new Set(input.areas.map((area) => area.slotMinutes));
       if (slotDurations.size > 1) {
-        throw new ApiError(422, "CAPACITY_SLOT_MISMATCH", "All playing areas must use one competition slot duration");
+        throw new ApiError(
+          422,
+          ErrorCode.CAPACITY_SLOT_MISMATCH,
+          "All playing areas must use one competition slot duration",
+        );
       }
       const preparedAreas = input.areas.map((area, index) => ({
         ...area,
@@ -2355,7 +2366,7 @@ export class Phase3Runtime {
         ...unavailable.map((window) => window.id),
       ];
       if (new Set(identifiers).size !== identifiers.length) {
-        throw new ApiError(422, "CAPACITY_ID_DUPLICATE", "Capacity resource identifiers must be unique");
+        throw new ApiError(422, ErrorCode.CAPACITY_ID_DUPLICATE, "Capacity resource identifiers must be unique");
       }
       const domainInput = {
         timeZone: timezone,
@@ -2387,7 +2398,7 @@ export class Phase3Runtime {
         return window.date < full.starts_on || resolvedEndDate > full.ends_on;
       });
       if (outsideCompetitionDates) {
-        throw new ApiError(422, "CAPACITY_INVALID", "Capacity windows must stay within competition dates");
+        throw new ApiError(422, ErrorCode.CAPACITY_INVALID, "Capacity windows must stay within competition dates");
       }
       await tx.unsafe(`DELETE FROM playing_areas WHERE competition_id=$1`, [competitionId]);
       for (const area of preparedAreas) {
@@ -2475,7 +2486,7 @@ export class Phase3Runtime {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       this.assertMutable(competition);
       const validation = this.domain.validateFormat(graph);
-      if (!validation.valid) throw new ApiError(422, "FORMAT_INVALID", "Format graph is invalid");
+      if (!validation.valid) throw new ApiError(422, ErrorCode.FORMAT_INVALID, "Format graph is invalid");
       const hash = this.domain.hash(graph);
       const lockedDivision = await tx.unsafe<{ id: string }>(
         `SELECT id FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
@@ -2578,7 +2589,7 @@ export class Phase3Runtime {
         "Format revision not found",
       );
       if (candidate.definition_hash !== definitionHash) {
-        throw new ApiError(409, "FORMAT_REVISION_CONFLICT", "Format revision or hash is stale");
+        throw new ApiError(409, ErrorCode.FORMAT_REVISION_CONFLICT, "Format revision or hash is stale");
       }
       const capacity = await this.capacity(actor, competitionId, tx);
       const requiredMatchSlots =
@@ -2596,17 +2607,21 @@ export class Phase3Runtime {
             ).required_match_slots,
           )
       ) {
-        throw new ApiError(409, "FORMAT_CAPACITY_STALE", "Format capacity evidence is stale");
+        throw new ApiError(409, ErrorCode.FORMAT_CAPACITY_STALE, "Format capacity evidence is stale");
       }
       if (!candidate.recommendation_fits_capacity || capacity.effective.availableMatchSlots < requiredMatchSlots) {
-        throw new ApiError(422, "CAPACITY_INSUFFICIENT", "Combined division formats do not fit available capacity");
+        throw new ApiError(
+          422,
+          ErrorCode.CAPACITY_INSUFFICIENT,
+          "Combined division formats do not fit available capacity",
+        );
       }
       const rows = await tx.unsafe<{ id: string; definition_hash: string }>(
         `UPDATE format_revisions SET status='published',published_at=$3
          WHERE id=$1 AND competition_id=$2 AND definition_hash=$4 AND status='draft' RETURNING id,definition_hash`,
         [formatId, competitionId, this.now(), definitionHash],
       );
-      if (!rows[0]) throw new ApiError(409, "FORMAT_REVISION_CONFLICT", "Format revision or hash is stale");
+      if (!rows[0]) throw new ApiError(409, ErrorCode.FORMAT_REVISION_CONFLICT, "Format revision or hash is stale");
       await this.evidence(
         tx,
         actor,
@@ -2681,7 +2696,11 @@ export class Phase3Runtime {
     );
     const slotMinutes = areas[0]?.slot_minutes ?? 30;
     if (areas.some((area) => area.slot_minutes !== slotMinutes))
-      throw new ApiError(409, "CAPACITY_SLOT_MISMATCH", "All playing areas must use one competition slot duration");
+      throw new ApiError(
+        409,
+        ErrorCode.CAPACITY_SLOT_MISMATCH,
+        "All playing areas must use one competition slot duration",
+      );
     const summary = this.domain.capacity({
       timeZone: timezone,
       availability: available.map((window) => ({
@@ -2766,7 +2785,11 @@ export class Phase3Runtime {
       "Competition publication state not found",
     );
     if (publication.result_version < 1)
-      throw new ApiError(409, "RESULTS_NOT_FINALISED", "No persisted final result is available to calculate standings");
+      throw new ApiError(
+        409,
+        ErrorCode.RESULTS_NOT_FINALISED,
+        "No persisted final result is available to calculate standings",
+      );
     const source = required(
       await tx.unsafe<{ source_hash: string }>(`SELECT phase3_standings_source_hash($1,$2,$3) AS source_hash`, [
         competitionId,
@@ -2815,7 +2838,7 @@ export class Phase3Runtime {
       settings.division_override ? decodedJson(settings.division_override) : {},
     );
     if (effective.issues.length > 0)
-      throw new ApiError(409, "SPORT_SETTINGS_INVALID", "Pinned sport settings are not valid for standings");
+      throw new ApiError(409, ErrorCode.SPORT_SETTINGS_INVALID, "Pinned sport settings are not valid for standings");
     const engineConfig = this.domain.standingsConfig(pack, effective.effective);
     const entries = await tx.unsafe<{
       id: string;

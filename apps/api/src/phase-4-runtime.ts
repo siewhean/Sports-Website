@@ -46,7 +46,7 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
-import { ApiError, ErrorCode } from "./errors.js";
+import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import {
   CompetitionRepository,
@@ -141,7 +141,7 @@ function schedulingEntryIdsBySeed(
 
 function first<T>(
   rows: readonly T[] | T[] | null | undefined,
-  code: string = ErrorCode.NOT_FOUND,
+  code: ApiErrorCode = ErrorCode.NOT_FOUND,
   message = "Not found",
 ): T {
   const value = rows?.[0];
@@ -150,7 +150,25 @@ function first<T>(
 }
 
 function mapPgError(error: unknown): never {
+  if (error instanceof ApiError) throw error;
+  const pgCode = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  const constraint =
+    typeof error === "object" && error !== null && "constraint_name" in error ? String(error.constraint_name) : "";
   const message = error instanceof Error ? error.message : "";
+
+  if (pgCode === "55P03" || pgCode === "40P01") {
+    throw new ApiError(409, ErrorCode.SCHEDULE_LOCK_CONFLICT, "Resource lock conflict; retry operation");
+  }
+  if (pgCode === "23505") {
+    if (constraint.includes("schedule_generation_jobs") || /schedule_generation_jobs/i.test(message)) {
+      throw new ApiError(409, ErrorCode.ACTIVE_SCHEDULE_JOB, "A schedule job is already active");
+    }
+    if (constraint.includes("idempotency") || /idempotency/i.test(message)) {
+      throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
+    }
+    throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Concurrent modification conflict detected");
+  }
+
   if (/idempotency key/i.test(message))
     throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
   if (/schedule_generation_jobs_one_active_competition|duplicate key.*schedule_generation_jobs/i.test(message))
@@ -436,9 +454,9 @@ export class Phase4Runtime {
     const access = first(rows, "COMPETITION_ACCESS_DENIED", "Competition access denied");
     access.capacity_revision = Number(access.capacity_revision);
     if (!Number.isSafeInteger(access.capacity_revision) || access.capacity_revision < 1)
-      throw new ApiError(500, "INVALID_CAPACITY_REVISION", "Competition capacity revision is invalid");
+      throw new ApiError(500, ErrorCode.INVALID_CAPACITY_REVISION, "Competition capacity revision is invalid");
     if (mutable && access.status === "archived")
-      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
     return access;
   }
 
@@ -448,7 +466,7 @@ export class Phase4Runtime {
        AND status='active' AND role IN ('owner','organiser')`,
       [organisationId, actor.accountId],
     );
-    if (!rows[0]) throw new ApiError(403, "ORGANISATION_ACCESS_DENIED", "Organisation access denied");
+    if (!rows[0]) throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
   }
 
   private async evidence(
@@ -627,7 +645,7 @@ export class Phase4Runtime {
         )
       )[0];
       if (receipt && (receipt.operation !== "setup.create" || !receipt.aggregate_matches))
-        throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+        throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       const replay = Boolean(receipt);
       await tx.unsafe(`SELECT phase4_create_setup_draft($1,$2,$3,$4,$5)`, [
         access.organisation_id,
@@ -808,7 +826,11 @@ export class Phase4Runtime {
       { materialiseSelectedFormat: true, publishSelectedFormat: true },
     );
     if (saved.outcome === "conflict")
-      throw new ApiError(409, "FORMAT_RECOMMENDATION_CONFLICT", "The competition changed; refresh the format options");
+      throw new ApiError(
+        409,
+        ErrorCode.FORMAT_RECOMMENDATION_CONFLICT,
+        "The competition changed; refresh the format options",
+      );
     if (saved.outcome !== "saved" && saved.outcome !== "idempotent_replay")
       throw new ApiError(
         409,
@@ -823,14 +845,18 @@ export class Phase4Runtime {
     const appliedSelection =
       applied && [...applied.recommendations].find((candidate) => candidate.id === recommendationId);
     if (!appliedSelection || appliedSelection.division_formats.some((format) => !format.format_revision_id))
-      throw new ApiError(409, "FORMAT_RECOMMENDATION_STALE", "The selected format could not be applied");
+      throw new ApiError(409, ErrorCode.FORMAT_RECOMMENDATION_STALE, "The selected format could not be applied");
     const formatIds = appliedSelection.division_formats.map((format) => format.format_revision_id!);
     const materialisedRows = (await this.formatRepo.findByIds(formatIds, this.sql)) as FormatRow[];
     if (
       materialisedRows.length !== appliedSelection.division_formats.length ||
       materialisedRows.some((row) => !row.graph_materialized_at)
     )
-      throw new ApiError(409, "FORMAT_MATERIALISATION_INCOMPLETE", "The selected format could not be materialised");
+      throw new ApiError(
+        409,
+        ErrorCode.FORMAT_MATERIALISATION_INCOMPLETE,
+        "The selected format could not be materialised",
+      );
     const materialised = materialisedRows.map((row) => ({
       revision: this.formatRevisionView(row),
       materialised: true as const,
@@ -852,7 +878,7 @@ export class Phase4Runtime {
     const entries = values.entries;
     const preferences = values.format_preferences;
     if (!capacity || !entries || !preferences)
-      throw new ApiError(422, "SETUP_PREREQUISITE_MISSING", "Complete capacity, entries and preferences first");
+      throw new ApiError(422, ErrorCode.SETUP_PREREQUISITE_MISSING, "Complete capacity, entries and preferences first");
     await this.assertCanonicalSetupStep(tx, access, "capacity", values);
     await this.assertCanonicalSetupStep(tx, access, "entries", values);
     const sourceEvidence = {
@@ -1149,7 +1175,7 @@ export class Phase4Runtime {
       [selected.id],
     );
     if (evidenceRows.length === 0)
-      throw new ApiError(409, "RECOMMENDATION_EVIDENCE_NOT_FOUND", "Recommendation evidence is stale");
+      throw new ApiError(409, ErrorCode.RECOMMENDATION_EVIDENCE_NOT_FOUND, "Recommendation evidence is stale");
     const applied = [];
     for (const evidence of evidenceRows) {
       const latest = (await this.formatRepo.findLatestByDivisionId(
@@ -1291,7 +1317,7 @@ export class Phase4Runtime {
         values.capacity.source_hash !== row.capacity_hash ||
         JSON.stringify([...values.capacity.area_ids].sort()) !== JSON.stringify(actualIds)
       )
-        throw new ApiError(409, "STALE_CAPACITY_REFERENCE", "Capacity reference is stale");
+        throw new ApiError(409, ErrorCode.STALE_CAPACITY_REFERENCE, "Capacity reference is stale");
     }
     if (stepId === "settings" && values.settings) {
       for (const reference of values.settings) {
@@ -1319,7 +1345,7 @@ export class Phase4Runtime {
           reference.pack_version !== row.version ||
           reference.pack_schema_version !== row.schema_version
         )
-          throw new ApiError(409, "STALE_SETTINGS_REFERENCE", "Settings reference is stale");
+          throw new ApiError(409, ErrorCode.STALE_SETTINGS_REFERENCE, "Settings reference is stale");
       }
     }
     if (stepId === "entries" && values.entries) {
@@ -1344,7 +1370,7 @@ export class Phase4Runtime {
         [access.id],
       );
       if (values.entries.competition_id !== access.id || values.entries.divisions.length !== rows.length)
-        throw new ApiError(409, "STALE_ENTRIES_REFERENCE", "Entries reference is stale");
+        throw new ApiError(409, ErrorCode.STALE_ENTRIES_REFERENCE, "Entries reference is stale");
       for (const expected of values.entries.divisions) {
         const actual = rows.find((row) => row.division_id === expected.division_id);
         if (
@@ -1355,7 +1381,7 @@ export class Phase4Runtime {
           actual.confirmed_count !== expected.confirmed_count ||
           actual.placeholder_count !== expected.placeholder_count
         )
-          throw new ApiError(409, "STALE_ENTRIES_REFERENCE", "Entries reference is stale");
+          throw new ApiError(409, ErrorCode.STALE_ENTRIES_REFERENCE, "Entries reference is stale");
       }
     }
     if (stepId === "format_recommendations" && values.format_recommendations) {
@@ -1387,7 +1413,7 @@ export class Phase4Runtime {
             evidence.definition_hash !== format.format_definition_hash ||
             evidence.match_count !== format.match_count
           )
-            throw new ApiError(409, "STALE_FORMAT_REFERENCE", "Format recommendation is stale");
+            throw new ApiError(409, ErrorCode.STALE_FORMAT_REFERENCE, "Format recommendation is stale");
           if (format.format_revision_id) {
             const applied = first(
               await tx.unsafe<{ definition_hash: string; division_id: string }>(
@@ -1410,7 +1436,7 @@ export class Phase4Runtime {
             candidate.division_formats.reduce((total, format) => total + format.match_count, 0) ||
           candidate.available_match_slots !== values.capacity?.effective.availableMatchSlots
         )
-          throw new ApiError(409, "STALE_RECOMMENDATION_EVIDENCE", "Recommendation evidence is stale");
+          throw new ApiError(409, ErrorCode.STALE_RECOMMENDATION_EVIDENCE, "Recommendation evidence is stale");
       }
     }
     if (stepId === "schedule_review" && values.schedule_review) {
@@ -1424,7 +1450,7 @@ export class Phase4Runtime {
         "SCHEDULE_REFERENCE_CHECK_FAILED",
         "Schedule selection could not be verified",
       );
-      if (row.stale) throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Schedule selection is stale");
+      if (row.stale) throw new ApiError(409, ErrorCode.STALE_SCHEDULE_REFERENCE, "Schedule selection is stale");
     }
     if (stepId === "review_publish" && values.review_publish) {
       const row = first(
@@ -1437,7 +1463,8 @@ export class Phase4Runtime {
         "PUBLICATION_REFERENCE_CHECK_FAILED",
         "Published schedule could not be verified",
       );
-      if (row.stale) throw new ApiError(409, "STALE_SCHEDULE_REFERENCE", "Published schedule reference is stale");
+      if (row.stale)
+        throw new ApiError(409, ErrorCode.STALE_SCHEDULE_REFERENCE, "Published schedule reference is stale");
     }
   }
 
@@ -1492,11 +1519,11 @@ export class Phase4Runtime {
       let nextStatus: "active" | "completed" = "active";
       if (request.transition.kind === "save_step") {
         const { step_id: stepId, value } = request.transition.step;
-        (next as unknown as Record<string, unknown>)[stepId] = value;
+        (next as Record<string, unknown>)[stepId] = value;
         if (stepId === "format_recommendations")
           await this.applySelectedRecommendation(tx, access, actor, row.id, next, options);
         const issues = validateAssistedSetupStep(stepId, setupDomainValues(next));
-        if (issues.length > 0) throw new ApiError(422, "SETUP_STEP_INVALID", issues[0]!.message);
+        if (issues.length > 0) throw new ApiError(422, ErrorCode.SETUP_STEP_INVALID, issues[0]!.message);
         await this.assertCanonicalSetupStep(tx, access, stepId, next);
         if (stepId === "format_preferences" && next.capacity && next.entries) {
           (next as { format_recommendations: Phase4SetupValues["format_recommendations"] }).format_recommendations =
@@ -1505,7 +1532,7 @@ export class Phase4Runtime {
       } else if (request.transition.kind === "go_to_step") {
         targetStep = request.transition.step_id;
       } else {
-        (next as unknown as Record<string, unknown>).review_publish = request.transition.review;
+        (next as Record<string, unknown>).review_publish = request.transition.review;
         await this.assertCanonicalSetupStep(tx, access, "review_publish", next);
         nextStatus = "completed";
         targetStep = "review_publish";
@@ -1513,14 +1540,14 @@ export class Phase4Runtime {
       const progress = deriveAssistedSetupProgress(setupDomainValues(next));
       const selected = progress.steps.find((step) => step.id === targetStep);
       if (!selected || selected.prerequisiteStepIds.some((stepId) => !progress.completedSteps.includes(stepId)))
-        throw new ApiError(422, "SETUP_PREREQUISITE_MISSING", "Complete prerequisite setup steps first");
+        throw new ApiError(422, ErrorCode.SETUP_PREREQUISITE_MISSING, "Complete prerequisite setup steps first");
       if (request.transition.kind === "save_step") {
         const savedStep = request.transition.step.step_id;
         const index = progress.steps.findIndex((step) => step.id === savedStep);
         targetStep = progress.steps[index + 1]?.id ?? savedStep;
       }
       if (nextStatus === "completed" && progress.steps.some((step) => step.errors.length > 0))
-        throw new ApiError(422, "SETUP_INCOMPLETE", "Every setup step must be valid before completion");
+        throw new ApiError(422, ErrorCode.SETUP_INCOMPLETE, "Every setup step must be valid before completion");
       const completedAtByStep = {
         ...((decoded<JsonObject>(row.validation).completed_at_by_step ?? {}) as Record<string, string>),
       };
@@ -1560,7 +1587,7 @@ export class Phase4Runtime {
         await this.sql.unsafe(`SELECT 1 FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId])
       )[0]
     )
-      throw new ApiError(404, "DIVISION_NOT_FOUND", "Division not found");
+      throw new ApiError(404, ErrorCode.DIVISION_NOT_FOUND, "Division not found");
     const result = validateFormatBuilderDocument(wireDocumentToDomain(document));
     if (!result.valid) return { valid: false, issues: result.issues, graph_hash: null, materialisation: null };
     return {
@@ -1669,7 +1696,7 @@ export class Phase4Runtime {
   ) {
     const validation = await this.validateFormat(actor, competitionId, divisionId, input.document);
     if (!validation.valid)
-      throw new ApiError(422, "FORMAT_INVALID", validation.issues[0]?.message ?? "Format is invalid");
+      throw new ApiError(422, ErrorCode.FORMAT_INVALID, validation.issues[0]?.message ?? "Format is invalid");
     const inserted = await this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, competitionId, actor);
       await this.lockIdempotency(tx, access.organisation_id, input.idempotency_key);
@@ -1688,7 +1715,11 @@ export class Phase4Runtime {
         "Division not found",
       );
       if (input.document.graph.entryCount !== division.active_entry_count)
-        throw new ApiError(422, "FORMAT_ENTRY_COUNT_MISMATCH", "Format entry count must match active division entries");
+        throw new ApiError(
+          422,
+          ErrorCode.FORMAT_ENTRY_COUNT_MISMATCH,
+          "Format entry count must match active division entries",
+        );
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { competition_id: competitionId, division_id: divisionId, ...input },
@@ -1704,7 +1735,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "format.save" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
         const response = decoded<{ revision_id: string }>(receipt.response);
         const formatRow = await this.formatRepo.findById(response.revision_id, "none", tx);
         if (!formatRow) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
@@ -1716,7 +1747,7 @@ export class Phase4Runtime {
         (latest?.revision ?? null) !== input.expected_revision ||
         (latest?.id ?? null) !== input.parent_revision_id
       )
-        throw new ApiError(409, "REVISION_CONFLICT", "The format changed; refresh and retry");
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "The format changed; refresh and retry");
       const row = first(
         await tx.unsafe<FormatRow>(
           `INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,status,created_by,
@@ -1942,7 +1973,7 @@ export class Phase4Runtime {
         "Source format not found",
       );
       if (source.sport_code !== input.sport_code)
-        throw new ApiError(422, "TEMPLATE_SPORT_MISMATCH", "Template sport must match its source format");
+        throw new ApiError(422, ErrorCode.TEMPLATE_SPORT_MISMATCH, "Template sport must match its source format");
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [input]),
         "HASH_FAILED",
@@ -1958,7 +1989,7 @@ export class Phase4Runtime {
       let versionId: string;
       if (receipt) {
         if (receipt.operation !== "template.save" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
         ({ template_id: templateId, template_version_id: versionId } = decoded<{
           template_id: string;
           template_version_id: string;
@@ -1998,9 +2029,9 @@ export class Phase4Runtime {
             "Template not found",
           );
           if (template.status !== "active")
-            throw new ApiError(409, "TEMPLATE_ARCHIVED", "Archived templates cannot be changed");
+            throw new ApiError(409, ErrorCode.TEMPLATE_ARCHIVED, "Archived templates cannot be changed");
           if (template.sport_code !== input.sport_code)
-            throw new ApiError(422, "TEMPLATE_SPORT_MISMATCH", "Template sport cannot change");
+            throw new ApiError(422, ErrorCode.TEMPLATE_SPORT_MISMATCH, "Template sport cannot change");
           const latest = first(
             await tx.unsafe<{ id: string; version: number }>(
               `SELECT id,version FROM format_template_versions WHERE template_id=$1 ORDER BY version DESC LIMIT 1 FOR UPDATE`,
@@ -2010,7 +2041,7 @@ export class Phase4Runtime {
             "Template version not found",
           );
           if (latest.id !== input.parent_version_id || latest.version !== input.expected_version)
-            throw new ApiError(409, "REVISION_CONFLICT", "Template changed; refresh and retry");
+            throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Template changed; refresh and retry");
           versionId = randomUUID();
           await tx.unsafe(`UPDATE format_templates SET name=$1,description=$2 WHERE id=$3`, [
             input.name,
@@ -2101,7 +2132,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "template.archive" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else if (row.status === "active") {
         await tx.unsafe(`UPDATE format_templates SET status='archived',archived_by=$1,archived_at=now() WHERE id=$2`, [
           actor.accountId,
@@ -2121,7 +2152,7 @@ export class Phase4Runtime {
           templateId,
         );
       } else {
-        throw new ApiError(409, "TEMPLATE_ARCHIVED", "Template is already archived");
+        throw new ApiError(409, ErrorCode.TEMPLATE_ARCHIVED, "Template is already archived");
       }
       const latest = first(
         await tx.unsafe<Parameters<Phase4Runtime["templateView"]>[0]>(
@@ -2150,7 +2181,7 @@ export class Phase4Runtime {
     const inserted = await this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, input.competition_id, actor);
       if (access.organisation_id !== organisationId)
-        throw new ApiError(403, "ORGANISATION_ACCESS_DENIED", "Organisation access denied");
+        throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
       await this.lockIdempotency(tx, organisationId, input.idempotency_key);
       const version = first(
         await tx.unsafe<{
@@ -2178,7 +2209,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "template.apply" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
         const response = decoded<{ revision_id: string }>(receipt.response);
         const formatRow = await this.formatRepo.findById(response.revision_id, "none", tx);
         if (!formatRow) throw new ApiError(404, ErrorCode.FORMAT_NOT_FOUND, "Format not found");
@@ -2190,7 +2221,7 @@ export class Phase4Runtime {
         tx,
       )) as FormatRow | null;
       if ((latest?.revision ?? null) !== input.expected_format_revision)
-        throw new ApiError(409, "REVISION_CONFLICT", "Format changed; refresh and retry");
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Format changed; refresh and retry");
       const row = first(
         await tx.unsafe<FormatRow>(
           `INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,status,created_by,
@@ -2259,7 +2290,7 @@ export class Phase4Runtime {
   ) {
     const normalizedText = input.text.normalize("NFC").trim();
     if (normalizedText.length < 1 || normalizedText.length > 10_000)
-      throw new ApiError(422, "AI_INPUT_INVALID", "Text must contain 1 to 10000 characters");
+      throw new ApiError(422, ErrorCode.AI_INPUT_INVALID, "Text must contain 1 to 10000 characters");
     const locale = input.locale ?? "en";
     const fingerprint = createAiRequestFingerprint({
       action: "text_to_brief",
@@ -2284,7 +2315,7 @@ export class Phase4Runtime {
       if (input.competition_id) {
         const access = await this.competitionAccess(tx, input.competition_id, actor, false);
         if (access.organisation_id !== organisationId)
-          throw new ApiError(403, "ORGANISATION_ACCESS_DENIED", "Organisation access denied");
+          throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
       }
       const replay = Boolean(
         (
@@ -2364,7 +2395,8 @@ export class Phase4Runtime {
         idempotent_replay: true,
       };
     }
-    if (begin.replay) throw new ApiError(409, "AI_ACTION_IN_PROGRESS", "This AI request is already in progress");
+    if (begin.replay)
+      throw new ApiError(409, ErrorCode.AI_ACTION_IN_PROGRESS, "This AI request is already in progress");
     let outcome: "success" | "manual_fallback" = "manual_fallback";
     let cacheStatus: "hit" | "miss" | "not_checked" = begin.cached ? "hit" : "not_checked";
     let result: Phase4CompetitionBrief | JsonObject = begin.cached ?? {};
@@ -2448,7 +2480,7 @@ export class Phase4Runtime {
     }
     if (ledger.outcome === "success") {
       const validated = validateCompetitionBrief(result);
-      if (!validated.ok) throw new ApiError(500, "AI_RESULT_INVALID", "AI result could not be returned");
+      if (!validated.ok) throw new ApiError(500, ErrorCode.AI_RESULT_INVALID, "AI result could not be returned");
       return {
         status: "success" as const,
         source: ledger.cache_status === "hit" ? ("cache" as const) : ("provider" as const),
@@ -2540,13 +2572,13 @@ export class Phase4Runtime {
       "Capacity not found",
     ).hash;
     if (!capacityHash)
-      throw new ApiError(422, "CAPACITY_NOT_CONFIGURED", "Competition capacity must be configured first");
+      throw new ApiError(422, ErrorCode.CAPACITY_NOT_CONFIGURED, "Competition capacity must be configured first");
     const areaRows = await tx.unsafe<{ id: string; slot_minutes: number }>(
       `SELECT id,slot_minutes FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
       [competition.id],
     );
     if (areaRows.length === 0)
-      throw new ApiError(422, "CAPACITY_NOT_CONFIGURED", "At least one playing area is required");
+      throw new ApiError(422, ErrorCode.CAPACITY_NOT_CONFIGURED, "At least one playing area is required");
     const durations = new Set(areaRows.map((area) => area.slot_minutes));
     if (durations.size !== 1)
       throw new ApiError(
@@ -2594,7 +2626,8 @@ export class Phase4Runtime {
         });
       }
     }
-    if (slots.length === 0) throw new ApiError(422, "CAPACITY_HAS_NO_SLOTS", "Capacity has no usable match slots");
+    if (slots.length === 0)
+      throw new ApiError(422, ErrorCode.CAPACITY_HAS_NO_SLOTS, "Capacity has no usable match slots");
     const formats = await tx.unsafe<{ id: string; division_id: string; definition: FormatGraph | string }>(
       `SELECT DISTINCT ON (division_id) id,division_id,definition FROM format_revisions
        WHERE competition_id=$1 AND status='published' ORDER BY division_id,revision DESC,id DESC`,
@@ -2608,7 +2641,7 @@ export class Phase4Runtime {
       "Divisions not found",
     ).count;
     if (formats.length !== divisionCount || formats.length === 0)
-      throw new ApiError(422, "PUBLISHED_FORMATS_REQUIRED", "Every division requires a published format");
+      throw new ApiError(422, ErrorCode.PUBLISHED_FORMATS_REQUIRED, "Every division requires a published format");
     const matches: ScheduleProblem["matches"][number][] = [];
     for (const format of formats) {
       const graph = decoded<FormatGraph>(format.definition);
@@ -2639,11 +2672,19 @@ export class Phase4Runtime {
       );
       const byGraphId = new Map(idRows.map((row) => [row.graph_match_id, row.id]));
       if (byGraphId.size !== graph.matches.length)
-        throw new ApiError(422, "FORMAT_NOT_MATERIALISED", "Published format graph is not completely materialised");
+        throw new ApiError(
+          422,
+          ErrorCode.FORMAT_NOT_MATERIALISED,
+          "Published format graph is not completely materialised",
+        );
       for (const match of derived) {
         const id = byGraphId.get(match.id);
         if (!id)
-          throw new ApiError(422, "FORMAT_NOT_MATERIALISED", "Published format graph is not completely materialised");
+          throw new ApiError(
+            422,
+            ErrorCode.FORMAT_NOT_MATERIALISED,
+            "Published format graph is not completely materialised",
+          );
         matches.push({
           ...match,
           id,
@@ -2670,7 +2711,8 @@ export class Phase4Runtime {
           candidate.startEpochMs === startEpochMs &&
           candidate.endEpochMs === endEpochMs,
       );
-      if (!slot) throw new ApiError(409, "STALE_SCHEDULE_LOCK", "A schedule lock no longer matches current capacity");
+      if (!slot)
+        throw new ApiError(409, ErrorCode.STALE_SCHEDULE_LOCK, "A schedule lock no longer matches current capacity");
       return {
         ...match,
         fixedAssignment: {
@@ -2815,7 +2857,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.generate" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
         const replay = decoded<{ job_id: string }>(receipt.response);
         const row = first(
           await tx.unsafe<{ input_hash: string }>(`SELECT input_hash FROM schedule_generation_jobs WHERE id=$1`, [
@@ -2830,14 +2872,14 @@ export class Phase4Runtime {
         access.revision !== input.expected_source_revision ||
         access.capacity_revision !== input.expected_capacity_revision
       )
-        throw new ApiError(409, "STALE_SCHEDULE_INPUT", "Competition or capacity changed; refresh and retry");
+        throw new ApiError(409, ErrorCode.STALE_SCHEDULE_INPUT, "Competition or capacity changed; refresh and retry");
       const active = (
         await tx.unsafe<{ id: string }>(
           `SELECT id FROM schedule_generation_jobs WHERE competition_id=$1 AND status IN ('queued','running','valid_best_found','cancelling') FOR UPDATE`,
           [competitionId],
         )
       )[0];
-      if (active) throw new ApiError(409, "ACTIVE_SCHEDULE_JOB", "A schedule job is already active");
+      if (active) throw new ApiError(409, ErrorCode.ACTIVE_SCHEDULE_JOB, "A schedule job is already active");
       const { problem, capacityHash } = await this.buildScheduleProblem(tx, access, input.objective, input.constraints);
       const jobId = randomUUID();
       const snapshot = toScheduleJobInput(problem, {
@@ -2927,7 +2969,7 @@ export class Phase4Runtime {
 
   async recoverQueuedScheduleJobs(limit = 100) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)
-      throw new ApiError(400, "VALIDATION_ERROR", "Limit must be 1 to 500");
+      throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Limit must be 1 to 500");
     const rows = await this.sql.unsafe<{
       id: string;
       competition_id: string;
@@ -2981,7 +3023,7 @@ export class Phase4Runtime {
       await this.competitionAccess(tx, parent.competition_id, actor);
       await this.lockIdempotency(tx, parent.organisation_id, input.idempotency_key);
       if (parent.revision !== input.expected_revision)
-        throw new ApiError(409, "REVISION_CONFLICT", "Schedule job changed; refresh and retry");
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule job changed; refresh and retry");
       if (
         !parent.current_best_option_id ||
         !["completed", "cancelled", "failed", "no_solution", "stale"].includes(parent.status)
@@ -3004,7 +3046,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.continue" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
         const response = decoded<{ job_id: string }>(receipt.response);
         const child = first(
           await tx.unsafe<{ input_hash: string; competition_id: string }>(
@@ -3109,10 +3151,10 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.cancel" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
         if (row.revision !== input.expected_revision)
-          throw new ApiError(409, "REVISION_CONFLICT", "Schedule job changed; refresh and retry");
+          throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule job changed; refresh and retry");
         await tx.unsafe(`SELECT phase4_request_schedule_cancellation($1,$2,$3)`, [jobId, actor.accountId, requestId]);
         await tx.unsafe(
           `INSERT INTO phase4_mutation_receipts(organisation_id,idempotency_key,operation,request_hash,response) VALUES($1,$2,'schedule.cancel',$3,$4::jsonb)`,
@@ -3248,11 +3290,11 @@ export class Phase4Runtime {
       let revisionId: string;
       if (receipt) {
         if (receipt.operation !== "schedule.accept" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
         revisionId = decoded<{ revision_id: string }>(receipt.response).revision_id;
       } else {
         if (job.revision !== input.expected_job_revision || job.current_best_option_id !== optionId)
-          throw new ApiError(409, "REVISION_CONFLICT", "Schedule option is no longer current");
+          throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule option is no longer current");
         await this.assertScheduleJobCurrent(tx, jobId);
         const accepted = first(
           await tx.unsafe<{ id: string }>(`SELECT (phase4_accept_schedule_option($1,$2,$3)).id`, [
@@ -3300,7 +3342,11 @@ export class Phase4Runtime {
       this.readScheduleRevision(actor, rightId),
     ]);
     if (left.competition_id !== right.competition_id)
-      throw new ApiError(422, "SCHEDULE_COMPARISON_INVALID", "Schedule revisions must belong to one competition");
+      throw new ApiError(
+        422,
+        ErrorCode.SCHEDULE_COMPARISON_INVALID,
+        "Schedule revisions must belong to one competition",
+      );
     const leftByMatch = new Map(left.assignments.map((assignment) => [assignment.match_id, assignment]));
     const rightByMatch = new Map(right.assignments.map((assignment) => [assignment.match_id, assignment]));
     const matchIds = [...new Set([...leftByMatch.keys(), ...rightByMatch.keys()])].sort();
@@ -3465,9 +3511,9 @@ export class Phase4Runtime {
     input: { match_id: string; playing_area_id: string; slot_id: string; start_epoch_ms: number; end_epoch_ms: number },
   ) {
     if (!revision.source_job_id)
-      throw new ApiError(409, "SCHEDULE_SOURCE_MISSING", "Schedule revision has no solver source");
+      throw new ApiError(409, ErrorCode.SCHEDULE_SOURCE_MISSING, "Schedule revision has no solver source");
     if (!["draft", "ready_for_review"].includes(revision.status))
-      throw new ApiError(409, "SCHEDULE_REVISION_IMMUTABLE", "Schedule revision is immutable");
+      throw new ApiError(409, ErrorCode.SCHEDULE_REVISION_IMMUTABLE, "Schedule revision is immutable");
     const job = first(
       await tx.unsafe<{ input_snapshot: JsonObject | string }>(
         `SELECT input_snapshot FROM schedule_generation_jobs WHERE id=$1`,
@@ -3489,10 +3535,14 @@ export class Phase4Runtime {
         candidate.endEpochMs === input.end_epoch_ms,
     );
     if (!slot)
-      throw new ApiError(422, "SCHEDULE_SLOT_INVALID", "Move target is not an authoritative current-capacity slot");
+      throw new ApiError(
+        422,
+        ErrorCode.SCHEDULE_SLOT_INVALID,
+        "Move target is not an authoritative current-capacity slot",
+      );
     const current = this.domainAssignments(revision.assignments);
     const source = current.find((assignment) => assignment.matchId === input.match_id);
-    if (!source) throw new ApiError(404, "MATCH_NOT_FOUND", "Scheduled match not found");
+    if (!source) throw new ApiError(404, ErrorCode.MATCH_NOT_FOUND, "Scheduled match not found");
     const moved = current.map((assignment) =>
       assignment.matchId === input.match_id
         ? {
@@ -3634,7 +3684,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.move" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
         const replay = decoded<{
           revision_id: string;
           consequences?: Awaited<ReturnType<Phase4Runtime["validateScheduleMoveOn"]>>["consequences"];
@@ -3646,7 +3696,7 @@ export class Phase4Runtime {
         };
       }
       if (access.status === "archived")
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
       await this.lockScheduleMutation(tx, access.id);
       const parent = first(
         await tx.unsafe<{
@@ -3661,7 +3711,7 @@ export class Phase4Runtime {
         "Schedule revision not found",
       );
       if (parent.revision !== input.expected_revision || !["draft", "ready_for_review"].includes(parent.status))
-        throw new ApiError(409, "REVISION_CONFLICT", "Schedule revision changed; refresh and retry");
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule revision changed; refresh and retry");
       const preview = await this.validateScheduleMoveOn(tx, await this.revisionDetail(tx, revisionId), {
         match_id: input.match_id,
         playing_area_id: input.playing_area_id,
@@ -3670,7 +3720,7 @@ export class Phase4Runtime {
         end_epoch_ms: input.end_epoch_ms,
       });
       if (!preview.validation.valid)
-        throw new ApiError(422, "SCHEDULE_INVALID", "Move violates required schedule constraints");
+        throw new ApiError(422, ErrorCode.SCHEDULE_INVALID, "Move violates required schedule constraints");
       const nextId = randomUUID();
       const nextRevision = first(
         await tx.unsafe<{ revision: number }>(
@@ -3776,7 +3826,11 @@ export class Phase4Runtime {
       assignment.start_epoch_ms !== input.start_epoch_ms ||
       assignment.end_epoch_ms !== input.end_epoch_ms
     )
-      throw new ApiError(422, "SCHEDULE_LOCK_INVALID", "A lock must match the selected schedule assignment exactly");
+      throw new ApiError(
+        422,
+        ErrorCode.SCHEDULE_LOCK_INVALID,
+        "A lock must match the selected schedule assignment exactly",
+      );
     return this.transaction(async (tx) => {
       const access = await this.competitionAccess(tx, revision.competition_id, actor);
       await this.lockIdempotency(tx, access.organisation_id, input.idempotency_key);
@@ -3795,7 +3849,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.lock" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
         await this.lockScheduleMutation(tx, revision.competition_id);
         await tx.unsafe(
@@ -3873,7 +3927,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.unlock" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
         await this.lockScheduleMutation(tx, revision.competition_id);
         await tx.unsafe(`SELECT set_config('matchday.phase4_schedule_lock','on',true)`);
@@ -4209,7 +4263,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.ready" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
         await this.lockScheduleMutation(tx, identity.competition_id);
         const row = first(
@@ -4227,17 +4281,17 @@ export class Phase4Runtime {
           "Schedule revision not found",
         );
         if (row.revision !== input.expected_revision)
-          throw new ApiError(409, "REVISION_CONFLICT", "Schedule revision changed; refresh and retry");
+          throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule revision changed; refresh and retry");
         if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id, false);
         await this.assertScheduleRevisionLocksCompatible(tx, revisionId);
         if (row.status === "draft") {
           if (!row.assignment_hash)
-            throw new ApiError(422, "SCHEDULE_ASSIGNMENTS_INCOMPLETE", "Schedule assignments are incomplete");
+            throw new ApiError(422, ErrorCode.SCHEDULE_ASSIGNMENTS_INCOMPLETE, "Schedule assignments are incomplete");
           await tx.unsafe(`UPDATE schedule_revisions SET status='ready_for_review',updated_at=now() WHERE id=$1`, [
             revisionId,
           ]);
         } else if (row.status !== "ready_for_review") {
-          throw new ApiError(409, "SCHEDULE_REVISION_IMMUTABLE", "Schedule revision cannot enter review");
+          throw new ApiError(409, ErrorCode.SCHEDULE_REVISION_IMMUTABLE, "Schedule revision cannot enter review");
         }
         await tx.unsafe(
           `INSERT INTO phase4_mutation_receipts(organisation_id,idempotency_key,operation,request_hash,response)
@@ -4289,7 +4343,7 @@ export class Phase4Runtime {
       )[0];
       if (receipt) {
         if (receipt.operation !== "schedule.publish" || receipt.request_hash !== requestHash)
-          throw new ApiError(409, "IDEMPOTENCY_MISMATCH", "Idempotency key was reused with different input");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
         await this.lockScheduleMutation(tx, identity.competition_id);
         const row = first(
@@ -4305,7 +4359,11 @@ export class Phase4Runtime {
           "Schedule revision not found",
         );
         if (row.revision !== input.expected_revision || row.status !== "ready_for_review")
-          throw new ApiError(409, "REVISION_CONFLICT", "Only the current review-ready schedule can be published");
+          throw new ApiError(
+            409,
+            ErrorCode.REVISION_CONFLICT,
+            "Only the current review-ready schedule can be published",
+          );
         if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id, false);
         await this.assertScheduleRevisionLocksCompatible(tx, revisionId);
         await tx.unsafe(`SELECT phase4_publish_schedule_revision($1,$2,$3)`, [revisionId, actor.accountId, requestId]);
@@ -4329,7 +4387,7 @@ export class Phase4Runtime {
         "Publication state not found",
       );
       if (!this.publicProjection)
-        throw new ApiError(500, "PUBLIC_PROJECTION_UNAVAILABLE", "Public schedule projection is unavailable");
+        throw new ApiError(500, ErrorCode.PUBLIC_PROJECTION_UNAVAILABLE, "Public schedule projection is unavailable");
       await this.publicProjection.writePublicProjection(
         tx,
         identity.competition_id,
@@ -4346,7 +4404,7 @@ export class Phase4Runtime {
 
   async runScheduleMaintenance(requestId: string) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(requestId))
-      throw new ApiError(400, "VALIDATION_ERROR", "Invalid request ID");
+      throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Invalid request ID");
     return this.transaction(async (tx) => {
       const dueWarnings = await tx.unsafe<{ revision_id: string; warning_days: 1 | 7; account_id: string }>(
         `SELECT sr.id revision_id,d.warning_days,m.account_id

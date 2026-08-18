@@ -25,7 +25,15 @@ import {
   type StandingsMatchResult,
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import {
+  CompetitionRepository,
+  DivisionRepository,
+  FormatRepository,
+  ScheduleRepository,
+  ScoringRepository,
+  IdentityRepository,
+} from "./repositories/index.js";
 import {
   NoopScoringAccessRateLimiter,
   scoringAccessRateLimited,
@@ -219,14 +227,14 @@ function effectiveStandingsConfig(sportId: SportId, settings: SportPackSettings)
 
 export class ScoringAccessRateLimitError extends ApiError {
   constructor(public readonly rateLimit: ScoringAccessRateLimitHeaders) {
-    super(429, "ACCESS_RATE_LIMITED", "Too many invalid access attempts. Try again later.");
+    super(429, ErrorCode.ACCESS_RATE_LIMITED, "Too many invalid access attempts. Try again later.");
   }
 }
 
 export class ScoringAccessRejectedError extends ApiError {
   constructor(
     statusCode: number,
-    code: string,
+    code: ApiErrorCode,
     message: string,
     public readonly rateLimit: ScoringAccessRateLimitHeaders,
   ) {
@@ -237,7 +245,7 @@ export class ScoringAccessRejectedError extends ApiError {
 class ScoringAccessDeniedError extends ApiError {
   constructor(
     statusCode: number,
-    code: string,
+    code: ApiErrorCode,
     message: string,
     readonly accessContext: {
       competitionId: string;
@@ -557,12 +565,18 @@ function safeEqual(left: Buffer, right: Buffer): boolean {
 
 function required<T>(rows: readonly T[], message: string): T {
   const row = rows[0];
-  if (!row) throw new ApiError(404, "NOT_FOUND", message);
+  if (!row) throw new ApiError(404, ErrorCode.NOT_FOUND, message);
   return row;
 }
 
 export class Phase2Runtime {
   private readonly fallbackCodeHmacSecret: string;
+  private readonly scoringRepo: ScoringRepository;
+  private readonly identityRepo: IdentityRepository;
+  private readonly competitionRepo: CompetitionRepository;
+  private readonly divisionRepo: DivisionRepository;
+  private readonly formatRepo: FormatRepository;
+  private readonly scheduleRepo: ScheduleRepository;
 
   constructor(
     private readonly sql: PostgresJsSql,
@@ -580,6 +594,12 @@ export class Phase2Runtime {
     if (!Number.isInteger(takeoverRequestTtlMs) || takeoverRequestTtlMs <= 0) {
       throw new Error("Takeover request TTL must be a positive integer.");
     }
+    this.scoringRepo = new ScoringRepository(sql);
+    this.identityRepo = new IdentityRepository(sql);
+    this.competitionRepo = new CompetitionRepository(sql);
+    this.divisionRepo = new DivisionRepository(sql);
+    this.formatRepo = new FormatRepository(sql);
+    this.scheduleRepo = new ScheduleRepository(sql);
   }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -602,9 +622,9 @@ export class Phase2Runtime {
        LIMIT 1`,
       [competitionId, actor.accountId, roles],
     );
-    if (!rows[0]) throw new ApiError(403, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+    if (!rows[0]) throw new ApiError(403, ErrorCode.COMPETITION_ACCESS_DENIED, "Competition access denied");
     if (mutable && rows[0].status === "archived") {
-      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
     }
     return rows[0];
   }
@@ -619,7 +639,7 @@ export class Phase2Runtime {
        WHERE organisation_id = $1 AND account_id = $2 AND status = 'active' AND role IN ('owner', 'organiser')`,
       [organisationId, actor.accountId],
     );
-    if (!rows[0]) throw new ApiError(403, "ORGANISATION_ACCESS_DENIED", "Organisation access denied");
+    if (!rows[0]) throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
   }
 
   private async evidence(
@@ -929,7 +949,8 @@ export class Phase2Runtime {
         `SELECT locked_at FROM competition_sport_settings WHERE competition_id = $1 FOR UPDATE`,
         [competitionId],
       );
-      if (locked[0]?.locked_at) throw new ApiError(409, "SETTINGS_LOCKED", "Settings are locked after scoring starts");
+      if (locked[0]?.locked_at)
+        throw new ApiError(409, ErrorCode.SETTINGS_LOCKED, "Settings are locked after scoring starts");
       const values = { ...this.domain.defaultSettings, ...settings };
       await tx.unsafe(
         `UPDATE competition_sport_settings SET
@@ -976,7 +997,7 @@ export class Phase2Runtime {
         [competitionId],
       );
       if ((existing[0]?.count ?? 0) >= 1)
-        throw new ApiError(409, "SLICE_DIVISION_LIMIT", "This slice supports one division");
+        throw new ApiError(409, ErrorCode.SLICE_DIVISION_LIMIT, "This slice supports one division");
       const rows = await tx.unsafe<{ id: string }>(
         `INSERT INTO divisions (competition_id, name, team_limit) VALUES ($1,$2,$3) RETURNING id`,
         [competitionId, input.name.trim(), input.teamLimit],
@@ -1015,12 +1036,17 @@ export class Phase2Runtime {
         `SELECT id FROM format_revisions WHERE division_id=$1 LIMIT 1`,
         [divisionId],
       );
-      if (existingFormat[0]) throw new ApiError(409, "ENTRIES_LOCKED", "Entries are locked after format generation");
+      if (existingFormat[0])
+        throw new ApiError(409, ErrorCode.ENTRIES_LOCKED, "Entries are locked after format generation");
       if (entries.length !== division.team_limit || ![8, 16].includes(entries.length)) {
-        throw new ApiError(422, "ENTRY_COUNT_INVALID", "Entry count must exactly match the 8 or 16 team division");
+        throw new ApiError(
+          422,
+          ErrorCode.ENTRY_COUNT_INVALID,
+          "Entry count must exactly match the 8 or 16 team division",
+        );
       }
       if (new Set(entries.map((entry) => entry.seed)).size !== entries.length) {
-        throw new ApiError(422, "ENTRY_SEEDS_INVALID", "Entry seeds must be unique");
+        throw new ApiError(422, ErrorCode.ENTRY_SEEDS_INVALID, "Entry seeds must be unique");
       }
       await tx.unsafe(`DELETE FROM division_entries WHERE division_id=$1`, [divisionId]);
       const created: { id: string; name: string; seed: number }[] = [];
@@ -1052,11 +1078,15 @@ export class Phase2Runtime {
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
-      if (areas.length < 1) throw new ApiError(422, "CAPACITY_EMPTY", "At least one playing area is required");
+      if (areas.length < 1) throw new ApiError(422, ErrorCode.CAPACITY_EMPTY, "At least one playing area is required");
       for (const area of areas) {
         for (const window of area.windows) {
           if (new Date(window.endsAt).getTime() <= new Date(window.startsAt).getTime()) {
-            throw new ApiError(422, "CAPACITY_WINDOW_INVALID", "Availability windows must end after they start");
+            throw new ApiError(
+              422,
+              ErrorCode.CAPACITY_WINDOW_INVALID,
+              "Availability windows must end after they start",
+            );
           }
         }
       }
@@ -1065,7 +1095,7 @@ export class Phase2Runtime {
         [competitionId],
       );
       if (existingSchedule[0])
-        throw new ApiError(409, "CAPACITY_LOCKED", "Capacity is locked after schedule generation");
+        throw new ApiError(409, ErrorCode.CAPACITY_LOCKED, "Capacity is locked after schedule generation");
       await tx.unsafe(`DELETE FROM playing_areas WHERE competition_id=$1`, [competitionId]);
       const response: unknown[] = [];
       for (const [index, area] of areas.entries()) {
@@ -1107,7 +1137,7 @@ export class Phase2Runtime {
         [divisionId, competitionId],
       );
       if (![8, 16].includes(entries.length))
-        throw new ApiError(422, "ENTRY_COUNT_INVALID", "Exactly 8 or 16 entries are required");
+        throw new ApiError(422, ErrorCode.ENTRY_COUNT_INVALID, "Exactly 8 or 16 entries are required");
       const generated = this.domain.generateFormat(
         entries.map((entry, index) => ({ ...entry, seed: entry.seed ?? index + 1 })),
       );
@@ -1243,7 +1273,7 @@ export class Phase2Runtime {
       }));
       const scheduled = this.domain.generateSchedule(matches, intervals);
       if (scheduled.length !== matches.length)
-        throw new ApiError(422, "CAPACITY_INSUFFICIENT", "Schedule cannot fit available capacity");
+        throw new ApiError(422, ErrorCode.CAPACITY_INSUFFICIENT, "Schedule cannot fit available capacity");
       const inputHash = stableHash({ format: format.id, intervals });
       const existing = await tx.unsafe<{ id: string; revision: number }>(
         `SELECT id,revision FROM schedule_revisions WHERE competition_id=$1 AND input_hash=$2`,
@@ -1295,7 +1325,7 @@ export class Phase2Runtime {
         "Schedule revision not found",
       );
       if (schedule.status !== "draft")
-        throw new ApiError(409, "REVISION_IMMUTABLE", "Schedule revision is not a draft");
+        throw new ApiError(409, ErrorCode.REVISION_IMMUTABLE, "Schedule revision is not a draft");
       const publication = required(
         await tx.unsafe<{ schedule_version: number; result_version: number }>(
           `SELECT schedule_version,result_version FROM competition_publications WHERE competition_id=$1 FOR UPDATE`,
@@ -1419,7 +1449,11 @@ export class Phase2Runtime {
           row.role !== normalized.role ||
           serializedDate(row.expires_at) !== normalized.expiresAt
         ) {
-          throw new ApiError(409, "ACCESS_IDEMPOTENCY_CONFLICT", "Idempotency key was used with different input");
+          throw new ApiError(
+            409,
+            ErrorCode.ACCESS_IDEMPOTENCY_CONFLICT,
+            "Idempotency key was used with different input",
+          );
         }
         return {
           id: row.id,
@@ -1437,7 +1471,7 @@ export class Phase2Runtime {
       const replay = await readReplay();
       if (replay[0]) return replayResponse(replay[0]);
       if (new Date(normalized.expiresAt).getTime() <= this.now().getTime()) {
-        throw new ApiError(422, "ACCESS_EXPIRY_INVALID", "Access expiry must be in the future");
+        throw new ApiError(422, ErrorCode.ACCESS_EXPIRY_INVALID, "Access expiry must be in the future");
       }
       const match = required(
         await tx.unsafe<{ id: string; home_entry_id: string | null; away_entry_id: string | null }>(
@@ -1447,7 +1481,11 @@ export class Phase2Runtime {
         "Match not found",
       );
       if (!match.home_entry_id || !match.away_entry_id) {
-        throw new ApiError(409, "MATCH_PARTICIPANTS_UNRESOLVED", "Scoring access requires resolved participants");
+        throw new ApiError(
+          409,
+          ErrorCode.MATCH_PARTICIPANTS_UNRESOLVED,
+          "Scoring access requires resolved participants",
+        );
       }
       const secret = opaqueSecret();
       let shortCode = "";
@@ -1508,7 +1546,7 @@ export class Phase2Runtime {
         }
       }
       if (!pass) {
-        throw new ApiError(503, "ACCESS_CODE_UNAVAILABLE", "A unique access code could not be issued");
+        throw new ApiError(503, ErrorCode.ACCESS_CODE_UNAVAILABLE, "A unique access code could not be issued");
       }
       await this.evidence(tx, {
         requestId,
@@ -1555,7 +1593,7 @@ export class Phase2Runtime {
         "Access pass not found",
       );
       if (pass.revoked_at || date(pass.expires_at).getTime() <= this.now().getTime()) {
-        throw new ApiError(409, "ACCESS_INACTIVE", "Only an active access pass can be rotated");
+        throw new ApiError(409, ErrorCode.ACCESS_INACTIVE, "Only an active access pass can be rotated");
       }
       const alreadyRotated = await tx.unsafe<{ request_id: string }>(
         `SELECT request_id FROM audit_events
@@ -1604,7 +1642,8 @@ export class Phase2Runtime {
           throw error;
         }
       }
-      if (!rotated) throw new ApiError(503, "ACCESS_CODE_UNAVAILABLE", "A unique access code could not be issued");
+      if (!rotated)
+        throw new ApiError(503, ErrorCode.ACCESS_CODE_UNAVAILABLE, "A unique access code could not be issued");
       await this.evidence(tx, {
         requestId,
         actorAccountId: actor.accountId,
@@ -1717,10 +1756,10 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     if (Boolean(input.token) === Boolean(input.shortCode)) {
-      throw new ApiError(400, "ACCESS_SECRET_AMBIGUOUS", "Provide exactly one access token or short code");
+      throw new ApiError(400, ErrorCode.ACCESS_SECRET_AMBIGUOUS, "Provide exactly one access token or short code");
     }
     const presented = input.token ?? input.shortCode;
-    if (!presented) throw new ApiError(400, "ACCESS_SECRET_REQUIRED", "Access token or code is required");
+    if (!presented) throw new ApiError(400, ErrorCode.ACCESS_SECRET_REQUIRED, "Access token or code is required");
     const ipAddress = input.ipAddress ?? "runtime-test";
     const credentialKind = input.token ? ("token" as const) : ("fallback_code" as const);
     const initialLimit = await this.scoringAccessRateLimiter.assertAllowed(presented, ipAddress);
@@ -1738,7 +1777,7 @@ export class Phase2Runtime {
     try {
       const result = await this.transaction(async (tx) => {
         if (Boolean(input.token) === Boolean(input.shortCode)) {
-          throw new ApiError(400, "ACCESS_SECRET_AMBIGUOUS", "Provide exactly one access token or short code");
+          throw new ApiError(400, ErrorCode.ACCESS_SECRET_AMBIGUOUS, "Provide exactly one access token or short code");
         }
         const digest = input.token ? hashSecret(presented) : hashFallbackCode(presented, this.fallbackCodeHmacSecret);
         const column = input.token ? "secret_hash" : "short_code_hash";
@@ -1774,7 +1813,7 @@ export class Phase2Runtime {
               );
             }
           }
-          throw new ApiError(403, "ACCESS_DENIED", "Access is invalid");
+          throw new ApiError(403, ErrorCode.ACCESS_DENIED, "Access is invalid");
         }
         // All access mutations use the match advisory lock before mutable row
         // locks, preventing exchange-vs-revocation lock inversion.
@@ -1782,10 +1821,10 @@ export class Phase2Runtime {
         pass = (await loadPass(true))[0];
         const lockedStored = input.token ? pass?.secret_hash : pass?.short_code_hash;
         if (!pass || !lockedStored || !safeEqual(Buffer.from(lockedStored), digest)) {
-          throw new ApiError(403, "ACCESS_DENIED", "Access is invalid");
+          throw new ApiError(403, ErrorCode.ACCESS_DENIED, "Access is invalid");
         }
         if (pass.competition_status === "archived") {
-          throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+          throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
         }
         const accessContext = {
           competitionId: pass.competition_id,
@@ -1823,7 +1862,7 @@ export class Phase2Runtime {
         const expiresAt = new Date(Math.min(date(pass.expires_at).getTime(), now.getTime() + 30 * 60_000));
         const activeLease = Boolean(lease[0] && date(lease[0].expires_at).getTime() > now.getTime());
         if (!input.deviceId && activeLease) {
-          throw new ApiError(409, "WRITER_ACTIVE", "Another scorekeeper currently controls this match");
+          throw new ApiError(409, ErrorCode.WRITER_ACTIVE, "Another scorekeeper currently controls this match");
         }
         const mode: ScoringSessionMode = pass.role === "viewer" ? "viewer" : activeLease ? "candidate" : "writer";
         const generation = mode === "writer" ? Math.max(lease[0]?.generation ?? 0, historicalGeneration) + 1 : null;
@@ -1995,17 +2034,17 @@ export class Phase2Runtime {
     );
     const session = rows[0];
     if (!session || !safeEqual(Buffer.from(session.session_token_hash), hashSecret(sessionToken))) {
-      throw new ApiError(403, "SCORING_SESSION_DENIED", "Scoring session is invalid");
+      throw new ApiError(403, ErrorCode.SCORING_SESSION_DENIED, "Scoring session is invalid");
     }
     if (session.competition_status === "archived") {
-      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
     }
     const now = this.now().getTime();
     if (session.revoked_at) {
-      throw new ApiError(403, "SCORING_SESSION_REVOKED", "Scoring session has been revoked");
+      throw new ApiError(403, ErrorCode.SCORING_SESSION_REVOKED, "Scoring session has been revoked");
     }
     if (date(session.expires_at).getTime() <= now) {
-      throw new ApiError(403, "SCORING_SESSION_EXPIRED", "Scoring session has expired");
+      throw new ApiError(403, ErrorCode.SCORING_SESSION_EXPIRED, "Scoring session has expired");
     }
     if (requireWriter) {
       if (
@@ -2017,7 +2056,11 @@ export class Phase2Runtime {
         !session.lease_expires_at ||
         date(session.lease_expires_at).getTime() <= now
       ) {
-        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+        throw new ApiError(
+          409,
+          ErrorCode.STALE_WRITER_GENERATION,
+          "This session does not hold the active writer lease",
+        );
       }
     }
     return session;
@@ -2057,7 +2100,7 @@ export class Phase2Runtime {
       "Match scoring settings not found",
     );
     const pack = SPORT_PACKS[row.sport_code];
-    if (!pack) throw new ApiError(409, "SPORT_PACK_UNSUPPORTED", "The competition sport is not supported");
+    if (!pack) throw new ApiError(409, ErrorCode.SPORT_PACK_UNSUPPORTED, "The competition sport is not supported");
     if (!row.pack_version || (row.division_pack_version && row.division_pack_version !== row.pack_version)) {
       throw new ApiError(
         409,
@@ -2143,7 +2186,7 @@ export class Phase2Runtime {
       stream.settings_fingerprint !== stableHash(jsonValue(stream.settings_snapshot)) ||
       stream.settings_fingerprint !== context.settings_fingerprint
     ) {
-      throw new ApiError(409, "SCORING_STREAM_CONTEXT_MISMATCH", "The match scoring stream context is invalid");
+      throw new ApiError(409, ErrorCode.SCORING_STREAM_CONTEXT_MISMATCH, "The match scoring stream context is invalid");
     }
     if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
       throw new ApiError(
@@ -2216,7 +2259,11 @@ export class Phase2Runtime {
     );
     const settings = jsonValue<SportPackSettings>(stream.settings_snapshot);
     if (stableHash(settings) !== stream.settings_fingerprint) {
-      throw new ApiError(409, "SCORING_STREAM_CONTEXT_MISMATCH", "The score stream settings fingerprint is invalid");
+      throw new ApiError(
+        409,
+        ErrorCode.SCORING_STREAM_CONTEXT_MISMATCH,
+        "The score stream settings fingerprint is invalid",
+      );
     }
     if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
       throw new ApiError(
@@ -2316,7 +2363,7 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     const command = parseFiveSportScoreCommand(rawCommand);
-    if (!command) throw new ApiError(422, "SCORE_EVENT_INVALID", "Score event command is invalid");
+    if (!command) throw new ApiError(422, ErrorCode.SCORE_EVENT_INVALID, "Score event command is invalid");
     try {
       return await this.transaction(async (tx) => {
         let session = await this.authenticateScoringSession(
@@ -2331,7 +2378,7 @@ export class Phase2Runtime {
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
         const permission: ScoringPermission = command.type === "reversal" ? "score:reverse" : "score:write";
         if (!jsonValue<ScoringPermission[]>(session.scope).includes(permission)) {
-          throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session lacks the required permission");
+          throw new ApiError(403, ErrorCode.SCORING_PERMISSION_DENIED, "Scoring session lacks the required permission");
         }
         if (command.type === "match_reopened" || command.type === "finalisation") {
           throw new ApiError(
@@ -2390,7 +2437,7 @@ export class Phase2Runtime {
           "Match not found",
         );
         if (match.state === "final" || match.state === "corrected") {
-          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+          throw new ApiError(409, ErrorCode.MATCH_FINALISED_READ_ONLY, "Finalised matches require organiser reopening");
         }
         if (!match.home_entry_id || !match.away_entry_id) {
           throw new ApiError(
@@ -2434,7 +2481,11 @@ export class Phase2Runtime {
         }
         const writerGeneration = session.generation;
         if (!writerGeneration) {
-          throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+          throw new ApiError(
+            409,
+            ErrorCode.STALE_WRITER_GENERATION,
+            "This session does not hold the active writer lease",
+          );
         }
         await tx.unsafe(
           `INSERT INTO canonical_score_events (
@@ -2494,7 +2545,11 @@ export class Phase2Runtime {
     } catch (error) {
       if (isScoreWriterSessionGuardViolation(error)) {
         await this.recordStaleScoreSubmission(auth, command, requestId);
-        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+        throw new ApiError(
+          409,
+          ErrorCode.STALE_WRITER_GENERATION,
+          "This session does not hold the active writer lease",
+        );
       }
       if (error instanceof ApiError && error.code === "STALE_WRITER_GENERATION") {
         await this.recordStaleScoreSubmission(auth, command, requestId);
@@ -2557,7 +2612,11 @@ export class Phase2Runtime {
         let leaseExpiresAt: Date | null = null;
         if (session.mode === "writer") {
           if (auth.generation == null || session.generation !== auth.generation) {
-            throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+            throw new ApiError(
+              409,
+              ErrorCode.STALE_WRITER_GENERATION,
+              "This session does not hold the active writer lease",
+            );
           }
           leaseExpiresAt = new Date(Math.min(renewedSessionExpiry.getTime(), now.getTime() + 45_000));
           const lease = await tx.unsafe<{ match_id: string }>(
@@ -2567,7 +2626,11 @@ export class Phase2Runtime {
             [session.match_id, session.id, auth.generation, leaseExpiresAt, now],
           );
           if (!lease[0]) {
-            throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+            throw new ApiError(
+              409,
+              ErrorCode.STALE_WRITER_GENERATION,
+              "This session does not hold the active writer lease",
+            );
           }
         }
         await this.evidence(tx, {
@@ -2617,7 +2680,11 @@ export class Phase2Runtime {
           false,
         );
         if (candidate.mode !== "candidate") {
-          throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
+          throw new ApiError(
+            409,
+            ErrorCode.TAKEOVER_CANDIDATE_REQUIRED,
+            "Only a read-only candidate may request takeover",
+          );
         }
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [candidate.match_id]);
         candidate = await this.authenticateScoringSession(
@@ -2628,14 +2695,18 @@ export class Phase2Runtime {
           false,
         );
         if (candidate.mode !== "candidate") {
-          throw new ApiError(409, "TAKEOVER_CANDIDATE_REQUIRED", "Only a read-only candidate may request takeover");
+          throw new ApiError(
+            409,
+            ErrorCode.TAKEOVER_CANDIDATE_REQUIRED,
+            "Only a read-only candidate may request takeover",
+          );
         }
         const match = required(
           await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [candidate.match_id]),
           "Match not found",
         );
         if (match.state === "final" || match.state === "corrected") {
-          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+          throw new ApiError(409, ErrorCode.MATCH_FINALISED_READ_ONLY, "Finalised matches require organiser reopening");
         }
         const lease = required(
           await tx.unsafe<{ access_session_id: string }>(
@@ -2839,7 +2910,7 @@ export class Phase2Runtime {
         "Takeover request not found",
       );
       if (takeover.status !== "pending") {
-        throw new ApiError(409, "TAKEOVER_ALREADY_RESOLVED", "Takeover request is no longer pending");
+        throw new ApiError(409, ErrorCode.TAKEOVER_ALREADY_RESOLVED, "Takeover request is no longer pending");
       }
       if (date(takeover.expires_at).getTime() <= this.now().getTime()) {
         const expiredAt = this.now();
@@ -2862,7 +2933,7 @@ export class Phase2Runtime {
         return { id: takeover.id, status: "expired" as const };
       }
       if (input.reason.trim().length < 3) {
-        throw new ApiError(422, "TAKEOVER_REASON_REQUIRED", "A takeover decision requires a reason");
+        throw new ApiError(422, ErrorCode.TAKEOVER_REASON_REQUIRED, "A takeover decision requires a reason");
       }
       if (input.decision === "deny") {
         await tx.unsafe(
@@ -2917,11 +2988,11 @@ export class Phase2Runtime {
         "Writer lease not found",
       );
       if (lease.access_session_id !== takeover.incumbent_session_id) {
-        throw new ApiError(409, "TAKEOVER_STALE", "The active writer changed before approval");
+        throw new ApiError(409, ErrorCode.TAKEOVER_STALE, "The active writer changed before approval");
       }
       const now = this.now();
       if (date(lease.expires_at).getTime() <= now.getTime()) {
-        throw new ApiError(409, "TAKEOVER_STALE", "The incumbent writer lease expired before approval");
+        throw new ApiError(409, ErrorCode.TAKEOVER_STALE, "The incumbent writer lease expired before approval");
       }
       const candidate = required(
         await tx.unsafe<{
@@ -2953,7 +3024,11 @@ export class Phase2Runtime {
         candidate.role !== "scorekeeper" ||
         !candidatePermissions.includes("score:write")
       ) {
-        throw new ApiError(409, "TAKEOVER_CANDIDATE_INACTIVE", "Candidate scoring session is no longer eligible");
+        throw new ApiError(
+          409,
+          ErrorCode.TAKEOVER_CANDIDATE_INACTIVE,
+          "Candidate scoring session is no longer eligible",
+        );
       }
       const incumbent = required(
         await tx.unsafe<{
@@ -3106,7 +3181,7 @@ export class Phase2Runtime {
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
         if (!jsonValue<ScoringPermission[]>(session.scope).includes("score:finalise")) {
-          throw new ApiError(403, "SCORING_PERMISSION_DENIED", "Scoring session cannot finalise this match");
+          throw new ApiError(403, ErrorCode.SCORING_PERMISSION_DENIED, "Scoring session cannot finalise this match");
         }
         const finalisationFingerprint = stableHash({
           client_event_id: clientEventId,
@@ -3134,7 +3209,8 @@ export class Phase2Runtime {
             );
           }
           const original = await this.matchResultAtSequence(tx, session.match_id, duplicate.aggregate_version);
-          if (!original) throw new ApiError(409, "RESULT_RECEIPT_MISSING", "Finalisation receipt is unavailable");
+          if (!original)
+            throw new ApiError(409, ErrorCode.RESULT_RECEIPT_MISSING, "Finalisation receipt is unavailable");
           return {
             match_id: session.match_id,
             sequence: duplicate.aggregate_version,
@@ -3153,7 +3229,7 @@ export class Phase2Runtime {
           "Match not found",
         );
         if (match.state === "final" || match.state === "corrected") {
-          throw new ApiError(409, "MATCH_FINALISED_READ_ONLY", "Finalised matches require organiser reopening");
+          throw new ApiError(409, ErrorCode.MATCH_FINALISED_READ_ONLY, "Finalised matches require organiser reopening");
         }
         if (!match.home_entry_id || !match.away_entry_id) {
           throw new ApiError(
@@ -3199,7 +3275,7 @@ export class Phase2Runtime {
         }
         const aggregateVersion = canonical.aggregateVersion + 1;
         const generation = session.generation;
-        if (!generation) throw new ApiError(409, "STALE_WRITER_GENERATION", "Writer lease is not active");
+        if (!generation) throw new ApiError(409, ErrorCode.STALE_WRITER_GENERATION, "Writer lease is not active");
         await tx.unsafe(
           `INSERT INTO canonical_score_events (
              id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
@@ -3275,7 +3351,11 @@ export class Phase2Runtime {
           "scoring_result.finalise_denied",
           "STALE_WRITER_GENERATION",
         );
-        throw new ApiError(409, "STALE_WRITER_GENERATION", "This session does not hold the active writer lease");
+        throw new ApiError(
+          409,
+          ErrorCode.STALE_WRITER_GENERATION,
+          "This session does not hold the active writer lease",
+        );
       }
       if (error instanceof ApiError && ["STALE_WRITER_GENERATION", "MATCH_FINALISED_READ_ONLY"].includes(error.code)) {
         await this.recordScoringSessionDenial(auth, requestId, "scoring_result.finalise_denied", error.code);
@@ -3292,7 +3372,7 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     if (input.reason.trim().length < 3) {
-      throw new ApiError(422, "REOPEN_REASON_REQUIRED", "Reopening a match requires a reason");
+      throw new ApiError(422, ErrorCode.REOPEN_REASON_REQUIRED, "Reopening a match requires a reason");
     }
     return this.transaction(async (tx) => {
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
@@ -3326,7 +3406,7 @@ export class Phase2Runtime {
       )[0];
       if (duplicate) {
         if (duplicate.command_fingerprint !== fingerprint) {
-          throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Reopen idempotency key was reused");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_KEY_REUSED, "Reopen idempotency key was reused");
         }
         const originalResult = required(
           await tx.unsafe<{ result_version: number }>(
@@ -3355,7 +3435,7 @@ export class Phase2Runtime {
         );
       }
       if (!["final", "corrected"].includes(match.state)) {
-        throw new ApiError(409, "MATCH_NOT_FINALISED", "Only a finalised match can be reopened");
+        throw new ApiError(409, ErrorCode.MATCH_NOT_FINALISED, "Only a finalised match can be reopened");
       }
       const eventId = randomUUID();
       const event = materialiseFiveSportScoreEvent(command, {
@@ -3372,7 +3452,11 @@ export class Phase2Runtime {
           canonical.context.settings,
         );
       } catch (error) {
-        throw new ApiError(422, "REOPEN_INVALID", error instanceof Error ? error.message : "Match cannot be reopened");
+        throw new ApiError(
+          422,
+          ErrorCode.REOPEN_INVALID,
+          error instanceof Error ? error.message : "Match cannot be reopened",
+        );
       }
       const aggregateVersion = canonical.aggregateVersion + 1;
       await tx.unsafe(
@@ -3453,18 +3537,18 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     if (input.reason.trim().length < 3) {
-      throw new ApiError(422, "CORRECTION_REASON_REQUIRED", "Correction reason is required");
+      throw new ApiError(422, ErrorCode.CORRECTION_REASON_REQUIRED, "Correction reason is required");
     }
     if (input.events.length < 1 || input.events.length > 25) {
-      throw new ApiError(422, "CORRECTION_EVENTS_REQUIRED", "Correction requires between one and 25 events");
+      throw new ApiError(422, ErrorCode.CORRECTION_EVENTS_REQUIRED, "Correction requires between one and 25 events");
     }
     const parsed = input.events.map(parseFiveSportScoreCommand);
     if (parsed.some((command) => !command)) {
-      throw new ApiError(422, "CORRECTION_EVENT_INVALID", "A correction event is invalid");
+      throw new ApiError(422, ErrorCode.CORRECTION_EVENT_INVALID, "A correction event is invalid");
     }
     const commands = parsed as FiveSportScoreCommand[];
     if (commands.some((command) => ["match_started", "match_reopened", "finalisation"].includes(command.type))) {
-      throw new ApiError(422, "CORRECTION_EVENT_INVALID", "Correction events cannot control match lifecycle");
+      throw new ApiError(422, ErrorCode.CORRECTION_EVENT_INVALID, "Correction events cannot control match lifecycle");
     }
     const transactionFingerprint = stableHash({
       reason: input.reason.trim(),
@@ -3487,7 +3571,7 @@ export class Phase2Runtime {
       )[0];
       if (duplicate) {
         if (duplicate.command_fingerprint !== transactionFingerprint) {
-          throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Correction idempotency key was reused");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_KEY_REUSED, "Correction idempotency key was reused");
         }
         const conflicts = await tx.unsafe<Record<string, unknown>>(
           `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,
@@ -3617,7 +3701,11 @@ export class Phase2Runtime {
           historicalSegmentEventIds,
         });
       } catch (error) {
-        throw new ApiError(422, "CORRECTION_INVALID", error instanceof Error ? error.message : "Correction is invalid");
+        throw new ApiError(
+          422,
+          ErrorCode.CORRECTION_INVALID,
+          error instanceof Error ? error.message : "Correction is invalid",
+        );
       }
       for (const item of staged) {
         await tx.unsafe(
@@ -3848,7 +3936,7 @@ export class Phase2Runtime {
       "Match not found",
     );
     if (!match.home_entry_id || !match.away_entry_id) {
-      throw new ApiError(409, "MATCH_PARTICIPANTS_UNRESOLVED", "Match participants are not resolved");
+      throw new ApiError(409, ErrorCode.MATCH_PARTICIPANTS_UNRESOLVED, "Match participants are not resolved");
     }
     const reduced: {
       homeScore: number;
@@ -3872,7 +3960,7 @@ export class Phase2Runtime {
             : forfeitLoserScore
           : input.canonical.state.score.away,
         state: input.canonical.resultState,
-        snapshot: input.canonical.state as unknown as Record<string, unknown>,
+        snapshot: input.canonical.state as Record<string, unknown>,
       };
     })();
     const publication = required(
@@ -3955,7 +4043,11 @@ export class Phase2Runtime {
       [divisionId],
     );
     if (entries.length === 0) {
-      throw new ApiError(409, "STANDINGS_ENTRIES_EMPTY", "Standings require at least one active division entry");
+      throw new ApiError(
+        409,
+        ErrorCode.STANDINGS_ENTRIES_EMPTY,
+        "Standings require at least one active division entry",
+      );
     }
     const results = await this.resultsForDivision(tx, divisionId, resultVersion);
     const effectiveSettings = required(
@@ -4490,7 +4582,11 @@ export class Phase2Runtime {
       "Competition not found",
     );
     if (competition.status === "draft") {
-      throw new ApiError(409, "COMPETITION_NOT_PUBLISHED", "Draft competitions cannot have a public projection");
+      throw new ApiError(
+        409,
+        ErrorCode.COMPETITION_NOT_PUBLISHED,
+        "Draft competitions cannot have a public projection",
+      );
     }
     const publicCompetitionStatus = competition.status;
     const divisions = await tx.unsafe<{ id: string; name: string }>(
@@ -4685,7 +4781,7 @@ export class Phase2Runtime {
       [slug],
     );
     const row = rows[0];
-    if (!row) throw new ApiError(404, "PUBLIC_COMPETITION_NOT_FOUND", "Competition not found");
+    if (!row) throw new ApiError(404, ErrorCode.PUBLIC_COMPETITION_NOT_FOUND, "Competition not found");
     const stored = jsonValue<
       Omit<PublicCompetitionProjection, "last_updated_at"> & {
         divisions?: PublicDivisionProjection[];
@@ -5095,7 +5191,7 @@ export class Phase2Runtime {
   async listResultConflicts(actor: Phase2Actor, competitionId: string, status: string | null) {
     await this.requireCompetitionAccess(this.sql, competitionId, actor);
     if (status && !["open", "acknowledged", "resolved"].includes(status)) {
-      throw new ApiError(422, "RESULT_CONFLICT_STATUS_INVALID", "Result conflict status is invalid");
+      throw new ApiError(422, ErrorCode.RESULT_CONFLICT_STATUS_INVALID, "Result conflict status is invalid");
     }
     return this.sql.unsafe<Record<string, unknown>>(
       `SELECT id,corrected_match_id,downstream_match_id,result_version,reason,status,detail,
@@ -5115,7 +5211,7 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     if (input.reason.trim().length < 3) {
-      throw new ApiError(422, "ACKNOWLEDGEMENT_REASON_REQUIRED", "Acknowledgement reason is required");
+      throw new ApiError(422, ErrorCode.ACKNOWLEDGEMENT_REASON_REQUIRED, "Acknowledgement reason is required");
     }
     const fingerprint = stableHash({
       client_event_id: input.clientEventId,
@@ -5132,7 +5228,7 @@ export class Phase2Runtime {
         )
       )[0];
       if (reusedAcknowledgement && reusedAcknowledgement.id !== conflictId) {
-        throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Acknowledgement idempotency key was reused");
+        throw new ApiError(409, ErrorCode.IDEMPOTENCY_KEY_REUSED, "Acknowledgement idempotency key was reused");
       }
       const existing = required(
         await tx.unsafe<{
@@ -5149,7 +5245,7 @@ export class Phase2Runtime {
       );
       if (existing.acknowledgement_client_event_id === input.clientEventId) {
         if (existing.acknowledgement_fingerprint !== fingerprint) {
-          throw new ApiError(409, "IDEMPOTENCY_KEY_REUSED", "Acknowledgement idempotency key was reused");
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_KEY_REUSED, "Acknowledgement idempotency key was reused");
         }
         return required(
           await tx.unsafe<Record<string, unknown>>(
@@ -5163,7 +5259,7 @@ export class Phase2Runtime {
         );
       }
       if (existing.acknowledgement_client_event_id) {
-        throw new ApiError(409, "RESULT_CONFLICT_ALREADY_ACKNOWLEDGED", "Conflict is already acknowledged");
+        throw new ApiError(409, ErrorCode.RESULT_CONFLICT_ALREADY_ACKNOWLEDGED, "Conflict is already acknowledged");
       }
       if (existing.result_version !== input.expectedRevision) {
         throw new ApiError(
@@ -5173,7 +5269,7 @@ export class Phase2Runtime {
         );
       }
       if (existing.status === "resolved") {
-        throw new ApiError(409, "RESULT_CONFLICT_RESOLVED", "Resolved conflicts cannot be acknowledged again");
+        throw new ApiError(409, ErrorCode.RESULT_CONFLICT_RESOLVED, "Resolved conflicts cannot be acknowledged again");
       }
       if (existing.status === "open") {
         await tx.unsafe(

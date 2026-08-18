@@ -5,7 +5,7 @@ import {
   type Clock,
   type IdentityProviderPort,
 } from "@matchday/identity";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import {
   IdentityApiRuntime,
   type AuthenticatedIdentityApiSession,
@@ -33,7 +33,7 @@ export class IdentityAssuranceRuntime extends IdentityApiRuntime {
       requireAuthenticationAssurance(session.assurance, policy, this.assuranceClock.now());
     } catch (error) {
       if (error instanceof IdentityError && error.code === "AUTHENTICATION_ASSURANCE_REQUIRED") {
-        throw new ApiError(403, "STEP_UP_REQUIRED", "Stronger authentication is required");
+        throw new ApiError(403, ErrorCode.STEP_UP_REQUIRED, "Stronger authentication is required");
       }
       throw error;
     }

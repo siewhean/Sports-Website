@@ -5,3 +5,5 @@ export * from "./division.repository.js";
 export * from "./setup.repository.js";
 export * from "./format.repository.js";
 export * from "./schedule.repository.js";
+export * from "./scoring.repository.js";
+export * from "./identity.repository.js";

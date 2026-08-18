@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
 import {
@@ -209,7 +209,7 @@ type ScoringHeaderValues = {
 function requireOrigin(request: FastifyRequest, allowedOrigins: readonly string[]): void {
   const origin = request.headers.origin;
   if (typeof origin !== "string" || !allowedOrigins.includes(origin)) {
-    throw new ApiError(403, "ORIGIN_REJECTED", "Request origin is not allowed");
+    throw new ApiError(403, ErrorCode.ORIGIN_REJECTED, "Request origin is not allowed");
   }
 }
 
@@ -246,7 +246,7 @@ export async function registerPhase2Routes(
     const session = await options.identityRequests.authenticate(request);
     const csrf = request.headers["x-csrf-token"];
     if (typeof csrf !== "string" || !options.identityRuntime.verifyCsrfToken(session.sessionToken, csrf)) {
-      throw new ApiError(403, "CSRF_INVALID", "CSRF validation failed");
+      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
     }
     return { accountId: session.account.id };
   };
@@ -376,17 +376,18 @@ export async function registerPhase2Routes(
     },
     async (request, reply) => {
       const authenticated = await actor(request);
-      if (!options.phase3Runtime) throw new ApiError(503, "PHASE3_UNAVAILABLE", "Phase 3 runtime is unavailable");
+      if (!options.phase3Runtime)
+        throw new ApiError(503, ErrorCode.PHASE3_UNAVAILABLE, "Phase 3 runtime is unavailable");
       let entryLimit: 8 | 12 | 16 | 24 | 48;
       if ("entry_limit" in request.body) {
         if ("team_limit" in request.body) {
-          throw new ApiError(400, "VALIDATION_ERROR", "Provide exactly one division limit");
+          throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Provide exactly one division limit");
         }
         entryLimit = request.body.entry_limit;
       } else if ("team_limit" in request.body) {
         entryLimit = request.body.team_limit;
       } else {
-        throw new ApiError(400, "VALIDATION_ERROR", "Provide exactly one division limit");
+        throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Provide exactly one division limit");
       }
       return reply.code(201).send(
         await options.phase3Runtime.createDivision(
@@ -533,7 +534,8 @@ export async function registerPhase2Routes(
     },
     async (request) => {
       const authenticated = await actor(request);
-      if (!options.phase3Runtime) throw new ApiError(503, "PHASE3_UNAVAILABLE", "Phase 3 runtime is unavailable");
+      if (!options.phase3Runtime)
+        throw new ApiError(503, ErrorCode.PHASE3_UNAVAILABLE, "Phase 3 runtime is unavailable");
       return options.phase3Runtime.replaceCapacity(
         authenticated,
         request.params.competitionId,
