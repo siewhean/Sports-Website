@@ -55,6 +55,8 @@ import {
   SetupRepository,
   FormatRepository,
   ScheduleRepository,
+  type ScheduleOptionRecord,
+  type ScheduleRevisionRecord,
 } from "./repositories/index.js";
 
 type JsonObject = Record<string, unknown>;
@@ -2742,18 +2744,7 @@ export class Phase4Runtime {
     return { problem, capacityHash, formatRevisionIds: formats.map((format) => format.id) };
   }
 
-  private optionView(row: {
-    id: string;
-    job_id: string;
-    result_revision: number;
-    solver_iteration: number;
-    result_status: "valid" | "infeasible";
-    quality: ScheduleOptionView["quality"] | string;
-    assignments: ScheduleAssignment[] | string;
-    violations: ScheduleOptionView["violations"] | string;
-    assignment_hash: string;
-    created_at: Date | string;
-  }): ScheduleOptionView {
+  private optionView(row: ScheduleOptionRecord): ScheduleOptionView {
     return {
       id: row.id,
       job_id: row.job_id,
@@ -2960,10 +2951,7 @@ export class Phase4Runtime {
 
   async listScheduleOptions(actor: Phase3Actor, jobId: string) {
     await this.readScheduleJob(actor, jobId);
-    const rows = await this.sql.unsafe<Parameters<Phase4Runtime["optionView"]>[0]>(
-      `SELECT * FROM schedule_generation_options WHERE job_id=$1 ORDER BY result_revision DESC,id DESC`,
-      [jobId],
-    );
+    const rows = await this.scheduleRepo.listOptionsByJobId(jobId, this.sql);
     return rows.map((row) => this.optionView(row));
   }
 
@@ -3165,20 +3153,7 @@ export class Phase4Runtime {
     });
   }
 
-  private revisionView(row: {
-    id: string;
-    competition_id: string;
-    revision: number;
-    parent_revision_id: string | null;
-    source_job_id: string | null;
-    source_option_id: string | null;
-    status: ScheduleRevisionView["status"];
-    editable_until: Date | string | null;
-    published_at: Date | string | null;
-    expired_at: Date | string | null;
-    created_at: Date | string;
-    updated_at: Date | string;
-  }): ScheduleRevisionView {
+  private revisionView(row: ScheduleRevisionRecord): ScheduleRevisionView {
     return {
       id: row.id,
       competition_id: row.competition_id,
@@ -3317,10 +3292,7 @@ export class Phase4Runtime {
 
   async listScheduleRevisions(actor: Phase3Actor, competitionId: string) {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    const rows = await this.sql.unsafe<Parameters<Phase4Runtime["revisionView"]>[0]>(
-      `SELECT * FROM schedule_revisions WHERE competition_id=$1 ORDER BY revision DESC,id DESC`,
-      [competitionId],
-    );
+    const rows = await this.scheduleRepo.listRevisionsByCompetitionId(competitionId, this.sql);
     return rows.map((row) => this.revisionView(row));
   }
 

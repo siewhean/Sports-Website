@@ -8,9 +8,9 @@ import type {
 
 export { type ScheduleRevisionRecord, type ScheduleJobRecord, type ScheduleOptionRecord };
 
-const SCHEDULE_COLUMNS = `id, competition_id, format_revision_id, revision, status, input_hash, warnings, created_by, created_at, published_at`;
+const SCHEDULE_COLUMNS = `id, competition_id, format_revision_id, revision, parent_revision_id, source_job_id, source_option_id, status, input_hash, assignment_hash, quality, warnings, editable_until, published_at, expired_at, created_by, created_at, updated_at`;
 const JOB_COLUMNS = `id, competition_id, format_revision_id, status, input_hash, created_by, created_at, completed_at`;
-const OPTION_COLUMNS = `id, job_id, result_revision, quality, assignments, warnings, created_at`;
+const OPTION_COLUMNS = `id, job_id, result_revision, solver_iteration, result_status, quality, assignments, violations, assignment_hash, warnings, created_at`;
 
 export class ScheduleRepository {
   constructor(private readonly sql: SqlExecutor) {}

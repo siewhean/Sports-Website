@@ -45,4 +45,20 @@ export class OrganisationRepository {
     );
     return Boolean(rows[0]?.exists);
   }
+
+  async listWritableByAccountId(
+    accountId: string,
+    executor: SqlExecutor = this.sql,
+  ): Promise<readonly { id: string; name: string; role: string }[]> {
+    return executor.unsafe<{ id: string; name: string; role: string }>(
+      `SELECT organisation.id, organisation.name, membership.role
+       FROM organisation_memberships membership
+       JOIN organisations organisation ON organisation.id = membership.organisation_id
+       WHERE membership.account_id = $1
+         AND membership.status = 'active'
+         AND membership.role IN ('owner', 'organiser')
+       ORDER BY lower(organisation.name), organisation.id`,
+      [accountId],
+    );
+  }
 }

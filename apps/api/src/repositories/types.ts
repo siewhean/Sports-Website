@@ -1,4 +1,5 @@
 import type { PostgresJsSql } from "@matchday/identity";
+import type { ScheduleRevisionStatus } from "@matchday/contracts";
 
 export type SqlExecutor = PostgresJsSql;
 
@@ -21,6 +22,7 @@ export type CompetitionRecord = {
   timezone?: string;
   locale?: string;
   sport_pack_version?: string;
+  plan_tier?: string;
   capacity_revision: number;
   revision?: number;
   created_at: Date | string;
@@ -39,6 +41,10 @@ export type DivisionRecord = {
   id: string;
   competition_id: string;
   name: string;
+  code?: string | null;
+  team_limit?: number | null;
+  settings_override?: Record<string, unknown> | string | null;
+  revision?: number;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -87,14 +93,22 @@ export type FormatRevisionRecord = {
 export type ScheduleRevisionRecord = {
   id: string;
   competition_id: string;
-  format_revision_id: string;
+  format_revision_id?: string;
   revision: number;
-  status: "draft" | "published" | "archived" | "superseded";
-  input_hash: string;
-  warnings: readonly unknown[];
+  parent_revision_id: string | null;
+  source_job_id: string | null;
+  source_option_id: string | null;
+  status: ScheduleRevisionStatus;
+  input_hash?: string;
+  assignment_hash?: string | null;
+  quality?: unknown;
+  warnings?: readonly unknown[];
+  editable_until: Date | string | null;
+  published_at: Date | string | null;
+  expired_at: Date | string | null;
   created_by?: string;
   created_at: Date | string;
-  published_at: Date | string | null;
+  updated_at: Date | string;
 };
 
 export type ScheduleJobRecord = {
@@ -112,9 +126,13 @@ export type ScheduleOptionRecord = {
   id: string;
   job_id: string;
   result_revision: number;
+  solver_iteration: number;
+  result_status: "valid" | "infeasible";
   quality: unknown;
   assignments: unknown;
-  warnings: readonly unknown[];
+  violations: unknown;
+  assignment_hash: string;
+  warnings?: readonly unknown[];
   created_at: Date | string;
 };
 

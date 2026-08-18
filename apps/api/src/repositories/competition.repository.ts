@@ -1,5 +1,7 @@
 import type { SqlExecutor, CompetitionRecord, LockMode } from "./types.js";
 
+const COMPETITION_COLUMNS = `id, organisation_id, created_by, name, slug, sport_code, status, venue, address, locality, country_code, starts_on, ends_on, timezone, locale, plan_tier, sport_pack_version, capacity_revision, revision, created_at, updated_at`;
+
 export class CompetitionRepository {
   constructor(private readonly sql: SqlExecutor) {}
 
@@ -11,7 +13,7 @@ export class CompetitionRepository {
     const lockClause = lock === "for_update" ? " FOR UPDATE" : lock === "for_share" ? " FOR SHARE" : "";
 
     const rows = await executor.unsafe<CompetitionRecord>(
-      `SELECT id, organisation_id, name, slug, status, sport_code, sport_pack_version, capacity_revision, created_at, updated_at
+      `SELECT ${COMPETITION_COLUMNS}
        FROM competitions
        WHERE id = $1${lockClause}`,
       [id],
@@ -21,7 +23,7 @@ export class CompetitionRepository {
 
   async findBySlug(slug: string, executor: SqlExecutor = this.sql): Promise<CompetitionRecord | null> {
     const rows = await executor.unsafe<CompetitionRecord>(
-      `SELECT id, organisation_id, name, slug, status, sport_code, sport_pack_version, capacity_revision, created_at, updated_at
+      `SELECT ${COMPETITION_COLUMNS}
        FROM competitions
        WHERE slug = $1`,
       [slug],

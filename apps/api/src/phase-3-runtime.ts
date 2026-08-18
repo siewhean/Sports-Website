@@ -128,6 +128,11 @@ function required<T>(rows: readonly T[], message: string): T {
   return value;
 }
 
+function requiredRecord<T>(value: T | null, message: string): T {
+  if (!value) throw new ApiError(404, ErrorCode.NOT_FOUND, message);
+  return value;
+}
+
 function decodedJson<T>(value: T | string): T {
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
 }
@@ -295,16 +300,9 @@ export class Phase3Runtime {
   }
 
   async listWritableOrganisations(actor: Phase3Actor): Promise<readonly Phase3OrganisationOption[]> {
-    return this.sql.unsafe<Phase3OrganisationOption>(
-      `SELECT organisation.id,organisation.name,membership.role
-       FROM organisation_memberships membership
-       JOIN organisations organisation ON organisation.id=membership.organisation_id
-       WHERE membership.account_id=$1
-         AND membership.status='active'
-         AND membership.role IN ('owner','organiser')
-       ORDER BY lower(organisation.name),organisation.id`,
-      [actor.accountId],
-    );
+    return this.organisationRepo.listWritableByAccountId(actor.accountId, this.sql) as Promise<
+      readonly Phase3OrganisationOption[]
+    >;
   }
 
   private async sportPack(tx: PostgresJsSql, sportCode: Phase3SportCode, version: string): Promise<SportPack> {
@@ -518,13 +516,10 @@ export class Phase3Runtime {
 
   async readCompetition(actor: Phase3Actor, competitionId: string) {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    const rows = await this.sql.unsafe<Record<string, unknown>>(
-      `SELECT id,organisation_id,name,slug,sport_code,status,venue,address,locality,country_code,
-              starts_on,ends_on,timezone,locale,plan_tier,revision
-       FROM competitions WHERE id=$1`,
-      [competitionId],
+    const row = requiredRecord(
+      await this.competitionRepo.findById(competitionId, "none", this.sql),
+      "Competition not found",
     );
-    const row = required(rows, "Competition not found");
     return {
       ...row,
       location: { venue: row.venue, address: row.address, locality: row.locality, country_code: row.country_code },
@@ -725,11 +720,7 @@ export class Phase3Runtime {
 
   async listDivisions(actor: Phase3Actor, competitionId: string) {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    return this.sql.unsafe<Record<string, unknown>>(
-      `SELECT id,competition_id,name,code,team_limit,settings_override,revision,created_at,updated_at
-       FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
-      [competitionId],
-    );
+    return this.divisionRepo.listByCompetitionId(competitionId, this.sql);
   }
 
   async updateDivision(
@@ -801,8 +792,8 @@ export class Phase3Runtime {
 
   async listEntries(actor: Phase3Actor, competitionId: string, divisionId: string) {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    required(
-      await this.sql.unsafe(`SELECT id FROM divisions WHERE id=$1 AND competition_id=$2`, [divisionId, competitionId]),
+    requiredRecord(
+      await this.divisionRepo.findByIdAndCompetitionId(divisionId, competitionId, "none", this.sql),
       "Division not found",
     );
     return this.sql.unsafe<Record<string, unknown>>(
