@@ -1,9 +1,9 @@
 import "server-only";
 
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import { demoCompetitionReadPort, phase2Competition, type CompetitionView } from "@/lib/phase2";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches, isOrganiserWorkspacePayload, toOrganiserCompetitionView } from "@/lib/phase2-organiser";
+import { isOrganiserWorkspacePayload, toOrganiserCompetitionView } from "@/lib/phase2-organiser";
 
 export type OrganiserCompetitionReadResult =
   | { state: "ready"; competition: CompetitionView }
@@ -25,10 +25,7 @@ function apiBaseUrl(): URL | null {
   }
 }
 
-async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
-  const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
-
+async function sessionCookieHeader(): Promise<string | null> {
   const cookieStore = await cookies();
   for (const name of sessionCookieNames) {
     const value = cookieStore.get(name)?.value;
@@ -48,7 +45,7 @@ export async function getOrganiserCompetitionView(id: string): Promise<Organiser
 
   const baseUrl = apiBaseUrl();
   if (!baseUrl) return { state: "error" };
-  const cookie = await sessionCookieHeader(baseUrl);
+  const cookie = await sessionCookieHeader();
   if (!cookie) return { state: "permission" };
 
   try {
