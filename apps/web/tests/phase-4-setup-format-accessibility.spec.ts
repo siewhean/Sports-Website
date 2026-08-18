@@ -7,7 +7,7 @@ test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo))
 
 for (const [surface, url] of [
   ["assisted setup", "/organiser/competitions/singapore-open/setup?step=basics"],
-  ["format designer", "/organiser/competitions/singapore-open/format"],
+  ["format designer", "/organiser/competitions/singapore-open/format?advanced=1"],
 ] as const) {
   test(`@a11y ${surface} has no WCAG A or AA accessibility violations`, async ({ page }) => {
     await page.goto(url);
@@ -34,7 +34,7 @@ test.describe("mocked format validation", () => {
         }),
       }),
     );
-    await page.goto("/organiser/competitions/singapore-open/format");
+    await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
     await dismissConsent(page);
     await page.getByRole("button", { name: "Validate graph" }).click();
     await expect(page.getByText("1 validation issue", { exact: true })).toBeVisible();

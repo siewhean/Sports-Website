@@ -102,7 +102,7 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
   await page.getByLabel("Country code").fill("SG");
   await page.getByLabel("Start date").fill("2027-08-01");
   await page.getByLabel("End date").fill("2027-08-02");
-  await page.getByLabel("Time zone").fill("Asia/Singapore");
+  await page.getByLabel("Time zone").selectOption("Asia/Singapore");
   await page.getByLabel("Locale").fill("en-SG");
   await submit(page, page.getByRole("button", { name: "Create competition" }), "POST", "/api/phase3/competitions");
   await page.waitForURL(/\/organiser\/competitions\/[0-9a-f-]+\/setup$/);

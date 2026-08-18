@@ -37,12 +37,20 @@ export default async function FormatDesignerPage({
       areaCount: capacity.areas.length,
       availableMatchSlots: capacity.summary?.availableMatchSlots ?? 0,
     },
+    teamCount: result.competition.division.teamCount,
+    teams: result.competition.teams,
   });
   const entriesHref = `/organiser/competitions/${encodeURIComponent(competitionId)}/entries`;
   const capacityHref = `/organiser/competitions/${encodeURIComponent(competitionId)}/capacity`;
   const scheduleHref = `/organiser/competitions/${encodeURIComponent(competitionId)}/schedule`;
+  const divisions = formatDivisionOptions(result.competition.division, result.competition.divisions);
+  const selectedDivision = selectFormatDivision(divisions, query.division);
+  if (!selectedDivision) notFound();
 
-  if (!readiness.ready) {
+  const advancedRequested = query.advanced === "1";
+  const advancedHref = `/organiser/competitions/${encodeURIComponent(competitionId)}/format?division=${encodeURIComponent(selectedDivision.id)}&advanced=1`;
+
+  if (!readiness.ready && !advancedRequested) {
     return (
       <OrganiserWorkspace
         competition={result.competition}
@@ -61,10 +69,6 @@ export default async function FormatDesignerPage({
       />
     );
   }
-
-  const divisions = formatDivisionOptions(result.competition.division, result.competition.divisions);
-  const selectedDivision = selectFormatDivision(divisions, query.division);
-  if (!selectedDivision) notFound();
 
   const formatDocuments = await Promise.all(
     divisions.map((division) =>
@@ -98,8 +102,6 @@ export default async function FormatDesignerPage({
         ],
       })),
     );
-  const advancedRequested = query.advanced === "1";
-  const advancedHref = `/organiser/competitions/${encodeURIComponent(competitionId)}/format?division=${encodeURIComponent(selectedDivision.id)}&advanced=1`;
 
   return (
     <OrganiserWorkspace

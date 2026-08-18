@@ -68,7 +68,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test:unit
       - run: pnpm db:migrate:check
-      - run: pnpm backup:verify
+      - run: BACKUP_VERIFY_MODE=direct BACKUP_VERIFY_ADMIN_DATABASE_URL=postgres://matchday:matchday@127.0.0.1:5432/postgres BACKUP_VERIFY_DIRECT_CLIENT_IMAGE=postgres:18.4-alpine pnpm backup:verify
       - run: pnpm test:integration
       - run: pnpm validate:fixtures
       - run: pnpm --filter @matchday/api openapi:generate
@@ -76,6 +76,7 @@ jobs:
       - run: pnpm build
       - run: pnpm deploy:manifest
       - run: pnpm asset-delivery:verify:origin
+        timeout-minutes: 5
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verified-contracts-and-deployment
@@ -83,7 +84,7 @@ jobs:
             apps/api/openapi.generated.json
             artifacts/deployment-manifest.json
           if-no-files-found: error
-      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e
       - run: pnpm test:a11y
       - run: pnpm test:visual

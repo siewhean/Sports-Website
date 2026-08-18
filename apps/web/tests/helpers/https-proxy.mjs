@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:https";
 import { request as httpRequest } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const upstreamPort = Number(process.env.HTTPS_PROXY_UPSTREAM_PORT ?? "3101");
 const proxyPort = Number(process.env.HTTPS_PROXY_PORT ?? "3100");
@@ -12,27 +15,45 @@ if (!Number.isSafeInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535) {
   throw new Error("HTTPS_PROXY_PORT must be an unprivileged TCP port");
 }
 
-const key = execFileSync("openssl", ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"], {
-  stdio: ["ignore", "pipe", "ignore"],
-});
-const certificate = execFileSync(
-  "openssl",
-  [
-    "req",
-    "-new",
-    "-x509",
-    "-sha256",
-    "-days",
-    "1",
-    "-subj",
-    "/CN=127.0.0.1",
-    "-addext",
-    "subjectAltName=IP:127.0.0.1,DNS:localhost",
-    "-key",
-    "/dev/stdin",
-  ],
-  { input: key, stdio: ["pipe", "pipe", "ignore"] },
-);
+const certificateDirectory = mkdtempSync(join(tmpdir(), "matchday-playwright-https-"));
+const keyPath = join(certificateDirectory, "key.pem");
+const certificatePath = join(certificateDirectory, "certificate.pem");
+let key;
+let certificate;
+try {
+  writeFileSync(
+    keyPath,
+    execFileSync("openssl", ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    }),
+    { mode: 0o600 },
+  );
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-new",
+      "-x509",
+      "-sha256",
+      "-days",
+      "1",
+      "-subj",
+      "/CN=127.0.0.1",
+      "-addext",
+      "subjectAltName=IP:127.0.0.1,DNS:localhost",
+      "-key",
+      keyPath,
+      "-out",
+      certificatePath,
+    ],
+    { stdio: "ignore" },
+  );
+  key = readFileSync(keyPath);
+  certificate = readFileSync(certificatePath);
+} finally {
+  // The server receives in-memory copies above; leave no private key on disk.
+  rmSync(certificateDirectory, { force: true, recursive: true });
+}
 
 const server = createServer({ key, cert: certificate }, (incoming, outgoing) => {
   const upstream = httpRequest(

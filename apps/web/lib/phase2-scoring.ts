@@ -475,7 +475,7 @@ class DemoScoringCommandPort implements ScoringCommandPort {
       this.sequence -= 1;
       throw error;
     }
-    return { clientEventId: command.clientEventId, sequence: this.sequence, syncState: "pending" };
+    return { clientEventId: command.clientEventId, sequence: this.sequence, syncState: "acknowledged" };
   }
 
   async finalizeResult(): Promise<{ receiptId: string; publishedAt: string }> {

@@ -22,5 +22,8 @@ describe("Phase 4 format division routing", () => {
     expect(formatDivisionHref("competition/id", "women & girls")).toBe(
       "/organiser/competitions/competition%2Fid/format?division=women+%26+girls",
     );
+    expect(formatDivisionHref("competition/id", "women & girls", true)).toBe(
+      "/organiser/competitions/competition%2Fid/format?division=women+%26+girls&advanced=1",
+    );
   });
 });

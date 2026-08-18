@@ -24,6 +24,7 @@ import { Phase2Runtime } from "../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
+import { verifiedScoringRateLimitSessionId } from "../src/scoring-rate-limit-identity.js";
 
 const defaultApiPort = 4101;
 const defaultWebPort = 3103;
@@ -965,12 +966,14 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
   process.once("SIGINT", markInterrupted);
   process.once("SIGTERM", markInterrupted);
   try {
-    await runProcess(
-      "local infrastructure",
-      "docker",
-      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
-      process.env,
-    );
+    if (!process.env.CI) {
+      await runProcess(
+        "local infrastructure",
+        "docker",
+        ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
+        process.env,
+      );
+    }
     rateLimitRedis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
     queueName = `matchday-phase4-real-e2e-${randomUUID()}`;
     redisOwnership = createRedisOwnership(queueName);
@@ -1082,6 +1085,13 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       },
       rateLimitRedis,
       rateLimitNameSpace: redisOwnership.rateLimitNameSpace,
+      resolveVerifiedScoringRateLimitSessionId: async (request) => {
+        const sessionId = request.headers["x-scoring-session-id"];
+        const sessionToken = request.headers["x-scoring-session-token"];
+        if (typeof sessionId !== "string" || typeof sessionToken !== "string") return null;
+        if (sessionToken.length < 32 || sessionToken.length > 256) return null;
+        return verifiedScoringRateLimitSessionId(sql!, sessionId, sessionToken);
+      },
       identityRuntime: identity,
       phase2Runtime: phase2,
       phase3Runtime: phase3,

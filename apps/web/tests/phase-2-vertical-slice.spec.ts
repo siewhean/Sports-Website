@@ -41,11 +41,15 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
     ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Open division"],
     ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Women's division"],
     ["/organiser/competitions/singapore-open/capacity", "Capacity", "Required match slots"],
-    ["/organiser/competitions/singapore-open/format", "Choose a format that fits your capacity", "Show format options"],
+    [
+      "/organiser/competitions/singapore-open/format",
+      "Choose a format that fits your competition",
+      "Show format options",
+    ],
     ["/organiser/competitions/singapore-open/format?advanced=1", "Competition format", "Group A"],
     ["/organiser/competitions/singapore-open/format?advanced=1", "Competition format", "Semifinals"],
     ["/organiser/competitions/singapore-open/schedule", "Schedule", "Playing-area timeline"],
-    ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
+    ["/organiser/competitions/singapore-open/publish", "Publication", "Schedule revision 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
     ["/score", "Marina Blue", "Validate access"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Results"],
@@ -91,7 +95,7 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   const eventHistory = page.getByRole("dialog", { name: "Match events" });
   await expect(eventHistory).toContainText("Aisha Tan");
   await eventHistory.getByRole("button", { name: "Close match events" }).click();
-  await expect(page.getByText("1 event pending sync")).toBeVisible();
+  await expect(page.getByText("Synced")).toBeVisible();
 
   await page.getByRole("button", { name: "Review final score" }).click();
   await expect(page.getByRole("heading", { name: "Marina Blue 1–0 Harbour Gold" })).toBeVisible();
@@ -112,7 +116,7 @@ test("default Canoe Polo scoring keeps advanced operations opt-in", async ({ pag
   await expect(page.locator(".p5-scoring-device")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Advanced scoring controls" })).toBeVisible();
 
-  await page.locator("summary").getByText("Match actions", { exact: true }).click();
+  await page.locator("summary").filter({ hasText: "More match actions" }).click();
   await expect(page.getByRole("button", { name: "Green card Marina Blue" })).toBeVisible();
 
   await page.getByRole("link", { name: "Advanced scoring controls" }).click();

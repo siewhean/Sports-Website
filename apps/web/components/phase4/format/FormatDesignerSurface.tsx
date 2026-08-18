@@ -186,7 +186,9 @@ export function FormatDesignerSurface({
                 aria-label={t("prototype.85a0c348e2a1")}
                 value={page.divisionId}
                 disabled={state.dirty || busy !== null}
-                onChange={(event) => router.push(formatDivisionHref(page.competitionId, event.currentTarget.value))}
+                onChange={(event) =>
+                  router.push(formatDivisionHref(page.competitionId, event.currentTarget.value, true))
+                }
               >
                 {divisions.map((division) => (
                   <option key={division.id} value={division.id}>

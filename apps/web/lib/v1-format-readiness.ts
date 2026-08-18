@@ -15,11 +15,14 @@ export type V1FormatReadiness = Readonly<{
 export type V1CanonicalFormatReadinessInput = Readonly<{
   divisions: readonly Readonly<{
     entries?: readonly Readonly<{ status: string }>[];
+    teamCount?: number;
   }>[];
   capacity: Readonly<{
     areaCount: number;
     availableMatchSlots: number;
   }>;
+  teamCount?: number;
+  teams?: readonly unknown[];
 }>;
 
 function readiness(
@@ -79,10 +82,17 @@ export function v1FormatReadiness(setup: Phase4SetupDocument | null | undefined)
  * avoids treating the optional Assisted Setup aggregate as a hidden gate.
  */
 export function v1CanonicalFormatReadiness(input: V1CanonicalFormatReadinessInput): V1FormatReadiness {
-  const divisionEntryCounts = input.divisions.map(
-    (division) =>
-      division.entries?.filter((entry) => entry.status === "active" || entry.status === "confirmed").length ?? 0,
-  );
+  const fallbackPerDivision =
+    input.divisions.length > 0 ? Math.floor((input.teamCount ?? input.teams?.length ?? 0) / input.divisions.length) : 0;
+
+  const divisionEntryCounts = input.divisions.map((division) => {
+    const activeEntries =
+      division.entries?.filter((entry) => entry.status === "active" || entry.status === "confirmed").length ?? 0;
+    if (activeEntries > 0) return activeEntries;
+    if (typeof division.teamCount === "number" && division.teamCount > 0) return division.teamCount;
+    return fallbackPerDivision;
+  });
+
   const totalEntryCount = divisionEntryCounts.reduce((total, count) => total + count, 0);
   return readiness(divisionEntryCounts, totalEntryCount, input.capacity.areaCount, input.capacity.availableMatchSlots);
 }

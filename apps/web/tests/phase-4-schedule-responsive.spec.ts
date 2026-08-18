@@ -217,7 +217,7 @@ test("smaller-screen organiser selects a match, day, available area and valid ti
     await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
   ).toBeLessThanOrEqual(1);
   const returnedToSchedule = page.waitForURL(
-    new RegExp(`/organiser/competitions/[^/]+/schedule\\?match=${matchId}&notice=moved$`),
+    new RegExp(`/organiser/competitions/[^/]+/schedule\\?match=${matchId}&notice=moved(&advanced=1)?$`),
   );
   await confirmMove.click();
   await expect.poll(() => moveBody).not.toBeNull();

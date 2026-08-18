@@ -173,23 +173,25 @@ test("entries enforce the cross-division free limit with keyboard and duplicate-
 
   const add = async (divisionIndex: number, entryIndex: number, keyboard = false) => {
     const division = divisions.nth(divisionIndex);
-    await division.getByLabel("Entry name").fill(`Team ${divisionIndex + 1}-${entryIndex + 1}`);
-    await division.getByLabel("Seed").fill(String(entryIndex + 1));
-    if (keyboard) await division.getByLabel("Seed").press("Enter");
-    else await division.getByRole("button", { name: "Add entry" }).click();
+    const form = division.locator("form").last();
+    await form.getByLabel("Entry name").fill(`Team ${divisionIndex + 1}-${entryIndex + 1}`);
+    await form.getByLabel("Seed").fill(String(entryIndex + 1));
+    if (keyboard) await form.getByLabel("Seed").press("Enter");
+    else await form.getByRole("button", { name: "Add entry" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Entry added." })).toBeVisible();
   };
 
   const firstDivision = divisions.nth(0);
-  await firstDivision.getByLabel("Entry name").fill("Team 1-1");
-  await firstDivision.getByLabel("Seed").fill("1");
-  await firstDivision.getByRole("button", { name: "Add entry" }).evaluate((button) => {
+  const firstForm = firstDivision.locator("form").last();
+  await firstForm.getByLabel("Entry name").fill("Team 1-1");
+  await firstForm.getByLabel("Seed").fill("1");
+  await firstForm.getByRole("button", { name: "Add entry" }).evaluate((button) => {
     (button as HTMLButtonElement).click();
     (button as HTMLButtonElement).click();
   });
   await expect(page.getByRole("alert").filter({ hasText: "invalid response" })).toBeVisible();
   expect(writes).toBe(1);
-  await firstDivision.getByRole("button", { name: "Add entry" }).click();
+  await firstForm.getByRole("button", { name: "Add entry" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Entry added." })).toBeVisible();
   expect(commandKeys[1]).toBe(commandKeys[0]);
 
@@ -201,9 +203,9 @@ test("entries enforce the cross-division free limit with keyboard and duplicate-
     page,
     /^console\.error: Failed to load resource: the server responded with a status of 422 \(Unprocessable Entity\)$/,
   );
-  await firstDivision.getByLabel("Entry name").fill("Rejected team");
-  await firstDivision.getByLabel("Seed").fill("9");
-  await firstDivision.getByRole("button", { name: "Add entry" }).press("Enter");
+  await firstForm.getByLabel("Entry name").fill("Rejected team");
+  await firstForm.getByLabel("Seed").fill("9");
+  await firstForm.getByRole("button", { name: "Add entry" }).press("Enter");
   await expect(
     page.getByRole("alert").filter({ hasText: "Free plan permits at most 16 active entries across all divisions." }),
   ).toBeVisible();

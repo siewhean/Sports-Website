@@ -11,3 +11,4 @@ apps/api/openapi.generated.json
 .DS_Store
 .env*
 !.env.example
+.vercel

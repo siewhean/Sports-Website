@@ -228,7 +228,7 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   await page.getByLabel("Country code").fill("SG");
   await page.getByLabel("Start date").fill("2027-08-01");
   await page.getByLabel("End date").fill("2027-08-02");
-  await page.getByLabel("Time zone").fill("Asia/Singapore");
+  await page.getByLabel("Time zone").selectOption("Asia/Singapore");
   await page.getByLabel("Locale").fill("en-SG");
   await submit(page, page.getByRole("button", { name: "Create competition" }), "POST", "/api/phase3/competitions");
   await page.waitForURL(/\/organiser\/competitions\/[0-9a-f-]+\/setup$/);
@@ -255,9 +255,8 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   await page.goto(`/organiser/competitions/${competitionId}/format`);
   await submit(page, page.getByRole("button", { name: "Show format options" }), "POST", "/v1-format-recommendations");
   const compact = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "Compact knockout" }) });
-  // The selected compact option is a single-elimination 16-team bracket: eight
-  // opening matches, four quarter-finals, two semi-finals, a final and bronze.
-  await expect(compact).toContainText("16 matches");
+  await expect(compact).toContainText("Total matches");
+  await expect(compact.locator("dd").first()).toHaveText("16");
   await submit(page, compact.getByRole("button", { name: "Use this format" }), "POST", "/apply");
   await expect(page.getByTestId("v1-format-selected")).toBeVisible();
 

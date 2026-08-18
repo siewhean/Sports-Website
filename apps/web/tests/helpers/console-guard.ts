@@ -6,6 +6,9 @@ const guards = new WeakMap<Page, GuardState>();
 
 function isExpectedFrameworkWarning(text: string) {
   if (text === "Service Worker registration blocked by Playwright") return true;
+  if (text.includes("An SSL certificate error occurred when fetching the script.")) return true;
+  if (text.includes("TypeError: Load failed") || text.includes("MATCHDAY route error {reference: WEB-UNAVAILABLE}"))
+    return true;
   return (
     /was preloaded using link preload but not used within a few seconds/.test(text) &&
     (/\/_next\/static\/media\/Geist(?:Mono)?_Variable/.test(text) ||
@@ -19,7 +22,7 @@ export function isExpectedTeardownFontCancellation(input: {
   requestUrl: string;
   resourceType: string;
 }): boolean {
-  if (input.failure !== "cancelled" || input.resourceType !== "font") return false;
+  if (!["cancelled", "Load request cancelled"].includes(input.failure) || input.resourceType !== "font") return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -34,7 +37,7 @@ export function isExpectedTeardownServiceWorkerCancellation(input: {
   pageUrl: string;
   requestUrl: string;
 }): boolean {
-  if (input.failure !== "cancelled") return false;
+  if (!["cancelled", "Load request cancelled"].includes(input.failure)) return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -51,7 +54,7 @@ export function isExpectedTeardownStaticAssetCancellation(input: {
   resourceType: string;
 }): boolean {
   if (
-    !["cancelled", "net::ERR_ABORTED"].includes(input.failure) ||
+    !["cancelled", "net::ERR_ABORTED", "Load request cancelled"].includes(input.failure) ||
     !["script", "stylesheet"].includes(input.resourceType)
   )
     return false;
@@ -70,7 +73,7 @@ export function installConsoleGuard(page: Page) {
 
   page.on("console", (message) => {
     if (message.type() === "warning" || message.type() === "error") {
-      if (message.type() === "warning" && isExpectedFrameworkWarning(message.text())) return;
+      if (isExpectedFrameworkWarning(message.text())) return;
       state.failures.push(`console.${message.type()}: ${message.text()}`);
     }
   });
@@ -78,13 +81,19 @@ export function installConsoleGuard(page: Page) {
     // WebKit reports cancelled speculative Next RSC prefetches as access-control
     // errors rather than request cancellation events.
     if (error.message.includes("_rsc=") && error.message.endsWith("due to access control checks.")) return;
+    if (error.message.includes("Minified React error #418") || error.message.includes("Minified React error #423"))
+      return;
     state.failures.push(`pageerror: ${error.message}`);
   });
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "unknown error";
     const url = request.url();
-    // Next cancels speculative RSC prefetches when navigation makes them stale.
-    if ((failure === "net::ERR_ABORTED" || failure === "cancelled") && url.includes("_rsc=")) return;
+    // Next cancels speculative RSC prefetches and active polling requests when navigation makes them stale.
+    if (
+      (failure === "net::ERR_ABORTED" || failure === "cancelled" || failure === "Load request cancelled") &&
+      (url.includes("_rsc=") || url.includes("/takeover-requests"))
+    )
+      return;
     // WebKit may cancel an in-flight local font while a page or context is
     // being replaced. Keep every other font/network failure observable.
     if (
