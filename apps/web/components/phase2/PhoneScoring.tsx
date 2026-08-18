@@ -16,6 +16,7 @@ import type { SportId } from "@matchday/domain";
 import { translate as t } from "@matchday/ui";
 import { phase2Copy, phase2Machine, type ScoringEventCommand, type ScoringSessionView } from "@/lib/phase2";
 import { FiveSportScoreControls, type FiveSportScoreControlsCopy } from "@/components/phase5/FiveSportScoreControls";
+import { ScoreHistoryDialog } from "./ScoreHistoryDialog";
 import { buildFiveSportScorecardDefinition } from "@/lib/five-sport-scorecard";
 import type { ScoreControlAction } from "@/lib/five-sport-score-control-actions";
 import { getScoringDeviceIdentity, renameScoringDevice } from "@/lib/scoring-device";
@@ -1147,45 +1148,17 @@ export function PhoneScoring({
             </div>
           ) : null}
           {useSimpleCanoeControls ? (
-            <dialog
-              className="p2-score-history-sheet"
-              ref={historyDialogRef}
-              aria-labelledby="event-log-title"
-              onCancel={(event) => {
-                event.preventDefault();
-                closeHistory();
-              }}
-            >
-              <header>
-                <h2 id="event-log-title">{phase2Copy.eventLog}</h2>
-                <button className="p2-score-secondary" type="button" onClick={closeHistory}>
-                  {phase2Copy.closeEvents}
-                </button>
-              </header>
-              <section className="p2-event-log">
-                {scoreState.actions.length ? (
-                  <ol>
-                    {[...scoreState.actions].reverse().map((action) => (
-                      <li key={action.eventId}>
-                        <time dateTime={action.occurredAt}>
-                          {definition.segmentLabel} {action.segmentNumber}
-                        </time>
-                        <span>
-                          <strong>{action.label}</strong>
-                          <small>
-                            {action.participantId
-                              ? `${phase2Copy.scorer}: ${action.participantId}`
-                              : (action.side ?? phase2Copy.incident)}
-                          </small>
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p>{phase2Copy.noEvents}</p>
-                )}
-              </section>
-            </dialog>
+            <ScoreHistoryDialog
+              dialogRef={historyDialogRef}
+              segmentLabel={definition.segmentLabel}
+              actions={scoreState.actions}
+              eventLogTitle={phase2Copy.eventLog}
+              closeEventsLabel={phase2Copy.closeEvents}
+              scorerLabel={phase2Copy.scorer}
+              incidentLabel={phase2Copy.incident}
+              noEventsLabel={phase2Copy.noEvents}
+              onClose={closeHistory}
+            />
           ) : null}
           {pendingAction || reversalTarget ? (
             <dialog

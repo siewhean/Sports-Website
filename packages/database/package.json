@@ -16,7 +16,8 @@
     "test:integration": "vitest run tests/integration",
     "profile:migration:populated": "node --import tsx scripts/profile-populated-migration.ts",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:migrate:check": "tsx scripts/check-migrations.ts"
+    "db:migrate:check": "tsx scripts/check-migrations.ts",
+    "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
     "@matchday/config": "workspace:*",

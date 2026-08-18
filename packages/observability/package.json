@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test:unit": "vitest run src --passWithNoTests"
+    "test:unit": "vitest run src --passWithNoTests",
+    "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
     "@opentelemetry/api": "1.9.1",

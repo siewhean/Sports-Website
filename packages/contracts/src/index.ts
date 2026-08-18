@@ -6,6 +6,8 @@ export type ApiErrorEnvelope = {
   };
 };
 
+export { ErrorCode, type ApiErrorCode } from "./error-codes.js";
+
 export type HealthStatus = "healthy" | "degraded" | "unhealthy";
 
 export type HealthResponse = {
