@@ -1,0 +1,1 @@
+Temporary Vercel branch deployment trigger. This file will be removed after Vercel registers the push.
