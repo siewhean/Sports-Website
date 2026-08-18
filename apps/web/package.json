@@ -2,7 +2,6 @@
   "name": "@matchday/web",
   "version": "0.1.0",
   "private": true,
-  "vercelRedeployNonce": "2026-08-18T09:19+08:00",
   "scripts": {
     "predev": "pnpm --filter @matchday/ui --filter @matchday/feature-flags build",
     "dev": "next dev",
@@ -35,7 +34,7 @@
     "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.61.1",
     "@types/node": "^24.0.0",
-    "@types/qrcode": "1.5.6",
+    "@types/qrcode": "^17.0.22",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "9.39.5",
