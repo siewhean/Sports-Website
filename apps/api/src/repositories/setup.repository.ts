@@ -1,17 +1,6 @@
-import type { SqlExecutor, LockMode } from "./types.js";
+import type { SqlExecutor, LockMode, SetupDraftRecord } from "./types.js";
 
-export type SetupDraftRecord = {
-  id: string;
-  organisation_id: string;
-  competition_id: string;
-  competition_status: string;
-  status: string;
-  revision: number;
-  current_step: string;
-  created_at: string;
-  updated_at: string;
-  [key: string]: unknown;
-};
+export { type SetupDraftRecord };
 
 export class SetupRepository {
   constructor(private readonly sql: SqlExecutor) {}
@@ -21,10 +10,12 @@ export class SetupRepository {
     lock: LockMode = "none",
     executor: SqlExecutor = this.sql,
   ): Promise<SetupDraftRecord | null> {
-    const lockClause = lock === "for_update" ? " FOR UPDATE OF d" : "";
+    const lockClause = lock === "for_update" ? " FOR UPDATE OF d" : lock === "for_share" ? " FOR SHARE OF d" : "";
 
     const rows = await executor.unsafe<SetupDraftRecord>(
-      `SELECT d.*, c.status AS competition_status
+      `SELECT d.id, d.organisation_id, d.competition_id, c.status AS competition_status,
+              d.status, d.revision, d.current_step, d.completed_steps, d.steps, d.validation,
+              d.created_at, d.updated_at, d.expires_at, d.completed_at
        FROM setup_drafts d
        JOIN competitions c ON c.id = d.competition_id
        WHERE d.competition_id = $1${lockClause}`,

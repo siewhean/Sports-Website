@@ -46,8 +46,16 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
+import {
+  CompetitionRepository,
+  OrganisationRepository,
+  DivisionRepository,
+  SetupRepository,
+  FormatRepository,
+  ScheduleRepository,
+} from "./repositories/index.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -374,6 +382,13 @@ export type Phase4PublicProjectionPort = {
 };
 
 export class Phase4Runtime {
+  private readonly competitionRepo: CompetitionRepository;
+  private readonly organisationRepo: OrganisationRepository;
+  private readonly divisionRepo: DivisionRepository;
+  private readonly setupRepo: SetupRepository;
+  private readonly formatRepo: FormatRepository;
+  private readonly scheduleRepo: ScheduleRepository;
+
   constructor(
     private readonly sql: PostgresJsSql,
     private readonly phase3: Phase3Runtime,
@@ -381,7 +396,14 @@ export class Phase4Runtime {
     private readonly ai: Phase4AiOptions,
     private readonly now: () => Date = () => new Date(),
     private readonly publicProjection?: Phase4PublicProjectionPort,
-  ) {}
+  ) {
+    this.competitionRepo = new CompetitionRepository(sql);
+    this.organisationRepo = new OrganisationRepository(sql);
+    this.divisionRepo = new DivisionRepository(sql);
+    this.setupRepo = new SetupRepository(sql);
+    this.formatRepo = new FormatRepository(sql);
+    this.scheduleRepo = new ScheduleRepository(sql);
+  }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     if (!this.sql.begin) throw new Error("Phase 4 mutations require a transaction-capable PostgreSQL client");
@@ -450,7 +472,7 @@ export class Phase4Runtime {
   }
 
   private async lockScheduleMutation(tx: PostgresJsSql, competitionId: string): Promise<void> {
-    await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended('phase4-schedule:'||$1,0))`, [competitionId]);
+    await this.scheduleRepo.acquireScheduleLock(competitionId, "phase4-schedule", tx);
   }
 
   private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string, includeLockSnapshot = true): Promise<void> {
@@ -535,19 +557,17 @@ export class Phase4Runtime {
       )
     )[0]?.compatible;
     if (!compatible)
-      throw new ApiError(409, "SCHEDULE_LOCK_CONFLICT", "Current assignment locks do not match this schedule revision");
+      throw new ApiError(
+        409,
+        ErrorCode.SCHEDULE_LOCK_CONFLICT,
+        "Current assignment locks do not match this schedule revision",
+      );
   }
 
   private async rawSetup(tx: PostgresJsSql, competitionId: string, lock = false): Promise<SetupRow> {
-    return first(
-      await tx.unsafe<SetupRow>(
-        `SELECT d.*,c.status AS competition_status FROM setup_drafts d JOIN competitions c ON c.id=d.competition_id
-         WHERE d.competition_id=$1${lock ? " FOR UPDATE OF d" : ""}`,
-        [competitionId],
-      ),
-      "SETUP_DRAFT_NOT_FOUND",
-      "Setup draft not found",
-    );
+    const draft = await this.setupRepo.findByCompetitionId(competitionId, lock ? "for_update" : "none", tx);
+    if (!draft) throw new ApiError(404, "SETUP_DRAFT_NOT_FOUND", "Setup draft not found");
+    return draft as unknown as SetupRow;
   }
 
   private setupDocument(row: SetupRow): Phase4SetupDocument {
@@ -1613,10 +1633,7 @@ export class Phase4Runtime {
 
   async readFormatBuilder(actor: Phase3Actor, competitionId: string, divisionId: string) {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    const rows = await this.sql.unsafe<FormatRow>(
-      `SELECT * FROM format_revisions WHERE competition_id=$1 AND division_id=$2 ORDER BY revision DESC,id DESC`,
-      [competitionId, divisionId],
-    );
+    const rows = (await this.formatRepo.listByDivisionId(divisionId, this.sql)) as unknown as FormatRow[];
     const draft = rows.find((row) => row.status === "draft") ?? null;
     return {
       revisions: rows.map((row) => this.formatRevisionView(row)),

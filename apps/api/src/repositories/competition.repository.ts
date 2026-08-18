@@ -67,4 +67,57 @@ export class CompetitionRepository {
     );
     return rows[0]?.capacity_revision ?? 0;
   }
+
+  async create(
+    params: {
+      id: string;
+      organisationId: string;
+      createdBy: string;
+      name: string;
+      slug: string;
+      sportCode: string;
+      venue: string;
+      address: string;
+      locality: string | null;
+      countryCode: string;
+      startsOn: string;
+      endsOn: string;
+      timezone: string;
+      locale: string;
+      status?: string;
+    },
+    executor: SqlExecutor = this.sql,
+  ): Promise<{ id: string; revision: number }> {
+    const rows = await executor.unsafe<{ id: string; revision: number }>(
+      `INSERT INTO competitions (
+        id, organisation_id, created_by, name, slug, sport_code,
+        venue, address, locality, country_code, starts_on, ends_on,
+        timezone, locale, status
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING id, revision`,
+      [
+        params.id,
+        params.organisationId,
+        params.createdBy,
+        params.name.trim(),
+        params.slug,
+        params.sportCode,
+        params.venue.trim(),
+        params.address.trim(),
+        params.locality?.trim() || null,
+        params.countryCode,
+        params.startsOn,
+        params.endsOn,
+        params.timezone,
+        params.locale,
+        params.status ?? "draft",
+      ],
+    );
+    const created = rows[0];
+    if (!created) {
+      throw new Error("Competition was not created");
+    }
+    return created;
+  }
 }

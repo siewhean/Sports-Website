@@ -1,16 +1,8 @@
-import type { SqlExecutor, LockMode } from "./types.js";
+import type { SqlExecutor, LockMode, FormatRevisionRecord } from "./types.js";
 
-export type FormatRevisionRecord = {
-  id: string;
-  competition_id: string;
-  division_id: string;
-  revision: number;
-  status: "draft" | "published" | "archived";
-  definition_hash: string;
-  definition: unknown;
-  created_at: string;
-  updated_at: string;
-};
+export { type FormatRevisionRecord };
+
+const FORMAT_COLUMNS = `id, competition_id, division_id, revision, status, definition_hash, definition, created_by, created_at, published_at`;
 
 export class FormatRepository {
   constructor(private readonly sql: SqlExecutor) {}
@@ -20,9 +12,9 @@ export class FormatRepository {
     lock: LockMode = "none",
     executor: SqlExecutor = this.sql,
   ): Promise<FormatRevisionRecord | null> {
-    const lockClause = lock === "for_update" ? " FOR UPDATE" : "";
+    const lockClause = lock === "for_update" ? " FOR UPDATE" : lock === "for_share" ? " FOR SHARE" : "";
     const rows = await executor.unsafe<FormatRevisionRecord>(
-      `SELECT * FROM format_revisions WHERE id = $1${lockClause}`,
+      `SELECT ${FORMAT_COLUMNS} FROM format_revisions WHERE id = $1${lockClause}`,
       [id],
     );
     return rows[0] ?? null;
@@ -33,9 +25,9 @@ export class FormatRepository {
     lock: LockMode = "none",
     executor: SqlExecutor = this.sql,
   ): Promise<FormatRevisionRecord | null> {
-    const lockClause = lock === "for_update" ? " FOR UPDATE" : "";
+    const lockClause = lock === "for_update" ? " FOR UPDATE" : lock === "for_share" ? " FOR SHARE" : "";
     const rows = await executor.unsafe<FormatRevisionRecord>(
-      `SELECT * FROM format_revisions
+      `SELECT ${FORMAT_COLUMNS} FROM format_revisions
        WHERE division_id = $1
        ORDER BY revision DESC, id DESC
        LIMIT 1${lockClause}`,
@@ -49,7 +41,7 @@ export class FormatRepository {
     executor: SqlExecutor = this.sql,
   ): Promise<FormatRevisionRecord | null> {
     const rows = await executor.unsafe<FormatRevisionRecord>(
-      `SELECT id, competition_id, division_id, revision, status, definition_hash, definition, created_at, updated_at
+      `SELECT ${FORMAT_COLUMNS}
        FROM format_revisions
        WHERE division_id = $1 AND status = 'published'
        ORDER BY revision DESC
@@ -60,15 +52,14 @@ export class FormatRepository {
   }
 
   async listByDivisionId(
-    competitionId: string,
     divisionId: string,
     executor: SqlExecutor = this.sql,
   ): Promise<readonly FormatRevisionRecord[]> {
     return executor.unsafe<FormatRevisionRecord>(
-      `SELECT * FROM format_revisions
-       WHERE competition_id = $1 AND division_id = $2
+      `SELECT ${FORMAT_COLUMNS} FROM format_revisions
+       WHERE division_id = $1
        ORDER BY revision DESC, id DESC`,
-      [competitionId, divisionId],
+      [divisionId],
     );
   }
 

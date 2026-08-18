@@ -22,10 +22,26 @@ export class OrganisationRepository {
   async isMember(organisationId: string, accountId: string, executor: SqlExecutor = this.sql): Promise<boolean> {
     const rows = await executor.unsafe<{ exists: boolean }>(
       `SELECT EXISTS(
-         SELECT 1 FROM organisation_members
-         WHERE organisation_id = $1 AND account_id = $2
+         SELECT 1 FROM organisation_memberships
+         WHERE organisation_id = $1 AND account_id = $2 AND status = 'active'
        ) AS exists`,
       [organisationId, accountId],
+    );
+    return Boolean(rows[0]?.exists);
+  }
+
+  async hasActiveRole(
+    organisationId: string,
+    accountId: string,
+    roles: readonly string[] = ["owner", "organiser"],
+    executor: SqlExecutor = this.sql,
+  ): Promise<boolean> {
+    const rows = await executor.unsafe<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM organisation_memberships
+         WHERE organisation_id = $1 AND account_id = $2 AND status = 'active' AND role = ANY($3::text[])
+       ) AS exists`,
+      [organisationId, accountId, roles],
     );
     return Boolean(rows[0]?.exists);
   }

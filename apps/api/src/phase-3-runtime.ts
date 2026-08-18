@@ -12,8 +12,16 @@ import {
   type SportPack,
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import type { Phase3DomainAdapter } from "./phase-3-domain-adapter.js";
+import {
+  CompetitionRepository,
+  OrganisationRepository,
+  DivisionRepository,
+  SetupRepository,
+  FormatRepository,
+  ScheduleRepository,
+} from "./repositories/index.js";
 
 export type Phase3Actor = { accountId: string };
 
@@ -132,11 +140,25 @@ function expectDomain<T>(result: DomainCommandResult<T>): T {
 }
 
 export class Phase3Runtime {
+  private readonly competitionRepo: CompetitionRepository;
+  private readonly organisationRepo: OrganisationRepository;
+  private readonly divisionRepo: DivisionRepository;
+  private readonly setupRepo: SetupRepository;
+  private readonly formatRepo: FormatRepository;
+  private readonly scheduleRepo: ScheduleRepository;
+
   constructor(
     private readonly sql: PostgresJsSql,
     private readonly domain: Phase3DomainAdapter,
     private readonly now: () => Date = () => new Date(),
-  ) {}
+  ) {
+    this.competitionRepo = new CompetitionRepository(sql);
+    this.organisationRepo = new OrganisationRepository(sql);
+    this.divisionRepo = new DivisionRepository(sql);
+    this.setupRepo = new SetupRepository(sql);
+    this.formatRepo = new FormatRepository(sql);
+    this.scheduleRepo = new ScheduleRepository(sql);
+  }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     if (!this.sql.begin) throw new Error("Phase 3 mutations require a transaction-capable PostgreSQL client.");
@@ -235,12 +257,8 @@ export class Phase3Runtime {
   }
 
   private async organisationAccess(tx: PostgresJsSql, id: string, actor: Phase3Actor) {
-    const rows = await tx.unsafe(
-      `SELECT 1 FROM organisation_memberships
-      WHERE organisation_id=$1 AND account_id=$2 AND status='active' AND role IN ('owner','organiser')`,
-      [id, actor.accountId],
-    );
-    if (!rows[0]) throw new ApiError(403, "ORGANISATION_ACCESS_DENIED", "Organisation access denied");
+    const hasAccess = await this.organisationRepo.hasActiveRole(id, actor.accountId, ["owner", "organiser"], tx);
+    if (!hasAccess) throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
   }
 
   private async platformAdminAccess(tx: PostgresJsSql, actor: Phase3Actor) {
@@ -1388,28 +1406,27 @@ export class Phase3Runtime {
       const settingsOverride = compatibleDefault
         ? this.domain.settingsDifference(compatibleDefault, pack.recommendedSettings)
         : {};
-      const rows = await tx.unsafe<{ id: string; revision: number }>(
-        `INSERT INTO competitions (id,organisation_id,created_by,name,slug,sport_code,venue,address,locality,country_code,
-          starts_on,ends_on,timezone,locale,status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'draft') RETURNING id,revision`,
-        [
-          competitionId,
-          input.organisationId,
-          actor.accountId,
-          input.name.trim(),
-          input.slug,
-          input.sportCode,
-          input.venue.trim(),
-          input.address.trim(),
-          input.locality?.trim() || null,
-          input.countryCode,
-          input.startsOn,
-          input.endsOn,
-          input.timezone,
-          input.locale,
-        ],
+      const competition = await this.competitionRepo.create(
+        {
+          id: competitionId,
+          organisationId: input.organisationId,
+          createdBy: actor.accountId,
+          name: input.name,
+          slug: input.slug,
+          sportCode: input.sportCode,
+          venue: input.venue,
+          address: input.address,
+          locality: input.locality ?? null,
+          countryCode: input.countryCode,
+          startsOn: input.startsOn,
+          endsOn: input.endsOn,
+          timezone: input.timezone,
+          locale: input.locale,
+          status: "draft",
+        },
+        tx,
       );
-      const competition = required(rows, "Competition was not created");
+
       await tx.unsafe(
         `INSERT INTO competition_sport_settings (competition_id,sport_code,pack_version,pack_schema_version,
           recommended_snapshot,settings_override,updated_by)
