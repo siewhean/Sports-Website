@@ -2,6 +2,7 @@
   "name": "@matchday/web",
   "version": "0.1.0",
   "private": true,
+  "vercelRedeployNonce": "2026-08-18T09:19+08:00",
   "scripts": {
     "predev": "pnpm --filter @matchday/ui --filter @matchday/feature-flags build",
     "dev": "next dev",
