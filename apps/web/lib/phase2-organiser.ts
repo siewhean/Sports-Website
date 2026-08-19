@@ -121,10 +121,22 @@ export function isOrganiserWorkspacePayload(value: unknown): value is OrganiserW
 }
 
 export function cookieHostMatches(requestHostHeader: string | null, apiHostname: string): boolean {
-  if (!requestHostHeader) return false;
   try {
-    const requestHostname = new URL(`http://${requestHostHeader}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const normalizedApiHostname = apiHostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const configuredApi = process.env.MATCHDAY_API_BASE_URL?.trim();
+    if (configuredApi) {
+      const configuredUrl = new URL(configuredApi);
+      const configuredHostname = configuredUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      if (
+        (configuredUrl.protocol === "http:" || configuredUrl.protocol === "https:") &&
+        configuredHostname === normalizedApiHostname
+      ) {
+        return true;
+      }
+    }
+
+    if (!requestHostHeader) return false;
+    const requestHostname = new URL(`http://${requestHostHeader}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
     if (requestHostname === normalizedApiHostname) return true;
     const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1"]);
     return loopbackHosts.has(requestHostname) && loopbackHosts.has(normalizedApiHostname);

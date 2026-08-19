@@ -12,13 +12,23 @@ const statusLabels: Record<CompetitionSummaryView["status"], string> = {
   archived: t("prototype.bdb86505f806"),
 };
 
-export function PublicCompetitionsList({ competitions }: { competitions: CompetitionSummaryView[] }) {
+type PublicCompetitionsViewer = Readonly<{
+  displayName: string;
+}>;
+
+export function PublicCompetitionsList({
+  competitions,
+  viewer = null,
+}: {
+  competitions: CompetitionSummaryView[];
+  viewer?: PublicCompetitionsViewer | null;
+}) {
   return (
     <div className={styles.page}>
       <a className="skip-link" href="#public-list-main">
         {phase2Copy.skip}
       </a>
-      <SiteHeader />
+      <SiteHeader viewer={viewer} />
       <main className={styles.main} id="public-list-main">
         <header className={styles.intro}>
           <div>
