@@ -1,6 +1,6 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
@@ -375,12 +375,12 @@ export async function registerPhase3Routes(
   const actor = async (request: FastifyRequest): Promise<Phase3Actor> => {
     const origin = request.headers.origin;
     if (typeof origin !== "string" || !options.allowedOrigins.includes(origin)) {
-      throw new ApiError(403, "ORIGIN_REJECTED", "Request origin is not allowed");
+      throw new ApiError(403, ErrorCode.ORIGIN_REJECTED, "Request origin is not allowed");
     }
     const session = await options.identityRequests.authenticate(request);
     const csrf = request.headers["x-csrf-token"];
     if (typeof csrf !== "string" || !options.identityRuntime.verifyCsrfToken(session.sessionToken, csrf)) {
-      throw new ApiError(403, "CSRF_INVALID", "CSRF validation failed");
+      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
     }
     return { accountId: session.account.id };
   };

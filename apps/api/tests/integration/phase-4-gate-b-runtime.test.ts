@@ -1057,7 +1057,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         `viewer-create-${randomUUID()}`,
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    ).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
     expect(await evidenceCounts()).toEqual(beforeCreate);
 
     await runtime.createSetupDraft(
@@ -1117,7 +1117,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
               { ...request, transition: { kind: "save_step" as const, step: request.step } },
               randomUUID(),
             );
-      await expect(denied).rejects.toMatchObject({ statusCode: 403 });
+      await expect(denied).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });
       expect(await evidenceCounts()).toEqual(beforeDenied);
     }
 
@@ -1177,7 +1177,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403 });
+    ).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });
   });
 
   it("lets V1 choose and materialise a capacity-fitting format without visiting Assisted Setup", async () => {
@@ -1338,8 +1338,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     expect(directMatches.filter((match) => !match.home_entry_id && !match.away_entry_id)).toHaveLength(1);
     const competition = required(
       await client<{ revision: number; capacity_revision: number }[]>`
-        SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}
-      `,
+        SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}`,
     );
     const areaId = required(
       await client<{ id: string }[]>`SELECT id FROM playing_areas WHERE competition_id=${fixture.competitionId}`,

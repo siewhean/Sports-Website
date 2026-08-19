@@ -3,9 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "pnpm --filter @matchday/ui --filter @matchday/feature-flags build",
     "dev": "next dev",
-    "prebuild": "node scripts/assert-demo-fixture-env.mjs && pnpm --filter @matchday/domain --filter @matchday/ui --filter @matchday/feature-flags build",
+    "prebuild": "node scripts/assert-demo-fixture-env.mjs",
     "build": "next build",
     "start": "next start",
     "check:i18n": "node scripts/check-hardcoded-user-strings.mjs --self-test",

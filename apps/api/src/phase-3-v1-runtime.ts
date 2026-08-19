@@ -1,4 +1,4 @@
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import { Phase3Runtime, type Phase3Actor, type Phase3CompetitionCreateInput } from "./phase-3-runtime.js";
 
 type PostgresErrorLike = Readonly<{
@@ -52,7 +52,7 @@ export class V1Phase3Runtime extends Phase3Runtime {
       if (isCompetitionSlugConflict(error)) {
         throw new ApiError(
           409,
-          "COMPETITION_SLUG_TAKEN",
+          ErrorCode.COMPETITION_SLUG_TAKEN,
           "That competition URL is already in use. Choose a different URL and try again.",
         );
       }

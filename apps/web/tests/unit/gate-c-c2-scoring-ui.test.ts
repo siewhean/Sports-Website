@@ -55,6 +55,10 @@ describe("Gate C C2 scoring UI source guards", () => {
       new URL("../../components/phase5/FiveSportScoreControls.tsx", import.meta.url),
       "utf8",
     );
+    const historyDialog = await readFile(
+      new URL("../../components/phase2/ScoreHistoryDialog.tsx", import.meta.url),
+      "utf8",
+    );
     const scoreRoute = await readFile(new URL("../../app/score/page.tsx", import.meta.url), "utf8");
 
     expect(scoreRoute).toContain("advanced?: string");
@@ -73,7 +77,8 @@ describe("Gate C C2 scoring UI source guards", () => {
     expect(shell).toContain("onPointerMove={continueSheetDismiss}");
     expect(shell).toContain('className={`p2-score${useSimpleCanoeControls ? " p2-score--simple" : ""}`}');
     expect(shell).toContain("const openHistory");
-    expect(shell).toContain('className="p2-score-history-sheet"');
+    expect(shell).toContain("<ScoreHistoryDialog");
+    expect(historyDialog).toContain('className="p2-score-history-sheet"');
     expect(controls).toContain('presentation?: "full" | "remote"');
     expect(controls).toContain("className={styles.remoteScoreAction}");
     expect(controls).toContain("<details className={styles.moreActions}>");

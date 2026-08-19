@@ -7,6 +7,7 @@ const generatedOutputs = [
   "apps/api/dist",
   "apps/web/.next",
   "apps/worker/dist",
+  "apps/scheduler/dist",
   "packages/config/dist",
   "packages/contracts/dist",
   "packages/database/dist",

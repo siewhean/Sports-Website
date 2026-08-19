@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test:unit": "vitest run tests"
+    "test:unit": "vitest run tests",
+    "lint": "eslint . --max-warnings=0"
   }
 }

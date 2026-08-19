@@ -2,20 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
-import {
-  ArrowRight,
-  Check,
-  Clock,
-  CloudCheck,
-  LockKey,
-  ShieldWarning,
-  UserCircle,
-  Warning,
-} from "@phosphor-icons/react";
+import { ArrowRight, Check, Clock, CloudCheck, LockKey, ShieldWarning, Warning } from "@phosphor-icons/react";
 import type { SportId } from "@matchday/domain";
 import { translate as t } from "@matchday/ui";
 import { phase2Copy, phase2Machine, type ScoringEventCommand, type ScoringSessionView } from "@/lib/phase2";
 import { FiveSportScoreControls, type FiveSportScoreControlsCopy } from "@/components/phase5/FiveSportScoreControls";
+import { ScoreHistoryDialog } from "./ScoreHistoryDialog";
+import { ScoreActionDialog } from "./ScoreActionDialog";
 import { buildFiveSportScorecardDefinition } from "@/lib/five-sport-scorecard";
 import type { ScoreControlAction } from "@/lib/five-sport-score-control-actions";
 import { getScoringDeviceIdentity, renameScoringDevice } from "@/lib/scoring-device";
@@ -1147,196 +1140,51 @@ export function PhoneScoring({
             </div>
           ) : null}
           {useSimpleCanoeControls ? (
-            <dialog
-              className="p2-score-history-sheet"
-              ref={historyDialogRef}
-              aria-labelledby="event-log-title"
-              onCancel={(event) => {
-                event.preventDefault();
-                closeHistory();
-              }}
-            >
-              <header>
-                <h2 id="event-log-title">{phase2Copy.eventLog}</h2>
-                <button className="p2-score-secondary" type="button" onClick={closeHistory}>
-                  {phase2Copy.closeEvents}
-                </button>
-              </header>
-              <section className="p2-event-log">
-                {scoreState.actions.length ? (
-                  <ol>
-                    {[...scoreState.actions].reverse().map((action) => (
-                      <li key={action.eventId}>
-                        <time dateTime={action.occurredAt}>
-                          {definition.segmentLabel} {action.segmentNumber}
-                        </time>
-                        <span>
-                          <strong>{action.label}</strong>
-                          <small>
-                            {action.participantId
-                              ? `${phase2Copy.scorer}: ${action.participantId}`
-                              : (action.side ?? phase2Copy.incident)}
-                          </small>
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p>{phase2Copy.noEvents}</p>
-                )}
-              </section>
-            </dialog>
+            <ScoreHistoryDialog
+              dialogRef={historyDialogRef}
+              segmentLabel={definition.segmentLabel}
+              actions={scoreState.actions}
+              eventLogTitle={phase2Copy.eventLog}
+              closeEventsLabel={phase2Copy.closeEvents}
+              scorerLabel={phase2Copy.scorer}
+              incidentLabel={phase2Copy.incident}
+              noEventsLabel={phase2Copy.noEvents}
+              onClose={closeHistory}
+            />
           ) : null}
-          {pendingAction || reversalTarget ? (
-            <dialog
-              className="p2-goal-sheet"
-              ref={actionDialogRef}
-              aria-labelledby="score-action-title"
-              aria-describedby="score-action-description"
-              onCancel={(event) => {
-                event.preventDefault();
-                if (!actionPending) closeActionDialog();
-              }}
-              onPointerMove={continueSheetDismiss}
-              onPointerUp={finishSheetDismiss}
-              onPointerCancel={() => {
-                sheetDismissStartYRef.current = null;
-              }}
-            >
-              <div className="p2-goal-sheet__handle" aria-hidden="true" onPointerDown={beginSheetDismiss} />
-              <header>
-                <p className="p2-eyebrow">{definition.displayName}</p>
-                <h2 id="score-action-title" ref={actionDialogTitleRef} tabIndex={-1}>
-                  {reversalTarget
-                    ? phase2Copy.reversalTitle
-                    : pendingAction?.control.id === phase2Machine.goal
-                      ? phase2Copy.confirmGoalTitle
-                      : `${phase2Copy.recordEvent}: ${pendingAction?.control.label ?? ""}`}
-                </h2>
-                <p id="score-action-description">
-                  {reversalTarget ? phase2Copy.reversalBody : phase2Copy.actionDialogBody}
-                </p>
-              </header>
-              <section className="p2-goal-sheet__team">
-                <span>
-                  {(pendingAction?.side ?? reversalTarget?.side) === phase2Machine.home
-                    ? home
-                    : (pendingAction?.side ?? reversalTarget?.side) === phase2Machine.away
-                      ? away
-                      : matchLabel}
-                </span>
-                <strong>{reversalTarget?.label ?? pendingAction?.control.label}</strong>
-              </section>
-              <dl>
-                <div>
-                  <dt>{definition.segmentLabel}</dt>
-                  <dd>{period}</dd>
-                </div>
-                {manualTimeEnabled ? (
-                  <div>
-                    <dt>{phase2Copy.eventTimeLabel}</dt>
-                    <dd>{eventTime}</dd>
-                  </div>
-                ) : null}
-              </dl>
-              {useSimpleCanoeControls && !reversalTarget ? (
-                <div className="p2-goal-sheet__details">
-                  <label>
-                    <span>{definition.segmentLabel}</span>
-                    <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-                      {definition.segments.map((segment) => (
-                        <option key={segment.number} value={segment.number}>
-                          {definition.segmentLabel} {segment.number}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {manualTimeEnabled ? (
-                    <label>
-                      <span>{phase2Copy.eventTimeLabel}</span>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={eventTime}
-                        onChange={(event) => setEventTime(event.target.value)}
-                      />
-                    </label>
-                  ) : null}
-                </div>
-              ) : null}
-              {reversalTarget || pendingAction?.control.participantAttribution !== "none" ? (
-                <>
-                  <label>
-                    <span>{reversalTarget ? phase2Copy.reversalReason : phase2Copy.participantLabel}</span>
-                    <span className="p2-input-icon">
-                      <UserCircle />
-                      <input
-                        ref={scorerInputRef}
-                        value={reversalTarget ? reversalReason : scorer}
-                        onChange={(event) =>
-                          reversalTarget ? setReversalReason(event.target.value) : setScorer(event.target.value)
-                        }
-                        aria-invalid={Boolean(scorerError)}
-                        aria-describedby={scorerError ? "score-action-hint score-action-error" : "score-action-hint"}
-                        disabled={unknownParticipant}
-                        required={
-                          Boolean(reversalTarget) ||
-                          (pendingAction?.control.participantAttribution === "required" && !unknownParticipant)
-                        }
-                      />
-                    </span>
-                    <small id="score-action-hint">
-                      {reversalTarget ? phase2Copy.reversalReasonHint : phase2Copy.participantHint}
-                    </small>
-                    {scorerError ? (
-                      <em id="score-action-error" role="alert">
-                        {scorerError}
-                      </em>
-                    ) : null}
-                  </label>
-                  {!reversalTarget && allowUnknownScorer && pendingAction?.control.id === phase2Machine.goal ? (
-                    <label className="p2-check">
-                      <input
-                        type="checkbox"
-                        checked={unknownParticipant}
-                        onChange={(event) => {
-                          setUnknownParticipant(event.target.checked);
-                          if (event.target.checked) setScorerError("");
-                        }}
-                      />
-                      <span>
-                        {phase2Copy.unknownParticipant}
-                        <small>{phase2Copy.unknownParticipantHint}</small>
-                      </span>
-                    </label>
-                  ) : null}
-                </>
-              ) : null}
-              <footer>
-                <button
-                  className="p2-score-secondary"
-                  type="button"
-                  disabled={actionPending}
-                  onClick={closeActionDialog}
-                >
-                  {phase2Copy.cancel}
-                </button>
-                <button
-                  className="p2-score-primary"
-                  type="button"
-                  disabled={actionPending}
-                  onClick={() => void (reversalTarget ? reverseAction() : recordAction())}
-                >
-                  {reversalTarget
-                    ? phase2Copy.confirmReversal
-                    : pendingAction?.control.id === phase2Machine.goal
-                      ? `${phase2Copy.recordGoalFor} ${pendingAction.side === phase2Machine.home ? home : away}`
-                      : phase2Copy.recordEvent}
-                  <Check />
-                </button>
-              </footer>
-            </dialog>
-          ) : null}
+          <ScoreActionDialog
+            isOpen={Boolean(pendingAction || reversalTarget)}
+            definition={definition}
+            reversalTarget={reversalTarget}
+            pendingAction={pendingAction}
+            home={home}
+            away={away}
+            matchLabel={matchLabel}
+            period={period}
+            setPeriod={setPeriod}
+            eventTime={eventTime}
+            setEventTime={setEventTime}
+            scorer={scorer}
+            setScorer={setScorer}
+            reversalReason={reversalReason}
+            setReversalReason={setReversalReason}
+            scorerError={scorerError}
+            setScorerError={setScorerError}
+            unknownParticipant={unknownParticipant}
+            setUnknownParticipant={setUnknownParticipant}
+            allowUnknownScorer={allowUnknownScorer}
+            manualTimeEnabled={manualTimeEnabled}
+            useSimpleCanoeControls={useSimpleCanoeControls}
+            actionPending={actionPending}
+            onClose={closeActionDialog}
+            onConfirm={() => void (reversalTarget ? reverseAction() : recordAction())}
+            onPointerDown={beginSheetDismiss}
+            onPointerMove={continueSheetDismiss}
+            onPointerUp={finishSheetDismiss}
+            onPointerCancel={() => {
+              sheetDismissStartYRef.current = null;
+            }}
+          />
         </>
       )}
     </main>

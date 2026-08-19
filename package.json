@@ -13,7 +13,7 @@
     "build": "turbo run build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint \"packages/**/*.ts\" \"apps/worker/**/*.ts\" --max-warnings=0 && turbo run lint",
+    "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "pnpm test:unit && pnpm test:integration",
     "test:unit": "turbo run test:unit",

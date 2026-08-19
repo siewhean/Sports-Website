@@ -13,7 +13,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run tests",
-    "test:evaluation": "vitest run tests/evaluation.test.ts"
+    "test:evaluation": "vitest run tests/evaluation.test.ts",
+    "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
     "@matchday/contracts": "workspace:*",

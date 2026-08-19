@@ -16,7 +16,7 @@
       "dependsOn": ["^typecheck"]
     },
     "test:unit": {
-      "dependsOn": ["^build", "^test:unit"]
+      "dependsOn": ["^build"]
     },
     "test:integration": {
       "dependsOn": ["^build"],

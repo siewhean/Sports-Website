@@ -7,7 +7,7 @@ import type {
 } from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
-import { ApiError } from "./errors.js";
+import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import type { Phase4AiOptions, Phase4PublicProjectionPort } from "./phase-4-runtime.js";
@@ -33,7 +33,7 @@ export type OrganisationBootstrapReceipt = WritableOrganisation & {
   created: boolean;
 };
 
-function first<T>(rows: readonly T[], code: string, message: string): T {
+function first<T>(rows: readonly T[], code: ApiErrorCode = ErrorCode.NOT_FOUND, message = "Not found"): T {
   const row = rows[0];
   if (!row) throw new ApiError(404, code, message);
   return row;
@@ -88,7 +88,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           `SELECT display_name FROM accounts WHERE id=$1 AND status='active' FOR SHARE`,
           [actor.accountId],
         ),
-        "ACCOUNT_NOT_ACTIVE",
+        ErrorCode.ACCOUNT_NOT_ACTIVE,
         "An active account is required to create an organiser workspace",
       );
       const occurredAt = this.reliableNow();
@@ -142,7 +142,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
             occurredAt,
           ],
         ),
-        "ORGANISATION_OUTBOX_FAILED",
+        ErrorCode.ORGANISATION_OUTBOX_FAILED,
         "The organiser workspace evidence could not be recorded",
       );
       return { id: organisation.id, name: organisation.name, role: "owner", created: true };
@@ -162,7 +162,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
            AND membership.role IN ('owner','organiser','viewer')`,
         [competitionId, actor.accountId],
       ),
-      "COMPETITION_ACCESS_DENIED",
+      ErrorCode.COMPETITION_ACCESS_DENIED,
       "Competition access denied",
     );
   }
@@ -170,9 +170,9 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
   private async assertSetupWrite(actor: Phase3Actor, competitionId: string): Promise<ReadAccess> {
     const access = await this.readAccess(this.reliableSql, actor, competitionId);
     if (access.membership_role === "viewer")
-      throw new ApiError(403, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+      throw new ApiError(403, ErrorCode.COMPETITION_ACCESS_DENIED, "Competition access denied");
     if (access.status === "archived")
-      throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+      throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
     return access;
   }
 
@@ -217,19 +217,19 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
              WHERE draft.competition_id=$1`,
             [competitionId],
           ),
-          "SETUP_DRAFT_NOT_FOUND",
+          ErrorCode.SETUP_DRAFT_NOT_FOUND,
           "Setup draft not found",
         );
         return readOnlyDocument(phase4SetupDocumentFromStorage(row));
       }
       if (access.status === "archived")
-        throw new ApiError(409, "COMPETITION_ARCHIVED", "Archived competitions are immutable");
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
       const resumed = first(
         await tx.unsafe<{ value: Phase4SetupStorageRow | string }>(
           `SELECT phase4_resume_setup_draft($1,$2,$3,$4,$5) value`,
           [access.organisation_id, competitionId, actor.accountId, idempotencyKey, requestId],
         ),
-        "SETUP_RESUME_FAILED",
+        ErrorCode.SETUP_RESUME_FAILED,
         "Setup draft could not be resumed",
       );
       const row = decodePhase4Json<Phase4SetupStorageRow>(resumed.value);
@@ -248,7 +248,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
          WHERE draft.competition_id=$1`,
         [competitionId],
       ),
-      "SETUP_DRAFT_NOT_FOUND",
+      ErrorCode.SETUP_DRAFT_NOT_FOUND,
       "Setup draft not found",
     );
     const document = phase4SetupDocumentFromStorage(row);
