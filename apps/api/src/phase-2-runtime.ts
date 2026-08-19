@@ -1808,7 +1808,7 @@ export class Phase2Runtime {
             if (rotationRequired[0]?.required) {
               throw new ApiError(
                 409,
-                "ACCESS_FALLBACK_ROTATION_REQUIRED",
+                ErrorCode.ACCESS_FALLBACK_ROTATION_REQUIRED,
                 "Legacy fallback numbers require organiser rotation before use",
               );
             }
@@ -2104,7 +2104,7 @@ export class Phase2Runtime {
     if (!row.pack_version || (row.division_pack_version && row.division_pack_version !== row.pack_version)) {
       throw new ApiError(
         409,
-        "SPORT_PACK_REFERENCE_INVALID",
+        ErrorCode.SPORT_PACK_REFERENCE_INVALID,
         "Competition and division scoring settings must use the same authoritative sport pack",
       );
     }
@@ -2127,7 +2127,7 @@ export class Phase2Runtime {
     } catch (error) {
       throw new ApiError(
         409,
-        "SPORT_SETTINGS_INVALID",
+        ErrorCode.SPORT_SETTINGS_INVALID,
         error instanceof Error ? error.message : "The effective sport settings are invalid",
       );
     }
@@ -2191,7 +2191,7 @@ export class Phase2Runtime {
     if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
       throw new ApiError(
         409,
-        "SPORT_PACK_VERSION_UNSUPPORTED",
+        ErrorCode.SPORT_PACK_VERSION_UNSUPPORTED,
         `Score stream pack ${stream.pack_version} is not supported by reducer ${SPORT_PACKS[stream.sport_code].version}`,
       );
     }
@@ -2268,7 +2268,7 @@ export class Phase2Runtime {
     if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
       throw new ApiError(
         409,
-        "SPORT_PACK_VERSION_UNSUPPORTED",
+        ErrorCode.SPORT_PACK_VERSION_UNSUPPORTED,
         `Score stream pack ${stream.pack_version} is not supported by reducer ${SPORT_PACKS[stream.sport_code].version}`,
       );
     }
@@ -2287,7 +2287,7 @@ export class Phase2Runtime {
     if (hasLegacyCorrection && !options.readOnlyLegacyProjection) {
       throw new ApiError(
         409,
-        "LEGACY_CORRECTION_REQUIRES_REVIEW",
+        ErrorCode.LEGACY_CORRECTION_REQUIRES_REVIEW,
         "This historical corrected result is readable but must be reviewed before canonical scoring can continue",
       );
     }
@@ -2337,7 +2337,7 @@ export class Phase2Runtime {
     } catch (error) {
       throw new ApiError(
         409,
-        "SCORING_STREAM_INVALID",
+        ErrorCode.SCORING_STREAM_INVALID,
         error instanceof Error ? error.message : "The score stream is invalid",
       );
     }
@@ -2401,7 +2401,7 @@ export class Phase2Runtime {
         if (legacyCorrection) {
           throw new ApiError(
             409,
-            "LEGACY_CORRECTION_REQUIRES_REVIEW",
+            ErrorCode.LEGACY_CORRECTION_REQUIRES_REVIEW,
             "This historical corrected result is readable but cannot accept canonical score events",
           );
         }
@@ -2418,7 +2418,7 @@ export class Phase2Runtime {
           if (duplicate.command_fingerprint !== fingerprint) {
             throw new ApiError(
               409,
-              "IDEMPOTENCY_KEY_REUSED",
+              ErrorCode.IDEMPOTENCY_KEY_REUSED,
               "Client event ID was reused with different score-event content",
             );
           }
@@ -2442,7 +2442,7 @@ export class Phase2Runtime {
         if (!match.home_entry_id || !match.away_entry_id) {
           throw new ApiError(
             409,
-            "MATCH_PARTICIPANTS_UNRESOLVED",
+            ErrorCode.MATCH_PARTICIPANTS_UNRESOLVED,
             "Scoring is unavailable until authoritative participants are resolved",
           );
         }
@@ -2457,7 +2457,7 @@ export class Phase2Runtime {
         if (stream.current_version !== expectedAggregateVersion) {
           throw new ApiError(
             409,
-            "SCORE_VERSION_CONFLICT",
+            ErrorCode.SCORE_VERSION_CONFLICT,
             `Expected aggregate version ${expectedAggregateVersion}, current version is ${stream.current_version}`,
           );
         }
@@ -2475,7 +2475,7 @@ export class Phase2Runtime {
         } catch (error) {
           throw new ApiError(
             422,
-            "SCORE_EVENT_REJECTED",
+            ErrorCode.SCORE_EVENT_REJECTED,
             error instanceof Error ? error.message : "Score event is invalid",
           );
         }
@@ -2564,7 +2564,7 @@ export class Phase2Runtime {
       await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation, false);
       throw new ApiError(
         403,
-        "SELF_TRANSFER_FORBIDDEN",
+        ErrorCode.SELF_TRANSFER_FORBIDDEN,
         "A writer cannot transfer itself. A candidate must request organiser approval.",
       );
     });
@@ -3053,7 +3053,7 @@ export class Phase2Runtime {
       if (authoritativePendingState !== "none" && !input.overrideAcknowledged) {
         throw new ApiError(
           409,
-          "TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED",
+          ErrorCode.TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED,
           "Current pending or unknown incumbent state requires explicit organiser acknowledgement",
         );
       }
@@ -3155,7 +3155,7 @@ export class Phase2Runtime {
     if (!hasCanonicalStream) {
       throw new ApiError(
         409,
-        "CANONICAL_SCORE_STREAM_REQUIRED",
+        ErrorCode.CANONICAL_SCORE_STREAM_REQUIRED,
         "Finalisation requires a canonical five-sport score stream",
       );
     }
@@ -3204,7 +3204,7 @@ export class Phase2Runtime {
           if (duplicate.event_type !== "finalisation" || duplicate.command_fingerprint !== finalisationFingerprint) {
             throw new ApiError(
               409,
-              "IDEMPOTENCY_KEY_REUSED",
+              ErrorCode.IDEMPOTENCY_KEY_REUSED,
               "Finalisation client event ID is already used by another score event",
             );
           }
@@ -3234,7 +3234,7 @@ export class Phase2Runtime {
         if (!match.home_entry_id || !match.away_entry_id) {
           throw new ApiError(
             409,
-            "MATCH_PARTICIPANTS_UNRESOLVED",
+            ErrorCode.MATCH_PARTICIPANTS_UNRESOLVED,
             "Finalisation is unavailable until authoritative participants are resolved",
           );
         }
@@ -3242,7 +3242,7 @@ export class Phase2Runtime {
         if (expectedAggregateVersion !== undefined && canonical.aggregateVersion !== expectedAggregateVersion) {
           throw new ApiError(
             409,
-            "SCORE_VERSION_CONFLICT",
+            ErrorCode.SCORE_VERSION_CONFLICT,
             `Expected aggregate version ${expectedAggregateVersion}, current version is ${canonical.aggregateVersion}`,
           );
         }
@@ -3269,7 +3269,7 @@ export class Phase2Runtime {
         } catch (error) {
           throw new ApiError(
             422,
-            "FINALISATION_INVALID",
+            ErrorCode.FINALISATION_INVALID,
             error instanceof Error ? error.message : "Finalisation is invalid",
           );
         }
@@ -3430,7 +3430,7 @@ export class Phase2Runtime {
       if (canonical.aggregateVersion !== input.expectedAggregateVersion) {
         throw new ApiError(
           409,
-          "SCORE_VERSION_CONFLICT",
+          ErrorCode.SCORE_VERSION_CONFLICT,
           `Expected aggregate version ${input.expectedAggregateVersion}, current version is ${canonical.aggregateVersion}`,
         );
       }
@@ -3604,7 +3604,7 @@ export class Phase2Runtime {
       if (canonical.aggregateVersion !== input.expectedAggregateVersion) {
         throw new ApiError(
           409,
-          "SCORE_VERSION_CONFLICT",
+          ErrorCode.SCORE_VERSION_CONFLICT,
           `Expected aggregate version ${input.expectedAggregateVersion}, current version is ${canonical.aggregateVersion}`,
         );
       }
@@ -3615,7 +3615,7 @@ export class Phase2Runtime {
       if (!["final", "corrected"].includes(match.state) && !explicitlyReopened) {
         throw new ApiError(
           409,
-          "MATCH_NOT_CORRECTION_READY",
+          ErrorCode.MATCH_NOT_CORRECTION_READY,
           "Correction requires a finalised match or the latest organiser reopen event",
         );
       }
@@ -3640,7 +3640,7 @@ export class Phase2Runtime {
       if (new Set(reservedClientEventIds).size !== reservedClientEventIds.length) {
         throw new ApiError(
           409,
-          "IDEMPOTENCY_KEY_REUSED",
+          ErrorCode.IDEMPOTENCY_KEY_REUSED,
           "Correction envelope and child client event IDs must be distinct",
         );
       }
@@ -3652,7 +3652,7 @@ export class Phase2Runtime {
       if (colliding[0]) {
         throw new ApiError(
           409,
-          "IDEMPOTENCY_KEY_REUSED",
+          ErrorCode.IDEMPOTENCY_KEY_REUSED,
           "A correction client event ID is already used by the score stream",
         );
       }
@@ -4200,7 +4200,7 @@ export class Phase2Runtime {
     if (snapshot.row_count !== entries.length) {
       throw new ApiError(
         500,
-        "STANDINGS_PERSISTENCE_INVALID",
+        ErrorCode.STANDINGS_PERSISTENCE_INVALID,
         `Standings snapshot retained ${snapshot.row_count} of ${entries.length} active entries`,
       );
     }
@@ -5264,7 +5264,7 @@ export class Phase2Runtime {
       if (existing.result_version !== input.expectedRevision) {
         throw new ApiError(
           409,
-          "RESULT_CONFLICT_VERSION_CONFLICT",
+          ErrorCode.RESULT_CONFLICT_VERSION_CONFLICT,
           `Expected conflict revision ${input.expectedRevision}, current revision is ${existing.result_version}`,
         );
       }

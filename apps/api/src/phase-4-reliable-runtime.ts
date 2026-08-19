@@ -88,7 +88,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           `SELECT display_name FROM accounts WHERE id=$1 AND status='active' FOR SHARE`,
           [actor.accountId],
         ),
-        "ACCOUNT_NOT_ACTIVE",
+        ErrorCode.ACCOUNT_NOT_ACTIVE,
         "An active account is required to create an organiser workspace",
       );
       const occurredAt = this.reliableNow();
@@ -142,7 +142,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
             occurredAt,
           ],
         ),
-        "ORGANISATION_OUTBOX_FAILED",
+        ErrorCode.ORGANISATION_OUTBOX_FAILED,
         "The organiser workspace evidence could not be recorded",
       );
       return { id: organisation.id, name: organisation.name, role: "owner", created: true };
@@ -162,7 +162,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
            AND membership.role IN ('owner','organiser','viewer')`,
         [competitionId, actor.accountId],
       ),
-      "COMPETITION_ACCESS_DENIED",
+      ErrorCode.COMPETITION_ACCESS_DENIED,
       "Competition access denied",
     );
   }
@@ -217,7 +217,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
              WHERE draft.competition_id=$1`,
             [competitionId],
           ),
-          "SETUP_DRAFT_NOT_FOUND",
+          ErrorCode.SETUP_DRAFT_NOT_FOUND,
           "Setup draft not found",
         );
         return readOnlyDocument(phase4SetupDocumentFromStorage(row));
@@ -229,7 +229,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
           `SELECT phase4_resume_setup_draft($1,$2,$3,$4,$5) value`,
           [access.organisation_id, competitionId, actor.accountId, idempotencyKey, requestId],
         ),
-        "SETUP_RESUME_FAILED",
+        ErrorCode.SETUP_RESUME_FAILED,
         "Setup draft could not be resumed",
       );
       const row = decodePhase4Json<Phase4SetupStorageRow>(resumed.value);
@@ -248,7 +248,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
          WHERE draft.competition_id=$1`,
         [competitionId],
       ),
-      "SETUP_DRAFT_NOT_FOUND",
+      ErrorCode.SETUP_DRAFT_NOT_FOUND,
       "Setup draft not found",
     );
     const document = phase4SetupDocumentFromStorage(row);

@@ -139,9 +139,13 @@ function decodedJson<T>(value: T | string): T {
 
 function expectDomain<T>(result: DomainCommandResult<T>): T {
   if (result.ok) return result.value;
-  const validation = ["VALIDATION_ERROR", "IMPORT_VALIDATION_FAILED", "FREE_ENTRY_LIMIT_REACHED"].includes(
-    result.error.code,
-  );
+  const validation = (
+    [
+      ErrorCode.VALIDATION_ERROR,
+      ErrorCode.IMPORT_VALIDATION_FAILED,
+      ErrorCode.FREE_ENTRY_LIMIT_REACHED,
+    ] as readonly string[]
+  ).includes(result.error.code);
   throw new ApiError(validation ? 422 : 409, result.error.code, result.error.message);
 }
 
@@ -1825,7 +1829,7 @@ export class Phase3Runtime {
       if (rollbackState.imported !== entryImport.row_count || rollbackState.safe !== rollbackState.imported) {
         throw new ApiError(
           409,
-          "IMPORT_ROLLBACK_CONFLICT",
+          ErrorCode.IMPORT_ROLLBACK_CONFLICT,
           "Imported entries changed or acquired match history and cannot be rolled back",
         );
       }
@@ -2078,7 +2082,7 @@ export class Phase3Runtime {
       if (issues.length) {
         throw new ApiError(
           422,
-          "SETTINGS_INCOMPATIBLE",
+          ErrorCode.SETTINGS_INCOMPATIBLE,
           "Previous effective settings are incompatible with the target pack",
         );
       }
@@ -2378,7 +2382,7 @@ export class Phase3Runtime {
       } catch (error) {
         throw new ApiError(
           422,
-          "CAPACITY_INVALID",
+          ErrorCode.CAPACITY_INVALID,
           error instanceof Error ? error.message : "Capacity input is invalid",
         );
       }
@@ -2799,7 +2803,7 @@ export class Phase3Runtime {
       if (existing[0].source_result_hash === source.source_hash) return existing[0];
       throw new ApiError(
         409,
-        "STANDINGS_SOURCE_STALE",
+        ErrorCode.STANDINGS_SOURCE_STALE,
         "Persisted standings no longer match the result or settings source for this version",
       );
     }

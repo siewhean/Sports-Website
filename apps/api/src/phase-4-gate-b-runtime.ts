@@ -156,7 +156,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
            AND membership.role IN ('owner','organiser') FOR UPDATE OF c`,
         [competitionId, actor.accountId],
       ),
-      "COMPETITION_ACCESS_DENIED",
+      ErrorCode.COMPETITION_ACCESS_DENIED,
       "Competition access denied",
     );
     if (access.status === "archived")
@@ -172,7 +172,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
          WHERE draft.competition_id=$1 FOR UPDATE OF draft`,
         [competitionId],
       ),
-      "SETUP_DRAFT_NOT_FOUND",
+      ErrorCode.SETUP_DRAFT_NOT_FOUND,
       "Setup draft not found",
     );
   }
@@ -210,7 +210,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
          ORDER BY activated_at DESC NULLS LAST,created_at DESC,version DESC LIMIT 1 FOR SHARE`,
         [sportCode],
       ),
-      "SPORT_PACK_NOT_FOUND",
+      ErrorCode.SPORT_PACK_NOT_FOUND,
       "The selected sport has no active settings pack",
     );
   }
@@ -226,7 +226,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
          FOR SHARE OF pack`,
         [competitionId],
       ),
-      "SPORT_PACK_NOT_FOUND",
+      ErrorCode.SPORT_PACK_NOT_FOUND,
       "The competition's pinned settings pack was not found",
     );
   }
@@ -452,7 +452,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
                     requestId,
                   ],
                 ),
-                "SETUP_PATCH_FAILED",
+                ErrorCode.SETUP_PATCH_FAILED,
                 "Setup patch failed",
               ).value
             : first(
@@ -472,7 +472,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
                     requestId,
                   ],
                 ),
-                "SETUP_SAVE_FAILED",
+                ErrorCode.SETUP_SAVE_FAILED,
                 "Setup save failed",
               ).value;
         const saved = decodePhase4Json<Phase4SetupStorageRow>(result);

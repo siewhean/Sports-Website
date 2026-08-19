@@ -7,7 +7,7 @@ import { createDefaultFormatTemplates, SPORT_PACKS } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../../src/app.js";
-import { ApiError } from "../../src/errors.js";
+import { ApiError, ErrorCode } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
@@ -2459,6 +2459,6 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         awayEntryId: entriesA[1]?.id ?? "",
       }),
     ).toThrow("Match has not started");
-    expect(new ApiError(409, "STALE_WRITER_GENERATION", "stale").statusCode).toBe(409);
+    expect(new ApiError(409, ErrorCode.STALE_WRITER_GENERATION, "stale").statusCode).toBe(409);
   });
 });

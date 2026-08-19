@@ -453,7 +453,7 @@ export class Phase4Runtime {
          AND m.role IN ('owner','organiser')`,
       [competitionId, actor.accountId],
     );
-    const access = first(rows, "COMPETITION_ACCESS_DENIED", "Competition access denied");
+    const access = first(rows, ErrorCode.COMPETITION_ACCESS_DENIED, "Competition access denied");
     access.capacity_revision = Number(access.capacity_revision);
     if (!Number.isSafeInteger(access.capacity_revision) || access.capacity_revision < 1)
       throw new ApiError(500, ErrorCode.INVALID_CAPACITY_REVISION, "Competition capacity revision is invalid");
@@ -559,7 +559,7 @@ export class Phase4Runtime {
     if (!current)
       throw new ApiError(
         409,
-        "STALE_SCHEDULE_INPUT",
+        ErrorCode.STALE_SCHEDULE_INPUT,
         "Capacity, entries, or published formats changed; generate a new schedule",
       );
   }
@@ -836,7 +836,7 @@ export class Phase4Runtime {
     if (saved.outcome !== "saved" && saved.outcome !== "idempotent_replay")
       throw new ApiError(
         409,
-        "FORMAT_RECOMMENDATION_UNAVAILABLE",
+        ErrorCode.FORMAT_RECOMMENDATION_UNAVAILABLE,
         `The selected format is no longer editable (${saved.outcome})`,
       );
     return this.v1MaterialisedResult(saved.document, recommendationId, saved.outcome === "idempotent_replay");
@@ -900,7 +900,7 @@ export class Phase4Runtime {
     };
     const recommendationSetHash = first(
       await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [sourceEvidence]),
-      "HASH_FAILED",
+      ErrorCode.HASH_FAILED,
       "Recommendation evidence could not be hashed",
     ).hash;
     const existingSet = (
@@ -1155,7 +1155,7 @@ export class Phase4Runtime {
          WHERE c.id=$1 AND s.competition_id=$2 AND s.source_hash=$3`,
         [selected.id, access.id, selection.recommendation_set_hash],
       ),
-      "RECOMMENDATION_EVIDENCE_NOT_FOUND",
+      ErrorCode.RECOMMENDATION_EVIDENCE_NOT_FOUND,
       "Recommendation evidence is stale",
     );
     const evidenceRows = await tx.unsafe<{
@@ -1215,7 +1215,7 @@ export class Phase4Runtime {
               decoded(evidence.layout),
             ],
           ),
-          "FORMAT_SAVE_FAILED",
+          ErrorCode.FORMAT_SAVE_FAILED,
           "Selected format could not be applied",
         );
       applied.push({
@@ -1339,7 +1339,7 @@ export class Phase4Runtime {
                WHERE d.competition_id=$1 AND s.division_id=$2`,
           reference.scope === "competition" ? [access.id] : [access.id, reference.division_id],
         );
-        const row = first(rows, "SETTINGS_NOT_FOUND", "Pinned settings not found");
+        const row = first(rows, ErrorCode.SETTINGS_NOT_FOUND, "Pinned settings not found");
         if (
           reference.competition_id !== access.id ||
           reference.settings_revision !== row.revision ||
@@ -1428,7 +1428,7 @@ export class Phase4Runtime {
             if (applied.definition_hash !== evidence.definition_hash || applied.division_id !== evidence.division_id)
               throw new ApiError(
                 409,
-                "STALE_FORMAT_REFERENCE",
+                ErrorCode.STALE_FORMAT_REFERENCE,
                 "Applied format does not match recommendation evidence",
               );
           }
@@ -1449,7 +1449,7 @@ export class Phase4Runtime {
            ) stale`,
           [access.id, values.capacity, values.settings, values.format_recommendations, values.schedule_review],
         ),
-        "SCHEDULE_REFERENCE_CHECK_FAILED",
+        ErrorCode.SCHEDULE_REFERENCE_CHECK_FAILED,
         "Schedule selection could not be verified",
       );
       if (row.stale) throw new ApiError(409, ErrorCode.STALE_SCHEDULE_REFERENCE, "Schedule selection is stale");
@@ -1462,7 +1462,7 @@ export class Phase4Runtime {
            ) stale`,
           [access.id, values.capacity, values.settings, values.schedule_review, values.review_publish],
         ),
-        "PUBLICATION_REFERENCE_CHECK_FAILED",
+        ErrorCode.PUBLICATION_REFERENCE_CHECK_FAILED,
         "Published schedule could not be verified",
       );
       if (row.stale)
@@ -1713,7 +1713,7 @@ export class Phase4Runtime {
            FOR UPDATE OF division`,
           [divisionId, competitionId],
         ),
-        "DIVISION_NOT_FOUND",
+        ErrorCode.DIVISION_NOT_FOUND,
         "Division not found",
       );
       if (input.document.graph.entryCount !== division.active_entry_count)
@@ -1726,7 +1726,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { competition_id: competitionId, division_id: divisionId, ...input },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -1767,7 +1767,7 @@ export class Phase4Runtime {
             input.document.layout,
           ],
         ),
-        "FORMAT_SAVE_FAILED",
+        ErrorCode.FORMAT_SAVE_FAILED,
         "Format could not be saved",
       );
       await tx.unsafe(
@@ -1978,7 +1978,7 @@ export class Phase4Runtime {
         throw new ApiError(422, ErrorCode.TEMPLATE_SPORT_MISMATCH, "Template sport must match its source format");
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [input]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -2094,7 +2094,7 @@ export class Phase4Runtime {
           `${this.templateQuery()} WHERE t.id=$1 AND v.id=$2`,
           [templateId, versionId],
         ),
-        "TEMPLATE_NOT_FOUND",
+        ErrorCode.TEMPLATE_NOT_FOUND,
         "Template not found",
       );
       return { ...this.templateView(row), idempotent_replay: Boolean(receipt) };
@@ -2116,14 +2116,14 @@ export class Phase4Runtime {
           `SELECT status FROM format_templates WHERE id=$1 AND organisation_id=$2 FOR UPDATE`,
           [templateId, organisationId],
         ),
-        "TEMPLATE_NOT_FOUND",
+        ErrorCode.TEMPLATE_NOT_FOUND,
         "Template not found",
       );
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { template_id: templateId, ...input },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -2161,7 +2161,7 @@ export class Phase4Runtime {
           `${this.templateQuery()} WHERE t.id=$1 ORDER BY v.version DESC LIMIT 1`,
           [templateId],
         ),
-        "TEMPLATE_NOT_FOUND",
+        ErrorCode.TEMPLATE_NOT_FOUND,
         "Template not found",
       );
       return { ...this.templateView(latest), idempotent_replay: Boolean(receipt) };
@@ -2200,7 +2200,7 @@ export class Phase4Runtime {
       );
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [input]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -2242,7 +2242,7 @@ export class Phase4Runtime {
             decoded(version.layout),
           ],
         ),
-        "FORMAT_SAVE_FAILED",
+        ErrorCode.FORMAT_SAVE_FAILED,
         "Template could not be applied",
       );
       await tx.unsafe(
@@ -2349,7 +2349,7 @@ export class Phase4Runtime {
             normalizedText.length,
           ],
         ),
-        "AI_BEGIN_FAILED",
+        ErrorCode.AI_BEGIN_FAILED,
         "AI action could not be started",
       );
       const beginValue = decoded<{
@@ -2570,7 +2570,7 @@ export class Phase4Runtime {
   ): Promise<{ problem: ScheduleProblem; capacityHash: string; formatRevisionIds: string[] }> {
     const capacityHash = first(
       await tx.unsafe<{ hash: string | null }>(`SELECT phase4_capacity_hash($1) hash`, [competition.id]),
-      "CAPACITY_NOT_FOUND",
+      ErrorCode.CAPACITY_NOT_FOUND,
       "Capacity not found",
     ).hash;
     if (!capacityHash)
@@ -2585,7 +2585,7 @@ export class Phase4Runtime {
     if (durations.size !== 1)
       throw new ApiError(
         422,
-        "MIXED_SLOT_DURATION_UNSUPPORTED",
+        ErrorCode.MIXED_SLOT_DURATION_UNSUPPORTED,
         "All playing areas must use the same match slot duration",
       );
     const durationMinutes = areaRows[0]!.slot_minutes;
@@ -2639,7 +2639,7 @@ export class Phase4Runtime {
       await tx.unsafe<{ count: number }>(`SELECT count(*)::int count FROM divisions WHERE competition_id=$1`, [
         competition.id,
       ]),
-      "DIVISIONS_NOT_FOUND",
+      ErrorCode.DIVISIONS_NOT_FOUND,
       "Divisions not found",
     ).count;
     if (formats.length !== divisionCount || formats.length === 0)
@@ -2664,7 +2664,7 @@ export class Phase4Runtime {
       } catch (error: unknown) {
         throw new ApiError(
           422,
-          "SCHEDULE_SOURCE_INVALID",
+          ErrorCode.SCHEDULE_SOURCE_INVALID,
           error instanceof Error ? error.message : "Format cannot be scheduled",
         );
       }
@@ -2792,7 +2792,7 @@ export class Phase4Runtime {
             `SELECT * FROM schedule_generation_options WHERE id=$1 AND job_id=$2`,
             [row.current_best_option_id, jobId],
           ),
-          "SCHEDULE_OPTION_NOT_FOUND",
+          ErrorCode.SCHEDULE_OPTION_NOT_FOUND,
           "Current schedule option not found",
         )
       : null;
@@ -2837,7 +2837,7 @@ export class Phase4Runtime {
       await this.lockIdempotency(tx, access.organisation_id, input.idempotency_key);
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [input]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -2854,7 +2854,7 @@ export class Phase4Runtime {
           await tx.unsafe<{ input_hash: string }>(`SELECT input_hash FROM schedule_generation_jobs WHERE id=$1`, [
             replay.job_id,
           ]),
-          "SCHEDULE_JOB_NOT_FOUND",
+          ErrorCode.SCHEDULE_JOB_NOT_FOUND,
           "Schedule job not found",
         );
         return { jobId: replay.job_id, inputHash: row.input_hash, replay: true };
@@ -2886,7 +2886,7 @@ export class Phase4Runtime {
            VALUES($1,$2,$3,$4,$5::jsonb,phase4_sha256_json($5::jsonb),$6,$7,$7) RETURNING input_hash`,
           [jobId, access.organisation_id, competitionId, input.objective, snapshot, actor.accountId, requestId],
         ),
-        "SCHEDULE_JOB_CREATE_FAILED",
+        ErrorCode.SCHEDULE_JOB_CREATE_FAILED,
         "Schedule job could not be created",
       );
       await tx.unsafe(
@@ -2933,7 +2933,7 @@ export class Phase4Runtime {
         `SELECT competition_id FROM schedule_generation_jobs WHERE id=$1`,
         [jobId],
       ),
-      "SCHEDULE_JOB_NOT_FOUND",
+      ErrorCode.SCHEDULE_JOB_NOT_FOUND,
       "Schedule job not found",
     );
     await this.competitionAccess(this.sql, row.competition_id, actor, false);
@@ -3018,12 +3018,12 @@ export class Phase4Runtime {
       )
         throw new ApiError(
           409,
-          "SCHEDULE_CONTINUE_NOT_ALLOWED",
+          ErrorCode.SCHEDULE_CONTINUE_NOT_ALLOWED,
           "Only a terminal job with a retained current best can continue",
         );
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [{ job_id: jobId, ...input }]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -3069,7 +3069,7 @@ export class Phase4Runtime {
             jobId,
           ],
         ),
-        "SCHEDULE_JOB_CREATE_FAILED",
+        ErrorCode.SCHEDULE_JOB_CREATE_FAILED,
         "Schedule continuation could not be created",
       );
       await tx.unsafe(
@@ -3128,7 +3128,7 @@ export class Phase4Runtime {
       await this.lockIdempotency(tx, row.organisation_id, input.idempotency_key);
       const requestHash = first(
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [{ job_id: jobId, ...input }]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -3253,7 +3253,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { job_id: jobId, option_id: optionId, ...input },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -3277,7 +3277,7 @@ export class Phase4Runtime {
             actor.accountId,
             requestId,
           ]),
-          "SCHEDULE_ACCEPT_FAILED",
+          ErrorCode.SCHEDULE_ACCEPT_FAILED,
           "Schedule option could not be accepted",
         );
         revisionId = accepted.id;
@@ -3301,7 +3301,7 @@ export class Phase4Runtime {
       await this.sql.unsafe<{ competition_id: string }>(`SELECT competition_id FROM schedule_revisions WHERE id=$1`, [
         revisionId,
       ]),
-      "SCHEDULE_REVISION_NOT_FOUND",
+      ErrorCode.SCHEDULE_REVISION_NOT_FOUND,
       "Schedule revision not found",
     );
     await this.competitionAccess(this.sql, row.competition_id, actor, false);
@@ -3491,7 +3491,7 @@ export class Phase4Runtime {
         `SELECT input_snapshot FROM schedule_generation_jobs WHERE id=$1`,
         [revision.source_job_id],
       ),
-      "SCHEDULE_JOB_NOT_FOUND",
+      ErrorCode.SCHEDULE_JOB_NOT_FOUND,
       "Schedule source job not found",
     );
     // Locks are a deliberate overlay added after an accepted source job. A
@@ -3636,7 +3636,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ competition_id: string }>(`SELECT competition_id FROM schedule_revisions WHERE id=$1`, [
           revisionId,
         ]),
-        "SCHEDULE_REVISION_NOT_FOUND",
+        ErrorCode.SCHEDULE_REVISION_NOT_FOUND,
         "Schedule revision not found",
       );
       const access = await this.competitionAccess(tx, identity.competition_id, actor, false);
@@ -3645,7 +3645,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { revision_id: revisionId, ...input },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -3699,7 +3699,7 @@ export class Phase4Runtime {
           `SELECT COALESCE(max(revision),0)::int+1 revision FROM schedule_revisions WHERE competition_id=$1`,
           [parent.competition_id],
         ),
-        "REVISION_FAILED",
+        ErrorCode.REVISION_FAILED,
         "Revision could not be allocated",
       ).revision;
       const firstFormat = first(
@@ -3707,7 +3707,7 @@ export class Phase4Runtime {
           `SELECT format_revision_id FROM schedule_revision_formats WHERE schedule_revision_id=$1 ORDER BY division_id LIMIT 1`,
           [revisionId],
         ),
-        "FORMAT_NOT_FOUND",
+        ErrorCode.FORMAT_NOT_FOUND,
         "Schedule format provenance not found",
       );
       const quality = preview.consequences.quality!;
@@ -3810,7 +3810,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { revision_id: revisionId, ...input },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -3888,7 +3888,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { revision_id: revisionId, match_id: matchId },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -4215,7 +4215,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ competition_id: string }>(`SELECT competition_id FROM schedule_revisions WHERE id=$1`, [
           revisionId,
         ]),
-        "SCHEDULE_REVISION_NOT_FOUND",
+        ErrorCode.SCHEDULE_REVISION_NOT_FOUND,
         "Schedule revision not found",
       );
       const access = await this.competitionAccess(tx, identity.competition_id, actor);
@@ -4224,7 +4224,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { revision_id: revisionId, ...input },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (
@@ -4295,7 +4295,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ competition_id: string }>(`SELECT competition_id FROM schedule_revisions WHERE id=$1`, [
           revisionId,
         ]),
-        "SCHEDULE_REVISION_NOT_FOUND",
+        ErrorCode.SCHEDULE_REVISION_NOT_FOUND,
         "Schedule revision not found",
       );
       const access = await this.competitionAccess(tx, identity.competition_id, actor);
@@ -4304,7 +4304,7 @@ export class Phase4Runtime {
         await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
           { revision_id: revisionId, ...input },
         ]),
-        "HASH_FAILED",
+        ErrorCode.HASH_FAILED,
         "Hash failed",
       ).hash;
       const receipt = (

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
-import { ApiError } from "../../src/errors.js";
+import { ApiError, ErrorCode } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import type { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
@@ -311,7 +311,7 @@ describe("Phase 3 authenticated route boundary", () => {
   it("preserves optimistic conflicts without success evidence", async () => {
     const phase3Runtime = runtime();
     vi.mocked(phase3Runtime.updateSettings).mockRejectedValueOnce(
-      new ApiError(409, "REVISION_CONFLICT", "Sport settings revision is stale"),
+      new ApiError(409, ErrorCode.REVISION_CONFLICT, "Sport settings revision is stale"),
     );
     const app = await buildApp({
       config: testConfig(),
