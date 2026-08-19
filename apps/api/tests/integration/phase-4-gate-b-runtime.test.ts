@@ -1057,7 +1057,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         `viewer-create-${randomUUID()}`,
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    ).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
     expect(await evidenceCounts()).toEqual(beforeCreate);
 
     await runtime.createSetupDraft(
@@ -1117,7 +1117,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
               { ...request, transition: { kind: "save_step" as const, step: request.step } },
               randomUUID(),
             );
-      await expect(denied).rejects.toMatchObject({ statusCode: 403 });
+      await expect(denied).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
       expect(await evidenceCounts()).toEqual(beforeDenied);
     }
 
@@ -1177,7 +1177,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403 });
+    ).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
   });
 
   it("lets V1 choose and materialise a capacity-fitting format without visiting Assisted Setup", async () => {
