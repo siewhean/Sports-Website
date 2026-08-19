@@ -1920,7 +1920,7 @@ body:has(.p2-score--simple) {
 }
 
 .p2-goal-sheet dt {
-  color: #969b96;
+  color: #b8bdb7;
   font-size: 0.67rem;
 }
 
@@ -1955,7 +1955,7 @@ body:has(.p2-score--simple) {
 }
 
 .p2-goal-sheet label small {
-  color: #969b96;
+  color: #b8bdb7;
   font-size: 0.68rem;
   font-weight: 430;
 }
