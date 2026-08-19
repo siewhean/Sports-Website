@@ -1,3 +1,4 @@
+import { authenticationAssuranceFromProvider } from "./assurance.js";
 import { IdentityError } from "./errors.js";
 import { SessionService } from "./session.js";
 import type { AccountRepository, Clock, IdentityProviderPort, ProviderSignInRequest, SignInResult } from "./types.js";
@@ -33,6 +34,7 @@ export class IdentityService {
     if (!claims.issuer || !claims.subject) {
       throw new IdentityError("AUTHENTICATION_FAILED", "Authentication could not be completed.");
     }
+    const assurance = authenticationAssuranceFromProvider(claims.assurance);
 
     const existing = await this.accounts.findByProvider(claims.issuer, claims.subject);
     if (existing) {
@@ -49,6 +51,7 @@ export class IdentityService {
         issuer: claims.issuer,
         subject: claims.subject,
         providerSessionId: claims.providerSessionId,
+        assurance,
       });
       return { account: existing, ...issued, isNewAccount: false };
     }
@@ -75,6 +78,7 @@ export class IdentityService {
       issuer: claims.issuer,
       subject: claims.subject,
       providerSessionId: claims.providerSessionId,
+      assurance,
     });
     return { account, ...issued, isNewAccount: true };
   }

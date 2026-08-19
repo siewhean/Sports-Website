@@ -81,6 +81,25 @@ const PublicDivisionSchema = Type.Object({
   standings: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
   bracket: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
 });
+const PublicCompetitionSummarySchema = Type.Object({
+  id: Id,
+  name: Type.String(),
+  slug: Type.String(),
+  sport_code: Type.Union([
+    Type.Literal("canoe_polo"),
+    Type.Literal("badminton"),
+    Type.Literal("table_tennis"),
+    Type.Literal("volleyball"),
+    Type.Literal("basketball"),
+  ]),
+  timezone: Type.String(),
+  starts_on: Type.String({ format: "date" }),
+  ends_on: Type.String({ format: "date" }),
+  status: Type.Union([Type.Literal("active"), Type.Literal("completed"), Type.Literal("archived")]),
+});
+const PublicCompetitionListingSchema = Type.Object({
+  competitions: Type.Array(PublicCompetitionSummarySchema),
+});
 const PublicCompetitionSchema = Type.Object({
   competition: Type.Object({
     id: Id,
@@ -1256,6 +1275,19 @@ export async function registerPhase2Routes(
       const session = await options.identityRequests.authenticate(request);
       return options.runtime.audit({ accountId: session.account.id }, request.params.competitionId);
     },
+  );
+
+  app.get(
+    "/api/v1/public/competitions",
+    {
+      schema: {
+        description:
+          "List competitions with a published schedule or result. A competition appears here once its organiser has completed setup and published at least once, the same condition the single-competition endpoint already requires.",
+        response: { 200: PublicCompetitionListingSchema },
+        tags: ["public"],
+      },
+    },
+    async () => options.runtime.publicCompetitions(),
   );
 
   app.get<{ Params: { slug: string } }>(

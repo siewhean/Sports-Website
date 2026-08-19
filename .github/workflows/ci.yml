@@ -52,8 +52,10 @@ jobs:
       RUN_INFRA_TESTS: "1"
       LOG_LEVEL: silent
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
       - name: Install the pinned pnpm version
@@ -66,7 +68,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test:unit
       - run: pnpm db:migrate:check
-      - run: pnpm backup:verify
+      - run: BACKUP_VERIFY_MODE=direct BACKUP_VERIFY_ADMIN_DATABASE_URL=postgres://matchday:matchday@127.0.0.1:5432/postgres BACKUP_VERIFY_DIRECT_CLIENT_IMAGE=postgres:18.4-alpine pnpm backup:verify
       - run: pnpm test:integration
       - run: pnpm validate:fixtures
       - run: pnpm --filter @matchday/api openapi:generate
@@ -74,14 +76,15 @@ jobs:
       - run: pnpm build
       - run: pnpm deploy:manifest
       - run: pnpm asset-delivery:verify:origin
-      - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verified-contracts-and-deployment
           path: |
             apps/api/openapi.generated.json
             artifacts/deployment-manifest.json
           if-no-files-found: error
-      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e
       - run: pnpm test:a11y
       - run: pnpm test:visual
@@ -90,8 +93,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Scan the repository for secrets
         run: bash scripts/scan-secrets.sh

@@ -58,14 +58,15 @@ async function createDivision(page: Page, name: string, code: string): Promise<s
 async function addEntries(page: Page, divisionName: string, prefix: string) {
   const division = page.getByRole("region", { name: divisionName });
   for (let seed = 1; seed <= 8; seed += 1) {
-    await division.getByLabel("Entry name").fill(`${prefix} ${seed}`);
-    await division.getByLabel("Seed").fill(String(seed));
-    await submitAndWait(page, division.getByRole("button", { name: "Add entry" }), "POST", "/entries");
+    const createEntry = division.locator("form").last();
+    await createEntry.getByLabel("Entry name").fill(`${prefix} ${seed}`);
+    await createEntry.getByLabel("Seed").fill(String(seed));
+    await submitAndWait(page, createEntry.getByRole("button", { name: "Add entry" }), "POST", "/entries");
   }
 }
 
 async function publishDivisionFormat(page: Page, competitionId: string, divisionId: string, label: string) {
-  await page.goto(`/organiser/competitions/${competitionId}/format?division=${divisionId}`);
+  await page.goto(`/organiser/competitions/${competitionId}/format?division=${divisionId}&advanced=1`);
   await expect(page.getByTestId("phase4-format-designer")).toBeVisible();
   await page.getByRole("button", { name: "Manual", exact: true }).click();
   const stageName = page.getByLabel("Stage name").first();
@@ -166,7 +167,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await page.getByLabel("Country code").fill("SG");
   await page.getByLabel("Start date").fill("2027-08-01");
   await page.getByLabel("End date").fill("2027-08-02");
-  await page.getByLabel("Time zone").fill("Asia/Singapore");
+  await page.getByLabel("Time zone").selectOption("Asia/Singapore");
   await page.getByLabel("Locale").fill("en-SG");
   await submitAndWait(
     page,
@@ -215,7 +216,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await addEntries(page, "Open", "Open Team");
   await addEntries(page, "Women", "Women Team");
   await expect(page.getByText("16 / 16").first()).toBeVisible();
-  const rejected = page.getByRole("region", { name: "Open" });
+  const rejected = page.getByRole("region", { name: "Open" }).locator("form").last();
   await rejected.getByLabel("Entry name").fill("Rejected Team 17");
   await rejected.getByLabel("Seed").fill("9");
   allowConsoleFailure(
@@ -327,7 +328,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   expect(unpublishedResponse?.status(), "Private schedule work must not be public").toBe(404);
   await expect(page.getByRole("heading", { name: "That page is not on the schedule" })).toBeVisible();
 
-  await page.goto(`/organiser/competitions/${competitionId}/schedule`);
+  await page.goto(`/organiser/competitions/${competitionId}/schedule?advanced=1`);
   await generateObjective(page, "Fastest");
   await generateObjective(page, "Balanced");
   await generateObjective(page, "Rest-focused");

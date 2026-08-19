@@ -17,7 +17,7 @@
 
 .nav {
   border-right: 1px solid var(--hairline);
-  background: #eeece4;
+  background: var(--surface-subtle);
 }
 
 .workSurface,
@@ -40,7 +40,7 @@
 .rail,
 .tabRow {
   border-radius: 5px;
-  background: #e4e1d8;
+  background: var(--hairline);
   animation: loadingPulse 1.4s ease-in-out infinite alternate;
 }
 

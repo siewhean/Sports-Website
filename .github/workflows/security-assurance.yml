@@ -1,0 +1,155 @@
+name: Security Assurance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - v1/simple-working-product
+    paths:
+      - ".github/workflows/security-assurance.yml"
+      - "render.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "apps/api/src/app.ts"
+      - "apps/api/src/identity-*.ts"
+      - "apps/api/src/oidc-*.ts"
+      - "apps/api/src/scoring-rate-limit-identity.ts"
+      - "apps/api/tests/integration/phase-2-routes.test.ts"
+      - "apps/api/tests/integration/rate-limit-redis.test.ts"
+      - "apps/api/tests/**/*assurance*.test.ts"
+      - "apps/api/tests/**/*oidc-provider*.test.ts"
+      - "apps/api/tests/**/*session-replacement*.test.ts"
+      - "apps/api/tests/unit/scoring-rate-limit-identity.test.ts"
+      - "apps/web/app/organiser/layout.tsx"
+      - "apps/web/app/sign-in/page.tsx"
+      - "packages/config/src/authentication-assurance.ts"
+      - "packages/config/tests/authentication-assurance.test.ts"
+      - "packages/database/migrations/0035_identity_authentication_assurance.sql"
+      - "packages/identity/src/**/*.ts"
+      - "packages/identity/tests/**/*.test.ts"
+      - "docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md"
+
+permissions:
+  contents: read
+
+jobs:
+  assurance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: matchday
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      LOG_LEVEL: silent
+      RUN_INFRA_TESTS: 1
+      MATCHDAY_PHASE2_DATA_MODE: api
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies
+        run: pnpm dependencies:audit
+      - name: Check security-slice formatting
+        run: >-
+          pnpm exec prettier --check
+          render.yaml
+          apps/api/src/app.ts
+          apps/api/src/identity-assurance-request-context.ts
+          apps/api/src/identity-assurance-runtime.ts
+          apps/api/src/identity-assurance-session-repository.ts
+          apps/api/src/identity-postgres.ts
+          apps/api/src/identity-routes.ts
+          apps/api/src/identity-runtime.ts
+          apps/api/src/main.ts
+          apps/api/src/oidc-assurance.ts
+          apps/api/src/oidc-provider.ts
+          apps/api/src/scoring-rate-limit-identity.ts
+          apps/api/tests/integration/identity-assurance-session.test.ts
+          apps/api/tests/integration/oidc-provider.test.ts
+          apps/api/tests/integration/phase-2-routes.test.ts
+          apps/api/tests/integration/rate-limit-redis.test.ts
+          apps/api/tests/unit/identity-assurance-request-context.test.ts
+          apps/api/tests/unit/identity-assurance-session-repository.test.ts
+          apps/api/tests/unit/identity-session-replacement.test.ts
+          apps/api/tests/unit/oidc-assurance.test.ts
+          apps/api/tests/unit/scoring-rate-limit-identity.test.ts
+          apps/web/app/organiser/layout.tsx
+          apps/web/app/sign-in/page.tsx
+          docs/operations/AUTH0_MFA_ASSURANCE_ROLLOUT_V2.md
+          packages/config/src/authentication-assurance.ts
+          packages/config/tests/authentication-assurance.test.ts
+          packages/identity/src/assurance.ts
+          packages/identity/src/identity.ts
+          packages/identity/src/session.ts
+          packages/identity/src/types.ts
+          packages/identity/tests/assurance.test.ts
+      - name: Typecheck assurance packages and applications
+        run: |
+          pnpm --filter @matchday/identity typecheck
+          pnpm --filter @matchday/config typecheck
+          pnpm --filter @matchday/api typecheck
+          pnpm --filter @matchday/web typecheck
+      - name: Run identity assurance unit tests
+        run: pnpm --filter @matchday/identity test:unit
+      - name: Run config assurance tests
+        run: pnpm --filter @matchday/config exec vitest run tests/authentication-assurance.test.ts
+      - name: Build API workspace dependency closure for focused tests
+        run: pnpm --filter @matchday/api... build
+      - name: Run focused API security unit tests
+        run: >-
+          pnpm --filter @matchday/api exec vitest run
+          tests/unit/oidc-assurance.test.ts
+          tests/unit/identity-assurance-request-context.test.ts
+          tests/unit/identity-session-replacement.test.ts
+          tests/unit/identity-assurance-session-repository.test.ts
+          tests/unit/scoring-rate-limit-identity.test.ts
+      - name: Check database migrations
+        run: pnpm db:migrate:check
+      - name: Prove deployment migration command is idempotent
+        run: |
+          pnpm --filter @matchday/database db:migrate
+          pnpm --filter @matchday/database db:migrate
+      - name: Run database-backed assurance integration tests
+        run: >-
+          pnpm --filter @matchday/api exec vitest run
+          tests/integration/oidc-provider.test.ts
+          tests/integration/identity-assurance-session.test.ts
+          --no-file-parallelism
+      - name: Run Redis scoring rate-limit integration tests
+        run: pnpm --filter @matchday/api exec vitest run tests/integration/rate-limit-redis.test.ts --no-file-parallelism
+      - name: Run Phase 2 unverified-scoring rate-limit route regression
+        run: pnpm --filter @matchday/api exec vitest run tests/integration/phase-2-routes.test.ts --no-file-parallelism
+      - name: Build API and web
+        run: |
+          pnpm --filter @matchday/api build
+          pnpm --filter @matchday/web build

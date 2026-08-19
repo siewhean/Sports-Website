@@ -1,3 +1,4 @@
+export * from "./assurance.js";
 export * from "./audit.js";
 export * from "./errors.js";
 export * from "./identity.js";

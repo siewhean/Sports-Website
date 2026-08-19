@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import type {
+  PublicCompetitionListing,
   PublicCompetitionProjection,
   PublicDivisionProjection,
   PublicMatchResult,
@@ -4642,6 +4643,32 @@ export class Phase2Runtime {
        DO UPDATE SET projection=EXCLUDED.projection,generated_at=EXCLUDED.generated_at`,
       [competitionId, scheduleVersion, resultVersion, JSON.stringify(projection), this.now()],
     );
+  }
+
+  async publicCompetitions(): Promise<PublicCompetitionListing> {
+    const rows = await this.sql.unsafe<{
+      id: string;
+      name: string;
+      slug: string;
+      sport_code: PublicCompetitionProjection["competition"]["sport_code"];
+      timezone: string;
+      starts_on: Date | string;
+      ends_on: Date | string;
+      status: PublicCompetitionProjection["competition"]["status"];
+    }>(
+      `SELECT c.id,c.name,c.slug,c.sport_code,c.timezone,c.starts_on,c.ends_on,c.status
+       FROM competitions c
+       JOIN competition_publications cp ON cp.competition_id=c.id
+       WHERE cp.schedule_version>0 OR cp.result_version>0
+       ORDER BY c.starts_on DESC, c.name ASC`,
+    );
+    return {
+      competitions: rows.map((row) => ({
+        ...row,
+        starts_on: serializedDate(row.starts_on).slice(0, 10),
+        ends_on: serializedDate(row.ends_on).slice(0, 10),
+      })),
+    };
   }
 
   async publicCompetition(slug: string): Promise<PublicCompetitionProjection> {

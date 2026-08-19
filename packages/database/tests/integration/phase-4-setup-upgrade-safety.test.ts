@@ -212,6 +212,7 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0032_v1_unseeded_schedule_source_mapping.sql",
           "0033_v1_unseeded_schedule_graph_shape_fix.sql",
           "0034_v1_materialize_direct_entry_sources.sql",
+          "0035_identity_authentication_assurance.sql",
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,

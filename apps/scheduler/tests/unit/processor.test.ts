@@ -115,6 +115,34 @@ describe("ScheduleJobProcessor", () => {
     }
   });
 
+  it("allows a production-sized solver step to run past one second without a false timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new MemoryStore();
+      const optimizer: ScheduleOptimizer = {
+        validateInput: vi.fn(),
+        verifyCandidate: vi.fn(async (_input, value) => value),
+        optimize: async function* () {
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          yield { iteration: 0, result: candidate(75) };
+        },
+      };
+      const resultPromise = processorWith(store, optimizer, {
+        cancellationPollMs: 250,
+        maxYieldIntervalMs: 5_000,
+      }).process(queuePayload(store.input), executionContext());
+
+      await vi.advanceTimersByTimeAsync(1_600);
+      const result = await resultPromise;
+
+      expect(result.state).toBe("completed");
+      expect(result.currentBestRevision).toBe(1);
+      expect(store.released).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("releases a failed attempt without deleting a persisted best", async () => {
     const store = new MemoryStore({ currentBest: candidate(68, 2) });
     const optimizer: ScheduleOptimizer = {
@@ -250,7 +278,7 @@ describe("isStrictImprovement", () => {
     ).toBe(false);
   });
 
-  it("rejects yield bounds above the one-second cancellation contract", () => {
+  it("accepts realistic solver-step deadlines while retaining a hard upper bound", () => {
     expect(
       () =>
         new ScheduleJobProcessor({
@@ -258,10 +286,21 @@ describe("isStrictImprovement", () => {
           store: new MemoryStore(),
           optimizer: new SequenceOptimizer([]),
           leaseMs: 1_000,
-          cancellationPollMs: 10,
-          maxYieldIntervalMs: 1_001,
+          cancellationPollMs: 250,
+          maxYieldIntervalMs: 30_000,
         }),
-    ).toThrow("maxYieldIntervalMs must be an integer from cancellationPollMs to 1000");
+    ).not.toThrow();
+    expect(
+      () =>
+        new ScheduleJobProcessor({
+          workerId: "scheduler-test-worker",
+          store: new MemoryStore(),
+          optimizer: new SequenceOptimizer([]),
+          leaseMs: 1_000,
+          cancellationPollMs: 250,
+          maxYieldIntervalMs: 120_001,
+        }),
+    ).toThrow("maxYieldIntervalMs must be an integer from cancellationPollMs to 120000");
   });
 });
 

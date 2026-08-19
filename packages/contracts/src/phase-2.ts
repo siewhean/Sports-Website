@@ -36,6 +36,21 @@ export type PublicDivisionProjection = {
   bracket: Record<string, unknown> | null;
 };
 
+export type PublicCompetitionSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  sport_code: Phase3SportCode;
+  timezone: string;
+  starts_on: string;
+  ends_on: string;
+  status: "active" | "completed" | "archived";
+};
+
+export type PublicCompetitionListing = {
+  competitions: PublicCompetitionSummary[];
+};
+
 export type PublicCompetitionProjection = {
   competition: {
     id: string;

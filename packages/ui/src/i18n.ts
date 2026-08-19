@@ -24,7 +24,7 @@ export const messages = {
     skip: "Skip to main content",
     organiser: "Organiser",
     official: "Official",
-    public: "Public competition",
+    public: "Competitions",
     setup: "Create competition",
     signIn: "Sign in",
     menu: "Primary navigation",

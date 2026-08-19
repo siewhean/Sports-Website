@@ -1,9 +1,10 @@
 import { createHmac, randomUUID } from "node:crypto";
 import type { ScoringSessionState } from "@matchday/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildApp, scoringSessionRateLimitKey } from "../../src/app.js";
+import { buildApp } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { ScoringAccessRejectedError, type Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { scoringSessionRateLimitKey } from "../../src/scoring-rate-limit-identity.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -86,6 +87,20 @@ function routeRuntime() {
     })),
     listTakeoverRequests: vi.fn(async () => []),
     expireTakeoverRequests: vi.fn(async () => ({ expired_count: 1 })),
+    publicCompetitions: vi.fn(async () => ({
+      competitions: [
+        {
+          id: randomUUID(),
+          name: "Singapore Open",
+          slug: "singapore-open",
+          sport_code: "canoe_polo",
+          timezone: "Asia/Singapore",
+          starts_on: "2026-08-01",
+          ends_on: "2026-08-01",
+          status: "active",
+        },
+      ],
+    })),
     publicCompetition: vi.fn(async () => ({
       competition: {
         id: randomUUID(),
@@ -340,6 +355,13 @@ describe("Phase 2 Fastify route boundaries", () => {
       expect(retainedTransportEvidence).not.toContain(secret);
     }
 
+    const publicListing = await app.inject({ method: "GET", url: "/api/v1/public/competitions" });
+    expect(publicListing.statusCode).toBe(200);
+    expect(publicListing.headers["cache-control"]).toContain("public");
+    expect(publicListing.json()).toMatchObject({
+      competitions: [{ name: "Singapore Open", slug: "singapore-open", status: "active" }],
+    });
+
     const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
     expect(publicView.statusCode).toBe(200);
     expect(publicView.headers["cache-control"]).toContain("public");
@@ -353,7 +375,7 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(publicView.body).not.toContain("session_token");
   });
 
-  it("bounds scoring traffic by the authenticated session and peer address without consuming organiser traffic", async () => {
+  it("keeps rotated unverified scoring ids on the anonymous budget while organiser sessions use account quota", async () => {
     const app = await buildApp({
       config: testConfig(),
       probes: healthyProbes,
@@ -378,10 +400,17 @@ describe("Phase 2 Fastify route boundaries", () => {
           headers: { ...headers, "x-scoring-session-id": randomUUID() },
         })
       ).statusCode,
-    ).toBe(200);
+    ).toBe(429);
 
     const organiserPath = `/api/v1/competitions/${randomUUID()}`;
-    expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(401);
-    expect((await app.inject({ method: "GET", url: organiserPath })).statusCode).toBe(429);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: organiserPath,
+          headers: { cookie: "matchday_session=session-token" },
+        })
+      ).statusCode,
+    ).toBe(200);
   });
 });

@@ -1,4 +1,8 @@
-import type { PublicCompetitionProjection, PublicDivisionProjection } from "@matchday/contracts";
+import type {
+  PublicCompetitionListing,
+  PublicCompetitionProjection,
+  PublicDivisionProjection,
+} from "@matchday/contracts";
 
 export const publicSportNames = {
   canoe_polo: "Canoe Polo",
@@ -46,4 +50,26 @@ export function isPublicCompetitionProjection(value: unknown): value is PublicCo
 
 export function publicSportName(code: PublicCompetitionProjection["competition"]["sport_code"]): string {
   return publicSportNames[code];
+}
+
+export function isPublicCompetitionListing(value: unknown): value is PublicCompetitionListing {
+  if (!value || typeof value !== "object") return false;
+  const listing = value as Partial<PublicCompetitionListing>;
+  return Boolean(
+    Array.isArray(listing.competitions) &&
+    listing.competitions.every(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        typeof entry.name === "string" &&
+        typeof entry.slug === "string" &&
+        typeof entry.sport_code === "string" &&
+        entry.sport_code in publicSportNames &&
+        typeof entry.timezone === "string" &&
+        typeof entry.starts_on === "string" &&
+        typeof entry.ends_on === "string" &&
+        typeof entry.status === "string",
+    ),
+  );
 }

@@ -1,5 +1,5 @@
 .p3-admin {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   min-height: 100dvh;
   background: var(--canvas);
   color: var(--ink);
@@ -76,8 +76,8 @@
   grid-template-columns: auto 1fr;
   gap: 4px 12px;
   padding: 20px;
-  border: 1px solid #c59d37;
-  background: #fffaf0;
+  border: 1px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
 }
 
 .p3-admin__intro aside svg {
@@ -117,7 +117,7 @@
 
 .p3-sport-tabs button[aria-selected="true"] {
   border-color: var(--signal-strong);
-  background: #eeeee8;
+  background: var(--surface-subtle);
 }
 
 .p3-sport-tabs button:active {
@@ -192,7 +192,7 @@
   min-height: 28px;
   padding: 2px 9px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--signal) 30%, white);
+  background: color-mix(in srgb, var(--signal) 30%, var(--surface));
   font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 700;
@@ -355,7 +355,7 @@
   display: block;
   height: 64px;
   border-radius: 5px;
-  background: #e4e1d8;
+  background: var(--hairline);
   animation: p3-admin-skeleton-pulse 1.4s ease-in-out infinite alternate;
 }
 
@@ -370,7 +370,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .p3-sport-tabs button:hover {
-    background: rgb(23 25 24 / 6%);
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
   }
 }
 

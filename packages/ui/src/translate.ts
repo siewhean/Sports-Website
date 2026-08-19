@@ -3,6 +3,57 @@ export const supportedLocales = ["en-SG", "en-XA", "ar"] as const;
 export type SupportedLocale = (typeof supportedLocales)[number];
 
 export const prototypeMessages = {
+  "prototype.ba5d9c34e7d6":
+    "Competition could not be created. The competition URL may already be in use. Try a different URL and submit again.",
+  "prototype.bfd402b2f6f3": "Sign in",
+  "prototype.ee7db0c90f4c": "Verify your sign-in to continue",
+  "prototype.dca582f9f5bb": "Sign in to manage competitions",
+  "prototype.2bb79c0209d5":
+    "This organiser session is valid, but this workspace requires stronger authentication before you continue.",
+  "prototype.d4eb4782174e":
+    "Your organiser workspace is private. Sign in before creating, scheduling or scoring a competition.",
+  "prototype.e6a8b1ba653e":
+    "Continue through the identity provider. MATCHDAY will accept access only after the configured verification requirement is satisfied.",
+  "prototype.7183e990a8f5": "After authentication, MATCHDAY will return you to the organiser workspace.",
+  "prototype.7c00476e6d90": "Verify sign-in",
+  "prototype.813643f18b43": "Turn this on when the end time is after midnight, for example 20:00 to 01:00.",
+  "prototype.534727adcf70":
+    "Entries or capacity changed. Complete those setup pages, then return here to choose a format.",
+  "prototype.21188b3c83ff":
+    "The competition changed while formats were being prepared. Refresh the page and try again.",
+  "prototype.3a0616051748": "Fixtures are ready for scheduling",
+  "prototype.372d1baf3b68": "Your selected format has been saved and materialised into matches.",
+  "prototype.3cdacc08fd08": "Continue to schedule",
+  "prototype.380508dcb9bf": "Finish setup before choosing a format",
+  "prototype.f8a571bb1fc5":
+    "MATCHDAY needs your teams and available match capacity before it can recommend a format that actually fits.",
+  "prototype.52227c712366": "Complete the missing setup below",
+  "prototype.b84dcbc3e1e3":
+    "You can return to Format as soon as both items are ready. Your existing competition work is kept.",
+  "prototype.8d478bc40b3d": "Format prerequisites",
+  "prototype.a8aa078b7ea6": "Go to",
+  "prototype.8edfbae782e1": "Choose a format that fits your competition",
+  "prototype.ae122944be4b":
+    "MATCHDAY uses the entries and playing time you already saved. Review the options, then choose one to create the fixtures used by Schedule.",
+  "prototype.0368c23692fd": "Entries and capacity are ready",
+  "prototype.6650f3b35035": "Generate only formats that fit the competition information currently saved.",
+  "prototype.33811c2dbd9e": "Available formats",
+  "prototype.f2817b90af81": "Compare match volume and guaranteed play before selecting.",
+  "prototype.b556e5c45b4e": "Total matches",
+  "prototype.4b9c79ade388": "Guaranteed / entry",
+  "prototype.b35e91492eb6": "Slots available",
+  "prototype.22a970d2e5b1": "Completed",
+  "prototype.bdb86505f806": "Archived",
+  "prototype.35d3447355e9": "What you can follow in each competition",
+  "prototype.ad58797f3416": "Published fixtures and start times",
+  "prototype.219c4a6c86a7": "Results",
+  "prototype.14a3ee805424": "Live and final match scores",
+  "prototype.c7342049e69b": "Standings",
+  "prototype.21a980b8febb": "Table positions as results land",
+  "prototype.75e5907f069f": "Schedule · results · standings",
+  "prototype.6523982b0541": "Restoring your generated schedule as a saved draft…",
+  "prototype.000ac935b6a9":
+    "A generated schedule is still available, but MATCHDAY could not restore it automatically. Use “Use this schedule” below to save it as a draft.",
   "prototype.1e9e73ee4d44": "Pass history",
   "prototype.424a2551d356": "Expired",
   "prototype.920e413c7d41": "Status",

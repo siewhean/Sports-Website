@@ -1301,20 +1301,20 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       required(
         await client<{ count: number }[]>`
           SELECT count(*)::int count FROM format_revisions
-          WHERE competition_id=${fixture.competitionId} AND graph_match_count=6 AND status='published'
+          WHERE id = ANY(${applied.materialised.map((format) => format.revision.revision_id)})
+            AND status='published'
         `,
       ).count,
     ).toBe(2);
-    const firstMaterialisedMatch = required(
-      await client<{ id: string }[]>`
-        SELECT id FROM matches WHERE format_revision_id=${applied.materialised[0]!.revision.revision_id} ORDER BY id LIMIT 1
-      `,
-    );
-    expect(
-      await client<{ entry_id: string }[]>`
-        SELECT entry_id FROM phase4_match_possible_entries(${firstMaterialisedMatch.id}) ORDER BY entry_id
-      `,
-    ).toHaveLength(2);
+    const possibleEntryCounts = await client<{ count: number }[]>`
+      SELECT count(*)::int count
+      FROM matches match
+      CROSS JOIN LATERAL phase4_match_possible_entries(match.id)
+      WHERE match.format_revision_id=${applied.materialised[0]!.revision.revision_id}
+      GROUP BY match.id
+      ORDER BY count(*)::int
+    `;
+    expect(possibleEntryCounts.map((row) => row.count)).toEqual([2, 2, 4]);
     const directMatches = await client<
       {
         id: string;
@@ -1331,10 +1331,11 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       WHERE match.format_revision_id=${applied.materialised[0]!.revision.revision_id}
       ORDER BY match.ordinal
     `;
-    expect(directMatches).toHaveLength(6);
+    expect(directMatches).toHaveLength(3);
     expect(
-      directMatches.every((match) => match.home_entry_id && match.away_entry_id && match.home_name && match.away_name),
-    ).toBe(true);
+      directMatches.filter((match) => match.home_entry_id && match.away_entry_id && match.home_name && match.away_name),
+    ).toHaveLength(2);
+    expect(directMatches.filter((match) => !match.home_entry_id && !match.away_entry_id)).toHaveLength(1);
     const competition = required(
       await client<{ revision: number; capacity_revision: number }[]>`
         SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}

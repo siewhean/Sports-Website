@@ -1,12 +1,17 @@
 import "server-only";
 
 import { cache } from "react";
-import type { PublicCompetitionProjection, PublicDivisionProjection } from "@matchday/contracts";
+import type {
+  PublicCompetitionProjection,
+  PublicCompetitionSummary,
+  PublicDivisionProjection,
+} from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { isPublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
+import { isPublicCompetitionListing, isPublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
 import {
   demoCompetitionReadPort,
   type CompetitionReadPort,
+  type CompetitionSummaryView,
   type CompetitionView,
   type MatchView,
   type PublicDivisionView,
@@ -193,6 +198,17 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
   };
 }
 
+export function toCompetitionSummaryView(entry: PublicCompetitionSummary): CompetitionSummaryView {
+  return {
+    id: entry.id,
+    slug: entry.slug,
+    name: entry.name,
+    sport: publicSportName(entry.sport_code),
+    dateLabel: dateRange(entry.starts_on, entry.ends_on, entry.timezone),
+    status: entry.status,
+  };
+}
+
 const apiCompetitionReadPort: CompetitionReadPort = {
   async getBySlug(slug) {
     const baseUrl = apiBaseUrl();
@@ -209,9 +225,30 @@ const apiCompetitionReadPort: CompetitionReadPort = {
       return null;
     }
   },
+  async list() {
+    const baseUrl = apiBaseUrl();
+    if (!baseUrl) return [];
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/public/competitions`, {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!response.ok) return [];
+      const payload: unknown = await response.json();
+      if (!isPublicCompetitionListing(payload)) return [];
+      return payload.competitions.map(toCompetitionSummaryView);
+    } catch {
+      return [];
+    }
+  },
 };
 
 export const getCompetitionView = cache(async (slug: string): Promise<CompetitionView | null> => {
   const reader = demoFixturesEnabled() ? demoCompetitionReadPort : apiCompetitionReadPort;
   return reader.getBySlug(slug);
+});
+
+export const getCompetitionListing = cache(async (): Promise<CompetitionSummaryView[]> => {
+  const reader = demoFixturesEnabled() ? demoCompetitionReadPort : apiCompetitionReadPort;
+  return reader.list();
 });

@@ -16,7 +16,7 @@ test("phase 4 setup and format visual baselines", async ({ page }, testInfo) => 
     fullPage: true,
   });
 
-  await page.goto("/organiser/competitions/singapore-open/format");
+  await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
   await dismissConsent(page);
   await hidePrivacyControl(page);
   await expect(page.getByTestId("phase4-format-designer")).toBeVisible();

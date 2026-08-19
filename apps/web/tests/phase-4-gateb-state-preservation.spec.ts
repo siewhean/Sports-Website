@@ -637,7 +637,7 @@ test("Gate B state preservation focus, context, and recovery for format designer
 
   const saveCounter = createRequestCounter(page, /\/format-builder$/, "PUT");
 
-  await page.goto(`/organiser/competitions/${COMPETITION_ID}/format`);
+  await page.goto(`/organiser/competitions/${COMPETITION_ID}/format?advanced=1`);
   await dismissConsent(page);
 
   const marker = await setPageLifetimeMarker(page);

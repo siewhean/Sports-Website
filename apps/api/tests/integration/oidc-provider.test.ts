@@ -3,6 +3,8 @@ import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createOidcIdentityProvider } from "../../src/oidc-provider.js";
 
+const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
+
 function encode(value: object): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
@@ -92,7 +94,10 @@ describe("OidcIdentityProvider", () => {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   });
 
-  async function provider(requestTimeoutMs?: number) {
+  async function provider(
+    requestTimeoutMs?: number,
+    assurance?: { authorizationAcrValues?: readonly string[]; maxAuthenticationAgeSeconds?: number },
+  ) {
     return createOidcIdentityProvider({
       issuer,
       clientId: "test-client",
@@ -100,14 +105,22 @@ describe("OidcIdentityProvider", () => {
       callbackUri: "http://127.0.0.1:4000/api/v1/identity/callback",
       allowInsecureLoopback: true,
       ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
+      ...(assurance?.authorizationAcrValues ? { authorizationAcrValues: assurance.authorizationAcrValues } : {}),
+      ...(assurance?.maxAuthenticationAgeSeconds !== undefined
+        ? { maxAuthenticationAgeSeconds: assurance.maxAuthenticationAgeSeconds }
+        : {}),
     });
   }
 
-  it("builds code+PKCE authorization and validates the signed ID token", async () => {
-    const adapter = await provider();
+  it("builds code+PKCE authorization, requests MFA context, and validates signed assurance claims", async () => {
+    const adapter = await provider(undefined, {
+      authorizationAcrValues: [MFA_ACR],
+      maxAuthenticationAgeSeconds: 900,
+    });
     expect(JSON.stringify(adapter)).not.toContain("test-client-secret");
     expectedNonce = "n".repeat(43);
-    claimOverrides = {};
+    const authTime = Math.floor(Date.now() / 1_000);
+    claimOverrides = { amr: ["mfa"], acr: MFA_ACR, auth_time: authTime };
     const authorization = new URL(
       await adapter.createAuthorizationUrl({
         redirectUri: "http://127.0.0.1:4000/api/v1/identity/callback",
@@ -120,6 +133,8 @@ describe("OidcIdentityProvider", () => {
     expect(authorization.searchParams.get("response_type")).toBe("code");
     expect(authorization.searchParams.get("scope")).toBe("openid email profile");
     expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorization.searchParams.get("acr_values")).toBe(MFA_ACR);
+    expect(authorization.searchParams.get("max_age")).toBe("900");
     expect(authorization.searchParams.has("client_secret")).toBe(false);
 
     await expect(
@@ -138,9 +153,27 @@ describe("OidcIdentityProvider", () => {
       email: "organiser@example.test",
       emailVerified: true,
       displayName: "Test Organiser",
+      assurance: {
+        methods: ["mfa"],
+        acr: MFA_ACR,
+        authenticatedAt: new Date(authTime * 1_000),
+        phishingResistant: false,
+      },
     });
     expect(observedTokenBodies.at(-1)?.get("code_verifier")).toBe("v".repeat(43));
     expect(observedTokenBodies.at(-1)?.get("redirect_uri")).toBe("http://127.0.0.1:4000/api/v1/identity/callback");
+  });
+
+  it("rejects invalid authorization assurance context before provider discovery", async () => {
+    await expect(
+      createOidcIdentityProvider({
+        issuer: "https://identity.example.test",
+        clientId: "test-client",
+        clientSecret: "test-client-secret",
+        callbackUri: "https://api.matchday.test/api/v1/identity/callback",
+        authorizationAcrValues: [MFA_ACR, MFA_ACR],
+      }),
+    ).rejects.toThrow("OIDC acr_values must not contain duplicates");
   });
 
   it("rejects state, nonce, issuer, and required-claim mismatches", async () => {

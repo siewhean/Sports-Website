@@ -12,6 +12,7 @@ export default defineConfig({
   outputDir: process.env.PHASE4_E2E_OUTPUT_DIR,
   use: {
     baseURL: process.env.PHASE4_E2E_WEB_BASE_URL ?? "http://localhost:3103",
+    ignoreHTTPSErrors: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

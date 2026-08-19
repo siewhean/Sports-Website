@@ -1647,6 +1647,7 @@ export class Phase3Runtime {
         [divisionId, competitionId],
       );
       required(division, "Division not found");
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
       let candidate = await this.domainCompetition(tx, competitionId);
       const plan = required(
         await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(`SELECT plan_tier FROM competitions WHERE id=$1`, [
@@ -2446,7 +2447,6 @@ export class Phase3Runtime {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       this.assertMutable(competition);
-      await tx.unsafe(`SELECT id FROM competitions WHERE id=$1 FOR UPDATE`, [competitionId]);
       const validation = this.domain.validateFormat(graph);
       if (!validation.valid) throw new ApiError(422, "FORMAT_INVALID", "Format graph is invalid");
       const hash = this.domain.hash(graph);

@@ -24,3 +24,12 @@ export function v1ScheduleProgress(job: ScheduleJob | null): "idle" | "creating"
   if (job.currentBest) return "ready";
   return job.status === "queued" || job.status === "running" || job.status === "cancelling" ? "creating" : "terminal";
 }
+
+export function isV1ScheduleOptimising(job: ScheduleJob | null): boolean {
+  return (
+    job?.status === "queued" ||
+    job?.status === "running" ||
+    job?.status === "valid_best_found" ||
+    job?.status === "cancelling"
+  );
+}

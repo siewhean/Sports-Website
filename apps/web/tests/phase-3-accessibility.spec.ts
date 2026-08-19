@@ -76,6 +76,7 @@ test("@a11y competition creation preserves recovery context and strict WCAG A/AA
   await expect(organisation).toBeEnabled();
   await organisation.selectOption({ label: "National Sports · Organiser" });
   await expect(page.getByLabel("Competition name")).toHaveValue("National Open");
+  await page.getByLabel("Public address").fill("");
 
   await page.getByRole("button", { name: "Create competition" }).click();
   await expect(page.getByLabel("Public address")).toBeFocused();
