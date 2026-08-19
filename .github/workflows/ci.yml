@@ -94,6 +94,7 @@ jobs:
       - name: Install the pinned pnpm version
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @matchday/config build
       - run: pnpm db:migrate:check
       - run: BACKUP_VERIFY_MODE=direct BACKUP_VERIFY_ADMIN_DATABASE_URL=postgres://matchday:matchday@127.0.0.1:5432/postgres BACKUP_VERIFY_DIRECT_CLIENT_IMAGE=postgres:18.4-alpine pnpm backup:verify
       - run: pnpm test:integration
