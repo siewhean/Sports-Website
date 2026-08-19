@@ -1,0 +1,99 @@
+name: V2 Integration Recovery
+
+on:
+  push:
+    branches: [v2/architecture-refinement]
+    paths:
+      - ".github/workflows/v2-integration-recovery.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: v2/architecture-refinement
+          fetch-depth: 0
+      - name: Restore preserved integration error contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          gate = Path("apps/api/tests/integration/phase-4-gate-b-runtime.test.ts")
+          text = gate.read_text()
+
+          loop_marker = 'for (const operation of ["PATCH", "PUT"] as const) {'
+          loop_start = text.index(loop_marker)
+          loop_end = text.index('    const beforePatch = await evidenceCounts();', loop_start)
+          loop = text[loop_start:loop_end]
+          old = 'await expect(denied).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });'
+          new = 'await expect(denied).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });'
+          if loop.count(old) != 1:
+              raise SystemExit(f"Viewer mutation assertion mismatch: expected 1, got {loop.count(old)}")
+          loop = loop.replace(old, new)
+          text = text[:loop_start] + loop + text[loop_end:]
+
+          viewer_marker = 'it("returns a truthful read-only setup document to viewers", async () => {'
+          viewer_start = text.index(viewer_marker)
+          viewer_end = text.index('  it("lets V1 choose and materialise a capacity-fitting format without visiting Assisted Setup"', viewer_start)
+          viewer = text[viewer_start:viewer_end]
+          old = ').rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });'
+          new = ').rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });'
+          if viewer.count(old) != 1:
+              raise SystemExit(f"Read-only viewer assertion mismatch: expected 1, got {viewer.count(old)}")
+          viewer = viewer.replace(old, new)
+          text = text[:viewer_start] + viewer + text[viewer_end:]
+          gate.write_text(text)
+
+          phase4 = Path("apps/api/tests/integration/phase-4-runtime.test.ts")
+          text = phase4.read_text()
+          cross_start = text.index('    const otherOrganisationId = await client.begin')
+          cross_end = text.index('    await runtime.archiveFormatTemplate(', cross_start)
+          cross = text[cross_start:cross_end]
+          old = ').rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });'
+          new = ').rejects.toMatchObject({ statusCode: 403, code: "ORGANISATION_ACCESS_DENIED" });'
+          if cross.count(old) != 1:
+              raise SystemExit(f"Cross-organisation assertion mismatch: expected 1, got {cross.count(old)}")
+          cross = cross.replace(old, new)
+          text = text[:cross_start] + cross + text[cross_end:]
+          phase4.write_text(text)
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/api/tests/integration/phase-4-gate-b-runtime.test.ts apps/api/tests/integration/phase-4-runtime.test.ts
+          git diff --cached --quiet && { echo "Expected assertion corrections"; exit 1; }
+          git commit -m "test(arch): correct integration error contracts"
+
+      - name: Serialize access-pass idempotent issuance
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path("apps/api/src/phase-2-runtime.ts")
+          text = runtime.read_text()
+          anchor = '      const readReplay = async () =>\n        tx.unsafe<{'
+          if text.count(anchor) != 1:
+              raise SystemExit(f"Access-pass replay anchor mismatch: expected 1, got {text.count(anchor)}")
+          replacement = '''      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+        `scoring-access-issuance:${competitionId}:${normalized.idempotencyKey}`,
+      ]);
+      const readReplay = async () =>
+        tx.unsafe<{'''
+          text = text.replace(anchor, replacement)
+          runtime.write_text(text)
+          PY
+          git diff --check
+          git add apps/api/src/phase-2-runtime.ts
+          git diff --cached --quiet && { echo "Expected idempotency serialization change"; exit 1; }
+          git commit -m "fix(api): serialize access-pass idempotent issuance"
+
+      - name: Remove helper and push final recovery
+        run: |
+          git rm .github/workflows/v2-integration-recovery.yml
+          git commit -m "chore(ci): remove one-shot V2 integration recovery"
+          git push origin HEAD:v2/architecture-refinement
