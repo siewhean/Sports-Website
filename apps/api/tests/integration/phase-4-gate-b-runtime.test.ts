@@ -150,8 +150,6 @@ beforeAll(async () => {
   });
   phase3 = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
 
-  // Install and validate all five immutable launch-sport packs before the
-  // complete switch matrix runs.
   for (const sportCode of sports) {
     await phase3.createCompetition(
       { accountId },
@@ -350,9 +348,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       revision: Number(canonicalCapacity.revision),
     });
     const before = required(
-      await client<
-        { count: number }[]
-      >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+      await client<{ count: number }[]>`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
     ).count;
     const preferences = created.values.format_preferences!;
     const generated = await runtime.autosaveSetupDraft(
@@ -466,9 +462,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     const canonicalRecommendations = structuredClone(selection.recommendations);
     expect(
       required(
-        await client<
-          { count: number }[]
-        >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+        await client<{ count: number }[]>`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
       ).count,
     ).toBe(before);
 
@@ -532,9 +526,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     );
     expect(selected.division_formats.every((item) => item.format_revision_id !== null)).toBe(true);
     const after = required(
-      await client<
-        { count: number }[]
-      >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+      await client<{ count: number }[]>`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
     ).count;
     expect(after).toBe(before + 2);
 
@@ -554,9 +546,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     expect(replay.outcome).toBe("saved");
     expect(
       required(
-        await client<
-          { count: number }[]
-        >`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
+        await client<{ count: number }[]>`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
       ).count,
     ).toBe(after);
   });
@@ -603,10 +593,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         idempotency_key: `placeholder-generate-${randomUUID()}`,
         transition: {
           kind: "save_step",
-          step: {
-            step_id: "format_preferences",
-            value: created.document.values.format_preferences!,
-          },
+          step: { step_id: "format_preferences", value: created.document.values.format_preferences! },
         },
       },
       randomUUID(),
@@ -618,10 +605,8 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
           (recommendation_set.source_evidence->'entries'->0->>'entry_count')::int source_entry_count,
           (candidate_division.definition->>'entryCount')::int definition_entry_count
         FROM phase4_format_recommendation_sets recommendation_set
-        JOIN phase4_format_recommendation_candidates candidate
-          ON candidate.recommendation_set_id=recommendation_set.id
-        JOIN phase4_format_recommendation_candidate_divisions candidate_division
-          ON candidate_division.candidate_id=candidate.id
+        JOIN phase4_format_recommendation_candidates candidate ON candidate.recommendation_set_id=recommendation_set.id
+        JOIN phase4_format_recommendation_candidate_divisions candidate_division ON candidate_division.candidate_id=candidate.id
         WHERE recommendation_set.competition_id=${fixture.competitionId}
         LIMIT 1`,
     );
@@ -637,9 +622,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       randomUUID(),
     );
     expect(created.document.values.basics).toMatchObject({ sport_code: "canoe_polo" });
-    expect(created.document.values.format_preferences).toMatchObject({
-      minimum_matches: { per_entry: 3 },
-    });
+    expect(created.document.values.format_preferences).toMatchObject({ minimum_matches: { per_entry: 3 } });
 
     const outcome = await runtime.patchSetupDraft(
       { accountId },
@@ -709,9 +692,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       ]),
     );
     expect(await client`SELECT 1 FROM audit_events WHERE action='competition.setup_basics.updated'`).toHaveLength(1);
-    expect(await client`SELECT 1 FROM outbox_events WHERE event_type='competition.setup_basics.updated'`).toHaveLength(
-      1,
-    );
+    expect(await client`SELECT 1 FROM outbox_events WHERE event_type='competition.setup_basics.updated'`).toHaveLength(1);
   });
 
   it("binds create, PATCH, Gate-B PUT, and base PUT receipts to one competition aggregate", async () => {
@@ -775,10 +756,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       {
         expected_revision: secondDraft.document.revision,
         idempotency_key: putKey,
-        transition: {
-          kind: "save_step",
-          step: { step_id: "basics", value: secondDraft.document.values.basics! },
-        },
+        transition: { kind: "save_step", step: { step_id: "basics", value: secondDraft.document.values.basics! } },
       },
       randomUUID(),
     );
@@ -807,10 +785,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       {
         expected_revision: secondDraft.document.revision,
         idempotency_key: baseKey,
-        transition: {
-          kind: "save_step",
-          step: { step_id: "format_preferences", value: secondDraft.document.values.format_preferences! },
-        },
+        transition: { kind: "save_step", step: { step_id: "format_preferences", value: secondDraft.document.values.format_preferences! } },
       },
       randomUUID(),
     );
@@ -859,8 +834,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
             FROM competitions competition
             JOIN competition_sport_settings competition_settings ON competition_settings.competition_id=competition.id
             JOIN division_sport_settings division_settings ON division_settings.competition_id=competition.id
-            JOIN sport_pack_versions pack ON pack.sport_code=competition_settings.sport_code
-              AND pack.version=competition_settings.pack_version
+            JOIN sport_pack_versions pack ON pack.sport_code=competition_settings.sport_code AND pack.version=competition_settings.pack_version
             JOIN playing_areas area ON area.competition_id=competition.id
             WHERE competition.id=${fixture.competitionId}`,
         );
@@ -939,10 +913,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
           ...putRequest,
           transition: {
             kind: "save_step",
-            step: {
-              ...putRequest.transition.step,
-              value: { ...putRequest.transition.step.value, name: "Different PUT payload" },
-            },
+            step: { ...putRequest.transition.step, value: { ...putRequest.transition.step.value, name: "Different PUT payload" } },
           },
         },
         randomUUID(),
@@ -1041,8 +1012,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     expect(result.outcome).toBe("saved");
     expect(
       required(
-        await client<{ slot_minutes: number }[]>`
-          SELECT slot_minutes FROM playing_areas WHERE competition_id=${fixture.competitionId}`,
+        await client<{ slot_minutes: number }[]>`SELECT slot_minutes FROM playing_areas WHERE competition_id=${fixture.competitionId}`,
       ).slot_minutes,
     ).toBe(SPORT_PACKS.badminton.recommendedSlotMinutes);
   });
@@ -1057,7 +1027,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         `viewer-create-${randomUUID()}`,
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    ).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
     expect(await evidenceCounts()).toEqual(beforeCreate);
 
     await runtime.createSetupDraft(
@@ -1117,7 +1087,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
               { ...request, transition: { kind: "save_step" as const, step: request.step } },
               randomUUID(),
             );
-      await expect(denied).rejects.toMatchObject({ statusCode: 403 });
+      await expect(denied).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
       expect(await evidenceCounts()).toEqual(beforeDenied);
     }
 
@@ -1148,10 +1118,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         {
           expected_revision: patched.document.revision,
           idempotency_key: `owner-put-${randomUUID()}`,
-          transition: {
-            kind: "save_step",
-            step: { step_id: "basics", value: patched.document.values.basics! },
-          },
+          transition: { kind: "save_step", step: { step_id: "basics", value: patched.document.values.basics! } },
         },
         randomUUID(),
       ),
@@ -1177,7 +1144,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403 });
+    ).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
   });
 
   it("lets V1 choose and materialise a capacity-fitting format without visiting Assisted Setup", async () => {
@@ -1203,8 +1170,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     const key = `v1-format-${randomUUID()}`;
     const recommendations = await runtime.recommendV1Format({ accountId }, fixture.competitionId, key, randomUUID());
     const fitting = recommendations.values.format_recommendations?.recommendations.find(
-      (candidate) =>
-        candidate.match_count <= candidate.available_match_slots && candidate.capacity_status !== "requires_changes",
+      (candidate) => candidate.match_count <= candidate.available_match_slots && candidate.capacity_status !== "requires_changes",
     );
     expect(fitting).toBeDefined();
     if (!fitting) throw new Error("Expected a capacity-fitting recommendation");
@@ -1225,11 +1191,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       WHERE competition_id=${fixture.competitionId} ORDER BY division_id,revision
     `;
     expect(revisions).toHaveLength(fitting.division_formats.length);
-    expect(
-      revisions.every(
-        (revision) => revision.graph_materialized_at && revision.graph_match_count && revision.graph_match_count > 0,
-      ),
-    ).toBe(true);
+    expect(revisions.every((revision) => revision.graph_materialized_at && revision.graph_match_count && revision.graph_match_count > 0)).toBe(true);
     const replay = await runtime.applyV1FormatRecommendation(
       { accountId },
       fixture.competitionId,
@@ -1242,9 +1204,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     );
     expect(
       required(
-        await client<{ count: number }[]>`
-          SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}
-        `,
+        await client<{ count: number }[]>`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
       ).count,
     ).toBe(revisions.length);
   });
@@ -1254,9 +1214,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     const firstDivisionId = fixture.divisionIds[0];
     if (!firstDivisionId) throw new Error("Expected first V1 fixture division");
     await client`UPDATE division_entries SET seed=NULL
-      WHERE id IN (
-        SELECT id FROM division_entries WHERE division_id=${firstDivisionId} ORDER BY seed DESC LIMIT 1
-      )`;
+      WHERE id IN (SELECT id FROM division_entries WHERE division_id=${firstDivisionId} ORDER BY seed DESC LIMIT 1)`;
     await phase3.replaceCapacity(
       { accountId },
       fixture.competitionId,
@@ -1299,11 +1257,8 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     expect(applied.materialised.every((format) => format.revision.document.graph.entryCount === 4)).toBe(true);
     expect(
       required(
-        await client<{ count: number }[]>`
-          SELECT count(*)::int count FROM format_revisions
-          WHERE id = ANY(${applied.materialised.map((format) => format.revision.revision_id)})
-            AND status='published'
-        `,
+        await client<{ count: number }[]>`SELECT count(*)::int count FROM format_revisions
+          WHERE id = ANY(${applied.materialised.map((format) => format.revision.revision_id)}) AND status='published'`,
       ).count,
     ).toBe(2);
     const possibleEntryCounts = await client<{ count: number }[]>`
@@ -1316,13 +1271,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     `;
     expect(possibleEntryCounts.map((row) => row.count)).toEqual([2, 2, 4]);
     const directMatches = await client<
-      {
-        id: string;
-        home_entry_id: string | null;
-        away_entry_id: string | null;
-        home_name: string | null;
-        away_name: string | null;
-      }[]
+      { id: string; home_entry_id: string | null; away_entry_id: string | null; home_name: string | null; away_name: string | null }[]
     >`
       SELECT match.id,match.home_entry_id,match.away_entry_id,home.name AS home_name,away.name AS away_name
       FROM matches match
@@ -1332,14 +1281,10 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       ORDER BY match.ordinal
     `;
     expect(directMatches).toHaveLength(3);
-    expect(
-      directMatches.filter((match) => match.home_entry_id && match.away_entry_id && match.home_name && match.away_name),
-    ).toHaveLength(2);
+    expect(directMatches.filter((match) => match.home_entry_id && match.away_entry_id && match.home_name && match.away_name)).toHaveLength(2);
     expect(directMatches.filter((match) => !match.home_entry_id && !match.away_entry_id)).toHaveLength(1);
     const competition = required(
-      await client<{ revision: number; capacity_revision: number }[]>`
-        SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}
-      `,
+      await client<{ revision: number; capacity_revision: number }[]>`SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}`,
     );
     const areaId = required(
       await client<{ id: string }[]>`SELECT id FROM playing_areas WHERE competition_id=${fixture.competitionId}`,
@@ -1542,14 +1487,11 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
     }
     expect(
       required(
-        await client<{ count: number }[]>`
-          SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}
-        `,
+        await client<{ count: number }[]>`SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}`,
       ).count,
     ).toBe(0);
     expect(
-      (await runtime.readSetupDraft({ accountId }, fixture.competitionId)).values.format_recommendations
-        ?.selected_recommendation_id,
+      (await runtime.readSetupDraft({ accountId }, fixture.competitionId)).values.format_recommendations?.selected_recommendation_id,
     ).toBeNull();
   });
 });
