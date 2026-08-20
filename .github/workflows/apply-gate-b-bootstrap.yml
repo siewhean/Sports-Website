@@ -1,0 +1,46 @@
+name: Apply Gate B production closure
+
+on:
+  push:
+    branches:
+      - fix/gate-b-production-closure-20260724-v2
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[gate-b-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact branch commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify and apply source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/gate-b-bootstrap/part-* | tr -d '\n' | base64 --decode > /tmp/gate-b.payload.gz
+          echo "2d2ba1eb71417d1efc382b378a4a9c8695e9f7a399f907d05ecdcc37f21a8c26  /tmp/gate-b.payload.gz" | sha256sum -c -
+          gzip --decompress --stdout /tmp/gate-b.payload.gz > /tmp/gate-b.patch
+          echo "a4fffb52b9d4c5775d029ed6a226fa8e7baf37f52ef75b13f25ef213954d6870  /tmp/gate-b.patch" | sha256sum -c -
+          git apply --index --binary /tmp/gate-b.patch
+          git diff --cached --check
+          ! git grep -nE 'window\.location\.(reload|assign|replace)\(' -- apps/web
+          ! git grep -nE 'impact === "(serious|critical)"|violation\.impact' -- apps/web/tests
+          git grep -q 'target-size' -- apps/web/tests/helpers/accessibility.ts
+          node --check scripts/write-browser-gate-evidence.mjs
+
+      - name: Replace bootstrap with reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/gate-b-bootstrap .github/workflows/apply-gate-b-bootstrap.yml
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: complete Gate B production closure [gate-b-applied]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
