@@ -51,6 +51,7 @@ const rawConfigSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   API_ALLOWED_ORIGINS: z.string().default("http://127.0.0.1:3000,http://localhost:3000"),
   API_TRUSTED_PROXIES: z.string().default(""),
+  MATCHDAY_PUBLIC_ORIGIN: optionalUrlSchema,
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
   SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-scoring-access-rate-key"),
@@ -120,6 +121,7 @@ export type AppConfig = {
     allowedOrigins: readonly string[];
     trustedProxies: readonly string[];
   };
+  publicOrigin?: string;
   databaseUrl: string;
   redisUrl: string;
   scoringAccess: {
@@ -180,6 +182,26 @@ function isIpOrCidr(value: string): boolean {
   if (!/^\d+$/.test(prefix)) return false;
   const bits = Number(prefix);
   return bits >= 1 && bits <= (family === 4 ? 32 : 128);
+}
+
+function validatedPublicOrigin(value: string, environment: AppEnvironment): string {
+  const url = new URL(value);
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash ||
+    value !== url.origin
+  ) {
+    throw new Error("MATCHDAY_PUBLIC_ORIGIN must be one canonical HTTP(S) origin without credentials, path, query, or fragment");
+  }
+  if (url.protocol !== "https:" && !((environment === "local" || environment === "test") && loopback)) {
+    throw new Error("MATCHDAY_PUBLIC_ORIGIN must use HTTPS outside local/test and HTTP is allowed only for loopback");
+  }
+  return url.origin;
 }
 
 function validatedIdentityUrl(
@@ -303,6 +325,12 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   requireProductionValue(parsed.APP_ENV, source, "DEEP_HEALTH_TOKEN");
   requireProductionValue(parsed.APP_ENV, source, "API_ALLOWED_ORIGINS");
   requireProductionValue(parsed.APP_ENV, source, "OTEL_EXPORTER_OTLP_ENDPOINT");
+  const publicOrigin = parsed.MATCHDAY_PUBLIC_ORIGIN
+    ? validatedPublicOrigin(parsed.MATCHDAY_PUBLIC_ORIGIN, parsed.APP_ENV)
+    : undefined;
+  if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !publicOrigin) {
+    throw new Error("MATCHDAY_PUBLIC_ORIGIN must be explicitly configured outside local/test");
+  }
   if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.IDENTITY_CSRF_HMAC_SECRET) {
     throw new Error("IDENTITY_CSRF_HMAC_SECRET must be explicitly configured outside local/test");
   }
@@ -369,6 +397,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     validatedIdentityUrl(required.IDENTITY_OIDC_ISSUER as string, parsed.APP_ENV, "IDENTITY_OIDC_ISSUER");
     const cookieSite = validatedCookieSite(required.IDENTITY_COOKIE_SITE as string, parsed.APP_ENV);
     requireCookieSite(required.IDENTITY_OIDC_CALLBACK_URI as string, cookieSite, "IDENTITY_OIDC_CALLBACK_URI");
+    if (publicOrigin) requireCookieSite(publicOrigin, cookieSite, "MATCHDAY_PUBLIC_ORIGIN");
     for (const origin of allowedOrigins) requireCookieSite(origin, cookieSite, "API_ALLOWED_ORIGINS");
     for (const redirect of postAuthRedirectUris) {
       requireCookieSite(redirect, cookieSite, "IDENTITY_POST_AUTH_REDIRECT_URIS");
@@ -455,6 +484,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       allowedOrigins,
       trustedProxies,
     },
+    ...(publicOrigin ? { publicOrigin } : {}),
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
     scoringAccess: {
@@ -506,6 +536,7 @@ export function safeConfigSummary(config: AppConfig) {
       ...config.api,
       allowedOrigins: config.api.allowedOrigins.map(redactUrl),
     },
+    publicOrigin: config.publicOrigin,
     databaseUrl: redactUrl(config.databaseUrl),
     redisUrl: redactUrl(config.redisUrl),
     scoringAccess: {
