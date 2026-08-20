@@ -21,6 +21,8 @@ All runtime configuration is parsed by `@matchday/config`; application modules m
 | `MATCHDAY_PUBLIC_ORIGIN`                                  | Exact browser-facing CSRF authority for credentialed web mutations. Required for every non-loopback deployment and HTTPS outside local loopback. |
 | `DATABASE_URL`                                            | PostgreSQL connection URL. Explicit in production and redacted from diagnostics.                                                               |
 | `REDIS_URL`                                               | Redis connection URL for cache, rate limiting, queue, and coordination. Explicit in production.                                                |
+| `SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET`                | Independent 32+ byte fallback-code HMAC primary used for single-key `v1` compatibility.                                                        |
+| `SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING`               | Optional secret-store JSON keyring for overlap rotation. New codes use `primary`; retained codes may use `verificationOnly`.                    |
 | `LOG_LEVEL`                                               | Structured logger threshold; use `silent` only in deterministic tests.                                                                         |
 | `DEEP_HEALTH_TOKEN`                                       | At least 32 characters and explicit in production. The deployment must additionally keep `/health/deep` on private ingress.                    |
 | `IDENTITY_CSRF_HMAC_SECRET`                               | Independent secret of at least 32 characters outside local/test; never browser-visible.                                                        |
@@ -41,6 +43,7 @@ All runtime configuration is parsed by `@matchday/config`; application modules m
 - No staging or production resource may share credentials, data stores, queues, buckets, identity tenants, or webhook secrets.
 - Staging and production use different OIDC tenants/client registrations, callback URIs, client secrets, and flow-seal keys.
 - Non-loopback web deployments must set `MATCHDAY_PUBLIC_ORIGIN`; organiser mutations fail closed rather than trusting forwarded host/protocol as the CSRF authority.
+- Fallback-code HMAC keyring material must be distinct from rate-limit, identity, cookie, and scoring-session secrets. Old fallback keys remain verification-only until the cutover inventory is fully revoked, expired, or rotated.
 - Builds are immutable. Promotion changes environment configuration, not application source.
 - Database changes use expand-contract migrations and must pass the clean-schema check before deployment.
 - A release may proceed only after config validation, migration compatibility, health checks, backup status, and rollback readiness are recorded.
