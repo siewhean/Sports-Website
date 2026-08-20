@@ -50,6 +50,21 @@ export function fallbackCodeCandidates(
   }));
 }
 
+export function selectFallbackCodeKey(
+  candidates: readonly FallbackCodeCandidate[],
+  matchedHashes: readonly string[],
+  primary: ScoringFallbackHmacKey,
+): ScoringFallbackHmacKey {
+  if (matchedHashes.length > 1) {
+    throw new Error("Presented fallback code is ambiguous across configured HMAC key versions");
+  }
+  const matchedHash = matchedHashes[0];
+  if (!matchedHash) return primary;
+  const candidate = candidates.find(({ hashHex }) => hashHex === matchedHash);
+  if (!candidate) throw new Error("Fallback-code HMAC resolver returned an unknown retained hash");
+  return candidate.key;
+}
+
 /**
  * Phase2Runtime remains the single authority for credential validation,
  * rate-limiting, session issuance, audit, and writer fencing. This subclass
@@ -62,9 +77,9 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
   constructor(
     private readonly keySql: PostgresJsSql,
     domain: Phase2DomainAdapter,
+    private readonly fallbackKeyring: ScoringFallbackHmacKeyring,
     now: () => Date = () => new Date(),
     scoringAccessRateLimiter: ScoringAccessRateLimiter = new NoopScoringAccessRateLimiter(),
-    private readonly fallbackKeyring: ScoringFallbackHmacKeyring,
     fallbackCodeGenerator?: () => string,
     takeoverRequestTtlMs?: number,
   ) {
@@ -112,14 +127,11 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
        LIMIT 2`,
       [hashes],
     );
-    if (rows.length > 1) {
-      throw new Error("Presented fallback code is ambiguous across configured HMAC key versions");
-    }
-    const matchedHash = rows[0]?.hash_hex;
-    if (!matchedHash) return this.fallbackKeyring.primary;
-    const candidate = candidates.find(({ hashHex }) => hashHex === matchedHash);
-    if (!candidate) throw new Error("Fallback-code HMAC resolver returned an unknown retained hash");
-    return candidate.key;
+    return selectFallbackCodeKey(
+      candidates,
+      rows.map((row) => row.hash_hex),
+      this.fallbackKeyring.primary,
+    );
   }
 
   async exchangeAccess(
