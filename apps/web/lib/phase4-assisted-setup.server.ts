@@ -1,9 +1,8 @@
 import "server-only";
 
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import type { Phase4SetupDocument } from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
 import {
   parseAssistedSetupDocument,
   type AssistedSetupPageDocument,
@@ -21,9 +20,7 @@ function apiBaseUrl(): URL | null {
   }
 }
 
-async function sessionCookie(apiUrl: URL): Promise<string | null> {
-  const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+async function sessionCookie(): Promise<string | null> {
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = store.get(name)?.value;
@@ -290,7 +287,7 @@ export async function getAssistedSetupDocument(
   }
   const base = apiBaseUrl();
   if (!base) return unavailable(competitionId, competitionName, "error");
-  const cookie = await sessionCookie(base);
+  const cookie = await sessionCookie();
   if (!cookie) return unavailable(competitionId, competitionName, "permission");
   try {
     const response = await fetch(

@@ -2,7 +2,6 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookieHostMatches } from "./phase2-organiser";
 import { requestOriginMatchesHost } from "./phase3-origin";
 
 type Validator = (value: unknown) => boolean;
@@ -24,8 +23,7 @@ function apiBaseUrl(): URL | null {
   }
 }
 
-function sessionCookie(request: NextRequest, apiUrl: URL): string | null {
-  if (!cookieHostMatches(request.headers.get("host"), apiUrl.hostname)) return null;
+function sessionCookie(request: NextRequest): string | null {
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = request.cookies.get(name)?.value;
     if (value && !/[\u0000-\u001f\u007f;]/.test(value)) return `${name}=${value}`;
@@ -81,7 +79,7 @@ export function hasExactKeys(value: Record<string, unknown>, keys: readonly stri
 export async function readPhase3Json(request: NextRequest, path: string): Promise<Phase3ReadResult> {
   const base = apiBaseUrl();
   if (!base) return { ok: false, status: 503, payload: null };
-  const cookie = sessionCookie(request, base);
+  const cookie = sessionCookie(request);
   if (!cookie) return { ok: false, status: 401, payload: null };
   try {
     const response = await fetch(new URL(path, base), {
@@ -115,7 +113,7 @@ export async function forwardPhase3Mutation(
     return error(403, "ORIGIN_REJECTED", "Request origin is not allowed");
   const base = apiBaseUrl();
   if (!base) return error(503, "API_UNAVAILABLE", "The settings service is unavailable");
-  const cookie = sessionCookie(request, base);
+  const cookie = sessionCookie(request);
   if (!cookie) return error(401, "AUTH_REQUIRED", "An authenticated session is required");
   try {
     const identityResponse = await fetch(new URL("/api/v1/identity/me", base), {

@@ -14,11 +14,13 @@ export const metadata: Metadata = {
 export default async function CompetitionCreatePage() {
   const demo = demoFixturesEnabled();
   let draftOwnerId = demoCompetitionDraftOwnerId;
+  let viewerName: string | null = null;
   if (!demo) {
     const session = await readCurrentIdentitySession();
     if (session.status === "step_up_required") redirect("/sign-in?reason=step-up");
     if (session.status !== "authenticated") redirect("/sign-in");
     draftOwnerId = session.identity.accountId;
+    viewerName = session.identity.displayName;
   }
 
   return (
@@ -26,6 +28,7 @@ export default async function CompetitionCreatePage() {
       kind="organiser"
       title={messages.organiserCreate.title}
       subtitle={messages.organiserCreate.subtitle}
+      utility={viewerName ? <span>{viewerName}</span> : undefined}
     >
       <CompetitionCreateForm draftOwnerId={draftOwnerId} />
     </ProductionShell>
