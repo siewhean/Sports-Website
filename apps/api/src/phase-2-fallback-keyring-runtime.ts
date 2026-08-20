@@ -134,11 +134,11 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
     );
   }
 
-  async exchangeAccess(
+  override async exchangeAccess(
     input: { token?: string; shortCode?: string; expectedMatchId?: string },
     requestId: string,
   ): Promise<LegacyWriterExchange>;
-  async exchangeAccess(
+  override async exchangeAccess(
     input: {
       token?: string;
       shortCode?: string;
@@ -149,7 +149,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
     },
     requestId: string,
   ): Promise<ExchangedScoringSession>;
-  async exchangeAccess(input: FallbackExchangeInput, requestId: string): Promise<ExchangedScoringSession> {
+  override async exchangeAccess(input: FallbackExchangeInput, requestId: string): Promise<ExchangedScoringSession> {
     const key = input.shortCode
       ? await this.keyForPresentedFallbackCode(input.shortCode)
       : this.fallbackKeyring.primary;
