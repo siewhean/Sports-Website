@@ -24,6 +24,13 @@ declare the chosen scorekeeper, public-reader, and organiser-worker counts in
 their retained receipt; a PASS is prohibited until the pilot owner records the
 expected concurrency and approves it against these budgets.
 
+The generic harness may use a low minimum sample count for deterministic unit
+coverage, but **release evidence must retain at least 500 successful samples per
+operation** and must run long enough to reach steady state. The release receipt
+must show p50/p95/p99 from that approved sample set; a ten-request smoke run is
+not acceptable C5 performance evidence. The pilot owner may require a larger
+sample count or duration for the expected event scale.
+
 ## Harness rules
 
 - Use disposable PostgreSQL schemas, a unique Redis namespace/database, and
@@ -48,7 +55,8 @@ expected concurrency and approves it against these budgets.
 ## Required C5 external evidence
 
 - Trusted HTTPS physical iPhone/iPad and budget Android journeys.
-- Pilot concurrency and load approval.
+- Pilot concurrency and load approval, including the release sample count and
+  sustained-run duration.
 - Operational owner approval for exported fallback documents and event-day
   incident/runbook procedures.
 
