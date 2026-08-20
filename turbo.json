@@ -3,6 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["RENDER_API_ORIGIN"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "dev": {
@@ -16,7 +17,7 @@
       "dependsOn": ["^typecheck"]
     },
     "test:unit": {
-      "dependsOn": ["^build", "^test:unit"]
+      "dependsOn": ["^build"]
     },
     "test:integration": {
       "dependsOn": ["^build"],

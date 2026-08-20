@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const generatedOutputs = [
   "apps/api/dist",
+  "apps/scheduler/dist",
   "apps/web/.next",
   "apps/worker/dist",
   "packages/config/dist",
