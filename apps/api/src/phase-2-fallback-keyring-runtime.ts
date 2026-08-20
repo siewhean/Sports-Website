@@ -1,5 +1,9 @@
 import { createHmac } from "node:crypto";
-import type { ScoringFallbackHmacKey, ScoringFallbackHmacKeyring } from "@matchday/config/scoring-fallback-keyring";
+import {
+  parseScoringFallbackHmacKeyring,
+  type ScoringFallbackHmacKey,
+  type ScoringFallbackHmacKeyring,
+} from "@matchday/config";
 import type { PostgresJsSql } from "@matchday/identity";
 import {
   NoopScoringAccessRateLimiter,
@@ -92,11 +96,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
       fallbackCodeGenerator,
       takeoverRequestTtlMs,
     );
-    const versions = [fallbackKeyring.primary.version, ...fallbackKeyring.verificationOnly.map((key) => key.version)];
-    const secrets = [fallbackKeyring.primary.secret, ...fallbackKeyring.verificationOnly.map((key) => key.secret)];
-    if (new Set(versions).size !== versions.length || new Set(secrets).size !== secrets.length) {
-      throw new Error("Fallback-code HMAC keyring versions and key material must be unique");
-    }
+    parseScoringFallbackHmacKeyring(fallbackKeyring);
     for (const key of fallbackKeyring.verificationOnly) {
       this.delegates.set(
         key.version,

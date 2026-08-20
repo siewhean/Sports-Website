@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ScoringFallbackHmacKeyring } from "@matchday/config/scoring-fallback-keyring";
+import type { ScoringFallbackHmacKeyring } from "@matchday/config";
 import {
   fallbackCodeCandidates,
   fallbackCodeHashHex,

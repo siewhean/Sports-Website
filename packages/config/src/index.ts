@@ -641,6 +641,10 @@ export function safeConfigSummary(config: AppConfig) {
 
 export {
   loadScoringFallbackHmacKeyring,
+  parseScoringFallbackHmacKeyring,
+  scoringFallbackKeySchema,
+  scoringFallbackKeyVersionSchema,
+  scoringFallbackKeyringSchema,
   type ScoringFallbackHmacKey,
   type ScoringFallbackHmacKeyring,
 } from "./scoring-fallback-keyring.js";

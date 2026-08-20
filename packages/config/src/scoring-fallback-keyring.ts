@@ -1,17 +1,17 @@
 import { z } from "zod";
 import type { AppEnvironment } from "./index.js";
 
-const keyVersionSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u);
-const keySchema = z
+export const scoringFallbackKeyVersionSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u);
+export const scoringFallbackKeySchema = z
   .object({
-    version: keyVersionSchema,
+    version: scoringFallbackKeyVersionSchema,
     secret: z.string().min(32).max(1_024),
   })
   .strict();
-const keyringSchema = z
+export const scoringFallbackKeyringSchema = z
   .object({
-    primary: keySchema,
-    verificationOnly: z.array(keySchema).max(7).default([]),
+    primary: scoringFallbackKeySchema,
+    verificationOnly: z.array(scoringFallbackKeySchema).max(7).default([]),
   })
   .strict()
   .superRefine((keyring, context) => {
@@ -24,6 +24,10 @@ const keyringSchema = z
       context.addIssue({ code: "custom", message: "Fallback-code HMAC key material must be unique" });
     }
   });
+
+export function parseScoringFallbackHmacKeyring(value: unknown): ScoringFallbackHmacKeyring {
+  return scoringFallbackKeyringSchema.parse(value);
+}
 
 export type ScoringFallbackHmacKey = Readonly<{
   version: string;
@@ -63,7 +67,7 @@ export function loadScoringFallbackHmacKeyring(
   } catch {
     throw new Error("SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING must be valid JSON");
   }
-  const parsed = keyringSchema.safeParse(decoded);
+  const parsed = scoringFallbackKeyringSchema.safeParse(decoded);
   if (!parsed.success) {
     throw new Error(
       "SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING must contain one primary key and unique verification-only keys",
