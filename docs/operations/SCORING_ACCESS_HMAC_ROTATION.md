@@ -2,12 +2,12 @@
 
 MATCHDAY uses two independent HMAC purposes for scoring access:
 
-1. rate-limit/access-attempt fingerprints, which support overlapping versioned
-   keys; and
-2. low-entropy fallback-code hashes, which currently use a separate secret and
-   deliberately require code invalidation and reissue during a secret rotation.
+1. rate-limit/access-attempt fingerprints; and
+2. low-entropy fallback-code hashes.
 
-Never assume rotating one purpose rotates the other.
+Both support overlap rotation, but they use separate keys, configuration, and
+retirement evidence. Never reuse key material or assume rotating one purpose
+rotates the other.
 
 ## Rate-limit and access-attempt keyring
 
@@ -33,16 +33,9 @@ rotates access-pass secrets, fallback-code secrets, sessions, or cookies.
    reconciles the public version names with
    `scoring_access_hmac_key_versions`, audits activation/demotion without key
    material, and refuses an unknown, retired, or omitted non-retired version.
-   Complete the rolling restart before demoting the former primary: each API
-   process checks the durable primary record immediately before a Redis write
-   or access-attempt receipt, so an old process fences itself once the
-   demotion/retirement transaction has committed.
 4. Confirm the startup health check and inspect the secret-free audit events
    `scoring_access_hmac_key.activated` and
    `scoring_access_hmac_key.verification_only`.
-   Confirm `scoring_access_hmac_rate_limit_operations_total` and
-   `scoring_access_hmac_key_lifecycle_total` contain only public versions,
-   accepted-version counts, and lifecycle/operation labels.
 
 During the overlap, new access-attempt rows and Redis writes use the primary
 version. The limiter aggregates counters and cooldowns across all configured
@@ -64,8 +57,7 @@ the maximum 15-minute Redis retention period has elapsed.
    still-live-attempt versions. A successful retirement is one-way and writes
    an append-only platform-admin audit event containing only the version and
    reason.
-4. Remove the retired version from the deployment keyring and restart. Startup
-   rejects any attempt to reactivate a retired version.
+4. Remove the retired version from the deployment keyring and restart.
 
 ### Rate-limit rollback
 
@@ -75,46 +67,94 @@ limits. After retirement, do not reactivate the version. Issue a distinct new
 version instead, investigate the audit history, and record the incident in the
 C5 operational evidence.
 
-## Fallback-code HMAC secret rotation
+## Fallback-code HMAC keyring
 
-`SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET` is intentionally independent from
-the rate-limit keyring. The current runtime writes fallback hashes as
-`hmac_sha256_v1`; therefore changing this secret without first invalidating
-existing fallback codes would make retained codes fail unpredictably across a
-rolling deployment.
+`SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET` remains the single-key `v1`
+compatibility value. Zero-downtime rotation is enabled by
+`SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING`:
 
-Until the fallback-code runtime has an overlapping versioned verification
-keyring, use this fail-closed procedure:
+```json
+{
+  "primary": { "version": "v2", "secret": "<new secret>" },
+  "verificationOnly": [{ "version": "v1", "secret": "<old secret>" }]
+}
+```
 
-1. Schedule the change outside an active event window and pause new fallback
-   code issuance/rotation for the affected environment.
-2. In one reviewed database transaction, invalidate every currently usable
-   fallback code by setting `short_code_hash=NULL`,
-   `fallback_code_hash_version='rotation_required'`, and recording the
-   corresponding secret-free audit/outbox evidence. Do not change QR/access
-   pass secrets or scoring-session credentials.
-3. Confirm there are no non-null `short_code_hash` values before changing the
-   secret. The full-history uniqueness invariant must remain present.
-4. Rotate `SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET` in the secret manager and
-   restart every API instance. Do not run old- and new-secret API instances at
-   the same time after invalidation.
-5. Organisers explicitly rotate/reissue fallback codes for passes that still
-   require them. Newly issued hashes must be marked `hmac_sha256_v1` for the
-   currently deployed runtime.
-6. Rehearse rollback before the maintenance window. If the deployment must be
-   rolled back, keep all invalidated fallback codes invalidated and reissue
-   them; never restore old hashes from a backup merely to recover a code.
+The API always issues and rotates new fallback codes with the configured
+primary key. On exchange it computes candidate HMACs for the primary and every
+verification-only key, looks for the retained full-history hash, and then runs
+the normal Phase 2 credential exchange exactly once with the matching key.
+Rate limiting, revocation, expiry, writer fencing, and audit behavior therefore
+remain owned by the existing Phase 2 runtime.
 
-This destructive reissue procedure is safe but operationally heavier than a
-true overlapping fallback-code keyring. Gate C must not claim that the
-rate-limit keyring provides fallback-code key rotation; a future dual-version
-runtime should replace this section before zero-downtime fallback-code secret
-rotation is required.
+The database keeps fallback-code hashes unique across retained history for one
+HMAC key. During an overlap it is theoretically possible for the same 12-digit
+plaintext to have been issued under different key versions; if the presented
+code resolves to more than one retained candidate hash, exchange fails closed
+rather than choosing one arbitrarily.
+
+### Prepare a fallback-code rotation
+
+1. Generate a new independent 32-byte-or-longer secret and a new public version
+   name. Do not reuse a rate-limit, identity, cookie, or scoring-session key.
+2. Immediately before the cutover, retain a **secret-free cutover inventory**
+   of every pass that still has a fallback code:
+
+   ```sql
+   SELECT id, competition_id, match_id, expires_at, revoked_at
+   FROM scoring_access_passes
+   WHERE short_code_hash IS NOT NULL
+   ORDER BY expires_at, id;
+   ```
+
+   The retained evidence must not include `short_code_hash`, raw fallback
+   codes, tokens, session cookies, IP addresses, or HMAC key material.
+3. Configure the new key as `primary` and the old key as `verificationOnly` in
+   `SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING`.
+4. Complete the rolling API deployment before removing any old key. Startup
+   logs only public primary/verification version names.
+5. Prove in staging that a code created before the cutover still exchanges,
+   a code created after the cutover exchanges, revoked/expired codes remain
+   rejected, and invalid attempts still consume the same rate-limit budget.
+
+### Retire a prior fallback-code key
+
+The current database records the fallback hash algorithm but does not persist
+the secret-key version per pass. For that reason **time alone is not sufficient
+retirement evidence**.
+
+Before removing a verification-only key, every pass in the cutover inventory
+must satisfy at least one of these conditions:
+
+- the pass is revoked;
+- the pass has expired; or
+- an organiser has explicitly rotated its fallback code after the new primary
+  became active.
+
+Retain the secret-free rotation/revocation/expiry receipts against the cutover
+inventory. Only when the inventory is fully discharged may the old key be
+removed from `verificationOnly` and the API restarted.
+
+A future schema may persist a public fallback HMAC key-version identifier per
+pass and automate this retirement check. Until then the cutover inventory is
+the release evidence and prevents an unverifiable early retirement.
+
+### Fallback-code rollback
+
+Before retirement, rollback is configuration-only: restore the old key as
+primary and keep the newer key in `verificationOnly`. Codes created during the
+attempted rotation continue to verify through the overlap. Do not delete or
+rewrite retained hashes during rollback.
+
+After the old key has been retired, do not reintroduce it casually. Use the
+cutover evidence, investigate why rollback is required, and either issue a new
+version or explicitly rotate affected fallback codes.
 
 ## Evidence required for C5
 
-Retain the exact release SHA, the redacted rate-limit key-version transition
-audit rows, the real-Redis aggregate-counter receipt, the retirement API
-receipt, the fallback-code invalidation/reissue receipt, and rollback
-rehearsals. Never retain secret values, HMAC digests, raw credentials, IP
-addresses, session cookies, or access URLs.
+Retain the exact release SHA, redacted rate-limit key-version transition audit
+rows, real-Redis aggregate-counter evidence, rate-limit retirement receipt,
+fallback-code cutover inventory, pre/post-cutover exchange receipts, fallback
+rotation/revocation receipts, and rollback rehearsals. Never retain secret
+values, HMAC digests, raw credentials, IP addresses, session cookies, or access
+URLs.
