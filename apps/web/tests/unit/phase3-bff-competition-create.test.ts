@@ -36,6 +36,7 @@ const body = {
 
 beforeEach(() => {
   process.env.MATCHDAY_API_BASE_URL = origin;
+  process.env.MATCHDAY_PUBLIC_ORIGIN = origin;
 });
 
 afterEach(() => {

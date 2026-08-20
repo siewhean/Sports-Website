@@ -42,7 +42,9 @@ describe("MATCHDAY_PUBLIC_ORIGIN configuration", () => {
   it("requires an explicit public origin outside local/test", () => {
     const source = staging();
     delete source.MATCHDAY_PUBLIC_ORIGIN;
-    expect(() => parseConfig(source)).toThrow(/MATCHDAY_PUBLIC_ORIGIN must be explicitly configured outside local\/test/i);
+    expect(() => parseConfig(source)).toThrow(
+      /MATCHDAY_PUBLIC_ORIGIN must be explicitly configured outside local\/test/i,
+    );
   });
 
   it("requires HTTPS and a canonical origin in staging", () => {

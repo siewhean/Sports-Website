@@ -1,5 +1,6 @@
-import { parseConfig } from "@matchday/config";
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
+import { parseConfig } from "@matchday/config";
 import type { DependencyProbes } from "../src/probes.js";
 
 export const healthyProbes: DependencyProbes = {
@@ -8,12 +9,25 @@ export const healthyProbes: DependencyProbes = {
   redis: async () => true,
 };
 
+const testRateLimitSecret = "test-scoring-access-rate-limit-secret";
+const testRateLimitCommitment = createHash("sha256").update(testRateLimitSecret).digest("hex");
+
 export function testConfig(overrides: NodeJS.ProcessEnv = {}) {
   return parseConfig({
     APP_ENV: "test",
     LOG_LEVEL: "silent",
-    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "test-scoring-access-rate-limit-secret",
+    MATCHDAY_PUBLIC_ORIGIN: "https://app.matchday.example",
+    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: testRateLimitSecret,
     SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "test-scoring-fallback-code-hmac-secret",
+    SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT: testRateLimitCommitment,
+    SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+      primary: { version: "v1", secret: testRateLimitSecret },
+      verificationOnly: [],
+    }),
+    SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING: JSON.stringify({
+      primary: { version: "v1", secret: "test-scoring-fallback-code-hmac-secret" },
+      verificationOnly: [],
+    }),
     ...overrides,
   });
 }
@@ -26,6 +40,7 @@ export function oidcEnvironment(appOrigin: string, apiOrigin = appOrigin): NodeJ
   const cookieSite = `${app.protocol}//${cookieHostname}${isLoopbackName && app.port ? `:${app.port}` : ""}`;
   return {
     API_ALLOWED_ORIGINS: appOrigin,
+    MATCHDAY_PUBLIC_ORIGIN: appOrigin,
     IDENTITY_PROVIDER: "oidc",
     IDENTITY_OIDC_ISSUER: "https://identity.matchday.test",
     IDENTITY_OIDC_CLIENT_ID: "matchday-test-client",

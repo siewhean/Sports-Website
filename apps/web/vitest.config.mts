@@ -13,4 +13,9 @@ export default defineConfig({
       },
     ],
   },
+  test: {
+    env: {
+      MATCHDAY_PUBLIC_ORIGIN: "https://matchday.test",
+    },
+  },
 });

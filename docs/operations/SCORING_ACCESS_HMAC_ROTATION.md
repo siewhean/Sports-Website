@@ -53,6 +53,7 @@ the maximum 15-minute Redis retention period has elapsed.
 
    with the normal same-origin session cookie, allowed `Origin`, valid CSRF
    token, and a 3-1000 character operational reason.
+
 3. The server rejects primary, unknown, already-retired, TTL-pending, or
    still-live-attempt versions. A successful retirement is one-way and writes
    an append-only platform-admin audit event containing only the version and
@@ -109,6 +110,7 @@ rather than choosing one arbitrarily.
 
    The retained evidence must not include `short_code_hash`, raw fallback
    codes, tokens, session cookies, IP addresses, or HMAC key material.
+
 3. Configure the new key as `primary` and the old key as `verificationOnly` in
    `SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING`.
 4. Complete the rolling API deployment before removing any old key. Startup

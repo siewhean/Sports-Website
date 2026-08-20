@@ -153,8 +153,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
     const key = input.shortCode
       ? await this.keyForPresentedFallbackCode(input.shortCode)
       : this.fallbackKeyring.primary;
-    const delegate =
-      key.version === this.fallbackKeyring.primary.version ? this : this.delegates.get(key.version);
+    const delegate = key.version === this.fallbackKeyring.primary.version ? this : this.delegates.get(key.version);
     if (key.version !== this.fallbackKeyring.primary.version && !delegate) {
       throw new Error("Fallback-code HMAC verification runtime is unavailable");
     }

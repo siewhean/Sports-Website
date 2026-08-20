@@ -196,7 +196,9 @@ function validatedPublicOrigin(value: string, environment: AppEnvironment): stri
     url.hash ||
     value !== url.origin
   ) {
-    throw new Error("MATCHDAY_PUBLIC_ORIGIN must be one canonical HTTP(S) origin without credentials, path, query, or fragment");
+    throw new Error(
+      "MATCHDAY_PUBLIC_ORIGIN must be one canonical HTTP(S) origin without credentials, path, query, or fragment",
+    );
   }
   if (url.protocol !== "https:" && !((environment === "local" || environment === "test") && loopback)) {
     throw new Error("MATCHDAY_PUBLIC_ORIGIN must use HTTPS outside local/test and HTTP is allowed only for loopback");

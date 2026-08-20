@@ -8,9 +8,7 @@ import {
 
 const keyring: ScoringFallbackHmacKeyring = {
   primary: { version: "v2", secret: "current-fallback-code-key-material-32-bytes-minimum" },
-  verificationOnly: [
-    { version: "v1", secret: "previous-fallback-code-key-material-32-bytes-minimum" },
-  ],
+  verificationOnly: [{ version: "v1", secret: "previous-fallback-code-key-material-32-bytes-minimum" }],
 };
 
 describe("fallback-code HMAC overlap resolution", () => {
@@ -18,9 +16,7 @@ describe("fallback-code HMAC overlap resolution", () => {
     const candidates = fallbackCodeCandidates("123456789012", keyring);
     expect(candidates.map(({ key }) => key.version)).toEqual(["v2", "v1"]);
     expect(new Set(candidates.map(({ hashHex }) => hashHex)).size).toBe(2);
-    expect(candidates[0]!.hashHex).toBe(
-      fallbackCodeHashHex("123456789012", keyring.primary.secret),
-    );
+    expect(candidates[0]!.hashHex).toBe(fallbackCodeHashHex("123456789012", keyring.primary.secret));
   });
 
   it("selects a verification-only key when its retained hash matches", () => {
@@ -36,11 +32,7 @@ describe("fallback-code HMAC overlap resolution", () => {
   it("fails closed if one plaintext code resolves to retained hashes under multiple versions", () => {
     const candidates = fallbackCodeCandidates("123456789012", keyring);
     expect(() =>
-      selectFallbackCodeKey(
-        candidates,
-        [candidates[0]!.hashHex, candidates[1]!.hashHex],
-        keyring.primary,
-      ),
+      selectFallbackCodeKey(candidates, [candidates[0]!.hashHex, candidates[1]!.hashHex], keyring.primary),
     ).toThrow(/ambiguous across configured HMAC key versions/i);
   });
 

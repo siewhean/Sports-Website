@@ -17,6 +17,7 @@ const openApiLegacyV1MaterialCommitment = createHash("sha256")
 export async function generateOpenApiDocument() {
   const config = parseConfig({
     APP_ENV: "staging",
+    MATCHDAY_PUBLIC_ORIGIN: "https://app.matchday.example",
     API_ALLOWED_ORIGINS: "https://app.matchday.example",
     LOG_LEVEL: "silent",
     IDENTITY_CSRF_HMAC_SECRET: "o".repeat(32),

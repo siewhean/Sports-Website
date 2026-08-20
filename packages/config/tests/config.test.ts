@@ -4,6 +4,7 @@ import { parseConfig, safeConfigSummary } from "../src/index.js";
 const flowSealKey = Buffer.alloc(32, 7).toString("base64url");
 const legacyV1MaterialCommitment = "a".repeat(64);
 const oidcConfig = {
+  MATCHDAY_PUBLIC_ORIGIN: "https://app.matchday.example",
   SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
     primary: { version: "v1", secret: "scoring-access-rate-limit-secret-32" },
     verificationOnly: [],
@@ -153,7 +154,9 @@ describe("configuration", () => {
   });
 
   it("requires a private CSRF secret and __Host cookie outside local/test", () => {
-    expect(() => parseConfig({ APP_ENV: "staging" })).toThrow("IDENTITY_CSRF_HMAC_SECRET");
+    expect(() => parseConfig({ APP_ENV: "staging", MATCHDAY_PUBLIC_ORIGIN: "https://app.matchday.example" })).toThrow(
+      "IDENTITY_CSRF_HMAC_SECRET",
+    );
     const config = parseConfig({
       APP_ENV: "staging",
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
@@ -274,12 +277,17 @@ describe("configuration", () => {
   });
 
   it("requires a complete OIDC provider outside local/test", () => {
-    expect(() => parseConfig({ APP_ENV: "staging", IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32) })).toThrow(
-      "IDENTITY_PROVIDER must be oidc",
-    );
     expect(() =>
       parseConfig({
         APP_ENV: "staging",
+        MATCHDAY_PUBLIC_ORIGIN: "https://app.matchday.example",
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      }),
+    ).toThrow("IDENTITY_PROVIDER must be oidc");
+    expect(() =>
+      parseConfig({
+        APP_ENV: "staging",
+        MATCHDAY_PUBLIC_ORIGIN: "https://app.matchday.example",
         IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
         IDENTITY_PROVIDER: "oidc",
         IDENTITY_POST_AUTH_REDIRECT_URIS: "https://app.matchday.example/organiser",

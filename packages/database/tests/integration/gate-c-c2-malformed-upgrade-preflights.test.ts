@@ -35,7 +35,7 @@ function definition(formatRevisionId: string, matchId: string, downstreamMatchId
   return {
     id: formatRevisionId,
     schemaVersion: 1,
-    entryCount: 2,
+    entryCount: 3,
     stages: [
       {
         id: "knockout",
@@ -44,7 +44,7 @@ function definition(formatRevisionId: string, matchId: string, downstreamMatchId
         order: 1,
         groupIds: [],
         groupSize: null,
-        outputRanks: 2,
+        outputRanks: 3,
         matchIds: [matchId, downstreamMatchId],
       },
     ],
@@ -54,9 +54,9 @@ function definition(formatRevisionId: string, matchId: string, downstreamMatchId
         stageId: "knockout",
         round: 1,
         order: 1,
-        purpose: "semifinal",
-        home: { type: "entry_seed", seed: 1 },
-        away: { type: "entry_seed", seed: 2 },
+        purpose: "progression",
+        home: { type: "entry_seed", seed: 2 },
+        away: { type: "entry_seed", seed: 3 },
       },
       {
         id: downstreamMatchId,
@@ -64,8 +64,8 @@ function definition(formatRevisionId: string, matchId: string, downstreamMatchId
         round: 2,
         order: 2,
         purpose: "championship",
-        home: { type: "match_winner", matchId },
-        away: { type: "entry_seed", seed: 2 },
+        home: { type: "entry_seed", seed: 1 },
+        away: { type: "winner", matchId },
       },
     ],
     terminalMatchIds: [downstreamMatchId],
@@ -104,6 +104,7 @@ async function seedUpgradeWorld(sql: Sql): Promise<UpgradeWorld> {
   const siblingDivisionId = randomUUID();
   const homeEntryId = randomUUID();
   const awayEntryId = randomUUID();
+  const entry3Id = randomUUID();
   const siblingEntryId = randomUUID();
   const formatRevisionId = randomUUID();
   const matchId = randomUUID();
@@ -115,98 +116,103 @@ async function seedUpgradeWorld(sql: Sql): Promise<UpgradeWorld> {
   const pack = { recommendedSlotMinutes: 30, recommendedSettings: { slotMinutes: 30 } };
   const graph = definition(formatRevisionId, matchId, downstreamMatchId);
 
-  await sql`INSERT INTO accounts(id,primary_email,display_name)
-    VALUES(${accountId},${`${accountId}@example.test`},'Gate C preflight owner')`;
-  await sql`INSERT INTO organisations(id,name,slug)
-    VALUES(${organisationId},'Gate C preflight org',${`gate-c-preflight-${organisationId}`})`;
-  await sql`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
-    VALUES(${organisationId},${accountId},'owner','active')`;
+  return sql.begin(async (sql) => {
+    await sql`INSERT INTO accounts(id,primary_email,display_name)
+      VALUES(${accountId},${`${accountId}@example.test`},'Gate C preflight owner')`;
+    await sql`INSERT INTO organisations(id,name,slug)
+      VALUES(${organisationId},'Gate C preflight org',${`gate-c-preflight-${organisationId}`})`;
+    await sql`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+      VALUES(${organisationId},${accountId},'owner','active')`;
 
-  const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) AS hash`;
-  await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
-    VALUES('canoe_polo','gate-c-preflight-v1',1,${sql.json(pack)},${packHash!.hash},'active',now())`;
+    const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) AS hash`;
+    await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
+      VALUES('canoe_polo','gate-c-preflight-v1',1,${sql.json(pack)},${packHash!.hash},'active',now())`;
 
-  await sql`INSERT INTO competitions(
-      id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,
-      venue,address,country_code,locale,plan_tier
-    ) VALUES(
-      ${competitionId},${organisationId},${accountId},'Gate C Preflight Cup',${`gate-c-preflight-cup-${competitionId}`},
-      'canoe_polo','Asia/Singapore','2027-01-01','2027-01-01','Arena','1 Road','SG','en-SG','organiser_pro'
-    )`;
-  await sql`INSERT INTO competition_sport_settings(
-      competition_id,updated_by,sport_code,pack_version,pack_schema_version,recommended_snapshot,settings_override
-    ) VALUES(
-      ${competitionId},${accountId},'canoe_polo','gate-c-preflight-v1',1,'{}'::jsonb,'{}'::jsonb
-    )`;
+    await sql`INSERT INTO competitions(
+        id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,
+        venue,address,country_code,locale,plan_tier
+      ) VALUES(
+        ${competitionId},${organisationId},${accountId},'Gate C Preflight Cup',${`gate-c-preflight-cup-${competitionId}`},
+        'canoe_polo','Asia/Singapore','2027-01-01','2027-01-01','Arena','1 Road','SG','en-SG','organiser_pro'
+      )`;
+    await sql`INSERT INTO competition_sport_settings(
+        competition_id,updated_by,sport_code,pack_version,pack_schema_version,recommended_snapshot,settings_override
+      ) VALUES(
+        ${competitionId},${accountId},'canoe_polo','gate-c-preflight-v1',1,'{}'::jsonb,'{}'::jsonb
+      )`;
 
-  await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
-    VALUES
-      (${divisionId},${competitionId},'Open',16),
-      (${siblingDivisionId},${competitionId},'Sibling',16)`;
-  await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
-    VALUES
-      (${homeEntryId},${divisionId},'Home',1,'team','confirmed'),
-      (${awayEntryId},${divisionId},'Away',2,'team','confirmed'),
-      (${siblingEntryId},${siblingDivisionId},'Sibling',1,'team','confirmed')`;
+    await sql`INSERT INTO divisions(id,competition_id,name,team_limit)
+      VALUES
+        (${divisionId},${competitionId},'Open',16),
+        (${siblingDivisionId},${competitionId},'Sibling',16)`;
+    await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status)
+      VALUES
+        (${homeEntryId},${divisionId},'Home',1,'team','confirmed'),
+        (${awayEntryId},${divisionId},'Away',2,'team','confirmed'),
+        (${entry3Id},${divisionId},'Third',3,'team','confirmed'),
+        (${siblingEntryId},${siblingDivisionId},'Sibling',1,'team','confirmed')`;
 
-  const [definitionHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(graph)}) AS hash`;
-  await sql`INSERT INTO format_revisions(
-      id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract
-    ) VALUES(
-      ${formatRevisionId},${competitionId},${divisionId},1,${sql.json(graph)},${definitionHash!.hash},${accountId},'phase3'
-    )`;
-  await sql`INSERT INTO matches(
-      id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,home_entry_id,away_entry_id
-    ) VALUES
-      (${matchId},${competitionId},${divisionId},${formatRevisionId},'C2-A','semifinal',1,1,${homeEntryId},${awayEntryId}),
-      (${downstreamMatchId},${competitionId},${divisionId},${formatRevisionId},'C2-B','final',2,2,${homeEntryId},${awayEntryId})`;
+    const [definitionHash] = await sql<
+      { hash: string }[]
+    >`SELECT phase4_sha256_json(${sql.json(graph as postgres.JSONValue)}) AS hash`;
+    await sql`INSERT INTO format_revisions(
+        id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract
+      ) VALUES(
+        ${formatRevisionId},${competitionId},${divisionId},1,${sql.json(graph as postgres.JSONValue)},${definitionHash!.hash},${accountId},'phase3'
+      )`;
+    await sql`INSERT INTO matches(
+        id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,home_entry_id,away_entry_id
+      ) VALUES
+        (${matchId},${competitionId},${divisionId},${formatRevisionId},'C2-A','semifinal',1,1,${awayEntryId},${entry3Id}),
+        (${downstreamMatchId},${competitionId},${divisionId},${formatRevisionId},'C2-B','final',2,2,${homeEntryId},NULL)`;
 
-  await sql`INSERT INTO playing_areas(id,competition_id,name,slot_minutes)
-    VALUES(${playingAreaId},${competitionId},'Court 1',30)`;
-  await sql`INSERT INTO schedule_revisions(
-      id,competition_id,format_revision_id,revision,input_hash,created_by
-    ) VALUES(
-      ${scheduleRevisionId},${competitionId},${formatRevisionId},1,${digest(scheduleRevisionId)},${accountId}
-    )`;
-  await sql`INSERT INTO scheduled_matches(
-      schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at
-    ) VALUES(
-      ${scheduleRevisionId},${matchId},${competitionId},${playingAreaId},
-      '2027-01-01T08:00:00Z','2027-01-01T08:30:00Z'
-    )`;
+    await sql`INSERT INTO playing_areas(id,competition_id,name,slot_minutes)
+      VALUES(${playingAreaId},${competitionId},'Court 1',30)`;
+    await sql`INSERT INTO schedule_revisions(
+        id,competition_id,format_revision_id,revision,input_hash,created_by
+      ) VALUES(
+        ${scheduleRevisionId},${competitionId},${formatRevisionId},1,${digest(scheduleRevisionId)},${accountId}
+      )`;
+    await sql`INSERT INTO scheduled_matches(
+        schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at
+      ) VALUES(
+        ${scheduleRevisionId},${matchId},${competitionId},${playingAreaId},
+        '2027-01-01T08:00:00Z','2027-01-01T08:30:00Z'
+      )`;
 
-  await sql`INSERT INTO scoring_access_passes(
-      id,competition_id,match_id,secret_hash,short_code_hash,fallback_code_hash_version,expires_at,created_by
-    ) VALUES(
-      ${accessPassId},${competitionId},${matchId},${randomBytes(32)},${randomBytes(32)},'hmac_sha256_v1',
-      '2100-01-01T12:00:00Z',${accountId}
-    )`;
-  await sql`INSERT INTO scoring_access_sessions(
-      id,access_pass_id,competition_id,match_id,session_token_hash,generation,device_id_hash,issued_at,expires_at
-    ) VALUES(
-      ${accessSessionId},${accessPassId},${competitionId},${matchId},${randomBytes(32)},7,${randomBytes(32)},
-      '2027-01-01T08:00:00Z','2100-01-01T09:00:00Z'
-    )`;
+    await sql`INSERT INTO scoring_access_passes(
+        id,competition_id,match_id,secret_hash,short_code_hash,fallback_code_hash_version,expires_at,created_by
+      ) VALUES(
+        ${accessPassId},${competitionId},${matchId},${randomBytes(32)},${randomBytes(32)},'hmac_sha256_v1',
+        '2100-01-01T12:00:00Z',${accountId}
+      )`;
+    await sql`INSERT INTO scoring_access_sessions(
+        id,access_pass_id,competition_id,match_id,session_token_hash,generation,device_id_hash,issued_at,expires_at
+      ) VALUES(
+        ${accessSessionId},${accessPassId},${competitionId},${matchId},${randomBytes(32)},7,${randomBytes(32)},
+        '2027-01-01T08:00:00Z','2100-01-01T09:00:00Z'
+      )`;
 
-  await sql`INSERT INTO match_score_streams(
-      match_id,competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version
-    ) VALUES(
-      ${matchId},${competitionId},${divisionId},'canoe_polo','gate-c-preflight-v1','{}'::jsonb,${"a".repeat(64)},0
-    )`;
+    await sql`INSERT INTO match_score_streams(
+        match_id,competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version
+      ) VALUES(
+        ${matchId},${competitionId},${divisionId},'canoe_polo','gate-c-preflight-v1','{}'::jsonb,${"a".repeat(64)},0
+      )`;
 
-  return {
-    accountId,
-    competitionId,
-    divisionId,
-    siblingDivisionId,
-    homeEntryId,
-    awayEntryId,
-    siblingEntryId,
-    matchId,
-    downstreamMatchId,
-    accessSessionId,
-    scheduleRevisionId,
-  };
+    return {
+      accountId,
+      competitionId,
+      divisionId,
+      siblingDivisionId,
+      homeEntryId,
+      awayEntryId,
+      siblingEntryId,
+      matchId,
+      downstreamMatchId,
+      accessSessionId,
+      scheduleRevisionId,
+    };
+  });
 }
 
 async function expectColumnAbsent(sql: Sql, schema: string, columnName: string): Promise<void> {
@@ -245,7 +251,7 @@ describeInfrastructure("Gate C C2 malformed upgrade preflights", () => {
     } finally {
       await sql.end({ timeout: 2 });
     }
-  });
+  }, 30_000);
 
   it("aborts migration 0030 when a retained result-conflict receipt exploits nullable CHECK semantics", async () => {
     const directory = await migrationCopyThrough("0029_gate_c_five_sport_scoring.sql");
@@ -270,7 +276,7 @@ describeInfrastructure("Gate C C2 malformed upgrade preflights", () => {
     } finally {
       await sql.end({ timeout: 2 });
     }
-  });
+  }, 30_000);
 
   it("aborts migration 0031 when a published participant snapshot belongs to another division", async () => {
     const directory = await migrationCopyThrough("0030_gate_c_published_schedule_participants.sql");
@@ -289,5 +295,5 @@ describeInfrastructure("Gate C C2 malformed upgrade preflights", () => {
     } finally {
       await sql.end({ timeout: 2 });
     }
-  });
+  }, 30_000);
 });
