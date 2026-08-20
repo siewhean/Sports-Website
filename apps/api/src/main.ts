@@ -57,9 +57,9 @@ const scoringAccessRateLimiter = new RedisScoringAccessRateLimiter(
 const phase2Runtime = new FallbackKeyringPhase2Runtime(
   identitySql,
   phase2DomainAdapter,
+  fallbackCodeHmacKeyring,
   undefined,
   scoringAccessRateLimiter,
-  fallbackCodeHmacKeyring,
 );
 const phase3Runtime = new Phase3Runtime(identitySql, phase3DomainAdapter);
 const scheduleQueue = new ScheduleJobQueue({
