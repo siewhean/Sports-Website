@@ -1,4 +1,5 @@
 import { loadConfig, safeConfigSummary } from "@matchday/config";
+import { loadScoringFallbackHmacKeyring } from "@matchday/config/scoring-fallback-keyring";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
 import { Redis } from "ioredis";
 import postgres from "postgres";
@@ -10,7 +11,7 @@ import { IdentityApiRuntime, UnavailableIdentityProvider } from "./identity-runt
 import { createOidcIdentityProvider } from "./oidc-provider.js";
 import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
-import { Phase2Runtime } from "./phase-2-runtime.js";
+import { FallbackKeyringPhase2Runtime } from "./phase-2-fallback-keyring-runtime.js";
 import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
 import { reconcileScoringAccessHmacKeyring } from "./scoring-access-hmac-keyring.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
@@ -20,6 +21,10 @@ import { ReliableGateBPhase4Runtime } from "./phase-4-reliable-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const config = loadConfig();
+const fallbackCodeHmacKeyring = loadScoringFallbackHmacKeyring(
+  config.scoringAccess.fallbackCodeHmacSecret,
+  config.environment,
+);
 const identityProvider = config.identity.oidc
   ? await createOidcIdentityProvider({
       issuer: config.identity.oidc.issuer,
@@ -44,16 +49,17 @@ const identityRuntime = new IdentityApiRuntime(
   config.identity.csrfHmacSecret,
   systemClock,
 );
-const phase2Runtime = new Phase2Runtime(
+const scoringAccessRateLimiter = new RedisScoringAccessRateLimiter(
+  rateLimitRedis,
+  config.scoringAccess.rateLimitHmacKeyring,
+  `matchday:${config.environment}:scoring-access:`,
+);
+const phase2Runtime = new FallbackKeyringPhase2Runtime(
   identitySql,
   phase2DomainAdapter,
   undefined,
-  new RedisScoringAccessRateLimiter(
-    rateLimitRedis,
-    config.scoringAccess.rateLimitHmacKeyring,
-    `matchday:${config.environment}:scoring-access:`,
-  ),
-  config.scoringAccess.fallbackCodeHmacSecret,
+  scoringAccessRateLimiter,
+  fallbackCodeHmacKeyring,
 );
 const phase3Runtime = new Phase3Runtime(identitySql, phase3DomainAdapter);
 const scheduleQueue = new ScheduleJobQueue({
@@ -114,7 +120,16 @@ try {
     onCloseError: (error) => app.log.error({ err: error }, "api cleanup failed"),
     onListenError: (error) => app.log.fatal({ err: error }, "api failed to start"),
   });
-  app.log.info({ config: safeConfigSummary(config) }, "api started");
+  app.log.info(
+    {
+      config: safeConfigSummary(config),
+      scoring_fallback_hmac: {
+        primary_version: fallbackCodeHmacKeyring.primary.version,
+        verification_only_versions: fallbackCodeHmacKeyring.verificationOnly.map((key) => key.version),
+      },
+    },
+    "api started",
+  );
 } catch {
   process.exitCode = 1;
 }
