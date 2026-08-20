@@ -8,28 +8,28 @@ import {
 } from "./scoring-access-rate-limit.js";
 import { Phase2Runtime, type Phase2DomainAdapter } from "./phase-2-runtime.js";
 
-export type FallbackExchangeInput = Readonly<{
+export type FallbackExchangeInput = {
   token?: string;
   shortCode?: string;
   expectedMatchId?: string;
   deviceId?: string;
   deviceLabel?: string;
   ipAddress?: string;
-}>;
+};
 
-type ExchangedScoringSession = Readonly<{
+type ExchangedScoringSession = {
   session_id: string;
   session_token: string;
   match_id: string;
   mode: "writer" | "candidate" | "viewer" | "transferred";
-  permissions: readonly ("score:read" | "score:write" | "score:reverse" | "score:finalise")[];
+  permissions: ("score:read" | "score:write" | "score:reverse" | "score:finalise")[];
   generation: number | null;
   expires_at: string;
   lease_expires_at: string | null;
   rate_limit: ScoringAccessRateLimitHeaders;
-}>;
+};
 
-type LegacyWriterExchange = ExchangedScoringSession & Readonly<{ mode: "writer"; generation: number }>;
+type LegacyWriterExchange = ExchangedScoringSession & { mode: "writer"; generation: number };
 
 export type FallbackCodeCandidate = Readonly<{
   key: ScoringFallbackHmacKey;
