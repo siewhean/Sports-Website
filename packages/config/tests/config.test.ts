@@ -15,7 +15,7 @@ const oidcConfig = {
   IDENTITY_PROVIDER: "oidc",
   IDENTITY_OIDC_ISSUER: "https://identity.matchday.example",
   IDENTITY_OIDC_CLIENT_ID: "matchday-web",
-  IDENTITY_OIDC_CLIENT_SECRET: "provider-secret-at-least-16",
+  IDENTITY_OIDC_CLIENT_SECRET: "provider-secret-at-least-32-bytes-long",
   IDENTITY_OIDC_CALLBACK_URI: "https://api.matchday.example/api/v1/identity/callback",
   IDENTITY_FLOW_SEAL_KEY: flowSealKey,
   IDENTITY_PROVIDER_EVENT_HMAC_SECRET: "provider-event-secret-at-least-32-bytes",
@@ -261,6 +261,7 @@ describe("configuration", () => {
       ...oidcConfig,
     });
     expect(safeConfigSummary(config).scoringAccess.fallbackCodeHmacSecretConfigured).toBe(true);
+    expect(safeConfigSummary(config).scoringAccess.fallbackCodeHmacPrimaryVersion).toBe("v1");
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain(
       oidcConfig.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
     );
@@ -273,7 +274,109 @@ describe("configuration", () => {
         }),
         SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "shared-scoring-access-hmac-secret",
       }),
-    ).toThrow("must be different");
+    ).toThrow("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+  });
+
+  it("enforces cross-secret separation across all key boundaries and keyrings", () => {
+    const baseStaging = {
+      APP_ENV: "staging",
+      DATABASE_URL: "postgres://user:secret@db.internal/matchday",
+      REDIS_URL: "redis://cache.internal:6379",
+      DEEP_HEALTH_TOKEN: "h".repeat(32),
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...edgeCacheConfig,
+      ...oidcConfig,
+    };
+
+    // 1. Fallback verification key matches rate-limit primary
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING: JSON.stringify({
+          primary: { version: "v2", secret: "fallback-code-primary-secret-32-bytes" },
+          verificationOnly: [{ version: "v1", secret: "scoring-access-rate-limit-secret-32" }],
+        }),
+      }),
+    ).toThrow("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+
+    // 2. Fallback primary matches identity CSRF key
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "c".repeat(32),
+      }),
+    ).toThrow("Scoring access fallback-code HMAC secret and identity CSRF key must be different");
+
+    // 3. Fallback primary matches identity flow seal key
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: flowSealKey,
+      }),
+    ).toThrow("Scoring access fallback-code HMAC secret and identity flow seal key must be different");
+
+    // 4. Fallback primary matches identity provider-event key
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: oidcConfig.IDENTITY_PROVIDER_EVENT_HMAC_SECRET,
+      }),
+    ).toThrow("Scoring access fallback-code HMAC secret and identity provider-event key must be different");
+
+    // 5. Fallback primary matches OIDC client secret
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: oidcConfig.IDENTITY_OIDC_CLIENT_SECRET,
+      }),
+    ).toThrow("Scoring access fallback-code HMAC secret and OIDC client secret must be different");
+
+    // 6. Fallback primary matches deep health token
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "h".repeat(32),
+      }),
+    ).toThrow("Scoring access fallback-code HMAC secret and deep health token must be different");
+
+    // 7. Fallback primary matches edge cache purge token
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: edgeCacheConfig.EDGE_CACHE_PURGE_BEARER_TOKEN,
+      }),
+    ).toThrow("Scoring access fallback-code HMAC secret and edge cache purge token must be different");
+
+    // 8. Rate-limit primary matches identity CSRF key
+    expect(() =>
+      parseConfig({
+        ...baseStaging,
+        SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+          primary: { version: "v1", secret: "c".repeat(32) },
+          verificationOnly: [],
+        }),
+      }),
+    ).toThrow("Scoring access rate-limit HMAC secret and identity CSRF key must be different");
+
+    // 9. Positive test: fully distinct secrets across all keys and purposes
+    const positiveConfig = parseConfig({
+      ...baseStaging,
+      SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: JSON.stringify({
+        primary: { version: "v2", secret: "distinct-rate-limit-primary-32-chars" },
+        verificationOnly: [{ version: "v1", secret: "distinct-rate-limit-verify-32-chars" }],
+      }),
+      SCORING_ACCESS_FALLBACK_CODE_HMAC_KEYRING: JSON.stringify({
+        primary: { version: "v2", secret: "distinct-fallback-primary-32-chars" },
+        verificationOnly: [{ version: "v1", secret: "distinct-fallback-verify-32-chars" }],
+      }),
+      SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "distinct-fallback-primary-32-chars",
+    });
+    expect(positiveConfig.scoringAccess.rateLimitHmacKeyring.primary.version).toBe("v2");
+    expect(positiveConfig.scoringAccess.fallbackCodeHmacKeyring.primary.version).toBe("v2");
+    expect(positiveConfig.scoringAccess.fallbackCodeHmacKeyring.verificationOnly).toHaveLength(1);
+    const summary = JSON.stringify(safeConfigSummary(positiveConfig));
+    expect(summary).not.toContain("distinct-rate-limit-primary-32-chars");
+    expect(summary).not.toContain("distinct-fallback-primary-32-chars");
   });
 
   it("requires a complete OIDC provider outside local/test", () => {

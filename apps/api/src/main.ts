@@ -1,5 +1,4 @@
 import { loadConfig, safeConfigSummary } from "@matchday/config";
-import { loadScoringFallbackHmacKeyring } from "@matchday/config/scoring-fallback-keyring";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
 import { Redis } from "ioredis";
 import postgres from "postgres";
@@ -21,10 +20,7 @@ import { ReliableGateBPhase4Runtime } from "./phase-4-reliable-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const config = loadConfig();
-const fallbackCodeHmacKeyring = loadScoringFallbackHmacKeyring(
-  config.scoringAccess.fallbackCodeHmacSecret,
-  config.environment,
-);
+const fallbackCodeHmacKeyring = config.scoringAccess.fallbackCodeHmacKeyring;
 const identityProvider = config.identity.oidc
   ? await createOidcIdentityProvider({
       issuer: config.identity.oidc.issuer,

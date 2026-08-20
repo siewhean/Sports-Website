@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { getDomain } from "tldts";
 import { z } from "zod";
+import { loadScoringFallbackHmacKeyring, type ScoringFallbackHmacKeyring } from "./scoring-fallback-keyring.js";
 
 const environmentSchema = z.enum(["local", "test", "staging", "production"]);
 const logLevelSchema = z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
@@ -131,6 +132,7 @@ export type AppConfig = {
       legacyV1MaterialCommitment?: string;
     };
     fallbackCodeHmacSecret: string;
+    fallbackCodeHmacKeyring: ScoringFallbackHmacKeyring;
   };
   logLevel: z.infer<typeof logLevelSchema>;
   deepHealthToken?: string;
@@ -441,12 +443,68 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET) {
     throw new Error("SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET must be explicitly configured outside local/test");
   }
-  if (
-    [rateLimitHmacKeyring.primary, ...rateLimitHmacKeyring.verificationOnly].some(
-      (key) => key.secret === parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
-    )
-  ) {
-    throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+
+  const fallbackCodeHmacKeyring = loadScoringFallbackHmacKeyring(
+    parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    parsed.APP_ENV,
+    source,
+  );
+
+  const fallbackSecrets = [
+    parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    fallbackCodeHmacKeyring.primary.secret,
+    ...fallbackCodeHmacKeyring.verificationOnly.map((key) => key.secret),
+  ];
+
+  const rateLimitSecrets = [
+    rateLimitHmacKeyring.primary.secret,
+    ...rateLimitHmacKeyring.verificationOnly.map((key) => key.secret),
+    ...(parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET ? [parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET] : []),
+  ];
+
+  for (const secret of fallbackSecrets) {
+    if (rateLimitSecrets.includes(secret)) {
+      throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+    }
+    if (parsed.IDENTITY_CSRF_HMAC_SECRET && secret === parsed.IDENTITY_CSRF_HMAC_SECRET) {
+      throw new Error("Scoring access fallback-code HMAC secret and identity CSRF key must be different");
+    }
+    if (parsed.IDENTITY_FLOW_SEAL_KEY && secret === parsed.IDENTITY_FLOW_SEAL_KEY) {
+      throw new Error("Scoring access fallback-code HMAC secret and identity flow seal key must be different");
+    }
+    if (parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET && secret === parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET) {
+      throw new Error("Scoring access fallback-code HMAC secret and identity provider-event key must be different");
+    }
+    if (parsed.IDENTITY_OIDC_CLIENT_SECRET && secret === parsed.IDENTITY_OIDC_CLIENT_SECRET) {
+      throw new Error("Scoring access fallback-code HMAC secret and OIDC client secret must be different");
+    }
+    if (parsed.DEEP_HEALTH_TOKEN && secret === parsed.DEEP_HEALTH_TOKEN) {
+      throw new Error("Scoring access fallback-code HMAC secret and deep health token must be different");
+    }
+    if (parsed.EDGE_CACHE_PURGE_BEARER_TOKEN && secret === parsed.EDGE_CACHE_PURGE_BEARER_TOKEN) {
+      throw new Error("Scoring access fallback-code HMAC secret and edge cache purge token must be different");
+    }
+  }
+
+  for (const secret of rateLimitSecrets) {
+    if (parsed.IDENTITY_CSRF_HMAC_SECRET && secret === parsed.IDENTITY_CSRF_HMAC_SECRET) {
+      throw new Error("Scoring access rate-limit HMAC secret and identity CSRF key must be different");
+    }
+    if (parsed.IDENTITY_FLOW_SEAL_KEY && secret === parsed.IDENTITY_FLOW_SEAL_KEY) {
+      throw new Error("Scoring access rate-limit HMAC secret and identity flow seal key must be different");
+    }
+    if (parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET && secret === parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET) {
+      throw new Error("Scoring access rate-limit HMAC secret and identity provider-event key must be different");
+    }
+    if (parsed.IDENTITY_OIDC_CLIENT_SECRET && secret === parsed.IDENTITY_OIDC_CLIENT_SECRET) {
+      throw new Error("Scoring access rate-limit HMAC secret and OIDC client secret must be different");
+    }
+    if (parsed.DEEP_HEALTH_TOKEN && secret === parsed.DEEP_HEALTH_TOKEN) {
+      throw new Error("Scoring access rate-limit HMAC secret and deep health token must be different");
+    }
+    if (parsed.EDGE_CACHE_PURGE_BEARER_TOKEN && secret === parsed.EDGE_CACHE_PURGE_BEARER_TOKEN) {
+      throw new Error("Scoring access rate-limit HMAC secret and edge cache purge token must be different");
+    }
   }
 
   let telemetryEndpoint: string | undefined;
@@ -497,6 +555,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
           : {}),
       },
       fallbackCodeHmacSecret: parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+      fallbackCodeHmacKeyring,
     },
     logLevel: parsed.LOG_LEVEL,
     ...(parsed.DEEP_HEALTH_TOKEN ? { deepHealthToken: parsed.DEEP_HEALTH_TOKEN } : {}),
@@ -546,6 +605,10 @@ export function safeConfigSummary(config: AppConfig) {
       rateLimitHmacVerificationOnlyVersions: config.scoringAccess.rateLimitHmacKeyring.verificationOnly.map(
         (key) => key.version,
       ),
+      fallbackCodeHmacPrimaryVersion: config.scoringAccess.fallbackCodeHmacKeyring.primary.version,
+      fallbackCodeHmacVerificationOnlyVersions: config.scoringAccess.fallbackCodeHmacKeyring.verificationOnly.map(
+        (key) => key.version,
+      ),
       fallbackCodeHmacSecretConfigured: Boolean(config.scoringAccess.fallbackCodeHmacSecret),
     },
     logLevel: config.logLevel,
@@ -575,3 +638,9 @@ export function safeConfigSummary(config: AppConfig) {
     },
   };
 }
+
+export {
+  loadScoringFallbackHmacKeyring,
+  type ScoringFallbackHmacKey,
+  type ScoringFallbackHmacKeyring,
+} from "./scoring-fallback-keyring.js";
