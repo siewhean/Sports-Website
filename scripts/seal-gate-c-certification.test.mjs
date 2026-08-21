@@ -242,7 +242,10 @@ test("Gate C evidence-only sealer", async (t) => {
   await t.test("fails if C1 exact-SHA execution ledger is absent", () => {
     const ws = setupValidWorkspace(candidateSha);
     fs.rmSync(path.join(ws.artifactsDir, "gate-c-access"), { recursive: true, force: true });
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /C1 access/);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /C1 access/,
+    );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
@@ -258,7 +261,10 @@ test("Gate C evidence-only sealer", async (t) => {
       "evidence.log",
     );
     fs.writeFileSync(file, "tampered\n");
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /immutable manifest/);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /immutable manifest/,
+    );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
@@ -274,7 +280,10 @@ test("Gate C evidence-only sealer", async (t) => {
       "online_preparation.trace.json",
     );
     fs.writeFileSync(file, "[]\n");
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /Raw trace hash mismatch/);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /Raw trace hash mismatch/,
+    );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
@@ -284,7 +293,10 @@ test("Gate C evidence-only sealer", async (t) => {
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
     value.runtime.benchmark_owned_routes = true;
     writeJson(file, value);
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /real Matchday infrastructure/);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /real Matchday infrastructure/,
+    );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
@@ -294,7 +306,10 @@ test("Gate C evidence-only sealer", async (t) => {
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
     delete value.injection_observed;
     writeJson(file, value);
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /not genuine/);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /not genuine/,
+    );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
@@ -304,7 +319,10 @@ test("Gate C evidence-only sealer", async (t) => {
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
     value.rate_limit.retirement_verified = false;
     writeJson(file, value);
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /mandatory observation/);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /mandatory observation/,
+    );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
@@ -315,7 +333,10 @@ test("Gate C evidence-only sealer", async (t) => {
     value.verification_mode = "artifact_payload";
     value.release_eligible = false;
     writeJson(file, value);
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /live READY exact-candidate/);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /live READY exact-candidate/,
+    );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 

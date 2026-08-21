@@ -152,7 +152,11 @@ function validateC3BrowserRun(artifactsRoot, targetSha) {
     throw new Error("C3 browser matrix is not an all-pass exact-SHA five-project run");
   }
   for (const project of run.projects) {
-    const projectPath = safeRelative(path.dirname(runPath), path.join(path.dirname(runPath), project.evidence_path), "C3 project evidence");
+    const projectPath = safeRelative(
+      path.dirname(runPath),
+      path.join(path.dirname(runPath), project.evidence_path),
+      "C3 project evidence",
+    );
     const receipt = readJson(projectPath, `C3 ${project.project_name} receipt`);
     if (
       receipt.source_sha !== targetSha ||
@@ -189,7 +193,8 @@ function validatePhysicalPlatform(artifactsRoot, targetSha, platform) {
     }
     assertSha256(scenario.raw_trace_sha256, `${platform}/${scenario.scenario_id} raw trace`);
     const tracePath = path.join(platformDir, "traces", `${scenario.scenario_id}.trace.json`);
-    if (!fs.existsSync(tracePath)) throw new Error(`Missing raw trace file for ${platform} scenario ${scenario.scenario_id}`);
+    if (!fs.existsSync(tracePath))
+      throw new Error(`Missing raw trace file for ${platform} scenario ${scenario.scenario_id}`);
     const traceContent = fs.readFileSync(tracePath);
     if (sha256(traceContent) !== scenario.raw_trace_sha256) {
       throw new Error(`Raw trace hash mismatch for ${platform} scenario ${scenario.scenario_id}`);

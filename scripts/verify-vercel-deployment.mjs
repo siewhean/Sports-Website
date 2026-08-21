@@ -85,8 +85,7 @@ export async function verifyVercelDeployment(options = {}) {
     const data = await res.json();
     const deployment = (data.deployments || []).find(
       (candidate) =>
-        candidate?.meta?.githubCommitSha === targetSha &&
-        candidate?.meta?.githubCommitRef === MATCHDAY_GATE_C_BRANCH,
+        candidate?.meta?.githubCommitSha === targetSha && candidate?.meta?.githubCommitRef === MATCHDAY_GATE_C_BRANCH,
     );
     if (!deployment) {
       throw new Error(`No Vercel deployment found for ${MATCHDAY_GATE_C_BRANCH} at candidate SHA ${targetSha}`);
