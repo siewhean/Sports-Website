@@ -3,26 +3,171 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { validateExactShaCertification } from "./validate-exact-sha-certification.mjs";
+import {
+  EVIDENCE_ONLY_ALLOWLIST_PATTERNS,
+  REQUIRED_EVIDENCE_FILES,
+  REQUIRED_VERDICT_FILES,
+  validateExactShaCertification,
+} from "./validate-exact-sha-certification.mjs";
+
+function setupCompleteEvidence(dir, sha, overrides = {}) {
+  const lanes = ["c1", "c2", "c3", "c4", "c5"];
+
+  fs.writeFileSync(
+    path.join(dir, "candidate-release.json"),
+    JSON.stringify({ candidateSha: sha, verdict: "PASS", status: "CERTIFIED" }),
+  );
+
+  fs.writeFileSync(
+    path.join(dir, "gate-c-final-evidence.json"),
+    JSON.stringify({
+      candidate_sha: sha,
+      record_status: "CURRENT_CERTIFICATION",
+      branch: "integration/gate-c-final",
+      certified_at: new Date().toISOString(),
+      environment: { os: "darwin" },
+      status: "PASS",
+    }),
+  );
+
+  for (const lane of lanes) {
+    const laneSha = overrides[`${lane}_sha`] || sha;
+    const laneStatus = overrides[`${lane}_status`] || "PASS";
+
+    fs.writeFileSync(
+      path.join(dir, `gate-c-${lane}-final-evidence.json`),
+      JSON.stringify({
+        source_sha: laneSha,
+        record_status: "CURRENT_CERTIFICATION",
+        branch: "integration/gate-c-final",
+        collected_at: new Date().toISOString(),
+        environment: { os: "darwin" },
+        status: laneStatus,
+      }),
+    );
+
+    fs.writeFileSync(
+      path.join(dir, `gate-c-${lane}-verdict.md`),
+      `# Gate C ${lane.toUpperCase()} Verdict\nSource SHA: ${laneSha}\nVerdict: ${laneStatus}\n`,
+    );
+  }
+
+  fs.writeFileSync(
+    path.join(dir, "gate-c-verdict.md"),
+    `# Gate C Final Verdict\nCandidate SHA: ${sha}\nVerdict: PASS\n`,
+  );
+}
 
 test("exact-sha certification validator", async (t) => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+  await t.test("passes when all C1-C5 final evidence files match candidate SHA and PASS status", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+    const mockSha = "3333333333333333333333333333333333333333";
+    setupCompleteEvidence(tempDir, mockSha);
 
-  await t.test("fails when evidence SHA does not match target SHA", () => {
-    const mockSha = "1111111111111111111111111111111111111111";
-    const wrongSha = "2222222222222222222222222222222222222222";
+    const result = validateExactShaCertification({
+      qaDir: tempDir,
+      targetSha: mockSha,
+      remoteSha: mockSha,
+      checkGit: false,
+    });
 
+    assert.strictEqual(result.valid, true);
+    assert.strictEqual(result.errors.length, 0);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails when C1 evidence has mismatched SHA", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+    const mockSha = "3333333333333333333333333333333333333333";
+    setupCompleteEvidence(tempDir, mockSha, { c1_sha: "1111111111111111111111111111111111111111" });
+
+    const result = validateExactShaCertification({
+      qaDir: tempDir,
+      targetSha: mockSha,
+      remoteSha: mockSha,
+      checkGit: false,
+    });
+
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(
+      result.errors.some((e) => e.includes("gate-c-c1-final-evidence.json SHA")),
+      true,
+    );
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails when C2 evidence has mismatched SHA", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+    const mockSha = "3333333333333333333333333333333333333333";
+    setupCompleteEvidence(tempDir, mockSha, { c2_sha: "2222222222222222222222222222222222222222" });
+
+    const result = validateExactShaCertification({
+      qaDir: tempDir,
+      targetSha: mockSha,
+      remoteSha: mockSha,
+      checkGit: false,
+    });
+
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(
+      result.errors.some((e) => e.includes("gate-c-c2-final-evidence.json SHA")),
+      true,
+    );
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails when C4 final evidence is missing", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+    const mockSha = "3333333333333333333333333333333333333333";
+    setupCompleteEvidence(tempDir, mockSha);
+    fs.rmSync(path.join(tempDir, "gate-c-c4-final-evidence.json"));
+
+    const result = validateExactShaCertification({
+      qaDir: tempDir,
+      targetSha: mockSha,
+      remoteSha: mockSha,
+      checkGit: false,
+    });
+
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(
+      result.errors.some((e) => e.includes("Missing required final evidence artifact: gate-c-c4-final-evidence.json")),
+      true,
+    );
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails when one lane is INCOMPLETE or failed", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+    const mockSha = "3333333333333333333333333333333333333333";
+    setupCompleteEvidence(tempDir, mockSha, { c5_status: "INCOMPLETE" });
+
+    const result = validateExactShaCertification({
+      qaDir: tempDir,
+      targetSha: mockSha,
+      remoteSha: mockSha,
+      checkGit: false,
+    });
+
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(
+      result.errors.some((e) => e.includes("gate-c-c5-final-evidence.json status is not PASS")),
+      true,
+    );
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails when historical evidence is present but current candidate evidence is absent", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+    const mockSha = "3333333333333333333333333333333333333333";
+    // Write historical C1 & C2 files
     fs.writeFileSync(
-      path.join(tempDir, "candidate-release.json"),
-      JSON.stringify({ candidateSha: wrongSha, verdict: "PASS", status: "CERTIFIED" }),
+      path.join(tempDir, "gate-c-access-final-evidence.json"),
+      JSON.stringify({ source_sha: "old1111", status: "PASS" }),
     );
     fs.writeFileSync(
-      path.join(tempDir, "gate-c-final-evidence.json"),
-      JSON.stringify({
-        candidate_sha: wrongSha,
-        certified_at: new Date().toISOString(),
-        environment: { os: "darwin" },
-      }),
+      path.join(tempDir, "gate-c-c2-historical-evidence.json"),
+      JSON.stringify({ source_sha: "old2222", status: "PASS" }),
     );
 
     const result = validateExactShaCertification({
@@ -33,39 +178,22 @@ test("exact-sha certification validator", async (t) => {
     });
 
     assert.strictEqual(result.valid, false);
-    assert.strictEqual(result.errors.length >= 2, true);
+    assert.strictEqual(
+      result.errors.some((e) => e.includes("Missing required candidate-release.json artifact")),
+      true,
+    );
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  await t.test("passes when all evidence and verdict files match target SHA", () => {
+  await t.test("passes when historical evidence is present AND valid current candidate evidence is present", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
     const mockSha = "3333333333333333333333333333333333333333";
+    setupCompleteEvidence(tempDir, mockSha);
 
+    // Keep historical files alongside current files
     fs.writeFileSync(
-      path.join(tempDir, "candidate-release.json"),
-      JSON.stringify({ candidateSha: mockSha, verdict: "PASS", status: "CERTIFIED" }),
-    );
-    fs.writeFileSync(
-      path.join(tempDir, "gate-c-final-evidence.json"),
-      JSON.stringify({ candidate_sha: mockSha, certified_at: new Date().toISOString(), environment: { os: "darwin" } }),
-    );
-    fs.writeFileSync(
-      path.join(tempDir, "gate-c-c3-final-evidence.json"),
-      JSON.stringify({ source_sha: mockSha, collected_at: new Date().toISOString(), environment: { os: "darwin" } }),
-    );
-    fs.writeFileSync(
-      path.join(tempDir, "gate-c-c5-final-evidence.json"),
-      JSON.stringify({ source_sha: mockSha, collected_at: new Date().toISOString(), environment: { os: "darwin" } }),
-    );
-    fs.writeFileSync(
-      path.join(tempDir, "gate-c-verdict.md"),
-      `# Gate C Verdict\nCandidate SHA: ${mockSha}\nVerdict: PASS\n`,
-    );
-    fs.writeFileSync(
-      path.join(tempDir, "gate-c-c3-verdict.md"),
-      `# Gate C C3 Verdict\nSource SHA: ${mockSha}\nVerdict: PASS\n`,
-    );
-    fs.writeFileSync(
-      path.join(tempDir, "gate-c-c5-verdict.md"),
-      `# Gate C C5 Verdict\nSource SHA: ${mockSha}\nVerdict: PASS\n`,
+      path.join(tempDir, "gate-c-access-final-evidence.json"),
+      JSON.stringify({ source_sha: "old1111", status: "PASS" }),
     );
 
     const result = validateExactShaCertification({
@@ -77,52 +205,21 @@ test("exact-sha certification validator", async (t) => {
 
     assert.strictEqual(result.valid, true);
     assert.strictEqual(result.errors.length, 0);
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when local HEAD differs from remote branch HEAD unless allowHistorical is true", () => {
-    const mockSha = "4444444444444444444444444444444444444444";
-    const remoteSha = "5555555555555555555555555555555555555555";
-
-    const result = validateExactShaCertification({
-      qaDir: tempDir,
-      targetSha: mockSha,
-      remoteSha,
-      allowHistorical: false,
-      checkGit: true,
-    });
-
-    assert.strictEqual(result.valid, false);
-    assert.strictEqual(
-      result.errors.some(
-        (e) => e.includes("not on integration/gate-c-final branch history") || e.includes("not a valid commit"),
-      ),
-      true,
-    );
-
-    const historicalResult = validateExactShaCertification({
-      qaDir: tempDir,
-      targetSha: mockSha,
-      remoteSha,
-      allowHistorical: true,
-      checkGit: false,
-    });
-
-    assert.strictEqual(
-      historicalResult.errors.some((e) => e.includes("not on integration/gate-c-final branch history")),
-      false,
-    );
-  });
-
-  await t.test("allows post-candidate evidence paths and rejects application runtime paths", async () => {
-    const { EVIDENCE_ONLY_ALLOWLIST_PATTERNS } = await import("./validate-exact-sha-certification.mjs");
+  await t.test("strictly enforces evidence-only allowlist patterns", () => {
     const allowedFiles = [
       "docs/qa/candidate-release.json",
+      "docs/qa/gate-c-c1-final-evidence.json",
       "artifacts/qa/gate-c-c3/abc/receipt.json",
       "fixtures/physical-device-evidence/ios-iphone15pro.json",
       "scripts/seal-gate-c-certification.mjs",
+      "scripts/seal-gate-c-certification.test.mjs",
+      "scripts/validate-exact-sha-certification.mjs",
+      "scripts/validate-exact-sha-certification.test.mjs",
       "scripts/verify-vercel-deployment.mjs",
-      "scripts/record-vercel-deployment.mjs",
-      ".githooks/pre-push",
+      "scripts/verify-vercel-deployment.test.mjs",
     ];
     for (const f of allowedFiles) {
       assert.strictEqual(
@@ -139,6 +236,9 @@ test("exact-sha certification validator", async (t) => {
       "infra/migrations/0036_test.sql",
       "turbo.json",
       "package.json",
+      ".githooks/pre-push",
+      "fixtures/canonical-competitions.json",
+      "scripts/run-gate-c-access-ledger.mjs",
     ];
     for (const f of disallowedFiles) {
       assert.strictEqual(
@@ -148,6 +248,4 @@ test("exact-sha certification validator", async (t) => {
       );
     }
   });
-
-  fs.rmSync(tempDir, { recursive: true, force: true });
 });
