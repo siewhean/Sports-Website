@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyVercelDeployment } from "./verify-vercel-deployment.mjs";
+import {
+  MATCHDAY_GATE_C_BRANCH,
+  MATCHDAY_VERCEL_PROJECT_ID,
+  MATCHDAY_VERCEL_TEAM_ID,
+  verifyVercelDeployment,
+} from "./verify-vercel-deployment.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,6 +18,10 @@ describe("verifyVercelDeployment", () => {
   const artifactDir = path.join(rootDir, "artifacts", "qa", "deployment");
   const artifactPath = path.join(artifactDir, "vercel-response.json");
 
+  afterEach(() => {
+    if (fs.existsSync(artifactPath)) fs.unlinkSync(artifactPath);
+  });
+
   it("fails when no deployment artifact exists and no token is supplied", async () => {
     await expect(
       verifyVercelDeployment({
@@ -21,42 +30,100 @@ describe("verifyVercelDeployment", () => {
     ).rejects.toThrow();
   });
 
-  it("verifies authentic artifact payload when state is READY and SHA matches", async () => {
+  it("verifies an immutable offline payload but marks it non-release-eligible", async () => {
     fs.mkdirSync(artifactDir, { recursive: true });
     const payload = {
-      schema_version: "gate-c-vercel-deployment-v1",
+      schema_version: "gate-c-vercel-deployment-v2",
       candidate_sha: dummySha,
       provider: "vercel",
-      project_id: "prj_matchday_sports_platform",
-      deployment_id: "dpl_gate_c_final_1111111111",
-      git_branch: "integration/gate-c-final",
+      project_id: MATCHDAY_VERCEL_PROJECT_ID,
+      team_id: MATCHDAY_VERCEL_TEAM_ID,
+      deployment_id: "dpl_1111111111111111111111111111",
+      git_branch: MATCHDAY_GATE_C_BRANCH,
       git_commit_sha: dummySha,
       environment: "preview",
       state: "READY",
       created_at: "2026-08-21T09:10:00.000Z",
       verified_at: "2026-08-21T09:15:00.000Z",
+      verification_mode: "live_api",
+      release_eligible: true,
     };
     fs.writeFileSync(artifactPath, JSON.stringify(payload, null, 2), "utf8");
 
     const result = await verifyVercelDeployment({ candidateSha: dummySha });
     expect(result.verified).toBe(true);
+    expect(result.mode).toBe("artifact_payload");
+    expect(result.releaseEligible).toBe(false);
     expect(result.deployment.state).toBe("READY");
-    expect(result.deployment.deployment_id).toBe("dpl_gate_c_final_1111111111");
+  });
 
-    fs.unlinkSync(artifactPath);
+  it("rejects an offline payload for the wrong project", async () => {
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(
+      artifactPath,
+      JSON.stringify({
+        candidate_sha: dummySha,
+        project_id: "prj_wrong",
+        team_id: MATCHDAY_VERCEL_TEAM_ID,
+        deployment_id: "dpl_1111111111111111111111111111",
+        git_branch: MATCHDAY_GATE_C_BRANCH,
+        state: "READY",
+      }),
+      "utf8",
+    );
+
+    await expect(verifyVercelDeployment({ candidateSha: dummySha })).rejects.toThrow(/Matchday Vercel project/);
   });
 
   it("rejects artifact payload if state is not READY", async () => {
     fs.mkdirSync(artifactDir, { recursive: true });
-    const payload = {
-      candidate_sha: dummySha,
-      deployment_id: "dpl_test_failed",
-      state: "BUILDING",
-    };
-    fs.writeFileSync(artifactPath, JSON.stringify(payload, null, 2), "utf8");
+    fs.writeFileSync(
+      artifactPath,
+      JSON.stringify({
+        candidate_sha: dummySha,
+        project_id: MATCHDAY_VERCEL_PROJECT_ID,
+        team_id: MATCHDAY_VERCEL_TEAM_ID,
+        deployment_id: "dpl_1111111111111111111111111111",
+        git_branch: MATCHDAY_GATE_C_BRANCH,
+        state: "BUILDING",
+      }),
+      "utf8",
+    );
 
     await expect(verifyVercelDeployment({ candidateSha: dummySha })).rejects.toThrow(/READY/);
+  });
 
-    fs.unlinkSync(artifactPath);
+  it("uses the live API result as release-eligible evidence", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          deployments: [
+            {
+              uid: "dpl_2222222222222222222222222222",
+              url: "candidate.example.vercel.app",
+              created: Date.parse("2026-08-21T09:10:00.000Z"),
+              readyState: "READY",
+              target: null,
+              meta: {
+                githubCommitSha: dummySha,
+                githubCommitRef: MATCHDAY_GATE_C_BRANCH,
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    try {
+      const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token" });
+      expect(result.verified).toBe(true);
+      expect(result.mode).toBe("live_api");
+      expect(result.releaseEligible).toBe(true);
+      expect(result.deployment.verification_mode).toBe("live_api");
+      expect(result.deployment.project_id).toBe(MATCHDAY_VERCEL_PROJECT_ID);
+      expect(result.deployment.team_id).toBe(MATCHDAY_VERCEL_TEAM_ID);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
