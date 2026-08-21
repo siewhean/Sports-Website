@@ -19,8 +19,9 @@ import { UnavailableIdentityProvider } from "./identity-runtime.js";
 import { createOidcIdentityProvider } from "./oidc-provider.js";
 import { createDependencyProbes } from "./probes.js";
 import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
-import { Phase2Runtime } from "./phase-2-runtime.js";
+import { FallbackKeyringPhase2Runtime } from "./phase-2-fallback-keyring-runtime.js";
 import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
+import { reconcileScoringAccessHmacKeyring } from "./scoring-access-hmac-keyring.js";
 import { verifiedScoringRateLimitSessionId } from "./scoring-rate-limit-identity.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { V1Phase3Runtime } from "./phase-3-v1-runtime.js";
@@ -87,16 +88,17 @@ const identityRuntime = new IdentityAssuranceRuntime(
   systemClock,
   assurancePolicy,
 );
-const phase2Runtime = new Phase2Runtime(
+await reconcileScoringAccessHmacKeyring(identitySql, config.scoringAccess.rateLimitHmacKeyring);
+const phase2Runtime = new FallbackKeyringPhase2Runtime(
   identitySql,
   phase2DomainAdapter,
+  config.scoringAccess.fallbackCodeHmacKeyring,
   undefined,
   new RedisScoringAccessRateLimiter(
     rateLimitRedis,
-    config.scoringAccess.rateLimitHmacSecret,
+    config.scoringAccess.rateLimitHmacKeyring,
     `matchday:${config.environment}:scoring-access:`,
   ),
-  config.scoringAccess.fallbackCodeHmacSecret,
 );
 const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
 const queueName = schedulerQueueName(config.environment);
