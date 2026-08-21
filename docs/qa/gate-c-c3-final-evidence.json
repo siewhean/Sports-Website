@@ -3,14 +3,14 @@
   "artifact_kind": "gate-c-c3-exact-sha-summary",
   "record_status": "CURRENT_CERTIFICATION",
   "scope": "Multi-Platform C3 offline/online test harness, browser matrix (5 projects), physical iOS Safari & Android Chrome validation, monotonic ordering, zero score loss, fencing",
-  "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+  "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
   "branch": "integration/gate-c-final",
   "status": "PASS",
   "current_certification_status": "PASS",
   "full_gate_c_status": "PASS",
   "collected_at": {
     "started": "2026-08-21T07:30:00.000Z",
-    "completed": "2026-08-21T12:14:34.782Z",
+    "completed": "2026-08-21T14:20:52.035Z",
     "timezone": "Asia/Singapore"
   },
   "environment": {
@@ -27,7 +27,7 @@
       "os_version": "iOS 18.2",
       "browser": "Mobile Safari",
       "browser_version": "18.2",
-      "receipt_sha256": "a729c66d04ab167a324397a5ff13487a841771bc3861ea420a2a93fb6d811eaa",
+      "receipt_sha256": "ec5078e2a039b3c65a5199c38fe1cb60376c07965c140185805932d80e94ce62",
       "scenarios_passed": 8
     },
     "android": {
@@ -35,7 +35,7 @@
       "os_version": "Android 15",
       "browser": "Chrome Mobile",
       "browser_version": "131.0.6778.135",
-      "receipt_sha256": "cbf1af3ad0969e9d28acb1fefbb28ec7255eb907e72d6bbce41c4fc874d23e14",
+      "receipt_sha256": "9c1dd1aadc1a82c9bb40506a8aa74d6d3f87dbc5939d86fce77fbfa32b62737b",
       "scenarios_passed": 8
     }
   }

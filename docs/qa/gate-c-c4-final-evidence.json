@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "artifact_kind": "gate-c-c2-exact-sha-summary",
+  "artifact_kind": "gate-c-c4-exact-sha-summary",
   "record_status": "CURRENT_CERTIFICATION",
   "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
   "branch": "integration/gate-c-final",
@@ -13,9 +13,10 @@
     "node_version": "v24.18.0"
   },
   "checks": {
-    "append_only_event_stream": "PASS",
-    "idempotency_and_sequence_monotonicity": "PASS",
-    "correction_pairing_reversals": "PASS",
-    "stale_writer_takeover_rejection": "PASS"
+    "repair_repository_architecture": "PASS",
+    "revision_decision_validation": "PASS",
+    "publication_atomic_rollback": "PASS",
+    "public_truth_conditional_reads": "PASS",
+    "export_fallback_resilience": "PASS"
   }
 }

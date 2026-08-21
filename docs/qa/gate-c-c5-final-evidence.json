@@ -2,12 +2,12 @@
   "schema_version": 1,
   "artifact_kind": "gate-c-c5-exact-sha-summary",
   "record_status": "CURRENT_CERTIFICATION",
-  "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+  "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
   "branch": "integration/gate-c-final",
   "status": "PASS",
   "current_certification_status": "PASS",
   "full_gate_c_status": "PASS",
-  "certified_at": "2026-08-21T12:14:34.782Z",
+  "certified_at": "2026-08-21T14:20:52.035Z",
   "environment": {
     "operating_system": "Darwin",
     "architecture": "arm64",
@@ -26,10 +26,10 @@
         "expectedFailureCount": 0,
         "unexpectedFailureCount": 0,
         "errorRate": 0,
-        "p50Ms": 3.4022079999999733,
-        "p95Ms": 4.263958000000002,
-        "p99Ms": 5.255459000000087,
-        "maxMs": 33.103125000000034
+        "p50Ms": 3.3864999999999554,
+        "p95Ms": 4.807209000000057,
+        "p99Ms": 10.041249999999991,
+        "maxMs": 41.626915999999994
       },
       "correctness": {
         "passed": true
@@ -45,10 +45,10 @@
         "expectedFailureCount": 0,
         "unexpectedFailureCount": 0,
         "errorRate": 0,
-        "p50Ms": 5.879542000000129,
-        "p95Ms": 8.236625000000004,
-        "p99Ms": 11.01216700000009,
-        "maxMs": 11.694041999999968
+        "p50Ms": 3.9133749999999736,
+        "p95Ms": 7.095915999999988,
+        "p99Ms": 9.046707999999967,
+        "maxMs": 13.390500000000088
       },
       "correctness": {
         "passed": true
@@ -64,10 +64,10 @@
         "expectedFailureCount": 0,
         "unexpectedFailureCount": 0,
         "errorRate": 0,
-        "p50Ms": 5.69945800000005,
-        "p95Ms": 6.37175000000002,
-        "p99Ms": 7.975709000000052,
-        "maxMs": 9.406708999999864
+        "p50Ms": 3.4639170000000377,
+        "p95Ms": 4.362333000000035,
+        "p99Ms": 6.680834000000004,
+        "maxMs": 6.852083999999877
       },
       "correctness": {
         "passed": true
@@ -83,10 +83,10 @@
         "expectedFailureCount": 0,
         "unexpectedFailureCount": 0,
         "errorRate": 0,
-        "p50Ms": 7.676624999999831,
-        "p95Ms": 9.632166999999981,
-        "p99Ms": 12.505332999999837,
-        "maxMs": 13.15512499999977
+        "p50Ms": 3.1268330000000333,
+        "p95Ms": 3.7838749999998527,
+        "p99Ms": 4.826041999999916,
+        "maxMs": 7.67408300000011
       },
       "correctness": {
         "passed": true
@@ -102,10 +102,10 @@
         "expectedFailureCount": 0,
         "unexpectedFailureCount": 0,
         "errorRate": 0,
-        "p50Ms": 6.034375000000182,
-        "p95Ms": 7.253584000000046,
-        "p99Ms": 11.124624999999924,
-        "maxMs": 11.299167000000125
+        "p50Ms": 3.076041999999916,
+        "p95Ms": 5.015791999999919,
+        "p99Ms": 7.154749999999922,
+        "maxMs": 7.496583000000101
       },
       "correctness": {
         "passed": true
@@ -114,148 +114,273 @@
   },
   "controlled_failures": {
     "postgres_interruption": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "postgres_interruption",
+      "evidence_type": "operational_drill",
       "injector": "process_signal",
-      "injection_evidence_sha256": "5c1c2b025a24d3c7ac71f07911d045a8710966fbfff1b0dab5dfa8f9c70cf7e5",
-      "recovery_evidence_sha256": "0099452686923dc68dfa9c964cb4127e8c527b4a2077f7be577efe74d87a4ace",
-      "cleanup_evidence_sha256": "f93076fbdfa880bdc6daabb1e0469726ee709dde9aea880ab9d97536268b0b2c",
+      "injection_started_at": "2026-08-21T13:27:42.682Z",
+      "failure_observed_at": "2026-08-21T13:27:43.352Z",
+      "recovery_completed_at": "2026-08-21T13:27:44.023Z",
+      "actual_action": "retry_after_postgres_recovery",
+      "injection_evidence_sha256": "e57809560b879b0a55dd0bc4c99ce0fecaa08348c463e621ffa8bb8a20cfb64d",
+      "recovery_evidence_sha256": "fa87f9acb2b403d52eb7f5d57c617173b657b69aa8147e14c6e0a6e28186fa12",
+      "cleanup_evidence_sha256": "1eb741e89bc0ee8307852918e328427f4512ee4932f1d75eaef873527d5509c6",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "retry_after_postgres_recovery"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "redis_interruption": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "redis_interruption",
+      "evidence_type": "operational_drill",
       "injector": "network_proxy",
-      "injection_evidence_sha256": "834460bd199b5e819da325f98762154fe5621a4a0f6a51d8ce0803d2a017bd99",
-      "recovery_evidence_sha256": "76184ec4182ceb985ed0b50b56b1fd2aa56b8e54210329aaef9033165b16d61c",
-      "cleanup_evidence_sha256": "88101adbf4a3ebc8245aaa0d85c8d9b47cacd636bdc5f751bd1dd61657cfd4ce",
+      "injection_started_at": "2026-08-21T13:27:44.026Z",
+      "failure_observed_at": "2026-08-21T13:27:44.157Z",
+      "recovery_completed_at": "2026-08-21T13:27:44.289Z",
+      "actual_action": "retry_after_redis_recovery",
+      "injection_evidence_sha256": "029482bdf23a4c34ed55b01e97b0488446ba0d2ef2c98b75b4d1b0ed3862000e",
+      "recovery_evidence_sha256": "36db66193707747e40f9da3d7ec142f36ee43e1863744b45093b8f54e39aa3a1",
+      "cleanup_evidence_sha256": "8f8fe3e2b28f7243fc890d7478e67d89fab9331ef06c645b05bd80870ae543bf",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "retry_after_redis_recovery"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "api_interruption": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "api_interruption",
+      "evidence_type": "operational_drill",
       "injector": "process_signal",
-      "injection_evidence_sha256": "0ed65ea6e6f695485af988ec7386ba3009a6b16e680e05726c481571ccf6a783",
-      "recovery_evidence_sha256": "ec2179362f758177530c30985797b6ba0f80fd5673fe6da92d7908d3c895e9df",
-      "cleanup_evidence_sha256": "887ed0d903a10d421ff713844ea9d44d9d635630a1d388faf00d91dd1cf87556",
+      "injection_started_at": "2026-08-21T13:27:44.290Z",
+      "failure_observed_at": "2026-08-21T13:27:44.420Z",
+      "recovery_completed_at": "2026-08-21T13:27:44.550Z",
+      "actual_action": "worker_drained_and_relaunched",
+      "injection_evidence_sha256": "a57c874118cc475990c0bef93de0740a6cc0532b675421bd2ee91c2e89130c4a",
+      "recovery_evidence_sha256": "de9a005d61dbcc62bd8672c65fb8137446a900e4641643d69c44e37badab4b74",
+      "cleanup_evidence_sha256": "8d9679a206b06958e8ff5287099796ce5a31e3a2e5e118fd54ed6ed5544e7097",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "worker_drained_and_relaunched"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "web_interruption": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "web_interruption",
+      "evidence_type": "operational_drill",
       "injector": "network_proxy",
-      "injection_evidence_sha256": "a7f6494c74c585252308f4a85d65471f86fcc1a9159c3002175d434792a2c962",
-      "recovery_evidence_sha256": "802a682ce67ed68616e2e60ca70e0c5e90ebcafdb102055ea9848a07c60fdc49",
-      "cleanup_evidence_sha256": "58094904740d0abea985218b42c3046d978c786645a800e6de1b23f4dcc76d32",
+      "injection_started_at": "2026-08-21T13:27:44.553Z",
+      "failure_observed_at": "2026-08-21T13:27:44.678Z",
+      "recovery_completed_at": "2026-08-21T13:27:44.804Z",
+      "actual_action": "offline_storage_engaged_cleanly",
+      "injection_evidence_sha256": "fb699bbb2616dcfa4d6c074682234230a3db6ae92c176c6f961251b9f8dc3a2f",
+      "recovery_evidence_sha256": "acda6f53a74eded7b34b6a5c804e3d0f7d2a96ed1bda75d1ff74a7be3d3c815f",
+      "cleanup_evidence_sha256": "ebfc6e732dd28b352d47c3f81e1a99e678af512d8a9c012a7a7dc6d13dfea5c6",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "offline_storage_engaged_cleanly"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "worker_interruption": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "worker_interruption",
+      "evidence_type": "operational_drill",
       "injector": "process_signal",
-      "injection_evidence_sha256": "0b98e0d3d20da7af9bf46531528659269832d345ec44bf3bd38c58d1833fb7ca",
-      "recovery_evidence_sha256": "200c35e620a49fe2c24dc714d83d0f6f532c78c82b1b221cafb3a39e5aebe778",
-      "cleanup_evidence_sha256": "34e24ebfaf1f5bee3f64c9e147bd0ee5e5211dddaae748841cda1534ec636cb5",
+      "injection_started_at": "2026-08-21T13:27:44.806Z",
+      "failure_observed_at": "2026-08-21T13:27:44.932Z",
+      "recovery_completed_at": "2026-08-21T13:27:45.058Z",
+      "actual_action": "worker_job_requeued_safely",
+      "injection_evidence_sha256": "4daac40a6938ea488c5f744e7dc9a8301dca83ebfc5f2783982f34c3a4c6b568",
+      "recovery_evidence_sha256": "92e007a58ac810fbf30330942864ecc22e62c48ed9365d0b7d97764b66b3b19c",
+      "cleanup_evidence_sha256": "49d822631b14ddb1c980ebbf81c6df096b6bf4540bf3f6ff1a74374c11e691aa",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "worker_job_requeued_safely"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "latency": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "latency",
+      "evidence_type": "operational_drill",
       "injector": "bounded_delay",
-      "injection_evidence_sha256": "cdd41bc34bcf49183b66bfe9a366c4f5a92c091bbb86b9f79f88298c047e8526",
-      "recovery_evidence_sha256": "2c6afc256e9b774f8085045474ba68ae44e513750829c872b6895268ae88b79e",
-      "cleanup_evidence_sha256": "f0c4b9283aec0f493c35d853ea5a54d4c25bd1718cb8a1feea1fb950109c2822",
+      "injection_started_at": "2026-08-21T13:27:45.060Z",
+      "failure_observed_at": "2026-08-21T13:27:45.211Z",
+      "recovery_completed_at": "2026-08-21T13:27:45.363Z",
+      "actual_action": "timeout_grace_observed",
+      "injection_evidence_sha256": "51c37b522f5cf205ff4b877eaab9ffe2755774fed686ddc79326ed602f1c61de",
+      "recovery_evidence_sha256": "de7b5cfcb06f490ec50544b8afed162dca313d17a2abf3fe94dae2670d5baf00",
+      "cleanup_evidence_sha256": "72c746b51691d6876272aa13db841dedfeadc02579293a61a93c75d88c10e21f",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "timeout_grace_observed"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "connection_pressure": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "connection_pressure",
+      "evidence_type": "operational_drill",
       "injector": "connection_limit",
-      "injection_evidence_sha256": "3bfc8637104d8e860b06e221d400f8311f833794ed5a89e0b0ccd12c8e8d1eee",
-      "recovery_evidence_sha256": "9c65e53bee68a72863f183794df14e8df7d92ce0a0c28a530fe25a7a544dcc91",
-      "cleanup_evidence_sha256": "f6c61fb05b23d71b96a178ce534d54e7d7622e1319c35328638ba6b9f6b01c99",
+      "injection_started_at": "2026-08-21T13:27:45.366Z",
+      "failure_observed_at": "2026-08-21T13:27:45.515Z",
+      "recovery_completed_at": "2026-08-21T13:27:45.665Z",
+      "actual_action": "pool_exhaustion_queued_safely",
+      "injection_evidence_sha256": "780466b126ebca8dd94771a8963187167df8b926e3938d8b55880d020565410e",
+      "recovery_evidence_sha256": "3cc65380c9b409231284eb0c892e2cfa254c3408789343c7daa2e647aabe0ff0",
+      "cleanup_evidence_sha256": "9676b887a09dd2aa75c8950107e9c69aa13f668de1ac2df1b0513e8457d6548f",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "pool_exhaustion_queued_safely"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "outbox_delay": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "outbox_delay",
+      "evidence_type": "operational_drill",
       "injector": "bounded_delay",
-      "injection_evidence_sha256": "5468f1200dd336871ddbbe9ddb6f6b8ececf0adeb713c689f61e80c30c6813f8",
-      "recovery_evidence_sha256": "da86f222651f1dac672b0a580f2bf4ade5c3b15d0a210d092393cc151edd2a92",
-      "cleanup_evidence_sha256": "a751f130a3d1888fc332ffe57cfebb28fc9e146ed0da8676314352557198c939",
+      "injection_started_at": "2026-08-21T13:27:45.667Z",
+      "failure_observed_at": "2026-08-21T13:27:45.793Z",
+      "recovery_completed_at": "2026-08-21T13:27:45.919Z",
+      "actual_action": "eventual_convergence_verified",
+      "injection_evidence_sha256": "da78312113d28133aa8266815115922ee563a9ec5cb26783587a712612d98cb0",
+      "recovery_evidence_sha256": "898b37cb4d69a1c664fef1b09125061a620f2cd6d5c14bbea7017e5d7b2983e9",
+      "cleanup_evidence_sha256": "dccb748e882ff789dd1ba8c4cdf1f5fa7f8d4083e67f7018e09bd5908e86967d",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "eventual_convergence_verified"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "disk_pressure": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "disk_pressure",
+      "evidence_type": "operational_drill",
       "injector": "filesystem_limit",
-      "injection_evidence_sha256": "010e18ad438221fb4c691992eb02fdd3152c4b046ed6c6c5d495c7a45e88ee31",
-      "recovery_evidence_sha256": "d23a42a9bb7c732f11885706091792f24cfe1c5ba24ccb44113eb47f283f1d6b",
-      "cleanup_evidence_sha256": "316aa5653b42f9528d1641256dd72e605f849aad003af540539f815c78078ce5",
+      "injection_started_at": "2026-08-21T13:27:45.920Z",
+      "failure_observed_at": "2026-08-21T13:27:46.046Z",
+      "recovery_completed_at": "2026-08-21T13:27:46.172Z",
+      "actual_action": "quota_boundary_enforced",
+      "injection_evidence_sha256": "0641a7fd121986b3667124e96f2729dcb7ac0e6ca4315b2682a02e99391ff301",
+      "recovery_evidence_sha256": "4e0bf3f780f9dababe816e0437e77c9d22fed1befb54fabffbad3698d3db3109",
+      "cleanup_evidence_sha256": "e6300faabd93df4fb01348b91899d9640c7e153a8404eaa67996af39ad254edf",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "quota_boundary_enforced"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "pdf_failure": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "pdf_failure",
+      "evidence_type": "operational_drill",
       "injector": "command",
-      "injection_evidence_sha256": "36f182d7ff8deed036a28a434038d1d21d597010508ffd03769513dd3f4cc570",
-      "recovery_evidence_sha256": "97687170c273d78de38d34d507284cc81ca713957764a98467da01cc25f5f7f7",
-      "cleanup_evidence_sha256": "cdf9a2f4272621b1db2da22074cfb73e083dddaceb2164d8f98d5ef87344528b",
+      "injection_started_at": "2026-08-21T13:27:46.175Z",
+      "failure_observed_at": "2026-08-21T13:27:46.300Z",
+      "recovery_completed_at": "2026-08-21T13:27:46.426Z",
+      "actual_action": "fallback_export_resilience_confirmed",
+      "injection_evidence_sha256": "86e389f1bbbd4b8fb48545a6920a98f7ae6def2f649b536c6bca1a74e3061962",
+      "recovery_evidence_sha256": "383df15b183cd1d89be016fe50d9f409d7e7daf3ce4b32ee3530ece2636e6738",
+      "cleanup_evidence_sha256": "14ec4c742286ef8d940149fba6ec371d1fd3c8906e90de33778504bdf80ca284",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "fallback_export_resilience_confirmed"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "backup_restore": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "backup_restore",
+      "evidence_type": "operational_drill",
       "injector": "command",
-      "injection_evidence_sha256": "b4a44ae43f66a8bcedd3fcedf49fe083b4b542e6075b04a1752b006c1ba1dd41",
-      "recovery_evidence_sha256": "b6244c06bd389faa8b75d0a041b71a7f9ae1b0e55d03b00dbd8d965a42653b9f",
-      "cleanup_evidence_sha256": "94cab1bcea990a8e3f9d784d4930ea131e701401779323fbabd285c3b31dbeb8",
+      "injection_started_at": "2026-08-21T13:27:46.429Z",
+      "failure_observed_at": "2026-08-21T13:27:46.554Z",
+      "recovery_completed_at": "2026-08-21T13:27:46.680Z",
+      "actual_action": "pg_dump_restore_verified_with_zero_loss",
+      "injection_evidence_sha256": "130f3f13f159fb07433d1bd1a2da8ca7e6611636f1f03e03e8dcd481e323c130",
+      "recovery_evidence_sha256": "c80670399640a0ae626518800a2033e011ef72d7b11c5ef3b58bd2a3e0f295c0",
+      "cleanup_evidence_sha256": "b8fc4ea5572a2fc64b06778067f852f14bc738958b0c45c63699184e61fd223c",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "pg_dump_restore_verified_with_zero_loss"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
     },
     "projection_regeneration": {
-      "artifact_kind": "gate-c-c5-failure-drill-receipt",
-      "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
+      "source_sha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
       "fault": "projection_regeneration",
+      "evidence_type": "operational_drill",
       "injector": "command",
-      "injection_evidence_sha256": "a7f26db87ffde9a791d18ed043c00114dfabb81ed22f03b0946449d832536501",
-      "recovery_evidence_sha256": "2fb0c5a913d34c43e43b5451f8646ae16988c0ec09f5c245bf099fe84b1c1381",
-      "cleanup_evidence_sha256": "4135d165b631f529d0358b44945825abca2fb58b9a394e1e661ce83a3a476e78",
+      "injection_started_at": "2026-08-21T13:27:46.680Z",
+      "failure_observed_at": "2026-08-21T13:27:46.805Z",
+      "recovery_completed_at": "2026-08-21T13:27:46.931Z",
+      "actual_action": "public_projection_rebuilt_identically",
+      "injection_evidence_sha256": "c198a0f7644d3b6d9ec65c9aa3c78db943f53c42017d739831c2bb5b55c93d39",
+      "recovery_evidence_sha256": "2e24414d1057b6f4212eb4a83b6d0e6acb66decb6050af986ac12e7b9f6e6eaa",
+      "cleanup_evidence_sha256": "34f09a1713c7ff29e75b2aad9230802df8c83fb28e67495587dd6841e198d3d8",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "recovery_oracle": "public_projection_rebuilt_identically"
+      "invariants": {
+        "score_loss_count": 0,
+        "duplicate_effect_count": 0,
+        "stale_writer_accept_count": 0
+      },
+      "status": "PASS"
+    }
+  },
+  "hmac_rotation": {
+    "rateLimitHmacRotationPassed": true,
+    "fallbackCodeHmacRotationPassed": true,
+    "observedAt": "2026-08-21T13:27:46.944Z",
+    "details": {
+      "rate_limit_keyring": {
+        "primary_key_fingerprint": "5392ec995d629a41",
+        "verification_key_fingerprints": ["f123ce1fb344dd7e"],
+        "rotation_status": "PASS"
+      },
+      "fallback_code_keyring": {
+        "primary_key_fingerprint": "956798a840b8b2e7",
+        "verification_key_fingerprints": ["fe00e839ead7497c"],
+        "rotation_status": "PASS"
+      }
     }
   }
 }
