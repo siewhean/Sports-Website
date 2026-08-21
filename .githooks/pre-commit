@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+export PATH="/Users/Siew Hean/.nvm/versions/node/v24.18.0/bin:$PATH"
 
 pnpm format:check
 pnpm lint

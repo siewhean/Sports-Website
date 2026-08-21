@@ -48,14 +48,14 @@
 
 ## Milestones
 
-| #   | Name                                                    | Scope                                                                                                  | Dependencies | Status  |
-| --- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------ | ------- |
-| M1  | Build & Database Migration Forward-Porting              | Renumber migrations to 0036–0051, update test references, verify Turbo build & clean outputs           | None         | DONE    |
-| M2  | Temporal Migration Matrix & Lock Benchmarks             | 6-scenario temporal DB test matrix, lock benchmarking harness (4 profiles), operational runbook        | M1           | PLANNED |
-| M3  | C4 V2 Architecture Alignment & ErrorCode                | Fix repositories, migrate C4 runtime/publisher to repos, replace raw ApiErrors, verify atomic rollback | M1           | PLANNED |
-| M4  | Server-Authoritative Offline Scoring & Retention        | Expiration timestamps, 2000 queue model, 72h IndexedDB retention, principal isolation                  | M1           | PLANNED |
-| M5  | Multi-Platform C3, Failure Drills & C5 Certification    | C5 script restoration, C5 benchmarks (>=500 samples), failure drills, HMAC rotations, QA ledgers       | M2, M3, M4   | PLANNED |
-| M6  | Final Milestone: E2E Test Suite & Adversarial Hardening | Phase 1: 100% E2E test pass (Tiers 1–4). Phase 2: Tier 5 Adversarial Coverage Hardening                | M1–M5        | PLANNED |
+| #   | Name                                                    | Scope                                                                                                  | Dependencies | Status      |
+| --- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------ | ----------- |
+| M1  | Build & Database Migration Forward-Porting              | Renumber migrations to 0036–0051, update test references, verify Turbo build & clean outputs           | None         | IMPLEMENTED |
+| M2  | Temporal Migration Matrix & Lock Benchmarks             | 6-scenario temporal DB test matrix, lock benchmarking harness (4 profiles), operational runbook        | M1           | IMPLEMENTED |
+| M3  | C4 V2 Architecture Alignment & ErrorCode                | Fix repositories, migrate C4 runtime/publisher to repos, replace raw ApiErrors, verify atomic rollback | M1           | IMPLEMENTED |
+| M4  | Server-Authoritative Offline Scoring & Retention        | Expiration timestamps, 2000 queue model, 72h IndexedDB retention, principal isolation                  | M1           | IMPLEMENTED |
+| M5  | Multi-Platform C3, Failure Drills & C5 Certification    | C5 script restoration, C5 benchmarks (>=500 samples), failure drills, HMAC rotations, QA ledgers       | M2, M3, M4   | IMPLEMENTED |
+| M6  | Final Milestone: E2E Test Suite & Adversarial Hardening | Phase 1: 100% E2E test pass (Tiers 1–4). Phase 2: Tier 5 Adversarial Coverage Hardening                | M1–M5        | IMPLEMENTED |
 
 ## Interface Contracts
 

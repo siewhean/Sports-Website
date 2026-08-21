@@ -7,7 +7,7 @@ RUN_SUFFIX="$(date -u +%s)_$$_${RANDOM}"
 SOURCE_DB="matchday_backup_test_${RUN_SUFFIX}"
 RESTORE_DB="matchday_restore_test_${RUN_SUFFIX}"
 BACKUP_FILE="/tmp/${SOURCE_DB}.dump"
-LOCAL_ADMIN_DATABASE_URL="${BACKUP_VERIFY_ADMIN_DATABASE_URL:-postgresql:///postgres}"
+LOCAL_ADMIN_DATABASE_URL="${BACKUP_VERIFY_ADMIN_DATABASE_URL:-postgres://matchday:matchday@127.0.0.1:5432/postgres}"
 POSTGRES_MODE="${BACKUP_VERIFY_POSTGRES_MODE:-local}"
 POSTGRES_CONTAINER_ID=""
 

@@ -13,7 +13,13 @@ These migrations introduce authoritative schedule participant snapshots (`home_e
 
 ## 1. Lock Profile & Concurrency Characteristics
 
-Based on continuous empirical benchmarking across 4 production traffic profiles (documented in `docs/qa/gate-c-lock-benchmarks.json` and `artifacts/qa/gate-c-locks/evidence.json`):
+### Evidence Classification: SMALL-SCALE LOCK CHARACTERIZATION
+
+> [!IMPORTANT]
+> The empirical benchmarks below reflect **SMALL-SCALE LOCK CHARACTERIZATION** under controlled staging concurrency. While migrations 0030 and 0031 complete in under 20ms under baseline conditions, their transactional table rewrites and constraint creation acquire `AccessExclusiveLock` on `scheduled_matches` and `canonical_score_events`.
+> At production data volume, a low-traffic deployment window or configured `lock_timeout = '3s'` is required to guarantee zero score disruption.
+
+Based on empirical benchmarking across 4 traffic profiles (documented in `docs/qa/gate-c-lock-benchmarks.json` and `artifacts/qa/gate-c-locks/evidence.json`):
 
 | Profile                         | Traffic Characteristics                                           | Total DDL Duration | Lock Wait Queue Max | Read / Write Impact                         |
 | ------------------------------- | ----------------------------------------------------------------- | ------------------ | ------------------- | ------------------------------------------- |
@@ -29,7 +35,7 @@ Based on continuous empirical benchmarking across 4 production traffic profiles 
 - `matches`: `AccessExclusiveLock` / `ShareRowExclusiveLock`
 - `scoring_access_sessions`: `AccessExclusiveLock` (during unique foreign key constraint addition)
 
-**Maintenance Window Requirement**: **Zero downtime required**. Can be executed live during low-mutation periods with recommended session timeouts.
+**Deployment Window Guidance**: Recommended execution during scheduled low-traffic maintenance window or configured session `lock_timeout = '3s'`.
 
 ---
 
