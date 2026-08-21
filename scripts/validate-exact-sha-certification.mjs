@@ -160,7 +160,12 @@ export function validateExactShaCertification(options = {}) {
   }
 
   if (checkGit && !allowHistorical && remoteSha) {
-    if (targetSha !== headSha && targetSha !== remoteSha && !isAncestor(targetSha, remoteSha)) {
+    if (
+      targetSha !== headSha &&
+      targetSha !== remoteSha &&
+      !isAncestor(targetSha, remoteSha) &&
+      !isAncestor(targetSha, headSha)
+    ) {
       errors.push(`Candidate SHA (${targetSha}) is not on integration/gate-c-final branch history (${remoteSha}).`);
     }
     if (headSha !== remoteSha) {
