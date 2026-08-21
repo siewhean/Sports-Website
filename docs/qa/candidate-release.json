@@ -1,10 +1,10 @@
 {
-  "releaseId": "gate-c-certified-f78d53a5bf",
-  "candidateSha": "f78d53a5bf117aa9a51bff6e755309e035ae4ff4",
+  "releaseId": "gate-c-certified-1a2d4d7cb6",
+  "candidateSha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
   "status": "CERTIFIED",
   "verdict": "PASS",
   "milestone": "GATE_C",
-  "certifiedAtUtc": "2026-08-21T09:25:16.978Z",
+  "certifiedAtUtc": "2026-08-21T12:14:34.782Z",
   "approvals": {
     "engineeringLead": "MATCHDAY-GATE-C-PLATFORM-LEAD",
     "qaLead": "MATCHDAY-GATE-C-QA-DIRECTOR",

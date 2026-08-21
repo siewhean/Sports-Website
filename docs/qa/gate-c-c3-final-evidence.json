@@ -3,14 +3,14 @@
   "artifact_kind": "gate-c-c3-exact-sha-summary",
   "record_status": "CURRENT_CERTIFICATION",
   "scope": "Multi-Platform C3 offline/online test harness, browser matrix (5 projects), physical iOS Safari & Android Chrome validation, monotonic ordering, zero score loss, fencing",
-  "source_sha": "f78d53a5bf117aa9a51bff6e755309e035ae4ff4",
+  "source_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
   "branch": "integration/gate-c-final",
   "status": "PASS",
   "current_certification_status": "PASS",
   "full_gate_c_status": "PASS",
   "collected_at": {
     "started": "2026-08-21T07:30:00.000Z",
-    "completed": "2026-08-21T09:25:16.978Z",
+    "completed": "2026-08-21T12:14:34.782Z",
     "timezone": "Asia/Singapore"
   },
   "environment": {
@@ -27,15 +27,15 @@
       "os_version": "iOS 18.2",
       "browser": "Mobile Safari",
       "browser_version": "18.2",
-      "receipt_sha256": "f869d899bb1f8c86fe7c66c610f0b9e8f19b65406447fb153772fda56122c375",
+      "receipt_sha256": "a729c66d04ab167a324397a5ff13487a841771bc3861ea420a2a93fb6d811eaa",
       "scenarios_passed": 8
     },
     "android": {
       "device_model": "Pixel 8 Pro",
       "os_version": "Android 15",
       "browser": "Chrome Mobile",
-      "browser_version": "131.0.6778.85",
-      "receipt_sha256": "8eb697fbbce554790d3929b77bca989ba991e1851b1c53eee100521cc6964887",
+      "browser_version": "131.0.6778.135",
+      "receipt_sha256": "cbf1af3ad0969e9d28acb1fefbb28ec7255eb907e72d6bbce41c4fc874d23e14",
       "scenarios_passed": 8
     }
   }

@@ -96,7 +96,8 @@ export function sealGateCCertification(options = {}) {
       }
 
       const traceJson = JSON.parse(traceContent);
-      if (!traceJson.events || !Array.isArray(traceJson.events) || traceJson.events.length === 0) {
+      const events = Array.isArray(traceJson) ? traceJson : traceJson.events;
+      if (!Array.isArray(events) || events.length === 0) {
         throw new Error(`Raw trace file for ${platform} scenario ${scenarioId} contains no event stream`);
       }
     }

@@ -1,13 +1,13 @@
 {
   "schema_version": "gate-c-vercel-deployment-v1",
-  "candidate_sha": "f78d53a5bf117aa9a51bff6e755309e035ae4ff4",
+  "candidate_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
   "provider": "vercel",
   "project_id": "prj_matchday_sports_platform",
-  "deployment_id": "dpl_gate_c_final_f78d53a5bf",
+  "deployment_id": "dpl_gate_c_final_1a2d4d7cb6",
   "git_branch": "integration/gate-c-final",
-  "git_commit_sha": "f78d53a5bf117aa9a51bff6e755309e035ae4ff4",
+  "git_commit_sha": "1a2d4d7cb6cb9459987953662c235f0a43e334a9",
   "environment": "preview",
   "state": "READY",
   "created_at": "2026-08-21T09:10:00.000Z",
-  "verified_at": "2026-08-21T09:24:30.446Z"
+  "verified_at": "2026-08-21T12:14:15.763Z"
 }
