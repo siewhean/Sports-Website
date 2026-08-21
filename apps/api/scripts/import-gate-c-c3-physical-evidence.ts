@@ -26,7 +26,7 @@ export type PhysicalScenarioExecution = Readonly<{
   assertions: readonly string[];
   observations: Record<string, unknown>;
   raw_trace_sha256?: string;
-  raw_trace_events?: readonly unknown[];
+  raw_trace_events: readonly unknown[];
 }>;
 
 export type RawPhysicalDevicePayload = Readonly<{
@@ -35,6 +35,11 @@ export type RawPhysicalDevicePayload = Readonly<{
   os_version: string;
   browser_name: string;
   browser_version: string;
+  capture_id: string;
+  collector: string;
+  collection_method: "physical_device_manual" | "device_farm" | "browser_trace";
+  device_run_id: string;
+  captured_at: string;
   collected_at: string;
   trusted_https_origin: string;
   tester_attestation: string;
@@ -64,6 +69,11 @@ export type ImportedPhysicalDeviceReceipt = Readonly<{
   os_version: string;
   browser_name: string;
   browser_version: string;
+  capture_id: string;
+  collector: string;
+  collection_method: "physical_device_manual" | "device_farm" | "browser_trace";
+  device_run_id: string;
+  captured_at: string;
   collected_at: string;
   trusted_https_origin: string;
   tester_attestation: string;
@@ -83,6 +93,11 @@ export function validateRawPhysicalPayload(p: RawPhysicalDevicePayload): void {
   }
   if (!p.device_model || !p.os_version || !p.browser_name || !p.browser_version) {
     throw new Error("Missing required device metadata fields");
+  }
+  if (!p.capture_id || !p.collector || !p.collection_method || !p.device_run_id || !p.captured_at) {
+    throw new Error(
+      "Missing required physical device provenance fields (capture_id, collector, collection_method, device_run_id, captured_at)",
+    );
   }
   if (!p.collected_at || Number.isNaN(Date.parse(p.collected_at))) {
     throw new Error("collected_at must be a valid ISO timestamp");
@@ -114,6 +129,11 @@ export function validateRawPhysicalPayload(p: RawPhysicalDevicePayload): void {
     if (s.raw_trace_sha256 && !/^[a-f0-9]{64}$/i.test(s.raw_trace_sha256)) {
       throw new Error(`Scenario ${s.scenario} raw_trace_sha256 must be a 64-character hex string`);
     }
+    if (!Array.isArray(s.raw_trace_events) || s.raw_trace_events.length === 0) {
+      throw new Error(
+        `Import failed: physical certification requires externally captured raw trace events for scenario ${s.scenario}`,
+      );
+    }
   }
 }
 
@@ -130,13 +150,8 @@ export async function importPhysicalReceipt(rawPayload: RawPhysicalDevicePayload
   const artifactHashes = [];
 
   for (const s of rawPayload.scenarios) {
-    // 1. Write raw trace file
-    const traceEvents = s.raw_trace_events ?? [
-      { event: "scenario_start", scenario: s.scenario, observed_at: s.observed_at },
-      { event: "assertions_verified", assertions: s.assertions },
-      { event: "observations_recorded", observations: s.observations },
-      { event: "scenario_pass", status: "passed" },
-    ];
+    // 1. Write externally captured raw trace file
+    const traceEvents = s.raw_trace_events;
     const traceJson = `${JSON.stringify(traceEvents, null, 2)}\n`;
     const computedTraceSha = sha256(traceJson);
 
@@ -190,6 +205,11 @@ export async function importPhysicalReceipt(rawPayload: RawPhysicalDevicePayload
     os_version: rawPayload.os_version,
     browser_name: rawPayload.browser_name,
     browser_version: rawPayload.browser_version,
+    capture_id: rawPayload.capture_id,
+    collector: rawPayload.collector,
+    collection_method: rawPayload.collection_method,
+    device_run_id: rawPayload.device_run_id,
+    captured_at: rawPayload.captured_at,
     collected_at: rawPayload.collected_at,
     trusted_https_origin: rawPayload.trusted_https_origin,
     tester_attestation: rawPayload.tester_attestation,
