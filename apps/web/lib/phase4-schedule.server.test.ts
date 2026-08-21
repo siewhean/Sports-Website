@@ -107,7 +107,8 @@ function job(
 
 describe("production schedule alternative loading", () => {
   beforeEach(() => {
-    process.env.MATCHDAY_API_BASE_URL = "http://api.test";
+    process.env.MATCHDAY_API_BASE_URL = "https://api.test";
+    process.env.MATCHDAY_PUBLIC_ORIGIN = "https://api.test";
     delete process.env.MATCHDAY_PHASE2_DATA_MODE;
   });
 

@@ -1,9 +1,36 @@
 import { describe, expect, it } from "vitest";
 import {
+  isExpectedFrameworkWarning,
   isExpectedTeardownFontCancellation,
   isExpectedTeardownServiceWorkerCancellation,
   isExpectedTeardownStaticAssetCancellation,
 } from "../helpers/console-guard";
+
+describe("framework warning filtering", () => {
+  it("ignores only Firefox's Playwright debugger-layout warning", () => {
+    expect(
+      isExpectedFrameworkWarning(
+        '[JavaScript Warning: "Layout was forced before the page was fully loaded. If stylesheets are not yet loaded this may cause a flash of unstyled content." {file: "debugger eval code" line: 393}]',
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores Firefox's equivalent Next Geist font-preload wording", () => {
+    expect(
+      isExpectedFrameworkWarning(
+        '[JavaScript Warning: "The resource at “http://localhost:3103/_next/static/media/Geist_Variable.woff2” preloaded with link preload was not used within a few seconds. Make sure all attributes of the preload tag are set correctly." {file: "http://localhost:3103/organiser" line: 0}]',
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "Layout was forced before the page was fully loaded.",
+    '[JavaScript Warning: "Layout was forced before the page was fully loaded. If stylesheets are not yet loaded this may cause a flash of unstyled content." {file: "app.js" line: 393}]',
+    '[JavaScript Warning: "A different warning" {file: "debugger eval code" line: 393}]',
+  ])("keeps unrelated framework warnings observable", (warning) => {
+    expect(isExpectedFrameworkWarning(warning)).toBe(false);
+  });
+});
 
 const localFont = {
   failure: "cancelled",

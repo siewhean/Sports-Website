@@ -16,8 +16,6 @@ describe("Phase 4 OpenAPI contract", () => {
     const requiredPaths = [
       "/api/v1/competitions/{competitionId}/setup-draft",
       "/api/v1/competitions/{competitionId}/setup-draft/resume",
-      "/api/v1/competitions/{competitionId}/v1-format-recommendations",
-      "/api/v1/competitions/{competitionId}/v1-format-recommendations/{recommendationId}/apply",
       "/api/v1/competitions/{competitionId}/divisions/{divisionId}/format-builder",
       "/api/v1/competitions/{competitionId}/divisions/{divisionId}/format-builder/validate",
       "/api/v1/organisations/{organisationId}/format-templates",
@@ -37,14 +35,12 @@ describe("Phase 4 OpenAPI contract", () => {
       document.paths[setupPath]?.put,
       document.paths[setupPath]?.patch,
       document.paths[resumePath]?.post,
-      document.paths[requiredPaths[2]!]?.post,
-      document.paths[requiredPaths[3]!]?.post,
-      document.paths[requiredPaths[4]!]?.put,
+      document.paths[requiredPaths[2]!]?.put,
+      document.paths[requiredPaths[5]!]?.post,
       document.paths[requiredPaths[7]!]?.post,
-      document.paths[requiredPaths[9]!]?.post,
+      document.paths[requiredPaths[8]!]?.post,
       document.paths[requiredPaths[10]!]?.post,
-      document.paths[requiredPaths[12]!]?.post,
-      document.paths[requiredPaths[13]!]?.post,
+      document.paths[requiredPaths[11]!]?.post,
     ];
     for (const mutation of mutations) {
       expect(mutation?.security).toEqual([{ sessionCookie: [] }]);

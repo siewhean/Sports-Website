@@ -10,14 +10,10 @@ import {
   parseCompetitionOrganisationOptions,
   phase3CompetitionCreateMachine,
   phase3CompetitionSports,
-  phase3TimeZones,
-  slugifyCompetitionName,
   type CompetitionCreateDraft,
   type CompetitionCreateField,
   type CompetitionOrganisationOption,
 } from "@/lib/phase3-competition-create";
-import { useCompetitionCreateDraft } from "@/lib/phase3-competition-draft.client";
-import { phase3CountrySuggestions } from "@/lib/phase3-country-codes";
 import styles from "./CompetitionCreateForm.module.css";
 
 const initialDraft = (): CompetitionCreateDraft => ({
@@ -50,12 +46,13 @@ function upstreamMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }) {
+export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   const router = useRouter();
-  const { draft, setDraft, clearDraft } = useCompetitionCreateDraft(draftOwnerId, initialDraft);
+  const [draft, setDraft] = useState(initialDraft);
   const [organisations, setOrganisations] = useState<CompetitionOrganisationOption[]>([]);
   const [organisationsLoading, setOrganisationsLoading] = useState(true);
   const [organisationsError, setOrganisationsError] = useState("");
+  const [organisationsAuthRequired, setOrganisationsAuthRequired] = useState(false);
   const [organisationLoadAttempt, setOrganisationLoadAttempt] = useState(0);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<CompetitionCreateField, string>>>({});
   const [commandError, setCommandError] = useState("");
@@ -64,13 +61,13 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
   const formRef = useRef<HTMLFormElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
-  const slugEditedRef = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       setOrganisationsLoading(true);
       setOrganisationsError("");
+      setOrganisationsAuthRequired(false);
       try {
         const response = await fetch("/api/phase3/competitions", {
           cache: phase3CompetitionCreateMachine.noStore,
@@ -79,6 +76,7 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
         const payload: unknown = await response.json().catch(() => null);
         const options = response.ok ? parseCompetitionOrganisationOptions(payload) : null;
         if (!options) {
+          setOrganisationsAuthRequired(response.status === 401 || response.status === 403);
           setOrganisationsError(messages.organiserCreate.organisationsFailed);
           return;
         }
@@ -101,21 +99,11 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
       }
     })();
     return () => controller.abort();
-  }, [organisationLoadAttempt, setDraft]);
+  }, [organisationLoadAttempt]);
 
   function update(field: CompetitionCreateField, value: string) {
-    if (field === phase3CompetitionCreateMachine.fields.slug) slugEditedRef.current = true;
-    const derivingSlug = field === phase3CompetitionCreateMachine.fields.name && !slugEditedRef.current;
-    setDraft((current) => ({
-      ...current,
-      [field]: value,
-      ...(derivingSlug ? { slug: slugifyCompetitionName(value) } : {}),
-    }));
-    setFieldErrors((current) => ({
-      ...current,
-      [field]: undefined,
-      ...(derivingSlug ? { [phase3CompetitionCreateMachine.fields.slug]: undefined } : {}),
-    }));
+    setDraft((current) => ({ ...current, [field]: value }));
+    setFieldErrors((current) => ({ ...current, [field]: undefined }));
     setCommandError("");
     setAnnouncement("");
   }
@@ -185,7 +173,6 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
         requestAnimationFrame(() => errorRef.current?.focus());
         return;
       }
-      clearDraft();
       setAnnouncement(messages.organiserCreate.created);
       router.push(`/organiser/competitions/${encodeURIComponent(receipt.id)}/setup`);
     } catch {
@@ -295,13 +282,20 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
               </p>
             ) : null}
             {organisationsError ? (
-              <button
-                className={styles.retry}
-                type="button"
-                onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
-              >
-                {messages.organiserCreate.retryOrganisations}
-              </button>
+              <>
+                <button
+                  className={styles.retry}
+                  type="button"
+                  onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
+                >
+                  {messages.organiserCreate.retryOrganisations}
+                </button>
+                {organisationsAuthRequired ? (
+                  <a className={styles.retry} href={signInHref}>
+                    {messages.organiserCreate.signInToLoadOrganisations}
+                  </a>
+                ) : null}
+              </>
             ) : null}
             <p className={styles.live} role="status">
               {organisationsLoading ? messages.organiserCreate.loadingOrganisations : ""}
@@ -356,41 +350,11 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
         {field(phase3CompetitionCreateMachine.fields.locality, messages.organiserCreate.locality, {
           autoComplete: phase3CompetitionCreateMachine.autocomplete.locality,
         })}
-        <div className={styles.field}>
-          <label htmlFor={phase3CompetitionCreateMachine.fields.countryCode}>{messages.organiserCreate.country}</label>
-          <input
-            id={phase3CompetitionCreateMachine.fields.countryCode}
-            name={phase3CompetitionCreateMachine.fields.countryCode}
-            list="country-code-suggestions"
-            value={draft.country_code}
-            type="text"
-            required
-            autoComplete={phase3CompetitionCreateMachine.autocomplete.country}
-            maxLength={2}
-            aria-invalid={Boolean(fieldErrors.country_code)}
-            aria-describedby={["country-code-hint", fieldErrors.country_code ? "country_code-error" : undefined]
-              .filter(Boolean)
-              .join(" ")}
-            onChange={(event) =>
-              update(phase3CompetitionCreateMachine.fields.countryCode, event.currentTarget.value.toUpperCase())
-            }
-          />
-          <datalist id="country-code-suggestions">
-            {phase3CountrySuggestions.map((country) => (
-              <option key={country.code} value={country.code}>
-                {country.name}
-              </option>
-            ))}
-          </datalist>
-          <p id="country-code-hint" className={styles.hint}>
-            {messages.organiserCreate.countryHint}
-          </p>
-          {fieldErrors.country_code ? (
-            <p id="country_code-error" className={styles.error}>
-              {fieldErrors.country_code}
-            </p>
-          ) : null}
-        </div>
+        {field(phase3CompetitionCreateMachine.fields.countryCode, messages.organiserCreate.country, {
+          required: true,
+          autoComplete: phase3CompetitionCreateMachine.autocomplete.country,
+          maxLength: 2,
+        })}
         {field(phase3CompetitionCreateMachine.fields.startsOn, messages.organiserCreate.startsOn, {
           type: "date",
           required: true,
@@ -399,29 +363,9 @@ export function CompetitionCreateForm({ draftOwnerId }: { draftOwnerId: string }
           type: "date",
           required: true,
         })}
-        <div className={styles.field}>
-          <label htmlFor={phase3CompetitionCreateMachine.fields.timezone}>{messages.organiserCreate.timezone}</label>
-          <select
-            id={phase3CompetitionCreateMachine.fields.timezone}
-            name={phase3CompetitionCreateMachine.fields.timezone}
-            value={draft.timezone}
-            required
-            aria-invalid={Boolean(fieldErrors.timezone)}
-            aria-describedby={fieldErrors.timezone ? "timezone-error" : undefined}
-            onChange={(event) => update(phase3CompetitionCreateMachine.fields.timezone, event.currentTarget.value)}
-          >
-            {phase3TimeZones.map((zone) => (
-              <option key={zone} value={zone}>
-                {zone}
-              </option>
-            ))}
-          </select>
-          {fieldErrors.timezone ? (
-            <p id="timezone-error" className={styles.error}>
-              {fieldErrors.timezone}
-            </p>
-          ) : null}
-        </div>
+        {field(phase3CompetitionCreateMachine.fields.timezone, messages.organiserCreate.timezone, {
+          required: true,
+        })}
         {field(phase3CompetitionCreateMachine.fields.locale, messages.organiserCreate.locale, {
           required: true,
         })}

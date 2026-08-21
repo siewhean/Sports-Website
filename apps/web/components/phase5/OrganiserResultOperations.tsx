@@ -368,9 +368,7 @@ export function OrganiserResultOperations({
                   ...current.match,
                   state: kind === machine.reopen ? machine.inProgress : machine.corrected,
                   aggregateVersion: current.match.aggregateVersion + 1,
-                  // A reopen withdraws the previously public result immediately,
-                  // so both lifecycle mutations advance the public result version.
-                  resultVersion: current.match.resultVersion + 1,
+                  resultVersion: kind === "correction" ? current.match.resultVersion + 1 : current.match.resultVersion,
                 },
                 events:
                   kind === machine.correction

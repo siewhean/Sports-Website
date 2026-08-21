@@ -7,6 +7,17 @@ test.use({ serviceWorkers: "block" });
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
+test("@a11y blocked service-worker registration remains a page-error-free progressive enhancement", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await dismissConsent(page);
+  await expect(page.getByTestId("scoring-worker-update-state")).toHaveAttribute("data-state", "idle");
+  await page.waitForLoadState("networkidle");
+  await page.goto("/organiser");
+  await expect(page.getByRole("navigation", { name: "Organiser workspace" })).toBeVisible();
+});
+
 test("@a11y sport settings editor has no WCAG A or AA accessibility violations", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/settings");
   await dismissConsent(page);
@@ -76,7 +87,6 @@ test("@a11y competition creation preserves recovery context and strict WCAG A/AA
   await expect(organisation).toBeEnabled();
   await organisation.selectOption({ label: "National Sports · Organiser" });
   await expect(page.getByLabel("Competition name")).toHaveValue("National Open");
-  await page.getByLabel("Public address").fill("");
 
   await page.getByRole("button", { name: "Create competition" }).click();
   await expect(page.getByLabel("Public address")).toBeFocused();

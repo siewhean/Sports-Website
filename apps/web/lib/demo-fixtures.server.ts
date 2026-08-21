@@ -2,8 +2,6 @@ import "server-only";
 
 type DemoFixtureEnvironment = Readonly<Record<string, string | undefined>>;
 
-export const demoCompetitionDraftOwnerId = "demo-fixtures";
-
 export function demoFixturesEnabled(source: DemoFixtureEnvironment = process.env): boolean {
   if (source.MATCHDAY_PHASE2_DATA_MODE !== "demo") return false;
   if (source.MATCHDAY_ALLOW_DEMO_FIXTURES !== "1") {

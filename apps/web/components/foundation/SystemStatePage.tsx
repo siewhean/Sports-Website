@@ -1,7 +1,6 @@
 "use client";
 
-import { ArrowClockwise, ArrowRight, LockKey, Plugs, WarningCircle } from "@phosphor-icons/react/dist/ssr";
-import { opaqueId } from "@matchday/ui";
+import { ArrowClockwise, LockKey, Plugs, WarningCircle } from "@phosphor-icons/react/dist/ssr";
 import { ActionLink, BrandLink } from "./Primitives";
 
 const iconByKind = {
@@ -20,7 +19,6 @@ export function SystemStatePage({
   detail,
   actionLabel,
   actionHref,
-  actionNavigation = opaqueId("client") as "client",
   action,
 }: Readonly<{
   kind: keyof typeof iconByKind;
@@ -30,14 +28,13 @@ export function SystemStatePage({
   detail?: string;
   actionLabel: string;
   actionHref?: string;
-  actionNavigation?: "client" | "document";
   action?: () => void;
 }>) {
   const Icon = iconByKind[kind];
   return (
     <main className="system-state" id="main-content">
       <header>
-        <BrandLink />
+        <BrandLink prefetch={false} />
       </header>
       <section aria-labelledby="system-state-title">
         <div className="system-state__icon" aria-hidden="true">
@@ -48,16 +45,9 @@ export function SystemStatePage({
         <p>{body}</p>
         {detail ? <p className="system-state__detail">{detail}</p> : null}
         {actionHref ? (
-          actionNavigation === "document" ? (
-            <a className="foundation-action foundation-action--dark" href={actionHref}>
-              <span>{actionLabel}</span>
-              <span className="foundation-action__icon" aria-hidden="true">
-                <ArrowRight />
-              </span>
-            </a>
-          ) : (
-            <ActionLink href={actionHref}>{actionLabel}</ActionLink>
-          )
+          <ActionLink href={actionHref} prefetch={false}>
+            {actionLabel}
+          </ActionLink>
         ) : (
           <button className="foundation-action foundation-action--dark" type="button" onClick={action}>
             <span>{actionLabel}</span>

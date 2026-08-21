@@ -8,15 +8,6 @@ export const phase3CompetitionSports = [
 
 export type Phase3CompetitionSport = (typeof phase3CompetitionSports)[number]["code"];
 
-// Every value here is guaranteed to satisfy isIanaTimeZone below, since both
-// come from the same Intl.supportedValuesOf("timeZone") call. Falls back to
-// just the configured default on a runtime that predates the API, so the
-// timezone select never renders empty.
-export const phase3TimeZones: readonly string[] =
-  typeof Intl.supportedValuesOf === "function"
-    ? [...Intl.supportedValuesOf("timeZone")].sort((a, b) => a.localeCompare(b))
-    : ["Asia/Singapore"];
-
 export const competitionCreateFieldOrder = [
   "organisation_id",
   "name",
@@ -104,19 +95,6 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const supportedSports = new Set<Phase3CompetitionSport>(phase3CompetitionSports.map(({ code }) => code));
-
-// Derives a slug candidate from a competition name. Always satisfies
-// slugPattern above (lowercase, digits, single hyphens between groups, no
-// leading/trailing hyphen), so callers never need to re-validate the result.
-export function slugifyCompetitionName(name: string): string {
-  return name
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));

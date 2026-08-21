@@ -8,9 +8,35 @@ import {
   type ScoringServerAuth,
 } from "./scoring-session.server";
 import { isScoringAccessToken } from "./scoring-access";
+import {
+  expiredOfflineGrantCookie,
+  InvalidOfflineGrantError,
+  OfflineGrantSealer,
+  offlineGrantCookie,
+  offlineGrantCookieName,
+} from "./offline-grant.server";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type SafeError = "access" | "conflict" | "expired" | "invalid" | "rate_limited" | "revoked" | "unavailable";
+const EXPOSED_ERROR_CODES = new Set([
+  "ACCESS_EXPIRED",
+  "ACCESS_RATE_LIMITED",
+  "ACCESS_REVOKED",
+  "FINALISATION_INVALID",
+  "IDEMPOTENCY_KEY_REUSED",
+  "MATCH_FINALISED_READ_ONLY",
+  "OFFLINE_AUTHORIZATION_EXPIRED",
+  "OFFLINE_AUTHORIZATION_REVOKED",
+  "OFFLINE_AUTHORIZATION_TRANSFERRED",
+  "OFFLINE_RECORDING_EXPIRED",
+  "SCORE_EVENT_INVALID",
+  "SCORE_EVENT_REJECTED",
+  "SCORE_VERSION_CONFLICT",
+  "SCORING_PERMISSION_DENIED",
+  "SCORING_SESSION_EXPIRED",
+  "SCORING_SESSION_REVOKED",
+  "STALE_WRITER_GENERATION",
+]);
 
 function jsonResponse(payload: unknown, status: number, cookie?: string): Response {
   const headers = new Headers({
@@ -24,7 +50,13 @@ function jsonResponse(payload: unknown, status: number, cookie?: string): Respon
   return new Response(JSON.stringify(payload), { status, headers });
 }
 
-function safeError(status: number, clearCookie = false, explicitState?: SafeError, sourceHeaders?: Headers): Response {
+function safeError(
+  status: number,
+  clearCookie = false,
+  explicitState?: SafeError,
+  sourceHeaders?: Headers,
+  machine?: { code?: string; current_sequence?: number; current_aggregate_version?: number },
+): Response {
   const state: SafeError =
     explicitState ??
     (status === 409
@@ -38,7 +70,18 @@ function safeError(status: number, clearCookie = false, explicitState?: SafeErro
             : [400, 401, 403].includes(status)
               ? "access"
               : "unavailable");
-  const response = jsonResponse({ error: state }, status, clearCookie ? expiredScoringSessionCookie() : undefined);
+  const response = jsonResponse(
+    {
+      error: state,
+      ...(machine?.code && EXPOSED_ERROR_CODES.has(machine.code) ? { code: machine.code } : {}),
+      ...(Number.isSafeInteger(machine?.current_sequence) ? { current_sequence: machine?.current_sequence } : {}),
+      ...(Number.isSafeInteger(machine?.current_aggregate_version)
+        ? { current_aggregate_version: machine?.current_aggregate_version }
+        : {}),
+    },
+    status,
+    clearCookie ? expiredScoringSessionCookie() : undefined,
+  );
   for (const name of ["ratelimit-limit", "ratelimit-remaining", "ratelimit-reset", "retry-after"]) {
     const value = sourceHeaders?.get(name);
     if (value) response.headers.set(name, value);
@@ -117,16 +160,30 @@ function sealer(): ScoringSessionSealer | null {
   }
 }
 
-function cookieValue(request: Request): string | null {
+function offlineSealer(): OfflineGrantSealer | null {
+  const key = process.env.SCORING_SESSION_SEAL_KEY?.trim();
+  if (!key) return null;
+  try {
+    return new OfflineGrantSealer(key);
+  } catch {
+    return null;
+  }
+}
+
+function namedCookieValue(request: Request, cookieName: string): string | null {
   const header = request.headers.get("cookie");
   if (!header) return null;
   for (const part of header.split(";")) {
     const [name, ...valueParts] = part.trim().split("=");
-    if (name !== scoringSessionCookieName) continue;
+    if (name !== cookieName) continue;
     const value = valueParts.join("=");
     return value && value.length <= 4_096 && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
   }
   return null;
+}
+
+function cookieValue(request: Request): string | null {
+  return namedCookieValue(request, scoringSessionCookieName);
 }
 
 function authHeaders(auth: ScoringServerAuth): Headers {
@@ -177,6 +234,72 @@ function eventPayload(value: unknown): Record<string, unknown> {
   for (const key of ["reversal_target_event_id", "person_id", "colour", "note"] as const) {
     const item = stringValue(source[key]);
     if (item !== null) result[key] = item;
+  }
+  return result;
+}
+
+function canonicalOfflineEvents(value: unknown): Array<Record<string, unknown>> | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const result: Array<Record<string, unknown>> = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const source = raw as Record<string, unknown>;
+    const eventId = source.event_id;
+    const sequence = source.sequence;
+    const rawCommand =
+      source.command && typeof source.command === "object" && !Array.isArray(source.command) ? source.command : source;
+    if (typeof eventId !== "string" || !UUID_PATTERN.test(eventId) || !safeInteger(sequence, 1)) {
+      return null;
+    }
+    if ((rawCommand as Record<string, unknown>).kind === "finalisation") {
+      const finalisation = rawCommand as Record<string, unknown>;
+      if (
+        typeof finalisation.client_event_id !== "string" ||
+        !UUID_PATTERN.test(finalisation.client_event_id) ||
+        !safeInteger(finalisation.expected_sequence) ||
+        finalisation.expected_sequence !== Number(sequence) - 1 ||
+        typeof finalisation.occurred_at !== "string" ||
+        !Number.isFinite(Date.parse(finalisation.occurred_at))
+      ) {
+        return null;
+      }
+      result.push({
+        event_id: eventId,
+        sequence,
+        command: {
+          kind: "finalisation",
+          client_event_id: finalisation.client_event_id,
+          expected_sequence: finalisation.expected_sequence,
+          occurred_at: finalisation.occurred_at,
+        },
+      });
+      continue;
+    }
+    const command = parseFiveSportScoreCommand(rawCommand);
+    if (!command) return null;
+    result.push({
+      event_id: eventId,
+      sequence,
+      command: {
+        kind: command.type === "finalisation" ? "finalisation" : "event",
+        client_event_id: command.clientEventId,
+        expected_sequence: Number(sequence) - 1,
+        occurred_at: command.occurredAt,
+        ...(command.type === "finalisation"
+          ? {}
+          : {
+              type: command.type,
+              ...(command.side ? { team_slot: command.side } : {}),
+              ...(command.participantId !== undefined ? { participant_id: command.participantId } : {}),
+              ...(command.unknownParticipant !== undefined ? { unknown_participant: command.unknownParticipant } : {}),
+              ...(command.segmentNumber !== undefined ? { segment_number: command.segmentNumber } : {}),
+              ...(command.manualTimeSeconds !== undefined ? { manual_time_seconds: command.manualTimeSeconds } : {}),
+              ...(command.reversalTargetEventId ? { reversal_target_event_id: command.reversalTargetEventId } : {}),
+              ...(command.reason ? { reason: command.reason } : {}),
+            }),
+      },
+    });
   }
   return result;
 }
@@ -308,6 +431,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
   const sport = source.sport as Record<string, unknown> | null;
   const home = match?.home as Record<string, unknown> | null;
   const away = match?.away as Record<string, unknown> | null;
+  const canonicalEvents = canonicalOfflineEvents(source.canonical_events);
   if (
     !competition ||
     typeof competition.slug !== "string" ||
@@ -333,6 +457,8 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     nullableString(home.name, 200) === undefined ||
     nullableString(away.id, 64) === undefined ||
     nullableString(away.name, 200) === undefined ||
+    typeof access.principal_id !== "string" ||
+    !/^[0-9a-f]{64}$/.test(access.principal_id) ||
     !["writer", "candidate", "viewer", "transferred"].includes(String(access.mode ?? "")) ||
     !Array.isArray(access.permissions) ||
     !access.permissions.every((permission) => typeof permission === "string") ||
@@ -343,7 +469,8 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     !["none", "pending", "approved", "denied"].includes(String(source.takeover_status ?? "none")) ||
     !canonicalScoreState(score) ||
     !Number.isSafeInteger(source.through_sequence) ||
-    !Array.isArray(source.events)
+    !Array.isArray(source.events) ||
+    !canonicalEvents
   ) {
     return null;
   }
@@ -384,6 +511,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
       away: { id: away.id, name: away.name },
     },
     access: {
+      principal_id: access.principal_id,
       mode: access.mode,
       permissions: access.permissions,
       generation: writer.generation,
@@ -395,6 +523,7 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     score: canonicalScoreState(score),
     through_sequence: source.through_sequence,
     events,
+    canonical_events: canonicalEvents,
   };
 }
 
@@ -423,6 +552,19 @@ function refreshAuthFromState(auth: ScoringServerAuth, state: Record<string, unk
     expiresAt: source.expires_at,
     leaseExpiresAt: source.lease_expires_at as string | null,
   };
+}
+
+function sameScoringAuthState(left: ScoringServerAuth, right: ScoringServerAuth): boolean {
+  const leftPermissions = [...left.permissions].sort();
+  const rightPermissions = [...right.permissions].sort();
+  return (
+    left.mode === right.mode &&
+    left.generation === right.generation &&
+    left.expiresAt === right.expiresAt &&
+    left.leaseExpiresAt === right.leaseExpiresAt &&
+    leftPermissions.length === rightPermissions.length &&
+    leftPermissions.every((permission, index) => permission === rightPermissions[index])
+  );
 }
 
 function exchangeInput(
@@ -520,6 +662,12 @@ async function upstreamSafeError(response: Response, clearCookie = false): Promi
       ? ((payload as Record<string, unknown>).error as Record<string, unknown>)
       : null;
   const code = envelope && typeof envelope.code === "string" ? envelope.code : "";
+  const currentSequence =
+    envelope && Number.isSafeInteger(envelope.current_sequence) ? Number(envelope.current_sequence) : undefined;
+  const currentAggregateVersion =
+    envelope && Number.isSafeInteger(envelope.current_aggregate_version)
+      ? Number(envelope.current_aggregate_version)
+      : undefined;
   const state: SafeError | undefined =
     code === "ACCESS_RATE_LIMITED"
       ? "rate_limited"
@@ -528,7 +676,11 @@ async function upstreamSafeError(response: Response, clearCookie = false): Promi
         : code === "ACCESS_EXPIRED" || code === "SCORING_SESSION_EXPIRED"
           ? "expired"
           : undefined;
-  return safeError(exposedStatus(response.status), clearCookie, state, response.headers);
+  return safeError(exposedStatus(response.status), clearCookie, state, response.headers, {
+    code,
+    current_sequence: currentSequence,
+    current_aggregate_version: currentAggregateVersion,
+  });
 }
 
 export async function exchangeScoringSession(request: Request): Promise<Response> {
@@ -602,7 +754,10 @@ export async function recoverScoringSession(request: Request): Promise<Response>
   const refreshedAuth = refreshAuthFromState(authenticated.auth, state);
   if (!refreshedAuth) return safeError(503, true);
   try {
-    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+    const refreshedCookie = sameScoringAuthState(authenticated.auth, refreshedAuth)
+      ? undefined
+      : scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt);
+    return jsonResponse(state, 200, refreshedCookie);
   } catch {
     return safeError(503, true);
   }
@@ -680,8 +835,14 @@ export async function heartbeatScoringSession(request: Request): Promise<Respons
   const state = scoringState(await readJson(stateResponse));
   const sessionSealer = sealer();
   if (!state || !sessionSealer) return safeError(503);
+  const authoritativeAuth = refreshAuthFromState(refreshedAuth, state);
+  if (!authoritativeAuth) return safeError(503, true);
   try {
-    return jsonResponse(state, 200, scoringSessionCookie(sessionSealer.seal(refreshedAuth), refreshedAuth.expiresAt));
+    return jsonResponse(
+      state,
+      200,
+      scoringSessionCookie(sessionSealer.seal(authoritativeAuth), authoritativeAuth.expiresAt),
+    );
   } catch {
     return safeError(503, true);
   }
@@ -737,14 +898,39 @@ export async function appendScoringEvent(request: Request): Promise<Response> {
     body: JSON.stringify(input),
   });
   if (!upstream) return safeError(503);
-  if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));
+  if (!upstream.ok) return upstreamSafeError(upstream, [401, 403].includes(upstream.status));
   const payload = await readJson(upstream);
   const source = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
-  const sequence = source?.sequence;
-  const duplicate = source?.duplicate;
-  return Number.isSafeInteger(sequence) && typeof duplicate === "boolean"
-    ? jsonResponse({ sequence, duplicate }, 200)
-    : safeError(503);
+  if (
+    !source ||
+    typeof input.client_event_id !== "string" ||
+    typeof source.client_event_id !== "string" ||
+    source.client_event_id !== input.client_event_id ||
+    typeof source.event_id !== "string" ||
+    !UUID_PATTERN.test(source.event_id) ||
+    typeof source.command_fingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(source.command_fingerprint) ||
+    typeof source.duplicate !== "boolean" ||
+    !Number.isSafeInteger(source.sequence) ||
+    !Number.isSafeInteger(source.aggregate_version) ||
+    source.sequence !== source.aggregate_version ||
+    typeof source.server_received_at !== "string" ||
+    !Number.isFinite(Date.parse(source.server_received_at))
+  ) {
+    return safeError(503);
+  }
+  return jsonResponse(
+    {
+      client_event_id: source.client_event_id,
+      event_id: source.event_id,
+      command_fingerprint: source.command_fingerprint,
+      duplicate: source.duplicate,
+      sequence: source.sequence,
+      aggregate_version: source.aggregate_version,
+      server_received_at: source.server_received_at,
+    },
+    200,
+  );
 }
 
 export async function finaliseScoringResult(request: Request): Promise<Response> {
@@ -761,25 +947,319 @@ export async function finaliseScoringResult(request: Request): Promise<Response>
     body && typeof body === "object" ? (body as Record<string, unknown>).client_event_id : undefined;
   const expectedSequence =
     body && typeof body === "object" ? (body as Record<string, unknown>).expected_sequence : undefined;
-  if (typeof clientEventId !== "string" || !UUID_PATTERN.test(clientEventId) || !safeInteger(expectedSequence)) {
+  const occurredAt = body && typeof body === "object" ? (body as Record<string, unknown>).occurred_at : undefined;
+  if (
+    typeof clientEventId !== "string" ||
+    !UUID_PATTERN.test(clientEventId) ||
+    !safeInteger(expectedSequence) ||
+    (occurredAt !== undefined &&
+      (typeof occurredAt !== "string" || occurredAt.length > 40 || !Number.isFinite(Date.parse(occurredAt))))
+  ) {
     return safeError(400);
   }
   const upstream = await upstreamFetch(new URL("/api/v1/scoring/finalise", authenticated.baseUrl), {
     method: "POST",
     headers: authHeaders(authenticated.auth),
-    body: JSON.stringify({ client_event_id: clientEventId, expected_sequence: expectedSequence }),
+    body: JSON.stringify({
+      client_event_id: clientEventId,
+      expected_sequence: expectedSequence,
+      ...(typeof occurredAt === "string" ? { occurred_at: occurredAt } : {}),
+    }),
   });
   if (!upstream) return safeError(503);
-  if (!upstream.ok) return safeError(exposedStatus(upstream.status), [401, 403].includes(upstream.status));
+  if (!upstream.ok) return upstreamSafeError(upstream, [401, 403].includes(upstream.status));
   const payload = await readJson(upstream);
   if (!payload || typeof payload !== "object") return safeError(503);
   const source = payload as Record<string, unknown>;
   if (
+    typeof source.client_event_id !== "string" ||
+    source.client_event_id !== clientEventId ||
+    typeof source.event_id !== "string" ||
+    !UUID_PATTERN.test(source.event_id) ||
+    typeof source.command_fingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(source.command_fingerprint) ||
+    typeof source.duplicate !== "boolean" ||
     typeof source.match_id !== "string" ||
     !UUID_PATTERN.test(source.match_id) ||
-    !Number.isSafeInteger(source.result_version)
+    !Number.isSafeInteger(source.sequence) ||
+    !Number.isSafeInteger(source.aggregate_version) ||
+    source.sequence !== source.aggregate_version ||
+    !Number.isSafeInteger(source.result_version) ||
+    !Number.isSafeInteger(source.publication_version) ||
+    typeof source.server_received_at !== "string" ||
+    !Number.isFinite(Date.parse(source.server_received_at)) ||
+    typeof source.published_at !== "string" ||
+    !Number.isFinite(Date.parse(source.published_at))
   ) {
     return safeError(503);
   }
-  return jsonResponse({ match_id: source.match_id, result_version: source.result_version }, 200);
+  return jsonResponse(
+    {
+      client_event_id: source.client_event_id,
+      event_id: source.event_id,
+      command_fingerprint: source.command_fingerprint,
+      duplicate: source.duplicate,
+      match_id: source.match_id,
+      sequence: source.sequence,
+      aggregate_version: source.aggregate_version,
+      result_version: source.result_version,
+      publication_version: source.publication_version,
+      server_received_at: source.server_received_at,
+      published_at: source.published_at,
+    },
+    200,
+  );
+}
+
+type OfflineAuthorityInput = {
+  device_id: string;
+  last_acknowledged_sequence: number;
+  pending_event_count: number;
+  pending_through_sequence: number;
+  last_reported_local_sequence: number;
+  queue_fingerprint: string;
+  indexeddb_schema_version: number;
+  service_worker_version: string;
+};
+
+function offlineAuthorityInput(value: unknown): OfflineAuthorityInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const deviceId = source.deviceId;
+  const lastAcknowledgedSequence = source.lastAcknowledgedSequence;
+  const pendingEventCount = source.pendingEventCount;
+  const pendingThroughSequence = source.pendingThroughSequence;
+  const lastReportedLocalSequence = source.lastReportedLocalSequence;
+  const queueFingerprint = source.queueFingerprint;
+  const indexeddbSchemaVersion = source.indexeddbSchemaVersion;
+  const serviceWorkerVersion = source.serviceWorkerVersion;
+  if (
+    typeof deviceId !== "string" ||
+    !UUID_PATTERN.test(deviceId) ||
+    !safeInteger(lastAcknowledgedSequence) ||
+    !safeInteger(pendingEventCount) ||
+    !safeInteger(pendingThroughSequence) ||
+    !safeInteger(lastReportedLocalSequence) ||
+    typeof queueFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(queueFingerprint) ||
+    !safeInteger(indexeddbSchemaVersion, 1) ||
+    Number(indexeddbSchemaVersion) > 100 ||
+    typeof serviceWorkerVersion !== "string" ||
+    !/^[a-z0-9][a-z0-9.-]{0,63}$/.test(serviceWorkerVersion)
+  ) {
+    return null;
+  }
+  return {
+    device_id: deviceId,
+    last_acknowledged_sequence: Number(lastAcknowledgedSequence),
+    pending_event_count: Number(pendingEventCount),
+    pending_through_sequence: Number(pendingThroughSequence),
+    last_reported_local_sequence: Number(lastReportedLocalSequence),
+    queue_fingerprint: queueFingerprint,
+    indexeddb_schema_version: Number(indexeddbSchemaVersion),
+    service_worker_version: serviceWorkerVersion,
+  };
+}
+
+function offlineAuthorityMetadata(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  if (
+    typeof source.principal_id !== "string" ||
+    !/^[0-9a-f]{64}$/.test(source.principal_id) ||
+    typeof source.authorization_id !== "string" ||
+    !UUID_PATTERN.test(source.authorization_id) ||
+    typeof source.competition_id !== "string" ||
+    !UUID_PATTERN.test(source.competition_id) ||
+    typeof source.match_id !== "string" ||
+    !UUID_PATTERN.test(source.match_id) ||
+    !safeInteger(source.generation, 1) ||
+    typeof source.recording_expires_at !== "string" ||
+    !Number.isFinite(Date.parse(source.recording_expires_at)) ||
+    typeof source.replay_expires_at !== "string" ||
+    !Number.isFinite(Date.parse(source.replay_expires_at)) ||
+    typeof source.pass_expires_at !== "string" ||
+    !Number.isFinite(Date.parse(source.pass_expires_at))
+  ) {
+    return null;
+  }
+  return {
+    principal_id: source.principal_id,
+    authorization_id: source.authorization_id,
+    competition_id: source.competition_id,
+    match_id: source.match_id,
+    generation: source.generation,
+    recording_expires_at: source.recording_expires_at,
+    replay_expires_at: source.replay_expires_at,
+    pass_expires_at: source.pass_expires_at,
+    status: typeof source.status === "string" ? source.status : "active",
+  };
+}
+
+function offlineCredentialFromResponse(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const metadata = offlineAuthorityMetadata(source);
+  return metadata && typeof source.resume_secret === "string" && /^[A-Za-z0-9_-]{43,128}$/.test(source.resume_secret)
+    ? {
+        metadata,
+        credential: {
+          authorizationId: String(source.authorization_id),
+          resumeSecret: source.resume_secret,
+          matchId: String(source.match_id),
+          replayExpiresAt: String(source.replay_expires_at),
+        },
+      }
+    : null;
+}
+
+function offlineCredential(request: Request) {
+  const sealed = namedCookieValue(request, offlineGrantCookieName);
+  const grantSealer = offlineSealer();
+  if (!sealed || !grantSealer) return null;
+  try {
+    return grantSealer.open(sealed);
+  } catch (error) {
+    if (error instanceof InvalidOfflineGrantError) return null;
+    return null;
+  }
+}
+
+async function offlineError(response: Response): Promise<Response> {
+  const safe = await upstreamSafeError(response, false);
+  if ([401, 403, 410].includes(response.status)) safe.headers.append("set-cookie", expiredOfflineGrantCookie());
+  return safe;
+}
+
+function expiredOfflineScoringResponse(preserveScoringSession = false): Response {
+  const response = jsonResponse({ success: true }, 200);
+  response.headers.append("set-cookie", expiredOfflineGrantCookie());
+  if (!preserveScoringSession) response.headers.append("set-cookie", expiredScoringSessionCookie());
+  return response;
+}
+
+export async function establishOfflineScoringAuthority(request: Request): Promise<Response> {
+  if (!sameOriginMutation(request)) return safeError(403);
+  const baseUrl = apiBaseUrl();
+  const sessionSealer = sealer();
+  const grantSealer = offlineSealer();
+  if (!baseUrl || !sessionSealer || !grantSealer) return safeError(503);
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return safeError(400);
+  }
+  const input = offlineAuthorityInput(body);
+  if (!input) return safeError(400);
+  const intent =
+    body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).intent : null;
+  if (intent !== "prepare" && intent !== "resume") return safeError(400);
+  const existing = offlineCredential(request);
+  if (intent === "prepare") {
+    const authenticated = authenticatedRequest(request);
+    if ("response" in authenticated) return authenticated.response;
+    const upstream = await upstreamFetch(new URL("/api/v1/scoring/offline-authorizations", baseUrl), {
+      method: "POST",
+      headers: authHeaders(authenticated.auth),
+      body: JSON.stringify({
+        ...input,
+        ...(existing ? { resume_secret: existing.resumeSecret } : {}),
+      }),
+    });
+    if (!upstream) return safeError(503);
+    if (!upstream.ok) return offlineError(upstream);
+    const result = offlineCredentialFromResponse(await readJson(upstream));
+    if (!result) return safeError(503);
+    try {
+      const cookie = offlineGrantCookie(grantSealer.seal(result.credential), result.credential.replayExpiresAt);
+      return jsonResponse({ offline: result.metadata }, 201, cookie);
+    } catch {
+      return safeError(503);
+    }
+  }
+  if (!existing) return safeError(401);
+
+  const upstream = await upstreamFetch(
+    new URL(`/api/v1/scoring/offline-authorizations/${existing.authorizationId}/resume`, baseUrl),
+    {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ ...input, resume_secret: existing.resumeSecret }),
+    },
+  );
+  if (!upstream) return safeError(503);
+  if (!upstream.ok) return offlineError(upstream);
+  const source = await readJson(upstream);
+  if (!source || typeof source !== "object" || Array.isArray(source)) return safeError(503);
+  const payload = source as Record<string, unknown>;
+  const auth = exchangedAuth(payload.session ?? payload);
+  const refreshedGrant = offlineCredentialFromResponse(payload.offline ?? payload);
+  if (
+    !auth ||
+    !refreshedGrant ||
+    auth.matchId !== existing.matchId ||
+    refreshedGrant.metadata.match_id !== existing.matchId
+  ) {
+    return safeError(503);
+  }
+  const stateResponse = await upstreamFetch(new URL("/api/v1/scoring/session", baseUrl), {
+    headers: authHeaders(auth),
+    cache: "no-store",
+  });
+  if (!stateResponse) return safeError(503);
+  if (!stateResponse.ok) return upstreamSafeError(stateResponse, [401, 403, 410].includes(stateResponse.status));
+  const state = scoringState(await readJson(stateResponse));
+  if (!state) return safeError(503);
+  try {
+    const response = jsonResponse(
+      { session: state, offline: refreshedGrant.metadata },
+      200,
+      scoringSessionCookie(sessionSealer.seal(auth), auth.expiresAt),
+    );
+    response.headers.append(
+      "set-cookie",
+      offlineGrantCookie(grantSealer.seal(refreshedGrant.credential), refreshedGrant.credential.replayExpiresAt),
+    );
+    return response;
+  } catch {
+    return safeError(503);
+  }
+}
+
+export async function revokeOfflineScoringAuthority(request: Request): Promise<Response> {
+  if (!sameOriginMutation(request)) return safeError(403);
+  const baseUrl = apiBaseUrl();
+  const existing = offlineCredential(request);
+  if (!baseUrl) return safeError(503);
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return safeError(400);
+  }
+  const deviceId =
+    body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).deviceId : null;
+  const intent =
+    body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).intent : null;
+  if (typeof deviceId !== "string" || !UUID_PATTERN.test(deviceId)) return safeError(400);
+  if (intent !== "end_session" && intent !== "preparation_rollback") return safeError(400);
+  if (!existing) {
+    return intent === "preparation_rollback" ? safeError(401) : expiredOfflineScoringResponse();
+  }
+  const upstream = await upstreamFetch(
+    new URL(`/api/v1/scoring/offline-authorizations/${existing.authorizationId}`, baseUrl),
+    {
+      method: "DELETE",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({
+        resume_secret: existing.resumeSecret,
+        device_id: deviceId,
+        preserve_writer_session: intent === "preparation_rollback",
+      }),
+    },
+  );
+  if (!upstream) return safeError(503);
+  if (!upstream.ok && upstream.status !== 404 && upstream.status !== 410) return offlineError(upstream);
+  return expiredOfflineScoringResponse(intent === "preparation_rollback");
 }

@@ -122,4 +122,39 @@ export class CompetitionRepository {
     }
     return created;
   }
+
+  async findCompetitionAccess(
+    competitionId: string,
+    accountId: string,
+    roles: readonly string[] = ["owner", "organiser"],
+    executor: SqlExecutor = this.sql,
+  ): Promise<{
+    competition_id: string;
+    organisation_id: string;
+    competition_status: string;
+    membership_role: "owner" | "organiser";
+  } | null> {
+    const rows = await executor.unsafe<{
+      competition_id: string;
+      organisation_id: string;
+      competition_status: string;
+      membership_role: "owner" | "organiser";
+    }>(
+      `SELECT competition.id AS competition_id, competition.organisation_id,
+              competition.status AS competition_status, membership.role AS membership_role
+       FROM competitions competition
+       JOIN organisation_memberships membership
+         ON membership.organisation_id = competition.organisation_id
+       WHERE competition.id = $1
+         AND membership.account_id = $2
+         AND membership.status = 'active'
+         AND membership.role = ANY($3::text[])`,
+      [competitionId, accountId, roles],
+    );
+    return rows[0] ?? null;
+  }
+
+  async acquireCompetitionUpdateLock(id: string, executor: SqlExecutor = this.sql): Promise<void> {
+    await executor.unsafe(`SELECT 1 FROM competitions WHERE id = $1 FOR UPDATE`, [id]);
+  }
 }

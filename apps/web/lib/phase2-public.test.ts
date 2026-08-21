@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { PublicCompetitionProjection, PublicCompetitionSummary } from "@matchday/contracts";
+import type { PublicCompetitionProjection } from "@matchday/contracts";
 import {
-  isPublicCompetitionListing,
+  isGateCC4PublicCompetitionProjection,
   isPublicCompetitionProjection,
   publicSportName,
   publicSportNames,
@@ -51,43 +51,34 @@ describe("public competition sport projection", () => {
       }),
     ).toBe(false);
   });
-});
 
-function summary(overrides: Partial<PublicCompetitionSummary> = {}): PublicCompetitionSummary {
-  return {
-    id: "competition",
-    name: "Cup",
-    slug: "cup",
-    sport_code: "canoe_polo",
-    timezone: "Asia/Singapore",
-    starts_on: "2027-01-01",
-    ends_on: "2027-01-01",
-    status: "active",
-    ...overrides,
-  };
-}
-
-describe("public competition listing", () => {
-  it("accepts an empty listing", () => {
-    expect(isPublicCompetitionListing({ competitions: [] })).toBe(true);
-  });
-
-  it("accepts a listing of well-formed summaries", () => {
-    expect(isPublicCompetitionListing({ competitions: [summary(), summary({ id: "other", slug: "other" })] })).toBe(
-      true,
-    );
-  });
-
-  it("rejects a summary with an unsupported sport code", () => {
-    expect(isPublicCompetitionListing({ competitions: [summary({ sport_code: "unsupported_sport" as never })] })).toBe(
-      false,
-    );
-  });
-
-  it("rejects a payload that is not a listing shape", () => {
-    expect(isPublicCompetitionListing(null)).toBe(false);
-    expect(isPublicCompetitionListing({})).toBe(false);
-    expect(isPublicCompetitionListing({ competitions: "not-an-array" })).toBe(false);
-    expect(isPublicCompetitionListing({ competitions: [{ id: "only-an-id" }] })).toBe(false);
+  it("requires C4 freshness to be scoped to the canonical compatibility division", () => {
+    const value = projection("canoe_polo") as Record<string, unknown>;
+    const valid = {
+      ...value,
+      freshness: {
+        division_id: "division",
+        division_projection_versions: { division: 1 },
+        schedule_version: 1,
+        result_version: 0,
+        projection_version: 1,
+        generated_at: "2027-01-01T00:00:01.000Z",
+        source_updated_at: "2027-01-01T00:00:00.000Z",
+        etag: "c4-1-0-1-fingerprint",
+      },
+    };
+    expect(isGateCC4PublicCompetitionProjection(valid)).toBe(true);
+    expect(
+      isGateCC4PublicCompetitionProjection({
+        ...valid,
+        freshness: { ...(valid.freshness as Record<string, unknown>), division_id: "competition" },
+      }),
+    ).toBe(false);
+    expect(
+      isGateCC4PublicCompetitionProjection({
+        ...valid,
+        freshness: { ...(valid.freshness as Record<string, unknown>), division_projection_versions: {} },
+      }),
+    ).toBe(false);
   });
 });

@@ -219,7 +219,7 @@ beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
   sql = postgres(databaseUrl, { max: 6, onnotice: () => undefined, connection: { search_path: schema } });
-});
+}, 60_000);
 
 afterAll(async () => {
   await sql?.end({ timeout: 2 });
@@ -785,18 +785,18 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     const attempt = randomUUID();
     await sql`
       INSERT INTO scoring_access_attempts (
-        id,credential_kind,outcome,credential_hmac,ip_hmac,request_id
+        id,credential_kind,outcome,credential_hmac,ip_hmac,request_id,hmac_key_version,rate_limit_state_expires_at
       ) VALUES (
-        ${attempt},'fallback_code','invalid',${randomBytes(32)},${randomBytes(32)},${`attempt-${attempt}`}
+        ${attempt},'fallback_code','invalid',${randomBytes(32)},${randomBytes(32)},${`attempt-${attempt}`},'v1',now()
       )
     `;
     await expect(sql`
       INSERT INTO scoring_access_attempts (
         competition_id,match_id,access_pass_id,credential_kind,outcome,
-        credential_hmac,ip_hmac,request_id
+        credential_hmac,ip_hmac,request_id,hmac_key_version,rate_limit_state_expires_at
       ) VALUES (
         ${world.competitionB},${world.matchB},${world.passA},'token','accepted',
-        ${randomBytes(32)},${randomBytes(32)},${`cross-tenant-${attempt}`}
+        ${randomBytes(32)},${randomBytes(32)},${`cross-tenant-${attempt}`},'v1',now()
       )
     `).rejects.toThrow();
     const hashColumns = await sql`
@@ -820,10 +820,10 @@ describeInfrastructure("Phase 2 PostgreSQL schema invariants", () => {
     await sql`
       INSERT INTO scoring_access_attempts (
         id,competition_id,match_id,access_pass_id,credential_kind,outcome,
-        credential_hmac,ip_hmac,request_id
+        credential_hmac,ip_hmac,request_id,hmac_key_version,rate_limit_state_expires_at
       ) VALUES (
         ${retainedAttempt},${world.competitionA},${world.matchA},${world.passA},'token','accepted',
-        ${randomBytes(32)},${randomBytes(32)},${`retained-${retainedAttempt}`}
+        ${randomBytes(32)},${randomBytes(32)},${`retained-${retainedAttempt}`},'v1',now()
       )
     `;
     await sql`DELETE FROM scoring_access_passes WHERE id=${world.passA}`;

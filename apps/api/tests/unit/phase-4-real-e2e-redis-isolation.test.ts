@@ -5,11 +5,10 @@ import type { Redis } from "ioredis";
 import { describe, expect, it } from "vitest";
 import {
   assertEmptyOwnedRedisNamespace,
+  assertLocalInfrastructureUrls,
   createRedisOwnership,
   isOwnedRedisKey,
-  resolveHarnessPorts,
-  resolveHarnessProjects,
-  resolveHarnessRunCount,
+  resolveInfrastructureMode,
   sha256Identifier,
   unlinkOwnedRedisKeys,
 } from "../../scripts/run-phase-4-real-e2e.js";
@@ -44,36 +43,36 @@ class FakeRedis {
 }
 
 describe("Phase 4 real E2E Redis ownership", () => {
-  it("uses explicit, valid, non-conflicting ports so parallel worktrees do not contend", () => {
-    expect(resolveHarnessPorts({})).toEqual({ apiPort: 4101, webPort: 3103 });
-    expect(resolveHarnessPorts({ PHASE4_E2E_API_PORT: "4115", PHASE4_E2E_WEB_PORT: "3115" })).toEqual({
-      apiPort: 4115,
-      webPort: 3115,
-    });
-    expect(() => resolveHarnessPorts({ PHASE4_E2E_API_PORT: "not-a-port" })).toThrow(/integer port/);
-    expect(() => resolveHarnessPorts({ PHASE4_E2E_API_PORT: "1023" })).toThrow(/between/);
-    expect(() => resolveHarnessPorts({ PHASE4_E2E_API_PORT: "4115", PHASE4_E2E_WEB_PORT: "4115" })).toThrow(
-      /must be different/,
-    );
+  it("defaults to local infrastructure and permits Docker only when explicitly selected", () => {
+    expect(resolveInfrastructureMode(undefined)).toBe("local");
+    expect(resolveInfrastructureMode("")).toBe("local");
+    expect(resolveInfrastructureMode("local")).toBe("local");
+    expect(resolveInfrastructureMode("docker")).toBe("docker");
+    expect(() => resolveInfrastructureMode("remote")).toThrow(/local or docker/);
   });
 
-  it("permits a bounded one-run calibration before the required two-run evidence", () => {
-    expect(resolveHarnessRunCount({})).toBe(2);
-    expect(resolveHarnessRunCount({ PHASE4_E2E_RUNS: "1" })).toBe(1);
-    expect(resolveHarnessRunCount({ PHASE4_E2E_RUNS: "2" })).toBe(2);
-    expect(() => resolveHarnessRunCount({ PHASE4_E2E_RUNS: "3" })).toThrow(/must be 1 or 2/);
-  });
-
-  it("limits a calibration to one recognised browser project without changing the evidence default", () => {
-    expect(resolveHarnessProjects({})).toEqual([
-      "phase-4-real-phone-chromium",
-      "phase-4-real-tablet-webkit",
-      "phase-4-real-desktop-chromium",
-    ]);
-    expect(resolveHarnessProjects({ PHASE4_E2E_PROJECT: "phase-4-real-phone-chromium" })).toEqual([
-      "phase-4-real-phone-chromium",
-    ]);
-    expect(() => resolveHarnessProjects({ PHASE4_E2E_PROJECT: "unknown" })).toThrow(/must be one of/);
+  it("permits only loopback local infrastructure without connection-string overrides", () => {
+    expect(() =>
+      assertLocalInfrastructureUrls(
+        "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        "redis://127.0.0.1:6379/15",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertLocalInfrastructureUrls("postgres://matchday:matchday@db.internal/matchday", "redis://127.0.0.1:6379/15"),
+    ).toThrow(/local loopback/);
+    expect(() =>
+      assertLocalInfrastructureUrls(
+        "postgres://matchday:matchday@127.0.0.1:5432/matchday?host=db.internal",
+        "redis://127.0.0.1:6379/15",
+      ),
+    ).toThrow(/query parameters/);
+    expect(() =>
+      assertLocalInfrastructureUrls(
+        "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        "redis://redis.internal:6379/15",
+      ),
+    ).toThrow(/local loopback/);
   });
 
   it("derives four exact key families from a canonical UUID queue name", () => {
@@ -175,5 +174,17 @@ describe("Phase 4 real E2E Redis ownership", () => {
     for (const term of forbidden) expect(source).not.toContain(`.${term}(`);
     expect(source).not.toContain("job_id: event.jobid");
     expect(source).not.toContain("queue name: ${queuename}");
+  });
+
+  it("wires the local Phase 2 runtime into both public-projection ports", async () => {
+    const scriptPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../scripts/run-phase-4-real-e2e.ts",
+    );
+    const source = await readFile(scriptPath, "utf8");
+
+    // The sixth constructor argument serves the legacy Phase 4 reader; the
+    // seventh is the C4 publication port. A real run must exercise both.
+    expect(source).toContain("      undefined,\n      phase2,\n      phase2,\n");
   });
 });

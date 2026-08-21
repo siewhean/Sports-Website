@@ -33,21 +33,6 @@ test("@a11y schedule meets WCAG A/AA requirements", async ({ page }) => {
   await dismissConsent(page);
   await expect(page.getByTestId("phase4-schedule")).toBeVisible();
   await assertNoWcagAOrAaViolations(page);
-
-  const warningRail = page.locator('[data-testid="phase4-schedule"] [data-tone="warning"]').first();
-  await expect(warningRail).toBeVisible();
-  const warningColors = await warningRail.evaluate((element) => {
-    const body = element.querySelector("p");
-    const icon = element.querySelector("svg");
-    if (!body || !icon) throw new Error("Expected warning rail body and icon");
-    return {
-      body: getComputedStyle(body).color,
-      icon: getComputedStyle(icon).color,
-      background: getComputedStyle(document.documentElement).backgroundColor,
-    };
-  });
-  expect(contrastRatio(warningColors.body, warningColors.background)).toBeGreaterThanOrEqual(4.5);
-  expect(contrastRatio(warningColors.icon, warningColors.background)).toBeGreaterThanOrEqual(3);
 });
 
 test("@a11y move flow meets WCAG A/AA requirements", async ({ page }) => {

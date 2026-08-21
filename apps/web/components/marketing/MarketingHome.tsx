@@ -11,11 +11,7 @@ import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
 
-type MarketingHomeViewer = Readonly<{
-  displayName: string;
-}>;
-
-export function MarketingHome({ viewer = null }: { viewer?: MarketingHomeViewer | null }) {
+export function MarketingHome() {
   const scope = useRef<HTMLElement>(null);
   const [activeCapability, setActiveCapability] = useState(0);
 
@@ -78,7 +74,7 @@ export function MarketingHome({ viewer = null }: { viewer?: MarketingHomeViewer 
         {messages.navigation.skip}
       </a>
       <section className="marketing-hero" aria-labelledby="marketing-title">
-        <SiteHeader inverse viewer={viewer} />
+        <SiteHeader inverse />
         <div className="marketing-hero__copy" id="marketing-content">
           <p className="marketing-eyebrow">{messages.home.eyebrow}</p>
           <h1 id="marketing-title">
@@ -92,6 +88,9 @@ export function MarketingHome({ viewer = null }: { viewer?: MarketingHomeViewer 
           <div className="marketing-actions">
             <ActionLink href="/organiser" tone="signal">
               {messages.home.primaryAction}
+            </ActionLink>
+            <ActionLink href="/competitions/singapore-open" tone="light">
+              {messages.home.secondaryAction}
             </ActionLink>
           </div>
         </div>

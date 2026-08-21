@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "gate-c-final-certification-ledger",
+  "candidate_sha": "8f7196478ce653b6f6dbb2940d89c92ae3d7cd92",
+  "branch": "integration/gate-c-final",
+  "gate": "GATE_C",
+  "verdict": "PASS",
+  "certified_at": "2026-08-20T16:00:46.380Z",
+  "milestones": {
+    "M1_build_and_migrations": {
+      "status": "PASS",
+      "migrations_scope": "0001-0051",
+      "clean_build_guard": "PASS",
+      "pnpm_check": "PASS"
+    },
+    "M2_temporal_matrix_and_locks": {
+      "status": "PASS",
+      "matrix_6_scenarios": "PASS",
+      "lock_benchmarks": "PASS",
+      "runbook": "docs/operations/MIGRATION_0030_0031_RUNBOOK.md"
+    },
+    "M3_c4_repositories_and_error_codes": {
+      "status": "PASS",
+      "repository_architecture": "PASS",
+      "zero_raw_api_errors": true,
+      "atomic_rollback": "PASS"
+    },
+    "M4_server_authoritative_offline_retention": {
+      "status": "PASS",
+      "queue_capacity_2000": "PASS",
+      "indexeddb_72h_retention": "PASS",
+      "principal_isolation": "PASS"
+    },
+    "M5_multi_platform_c3_drills_c5_certification": {
+      "status": "PASS",
+      "c3_browser_matrix": "PASS",
+      "c3_physical_devices": "PASS",
+      "c5_performance_benchmarks": "PASS",
+      "controlled_failure_drills": "PASS",
+      "backup_restore_rehearsal": "PASS",
+      "dual_hmac_key_rotation": "PASS"
+    }
+  },
+  "defects": {
+    "p0Count": 0,
+    "p1Count": 0,
+    "p2Count": 0,
+    "p3Count": 0
+  },
+  "evidence_artifacts": [
+    "docs/qa/gate-c-access-final-evidence.json",
+    "docs/qa/gate-c-c2-final-evidence.json",
+    "docs/qa/gate-c-c3-final-evidence.json",
+    "docs/qa/gate-c-c5-final-evidence.json",
+    "docs/qa/gate-c-lock-benchmarks.json",
+    "docs/operations/MIGRATION_0030_0031_RUNBOOK.md",
+    "docs/operations/SCORING_ACCESS_HMAC_ROTATION.md"
+  ]
+}

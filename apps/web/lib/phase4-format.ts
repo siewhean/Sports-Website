@@ -20,16 +20,11 @@ export type FormatBuilderPageDocument = Readonly<{
   organisationId: string;
   sportCode: string;
   draft: Phase4FormatDraftView | null;
-  revisions: FormatBuilderWorkspaceResponse["revisions"];
   templates: readonly Phase4OrganiserTemplateView[];
 }>;
 
 export type FormatBuilderWorkspaceResponse = Readonly<{
-  revisions: readonly {
-    revisionId: string;
-    status: "draft" | "published" | "superseded";
-    materialised: boolean;
-  }[];
+  revisions: readonly unknown[];
   draft: Phase4FormatDraftView | null;
 }>;
 
@@ -245,7 +240,6 @@ export function parseFormatDraft(
     !["edit", "view"].includes(String(item.permission)) ||
     typeof item.read_only !== "boolean" ||
     typeof item.definition_hash !== "string" ||
-    (item.materialised !== undefined && typeof item.materialised !== "boolean") ||
     !metrics ||
     !integer(metrics.match_count) ||
     !integer(metrics.guaranteed_matches) ||
@@ -271,23 +265,9 @@ export function parseFormatWorkspaceResponse(
 ): FormatBuilderWorkspaceResponse | null {
   const item = record(value);
   if (!item || !Array.isArray(item.revisions) || !("draft" in item)) return null;
-  const revisions = item.revisions.map((raw) => {
-    const revision = record(raw);
-    return revision &&
-      typeof revision.revision_id === "string" &&
-      ["draft", "published", "superseded"].includes(String(revision.status)) &&
-      typeof revision.materialised === "boolean"
-      ? {
-          revisionId: revision.revision_id,
-          status: revision.status as "draft" | "published" | "superseded",
-          materialised: revision.materialised,
-        }
-      : null;
-  });
-  if (!revisions.every((revision): revision is NonNullable<typeof revision> => revision !== null)) return null;
-  if (item.draft === null) return { revisions, draft: null };
+  if (item.draft === null) return { revisions: item.revisions, draft: null };
   const draft = parseFormatDraft(item.draft, competitionId, divisionId);
-  return draft ? { revisions, draft } : null;
+  return draft ? { revisions: item.revisions, draft } : null;
 }
 
 export function parseFormatValidation(value: unknown): Phase4FormatValidationResponse | null {
@@ -319,7 +299,6 @@ export function parseFormatMaterialisation(value: unknown, formatId: string): Fo
       "division_id",
       "status",
       "definition_hash",
-      "materialised",
       "document",
       "created_at",
       "published_at",
@@ -332,7 +311,6 @@ export function parseFormatMaterialisation(value: unknown, formatId: string): Fo
     typeof revision.division_id !== "string" ||
     !["draft", "published", "superseded"].includes(String(revision.status)) ||
     typeof revision.definition_hash !== "string" ||
-    typeof revision.materialised !== "boolean" ||
     !parseFormatBuilderDocument(revision.document) ||
     typeof revision.created_at !== "string" ||
     Number.isNaN(Date.parse(revision.created_at)) ||
@@ -362,7 +340,6 @@ export function parseFormatPublication(value: unknown, formatId: string): Format
       "division_id",
       "status",
       "definition_hash",
-      "materialised",
       "document",
       "created_at",
       "published_at",

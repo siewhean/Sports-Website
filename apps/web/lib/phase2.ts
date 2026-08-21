@@ -1,4 +1,5 @@
 import type { SportId, SportPackSettings } from "@matchday/domain";
+import type { GateCOfflineCanonicalCommand } from "@matchday/contracts";
 
 export type SurfaceState =
   "ready" | "loading" | "empty" | "error" | "offline" | "conflict" | "read-only" | "permission";
@@ -68,7 +69,7 @@ export type CompetitionView = {
     id: string;
     name: string;
     entryLimit?: number;
-    entries?: ReadonlyArray<{ id: string; name: string; seed: number | null; status: string; revision: number }>;
+    entries?: ReadonlyArray<{ id: string; name: string; seed: number | null; status: string }>;
   }>;
   teams: string[];
   areas: string[];
@@ -103,7 +104,7 @@ export type CompetitionSummaryView = {
   name: string;
   sport: string;
   dateLabel: string;
-  status: "active" | "completed" | "archived";
+  status: string;
 };
 
 export type CompetitionReadPort = {
@@ -126,14 +127,28 @@ export type ScoringEventCommand = {
   segmentNumber?: number;
   manualTimeSeconds?: number | null;
   reversalTargetEventId?: string;
+  reversalTargetClientEventId?: string;
   reason?: string;
   occurredAt?: string;
 };
 
 export type ScoringAppendReceipt = {
   clientEventId: string;
+  eventId: string;
+  commandFingerprint: string;
+  duplicate: boolean;
   sequence: number;
+  aggregateVersion: number;
+  serverReceivedAt: string;
   syncState: "acknowledged" | "pending";
+};
+
+export type ScoringFinaliseReceipt = ScoringAppendReceipt & {
+  receiptId: string;
+  matchId: string;
+  resultVersion: number;
+  publicationVersion: number;
+  publishedAt: string;
 };
 
 export type ScoringDeviceView = { id: string; label: string };
@@ -179,6 +194,7 @@ export type ScoringScoreStateView = {
 };
 
 export type ScoringSessionView = {
+  principalId: string;
   competitionSlug: string;
   sportId: SportId;
   sportPackVersion: string;
@@ -192,6 +208,11 @@ export type ScoringSessionView = {
   awayScore: number;
   scoreState: ScoringScoreStateView;
   events: ScoringEventCommand[];
+  canonicalEvents: ReadonlyArray<{
+    eventId: string;
+    sequence: number;
+    command: GateCOfflineCanonicalCommand;
+  }>;
   throughSequence: number;
   mode: ScoringAccessMode;
   permissions: string[];
@@ -203,11 +224,13 @@ export type ScoringSessionView = {
 };
 
 export type FinalizeResultCommand = {
+  clientEventId: string;
   matchId: string;
   expectedSequence: number;
   homeScore: number;
   awayScore: number;
   scorer: string;
+  occurredAt: string;
 };
 
 export type ScoringCommandPort = {
@@ -226,16 +249,10 @@ export type ScoringCommandPort = {
     pendingThroughSequence: number | null;
   }): Promise<{ status: "pending"; requestId: string }>;
   appendEvent(command: ScoringEventCommand): Promise<ScoringAppendReceipt>;
-  finalizeResult(command: FinalizeResultCommand): Promise<{ receiptId: string; publishedAt: string }>;
+  finalizeResult(command: FinalizeResultCommand): Promise<ScoringFinaliseReceipt>;
 };
 
-export type OrganiserNavigationItem = Readonly<{ id: OrganiserSection; label: string; short: string }>;
-
-/**
- * All supported organiser routes. Advanced and legacy operational pages remain
- * addressable even when they are deliberately absent from the V1 navigation.
- */
-export const organiserSections: ReadonlyArray<OrganiserNavigationItem> = [
+export const organiserSections: ReadonlyArray<{ id: OrganiserSection; label: string; short: string }> = [
   { id: "control-room", label: "Control room", short: "Overview" },
   { id: "setup", label: "Competition setup", short: "Setup" },
   { id: "settings", label: "Canoe Polo rules", short: "Rules" },
@@ -249,12 +266,7 @@ export const organiserSections: ReadonlyArray<OrganiserNavigationItem> = [
   { id: "audit", label: "Audit log", short: "Audit" },
 ];
 
-/**
- * The V1 path keeps the primary organiser journey legible. The omitted routes
- * are still valid direct routes for advanced or operational use; hiding them
- * here must not change routing or authorisation behaviour.
- */
-export const v1OrganiserSections: ReadonlyArray<OrganiserNavigationItem> = [
+export const v1OrganiserSections: ReadonlyArray<{ id: OrganiserSection; label: string; short: string }> = [
   { id: "control-room", label: "Overview", short: "Overview" },
   { id: "entries", label: "Teams", short: "Teams" },
   { id: "capacity", label: "Capacity", short: "Capacity" },
@@ -276,7 +288,6 @@ export const phase2Copy = {
   save: "Save changes",
   continue: "Continue",
   edit: "Edit",
-  issueScorerAccess: "Issue scorer access",
   publish: "Publish competition",
   published: "Published",
   openPublic: "Open public page",
@@ -343,7 +354,6 @@ export const phase2Copy = {
   publicTitleSuffix: "Canoe Polo",
   publicLive: "Live",
   publicFinal: "Final",
-  publicLatestResults: "Latest results",
   publicScheduled: "Scheduled",
   results: "Results",
   table: "Table",
@@ -396,6 +406,71 @@ export const phase2Copy = {
   leaseExpiringBody:
     "Scoring is read only because the 45-second writer lease is near or past its deadline. Your scoring session and access pass remain valid while authoritative access is checked.",
   syncPending: "1 event pending sync",
+  offlineReady: "Offline scoring ready",
+  offlineRecording: "Recording safely on this device",
+  offlineReconnecting: "Reconnecting to scoring services",
+  offlineReplaying: "Replaying pending events in order",
+  offlinePendingFinalisation: "Finalised on this device — Pending server confirmation",
+  offlineConflict: "Replay stopped for organiser review",
+  offlineStorageError: "Offline scoring storage needs attention",
+  pendingEvents: "pending events",
+  diagnosticExport: "Export scoring diagnostics",
+  offlinePreparationTitle: "Prepare this match for offline scoring",
+  offlinePreparationBody:
+    "Confirm the latest server state and store only this match’s authorised package before losing connectivity.",
+  offlinePrepareAction: "Prepare offline scoring",
+  offlinePreparedAnnouncement: "Offline scoring is ready for this match.",
+  offlineRestoredAnnouncement: "Offline scoring restored from this device.",
+  offlineStorageRecoveryError: "Offline scoring storage could not be recovered.",
+  offlineReconnectAnnouncement: "Connection restored. Confirming authoritative scoring access.",
+  offlineReplayStopped: "Replay stopped. The pending scoring history remains on this device for review.",
+  offlineAuthoritativeUnavailable: "Authoritative scoring state is unavailable after replay.",
+  offlineReplayComplete: "All pending scoring events were acknowledged by the server.",
+  offlineReplayDeferred: "Pending scoring remains stored on this device. Replay will resume after access is confirmed.",
+  offlinePreparationError: "Offline scoring could not be prepared on this device.",
+  offlinePreparationRetry:
+    "Offline authority was rolled back safely. Check browser storage, then retry preparation while online.",
+  offlineDiagnosticError: "The offline diagnostic could not be created safely.",
+  offlineMatchUnauthorized: "This match was not authorised for offline scoring.",
+  offlineEventStorageError: "The scoring event could not be stored safely on this device.",
+  offlineReversalUnavailable: "The reversal command is unavailable.",
+  offlineReversalStorageError: "The reversal could not be stored safely on this device.",
+  offlineFinalisationStorageError: "Finalisation could not be stored safely on this device.",
+  offlineQueueFull: "Offline queue full",
+  offlineQueueWarning: "Offline queue nearing capacity",
+  offlineReadyTitle: "Ready for offline scoring",
+  offlineRecordingTitle: "Recording offline",
+  offlineReplayingTitle: "Replaying in order",
+  offlineConfirmingTitle: "Confirming server state",
+  offlineConflictTitle: "Replay stopped for review",
+  offlineExpiredTitle: "Offline authority expired",
+  offlineRevokedTitle: "Offline authority revoked",
+  offlineReadOnlyTitle: "Offline scoring is read-only",
+  offlineStorageErrorTitle: "Offline storage error",
+  offlinePreparingTitle: "Preparing offline scoring",
+  offlinePendingTitle: "Pending sync",
+  offlineQueueGuidance: (limit: number) =>
+    `Reconnect and replay now. This device stops accepting new commands at ${limit.toLocaleString()}.`,
+  offlinePendingCount: (count: number) => `${count} ${count === 1 ? "command" : "commands"} pending.`,
+  offlinePendingAnnouncement: (count: number) => `${count} scoring ${count === 1 ? "event" : "events"} pending sync.`,
+  offlineReplayAnnouncement: (count: number) => `${count} pending scoring events are replaying in order.`,
+  offlineRecordedAnnouncement: (message: string, count: number) => `${message} ${count} pending sync.`,
+  offlineRecordingEnds: (value: string) => `New offline scoring ends ${value}.`,
+  offlineReplayEnds: (value: string) => `Stored commands may replay until ${value}.`,
+  offlineLastConfirmed: (sequence: number) => `Last confirmed server sequence: ${sequence}.`,
+  offlineAllSynced: "All changes are synced.",
+  offlineSyncNow: "Sync now",
+  offlineDiagnosticAction: "Export sanitized diagnostic",
+  offlineDiagnosticSuccess: (checksum: string) => `Sanitized offline diagnostic exported. Checksum ${checksum}.`,
+  offlineEndSession: "End scoring session",
+  offlineEndSessionTitle: "Unsynchronised scoring remains on this device",
+  offlineEndSessionBody:
+    "Reconnect and sync, or export a sanitized diagnostic before explicitly discarding the local queue.",
+  offlineReconnectAndSync: "Reconnect and sync",
+  offlineExportBeforeDiscard: "Export before discard",
+  offlineDiscardAndEnd: "Discard exported work and end scoring",
+  offlineEndComplete: "Scoring session ended and local offline data removed.",
+  offlineEndError: "Scoring could not be ended safely. Local offline data was retained.",
   writerConflict: "Another device is the active scorer",
   writerConflictBody:
     "Scoring controls are locked. An organiser must confirm a takeover before new events can be recorded.",
@@ -408,8 +483,6 @@ export const phase2Copy = {
     "Scoring access could not be verified. Check the code or try again when the service is available.",
   semanticRejected: "This action is not valid for the current match state. Review the details and try again.",
   eventLog: "Match events",
-  moreMatchActions: "More match actions",
-  closeEvents: "Close match events",
   noEvents: "No events recorded",
   scorer: "Scorer",
   manualTime: "Manual match time",
@@ -476,8 +549,6 @@ export const phase2Copy = {
   recordGoalFor: "Record goal for",
   goalSheetScorerHint: "This name is attached to the goal event and audit record.",
   scoreControlsTitle: "Scoring controls",
-  advancedScoring: "Advanced scoring controls",
-  simpleScoring: "Simple scoring controls",
   scoreControlsReadOnly: "Only the active scoring device can record match events.",
   scoreControlsPending: "Saving the match event…",
   manualTimeOnly: "Enter event times manually. No live match clock is running.",
@@ -529,6 +600,9 @@ export const phase2Machine = {
   transferred: "transferred" as const,
   writer: "writer" as const,
   access: "access" as const,
+  refreshNone: "none" as const,
+  refreshPromotion: "promotion" as const,
+  refreshRenewal: "renewal" as const,
   goal: "goal",
   home: "home" as const,
   away: "away" as const,
@@ -547,8 +621,28 @@ export const phase2Machine = {
   singaporeOpenSlug: "singapore-open",
   scoringApiMode: "api" as const,
   scoringDemoMode: "demo" as const,
-  scoreControlsFull: "full" as const,
-  scoreControlsRemote: "remote" as const,
+  offlineOnline: "online" as const,
+  offlinePreparing: "preparing" as const,
+  offlineReady: "offline-ready" as const,
+  offlineRecording: "offline-recording" as const,
+  offlinePendingSync: "pending-sync" as const,
+  offlineReconnecting: "reconnecting" as const,
+  offlineReplaying: "replaying" as const,
+  offlinePendingFinalisation: "pending-finalisation" as const,
+  offlineStorageError: "storage-error" as const,
+  offlineUnexpectedPreparationFailure: "unexpected_preparation_failure" as const,
+  offlinePrepareIntent: "prepare" as const,
+  offlinePreparationRollbackIntent: "preparation_rollback" as const,
+  offlineResumeIntent: "resume" as const,
+  unavailable: "unavailable" as const,
+  anchorElement: "a" as const,
+  offlineRecordingExpiredCode: "recording_expired",
+  offlineReplayExpiredCode: "replay_expired",
+  offlinePassExpiredCode: "pass_expired",
+  offlineRevokedCode: "revoked",
+  offlineTransferredCode: "transferred",
+  offlineQueueFullCode: "queue_full",
+  offlineCommandLimitCode: "command limit",
 };
 
 export const canoePoloSettings: ReadonlyArray<readonly [string, string]> = [
@@ -582,8 +676,8 @@ export const phase2Competition: CompetitionView = {
   lastUpdated: "12 Sep, 10:24 SGT",
   division: { id: "open", name: "Open division", teamCount: 8, matchCount: 16 },
   divisions: [
-    { id: "open", name: "Open division", entries: [] },
-    { id: "women", name: "Women's division", entries: [] },
+    { id: "open", name: "Open division" },
+    { id: "women", name: "Women's division" },
   ],
   teams: [
     "Marina Blue",

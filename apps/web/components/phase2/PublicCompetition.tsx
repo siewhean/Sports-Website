@@ -96,8 +96,7 @@ function PublicDivisionSections({
   uniqueIds: boolean;
 }) {
   const { division, matches, standings, bracket } = value;
-  const completedMatches = matches.filter((match) => match.status === "final");
-  const finalMatch = completedMatches[0];
+  const finalMatch = matches.find((match) => match.status === "final");
   const liveMatch = matches.find((match) => match.status === "live");
   const nextMatches = matches.filter((match) => match.status === "scheduled");
   const sectionId = (name: string) => (uniqueIds ? `${name}-${division.id}` : name);
@@ -160,32 +159,6 @@ function PublicDivisionSections({
               <strong>{finalMatch.awayScore}</strong>
             </div>
             <small>{publicationRevision}</small>
-          </div>
-        ) : null}
-        {completedMatches.length > 0 ? (
-          <div className="p2-public-results">
-            <h3 id={headingId("public-latest-results-title")}>{phase2Copy.publicLatestResults}</h3>
-            <ol aria-labelledby={headingId("public-latest-results-title")}>
-              {completedMatches.map((match) => (
-                <li key={match.id} data-match-id={match.id}>
-                  <article>
-                    <header>
-                      <span>{phase2Copy.publicFinal}</span>
-                      <strong>
-                        {match.label} · {match.stage}
-                      </strong>
-                    </header>
-                    <p>
-                      <span>{match.home}</span>
-                      <strong aria-label={`${match.homeScore ?? 0} to ${match.awayScore ?? 0}`}>
-                        {match.homeScore ?? 0}–{match.awayScore ?? 0}
-                      </strong>
-                      <span>{match.away}</span>
-                    </p>
-                  </article>
-                </li>
-              ))}
-            </ol>
           </div>
         ) : null}
       </section>

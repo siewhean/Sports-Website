@@ -7,3 +7,6 @@ export * from "./format.repository.js";
 export * from "./schedule.repository.js";
 export * from "./scoring.repository.js";
 export * from "./identity.repository.js";
+export * from "./repair.repository.js";
+export * from "./publication.repository.js";
+export * from "./public-projection.repository.js";

@@ -47,4 +47,20 @@ describe("V1 preview API rewrite", () => {
 
     await expect(import("../../next.config")).rejects.toThrow("RENDER_API_ORIGIN");
   });
+
+  it("configures workspace transpilePackages and deterministic turbopack root", async () => {
+    delete process.env.RENDER_API_ORIGIN;
+    process.env.MATCHDAY_BUILD_ID = "v1-preview-test-transpile-packages";
+
+    const config = (await import("../../next.config")).default;
+
+    expect(config.transpilePackages).toEqual([
+      "@matchday/contracts",
+      "@matchday/domain",
+      "@matchday/feature-flags",
+      "@matchday/ui",
+    ]);
+    expect(config.turbopack?.root).toBeDefined();
+    expect(typeof config.turbopack?.root).toBe("string");
+  });
 });

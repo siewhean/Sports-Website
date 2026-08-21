@@ -1,9 +1,10 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { CapacityEditor } from "@/components/phase3/CapacityEditor";
 import { EntriesEditor } from "@/components/phase3/EntriesEditor";
 import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
-import { V1PublishWorkspace } from "@/components/phase4/schedule/V1PublishWorkspace";
+import { gateCC4Copy } from "@/lib/gate-c-c4";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase3CapacityCopy, phase3CapacityMachine } from "@/lib/phase3-capacity";
@@ -11,13 +12,6 @@ import { getCapacityDocument } from "@/lib/phase3-capacity.server";
 import { phase3EntriesCopy, phase3EntriesMachine, totalActiveEntries } from "@/lib/phase3-entries";
 import { phase3ResultsCopy, phase3ResultsMachine, resultVersionLabel } from "@/lib/phase3-results";
 import { getResultsDocument } from "@/lib/phase3-results.server";
-import { phase4ScheduleMachine } from "@/lib/phase4-schedule";
-import { getScheduleDocument } from "@/lib/phase4-schedule.server";
-import {
-  v1ScheduleProductionCopy,
-  v1ScheduleProductionMachine,
-  v1ScheduleRevisionLabel,
-} from "@/lib/v1-schedule-production";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 export default async function CompetitionSectionPage({
@@ -102,7 +96,11 @@ export default async function CompetitionSectionPage({
       <OrganiserWorkspace
         competition={result.competition}
         section={phase3ResultsMachine.section}
-        sectionAction={null}
+        sectionAction={
+          <Link href={`/organiser/competitions/${encodeURIComponent(result.competition.id)}/repairs`}>
+            {gateCC4Copy.openRepairs}
+          </Link>
+        }
         pageTitle={phase3ResultsCopy.title}
         pageIntro={phase3ResultsCopy.intro}
         pageEyebrow={phase3ResultsCopy.eyebrow}
@@ -132,37 +130,6 @@ export default async function CompetitionSectionPage({
             enableRemoteOperations={!demoFixturesEnabled()}
           />
         }
-      />
-    );
-  }
-  if (section === v1ScheduleProductionMachine.publishSection) {
-    const schedule = await getScheduleDocument({
-      competitionId: result.competition.id,
-      competitionName: result.competition.name,
-      timeZone: result.competition.timezone,
-      publicationRevision: result.competition.publicationRevision,
-      ...(query.state ? { previewState: query.state } : {}),
-    });
-    return (
-      <OrganiserWorkspace
-        competition={result.competition}
-        section={v1ScheduleProductionMachine.publishSection}
-        sectionAction={null}
-        syncLabel={
-          schedule.currentRevision
-            ? v1ScheduleRevisionLabel(schedule.currentRevision.revision)
-            : v1ScheduleProductionCopy.noScheduleRevision
-        }
-        syncState={
-          schedule.state === phase4ScheduleMachine.offline
-            ? phase4ScheduleMachine.offline
-            : schedule.state === phase4ScheduleMachine.readOnly
-              ? phase4ScheduleMachine.readOnly
-              : schedule.state === phase4ScheduleMachine.ready
-                ? phase4ScheduleMachine.saved
-                : phase4ScheduleMachine.unavailable
-        }
-        sectionContent={<V1PublishWorkspace document={schedule} competitionSlug={result.competition.slug} />}
       />
     );
   }

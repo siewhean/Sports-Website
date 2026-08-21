@@ -8,6 +8,8 @@ import styles from "./PublicCompetitionsList.module.css";
 
 const statusLabels: Record<CompetitionSummaryView["status"], string> = {
   active: t("prototype.92340695899b"),
+  published: t("prototype.92340695899b"),
+  live: t("prototype.92340695899b"),
   completed: t("prototype.22a970d2e5b1"),
   archived: t("prototype.bdb86505f806"),
 };

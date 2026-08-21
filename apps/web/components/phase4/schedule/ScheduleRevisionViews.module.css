@@ -2,8 +2,10 @@
 .detail,
 .comparison,
 .empty {
-  --muted: var(--ink-muted);
-  --line: var(--hairline);
+  --ink: #171918;
+  --muted: #646863;
+  --line: #d3d4ce;
+  --signal: #b7dc22;
   color: var(--ink);
 }
 
@@ -373,7 +375,7 @@
 .empty > svg {
   width: 2.4rem;
   height: 2.4rem;
-  color: var(--signal-strong);
+  color: #789700;
 }
 
 .empty p {

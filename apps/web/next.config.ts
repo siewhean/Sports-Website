@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const monorepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const requestedBuildId = process.env.MATCHDAY_BUILD_ID?.trim();
 if (requestedBuildId !== undefined && !/^[A-Za-z0-9._-]{8,128}$/u.test(requestedBuildId)) {
@@ -59,9 +62,10 @@ const nextConfig: NextConfig = {
     formats: ["image/avif", "image/webp"],
     minimumCacheTTL: 31_536_000,
   },
+  transpilePackages: ["@matchday/contracts", "@matchday/domain", "@matchday/feature-flags", "@matchday/ui"],
   poweredByHeader: false,
   turbopack: {
-    root: path.resolve(process.cwd(), "../.."),
+    root: monorepoRoot,
   },
 };
 

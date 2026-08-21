@@ -19,6 +19,7 @@
     "test:unit": "turbo run test:unit",
     "test:integration": "turbo run test:integration --concurrency=1",
     "test:e2e": "pnpm --filter @matchday/web test:e2e && pnpm test:e2e:phase4:real",
+    "test:e2e:suite": "vitest run --config tests/e2e/vitest.config.ts",
     "test:e2e:phase2:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-2-real-e2e.ts",
     "test:e2e:gate-c-access:real": "pnpm --filter @matchday/api exec tsx scripts/run-gate-c-access-e2e.ts",
     "evidence:gate-c-access:run": "node scripts/run-gate-c-access-ledger.mjs",

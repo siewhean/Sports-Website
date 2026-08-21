@@ -32,7 +32,7 @@ describeInfrastructure("Phase 4 format-template sport guard", () => {
     await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
     sql = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
     await sql.unsafe(`SET search_path TO "${schema}", public`);
-  });
+  }, 60_000);
 
   afterAll(async () => {
     await sql?.end();

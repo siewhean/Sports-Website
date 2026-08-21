@@ -1,16 +1,32 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
-type GuardState = { failures: string[]; allowed: RegExp[] };
+type AllowedFailure = { pattern: RegExp; remaining: number | null };
+type GuardState = { failures: string[]; allowed: AllowedFailure[] };
 
 const guards = new WeakMap<Page, GuardState>();
 
-function isExpectedFrameworkWarning(text: string) {
+export function isExpectedFrameworkWarning(text: string) {
   if (text === "Service Worker registration blocked by Playwright") return true;
-  if (text.includes("An SSL certificate error occurred when fetching the script.")) return true;
-  if (text.includes("TypeError: Load failed") || text.includes("MATCHDAY route error {reference: WEB-UNAVAILABLE}"))
+  // Firefox validates strict-dynamic correctly but reports this standards
+  // interpretation warning for each document. It does not indicate a blocked
+  // script or a failed policy; the matching browser journey remains guarded
+  // for every real console error and non-framework warning.
+  if (/Content-Security-Policy: Ignoring .*self.* within script-src: .*strict-dynamic.* specified/.test(text)) {
     return true;
+  }
+  // Firefox emits this DevTools-only warning when Playwright evaluates layout
+  // while an initial stylesheet is settling. It is not page-originated and
+  // does not represent a layout, stylesheet, or runtime failure in the app.
+  if (
+    /^\[JavaScript Warning: "Layout was forced before the page was fully loaded\. If stylesheets are not yet loaded this may cause a flash of unstyled content\." \{file: "debugger eval code" line: \d+\}\]$/u.test(
+      text,
+    )
+  ) {
+    return true;
+  }
   return (
-    /was preloaded using link preload but not used within a few seconds/.test(text) &&
+    (/was preloaded using link preload but not used within a few seconds/.test(text) ||
+      /preloaded with link preload was not used within a few seconds/.test(text)) &&
     (/\/_next\/static\/media\/Geist(?:Mono)?_Variable/.test(text) ||
       /\/_next\/static\/chunks\/[A-Za-z0-9_-]+\.css/.test(text))
   );
@@ -22,7 +38,7 @@ export function isExpectedTeardownFontCancellation(input: {
   requestUrl: string;
   resourceType: string;
 }): boolean {
-  if (!["cancelled", "Load request cancelled"].includes(input.failure) || input.resourceType !== "font") return false;
+  if (input.failure !== "cancelled" || input.resourceType !== "font") return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -37,7 +53,7 @@ export function isExpectedTeardownServiceWorkerCancellation(input: {
   pageUrl: string;
   requestUrl: string;
 }): boolean {
-  if (!["cancelled", "Load request cancelled"].includes(input.failure)) return false;
+  if (input.failure !== "cancelled") return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -54,7 +70,7 @@ export function isExpectedTeardownStaticAssetCancellation(input: {
   resourceType: string;
 }): boolean {
   if (
-    !["cancelled", "net::ERR_ABORTED", "Load request cancelled"].includes(input.failure) ||
+    !["cancelled", "net::ERR_ABORTED"].includes(input.failure) ||
     !["script", "stylesheet"].includes(input.resourceType)
   )
     return false;
@@ -73,7 +89,7 @@ export function installConsoleGuard(page: Page) {
 
   page.on("console", (message) => {
     if (message.type() === "warning" || message.type() === "error") {
-      if (isExpectedFrameworkWarning(message.text())) return;
+      if (message.type() === "warning" && isExpectedFrameworkWarning(message.text())) return;
       state.failures.push(`console.${message.type()}: ${message.text()}`);
     }
   });
@@ -81,17 +97,15 @@ export function installConsoleGuard(page: Page) {
     // WebKit reports cancelled speculative Next RSC prefetches as access-control
     // errors rather than request cancellation events.
     if (error.message.includes("_rsc=") && error.message.endsWith("due to access control checks.")) return;
-    if (error.message.includes("Minified React error #418") || error.message.includes("Minified React error #423"))
-      return;
     state.failures.push(`pageerror: ${error.message}`);
   });
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "unknown error";
     const url = request.url();
-    // Next cancels speculative RSC prefetches and active polling requests when navigation makes them stale.
+    // Next cancels speculative RSC prefetches when navigation makes them stale.
     if (
-      (failure === "net::ERR_ABORTED" || failure === "cancelled" || failure === "Load request cancelled") &&
-      (url.includes("_rsc=") || url.includes("/takeover-requests"))
+      (failure === "net::ERR_ABORTED" || failure === "cancelled" || failure === "NS_BINDING_ABORTED") &&
+      url.includes("_rsc=")
     )
       return;
     // WebKit may cancel an in-flight local font while a page or context is
@@ -133,21 +147,43 @@ export function installConsoleGuard(page: Page) {
 }
 
 export function allowConsoleFailure(page: Page, pattern: RegExp) {
-  guards.get(page)?.allowed.push(pattern);
+  guards.get(page)?.allowed.push({ pattern, remaining: null });
 }
 
-export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
+export function allowConsoleFailureCount(page: Page, pattern: RegExp, maximumCount: number) {
+  if (!Number.isSafeInteger(maximumCount) || maximumCount < 1) {
+    throw new Error("Console failure allowance count must be a positive integer.");
+  }
+  guards.get(page)?.allowed.push({ pattern, remaining: maximumCount });
+}
+
+async function assertAndClearConsoleGuard(page: Page, testInfo: TestInfo, attachmentName: string) {
   const state = guards.get(page);
-  const failures = (state?.failures ?? []).filter(
-    (failure) => !(state?.allowed ?? []).some((pattern) => pattern.test(failure)),
-  );
-  await testInfo.attach("browser-runtime-health", {
+  const failures = (state?.failures ?? []).filter((failure) => {
+    const allowance = (state?.allowed ?? []).find(({ pattern, remaining }) => remaining !== 0 && pattern.test(failure));
+    if (!allowance) return true;
+    if (allowance.remaining !== null) allowance.remaining -= 1;
+    return false;
+  });
+  await testInfo.attach(attachmentName, {
     body: failures.length
       ? failures.join("\n")
       : "No console warnings, console errors, page errors, or failed requests.",
     contentType: "text/plain",
   });
+  if (state) {
+    state.failures.length = 0;
+    state.allowed.length = 0;
+  }
   expect(failures, "unexpected browser runtime failures").toEqual([]);
+}
+
+export async function assertConsoleGuardCheckpoint(page: Page, testInfo: TestInfo, checkpoint: string) {
+  await assertAndClearConsoleGuard(page, testInfo, `browser-runtime-health-${checkpoint}`);
+}
+
+export async function assertConsoleGuard(page: Page, testInfo: TestInfo) {
+  await assertAndClearConsoleGuard(page, testInfo, "browser-runtime-health");
 }
 
 export async function dismissConsent(page: Page) {

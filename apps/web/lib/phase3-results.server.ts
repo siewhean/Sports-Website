@@ -3,7 +3,7 @@ import "server-only";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 import { cookies, headers } from "next/headers";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { requestCanForwardSessionCookie, requestPublicOrigin } from "@/lib/phase3-origin";
 import {
   parseStandingsSnapshot,
   type ResultsDocument,
@@ -36,14 +36,14 @@ function apiBaseUrl(): URL | null {
 async function requestContext(apiUrl: URL): Promise<{ cookie: string; origin: string } | null> {
   const requestHeaders = await headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
-  if (!host || !cookieHostMatches(host, apiUrl.hostname) || /[\u0000-\u001f\u007f/\\]/.test(host)) return null;
-  const forwarded = requestHeaders.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  const protocol = forwarded === "https" ? "https" : "http";
+  if (!host || !requestCanForwardSessionCookie(requestHeaders, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN))
+    return null;
+  const origin = requestPublicOrigin(requestHeaders, process.env.MATCHDAY_PUBLIC_ORIGIN);
+  if (!origin) return null;
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"] as const) {
     const value = store.get(name)?.value;
-    if (value && !/[\u0000-\u001f\u007f;]/.test(value))
-      return { cookie: `${name}=${value}`, origin: `${protocol}://${host}` };
+    if (value && !/[\u0000-\u001f\u007f;]/.test(value)) return { cookie: `${name}=${value}`, origin };
   }
   return null;
 }

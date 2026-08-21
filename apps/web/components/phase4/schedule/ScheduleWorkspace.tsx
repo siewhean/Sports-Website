@@ -9,7 +9,6 @@ import {
   ArrowsLeftRight,
   CalendarBlank,
   CheckCircle,
-  CircleNotch,
   Clock,
   HourglassMedium,
   LockKey,
@@ -46,7 +45,6 @@ import {
   type ScheduleObjective,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
-import { isV1ScheduleOptimising, v1ScheduleObjective, v1ScheduleOption, v1ScheduleProgress } from "@/lib/v1-schedule";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -79,7 +77,6 @@ function withRevision(document: ScheduleDocument, revision: NonNullable<Schedule
 }
 
 export function ScheduleWorkspace({
-  advanced = false,
   document: initialDocument,
   initialSelectedMatchId = null,
   initialNotice = null,
@@ -97,9 +94,7 @@ export function ScheduleWorkspace({
   );
   const [job, setJob] = useState(document.activeJob);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
-  const [objective, setObjective] = useState<ScheduleObjective>(
-    advanced ? (job?.objective ?? "balanced") : v1ScheduleObjective,
-  );
+  const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
   const [selectedMatchId, setSelectedMatchId] = useState(
     (initialSelectedMatchId && document.matches.some((match) => match.id === initialSelectedMatchId)
       ? initialSelectedMatchId
@@ -126,7 +121,6 @@ export function ScheduleWorkspace({
     if (currentOption) byObjective.set(currentOption.objective, currentOption);
     return [...byObjective.values()];
   }, [currentOption, retainedAlternatives]);
-  const simpleOption = v1ScheduleOption(options, currentOption);
   const expired = document.currentRevision?.status === "expired";
   const disabled = !hydrated || !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
@@ -231,7 +225,7 @@ export function ScheduleWorkspace({
         idempotency_key: createIdempotencyKey(phase4ScheduleMachine.generateKey),
         expected_source_revision: document.sourceRevision,
         expected_capacity_revision: document.capacityRevision,
-        objective: advanced ? objective : v1ScheduleObjective,
+        objective,
         constraints: document.constraints,
       },
       (payload) => {
@@ -421,130 +415,77 @@ export function ScheduleWorkspace({
         </div>
       ) : null}
 
-      {advanced ? (
-        <section className={styles.commandBar} aria-labelledby="strategy-title">
-          <div className={styles.strategy}>
-            <p id="strategy-title">{phase4ScheduleCopy.strategy}</p>
-            <div role="radiogroup" aria-labelledby="strategy-title">
-              {(
-                [
-                  phase4ScheduleMachine.fastest,
-                  phase4ScheduleMachine.balanced,
-                  phase4ScheduleMachine.restFocused,
-                ] as const
-              ).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="radio"
-                  aria-checked={objective === value}
-                  disabled={disabled || Boolean(job && activeStatuses.has(job.status))}
-                  onClick={() => setObjective(value)}
-                >
-                  {value === "fastest" ? (
-                    <Timer />
-                  ) : value === "rest_focused" ? (
-                    <HourglassMedium />
-                  ) : (
-                    <ArrowsLeftRight />
-                  )}
-                  {objectiveLabel(value)}
-                </button>
-              ))}
-            </div>
+      <section className={styles.commandBar} aria-labelledby="strategy-title">
+        <div className={styles.strategy}>
+          <p id="strategy-title">{phase4ScheduleCopy.strategy}</p>
+          <div role="radiogroup" aria-labelledby="strategy-title">
+            {(
+              [
+                phase4ScheduleMachine.fastest,
+                phase4ScheduleMachine.balanced,
+                phase4ScheduleMachine.restFocused,
+              ] as const
+            ).map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={objective === value}
+                disabled={disabled || Boolean(job && activeStatuses.has(job.status))}
+                onClick={() => setObjective(value)}
+              >
+                {value === "fastest" ? <Timer /> : value === "rest_focused" ? <HourglassMedium /> : <ArrowsLeftRight />}
+                {objectiveLabel(value)}
+              </button>
+            ))}
           </div>
-          <QualityOverview option={currentOption ?? options.find((option) => option.objective === objective) ?? null} />
-          <div className={styles.headerActions}>
-            <Link href={`/organiser/competitions/${document.competitionId}/schedule/compare`}>
-              {phase4ScheduleCopy.compare}
-            </Link>
-            <button type="button" onClick={() => void publish()} disabled={!document.canPublish || disabled}>
-              {busy === phase4ScheduleMachine.publishAction
-                ? phase4ScheduleCopy.publishing
-                : phase4ScheduleCopy.publish}
-            </button>
-          </div>
-        </section>
-      ) : (
-        <section className={styles.simpleCommandBar} aria-label={phase4ScheduleCopy.v1ScheduleActions}>
-          <div>
-            <p>{phase4ScheduleCopy.strategy}</p>
-            <h3>{phase4ScheduleCopy.v1BalancedSchedule}</h3>
-          </div>
+        </div>
+        <QualityOverview option={currentOption ?? options.find((option) => option.objective === objective) ?? null} />
+        <div className={styles.headerActions}>
+          <Link href={`/organiser/competitions/${document.competitionId}/schedule/compare`}>
+            {phase4ScheduleCopy.compare}
+          </Link>
           <button type="button" onClick={() => void publish()} disabled={!document.canPublish || disabled}>
             {busy === phase4ScheduleMachine.publishAction ? phase4ScheduleCopy.publishing : phase4ScheduleCopy.publish}
           </button>
-        </section>
-      )}
+        </div>
+      </section>
 
-      {advanced ? (
-        options.length ? (
-          <OptionComparison
-            options={options}
-            currentRevision={document.currentRevision?.revision ?? null}
-            onAccept={acceptOption}
-            disabled={disabled}
-          />
-        ) : null
-      ) : simpleOption ? (
-        <section className={styles.simpleOption} aria-label={phase4ScheduleCopy.v1BalancedSchedule}>
-          <div>
-            <h3>{phase4ScheduleCopy.v1BalancedScheduleReady}</h3>
-            <p>{phase4ScheduleCopy.v1BalancedScheduleReadyBody}</p>
-          </div>
-          <button
-            type="button"
-            disabled={disabled || !simpleOption.quality.valid}
-            onClick={() => void acceptOption(simpleOption)}
-          >
-            <CheckCircle />
-            {phase4ScheduleCopy.v1Use}
-          </button>
-        </section>
+      {options.length ? (
+        <OptionComparison
+          options={options}
+          currentRevision={document.currentRevision?.revision ?? null}
+          onAccept={acceptOption}
+          disabled={disabled}
+        />
       ) : null}
 
       {document.currentRevision ? (
         <div className={styles.planner}>
           <UnscheduledTray document={document} onSelect={setSelectedMatchId} selectedMatchId={selectedMatchId} />
-          <Timeline
-            advanced={advanced}
-            document={document}
-            selectedMatchId={selectedMatchId}
-            onSelect={setSelectedMatchId}
-          />
+          <Timeline document={document} selectedMatchId={selectedMatchId} onSelect={setSelectedMatchId} />
           <MatchInspector
-            advanced={advanced}
             document={document}
             match={selectedMatch}
-            locked={advanced && Boolean(selectedLock)}
-            onToggleLock={advanced ? toggleLock : undefined}
-            disabled={advanced && (disabled || !assignment)}
+            locked={Boolean(selectedLock)}
+            onToggleLock={toggleLock}
+            disabled={disabled || !assignment}
           />
         </div>
       ) : (
-        <ScheduleEmpty
-          advanced={advanced}
-          objective={advanced ? objective : v1ScheduleObjective}
-          disabled={disabled}
-          busy={busy === "generate"}
-          onGenerate={generate}
-        />
+        <ScheduleEmpty objective={objective} disabled={disabled} busy={busy === "generate"} onGenerate={generate} />
       )}
 
-      {advanced ? (
-        <JobRail
-          job={job}
-          disabled={disabled}
-          busy={busy}
-          onGenerate={generate}
-          onContinue={continueOptimising}
-          onCancel={cancelJob}
-          onAccept={acceptOption}
-          objective={objective}
-        />
-      ) : (
-        <SimpleScheduleStatus job={job} />
-      )}
+      <JobRail
+        job={job}
+        disabled={disabled}
+        busy={busy}
+        onGenerate={generate}
+        onContinue={continueOptimising}
+        onCancel={cancelJob}
+        onAccept={acceptOption}
+        objective={objective}
+      />
     </div>
   );
 }
@@ -695,12 +636,10 @@ function UnscheduledTray({
 }
 
 function Timeline({
-  advanced,
   document,
   selectedMatchId,
   onSelect,
 }: {
-  advanced: boolean;
   document: ScheduleDocument;
   selectedMatchId: string | null;
   onSelect: (id: string) => void;
@@ -730,18 +669,12 @@ function Timeline({
     <section className={styles.timeline} aria-labelledby="timeline-title">
       <header>
         <div>
-          <p>
-            {advanced
-              ? interpolate(phase4ScheduleCopy.privateDraft, { revision: document.currentRevision?.revision ?? "—" })
-              : phase4ScheduleCopy.v1DraftSchedule}
-          </p>
+          <p>{interpolate(phase4ScheduleCopy.privateDraft, { revision: document.currentRevision?.revision ?? "—" })}</p>
           <h2 id="timeline-title">{phase4ScheduleCopy.timeline}</h2>
         </div>
-        {advanced ? (
-          <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions`}>
-            {phase4ScheduleCopy.revisions}
-          </Link>
-        ) : null}
+        <Link href={`/organiser/competitions/${document.competitionId}/schedule/revisions`}>
+          {phase4ScheduleCopy.revisions}
+        </Link>
       </header>
       <div className={styles.desktopTimeline} role="region" aria-label={phase4ScheduleCopy.timelineRegion} tabIndex={0}>
         <div className={styles.axis} style={axisStyle} aria-hidden="true">
@@ -760,8 +693,8 @@ function Timeline({
               {matchesForArea(document, area.id).map(({ match, assignment }) => {
                 const left = ((Date.parse(assignment.startsAt) - start) / span) * 100;
                 const width = ((Date.parse(assignment.endsAt) - Date.parse(assignment.startsAt)) / span) * 100;
-                const locked = advanced && Boolean(lockForMatch(document.locks, match.id));
-                const conflict = advanced ? scheduleConflictForMatch(document, match.id) : null;
+                const locked = Boolean(lockForMatch(document.locks, match.id));
+                const conflict = scheduleConflictForMatch(document, match.id);
                 const timeLabel = `${formatScheduleTime(assignment.startsAt, document.timeZone)}–${formatScheduleTime(assignment.endsAt, document.timeZone)}`;
                 return (
                   <button
@@ -795,8 +728,8 @@ function Timeline({
             <h3 id={`area-${area.id}`}>{area.name}</h3>
             <ol>
               {matchesForArea(document, area.id).map(({ match, assignment }) => {
-                const locked = advanced && Boolean(lockForMatch(document.locks, match.id));
-                const conflict = advanced ? scheduleConflictForMatch(document, match.id) : null;
+                const locked = Boolean(lockForMatch(document.locks, match.id));
+                const conflict = scheduleConflictForMatch(document, match.id);
                 const timeLabel = `${formatScheduleTime(assignment.startsAt, document.timeZone)}–${formatScheduleTime(assignment.endsAt, document.timeZone)}`;
                 return (
                   <li key={match.id} data-conflict={conflict || undefined}>
@@ -837,36 +770,32 @@ function Timeline({
           </section>
         ))}
       </div>
-      {advanced ? (
-        <footer className={styles.legend}>
-          <span>
-            <LockKey /> {phase4ScheduleCopy.locked}
-          </span>
-          <span>
-            <ArrowsLeftRight /> {phase4ScheduleCopy.dependency}
-          </span>
-          <span>
-            <Warning /> {phase4ScheduleCopy.conflictLegend}
-          </span>
-        </footer>
-      ) : null}
+      <footer className={styles.legend}>
+        <span>
+          <LockKey /> {phase4ScheduleCopy.locked}
+        </span>
+        <span>
+          <ArrowsLeftRight /> {phase4ScheduleCopy.dependency}
+        </span>
+        <span>
+          <Warning /> {phase4ScheduleCopy.conflictLegend}
+        </span>
+      </footer>
     </section>
   );
 }
 
 function MatchInspector({
-  advanced,
   document,
   match,
   locked,
   onToggleLock,
   disabled,
 }: {
-  advanced: boolean;
   document: ScheduleDocument;
   match: ScheduleMatch | null;
   locked: boolean;
-  onToggleLock?: () => Promise<void>;
+  onToggleLock: () => Promise<void>;
   disabled: boolean;
 }) {
   const assignment = match ? assignmentForMatch(document.currentRevision, match.id) : null;
@@ -916,30 +845,26 @@ function MatchInspector({
               </dd>
             </div>
           </dl>
-          {advanced ? (
-            <section>
-              <h3>{phase4ScheduleCopy.dependencies}</h3>
-              {match.dependencyMatchIds.length ? (
-                <ul>
-                  {match.dependencyMatchIds.map((id) => (
-                    <li key={id}>{document.matches.find((candidate) => candidate.id === id)?.code ?? id}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p>{phase4ScheduleCopy.noDependencies}</p>
-              )}
-            </section>
-          ) : null}
-          {advanced && onToggleLock ? (
-            <button className={styles.lockButton} type="button" disabled={disabled} onClick={() => void onToggleLock()}>
-              {locked ? <LockKeyOpen /> : <LockKey />}
-              {locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}
-            </button>
-          ) : null}
+          <section>
+            <h3>{phase4ScheduleCopy.dependencies}</h3>
+            {match.dependencyMatchIds.length ? (
+              <ul>
+                {match.dependencyMatchIds.map((id) => (
+                  <li key={id}>{document.matches.find((candidate) => candidate.id === id)?.code ?? id}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>{phase4ScheduleCopy.noDependencies}</p>
+            )}
+          </section>
+          <button className={styles.lockButton} type="button" disabled={disabled} onClick={() => void onToggleLock()}>
+            {locked ? <LockKeyOpen /> : <LockKey />}
+            {locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}
+          </button>
           {assignment ? (
             <Link
               className={styles.moveLink}
-              href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move${advanced ? "?advanced=1" : ""}`}
+              href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
             >
               {phase4ScheduleCopy.move}
             </Link>
@@ -1049,30 +974,6 @@ function JobRail({
   );
 }
 
-function SimpleScheduleStatus({ job }: { job: ScheduleJob | null }) {
-  if (!job) return null;
-  const progress = v1ScheduleProgress(job);
-  const isOptimising = isV1ScheduleOptimising(job);
-  const message =
-    isOptimising || progress === "terminal"
-      ? jobStatusTitle(job)
-      : progress === "ready"
-        ? phase4ScheduleCopy.v1ReadyBody
-        : phase4ScheduleCopy.v1Creating;
-  return (
-    <p
-      className={styles.simpleStatus}
-      role="status"
-      aria-live="polite"
-      aria-busy={isOptimising || undefined}
-      data-testid="v1-schedule-status"
-    >
-      {isOptimising ? <CircleNotch className={styles.simpleStatusSpinner} aria-hidden="true" /> : null}
-      <span data-testid={isOptimising ? "v1-schedule-optimising" : undefined}>{message}</span>
-    </p>
-  );
-}
-
 function jobStatusTitle(job: ScheduleJob): string {
   switch (job.status) {
     case "queued":
@@ -1101,13 +1002,11 @@ function jobStatusMessage(job: ScheduleJob): string {
 }
 
 function ScheduleEmpty({
-  advanced,
   objective,
   disabled,
   busy,
   onGenerate,
 }: {
-  advanced: boolean;
   objective: ScheduleObjective;
   disabled: boolean;
   busy: boolean;
@@ -1117,15 +1016,13 @@ function ScheduleEmpty({
     <section className={styles.empty}>
       <CalendarBlank />
       <div>
-        <h2>{advanced ? phase4ScheduleCopy.noSchedule : phase4ScheduleCopy.v1NoSchedule}</h2>
-        <p>{advanced ? phase4ScheduleCopy.noScheduleBody : phase4ScheduleCopy.v1NoScheduleBody}</p>
+        <h2>{phase4ScheduleCopy.noSchedule}</h2>
+        <p>{phase4ScheduleCopy.noScheduleBody}</p>
       </div>
       <button type="button" disabled={disabled} onClick={() => void onGenerate()}>
         {busy
           ? phase4ScheduleCopy.generating
-          : advanced
-            ? interpolate(phase4ScheduleCopy.generateObjective, { objective: objectiveLabel(objective) })
-            : phase4ScheduleCopy.v1Generate}
+          : interpolate(phase4ScheduleCopy.generateObjective, { objective: objectiveLabel(objective) })}
       </button>
     </section>
   );

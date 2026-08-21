@@ -7,6 +7,7 @@ import {
   type SportId,
   type SportPackSettings,
 } from "@matchday/domain";
+import type { GateCOfflineCanonicalCommand } from "@matchday/contracts";
 import {
   phase2Copy,
   phase2Machine,
@@ -17,7 +18,7 @@ import {
   type ScoringSessionView,
 } from "./phase2";
 
-type ApiSessionState = {
+export type ApiSessionState = {
   competition: { slug: string; sport_code: SportId };
   sport: { pack_version: string; settings: SportPackSettings };
   match: {
@@ -28,6 +29,7 @@ type ApiSessionState = {
     away: { id: string | null; name: string | null };
   };
   access: {
+    principal_id: string;
     mode: "writer" | "candidate" | "viewer" | "transferred";
     permissions: string[];
     generation: number | null;
@@ -75,21 +77,94 @@ type ApiSessionState = {
     manual_event_seconds: number | null;
     payload: Record<string, unknown>;
   }>;
+  canonical_events?: Array<{
+    event_id: string;
+    sequence: number;
+    command: GateCOfflineCanonicalCommand;
+  }>;
 };
 
 export class ScoringTransportError extends Error {
   constructor(
     public readonly state: "access" | "conflict" | "expired" | "invalid" | "rate_limited" | "revoked" | "unavailable",
     public readonly retryAfterSeconds: number | null = null,
+    public readonly code: string | null = null,
+    public readonly currentSequence: number | null = null,
+    public readonly currentAggregateVersion: number | null = null,
   ) {
     super(state);
     this.name = "ScoringTransportError";
   }
 }
 
+export function scoringMutationIsLocked(input: {
+  writerState: string;
+  offlineState: string;
+  hasOfflineAuthorization: boolean;
+  pendingCount: number;
+  queueLimit: number;
+}): boolean {
+  const offlineRecordingCanWrite =
+    input.hasOfflineAuthorization &&
+    (input.offlineState === "offline-recording" || input.offlineState === "pending-sync");
+  const terminalOrTransitionState = new Set([
+    "preparing",
+    "reconnecting",
+    "replaying",
+    "pending-finalisation",
+    "conflict",
+    "expired",
+    "revoked",
+    "read-only",
+    "storage-error",
+  ]).has(input.offlineState);
+  return (
+    (!offlineRecordingCanWrite && input.writerState !== "active") ||
+    terminalOrTransitionState ||
+    input.pendingCount >= input.queueLimit
+  );
+}
+
+export function terminalOfflineQueueState(detail: string): "expired" | "revoked" | "read-only" | null {
+  const availability = /^Offline scoring cannot accept another command: ([a-z_]+)\.$/u.exec(detail)?.[1];
+  if (["recording_expired", "replay_expired", "pass_expired", "expired"].includes(availability ?? "")) {
+    return "expired";
+  }
+  if (availability === "revoked") return "revoked";
+  if (availability === "transferred" || availability === "completed") return "read-only";
+  return null;
+}
+
+export function recoveredOfflineState(input: {
+  status: "active" | "expired" | "revoked" | "transferred" | "completed";
+  recordingExpiresAt: string;
+  replayExpiresAt: string;
+  passExpiresAt: string;
+  pendingCount: number;
+  now?: number;
+}): "offline-recording" | "pending-sync" | "expired" | "revoked" | "read-only" {
+  if (input.status === "transferred" || input.status === "completed") return "read-only";
+  if (input.status === "revoked") return "revoked";
+  const now = input.now ?? Date.now();
+  if (
+    input.status === "expired" ||
+    now >= Date.parse(input.recordingExpiresAt) ||
+    now >= Date.parse(input.replayExpiresAt) ||
+    now >= Date.parse(input.passExpiresAt)
+  ) {
+    return "expired";
+  }
+  return input.pendingCount > 0 ? "pending-sync" : "offline-recording";
+}
+
 async function responsePayload<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    const payload = (await response.json().catch(() => null)) as {
+      error?: string;
+      code?: string;
+      current_sequence?: number;
+      current_aggregate_version?: number;
+    } | null;
     const state =
       payload?.error === "conflict" ||
       payload?.error === "expired" ||
@@ -100,10 +175,26 @@ async function responsePayload<T>(response: Response): Promise<T> {
         : response.status === 400 || response.status === 401 || response.status === 403
           ? "access"
           : "unavailable";
-    const retryAfter = Number(response.headers.get("retry-after"));
-    throw new ScoringTransportError(state, Number.isFinite(retryAfter) ? retryAfter : null);
+    const retryAfterHeader = response.headers.get("retry-after");
+    const retryAfter = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader);
+    throw new ScoringTransportError(
+      state,
+      Number.isFinite(retryAfter) ? retryAfter : null,
+      typeof payload?.code === "string" ? payload.code : null,
+      Number.isSafeInteger(payload?.current_sequence) ? Number(payload?.current_sequence) : null,
+      Number.isSafeInteger(payload?.current_aggregate_version) ? Number(payload?.current_aggregate_version) : null,
+    );
   }
   return response.json() as Promise<T>;
+}
+
+async function scoringFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    if (error instanceof ScoringTransportError) throw error;
+    throw new ScoringTransportError("unavailable");
+  }
 }
 
 function manualClock(value: number | null): string {
@@ -126,7 +217,7 @@ function eventType(event: ApiSessionState["events"][number]): string | null {
   return null;
 }
 
-function sessionView(state: ApiSessionState): ScoringSessionView {
+export function scoringSessionView(state: ApiSessionState): ScoringSessionView {
   if (state.sport.pack_version !== SPORT_PACKS[state.competition.sport_code].version) {
     throw new ScoringTransportError("unavailable");
   }
@@ -153,6 +244,7 @@ function sessionView(state: ApiSessionState): ScoringSessionView {
     ];
   });
   return {
+    principalId: state.access.principal_id,
     competitionSlug: state.competition.slug,
     sportId: state.competition.sport_code,
     sportPackVersion: state.sport.pack_version,
@@ -192,6 +284,11 @@ function sessionView(state: ApiSessionState): ScoringSessionView {
       })),
     },
     events,
+    canonicalEvents: (state.canonical_events ?? []).map((event) => ({
+      eventId: event.event_id,
+      sequence: event.sequence,
+      command: event.command,
+    })),
     throughSequence: state.through_sequence,
     mode: state.access.mode,
     permissions: state.access.permissions,
@@ -256,7 +353,7 @@ function appendBody(command: ScoringEventCommand): Record<string, unknown> {
 
 class ApiScoringCommandPort implements ScoringCommandPort {
   async exchangeAccess(input: ScoringAccessInput): Promise<ScoringSessionView> {
-    const response = await fetch("/api/scoring/access/exchange", {
+    const response = await scoringFetch("/api/scoring/access/exchange", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(
@@ -266,17 +363,17 @@ class ApiScoringCommandPort implements ScoringCommandPort {
       ),
       credentials: "same-origin",
     });
-    return sessionView(await responsePayload<ApiSessionState>(response));
+    return scoringSessionView(await responsePayload<ApiSessionState>(response));
   }
 
   async recoverSession(signal?: AbortSignal): Promise<ScoringSessionView | null> {
-    const response = await fetch("/api/scoring/session", {
+    const response = await scoringFetch("/api/scoring/session", {
       cache: "no-store",
       credentials: "same-origin",
       signal,
     });
     if (response.status === 204 || response.status === 401) return null;
-    return sessionView(await responsePayload<ApiSessionState>(response));
+    return scoringSessionView(await responsePayload<ApiSessionState>(response));
   }
 
   async heartbeat(
@@ -287,7 +384,7 @@ class ApiScoringCommandPort implements ScoringCommandPort {
     },
     signal?: AbortSignal,
   ): Promise<ScoringSessionView> {
-    const response = await fetch("/api/scoring/session/heartbeat", {
+    const response = await scoringFetch("/api/scoring/session/heartbeat", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -298,14 +395,14 @@ class ApiScoringCommandPort implements ScoringCommandPort {
       credentials: "same-origin",
       signal,
     });
-    return sessionView(await responsePayload<ApiSessionState>(response));
+    return scoringSessionView(await responsePayload<ApiSessionState>(response));
   }
 
   async requestTakeover(input: {
     pendingEventCount: number;
     pendingThroughSequence: number | null;
   }): Promise<{ status: "pending"; requestId: string }> {
-    const response = await fetch("/api/scoring/takeover", {
+    const response = await scoringFetch("/api/scoring/takeover", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
@@ -315,31 +412,76 @@ class ApiScoringCommandPort implements ScoringCommandPort {
   }
 
   async appendEvent(command: ScoringEventCommand): Promise<ScoringAppendReceipt> {
-    const response = await fetch("/api/scoring/events", {
+    const response = await scoringFetch("/api/scoring/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(appendBody(command)),
       credentials: "same-origin",
     });
-    const receipt = await responsePayload<{ sequence: number }>(response);
-    return { clientEventId: command.clientEventId, sequence: receipt.sequence, syncState: "acknowledged" };
+    const receipt = await responsePayload<{
+      client_event_id: string;
+      event_id: string;
+      command_fingerprint: string;
+      duplicate: boolean;
+      sequence: number;
+      aggregate_version: number;
+      server_received_at: string;
+    }>(response);
+    return {
+      clientEventId: receipt.client_event_id,
+      eventId: receipt.event_id,
+      commandFingerprint: receipt.command_fingerprint,
+      duplicate: receipt.duplicate,
+      sequence: receipt.sequence,
+      aggregateVersion: receipt.aggregate_version,
+      serverReceivedAt: receipt.server_received_at,
+      syncState: "acknowledged",
+    };
   }
 
   async finalizeResult(command: {
+    clientEventId: string;
     matchId: string;
     expectedSequence: number;
-  }): Promise<{ receiptId: string; publishedAt: string }> {
-    const clientEventId = crypto.randomUUID();
-    const response = await fetch("/api/scoring/finalise", {
+    occurredAt: string;
+  }) {
+    const response = await scoringFetch("/api/scoring/finalise", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ client_event_id: clientEventId, expected_sequence: command.expectedSequence }),
+      body: JSON.stringify({
+        client_event_id: command.clientEventId,
+        expected_sequence: command.expectedSequence,
+        occurred_at: command.occurredAt,
+      }),
       credentials: "same-origin",
     });
-    const receipt = await responsePayload<{ match_id?: string; result_version?: number }>(response);
+    const receipt = await responsePayload<{
+      client_event_id: string;
+      event_id: string;
+      command_fingerprint: string;
+      duplicate: boolean;
+      match_id: string;
+      sequence: number;
+      aggregate_version: number;
+      result_version: number;
+      publication_version: number;
+      server_received_at: string;
+      published_at: string;
+    }>(response);
     return {
-      receiptId: `${receipt.match_id ?? command.matchId}:v${receipt.result_version ?? 0}`,
-      publishedAt: new Date().toISOString(),
+      clientEventId: receipt.client_event_id,
+      eventId: receipt.event_id,
+      commandFingerprint: receipt.command_fingerprint,
+      duplicate: receipt.duplicate,
+      sequence: receipt.sequence,
+      aggregateVersion: receipt.aggregate_version,
+      serverReceivedAt: receipt.server_received_at,
+      syncState: "acknowledged" as const,
+      receiptId: `${receipt.match_id}:v${receipt.result_version}`,
+      matchId: receipt.match_id,
+      resultVersion: receipt.result_version,
+      publicationVersion: receipt.publication_version,
+      publishedAt: receipt.published_at,
     };
   }
 }
@@ -351,14 +493,38 @@ export async function refreshScoringSessionAccess(
     pendingEventCount: number;
     pendingThroughSequence: number | null;
   },
-  recoverAuthoritatively: boolean,
+  recoveryMode: "none" | "promotion" | "renewal",
   signal?: AbortSignal,
 ): Promise<ScoringSessionView | null> {
-  if (recoverAuthoritatively) {
+  if (recoveryMode !== "none") {
     const recovered = await port.recoverSession(signal);
-    if (!recovered || recovered.mode !== "writer" || recovered.readOnly) return recovered;
+    if (recoveryMode === "promotion" || !recovered || recovered.mode !== "writer" || recovered.readOnly) {
+      return recovered;
+    }
   }
   return port.heartbeat(input, signal);
+}
+
+export type ScoringRefreshWriterState =
+  | "active"
+  | "candidate"
+  | "checking"
+  | "conflict"
+  | "expired"
+  | "expiring"
+  | "rate-limited"
+  | "read-only"
+  | "revoked"
+  | "transferred";
+
+export function scoringRefreshFailureState(
+  currentState: ScoringRefreshWriterState,
+  error: unknown,
+  sessionActive: boolean,
+): ScoringRefreshWriterState | null {
+  if (!sessionActive) return null;
+  if (error instanceof ScoringTransportError && error.state !== "unavailable") return null;
+  return currentState === "active" ? "expiring" : currentState;
 }
 
 class DemoScoringCommandPort implements ScoringCommandPort {
@@ -372,6 +538,7 @@ class DemoScoringCommandPort implements ScoringCommandPort {
     const pack = SPORT_PACKS[this.sportId];
     const reduced = reduceFiveSportScoreEvents(this.sportId, this.canonicalEvents, pack.recommendedSettings);
     return {
+      principalId: "d".repeat(64),
       competitionSlug: phase2Machine.singaporeOpenSlug,
       sportId: this.sportId,
       sportPackVersion: pack.version,
@@ -417,6 +584,7 @@ class DemoScoringCommandPort implements ScoringCommandPort {
         })),
       },
       events: [],
+      canonicalEvents: [],
       throughSequence: this.sequence,
       mode: "writer",
       permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
@@ -429,9 +597,8 @@ class DemoScoringCommandPort implements ScoringCommandPort {
   }
 
   async exchangeAccess(input: ScoringAccessInput): Promise<ScoringSessionView> {
-    const accepted =
-      input.shortCode?.trim().toUpperCase() === "POLO-12" ||
-      input.token === "demo-phase2-scoring-access-token-000000000001";
+    const rawCode = input.shortCode?.replace(/[\s-]/g, "").toUpperCase() ?? "";
+    const accepted = rawCode === "POLO12" || input.token === "demo-phase2-scoring-access-token-000000000001";
     if (!accepted) throw new ScoringTransportError("access");
     this.active = true;
     return this.session();
@@ -475,11 +642,34 @@ class DemoScoringCommandPort implements ScoringCommandPort {
       this.sequence -= 1;
       throw error;
     }
-    return { clientEventId: command.clientEventId, sequence: this.sequence, syncState: "acknowledged" };
+    return {
+      clientEventId: command.clientEventId,
+      eventId: command.clientEventId,
+      commandFingerprint: "0".repeat(64),
+      duplicate: false,
+      sequence: this.sequence,
+      aggregateVersion: this.sequence,
+      serverReceivedAt: command.occurredAt ?? new Date().toISOString(),
+      syncState: "pending",
+    };
   }
 
-  async finalizeResult(): Promise<{ receiptId: string; publishedAt: string }> {
-    return { receiptId: "R-2026-09-12-M12-04", publishedAt: "10:24 SGT" };
+  async finalizeResult(command: { clientEventId: string; matchId: string; occurredAt: string }) {
+    return {
+      clientEventId: command.clientEventId,
+      eventId: command.clientEventId,
+      commandFingerprint: "0".repeat(64),
+      duplicate: false,
+      sequence: this.sequence + 1,
+      aggregateVersion: this.sequence + 1,
+      serverReceivedAt: command.occurredAt,
+      syncState: "pending" as const,
+      receiptId: "R-2026-09-12-M12-04",
+      matchId: command.matchId,
+      resultVersion: 1,
+      publicationVersion: 1,
+      publishedAt: "10:24 SGT",
+    };
   }
 }
 

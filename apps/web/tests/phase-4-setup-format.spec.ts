@@ -72,7 +72,7 @@ test("assisted setup sends an optimistic server transition and surfaces conflict
 });
 
 test("manual and visual format modes edit the same canonical stage", async ({ page }) => {
-  await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+  await page.goto("/organiser/competitions/singapore-open/format");
   await dismissConsent(page);
   await expect(page.getByTestId("phase4-format-designer")).toBeVisible();
   await page.getByRole("button", { name: /Manual/ }).click();
@@ -187,7 +187,6 @@ test.describe("authoritative format round trip", () => {
             status: "draft",
             definition_hash: graphHash,
             document: savedDocument,
-            materialised: true,
             created_at: "2026-07-22T08:00:00.000Z",
             published_at: null,
           },
@@ -213,7 +212,6 @@ test.describe("authoritative format round trip", () => {
           division_id: "open-division",
           status: "published",
           definition_hash: graphHash,
-          materialised: true,
           document: savedDocument,
           created_at: "2026-07-22T08:00:00.000Z",
           published_at: "2026-07-22T08:01:00.000Z",
@@ -222,7 +220,7 @@ test.describe("authoritative format round trip", () => {
       });
     });
 
-    await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+    await page.goto("/organiser/competitions/singapore-open/format");
     await dismissConsent(page);
     await page.getByRole("button", { name: "Manual", exact: true }).click();
     await page.getByLabel("Stage name").first().fill("Opening pools");
@@ -306,7 +304,7 @@ test.describe("authoritative format round trip", () => {
       });
     });
 
-    await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+    await page.goto("/organiser/competitions/singapore-open/format");
     await dismissConsent(page);
     await page.getByRole("button", { name: "Validate graph" }).click();
     await page.getByRole("button", { name: "Templates" }).click();
@@ -364,7 +362,6 @@ test("server validation controls preview and materialisation state", async ({ pa
           status: "draft",
           definition_hash: "demo-format-definition-hash",
           document: validatedDocument,
-          materialised: true,
           created_at: "2026-07-20T04:00:00.000Z",
           published_at: null,
         },
@@ -375,7 +372,7 @@ test("server validation controls preview and materialisation state", async ({ pa
       }),
     });
   });
-  await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+  await page.goto("/organiser/competitions/singapore-open/format");
   await dismissConsent(page);
   await page.getByRole("button", { name: "Validate graph" }).click();
   await expect(page.getByText("Format valid", { exact: true })).toBeVisible();

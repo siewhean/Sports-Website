@@ -12,12 +12,12 @@ export default defineConfig({
   outputDir: process.env.PHASE4_E2E_OUTPUT_DIR,
   use: {
     baseURL: process.env.PHASE4_E2E_WEB_BASE_URL ?? "http://localhost:3103",
-    ignoreHTTPSErrors: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   projects: [
     { name: "phase-4-real-phone-chromium", use: { ...devices["Pixel 7"] } },
+    { name: "phase-4-real-phone-webkit", use: { ...devices["iPhone 13"] } },
     {
       name: "phase-4-real-tablet-webkit",
       use: { ...devices["iPad Pro 11"] },
@@ -25,6 +25,14 @@ export default defineConfig({
     {
       name: "phase-4-real-desktop-chromium",
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1000 } },
+    },
+    {
+      name: "phase-4-real-desktop-webkit",
+      use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 1000 } },
+    },
+    {
+      name: "phase-4-real-desktop-firefox",
+      use: { ...devices["Desktop Firefox"], viewport: { width: 1440, height: 1000 } },
     },
   ],
 });

@@ -98,6 +98,7 @@ export const messages = {
     organisationsFailed: "Your organisations could not be loaded. Try again before creating a competition.",
     noWritableOrganisation: "You need owner or organiser access to create a competition.",
     retryOrganisations: "Retry organisation list",
+    signInToLoadOrganisations: "Sign in to load organisations",
     ownerRole: "Owner",
     organiserRole: "Organiser",
     name: "Competition name",

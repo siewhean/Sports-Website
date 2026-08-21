@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   parseCreatedDivision,
   parseCreatedEntry,
@@ -14,7 +15,6 @@ import styles from "./EntriesEditor.module.css";
 type ErrorEnvelope = { error?: { code?: unknown; message?: unknown } };
 type PendingCommand = { fingerprint: string; key: string };
 type CommandResult = { payload: unknown | null; clearKey: boolean };
-type PendingDelete = { divisionId: string; entryId: string; entryName: string; revision: number };
 
 function responseMessage(status: number, payload: unknown): string {
   if (status === 401 || status === 403) return phase3EntriesCopy.authRequired;
@@ -34,6 +34,7 @@ export function EntriesEditor({
   initialDivisions: readonly EntryEditorDivision[];
   canEdit: boolean;
 }) {
+  const router = useRouter();
   const [divisions, setDivisions] = useState(initialDivisions);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -41,8 +42,6 @@ export function EntriesEditor({
   const commandRef = useRef<string | null>(null);
   const divisionCommandRef = useRef<PendingCommand | null>(null);
   const entryCommandRefs = useRef(new Map<string, PendingCommand>());
-  const deleteDialogRef = useRef<HTMLDialogElement>(null);
-  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const activeCount = totalActiveEntries(divisions);
 
   async function runCommand(commandId: string, operation: () => Promise<Response>): Promise<CommandResult> {
@@ -104,6 +103,7 @@ export function EntriesEditor({
     setDivisions((current) => [...current, division]);
     setMessage(phase3EntriesCopy.divisionCreated);
     form.reset();
+    router.refresh();
   }
 
   async function addEntry(event: FormEvent<HTMLFormElement>, divisionId: string) {
@@ -112,8 +112,7 @@ export function EntriesEditor({
     const form = event.currentTarget;
     const data = new FormData(form);
     const name = String(data.get(phase3EntriesMachine.entryNameField) ?? "").trim();
-    const rawSeed = String(data.get(phase3EntriesMachine.entrySeedField) ?? "").trim();
-    const seed = rawSeed ? Number(rawSeed) : null;
+    const seed = Number(data.get(phase3EntriesMachine.entrySeedField));
     const fingerprint = JSON.stringify({ divisionId, name, seed });
     const existing = entryCommandRefs.current.get(divisionId);
     const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
@@ -127,7 +126,7 @@ export function EntriesEditor({
           body: JSON.stringify({
             name,
             entry_type: phase3EntriesMachine.teamEntryType,
-            ...(seed === null ? {} : { seed }),
+            seed,
             idempotency_key: pending.key,
           }),
         },
@@ -147,96 +146,7 @@ export function EntriesEditor({
     );
     setMessage(phase3EntriesCopy.entryCreated);
     form.reset();
-  }
-
-  async function updateEntry(event: FormEvent<HTMLFormElement>, divisionId: string, entryId: string, revision: number) {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    const name = String(data.get(phase3EntriesMachine.entryNameField) ?? "").trim();
-    const rawSeed = String(data.get(phase3EntriesMachine.entrySeedField) ?? "").trim();
-    const seed = rawSeed ? Number(rawSeed) : null;
-    const fingerprint = JSON.stringify({ divisionId, entryId, revision, name, seed });
-    const existing = entryCommandRefs.current.get(`update:${entryId}`);
-    const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
-    entryCommandRefs.current.set(`update:${entryId}`, pending);
-    const result = await runCommand(pending.key, () =>
-      fetch(
-        `/api/phase3/competitions/${encodeURIComponent(competitionId)}/divisions/${encodeURIComponent(divisionId)}/entries/${encodeURIComponent(entryId)}`,
-        {
-          method: phase3EntriesMachine.patch,
-          headers: { "content-type": phase3EntriesMachine.applicationJson },
-          body: JSON.stringify({ revision, name, seed, idempotency_key: pending.key }),
-        },
-      ),
-    );
-    const updated = parseCreatedEntry(result.payload, divisionId);
-    if (!updated || updated.id !== entryId) {
-      if (result.clearKey) entryCommandRefs.current.delete(`update:${entryId}`);
-      return;
-    }
-    entryCommandRefs.current.delete(`update:${entryId}`);
-    setDivisions((current) =>
-      current.map((division) =>
-        division.id === divisionId
-          ? { ...division, entries: division.entries.map((entry) => (entry.id === entryId ? updated : entry)) }
-          : division,
-      ),
-    );
-    setMessage(phase3EntriesCopy.entryUpdated);
-  }
-
-  async function removeEntry(divisionId: string, entryId: string, revision: number) {
-    if (!canEdit) return;
-    const fingerprint = JSON.stringify({ divisionId, entryId, revision });
-    const existing = entryCommandRefs.current.get(`delete:${entryId}`);
-    const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
-    entryCommandRefs.current.set(`delete:${entryId}`, pending);
-    const result = await runCommand(pending.key, () =>
-      fetch(
-        `/api/phase3/competitions/${encodeURIComponent(competitionId)}/divisions/${encodeURIComponent(divisionId)}/entries/${encodeURIComponent(entryId)}`,
-        {
-          method: phase3EntriesMachine.delete,
-          headers: { "content-type": phase3EntriesMachine.applicationJson },
-          body: JSON.stringify({ revision, idempotency_key: pending.key }),
-        },
-      ),
-    );
-    if (
-      !result.payload ||
-      typeof result.payload !== "object" ||
-      (result.payload as { deleted?: unknown }).deleted !== true
-    ) {
-      if (result.clearKey) entryCommandRefs.current.delete(`delete:${entryId}`);
-      return;
-    }
-    entryCommandRefs.current.delete(`delete:${entryId}`);
-    setDivisions((current) =>
-      current.map((division) =>
-        division.id === divisionId
-          ? { ...division, entries: division.entries.filter((entry) => entry.id !== entryId) }
-          : division,
-      ),
-    );
-    setMessage(phase3EntriesCopy.entryRemoved);
-  }
-
-  function openDeleteDialog(deleteRequest: PendingDelete) {
-    setPendingDelete(deleteRequest);
-    queueMicrotask(() => {
-      if (!deleteDialogRef.current?.open) deleteDialogRef.current?.showModal();
-    });
-  }
-
-  function cancelDelete() {
-    deleteDialogRef.current?.close();
-  }
-
-  function confirmDelete(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const request = pendingDelete;
-    if (!request) return;
-    deleteDialogRef.current?.close();
-    void removeEntry(request.divisionId, request.entryId, request.revision);
+    router.refresh();
   }
 
   return (
@@ -315,49 +225,6 @@ export function EntriesEditor({
                       <span>{entry.seed ?? "—"}</span>
                       <strong>{entry.name}</strong>
                       <small>{entry.status}</small>
-                      {canEdit ? (
-                        <details>
-                          <summary>{phase3EntriesCopy.editEntry}</summary>
-                          <form onSubmit={(event) => void updateEntry(event, division.id, entry.id, entry.revision)}>
-                            <label>
-                              {phase3EntriesCopy.entryName}
-                              <input
-                                name={phase3EntriesMachine.entryNameField}
-                                defaultValue={entry.name}
-                                maxLength={120}
-                                required
-                              />
-                            </label>
-                            <label>
-                              {phase3EntriesCopy.optionalSeed}
-                              <input
-                                name={phase3EntriesMachine.entrySeedField}
-                                type="number"
-                                min={1}
-                                max={48}
-                                defaultValue={entry.seed ?? ""}
-                              />
-                            </label>
-                            <button type="submit" disabled={busy}>
-                              {phase3EntriesCopy.saveEntry}
-                            </button>
-                          </form>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() =>
-                              openDeleteDialog({
-                                divisionId: division.id,
-                                entryId: entry.id,
-                                entryName: entry.name,
-                                revision: entry.revision,
-                              })
-                            }
-                          >
-                            {phase3EntriesCopy.removeEntry}
-                          </button>
-                        </details>
-                      ) : null}
                     </li>
                   ))}
                 </ol>
@@ -370,13 +237,14 @@ export function EntriesEditor({
                   <input name={phase3EntriesMachine.entryNameField} maxLength={120} required disabled={!canEdit} />
                 </label>
                 <label>
-                  {phase3EntriesCopy.optionalSeed}
+                  {phase3EntriesCopy.seed}
                   <input
                     name={phase3EntriesMachine.entrySeedField}
                     type="number"
                     min={1}
                     max={48}
-                    placeholder={String(nextSeed)}
+                    defaultValue={nextSeed}
+                    required
                     disabled={!canEdit}
                   />
                 </label>
@@ -388,31 +256,6 @@ export function EntriesEditor({
           );
         })}
       </div>
-
-      <dialog
-        ref={deleteDialogRef}
-        onClose={() => setPendingDelete(null)}
-        aria-describedby="entry-delete-description"
-        aria-labelledby="entry-delete-title"
-      >
-        <form onSubmit={confirmDelete}>
-          <h2 id="entry-delete-title">{phase3EntriesCopy.confirmRemoveEntry}</h2>
-          <p id="entry-delete-description">
-            {pendingDelete
-              ? phase3EntriesCopy.removeEntryDescription.replace(
-                  phase3EntriesMachine.entryNameToken,
-                  pendingDelete.entryName,
-                )
-              : ""}
-          </p>
-          <button type="button" onClick={cancelDelete} disabled={busy}>
-            {phase3EntriesCopy.cancel}
-          </button>
-          <button type="submit" disabled={busy || !pendingDelete}>
-            {phase3EntriesCopy.removeEntry}
-          </button>
-        </form>
-      </dialog>
 
       <p className={error ? styles.error : styles.status} role={error ? "alert" : "status"} aria-live="polite">
         {error || message}

@@ -9,31 +9,6 @@ import {
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-test("V1 organiser navigation shows only the primary journey", async ({ page }) => {
-  await page.goto("/organiser/competitions/singapore-open");
-  await dismissConsent(page);
-
-  const navigation = page.getByRole("navigation", { name: "Competition workspace" });
-  await expect(navigation.getByRole("link")).toHaveText([
-    "OverviewOverview",
-    "TeamsTeams",
-    "CapacityCapacity",
-    "FormatFormat",
-    "ScheduleSchedule",
-    "ResultsResults",
-    "PublishPublish",
-    "Back to MATCHDAY",
-  ]);
-  await expect(navigation.getByText("Setup", { exact: true })).toHaveCount(0);
-  await expect(navigation.getByText("Rules", { exact: true })).toHaveCount(0);
-  await expect(navigation.getByText("Access", { exact: true })).toHaveCount(0);
-  await expect(navigation.getByText("Audit", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Issue scorer access" })).toHaveAttribute(
-    "href",
-    "/organiser/competitions/cmp_sgopen_2026/access",
-  );
-});
-
 test("canonical routes expose the complete 14-step competition slice", async ({ page }) => {
   const routeEvidence = [
     ["/organiser/competitions/singapore-open/setup", "Set the event capacity", "Singapore Open 2026"],
@@ -41,15 +16,10 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
     ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Open division"],
     ["/organiser/competitions/singapore-open/entries", "Divisions and entries", "Women's division"],
     ["/organiser/competitions/singapore-open/capacity", "Capacity", "Required match slots"],
-    [
-      "/organiser/competitions/singapore-open/format",
-      "Choose a format that fits your competition",
-      "Show format options",
-    ],
-    ["/organiser/competitions/singapore-open/format?advanced=1", "Competition format", "Group A"],
-    ["/organiser/competitions/singapore-open/format?advanced=1", "Competition format", "Semifinals"],
+    ["/organiser/competitions/singapore-open/format", "Competition format", "Group A"],
+    ["/organiser/competitions/singapore-open/format", "Competition format", "Semifinals"],
     ["/organiser/competitions/singapore-open/schedule", "Schedule", "Playing-area timeline"],
-    ["/organiser/competitions/singapore-open/publish", "Publication", "Schedule revision 4"],
+    ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
     ["/score", "Marina Blue", "Validate access"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Results"],
@@ -91,11 +61,8 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   const scoringControls = page.getByRole("region", { name: "Scoring controls" });
   await expect(scoringControls).toContainText("Marina Blue1");
   await expect(scoringControls).toContainText("Harbour Gold0");
-  await page.getByRole("button", { name: "Match events" }).click();
-  const eventHistory = page.getByRole("dialog", { name: "Match events" });
-  await expect(eventHistory).toContainText("Aisha Tan");
-  await eventHistory.getByRole("button", { name: "Close match events" }).click();
-  await expect(page.getByText("Synced")).toBeVisible();
+  await expect(page.locator(".p2-event-log")).toContainText("Aisha Tan");
+  await expect(page.getByText("1 event pending sync")).toBeVisible();
 
   await page.getByRole("button", { name: "Review final score" }).click();
   await expect(page.getByRole("heading", { name: "Marina Blue 1–0 Harbour Gold" })).toBeVisible();
@@ -106,60 +73,6 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
     "href",
     "/competitions/singapore-open",
   );
-});
-
-test("default Canoe Polo scoring keeps advanced operations opt-in", async ({ page }) => {
-  await openPhase2Scorekeeper(page);
-
-  const remoteGoals = page.locator('[data-control-id="goal"]');
-  await expect(remoteGoals).toHaveCount(2);
-  await expect(page.locator(".p5-scoring-device")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Advanced scoring controls" })).toBeVisible();
-
-  await page.locator("summary").filter({ hasText: "More match actions" }).click();
-  await expect(page.getByRole("button", { name: "Green card Marina Blue" })).toBeVisible();
-
-  await page.getByRole("link", { name: "Advanced scoring controls" }).click();
-  await expect(page.locator(".p5-scoring-device")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Simple scoring controls" })).toBeVisible();
-});
-
-test("default Canoe Polo scoring owns the viewport and reveals event history in a contained sheet", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await openPhase2Scorekeeper(page);
-
-  await expect(page.locator(".p2-score--simple")).toBeVisible();
-  await expect(page.locator(".p2-event-log:visible")).toHaveCount(0);
-  const documentMetrics = await page.evaluate(() => ({
-    clientHeight: document.documentElement.clientHeight,
-    scrollHeight: document.documentElement.scrollHeight,
-  }));
-  expect(documentMetrics.scrollHeight).toBeLessThanOrEqual(documentMetrics.clientHeight);
-  await page.evaluate(() => window.scrollTo(0, 200));
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-
-  await page.getByRole("button", { name: "Match events" }).click();
-  const history = page.getByRole("dialog", { name: "Match events" });
-  await expect(history).toBeVisible();
-  await expect(history).toContainText("No events recorded");
-  await history.getByRole("button", { name: "Close match events" }).click();
-  await expect(history).toBeHidden();
-});
-
-test("the action sheet dismisses from its handle without moving the scorekeeper page", async ({ page }) => {
-  await openPhase2Scorekeeper(page);
-  await page.getByRole("button", { name: "Goal Marina Blue" }).click();
-  const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
-  await expect(confirmation).toBeVisible();
-
-  const handle = confirmation.locator(".p2-goal-sheet__handle");
-  await handle.dispatchEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientY: 100 });
-  await confirmation.dispatchEvent("pointermove", { pointerId: 1, pointerType: "touch", clientY: 196 });
-
-  await expect(confirmation).toBeHidden();
-  await expect(page.getByRole("button", { name: "Goal Marina Blue" })).toBeVisible();
 });
 
 test("public projection is complete in raw server-rendered HTML", async ({ request }) => {

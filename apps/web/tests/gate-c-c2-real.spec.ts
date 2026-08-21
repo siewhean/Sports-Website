@@ -312,7 +312,7 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     await page.reload();
     await expect(page.getByRole("heading", { name: "Scoring event history" })).toBeVisible();
     const correction = await correctThroughUi(page, sport, target.event_id);
-    expect(correction.result_version).toBe(sport.secondaryDivision ? 4 : 3);
+    expect(correction.result_version).toBe(sport.secondaryDivision ? 3 : 2);
     observedResultVersions.push(correction.result_version);
     observedSteps.push("organiser_correction");
     audit = await sameOriginJson<AuditDocument>(page, auditPath);
@@ -322,11 +322,11 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     await page.goto("/score");
     await expect(page.getByRole("button", { name: "Review final score" })).toBeVisible();
     const finalAfterReopen = await finaliseThroughUi(page);
-    expect(finalAfterReopen.result_version).toBe(sport.secondaryDivision ? 6 : 5);
+    expect(finalAfterReopen.result_version).toBe(sport.secondaryDivision ? 4 : 3);
     observedResultVersions.push(finalAfterReopen.result_version);
     observedSteps.push("refinalised");
     audit = await sameOriginJson<AuditDocument>(page, auditPath);
-    expect(audit.result?.result_version).toBe(sport.secondaryDivision ? 6 : 5);
+    expect(audit.result?.result_version).toBe(sport.secondaryDivision ? 4 : 3);
 
     await page.goto(`/organiser/competitions/${sport.competitionId}/results?match=${sport.matchId}`);
     await expect(page.getByRole("heading", { name: "Calculated tables" })).toBeVisible();

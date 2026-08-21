@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { interpolate, opaqueId } from "@matchday/ui";
+import { interpolate } from "@matchday/ui";
 import {
   ArrowLeft,
   CalendarBlank,
@@ -186,13 +186,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
         setError(phase4ScheduleCopy.malformed);
         return;
       }
-      const isAdvanced =
-        typeof window !== "undefined" && new URLSearchParams(window.location.search).get(opaqueId("advanced")) === "1";
-      const query = new URLSearchParams({
-        match: match.id,
-        notice: phase4ScheduleMachine.moveNotice,
-        ...(isAdvanced ? { advanced: "1" } : {}),
-      });
+      const query = new URLSearchParams({ match: match.id, notice: phase4ScheduleMachine.moveNotice });
       router.replace(`/organiser/competitions/${document.competitionId}/schedule?${query.toString()}`, {
         scroll: false,
       });
@@ -203,8 +197,6 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
     }
   }
 
-  const isAdvanced =
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get(opaqueId("advanced")) === "1";
   const consequences = displayedValidation?.consequences ?? emptyConsequences;
   return (
     <main className={styles.page} data-testid="phase4-move-flow">
@@ -212,7 +204,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
         {validating ? phase4ScheduleCopy.validating : error}
       </p>
       <header className={styles.topbar}>
-        <Link href={`/organiser/competitions/${document.competitionId}/schedule${isAdvanced ? "?advanced=1" : ""}`}>
+        <Link href={`/organiser/competitions/${document.competitionId}/schedule`}>
           <ArrowLeft />
           {phase4ScheduleCopy.backToSchedule}
         </Link>

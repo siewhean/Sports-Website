@@ -3,7 +3,7 @@ import "server-only";
 import { interpolate } from "@matchday/ui";
 import { cookies, headers } from "next/headers";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { requestCanForwardSessionCookie } from "@/lib/phase3-origin";
 import {
   phase4ScheduleCopy,
   parseScheduleJobView,
@@ -51,8 +51,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
-  if (!cookieHostMatches(host, apiUrl.hostname)) return null;
+  if (!requestCanForwardSessionCookie(requestHeaders, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN)) return null;
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"] as const) {
     const value = store.get(name)?.value;

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "candidateSha": "8f7196478ce653b6f6dbb2940d89c92ae3d7cd92",
+  "branch": "integration/gate-c-final",
+  "releaseGate": "GATE_C_FINAL",
+  "status": "CERTIFIED",
+  "sealedAt": "2026-08-20T16:00:46.380Z",
+  "defects": {
+    "p0Count": 0,
+    "p1Count": 0,
+    "p2Count": 0
+  },
+  "verdict": "PASS",
+  "milestonesPassed": ["M1", "M2", "M3", "M4", "M5"],
+  "artifacts": ["gate-c-c3-final-evidence.json", "gate-c-c5-final-evidence.json", "gate-c-final-evidence.json"]
+}

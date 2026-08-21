@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,61 +21,27 @@ import { PostgresIdentityUnitOfWork } from "../src/identity-postgres.js";
 import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
+import {
+  createGateCC5ScoreWriteResource,
+  GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS,
+  issueGateCC5ScoreWriteSessions,
+  type GateCC5ScoreWriteResource,
+} from "../src/gate-c-c5-score-write.js";
+import { createGateCC5PublicCurrentExecutor } from "../src/gate-c-c5-public-current.js";
+import {
+  createGateCC5PublicResultConvergenceExecutor,
+  type GateCC5PublicResultConvergenceTarget,
+} from "../src/gate-c-c5-public-result-convergence.js";
+import { createGateCC5LeaseTakeoverExecutor, type GateCC5LeaseSession } from "../src/gate-c-c5-lease-takeover.js";
+import type { C5WorkloadExecutor } from "@matchday/observability";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
-import { verifiedScoringRateLimitSessionId } from "../src/scoring-rate-limit-identity.js";
 
-const defaultApiPort = 4101;
-const defaultWebPort = 3103;
-const minimumUnprivilegedPort = 1024;
-const maximumPort = 65_535;
-const realE2eProjectNames = [
-  "phase-4-real-phone-chromium",
-  "phase-4-real-tablet-webkit",
-  "phase-4-real-desktop-chromium",
-] as const;
-type RealE2eProjectName = (typeof realE2eProjectNames)[number];
-
-export function resolveHarnessPorts(environment: NodeJS.ProcessEnv): { apiPort: number; webPort: number } {
-  const resolvePort = (name: "PHASE4_E2E_API_PORT" | "PHASE4_E2E_WEB_PORT", fallback: number): number => {
-    const raw = environment[name];
-    if (raw === undefined || raw.trim() === "") return fallback;
-    if (!/^\d+$/.test(raw)) throw new Error(`${name} must be an integer port, received ${JSON.stringify(raw)}`);
-    const port = Number(raw);
-    if (!Number.isSafeInteger(port) || port < minimumUnprivilegedPort || port > maximumPort)
-      throw new Error(
-        `${name} must be between ${minimumUnprivilegedPort} and ${maximumPort}, received ${JSON.stringify(raw)}`,
-      );
-    return port;
-  };
-
-  const apiPort = resolvePort("PHASE4_E2E_API_PORT", defaultApiPort);
-  const webPort = resolvePort("PHASE4_E2E_WEB_PORT", defaultWebPort);
-  if (apiPort === webPort) throw new Error("PHASE4_E2E_API_PORT and PHASE4_E2E_WEB_PORT must be different");
-  return { apiPort, webPort };
-}
-
-export function resolveHarnessRunCount(environment: NodeJS.ProcessEnv): 1 | 2 {
-  const raw = environment.PHASE4_E2E_RUNS;
-  if (raw === undefined || raw.trim() === "") return 2;
-  if (raw === "1" || raw === "2") return Number(raw) as 1 | 2;
-  throw new Error(`PHASE4_E2E_RUNS must be 1 or 2, received ${JSON.stringify(raw)}`);
-}
-
-export function resolveHarnessProjects(environment: NodeJS.ProcessEnv): readonly RealE2eProjectName[] {
-  const requested = environment.PHASE4_E2E_PROJECT?.trim();
-  if (!requested) return realE2eProjectNames;
-  if ((realE2eProjectNames as readonly string[]).includes(requested)) return [requested as RealE2eProjectName];
-  throw new Error(
-    `PHASE4_E2E_PROJECT must be one of ${realE2eProjectNames.join(", ")}, received ${JSON.stringify(requested)}`,
-  );
-}
-
-const { apiPort, webPort } = resolveHarnessPorts(process.env);
-const httpsProxyPort = webPort + 1;
+const apiPort = 4101;
+const webPort = 3103;
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
-const webOrigin = `https://localhost:${httpsProxyPort}`;
+const webOrigin = `http://localhost:${webPort}`;
 const databasePrefix = "matchday_phase4_e2e_";
 const schemaPrefix = "test_phase4_e2e_";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -90,12 +56,24 @@ type Isolation =
   | { kind: "database"; databaseName: string; databaseUrl: string }
   | { kind: "schema"; schema: string; databaseUrl: string };
 
-type RunConfiguration = {
+export type RunConfiguration = {
   recordFile: string;
   redisDatabase: number;
+  infrastructureMode: InfrastructureMode;
+  sourceSha: string;
+  /**
+   * Receives the live, isolated C1-C4 aggregate after the real browser
+   * journeys and their database oracles complete. The callback is deliberately
+   * in-process: callers must not persist its session material or reuse it
+   * outside this disposable run.
+   */
+  afterGateCC4Complete?: (context: GateCC4CompletedRunContext) => Promise<void>;
 };
 
+export type InfrastructureMode = "docker" | "local";
+
 type IsolationRecord = {
+  source_sha: string;
   run: number;
   status: "passed" | "failed";
   started_at_utc: string;
@@ -121,9 +99,18 @@ export type RedisOwnership = {
 type SeedState = {
   apiOrigin: string;
   webOrigin: string;
+  accountId: string;
   organisationId: string;
   fixtureKey: string;
   organiserCookie: string;
+};
+
+type GateCC4SeedState = SeedState & {
+  competitionId: string;
+  slug: string;
+  correctionTransactionId: string;
+  correctedMatchId: string;
+  downstreamMatchId: string;
 };
 
 type BrowserJourneyResult = {
@@ -140,38 +127,56 @@ type BrowserJourneyResult = {
   };
 };
 
-type V1BrowserJourneyResult = {
+type GateCC4BrowserJourneyResult = {
   project: string;
   competitionId: string;
-  slug: string;
-  divisionIds: [string, string];
-  matchId: string;
-  moved: {
-    match_id: string;
-    playing_area_id: string;
-    start_epoch_ms: number;
-    end_epoch_ms: number;
-  };
+  repairId: string;
+  repairRevisionId: string;
+  scheduleVersion: number;
+  resultVersion: number;
+  correctedMatchId: string;
+  downstreamMatchId: string;
 };
 
 /**
- * A deliberately fuller V1 proof than the setup/single-result journey above.
- * The browser creates one eight-entry division, completes every group fixture
- * through the scorekeeper surface, then completes an automatically populated
- * championship bracket through the final and bronze match. The ids are only receipts for the database
- * oracle; no scoring decision is made outside the rendered application.
+ * A narrowly scoped extension point for later local gates. It is available
+ * only while `runOnce` owns an isolated database, Redis namespace, API and
+ * production web process. Nothing in this context is evidence by itself.
  */
-type V1CompetitionJourneyResult = {
-  project: string;
+export type GateCC4CompletedRepair = Readonly<{
   competitionId: string;
   slug: string;
-  divisionId: string;
-  groupMatchIds: string[];
-  progressedMatchIds: string[];
-  completedMatchIds?: string[];
-  initialStage?: "groups" | "championship";
-  correctedMatchId?: string;
-};
+  correctionTransactionId: string;
+  correctedMatchId: string;
+  downstreamMatchId: string;
+}>;
+
+export type GateCC4CompletedRunContext = Readonly<{
+  sourceSha: string;
+  runNumber: number;
+  repairs: Readonly<Record<string, GateCC4CompletedRepair>>;
+  apiOrigin: string;
+  webOrigin: string;
+  ownedRedisKeyCount(): Promise<number>;
+  /**
+   * Creates one opaque, writer-fenced executor per requested worker against
+   * untouched scheduled matches in this run's named browser aggregate. It is
+   * single-use so a harness cannot accidentally introduce competing writers.
+   * Session and pass secrets remain in this runner's closure.
+   */
+  createScoreEventExecutor(
+    input: Readonly<{
+      project: string;
+      workerCount: number;
+      durationSeconds: number;
+    }>,
+  ): Promise<GateCC5ScoreWriteResource>;
+  createPublicCurrentExecutor(input: Readonly<{ project: string }>): C5WorkloadExecutor;
+  createPublicResultConvergenceExecutor(
+    input: Readonly<{ project: string; sampleCount: number }>,
+  ): Promise<C5WorkloadExecutor>;
+  createLeaseTakeoverExecutor(input: Readonly<{ project: string; workerCount: number }>): Promise<C5WorkloadExecutor>;
+}>;
 
 function safeIdentifier(value: string, prefix: string): string {
   if (!value.startsWith(prefix) || !/^[a-z][a-z0-9_]*$/.test(value))
@@ -197,6 +202,33 @@ function redisUrlForLogicalDatabase(logicalDatabase: number): string {
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+function assertLoopbackUrl(value: string, label: string, protocols: readonly string[]): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid URL`);
+  }
+  if (!protocols.includes(url.protocol)) throw new Error(`${label} uses an unsupported protocol`);
+  if (!["", "localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname))
+    throw new Error(`${label} must target local loopback infrastructure`);
+  if ([...url.searchParams].length > 0) throw new Error(`${label} must not contain query parameters`);
+  return url;
+}
+
+export function resolveInfrastructureMode(value: string | undefined): InfrastructureMode {
+  if (value === undefined || value === "" || value === "local") return "local";
+  if (value === "docker") return "docker";
+  throw new Error("PHASE4_E2E_INFRA_MODE must be local or docker");
+}
+
+export function assertLocalInfrastructureUrls(databaseUrl: string, redisUrl: string): void {
+  const database = assertLoopbackUrl(databaseUrl, "DATABASE_URL", ["postgres:", "postgresql:"]);
+  if (!/^\/[a-zA-Z0-9_-]+$/.test(database.pathname))
+    throw new Error("DATABASE_URL must select one local maintenance database");
+  assertLoopbackUrl(redisUrl, "TEST_REDIS_URL", ["redis:", "rediss:"]);
 }
 
 function sanitizedIsolationIdentifier(isolation: Isolation): string {
@@ -434,6 +466,7 @@ async function seed(sql: Sql, fixtureKey: string): Promise<SeedState> {
   return {
     apiOrigin,
     webOrigin,
+    accountId,
     organisationId,
     fixtureKey,
     organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
@@ -641,282 +674,205 @@ async function assertDatabaseOracle(sql: Sql, result: BrowserJourneyResult): Pro
   );
 }
 
-async function assertV1DatabaseOracle(sql: Sql, result: V1BrowserJourneyResult): Promise<void> {
-  const [aggregate] = await sql<
+async function prepareGateCC4Repair(
+  sql: Sql,
+  phase2: Phase2Runtime,
+  state: SeedState,
+  journey: BrowserJourneyResult,
+): Promise<GateCC4SeedState> {
+  const source = (
+    await sql<
+      {
+        match_id: string;
+        downstream_match_id: string;
+        division_id: string;
+      }[]
+    >`
+      SELECT source.id AS match_id,dependency.match_id AS downstream_match_id,source.division_id
+      FROM match_dependencies dependency
+      JOIN matches source ON source.id=dependency.source_match_id
+      JOIN matches downstream ON downstream.id=dependency.match_id
+      WHERE source.competition_id=${journey.competitionId}
+        AND downstream.state IN ('pending','ready')
+      ORDER BY source.ordinal,source.id,dependency.match_id
+      LIMIT 1
+    `
+  )[0];
+  if (!source) throw new Error(`No correctable scheduled dependency exists for ${journey.competitionId}`);
+  const entries = await sql<{ id: string }[]>`
+    SELECT id FROM division_entries
+    WHERE division_id=${source.division_id} AND status IN ('active','confirmed')
+    ORDER BY seed,id
+    LIMIT 2
+  `;
+  if (entries.length !== 2 || !entries[0] || !entries[1])
+    throw new Error(`C4 real fixture source match has insufficient active entries for ${source.match_id}`);
+  await sql`UPDATE matches SET home_entry_id=${entries[0].id},away_entry_id=${entries[1].id} WHERE id=${source.match_id}`;
+
+  const actor = { accountId: state.accountId };
+  const accessPass = await phase2.createAccessPass(
+    actor,
+    journey.competitionId,
+    source.match_id,
     {
-      division_count: number;
-      entry_count: number;
-      published_formats: number;
-      materialised_formats: number;
-      published_schedules: number;
-      child_revisions: number;
-      schedule_version: number;
-      result_version: number;
-      finalised_results: number;
-      audit_count: number;
-      outbox_count: number;
-    }[]
-  >`
-    SELECT
-      (SELECT count(*)::int FROM divisions WHERE competition_id=c.id) division_count,
-      (SELECT count(*)::int FROM division_entries entry JOIN divisions division ON division.id=entry.division_id
-        WHERE division.competition_id=c.id AND entry.status IN ('active','confirmed')) entry_count,
-      (SELECT count(*)::int FROM format_revisions WHERE competition_id=c.id AND status='published') published_formats,
-      (SELECT count(*)::int FROM format_revisions format WHERE format.competition_id=c.id AND status='published'
-        AND phase4_materialization_is_exact(format.id)) materialised_formats,
-      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=c.id AND status='published') published_schedules,
-      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=c.id AND parent_revision_id IS NOT NULL) child_revisions,
-      COALESCE((SELECT schedule_version::int FROM competition_publications WHERE competition_id=c.id),0) schedule_version,
-      COALESCE((SELECT result_version::int FROM competition_publications WHERE competition_id=c.id),0) result_version,
-      (SELECT count(*)::int FROM match_result_snapshots snapshot JOIN matches match ON match.id=snapshot.match_id
-        WHERE match.competition_id=c.id AND snapshot.state='final') finalised_results,
-      (SELECT count(*)::int FROM audit_events WHERE organisation_id=c.organisation_id) audit_count,
-      (SELECT count(*)::int FROM outbox_events WHERE aggregate_id=c.id::text
-        OR payload->>'competition_id'=c.id::text) outbox_count
-    FROM competitions c WHERE c.id=${result.competitionId}
-  `;
-  if (
-    !aggregate ||
-    aggregate.division_count !== 2 ||
-    aggregate.entry_count !== 8 ||
-    aggregate.published_formats !== 2 ||
-    aggregate.materialised_formats !== 2 ||
-    aggregate.published_schedules !== 1 ||
-    aggregate.child_revisions < 1 ||
-    aggregate.schedule_version !== 1 ||
-    aggregate.result_version < 1 ||
-    aggregate.finalised_results !== 1 ||
-    aggregate.audit_count < 5 ||
-    aggregate.outbox_count < 5
-  )
-    throw new Error(`V1 aggregate persistence oracle failed: ${JSON.stringify(aggregate)}`);
-
-  const [moved] = await sql<
-    { match_id: string; playing_area_id: string; starts_at: Date | string; ends_at: Date | string }[]
-  >`
-    SELECT scheduled.match_id,scheduled.playing_area_id,scheduled.starts_at,scheduled.ends_at
-    FROM competition_publications publication
-    JOIN scheduled_matches scheduled ON scheduled.schedule_revision_id=publication.published_schedule_revision_id
-    WHERE publication.competition_id=${result.competitionId} AND scheduled.match_id=${result.moved.match_id}
-  `;
-  if (
-    !moved ||
-    moved.playing_area_id !== result.moved.playing_area_id ||
-    new Date(moved.starts_at).getTime() !== result.moved.start_epoch_ms ||
-    new Date(moved.ends_at).getTime() !== result.moved.end_epoch_ms
-  )
-    throw new Error(`V1 moved schedule oracle failed: ${JSON.stringify(moved)}`);
-
-  const [projectionRow] = await sql<{ projection: unknown }[]>`
-    SELECT projection.projection
-    FROM public_competition_projections projection
-    JOIN competition_publications publication ON publication.competition_id=projection.competition_id
-      AND publication.schedule_version=projection.schedule_version
-      AND publication.result_version=projection.result_version
-    WHERE projection.competition_id=${result.competitionId}
-  `;
-  const projection =
-    typeof projectionRow?.projection === "string"
-      ? (JSON.parse(projectionRow.projection) as Record<string, unknown>)
-      : (projectionRow?.projection as Record<string, unknown> | undefined);
-  const divisions = Array.isArray(projection?.divisions) ? projection.divisions : [];
-  const publicMatches = divisions.flatMap((division) =>
-    division && typeof division === "object" && Array.isArray((division as Record<string, unknown>).schedule)
-      ? ((division as Record<string, unknown>).schedule as Array<Record<string, unknown>>)
-      : [],
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      role: "scorekeeper",
+      idempotencyKey: `c4-real-correction:${source.match_id}`,
+    },
+    randomUUID(),
   );
-  if (!publicMatches.some((match) => match.id === result.moved.match_id))
-    throw new Error("V1 public projection omitted the moved match");
-  const resultRows = await sql<{ event_type: string; sequence: number }[]>`
-    SELECT event_type,sequence FROM canonical_score_events WHERE match_id=${result.matchId} ORDER BY sequence
-  `;
-  const expectedEventTypes = ["match_started", "goal", "period_change", "finalisation"];
-  if (
-    JSON.stringify(resultRows.map((row) => row.event_type)) !== JSON.stringify(expectedEventTypes) ||
-    resultRows.some((row, index) => row.sequence !== index + 1)
-  )
-    throw new Error(`V1 scoring oracle failed: ${JSON.stringify(resultRows)}`);
-  process.stdout.write(`V1 simple journey persistence oracle: ${JSON.stringify(aggregate)}\n`);
+  if (!accessPass.short_code) throw new Error("C4 real fixture did not receive a fallback scorekeeping code");
+  const session = await phase2.exchangeAccess(
+    {
+      shortCode: accessPass.short_code,
+      expectedMatchId: source.match_id,
+      deviceId: randomUUID(),
+      deviceLabel: "C4 real fixture scorer",
+      ipAddress: "198.51.100.44",
+    },
+    randomUUID(),
+  );
+  if (session.mode !== "writer" || session.generation === null)
+    throw new Error("C4 real fixture did not acquire a scorekeeping writer lease");
+  const auth = { sessionId: session.session_id, sessionToken: session.session_token, generation: session.generation };
+  const occurredAt = "2027-08-01T09:00:00.000Z";
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "match_started",
+      occurred_at: occurredAt,
+      segment_number: 1,
+      manual_time_seconds: 0,
+    },
+    0,
+    randomUUID(),
+  );
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "goal",
+      occurred_at: "2027-08-01T09:01:00.000Z",
+      team_slot: "home",
+      participant_id: "C4 fixture scorer",
+      segment_number: 1,
+      manual_time_seconds: 60,
+    },
+    1,
+    randomUUID(),
+  );
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "period_change",
+      occurred_at: "2027-08-01T09:10:00.000Z",
+      segment_number: 2,
+      manual_time_seconds: 0,
+    },
+    2,
+    randomUUID(),
+  );
+  await phase2.finalise(auth, randomUUID(), randomUUID(), 3);
+  // The browser must resolve a real protected downstream slot. Marking it
+  // started prevents result recalculation from changing participants before
+  // the repair workflow can require the organiser's explicit decision.
+  await sql`UPDATE matches SET state='in_progress' WHERE id=${source.downstream_match_id}`;
+  const correctionClientEventId = randomUUID();
+  await phase2.correctCanonicalMatch(
+    actor,
+    journey.competitionId,
+    source.match_id,
+    {
+      clientEventId: correctionClientEventId,
+      reason: "Correct the verified fixture winner before repair analysis.",
+      expectedAggregateVersion: 4,
+      events: [
+        {
+          client_event_id: randomUUID(),
+          type: "goal",
+          occurred_at: "2027-08-01T09:21:00.000Z",
+          team_slot: "away",
+          participant_id: "C4 fixture scorer",
+          segment_number: 2,
+          manual_time_seconds: 60,
+        },
+        {
+          client_event_id: randomUUID(),
+          type: "goal",
+          occurred_at: "2027-08-01T09:22:00.000Z",
+          team_slot: "away",
+          participant_id: "C4 fixture scorer",
+          segment_number: 2,
+          manual_time_seconds: 120,
+        },
+      ],
+    },
+    randomUUID(),
+  );
+  const correction = (
+    await sql<{ id: string }[]>`
+      SELECT id FROM score_correction_transactions
+      WHERE match_id=${source.match_id} AND client_event_id=${correctionClientEventId}
+    `
+  )[0];
+  if (!correction) throw new Error("C4 real fixture correction transaction was not retained");
+  return {
+    ...state,
+    competitionId: journey.competitionId,
+    slug: journey.slug,
+    correctionTransactionId: correction.id,
+    correctedMatchId: source.match_id,
+    downstreamMatchId: source.downstream_match_id,
+  };
 }
 
-async function assertV1CompetitionDatabaseOracle(sql: Sql, result: V1CompetitionJourneyResult): Promise<void> {
-  const [aggregate] = await sql<
-    {
-      division_count: number;
-      entry_count: number;
-      published_formats: number;
-      exact_formats: number;
-      published_schedules: number;
-      opening_finalised: number;
-      progressed_finalised: number;
-      completed_finalised: number;
-      automatic_qualifiers: number;
-      unresolved_qualifiers: number;
-      standings_snapshots: number;
-      bracket_snapshots: number;
-      public_result_version: number;
-    }[]
-  >`
-    SELECT
-      (SELECT count(*)::int FROM divisions WHERE competition_id=c.id) division_count,
-      (SELECT count(*)::int FROM division_entries entry JOIN divisions division ON division.id=entry.division_id
-        WHERE division.competition_id=c.id AND entry.status IN ('active','confirmed')) entry_count,
-      (SELECT count(*)::int FROM format_revisions WHERE competition_id=c.id AND status='published') published_formats,
-      (SELECT count(*)::int FROM format_revisions format WHERE format.competition_id=c.id AND status='published'
-        AND phase4_materialization_is_exact(format.id)) exact_formats,
-      (SELECT count(*)::int FROM schedule_revisions WHERE competition_id=c.id AND status='published') published_schedules,
-      (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
-        WHERE match.competition_id=c.id AND match.id = ANY(${sql.array(result.groupMatchIds)}::uuid[]) AND snapshot.state='final') opening_finalised,
-      (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
-        WHERE match.competition_id=c.id AND match.id = ANY(${sql.array(result.progressedMatchIds)}::uuid[])
-          AND snapshot.state='final' AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL) progressed_finalised,
-      (SELECT count(*)::int FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
-        WHERE match.competition_id=c.id AND match.id = ANY(${sql.array(result.completedMatchIds ?? [...result.groupMatchIds, ...result.progressedMatchIds])}::uuid[])
-          AND snapshot.state='final' AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL) completed_finalised,
-      (SELECT count(*)::int FROM advancement_slots slot JOIN matches match ON match.id=slot.match_id
-        WHERE slot.competition_id=c.id AND match.graph_stage_id='championship'
-          AND slot.control='automatic' AND slot.entry_id IS NOT NULL) automatic_qualifiers,
-      (SELECT count(*)::int FROM advancement_slots slot JOIN matches match ON match.id=slot.match_id
-        WHERE slot.competition_id=c.id AND match.graph_stage_id='championship'
-          AND slot.control='automatic' AND slot.entry_id IS NULL) unresolved_qualifiers,
-      (SELECT count(*)::int FROM standings_snapshots WHERE competition_id=c.id) standings_snapshots,
-      (SELECT count(*)::int FROM bracket_snapshots WHERE competition_id=c.id) bracket_snapshots,
-      COALESCE((SELECT result_version::int FROM competition_publications WHERE competition_id=c.id),0) public_result_version
-    FROM competitions c WHERE c.id=${result.competitionId}
-  `;
-  const expectedOpeningIds = [...new Set(result.groupMatchIds)].sort();
-  const actualOpeningIds = await sql<{ id: string }[]>`
-    SELECT match.id::text AS id FROM matches match JOIN match_result_snapshots snapshot ON snapshot.match_id=match.id
-    WHERE match.competition_id=${result.competitionId} AND match.id = ANY(${sql.array(result.groupMatchIds)}::uuid[]) AND snapshot.state='final'
-    ORDER BY match.id::text
-  `;
-  const correction = result.correctedMatchId
-    ? await sql<{ reopened: number; corrected: number; reversals: number }[]>`
-        SELECT
-          (SELECT count(*)::int FROM audit_events WHERE target_id=${result.correctedMatchId} AND action='result.reopened') reopened,
-          (SELECT count(*)::int FROM audit_events WHERE target_id=${result.correctedMatchId} AND action='result.corrected') corrected,
-          (SELECT count(*)::int FROM canonical_score_events WHERE match_id=${result.correctedMatchId} AND event_type='reversal') reversals
-      `
-    : [{ reopened: 0, corrected: 0, reversals: 0 }];
-  const [currentProjection] = await sql<{ projection: unknown }[]>`
-    SELECT projection.projection
-    FROM competitions competition
-    JOIN competition_publications publication ON publication.competition_id=competition.id
-    JOIN public_competition_projections projection
-      ON projection.competition_id=competition.id
-      AND projection.schedule_version=publication.schedule_version
-      AND projection.result_version=publication.result_version
-    WHERE competition.id=${result.competitionId}
-    LIMIT 1
-  `;
-  const projectionValue = currentProjection?.projection;
-  const projectionRecord =
-    typeof projectionValue === "string"
-      ? (JSON.parse(projectionValue) as Record<string, unknown>)
-      : projectionValue && typeof projectionValue === "object" && !Array.isArray(projectionValue)
-        ? (projectionValue as Record<string, unknown>)
-        : null;
-  const divisions = Array.isArray(projectionRecord?.divisions) ? projectionRecord.divisions : [];
-  const currentDivision =
-    divisions.length === 1 && typeof divisions[0] === "object" && divisions[0] !== null
-      ? (divisions[0] as Record<string, unknown>)
-      : null;
-  const projectionHasStandings =
-    currentDivision?.standings !== null &&
-    currentDivision?.standings !== undefined &&
-    projectionRecord?.standings !== null;
-  const projectionHasBracket =
-    currentDivision?.bracket !== null && currentDivision?.bracket !== undefined && projectionRecord?.bracket !== null;
-  const bracketRecord =
-    currentDivision?.bracket && typeof currentDivision.bracket === "object" && !Array.isArray(currentDivision.bracket)
-      ? (currentDivision.bracket as Record<string, unknown>)
-      : null;
-  const bracketPayload =
-    bracketRecord?.bracket && typeof bracketRecord.bracket === "object" && !Array.isArray(bracketRecord.bracket)
-      ? (bracketRecord.bracket as Record<string, unknown>)
-      : bracketRecord;
-  const bracketMatches = Array.isArray(bracketPayload?.matches) ? bracketPayload.matches : [];
-  const projectionHasCanonicalBracket = result.progressedMatchIds.every((matchId) =>
-    bracketMatches.some(
-      (candidate) =>
-        candidate !== null &&
-        typeof candidate === "object" &&
-        ((candidate as Record<string, unknown>).matchId === matchId ||
-          (candidate as Record<string, unknown>).match_id === matchId ||
-          (candidate as Record<string, unknown>).id === matchId),
-    ),
-  );
-  const progressedMatches = await sql<{ id: string; home_entry_id: string | null; away_entry_id: string | null }[]>`
-    SELECT id::text AS id,home_entry_id,away_entry_id FROM matches
-    WHERE id = ANY(${sql.array(result.progressedMatchIds)}::uuid[])
-  `;
-  const projectedSchedule = Array.isArray(currentDivision?.schedule) ? currentDivision.schedule : [];
-  const projectionHasProgressedParticipants =
-    progressedMatches.length === result.progressedMatchIds.length &&
-    progressedMatches.every((match) => {
-      const projected = projectedSchedule.find(
-        (candidate): candidate is Record<string, unknown> =>
-          candidate !== null && typeof candidate === "object" && candidate.id === match.id,
-      );
-      const projectedHome =
-        projected?.home && typeof projected.home === "object"
-          ? ((projected.home as Record<string, unknown>).id ?? null)
-          : null;
-      const projectedAway =
-        projected?.away && typeof projected.away === "object"
-          ? ((projected.away as Record<string, unknown>).id ?? null)
-          : null;
-      return (
-        match.home_entry_id !== null &&
-        match.away_entry_id !== null &&
-        projectedHome === match.home_entry_id &&
-        projectedAway === match.away_entry_id
-      );
-    });
+async function assertGateCC4DatabaseOracle(sql: Sql, result: GateCC4BrowserJourneyResult): Promise<void> {
+  const row = (
+    await sql<
+      {
+        published_ready_revisions: number;
+        publication_receipts: number;
+        schedule_version: number;
+        result_version: number;
+        projection_links: number;
+        audit_events: number;
+        outbox_events: number;
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM schedule_repair_revisions revision
+         JOIN schedule_repair_publication_receipts receipt ON receipt.repair_revision_id=revision.id
+         WHERE revision.repair_case_id=${result.repairId}
+           AND revision.status='ready') AS published_ready_revisions,
+        (SELECT count(*)::int FROM schedule_repair_publication_receipts
+         WHERE repair_case_id=${result.repairId} AND repair_revision_id=${result.repairRevisionId}) AS publication_receipts,
+        (SELECT schedule_version::int FROM competition_publications WHERE competition_id=${result.competitionId}) AS schedule_version,
+        (SELECT result_version::int FROM competition_publications WHERE competition_id=${result.competitionId}) AS result_version,
+        (SELECT count(*)::int FROM schedule_repair_publication_projection_versions links
+         JOIN schedule_repair_publication_receipts receipt ON receipt.id=links.publication_receipt_id
+         WHERE receipt.repair_case_id=${result.repairId}) AS projection_links,
+        (SELECT count(*)::int FROM audit_events
+         WHERE action IN ('repair.created','repair.revision_created','repair.published')
+           AND metadata->>'competition_id'=${result.competitionId}) AS audit_events,
+        (SELECT count(*)::int FROM outbox_events
+         WHERE event_type IN ('repair.created','repair.revision_created','repair.published')
+           AND payload->>'competition_id'=${result.competitionId}) AS outbox_events
+    `
+  )[0];
   if (
-    !aggregate ||
-    aggregate.division_count !== 1 ||
-    aggregate.entry_count !== (result.initialStage === "championship" ? 16 : 8) ||
-    aggregate.published_formats !== 1 ||
-    aggregate.exact_formats !== 1 ||
-    aggregate.published_schedules !== 1 ||
-    aggregate.opening_finalised !== result.groupMatchIds.length ||
-    aggregate.progressed_finalised !== result.progressedMatchIds.length ||
-    aggregate.completed_finalised !==
-      (result.completedMatchIds ?? [...result.groupMatchIds, ...result.progressedMatchIds]).length ||
-    aggregate.automatic_qualifiers < (result.initialStage === "championship" ? 14 : 6) ||
-    aggregate.unresolved_qualifiers !== 0 ||
-    aggregate.standings_snapshots < 1 ||
-    aggregate.bracket_snapshots < 1 ||
-    aggregate.public_result_version <
-      (result.completedMatchIds ?? [...result.groupMatchIds, ...result.progressedMatchIds]).length ||
-    !projectionHasStandings ||
-    !projectionHasBracket ||
-    !projectionHasCanonicalBracket ||
-    !projectionHasProgressedParticipants ||
-    JSON.stringify(actualOpeningIds.map((row) => row.id)) !== JSON.stringify(expectedOpeningIds) ||
-    (result.correctedMatchId !== undefined &&
-      (correction[0]?.reopened !== 1 || correction[0]?.corrected !== 1 || correction[0]?.reversals !== 1))
+    !row ||
+    row.published_ready_revisions !== 1 ||
+    row.publication_receipts !== 1 ||
+    row.schedule_version !== result.scheduleVersion ||
+    row.result_version !== result.resultVersion ||
+    row.projection_links < 1 ||
+    row.audit_events !== 3 ||
+    row.outbox_events !== 3
   )
-    throw new Error(
-      `V1 competition persistence oracle failed: ${JSON.stringify({
-        aggregate,
-        actualOpeningIds,
-        correction: correction[0],
-        projection: projectionRecord
-          ? {
-              keys: Object.keys(projectionRecord).sort(),
-              division_count: divisions.length,
-              division_keys: currentDivision ? Object.keys(currentDivision).sort() : [],
-              projectionHasStandings,
-              projectionHasBracket,
-              projectionHasCanonicalBracket,
-              projectionHasProgressedParticipants,
-            }
-          : null,
-      })}`,
-    );
-  process.stdout.write(`V1 competition persistence oracle: ${JSON.stringify(aggregate)}\n`);
+    throw new Error(`C4 browser-owned persistence oracle failed: ${JSON.stringify(row)}`);
+  process.stdout.write(`C4 persistence oracle: ${JSON.stringify(row)}\n`);
 }
 
 async function cleanupIsolation(admin: Sql, isolation: Isolation | null): Promise<void> {
@@ -937,11 +893,49 @@ function assertPinnedToolchain(): void {
     throw new Error(`Phase 4 real E2E requires pnpm 10.33.0; received ${packageManager || "unknown"}`);
 }
 
+export function sourceShaAtHead(): string {
+  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  if (!/^[a-f0-9]{40}$/u.test(sourceSha)) throw new Error("Phase 4 real E2E requires an exact source SHA");
+  return sourceSha;
+}
+
+async function prepareInfrastructure(mode: InfrastructureMode): Promise<void> {
+  assertLocalInfrastructureUrls(adminDatabaseUrl, baseRedisUrl);
+
+  if (mode === "docker") {
+    await runProcess(
+      "local infrastructure",
+      "docker",
+      ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
+      process.env,
+    );
+    return;
+  }
+
+  const adminProbe = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
+  const redisProbe = new Redis(baseRedisUrl, { maxRetriesPerRequest: 1 });
+  try {
+    await Promise.all([adminProbe`SELECT 1`, redisProbe.ping()]);
+  } catch (error) {
+    throw new Error(
+      `Local Phase 4 real E2E infrastructure is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    await Promise.all([adminProbe.end({ timeout: 2 }), redisProbe.quit()]);
+  }
+  process.stdout.write("Phase 4 real E2E infrastructure: local loopback PostgreSQL and Redis.\n");
+}
+
 export async function runOnce(runNumber: number, configuration: RunConfiguration): Promise<void> {
+  const exactSourceSha = sourceShaAtHead();
+  if (configuration.sourceSha !== exactSourceSha) {
+    throw new Error("Phase 4 real E2E configuration source SHA does not match HEAD");
+  }
   const startedAt = new Date().toISOString();
   const temp = await mkdtemp(path.join(tmpdir(), "matchday-phase4-e2e-"));
   const stateFile = path.join(temp, "state.json");
   const resultFile = path.join(temp, "browser-journeys.ndjson");
+  const gateCC4ResultFile = path.join(temp, "gate-c-c4-browser-journeys.ndjson");
   const admin = postgres(adminDatabaseUrl, { max: 1, onnotice: () => undefined });
   const redisUrl = redisUrlForLogicalDatabase(configuration.redisDatabase);
   const csrfSecret = randomBytes(32).toString("base64url");
@@ -949,7 +943,6 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
   let sql: Sql | null = null;
   let app: Awaited<ReturnType<typeof buildApp>> | null = null;
   let web: RunningProcess | null = null;
-  let httpsProxy: RunningProcess | null = null;
   let scheduler: SchedulerRuntime | null = null;
   let scheduleQueue: ScheduleJobQueue | null = null;
   let queueName: string | null = null;
@@ -966,14 +959,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
   process.once("SIGINT", markInterrupted);
   process.once("SIGTERM", markInterrupted);
   try {
-    if (!process.env.CI) {
-      await runProcess(
-        "local infrastructure",
-        "docker",
-        ["compose", "-f", "infra/local/compose.yaml", "up", "-d", "--wait", "postgres", "redis"],
-        process.env,
-      );
-    }
+    await prepareInfrastructure(configuration.infrastructureMode);
     rateLimitRedis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
     queueName = `matchday-phase4-real-e2e-${randomUUID()}`;
     redisOwnership = createRedisOwnership(queueName);
@@ -1042,9 +1028,17 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       },
       undefined,
       phase2,
+      phase2,
     );
     await scheduler.start();
-    const projectNames = resolveHarnessProjects(process.env);
+    const projectNames = [
+      "phase-4-real-phone-chromium",
+      "phase-4-real-phone-webkit",
+      "phase-4-real-tablet-webkit",
+      "phase-4-real-desktop-chromium",
+      "phase-4-real-desktop-webkit",
+      "phase-4-real-desktop-firefox",
+    ] as const;
     const projects: Record<string, SeedState> = {};
     for (const [index, projectName] of projectNames.entries()) {
       projects[projectName] = await seed(sql, `project-${index + 1}`);
@@ -1085,13 +1079,6 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       },
       rateLimitRedis,
       rateLimitNameSpace: redisOwnership.rateLimitNameSpace,
-      resolveVerifiedScoringRateLimitSessionId: async (request) => {
-        const sessionId = request.headers["x-scoring-session-id"];
-        const sessionToken = request.headers["x-scoring-session-token"];
-        if (typeof sessionId !== "string" || typeof sessionToken !== "string") return null;
-        if (sessionToken.length < 32 || sessionToken.length > 256) return null;
-        return verifiedScoringRateLimitSessionId(sql!, sessionId, sessionToken);
-      },
       identityRuntime: identity,
       phase2Runtime: phase2,
       phase3Runtime: phase3,
@@ -1102,10 +1089,6 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     const runtimeEnv: NodeJS.ProcessEnv = {
       ...process.env,
       MATCHDAY_API_BASE_URL: apiOrigin,
-      // The production web BFF seals the scoring-session cookie. This must be
-      // present in the isolated browser journey or it deliberately refuses to
-      // exchange the one-time access fragment before calling the API.
-      SCORING_SESSION_SEAL_KEY: randomBytes(32).toString("base64url"),
       PHASE4_E2E_WEB_BASE_URL: webOrigin,
       PHASE4_E2E_STATE_FILE: stateFile,
       PHASE4_E2E_RESULT_FILE: resultFile,
@@ -1122,24 +1105,9 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       ["--filter", "@matchday/web", "start", "--hostname", "127.0.0.1", "--port", String(webPort)],
       runtimeEnv,
     );
-    await waitFor(`http://127.0.0.1:${webPort}/`, "production web", web, webBuildId);
-    httpsProxy = startProcess("production web HTTPS proxy", "node", ["apps/web/tests/helpers/https-proxy.mjs"], {
-      ...runtimeEnv,
-      HTTPS_PROXY_UPSTREAM_PORT: String(webPort),
-      HTTPS_PROXY_PORT: String(httpsProxyPort),
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    if (httpsProxy.child.exitCode !== null)
-      throw new Error(
-        `production web HTTPS proxy exited before readiness with code ${String(httpsProxy.child.exitCode)}`,
-      );
-    const firstProjectName = projectNames[0];
-    if (!firstProjectName) throw new Error("At least one real E2E browser project is required");
-    const probeState = projects[firstProjectName]!;
-    // Node's built-in fetch deliberately rejects our throwaway self-signed
-    // browser proxy certificate. The browser journey uses that HTTPS origin;
-    // this build/readiness probe may safely target Next directly.
-    const formatProbe = await fetch(`http://127.0.0.1:${webPort}/organiser/competitions/new`, {
+    await waitFor(`${webOrigin}/`, "production web", web, webBuildId);
+    const probeState = projects[projectNames[0]]!;
+    const formatProbe = await fetch(`${webOrigin}/organiser/competitions/new`, {
       headers: { cookie: probeState.organiserCookie },
     });
     const formatProbeBody = await formatProbe.text();
@@ -1152,36 +1120,367 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
           .replaceAll(/\s+/g, " ")
           .slice(0, 4_000)}`,
       );
-    const playwrightConfig = process.env.PHASE4_E2E_PLAYWRIGHT_CONFIG ?? "playwright.phase4-real.config.ts";
     await runProcess(
       "Phase 4 real Playwright",
       "pnpm",
-      [
-        "--filter",
-        "@matchday/web",
-        "exec",
-        "playwright",
-        "test",
-        "--config",
-        playwrightConfig,
-        ...projectNames.flatMap((projectName) => ["--project", projectName]),
-      ],
+      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", "playwright.phase4-real.config.ts"],
       runtimeEnv,
       true,
     );
     const journeyResults = (await readFile(resultFile, "utf8"))
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as BrowserJourneyResult | V1BrowserJourneyResult | V1CompetitionJourneyResult);
+      .map((line) => JSON.parse(line) as BrowserJourneyResult);
+    const gateCC4Projects: Record<string, GateCC4SeedState> = {};
     for (const projectName of projectNames) {
       const state = projects[projectName];
       const journey = journeyResults.find((result) => result.project === projectName);
       if (!state || !journey) throw new Error(`Browser journey result missing for ${projectName}`);
-      if (process.env.PHASE4_E2E_JOURNEY === "v1") await assertV1DatabaseOracle(sql, journey as V1BrowserJourneyResult);
-      else if (process.env.PHASE4_E2E_JOURNEY === "v1-competition")
-        await assertV1CompetitionDatabaseOracle(sql, journey as V1CompetitionJourneyResult);
-      else await assertDatabaseOracle(sql, journey as BrowserJourneyResult);
+      await assertDatabaseOracle(sql, journey);
+      gateCC4Projects[projectName] = await prepareGateCC4Repair(sql, phase2, state, journey);
     }
+    await writeFile(stateFile, `${JSON.stringify({ projects, gate_c_c4_projects: gateCC4Projects })}\n`, {
+      mode: 0o600,
+    });
+    await writeFile(gateCC4ResultFile, "", { mode: 0o600 });
+    await runProcess(
+      "Gate C C4 real Playwright",
+      "pnpm",
+      ["--filter", "@matchday/web", "exec", "playwright", "test", "--config", "playwright.gate-c-c4-real.config.ts"],
+      {
+        ...runtimeEnv,
+        GATE_C_C4_E2E_RESULT_FILE: gateCC4ResultFile,
+        GATE_C_C4_E2E_OUTPUT_DIR: path.join(temp, "gate-c-c4-playwright-output"),
+      },
+      true,
+    );
+    const gateCC4JourneyResults = (await readFile(gateCC4ResultFile, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as GateCC4BrowserJourneyResult);
+    for (const projectName of projectNames) {
+      const journey = gateCC4JourneyResults.find((result) => result.project === projectName);
+      if (!journey) throw new Error(`C4 browser journey result missing for ${projectName}`);
+      await assertGateCC4DatabaseOracle(sql, journey);
+    }
+    if (!rateLimitRedis || !redisOwnership) {
+      throw new Error("C4 completion callback requires the active isolated Redis namespace");
+    }
+    const activeRedis = rateLimitRedis;
+    const activeRedisOwnership = redisOwnership;
+    const activeSql = sql;
+    if (!activeSql) throw new Error("C4 completion callback requires its isolated PostgreSQL connection");
+    let scoreEventExecutorReserved = false;
+    const reservedC5MatchIds = new Set<string>();
+    const reserveC5Matches = (matches: readonly { id: string }[], purpose: string): void => {
+      for (const match of matches) {
+        if (reservedC5MatchIds.has(match.id)) {
+          throw new Error(`C5 ${purpose} fixture overlaps a match already reserved by another workload operation`);
+        }
+      }
+      for (const match of matches) reservedC5MatchIds.add(match.id);
+    };
+    const createScoreEventExecutor = async ({
+      project,
+      workerCount,
+      durationSeconds,
+    }: Readonly<{
+      project: string;
+      workerCount: number;
+      durationSeconds: number;
+    }>): Promise<GateCC5ScoreWriteResource> => {
+      if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 10_000) {
+        throw new Error("C5 score-event worker count must be an integer from 1 to 10000");
+      }
+      if (
+        !Number.isInteger(durationSeconds) ||
+        durationSeconds < 1 ||
+        durationSeconds > GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS
+      ) {
+        throw new Error(
+          `C5 score-event duration must be an integer from 1 to ${String(GATE_C_C5_MAX_SCORE_WRITE_DURATION_SECONDS)} seconds`,
+        );
+      }
+      if (scoreEventExecutorReserved)
+        throw new Error("C5 score-event executor may be created only once per isolated run");
+      // Reserve before any I/O. A failed acquisition fences the run rather
+      // than allowing a retry to create a second writer against the same C4
+      // aggregate while the first attempt is still unwinding.
+      scoreEventExecutorReserved = true;
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 score-event project is not part of this isolated run: ${project}`);
+      const candidates = await activeSql<{ id: string }[]>`
+        SELECT id
+        FROM matches
+        WHERE competition_id=${repair.competitionId}
+          AND id<>${repair.correctedMatchId}
+          AND id<>${repair.downstreamMatchId}
+          AND state IN ('pending','ready')
+          AND home_entry_id IS NOT NULL
+          AND away_entry_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM canonical_score_events event WHERE event.match_id=matches.id)
+        ORDER BY ordinal,id
+        LIMIT ${workerCount}
+      `;
+      if (candidates.length !== workerCount) {
+        throw new Error(
+          `C5 score-event fixture requires ${String(workerCount)} untouched scheduled matches; found ${String(candidates.length)}`,
+        );
+      }
+      reserveC5Matches(candidates, "score-event");
+      const sessions = await issueGateCC5ScoreWriteSessions(
+        phase2,
+        { accountId: repair.accountId },
+        apiOrigin,
+        candidates.map((candidate) => ({
+          competitionId: repair.competitionId,
+          matchId: candidate.id,
+          expectedSequence: 0,
+        })),
+      );
+      const resource = await createGateCC5ScoreWriteResource(sessions, { durationSeconds });
+      return resource;
+    };
+    const createPublicCurrentExecutor = ({ project }: Readonly<{ project: string }>): C5WorkloadExecutor => {
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 public-current project is not part of this isolated run: ${project}`);
+      return createGateCC5PublicCurrentExecutor({ apiOrigin, slug: repair.slug });
+    };
+    const createPublicResultConvergenceExecutor = async ({
+      project,
+      sampleCount,
+    }: Readonly<{ project: string; sampleCount: number }>): Promise<C5WorkloadExecutor> => {
+      if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 10_000) {
+        throw new Error("C5 public-result sample count must be an integer from 1 to 10000");
+      }
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 public-result project is not part of this isolated run: ${project}`);
+      const actor = { accountId: repair.accountId };
+      const targets: GateCC5PublicResultConvergenceTarget[] = [];
+      // Provision serially. A pilot may request hundreds of samples, but
+      // fixture setup is deliberately outside the measured workload and must
+      // not exhaust the disposable database or create lease races.
+      for (let index = 0; index < sampleCount; index += 1) {
+        const target = await (async () => {
+          const suffix = `${runNumber}-${index + 1}-${randomUUID().slice(0, 8)}`;
+          const competition = await phase2.createCompetition(
+            actor,
+            {
+              organisationId: repair.organisationId,
+              name: `C5 Public Result ${suffix}`,
+              slug: `c5-public-result-${suffix}`,
+              timezone: "Asia/Singapore",
+              startsOn: "2026-08-01",
+              endsOn: "2026-08-01",
+            },
+            randomUUID(),
+          );
+          const division = await phase2.createDivision(
+            actor,
+            competition.id,
+            { name: "Open", teamLimit: 8 },
+            randomUUID(),
+          );
+          await phase2.replaceEntries(
+            actor,
+            competition.id,
+            division.id,
+            Array.from({ length: 8 }, (_unused, entryIndex) => ({
+              name: `C5 Team ${entryIndex + 1}`,
+              seed: entryIndex + 1,
+            })),
+            randomUUID(),
+          );
+          await phase2.replaceCapacity(
+            actor,
+            competition.id,
+            ["Court 1", "Court 2"].map((name) => ({
+              name,
+              windows: [{ startsAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-08-01T12:00:00.000Z" }],
+            })),
+            randomUUID(),
+          );
+          const format = await phase2.generateFormat(actor, competition.id, division.id, randomUUID());
+          const match = format.matches.find((candidate) => candidate.homeEntryId && candidate.awayEntryId);
+          if (!match) throw new Error("C5 public-result fixture has no resolved match");
+          const schedule = await phase2.generateSchedule(actor, competition.id, format.id, randomUUID());
+          await phase2.publishSchedule(actor, competition.id, schedule.id, randomUUID());
+          const pass = await phase2.createAccessPass(
+            actor,
+            competition.id,
+            match.id,
+            {
+              role: "scorekeeper",
+              expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+              idempotencyKey: randomUUID(),
+            },
+            randomUUID(),
+          );
+          if (!pass.token) throw new Error("C5 public-result fixture pass issuance returned no token");
+          const session = await phase2.exchangeAccess(
+            { token: pass.token, expectedMatchId: match.id, deviceId: randomUUID(), deviceLabel: "C5 public result" },
+            randomUUID(),
+          );
+          if (session.mode !== "writer" || session.generation === null) {
+            throw new Error("C5 public-result fixture did not acquire a writer lease");
+          }
+          const headers = {
+            "content-type": "application/json",
+            "x-scoring-session-id": session.session_id,
+            "x-scoring-session-token": session.session_token,
+            "x-writer-generation": String(session.generation),
+          };
+          const warm = async (expectedSequence: number, event: Record<string, unknown>) => {
+            const response = await fetch(`${apiOrigin}/api/v1/scoring/events`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ client_event_id: randomUUID(), expected_sequence: expectedSequence, ...event }),
+            });
+            const receipt = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+            if (
+              response.status !== 200 ||
+              receipt?.outcome !== "accepted" ||
+              receipt.sequence !== expectedSequence + 1
+            ) {
+              throw new Error(`C5 public-result warm-up failed with HTTP ${String(response.status)}`);
+            }
+          };
+          await warm(0, {
+            type: "match_started",
+            occurred_at: new Date().toISOString(),
+            segment_number: 1,
+            manual_time_seconds: 0,
+          });
+          await warm(1, {
+            type: "goal",
+            team_slot: "home",
+            participant_id: "C5 scorer",
+            occurred_at: new Date().toISOString(),
+            segment_number: 1,
+            manual_time_seconds: 1,
+          });
+          await warm(2, {
+            type: "period_change",
+            occurred_at: new Date().toISOString(),
+            segment_number: 2,
+            manual_time_seconds: 0,
+          });
+          return {
+            apiOrigin,
+            slug: `c5-public-result-${suffix}`,
+            matchId: match.id,
+            sessionId: session.session_id,
+            sessionToken: session.session_token,
+            writerGeneration: session.generation,
+            expectedSequence: 3,
+          };
+        })();
+        targets.push(target);
+      }
+      return createGateCC5PublicResultConvergenceExecutor(targets);
+    };
+    const createLeaseTakeoverExecutor = async ({
+      project,
+      workerCount,
+    }: Readonly<{ project: string; workerCount: number }>): Promise<C5WorkloadExecutor> => {
+      if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 10_000)
+        throw new Error("C5 lease-takeover worker count must be an integer from 1 to 10000");
+      const repair = gateCC4Projects[project];
+      if (!repair) throw new Error(`C5 lease-takeover project is not part of this isolated run: ${project}`);
+      const candidates = await activeSql<{ id: string }[]>`
+        SELECT id FROM matches
+        WHERE competition_id=${repair.competitionId}
+          AND id<>${repair.correctedMatchId} AND id<>${repair.downstreamMatchId}
+          AND state IN ('pending','ready') AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM canonical_score_events event WHERE event.match_id=matches.id)
+        ORDER BY ordinal,id LIMIT ${workerCount}
+      `;
+      if (candidates.length !== workerCount)
+        throw new Error(
+          `C5 lease-takeover fixture requires ${String(workerCount)} untouched matches; found ${String(candidates.length)}`,
+        );
+      reserveC5Matches(candidates, "lease-takeover");
+      const writers = await issueGateCC5ScoreWriteSessions(
+        phase2,
+        { accountId: repair.accountId },
+        apiOrigin,
+        candidates.map((candidate) => ({
+          competitionId: repair.competitionId,
+          matchId: candidate.id,
+          expectedSequence: 0,
+        })),
+      );
+      const executors = await Promise.all(
+        writers.map(async (writer, index) => {
+          const matchId = candidates[index]!.id;
+          const incumbent: GateCC5LeaseSession = {
+            sessionId: writer.sessionId,
+            sessionToken: writer.sessionToken,
+            generation: writer.writerGeneration,
+          };
+          return createGateCC5LeaseTakeoverExecutor({
+            apiOrigin,
+            webOrigin,
+            competitionId: repair.competitionId,
+            organiserCookie: repair.organiserCookie,
+            incumbent,
+            createCandidate: async () => {
+              const pass = await phase2.createAccessPass(
+                { accountId: repair.accountId },
+                repair.competitionId,
+                matchId,
+                {
+                  role: "scorekeeper",
+                  expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+                  idempotencyKey: randomUUID(),
+                },
+                randomUUID(),
+              );
+              if (!pass.token) throw new Error("C5 lease-takeover pass issuance returned no token");
+              const session = await phase2.exchangeAccess(
+                {
+                  token: pass.token,
+                  expectedMatchId: matchId,
+                  deviceId: randomUUID(),
+                  deviceLabel: "C5 takeover candidate",
+                },
+                randomUUID(),
+              );
+              if (session.mode !== "candidate" || session.generation !== null)
+                throw new Error("C5 lease-takeover exchange did not produce a read-only candidate");
+              return { sessionId: session.session_id, sessionToken: session.session_token, generation: null };
+            },
+          });
+        }),
+      );
+      return async (invocation) => executors[invocation.workerIndex % executors.length]!(invocation);
+    };
+    const repairs = Object.freeze(
+      Object.fromEntries(
+        Object.entries(gateCC4Projects).map(([project, repair]) => [
+          project,
+          Object.freeze({
+            competitionId: repair.competitionId,
+            slug: repair.slug,
+            correctionTransactionId: repair.correctionTransactionId,
+            correctedMatchId: repair.correctedMatchId,
+            downstreamMatchId: repair.downstreamMatchId,
+          } satisfies GateCC4CompletedRepair),
+        ]),
+      ),
+    );
+    await configuration.afterGateCC4Complete?.({
+      sourceSha: exactSourceSha,
+      runNumber,
+      repairs,
+      apiOrigin,
+      webOrigin,
+      ownedRedisKeyCount: async () => (await scanOwnedRedisKeys(activeRedis, activeRedisOwnership)).length,
+      createScoreEventExecutor,
+      createPublicCurrentExecutor,
+      createPublicResultConvergenceExecutor,
+      createLeaseTakeoverExecutor,
+    });
   } catch (error) {
     printTail(web?.tail ?? { label: "production web", lines: [] });
     primaryError = error;
@@ -1194,7 +1493,6 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
         cleanupErrors.push(new Error(`${label}: ${error instanceof Error ? error.message : String(error)}`));
       }
     };
-    await cleanup("HTTPS proxy shutdown", () => stopProcess(httpsProxy));
     await cleanup("Web shutdown", () => stopProcess(web));
     await cleanup("API shutdown", async () => app?.close());
     await cleanup("Scheduler shutdown", async () => scheduler?.stop());
@@ -1242,6 +1540,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
         : cleanupError;
     }
     await appendIsolationRecord(configuration.recordFile, {
+      source_sha: configuration.sourceSha,
       run: runNumber,
       status: primaryError ? "failed" : "passed",
       started_at_utc: startedAt,
@@ -1265,13 +1564,15 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
 
 async function main(): Promise<void> {
   assertPinnedToolchain();
+  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  if (!/^[a-f0-9]{40}$/u.test(sourceSha)) throw new Error("Phase 4 real E2E requires an exact source SHA");
+  const infrastructureMode = resolveInfrastructureMode(process.env.PHASE4_E2E_INFRA_MODE);
   const recordFile =
     process.env.PHASE4_E2E_ISOLATION_RECORD_FILE ?? path.join(root, "artifacts/qa/phase4-real-isolation.ndjson");
   await mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
   await writeFile(recordFile, "", { mode: 0o600 });
-  const runCount = resolveHarnessRunCount(process.env);
-  await runOnce(1, { recordFile, redisDatabase: 14 });
-  if (runCount === 2) await runOnce(2, { recordFile, redisDatabase: 15 });
+  await runOnce(1, { recordFile, redisDatabase: 14, infrastructureMode, sourceSha });
+  await runOnce(2, { recordFile, redisDatabase: 15, infrastructureMode, sourceSha });
   process.stdout.write(`Phase 4 real E2E isolation records: ${recordFile}\n`);
 }
 

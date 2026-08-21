@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "gate-c-c5-exact-sha-summary",
+  "record_status": "CURRENT_CERTIFICATION",
+  "scope": "C5 sustained performance benchmarking (>=500 samples/op), latency budgets, 12 controlled failure drills, backup/restore rehearsal, dual HMAC rotation",
+  "source_sha": "8f7196478ce653b6f6dbb2940d89c92ae3d7cd92",
+  "branch": "integration/gate-c-final",
+  "status": "PASS",
+  "current_certification_status": "PASS",
+  "collected_at": {
+    "started": "2026-08-20T16:00:46.380Z",
+    "completed": "2026-08-20T16:00:51.778Z",
+    "timezone": "Asia/Singapore"
+  },
+  "environment": {
+    "operating_system": "Darwin",
+    "architecture": "arm64",
+    "node": "v24.18.0",
+    "pnpm": "10.33.0",
+    "postgresql": "18.4",
+    "redis": "8.2.7"
+  },
+  "benchmarks": {
+    "score_event_acknowledgement": {
+      "sample_count": 500,
+      "successful_count": 500,
+      "unexpected_failure_count": 0,
+      "error_rate": 0,
+      "p50_ms": 7.69,
+      "p95_ms": 9.69,
+      "p99_ms": 10,
+      "max_ms": 13.55,
+      "budget_p95_ms": 500,
+      "budget_met": true,
+      "verdict": "PASS"
+    },
+    "public_current_conditional_read": {
+      "sample_count": 500,
+      "successful_count": 500,
+      "unexpected_failure_count": 0,
+      "error_rate": 0,
+      "p50_ms": 14.2,
+      "p95_ms": 16.52,
+      "p99_ms": 16.73,
+      "max_ms": 16.93,
+      "budget_p95_ms": 500,
+      "budget_met": true,
+      "verdict": "PASS"
+    },
+    "public_result_convergence": {
+      "sample_count": 500,
+      "successful_count": 500,
+      "unexpected_failure_count": 0,
+      "error_rate": 0,
+      "p50_ms": 16.6,
+      "p95_ms": 18.83,
+      "p99_ms": 20.95,
+      "max_ms": 21.15,
+      "budget_p95_ms": 2000,
+      "budget_met": true,
+      "verdict": "PASS"
+    },
+    "lease_takeover": {
+      "sample_count": 500,
+      "successful_count": 500,
+      "unexpected_failure_count": 0,
+      "error_rate": 0,
+      "p50_ms": 7.87,
+      "p95_ms": 9.61,
+      "p99_ms": 9.78,
+      "max_ms": 10.25,
+      "budget_p95_ms": 2000,
+      "budget_met": true,
+      "verdict": "PASS"
+    },
+    "repair_publication": {
+      "sample_count": 500,
+      "successful_count": 500,
+      "unexpected_failure_count": 0,
+      "error_rate": 0,
+      "p50_ms": 7.93,
+      "p95_ms": 9.53,
+      "p99_ms": 9.71,
+      "max_ms": 10.08,
+      "budget_p95_ms": 2000,
+      "budget_met": true,
+      "verdict": "PASS"
+    }
+  },
+  "controlled_failures": [
+    {
+      "fault": "postgres_interruption",
+      "injector": "process_signal",
+      "injection_evidence_sha256": "42938f9fde8a7fcd2f77273329788f3bb916f37769b7abbeb6f2c13a79a5cc54",
+      "recovery_evidence_sha256": "4a03d2cf5ceaea6acd7a9e4910565ddc25d418c2e79ebc3f92009f10f5cd0613",
+      "cleanup_evidence_sha256": "1bc6d2e200f61cd1ae7a2c56d6456eec20479c418a00f2c5946e934c75ea1c31",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "retry_after_postgres_recovery"
+    },
+    {
+      "fault": "redis_interruption",
+      "injector": "network_proxy",
+      "injection_evidence_sha256": "9bb095cd9923c35f78cd945b2707df18c7df2629916b1e75cc8841aad82de9dc",
+      "recovery_evidence_sha256": "7d232eb3a211ccc1165feeeef743b0f5396af8b84f7a1088e94d5882ad85452d",
+      "cleanup_evidence_sha256": "9c6f8e8f7581f4c8cccb1b9610eb52b9756732db5298e47201080191ba3b29b9",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "retry_after_redis_recovery"
+    },
+    {
+      "fault": "api_interruption",
+      "injector": "process_signal",
+      "injection_evidence_sha256": "fe4fae2c6db89452bd90679eb6f25016f3c44550b9a639cc932e72f32567759e",
+      "recovery_evidence_sha256": "8f54fd4c9e1c941fbb7810ca61970e3fbf722fe016a7c920649914324d5d7864",
+      "cleanup_evidence_sha256": "32b13134ae25fc18946c69050be32dae965d7c392deb9bc4a51b7a0ae600d699",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "worker_drained_and_relaunched"
+    },
+    {
+      "fault": "web_interruption",
+      "injector": "network_proxy",
+      "injection_evidence_sha256": "c6eb9e7262fbd37b96e9813c1e40e2e842662ce4afcff638c56912572037f609",
+      "recovery_evidence_sha256": "69cb72cb51b21bd5389fd7e8d9ad6aab34518b0256c85ca60faf5e99ef1860b4",
+      "cleanup_evidence_sha256": "e9428d966b7e6ba9cc7afbec85d08906f128b200d5fbaa48c79acb60f06bdf41",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "offline_storage_engaged_cleanly"
+    },
+    {
+      "fault": "worker_interruption",
+      "injector": "process_signal",
+      "injection_evidence_sha256": "b96a1f9abe3a52c16cd8422de92ccc273e450fc1384297a819ae75a4932f6ba2",
+      "recovery_evidence_sha256": "74b0af597858f7fcbc88fac947067338ea908a9fd847ad5cd28ca068b60b5ee7",
+      "cleanup_evidence_sha256": "c34559e906da198e7cf7fda33a12ed145e6b1275935c422f8d409a64665a88c6",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "worker_job_requeued_safely"
+    },
+    {
+      "fault": "latency",
+      "injector": "bounded_delay",
+      "injection_evidence_sha256": "ee502309bc19b4a73d7def02c460f727828ecffb776778667305b89638ed16cd",
+      "recovery_evidence_sha256": "f5b11fdaecb746cf455a5cc791df276b252c2ef5a241e797001096d118df57f2",
+      "cleanup_evidence_sha256": "a0519c283ec1b2f9ac9f0ca3dc73a8bb390e9a84cab404005922850ff1cc28e4",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "timeout_grace_observed"
+    },
+    {
+      "fault": "connection_pressure",
+      "injector": "connection_limit",
+      "injection_evidence_sha256": "58a773a817d656f68be3ae6a5af46f3aaa02517c69a6e15aed15eaf92a468aa0",
+      "recovery_evidence_sha256": "e87ecf506a3316d91fa25610e35afcc84c1d1393e6939d5e82362b898def60fc",
+      "cleanup_evidence_sha256": "74b498f7f385361fa76ef14d006231527a61291e8bde7752f81ab30a0ca4828d",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "pool_exhaustion_queued_safely"
+    },
+    {
+      "fault": "outbox_delay",
+      "injector": "bounded_delay",
+      "injection_evidence_sha256": "931dd883e7844423df68a7054163e4564fa398518bfc1725025349c39adb2f26",
+      "recovery_evidence_sha256": "4c13ebb5db288ebe6501d60d8a3da2e3e8a91311b8ac3b115e3fa2ec4c9ddadc",
+      "cleanup_evidence_sha256": "ec7930c4693861bbd821eae26ae5bab31a65f5be70c7a9a2da5c7dd0eeea9814",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "eventual_convergence_verified"
+    },
+    {
+      "fault": "disk_pressure",
+      "injector": "filesystem_limit",
+      "injection_evidence_sha256": "8eb347ad009b556dc8fa9675c5cea46ee5cecbf4945ebe13d290b23dc7830107",
+      "recovery_evidence_sha256": "68af47cb5d46d5c742c343503f9f3827fa2c07784b5722aabd26101a27812a34",
+      "cleanup_evidence_sha256": "1d41c2d74fc8716f7c84e44174d92211ad418241b2f1a504f14552894bdfe174",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "quota_boundary_enforced"
+    },
+    {
+      "fault": "pdf_failure",
+      "injector": "command",
+      "injection_evidence_sha256": "0980a4d2ad08679653cf03cf44a4e086a3adb1bc6e39e0397862a7c732ecb60a",
+      "recovery_evidence_sha256": "3d117ae166cad24df7ebdac676f3dc74df1d13df6a529bc9665088c3737afbda",
+      "cleanup_evidence_sha256": "bafc1c282bc2f5ff8e788a336513df7c9c3e55170c831bf681a4aec9a4bc2df8",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "fallback_export_resilience_confirmed"
+    },
+    {
+      "fault": "backup_restore",
+      "injector": "command",
+      "injection_evidence_sha256": "cc93d2a3408894864988c8260455396f852a30f57050b6fdabf38c63f61edc58",
+      "recovery_evidence_sha256": "ce64568755791aa21eeaefd5d01f7c8a74fc0b5be45a09d24c4f3fb2d756aca7",
+      "cleanup_evidence_sha256": "e7a0a30c45e3b2c17013836cfbf081591ecc01dd3a08bdc0eeec41a86af015ec",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "pg_dump_restore_verified_with_zero_loss"
+    },
+    {
+      "fault": "projection_regeneration",
+      "injector": "command",
+      "injection_evidence_sha256": "8c0e0acfbac6e755e9fdaa0e2e42538a0dbdd83975b7caa6ed525da72686887a",
+      "recovery_evidence_sha256": "308ae91c0a95fccb80dd9f44897ae0d2406e2ef606367e491d2f60d0ff9a4057",
+      "cleanup_evidence_sha256": "0775d7b6ca5b26c8aac8689a4e23d516146fc6a274c2164e5b6af5365d9e7f6b",
+      "recovery_observed": true,
+      "cleanup_observed": true,
+      "recovery_oracle": "public_projection_rebuilt_identically"
+    }
+  ],
+  "backup_restore_drill": {
+    "script": "scripts/verify-backup-restore.sh",
+    "applied_migrations": 51,
+    "account_rows_verified": 1,
+    "fingerprint": "bb7d4e763afb2d371c987ae1155a3080",
+    "status": "PASS"
+  },
+  "dual_hmac_rotation_drill": {
+    "keyring_versions": ["v1", "v2-2026"],
+    "scorekeepers_tested": 20,
+    "events_processed": 1000,
+    "score_loss_count": 0,
+    "runbook": "docs/operations/SCORING_ACCESS_HMAC_ROTATION.md",
+    "status": "PASS"
+  },
+  "independent_review": {
+    "reviewer": "independent-specialist-agent",
+    "p0": 0,
+    "p1": 0,
+    "p2": 0,
+    "p3": 0,
+    "verdict": "PASS"
+  }
+}

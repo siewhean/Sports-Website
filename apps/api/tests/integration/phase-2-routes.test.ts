@@ -1,10 +1,9 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ScoringSessionState } from "@matchday/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { ScoringAccessRejectedError, type Phase2Runtime } from "../../src/phase-2-runtime.js";
-import { scoringSessionRateLimitKey } from "../../src/scoring-rate-limit-identity.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -34,6 +33,11 @@ function authenticatedIdentityRuntime(): IdentityApiRuntime {
 
 function routeRuntime() {
   return {
+    scoringSessionRateLimitSubject: vi.fn(async (sessionId: unknown, sessionToken: unknown): Promise<string | null> => {
+      void sessionId;
+      void sessionToken;
+      return null;
+    }),
     createCompetition: vi.fn(async () => ({ id: randomUUID(), status: "draft", sport_code: "canoe_polo" })),
     competitionWorkspace: vi.fn(async () => ({
       competition: { id: randomUUID(), name: "Singapore Open" },
@@ -56,6 +60,7 @@ function routeRuntime() {
             away: { id: randomUUID(), name: "Harbour Gold" },
           },
           access: {
+            principal_id: "a".repeat(64),
             mode: "writer",
             permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
             session_expires_at: "2026-08-01T00:00:00.000Z",
@@ -74,6 +79,7 @@ function routeRuntime() {
           },
           aggregate_version: 2,
           through_sequence: 2,
+          canonical_events: [],
           events: [],
         }) satisfies ScoringSessionState,
     ),
@@ -85,22 +91,46 @@ function routeRuntime() {
       expires_at: "2026-08-01T00:00:00.000Z",
       rate_limit: { limit: 5, remaining: 5, resetSeconds: 600 },
     })),
+    issueOfflineAuthorization: vi.fn(async () => ({
+      authorization_id: randomUUID(),
+      resume_secret: "r".repeat(43),
+      recording_expires_at: "2026-08-01T04:00:00.000Z",
+      replay_expires_at: "2026-08-01T04:15:00.000Z",
+      pass_expires_at: "2026-08-01T05:00:00.000Z",
+      generation: 1,
+      match_id: randomUUID(),
+      competition_id: randomUUID(),
+    })),
+    resumeOfflineAuthorization: vi.fn(async () => ({
+      session: {
+        session_id: randomUUID(),
+        session_token: "s".repeat(43),
+        match_id: randomUUID(),
+        mode: "writer",
+        permissions: ["score:read", "score:write", "score:reverse", "score:finalise"],
+        generation: 1,
+        expires_at: "2026-08-01T00:30:00.000Z",
+        lease_expires_at: "2026-08-01T00:00:45.000Z",
+      },
+      offline: {
+        principal_id: "a".repeat(64),
+        authorization_id: randomUUID(),
+        resume_secret: "n".repeat(43),
+        recording_expires_at: "2026-08-01T04:00:00.000Z",
+        replay_expires_at: "2026-08-01T04:15:00.000Z",
+        pass_expires_at: "2026-08-01T05:00:00.000Z",
+        generation: 1,
+        match_id: randomUUID(),
+        competition_id: randomUUID(),
+      },
+    })),
+    revokeOfflineAuthorization: vi.fn(async () => ({
+      authorization_id: randomUUID(),
+      status: "revoked",
+      duplicate: false,
+    })),
     listTakeoverRequests: vi.fn(async () => []),
     expireTakeoverRequests: vi.fn(async () => ({ expired_count: 1 })),
-    publicCompetitions: vi.fn(async () => ({
-      competitions: [
-        {
-          id: randomUUID(),
-          name: "Singapore Open",
-          slug: "singapore-open",
-          sport_code: "canoe_polo",
-          timezone: "Asia/Singapore",
-          starts_on: "2026-08-01",
-          ends_on: "2026-08-01",
-          status: "active",
-        },
-      ],
-    })),
     publicCompetition: vi.fn(async () => ({
       competition: {
         id: randomUUID(),
@@ -133,20 +163,52 @@ function routeRuntime() {
 }
 
 describe("Phase 2 Fastify route boundaries", () => {
-  it("derives scoring rate-limit keys with the dedicated HMAC secret without retaining raw session or IP inputs", () => {
-    const sessionId = randomUUID();
-    const clientIp = "198.51.100.202";
-    const rateLimitSecret = "dedicated-scoring-rate-limit-hmac-secret";
-    const csrfSecret = "independent-csrf-hmac-secret-do-not-use";
-    const fingerprint = (value: string) => createHmac("sha256", rateLimitSecret).update(value, "utf8").digest("hex");
+  it("gives only validated scoring sessions independent authenticated rate-limit budgets", async () => {
+    const runtime = routeRuntime();
+    const firstToken = "a".repeat(43);
+    const rotatedFirstToken = "c".repeat(43);
+    const secondToken = "b".repeat(43);
+    const firstSession = randomUUID();
+    const rotatedFirstSession = randomUUID();
+    const secondSession = randomUUID();
+    const firstAccessPass = randomUUID();
+    const secondAccessPass = randomUUID();
+    const validSessions = new Map([
+      [firstToken, { sessionId: firstSession, subject: firstAccessPass }],
+      [rotatedFirstToken, { sessionId: rotatedFirstSession, subject: firstAccessPass }],
+      [secondToken, { sessionId: secondSession, subject: secondAccessPass }],
+    ]);
+    runtime.scoringSessionRateLimitSubject.mockImplementation(async (sessionId, sessionToken) => {
+      const expected = typeof sessionToken === "string" ? validSessions.get(sessionToken) : null;
+      return typeof sessionId === "string" && expected?.sessionId === sessionId ? expected.subject : null;
+    });
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: authenticatedIdentityRuntime(),
+      phase2Runtime: runtime as unknown as Phase2Runtime,
+      anonymousRateLimitMax: 2,
+      authenticatedRateLimitMax: 2,
+    });
+    apps.push(app);
+    const request = (sessionId: string, sessionToken: string, url = "/api/v1/scoring/session") =>
+      app.inject({
+        method: "GET",
+        url,
+        headers: {
+          "x-scoring-session-id": sessionId,
+          "x-scoring-session-token": sessionToken,
+        },
+      });
+    expect((await request(firstSession, firstToken)).statusCode).toBe(200);
+    expect((await request(rotatedFirstSession, rotatedFirstToken)).statusCode).toBe(200);
+    expect((await request(firstSession, firstToken)).statusCode).toBe(429);
+    expect((await request(secondSession, secondToken)).statusCode).toBe(200);
+    expect((await request(secondSession, secondToken)).statusCode).toBe(200);
 
-    const key = scoringSessionRateLimitKey(sessionId, clientIp, rateLimitSecret);
-
-    expect(key).toBe(`scoring-session:${fingerprint(`session:${sessionId}`)}:ip:${fingerprint(`ip:${clientIp}`)}`);
-    expect(key).not.toContain(sessionId);
-    expect(key).not.toContain(clientIp);
-    expect(key).not.toContain(csrfSecret);
-    expect(key).not.toBe(scoringSessionRateLimitKey(sessionId, clientIp, csrfSecret));
+    expect((await request(firstSession, firstToken, "/api/v1/status")).statusCode).toBe(200);
+    expect((await request(randomUUID(), "y".repeat(43))).statusCode).toBe(200);
+    expect((await request(randomUUID(), "z".repeat(43))).statusCode).toBe(429);
   });
 
   it("enforces organiser origin, session and CSRF before mutation and excludes access secrets from reads", async () => {
@@ -340,6 +402,91 @@ describe("Phase 2 Fastify route boundaries", () => {
       expect.objectContaining({ deviceLabel: "x".repeat(80) }),
       expect.any(String),
     );
+    const scoringHeaders = {
+      "x-scoring-session-id": randomUUID(),
+      "x-scoring-session-token": "t".repeat(43),
+      "x-writer-generation": "1",
+    };
+    const offlineSummary = {
+      device_id: rawDeviceId,
+      last_acknowledged_sequence: 2,
+      pending_event_count: 1,
+      pending_through_sequence: 3,
+      last_reported_local_sequence: 1,
+      queue_fingerprint: "a".repeat(64),
+      indexeddb_schema_version: 1,
+      service_worker_version: "gate-c-c3-v6",
+    };
+    const issuedOffline = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/offline-authorizations",
+      headers: scoringHeaders,
+      payload: offlineSummary,
+    });
+    expect(issuedOffline.statusCode).toBe(200);
+    expect(runtime.issueOfflineAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: 1 }),
+      expect.objectContaining({
+        deviceId: rawDeviceId,
+        pendingEventCount: 1,
+        queueFingerprint: "a".repeat(64),
+      }),
+      expect.any(String),
+    );
+    const renewedOffline = await app.inject({
+      method: "POST",
+      url: "/api/v1/scoring/offline-authorizations",
+      headers: scoringHeaders,
+      payload: { ...offlineSummary, resume_secret: "r".repeat(43) },
+    });
+    expect(renewedOffline.statusCode).toBe(200);
+    expect(runtime.issueOfflineAuthorization).toHaveBeenLastCalledWith(
+      expect.objectContaining({ generation: 1 }),
+      expect.objectContaining({ resumeSecret: "r".repeat(43) }),
+      expect.any(String),
+    );
+    const authorizationId = randomUUID();
+    const resumedOffline = await app.inject({
+      method: "POST",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}/resume`,
+      payload: { ...offlineSummary, resume_secret: "r".repeat(43) },
+    });
+    expect(resumedOffline.statusCode).toBe(200);
+    expect(runtime.resumeOfflineAuthorization).toHaveBeenCalledWith(
+      authorizationId,
+      expect.objectContaining({
+        resumeSecret: "r".repeat(43),
+        deviceId: rawDeviceId,
+        pendingEventCount: 1,
+      }),
+      expect.any(String),
+    );
+    const revokedOffline = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}`,
+      payload: { resume_secret: "n".repeat(43), device_id: rawDeviceId },
+    });
+    expect(revokedOffline.statusCode).toBe(200);
+    expect(runtime.revokeOfflineAuthorization).toHaveBeenCalledWith(
+      authorizationId,
+      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId, preserveWriterSession: false },
+      expect.any(String),
+    );
+    const rolledBackOffline = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/scoring/offline-authorizations/${authorizationId}`,
+      payload: {
+        resume_secret: "n".repeat(43),
+        device_id: rawDeviceId,
+        preserve_writer_session: true,
+      },
+    });
+    expect(rolledBackOffline.statusCode).toBe(200);
+    expect(runtime.revokeOfflineAuthorization).toHaveBeenLastCalledWith(
+      authorizationId,
+      { resumeSecret: "n".repeat(43), deviceId: rawDeviceId, preserveWriterSession: true },
+      expect.any(String),
+    );
     const retainedTransportEvidence = JSON.stringify({
       logs: retainedLogLines,
       telemetry: telemetryInputs,
@@ -355,62 +502,11 @@ describe("Phase 2 Fastify route boundaries", () => {
       expect(retainedTransportEvidence).not.toContain(secret);
     }
 
-    const publicListing = await app.inject({ method: "GET", url: "/api/v1/public/competitions" });
-    expect(publicListing.statusCode).toBe(200);
-    expect(publicListing.headers["cache-control"]).toContain("public");
-    expect(publicListing.json()).toMatchObject({
-      competitions: [{ name: "Singapore Open", slug: "singapore-open", status: "active" }],
+    const removedLegacyPublicView = await app.inject({
+      method: "GET",
+      url: "/api/v1/public/competitions/singapore-open",
     });
-
-    const publicView = await app.inject({ method: "GET", url: "/api/v1/public/competitions/singapore-open" });
-    expect(publicView.statusCode).toBe(200);
-    expect(publicView.headers["cache-control"]).toContain("public");
-    expect(publicView.json()).toMatchObject({
-      competition: { name: "Singapore Open", status: "active" },
-      divisions: [{ division: { name: "Open" }, schedule: [], results: [] }],
-      division: { name: "Open" },
-      publication: { schedule_version: 1, result_version: 2 },
-    });
-    expect(publicView.body).not.toContain("primary_email");
-    expect(publicView.body).not.toContain("session_token");
-  });
-
-  it("keeps rotated unverified scoring ids on the anonymous budget while organiser sessions use account quota", async () => {
-    const app = await buildApp({
-      config: testConfig(),
-      probes: healthyProbes,
-      identityRuntime: authenticatedIdentityRuntime(),
-      phase2Runtime: routeRuntime() as unknown as Phase2Runtime,
-      anonymousRateLimitMax: 1,
-    });
-    apps.push(app);
-    const headers = {
-      "x-scoring-session-id": randomUUID(),
-      "x-scoring-session-token": "t".repeat(43),
-      "x-writer-generation": "1",
-    };
-
-    expect((await app.inject({ method: "GET", url: "/api/v1/scoring/session", headers })).statusCode).toBe(200);
-    expect((await app.inject({ method: "GET", url: "/api/v1/scoring/session", headers })).statusCode).toBe(429);
-    expect(
-      (
-        await app.inject({
-          method: "GET",
-          url: "/api/v1/scoring/session",
-          headers: { ...headers, "x-scoring-session-id": randomUUID() },
-        })
-      ).statusCode,
-    ).toBe(429);
-
-    const organiserPath = `/api/v1/competitions/${randomUUID()}`;
-    expect(
-      (
-        await app.inject({
-          method: "GET",
-          url: organiserPath,
-          headers: { cookie: "matchday_session=session-token" },
-        })
-      ).statusCode,
-    ).toBe(200);
+    expect(removedLegacyPublicView.statusCode).toBe(404);
+    expect(runtime.publicCompetition).not.toHaveBeenCalled();
   });
 });

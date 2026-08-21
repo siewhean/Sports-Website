@@ -40,95 +40,22 @@ const ResultMutationReceiptSchema = Type.Object(
 const ScoringFinalisationReceiptSchema = Type.Object(
   {
     match_id: Id,
+    client_event_id: Id,
+    event_id: Id,
+    command_fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+    outcome: Type.Union([Type.Literal("accepted"), Type.Literal("duplicate")]),
     sequence: Type.Integer({ minimum: 1 }),
     aggregate_version: Type.Integer({ minimum: 1 }),
     duplicate: Type.Boolean(),
     home_score: Type.Integer({ minimum: 0 }),
     away_score: Type.Integer({ minimum: 0 }),
     result_version: Type.Integer({ minimum: 1 }),
+    publication_version: Type.Integer({ minimum: 1 }),
+    published_at: Type.String({ format: "date-time" }),
+    server_received_at: Type.String({ format: "date-time" }),
   },
   { additionalProperties: false },
 );
-const PublicParticipantSchema = Type.Object({
-  id: Type.Union([Id, Type.Null()]),
-  name: Type.String(),
-});
-const PublicScheduleSchema = Type.Object({
-  id: Id,
-  code: Type.String(),
-  stage: Type.String(),
-  home: PublicParticipantSchema,
-  away: PublicParticipantSchema,
-  starts_at: Type.String({ format: "date-time" }),
-  ends_at: Type.String({ format: "date-time" }),
-  area: Type.Object({ id: Id, name: Type.String() }),
-});
-const PublicResultSchema = Type.Object({
-  id: Id,
-  code: Type.String(),
-  stage: Type.String(),
-  home: PublicParticipantSchema,
-  away: PublicParticipantSchema,
-  home_score: Type.Integer({ minimum: 0 }),
-  away_score: Type.Integer({ minimum: 0 }),
-  state: Type.Union([Type.Literal("final"), Type.Literal("corrected")]),
-  updated_at: Type.String({ format: "date-time" }),
-});
-const PublicDivisionSchema = Type.Object({
-  division: Type.Object({ id: Id, name: Type.String() }),
-  schedule: Type.Array(PublicScheduleSchema),
-  results: Type.Array(PublicResultSchema),
-  standings: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-  bracket: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-});
-const PublicCompetitionSummarySchema = Type.Object({
-  id: Id,
-  name: Type.String(),
-  slug: Type.String(),
-  sport_code: Type.Union([
-    Type.Literal("canoe_polo"),
-    Type.Literal("badminton"),
-    Type.Literal("table_tennis"),
-    Type.Literal("volleyball"),
-    Type.Literal("basketball"),
-  ]),
-  timezone: Type.String(),
-  starts_on: Type.String({ format: "date" }),
-  ends_on: Type.String({ format: "date" }),
-  status: Type.Union([Type.Literal("active"), Type.Literal("completed"), Type.Literal("archived")]),
-});
-const PublicCompetitionListingSchema = Type.Object({
-  competitions: Type.Array(PublicCompetitionSummarySchema),
-});
-const PublicCompetitionSchema = Type.Object({
-  competition: Type.Object({
-    id: Id,
-    name: Type.String(),
-    slug: Type.String(),
-    sport_code: Type.Union([
-      Type.Literal("canoe_polo"),
-      Type.Literal("badminton"),
-      Type.Literal("table_tennis"),
-      Type.Literal("volleyball"),
-      Type.Literal("basketball"),
-    ]),
-    timezone: Type.String(),
-    starts_on: Type.String({ format: "date" }),
-    ends_on: Type.String({ format: "date" }),
-    status: Type.Union([Type.Literal("active"), Type.Literal("completed"), Type.Literal("archived")]),
-  }),
-  divisions: Type.Array(PublicDivisionSchema, { minItems: 1 }),
-  division: Type.Object({ id: Id, name: Type.String() }),
-  publication: Type.Object({
-    schedule_version: Type.Integer({ minimum: 0 }),
-    result_version: Type.Integer({ minimum: 0 }),
-  }),
-  schedule: Type.Array(PublicScheduleSchema),
-  results: Type.Array(PublicResultSchema),
-  standings: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-  bracket: Type.Union([Type.Record(Type.String(), Type.Any()), Type.Null()]),
-  last_updated_at: Type.String({ format: "date-time" }),
-});
 const ScoringSessionStateSchema = Type.Object({
   competition: Type.Object({
     slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
@@ -164,6 +91,7 @@ const ScoringSessionStateSchema = Type.Object({
     read_only: Type.Boolean(),
   }),
   access: Type.Object({
+    principal_id: Type.String({ pattern: "^[0-9a-f]{64}$" }),
     mode: Type.Union([
       Type.Literal("writer"),
       Type.Literal("candidate"),
@@ -183,6 +111,13 @@ const ScoringSessionStateSchema = Type.Object({
   score: GenericSuccess,
   aggregate_version: Type.Integer({ minimum: 0 }),
   through_sequence: Type.Integer({ minimum: 0 }),
+  canonical_events: Type.Array(
+    Type.Object({
+      event_id: Id,
+      sequence: Type.Integer({ minimum: 1 }),
+      command: Type.Record(Type.String(), Type.Any()),
+    }),
+  ),
   events: Type.Array(
     Type.Object({
       client_event_id: Id,
@@ -938,6 +873,159 @@ export async function registerPhase2Routes(
     },
   );
 
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: {
+      device_id: string;
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+      last_reported_local_sequence: number;
+      queue_fingerprint?: string | null;
+      indexeddb_schema_version: number;
+      service_worker_version: string;
+      resume_secret?: string;
+    };
+  }>(
+    "/api/v1/scoring/offline-authorizations",
+    {
+      schema: {
+        description:
+          "Issue or renew generation-bound offline scoring authority after confirming authoritative server state.",
+        headers: ScoringHeaders,
+        security: [{ scoringSession: [] }],
+        body: Type.Object(
+          {
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+            pending_event_count: Type.Integer({ minimum: 0 }),
+            pending_through_sequence: Type.Integer({ minimum: 0 }),
+            last_reported_local_sequence: Type.Integer({ minimum: 0 }),
+            queue_fingerprint: Type.Optional(Type.Union([Type.String({ pattern: "^[0-9a-f]{64}$" }), Type.Null()])),
+            indexeddb_schema_version: Type.Literal(1),
+            service_worker_version: Type.Union([
+              Type.Literal("gate-c-c3-v4"),
+              Type.Literal("gate-c-c3-v5"),
+              Type.Literal("gate-c-c3-v6"),
+            ]),
+            resume_secret: Type.Optional(Type.String({ minLength: 32, maxLength: 256 })),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.issueOfflineAuthorization(
+        scoringAuth(request.headers),
+        {
+          deviceId: request.body.device_id,
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+          lastReportedLocalSequence: request.body.last_reported_local_sequence,
+          queueFingerprint: request.body.queue_fingerprint ?? null,
+          indexeddbSchemaVersion: request.body.indexeddb_schema_version,
+          serviceWorkerVersion: request.body.service_worker_version,
+          ...(request.body.resume_secret ? { resumeSecret: request.body.resume_secret } : {}),
+        },
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Params: { authorizationId: string };
+    Body: {
+      resume_secret: string;
+      device_id: string;
+      last_acknowledged_sequence: number;
+      pending_event_count: number;
+      pending_through_sequence: number;
+      last_reported_local_sequence: number;
+      queue_fingerprint?: string | null;
+      indexeddb_schema_version: number;
+      service_worker_version: string;
+    };
+  }>(
+    "/api/v1/scoring/offline-authorizations/:authorizationId/resume",
+    {
+      schema: {
+        description: "Resume the same offline writer generation and rotate the ordinary short-lived scoring session.",
+        params: Type.Object({ authorizationId: Id }),
+        body: Type.Object(
+          {
+            resume_secret: Type.String({ minLength: 32, maxLength: 256 }),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            last_acknowledged_sequence: Type.Integer({ minimum: 0 }),
+            pending_event_count: Type.Integer({ minimum: 0 }),
+            pending_through_sequence: Type.Integer({ minimum: 0 }),
+            last_reported_local_sequence: Type.Integer({ minimum: 0 }),
+            queue_fingerprint: Type.Optional(Type.Union([Type.String({ pattern: "^[0-9a-f]{64}$" }), Type.Null()])),
+            indexeddb_schema_version: Type.Literal(1),
+            service_worker_version: Type.Union([
+              Type.Literal("gate-c-c3-v4"),
+              Type.Literal("gate-c-c3-v5"),
+              Type.Literal("gate-c-c3-v6"),
+            ]),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.resumeOfflineAuthorization(
+        request.params.authorizationId,
+        {
+          resumeSecret: request.body.resume_secret,
+          deviceId: request.body.device_id,
+          lastAcknowledgedSequence: request.body.last_acknowledged_sequence,
+          pendingEventCount: request.body.pending_event_count,
+          pendingThroughSequence: request.body.pending_through_sequence,
+          lastReportedLocalSequence: request.body.last_reported_local_sequence,
+          queueFingerprint: request.body.queue_fingerprint ?? null,
+          indexeddbSchemaVersion: request.body.indexeddb_schema_version,
+          serviceWorkerVersion: request.body.service_worker_version,
+        },
+        request.id,
+      ),
+  );
+
+  app.delete<{
+    Params: { authorizationId: string };
+    Body: { resume_secret: string; device_id: string; preserve_writer_session?: boolean };
+  }>(
+    "/api/v1/scoring/offline-authorizations/:authorizationId",
+    {
+      schema: {
+        description: "Revoke a generation-bound offline authorization and relinquish its matching writer lease.",
+        params: Type.Object({ authorizationId: Id }),
+        body: Type.Object(
+          {
+            resume_secret: Type.String({ minLength: 32, maxLength: 256 }),
+            device_id: Type.String({ minLength: 32, maxLength: 256 }),
+            preserve_writer_session: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: GenericSuccess, 403: ErrorResponse },
+        tags: ["scoring-offline"],
+      },
+    },
+    async (request) =>
+      options.runtime.revokeOfflineAuthorization(
+        request.params.authorizationId,
+        {
+          resumeSecret: request.body.resume_secret,
+          deviceId: request.body.device_id,
+          preserveWriterSession: request.body.preserve_writer_session === true,
+        },
+        request.id,
+      ),
+  );
+
   app.post<{ Headers: ScoringHeaderValues }>(
     "/api/v1/scoring/sessions/transfer",
     {
@@ -1183,7 +1271,10 @@ export async function registerPhase2Routes(
     },
   );
 
-  app.post<{ Headers: ScoringHeaderValues; Body: { client_event_id: string; expected_sequence: number } }>(
+  app.post<{
+    Headers: ScoringHeaderValues;
+    Body: { client_event_id: string; expected_sequence: number; occurred_at?: string };
+  }>(
     "/api/v1/scoring/finalise",
     {
       schema: {
@@ -1194,6 +1285,7 @@ export async function registerPhase2Routes(
         body: Type.Object({
           client_event_id: Id,
           expected_sequence: Type.Integer({ minimum: 0 }),
+          occurred_at: Type.Optional(Type.String({ format: "date-time" })),
         }),
         response: {
           200: ScoringFinalisationReceiptSchema,
@@ -1210,6 +1302,7 @@ export async function registerPhase2Routes(
         request.body.client_event_id,
         request.id,
         request.body.expected_sequence,
+        request.body.occurred_at,
       ),
   );
 
@@ -1277,32 +1370,5 @@ export async function registerPhase2Routes(
       const session = await options.identityRequests.authenticate(request);
       return options.runtime.audit({ accountId: session.account.id }, request.params.competitionId);
     },
-  );
-
-  app.get(
-    "/api/v1/public/competitions",
-    {
-      schema: {
-        description:
-          "List competitions with a published schedule or result. A competition appears here once its organiser has completed setup and published at least once, the same condition the single-competition endpoint already requires.",
-        response: { 200: PublicCompetitionListingSchema },
-        tags: ["public"],
-      },
-    },
-    async () => options.runtime.publicCompetitions(),
-  );
-
-  app.get<{ Params: { slug: string } }>(
-    "/api/v1/public/competitions/:slug",
-    {
-      schema: {
-        description:
-          "Read only the current matched schedule/result projection. Draft revisions and private contacts are excluded.",
-        params: Type.Object({ slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 120 }) }),
-        response: { 200: PublicCompetitionSchema, 404: ErrorResponse },
-        tags: ["public"],
-      },
-    },
-    async (request) => options.runtime.publicCompetition(request.params.slug),
   );
 }

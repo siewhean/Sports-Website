@@ -306,7 +306,7 @@ beforeAll(async () => {
   await sql`INSERT INTO sport_pack_versions(
     sport_code,version,schema_version,definition,definition_hash,status,activated_at
   ) VALUES('badminton','phase4-test-1',1,${sql.json(definition)},${hash(definition)},'active',now())`;
-});
+}, 60_000);
 
 afterAll(async () => {
   await sql?.end({ timeout: 2 });

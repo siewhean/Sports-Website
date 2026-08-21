@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { translate as t } from "@matchday/ui";
 import { forwardPhase3Mutation, jsonBody } from "@/lib/phase3-settings-command.server";
 import {
   isCompetitionCreateRequest,
@@ -9,10 +8,6 @@ import {
   phase3CompetitionCreateMachine,
 } from "@/lib/phase3-competition-create";
 import { readPhase3Json } from "@/lib/phase3-settings-command.server";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 export async function GET(request: NextRequest) {
   const result = await readPhase3Json(request, phase3CompetitionCreateMachine.optionsPath);
@@ -59,30 +54,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const response = await forwardPhase3Mutation(request, {
+  return forwardPhase3Mutation(request, {
     method: phase3CompetitionCreateMachine.post,
     path: "/api/v1/competitions/phase3",
     body,
     validate: (value) => parseCompetitionCreateReceipt(value)?.sport_code === body.sport_code,
     successStatus: 201,
   });
-
-  if (response.status !== 500) return response;
-  const payload: unknown = await response
-    .clone()
-    .json()
-    .catch(() => null);
-  const upstreamError = isRecord(payload) && isRecord(payload.error) ? payload.error : null;
-  if (upstreamError?.code !== "INTERNAL_ERROR") return response;
-
-  return NextResponse.json(
-    {
-      error: {
-        code: "COMPETITION_CREATE_FAILED",
-        message: t("prototype.ba5d9c34e7d6"),
-        ...(typeof upstreamError.request_id === "string" ? { request_id: upstreamError.request_id } : {}),
-      },
-    },
-    { status: 500 },
-  );
 }

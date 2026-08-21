@@ -32,8 +32,14 @@ import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import { registerPhase4Routes } from "./phase-4-routes.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
 import { registerPhase4SetupPatchRoutes } from "./phase-4-setup-patch-routes.js";
-import { anonymousRateLimitKey, scoringSessionRateLimitKey } from "./scoring-rate-limit-identity.js";
+import { registerGateCC4Routes } from "./gate-c-c4-routes.js";
+import type { GateCC4Runtime } from "./gate-c-c4-runtime.js";
+import type { GateCC4Operations } from "./gate-c-c4-operations.js";
+import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
+import { registerGateCC4PublicTruthRoutes, type GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
+import { registerScoringAccessHmacKeyringRoutes } from "./scoring-access-hmac-keyring-routes.js";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
+import type { PostgresJsSql } from "@matchday/identity";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
@@ -114,6 +120,11 @@ export type BuildAppOptions = {
   phase2Runtime?: Phase2Runtime;
   phase3Runtime?: Phase3Runtime;
   phase4Runtime?: Phase4Runtime;
+  gateCC4Runtime?: GateCC4Runtime;
+  gateCC4Operations?: GateCC4Operations;
+  gateCC4Lifecycle?: GateCC4LifecycleOperations;
+  gateCC4PublicTruthRuntime?: GateCC4PublicTruthRuntime;
+  scoringAccessHmacKeySql?: PostgresJsSql;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -246,9 +257,26 @@ export async function buildApp(options: BuildAppOptions) {
     },
     crossOriginResourcePolicy: { policy: "same-site" },
     frameguard: { action: "deny" },
-    hsts: deployedEnvironment ? { includeSubDomains: true, maxAge: 63_072_000, preload: true } : false,
+    hsts: deployedEnvironment
+      ? {
+          includeSubDomains: true,
+          maxAge: options.config.environment === "production" ? 31_536_000 : 63_072_000,
+          preload: true,
+        }
+      : false,
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
   });
+
+  const scoringSessionAuthorisedRateLimitRoutes = new Set([
+    "GET /api/v1/scoring/session",
+    "POST /api/v1/scoring/events",
+    "POST /api/v1/scoring/finalise",
+    "POST /api/v1/scoring/offline-authorizations",
+    "POST /api/v1/scoring/sessions/heartbeat",
+    "POST /api/v1/scoring/offline-authorizations/:authorizationId/resume",
+    "DELETE /api/v1/scoring/offline-authorizations/:authorizationId",
+    "POST /api/v1/scoring/sessions/lease-takeover",
+  ]);
 
   await app.register(rateLimit, {
     global: true,
@@ -258,29 +286,20 @@ export async function buildApp(options: BuildAppOptions) {
         ? await options.resolveRateLimitAccountId(request)
         : await identityRequests?.rateLimitAccountId(request);
       if (accountId) return `account:${accountId}`;
-
-      if (requestRoute(request).startsWith("/api/v1/scoring/") && options.resolveVerifiedScoringRateLimitSessionId) {
-        const scoringSessionId = await options.resolveVerifiedScoringRateLimitSessionId(request);
-        if (scoringSessionId) {
-          return scoringSessionRateLimitKey(
-            scoringSessionId,
-            request.ip,
-            options.config.scoringAccess.rateLimitHmacSecret,
-          );
-        }
+      const route = `${request.method} ${request.routeOptions.url}`;
+      if (scoringSessionAuthorisedRateLimitRoutes.has(route)) {
+        const scoringAccessPassId = await options.phase2Runtime?.scoringSessionRateLimitSubject(
+          request.headers["x-scoring-session-id"],
+          request.headers["x-scoring-session-token"],
+        );
+        if (scoringAccessPassId) return `scoring-access-pass:${scoringAccessPassId}`;
       }
-
-      return anonymousRateLimitKey(request.ip, options.config.scoringAccess.rateLimitHmacSecret);
+      return `ip:${request.ip}`;
     },
-    max: async (_request, key) => {
-      if (key.startsWith("account:")) {
-        return options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000;
-      }
-      if (key.startsWith("scoring-session:")) {
-        return options.scoringSessionRateLimitMax ?? options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000;
-      }
-      return options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100;
-    },
+    max: async (_request, key) =>
+      key.startsWith("account:") || key.startsWith("scoring-access-pass:")
+        ? (options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000)
+        : (options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100),
     ...(options.rateLimitRedis ? { redis: options.rateLimitRedis } : {}),
     ...(options.rateLimitNameSpace ? { nameSpace: options.rateLimitNameSpace } : {}),
     timeWindow: "1 minute",
@@ -294,7 +313,10 @@ export async function buildApp(options: BuildAppOptions) {
 
   app.addHook("onSend", async (request, reply) => {
     reply.header("X-Request-Id", request.id);
-    reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    reply.header(
+      "Permissions-Policy",
+      deployedEnvironment ? "camera=(), microphone=(), geolocation=()" : "camera=(self), microphone=(), geolocation=()",
+    );
     const route = request.routeOptions.url || request.url.split("?", 1)[0] || "";
     if (
       route.startsWith("/api/v1/identity/") ||
@@ -520,6 +542,30 @@ export async function buildApp(options: BuildAppOptions) {
         });
       }
     }
+    if (options.scoringAccessHmacKeySql) {
+      await registerScoringAccessHmacKeyringRoutes(app as unknown as FastifyInstance, {
+        sql: options.scoringAccessHmacKeySql,
+        identityRuntime: options.identityRuntime,
+        identityRequests,
+        allowedOrigins: options.config.api.allowedOrigins,
+      });
+    }
+    if (options.gateCC4Runtime && options.gateCC4Operations && options.gateCC4Lifecycle) {
+      await registerGateCC4Routes(app as unknown as FastifyInstance, {
+        runtime: options.gateCC4Runtime,
+        operations: options.gateCC4Operations,
+        lifecycle: options.gateCC4Lifecycle,
+        identityRuntime: options.identityRuntime,
+        identityRequests,
+        allowedOrigins: options.config.api.allowedOrigins,
+      });
+    }
+  }
+
+  if (options.gateCC4PublicTruthRuntime) {
+    await registerGateCC4PublicTruthRoutes(app as unknown as FastifyInstance, {
+      runtime: options.gateCC4PublicTruthRuntime,
+    });
   }
 
   await app.ready();

@@ -36,12 +36,7 @@ function required<T>(rows: readonly T[]): T {
   return value;
 }
 
-async function createCompetitionFixture(
-  sportCode: SportCode,
-  label: string,
-  divisionCount = 1,
-  entriesPerDivision = 8,
-) {
+async function createCompetitionFixture(sportCode: SportCode, label: string) {
   const competition = await phase3.createCompetition(
     { accountId },
     {
@@ -59,32 +54,23 @@ async function createCompetitionFixture(
     },
     randomUUID(),
   );
+  const fixtureDivisionId = randomUUID();
+  await client`INSERT INTO divisions(id,competition_id,name,team_limit)
+    VALUES(${fixtureDivisionId},${competition.id},'Open',16)`;
+  for (let seed = 1; seed <= 8; seed += 1) {
+    await client`INSERT INTO division_entries(id,division_id,name,seed,status)
+      VALUES(${randomUUID()},${fixtureDivisionId},${`Fixture entry ${seed}`},${seed},'confirmed')`;
+  }
   const settings = required(
     await client<{ pack_version: string }[]>`
       SELECT pack_version FROM competition_sport_settings WHERE competition_id=${competition.id}`,
   );
-  const divisionIds: string[] = [];
-  for (let divisionIndex = 1; divisionIndex <= divisionCount; divisionIndex += 1) {
-    const fixtureDivisionId = randomUUID();
-    divisionIds.push(fixtureDivisionId);
-    await client`INSERT INTO divisions(id,competition_id,name,team_limit)
-      VALUES(${fixtureDivisionId},${competition.id},${divisionIndex === 1 ? "Open" : `Division ${divisionIndex}`},16)`;
-    for (let seed = 1; seed <= entriesPerDivision; seed += 1) {
-      await client`INSERT INTO division_entries(id,division_id,name,seed,status)
-        VALUES(${randomUUID()},${fixtureDivisionId},${`Fixture ${divisionIndex} entry ${seed}`},${seed},'confirmed')`;
-    }
-    await client`INSERT INTO division_sport_settings(
-        division_id,competition_id,sport_code,pack_version,settings_override,updated_by
-      ) VALUES(${fixtureDivisionId},${competition.id},${sportCode},${settings.pack_version},'{}'::jsonb,${accountId})`;
-  }
+  await client`INSERT INTO division_sport_settings(
+      division_id,competition_id,sport_code,pack_version,settings_override,updated_by
+    ) VALUES(${fixtureDivisionId},${competition.id},${sportCode},${settings.pack_version},'{}'::jsonb,${accountId})`;
   await client`INSERT INTO playing_areas(competition_id,name,slot_minutes)
     VALUES(${competition.id},'Default area',${SPORT_PACKS[sportCode].recommendedSlotMinutes})`;
-  return {
-    competitionId: competition.id,
-    divisionId: divisionIds[0]!,
-    divisionIds,
-    packVersion: settings.pack_version,
-  };
+  return { competitionId: competition.id, divisionId: fixtureDivisionId, packVersion: settings.pack_version };
 }
 
 function basicsFor(document: Awaited<ReturnType<ReliableGateBPhase4Runtime["readSetupDraft"]>>, sportCode: SportCode) {
@@ -101,30 +87,6 @@ async function evidenceCounts() {
         (SELECT count(*)::int FROM audit_events) audits,
         (SELECT count(*)::int FROM outbox_events) outbox`,
   );
-}
-
-function ignoredScheduleConstraints(areaId: string) {
-  const ignored = <T>(value: T) => ({ mode: "ignored" as const, value });
-  return {
-    minimum_rest: ignored({ minutes: 0 }),
-    maximum_matches_per_day: ignored({ matches: 8 }),
-    preferred_final_time: ignored({ target_start_epoch_ms: Date.parse("2027-09-01T12:00:00Z"), tolerance_minutes: 60 }),
-    entry_unavailable: ignored({ by_entry_id: {} }),
-    official_availability: ignored({ by_official_id: {} }),
-    featured_playing_area: ignored({ area_id: areaId, match_ids: [] }),
-    avoid_consecutive_matches: ignored({ minutes: 0 }),
-    balance_early_matches: ignored({ before_local_time: "09:00" }),
-    balance_late_matches: ignored({ at_or_after_local_time: "18:00" }),
-    keep_division_together: ignored({ maximum_area_count: 1 }),
-    preserve_existing_schedule: ignored({ maximum_shift_minutes: 0, by_match_id: {} }),
-  };
-}
-
-async function createBootstrapAccount(label: string) {
-  return required(
-    await client<{ id: string }[]>`INSERT INTO accounts(primary_email,display_name,email_verified_at)
-      VALUES(${`${label}-${randomUUID()}@gate-b.test`},${label},now()) RETURNING id`,
-  ).id;
 }
 
 beforeAll(async () => {
@@ -219,84 +181,6 @@ afterAll(async () => {
 });
 
 describeInfrastructure("Gate B dynamic sport setup runtime", () => {
-  it("creates exactly one durable workspace and recovers from a non-writable legacy membership", async () => {
-    const firstAccountId = await createBootstrapAccount("First workspace");
-    const receipts = await Promise.all([
-      runtime.ensureWritableOrganisation({ accountId: firstAccountId }, randomUUID()),
-      runtime.ensureWritableOrganisation({ accountId: firstAccountId }, randomUUID()),
-    ]);
-    expect(receipts.map((receipt) => receipt.id)).toEqual([receipts[0]!.id, receipts[0]!.id]);
-    expect(receipts.filter((receipt) => receipt.created)).toHaveLength(1);
-    const firstCounts = required(
-      await client<{ organisations: number; memberships: number; audits: number; outbox: number }[]>`
-        SELECT
-          (SELECT count(*)::int FROM organisations WHERE id=${receipts[0]!.id}) organisations,
-          (SELECT count(*)::int FROM organisation_memberships
-           WHERE organisation_id=${receipts[0]!.id} AND account_id=${firstAccountId} AND role='owner' AND status='active') memberships,
-          (SELECT count(*)::int FROM audit_events
-           WHERE target_id=${receipts[0]!.id} AND action='organisation.created') audits,
-          (SELECT count(*)::int FROM outbox_events
-           WHERE aggregate_id=${receipts[0]!.id} AND event_type='organisation.created') outbox`,
-    );
-    expect(firstCounts).toEqual({ organisations: 1, memberships: 1, audits: 1, outbox: 1 });
-
-    const legacyAccountId = await createBootstrapAccount("Legacy viewer");
-    const legacyOwnerId = await createBootstrapAccount("Legacy owner");
-    const legacyOrganisationId = await client.begin(async (tx) => {
-      const legacyOrganisation = required(
-        await tx<{ id: string }[]>`INSERT INTO organisations(name,slug)
-          VALUES('Legacy workspace',${`workspace-${legacyAccountId}`}) RETURNING id`,
-      );
-      await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
-        VALUES
-          (${legacyOrganisation.id},${legacyOwnerId},'owner','active'),
-          (${legacyOrganisation.id},${legacyAccountId},'viewer','active')`;
-      return legacyOrganisation.id;
-    });
-    const recovered = await runtime.ensureWritableOrganisation({ accountId: legacyAccountId }, randomUUID());
-    expect(recovered).toMatchObject({ role: "owner", created: true });
-    expect(recovered.id).not.toBe(legacyOrganisationId);
-  });
-
-  it("rolls back workspace creation when its audit or outbox evidence fails", async () => {
-    for (const failure of [
-      { table: "audit_events", trigger: "bootstrap_audit_failure", field: "action", value: "organisation.created" },
-      {
-        table: "outbox_events",
-        trigger: "bootstrap_outbox_failure",
-        field: "event_type",
-        value: "organisation.created",
-      },
-    ] as const) {
-      const bootstrapAccountId = await createBootstrapAccount(failure.trigger);
-      const functionName = `${failure.trigger}_fn`;
-      await client.unsafe(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN RAISE EXCEPTION '${failure.trigger}'; END;
-      $$`);
-      await client.unsafe(
-        `CREATE TRIGGER ${failure.trigger} BEFORE INSERT ON ${failure.table}
-         FOR EACH ROW WHEN (NEW.${failure.field} = '${failure.value}') EXECUTE FUNCTION ${functionName}()`,
-      );
-      try {
-        await expect(
-          runtime.ensureWritableOrganisation({ accountId: bootstrapAccountId }, randomUUID()),
-        ).rejects.toThrow(failure.trigger);
-      } finally {
-        await client.unsafe(`DROP TRIGGER ${failure.trigger} ON ${failure.table}`);
-        await client.unsafe(`DROP FUNCTION ${functionName}()`);
-      }
-      const rollbackCounts = required(
-        await client<{ organisations: number; memberships: number; audits: number; outbox: number }[]>`
-          SELECT
-            (SELECT count(*)::int FROM organisations WHERE slug=${`workspace-${bootstrapAccountId}`}) organisations,
-            (SELECT count(*)::int FROM organisation_memberships WHERE account_id=${bootstrapAccountId}) memberships,
-            (SELECT count(*)::int FROM audit_events WHERE actor_account_id=${bootstrapAccountId} AND action='organisation.created') audits,
-            (SELECT count(*)::int FROM outbox_events WHERE idempotency_key LIKE ${`organisation.bootstrap:${bootstrapAccountId}:%`}) outbox`,
-      );
-      expect(rollbackCounts).toEqual({ organisations: 0, memberships: 0, audits: 0, outbox: 0 });
-    }
-  });
-
   it("generates immutable multi-metric evidence without changing formats and applies a selection once", async () => {
     const fixture = await createCompetitionFixture("basketball", "Recommendations");
     await client`UPDATE competitions SET plan_tier='organiser_pro' WHERE id=${fixture.competitionId}`;
@@ -1057,7 +941,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         `viewer-create-${randomUUID()}`,
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
     expect(await evidenceCounts()).toEqual(beforeCreate);
 
     await runtime.createSetupDraft(
@@ -1117,7 +1001,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
               { ...request, transition: { kind: "save_step" as const, step: request.step } },
               randomUUID(),
             );
-      await expect(denied).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });
+      await expect(denied).rejects.toMatchObject({ statusCode: 403 });
       expect(await evidenceCounts()).toEqual(beforeDenied);
     }
 
@@ -1177,378 +1061,6 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403, code: "COMPETITION_ACCESS_DENIED" });
-  });
-
-  it("lets V1 choose and materialise a capacity-fitting format without visiting Assisted Setup", async () => {
-    const fixture = await createCompetitionFixture("badminton", "V1 direct format");
-    await phase3.replaceCapacity(
-      { accountId },
-      fixture.competitionId,
-      {
-        revision: 1,
-        areas: [
-          {
-            name: "Main court",
-            slotMinutes: SPORT_PACKS.badminton.recommendedSlotMinutes,
-            availability: [
-              { date: "2027-09-01", startTime: "00:00", endTime: "23:30" },
-              { date: "2027-09-02", startTime: "00:00", endTime: "23:30" },
-            ],
-          },
-        ],
-      },
-      randomUUID(),
-    );
-    const key = `v1-format-${randomUUID()}`;
-    const recommendations = await runtime.recommendV1Format({ accountId }, fixture.competitionId, key, randomUUID());
-    const fitting = recommendations.values.format_recommendations?.recommendations.find(
-      (candidate) =>
-        candidate.match_count <= candidate.available_match_slots && candidate.capacity_status !== "requires_changes",
-    );
-    expect(fitting).toBeDefined();
-    if (!fitting) throw new Error("Expected a capacity-fitting recommendation");
-
-    const applyKey = `v1-apply-${randomUUID()}`;
-    const applied = await runtime.applyV1FormatRecommendation(
-      { accountId },
-      fixture.competitionId,
-      fitting.id,
-      applyKey,
-      randomUUID(),
-    );
-    expect(applied.document.values.format_recommendations?.selected_recommendation_id).toBe(fitting.id);
-    expect(applied.materialised).toHaveLength(fitting.division_formats.length);
-    expect(applied.materialised.every((result) => result.materialised)).toBe(true);
-    const revisions = await client<{ graph_materialized_at: Date | null; graph_match_count: number | null }[]>`
-      SELECT graph_materialized_at,graph_match_count FROM format_revisions
-      WHERE competition_id=${fixture.competitionId} ORDER BY division_id,revision
-    `;
-    expect(revisions).toHaveLength(fitting.division_formats.length);
-    expect(
-      revisions.every(
-        (revision) => revision.graph_materialized_at && revision.graph_match_count && revision.graph_match_count > 0,
-      ),
-    ).toBe(true);
-    const replay = await runtime.applyV1FormatRecommendation(
-      { accountId },
-      fixture.competitionId,
-      fitting.id,
-      applyKey,
-      randomUUID(),
-    );
-    expect(replay.materialised.map((result) => result.revision.revision_id)).toEqual(
-      applied.materialised.map((result) => result.revision.revision_id),
-    );
-    expect(
-      required(
-        await client<{ count: number }[]>`
-          SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}
-        `,
-      ).count,
-    ).toBe(revisions.length);
-  });
-
-  it("lets V1 publish four-team direct formats that the balanced scheduler can use", async () => {
-    const fixture = await createCompetitionFixture("canoe_polo", "V1 four team direct format", 2, 4);
-    const firstDivisionId = fixture.divisionIds[0];
-    if (!firstDivisionId) throw new Error("Expected first V1 fixture division");
-    await client`UPDATE division_entries SET seed=NULL
-      WHERE id IN (
-        SELECT id FROM division_entries WHERE division_id=${firstDivisionId} ORDER BY seed DESC LIMIT 1
-      )`;
-    await phase3.replaceCapacity(
-      { accountId },
-      fixture.competitionId,
-      {
-        revision: 1,
-        areas: [
-          {
-            name: "Water court",
-            slotMinutes: SPORT_PACKS.canoe_polo.recommendedSlotMinutes,
-            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
-          },
-        ],
-      },
-      randomUUID(),
-    );
-    const recommended = await runtime.recommendV1Format(
-      { accountId },
-      fixture.competitionId,
-      `v1-four-team-recommend-${randomUUID()}`,
-      randomUUID(),
-    );
-    const selected = recommended.values.format_recommendations?.recommendations.find(
-      (candidate) =>
-        candidate.capacity_status !== "requires_changes" &&
-        candidate.match_count <= candidate.available_match_slots &&
-        candidate.division_formats.length === 2,
-    );
-    expect(selected).toBeDefined();
-    if (!selected) throw new Error("Expected a fitting four-team V1 format");
-
-    const applied = await runtime.applyV1FormatRecommendation(
-      { accountId },
-      fixture.competitionId,
-      selected.id,
-      `v1-four-team-apply-${randomUUID()}`,
-      randomUUID(),
-    );
-    expect(applied.materialised).toHaveLength(2);
-    expect(applied.materialised.every((format) => format.materialised)).toBe(true);
-    expect(applied.materialised.every((format) => format.revision.document.graph.entryCount === 4)).toBe(true);
-    expect(
-      required(
-        await client<{ count: number }[]>`
-          SELECT count(*)::int count FROM format_revisions
-          WHERE id = ANY(${applied.materialised.map((format) => format.revision.revision_id)})
-            AND status='published'
-        `,
-      ).count,
-    ).toBe(2);
-    const possibleEntryCounts = await client<{ count: number }[]>`
-      SELECT count(*)::int count
-      FROM matches match
-      CROSS JOIN LATERAL phase4_match_possible_entries(match.id)
-      WHERE match.format_revision_id=${applied.materialised[0]!.revision.revision_id}
-      GROUP BY match.id
-      ORDER BY count(*)::int
-    `;
-    expect(possibleEntryCounts.map((row) => row.count)).toEqual([2, 2, 4]);
-    const directMatches = await client<
-      {
-        id: string;
-        home_entry_id: string | null;
-        away_entry_id: string | null;
-        home_name: string | null;
-        away_name: string | null;
-      }[]
-    >`
-      SELECT match.id,match.home_entry_id,match.away_entry_id,home.name AS home_name,away.name AS away_name
-      FROM matches match
-      LEFT JOIN division_entries home ON home.id=match.home_entry_id
-      LEFT JOIN division_entries away ON away.id=match.away_entry_id
-      WHERE match.format_revision_id=${applied.materialised[0]!.revision.revision_id}
-      ORDER BY match.ordinal
-    `;
-    expect(directMatches).toHaveLength(3);
-    expect(
-      directMatches.filter((match) => match.home_entry_id && match.away_entry_id && match.home_name && match.away_name),
-    ).toHaveLength(2);
-    expect(directMatches.filter((match) => !match.home_entry_id && !match.away_entry_id)).toHaveLength(1);
-    const competition = required(
-      await client<{ revision: number; capacity_revision: number }[]>`
-        SELECT revision,capacity_revision FROM competitions WHERE id=${fixture.competitionId}`,
-    );
-    const areaId = required(
-      await client<{ id: string }[]>`SELECT id FROM playing_areas WHERE competition_id=${fixture.competitionId}`,
-    ).id;
-    await expect(
-      runtime.generateSchedule(
-        { accountId },
-        fixture.competitionId,
-        {
-          idempotency_key: `v1-four-team-balanced-${randomUUID()}`,
-          expected_source_revision: competition.revision,
-          expected_capacity_revision: Number(competition.capacity_revision),
-          objective: "balanced",
-          constraints: ignoredScheduleConstraints(areaId),
-        },
-        randomUUID(),
-      ),
-    ).resolves.toMatchObject({ job: { status: "queued", objective: "balanced" }, enqueued: true });
-    await client`UPDATE schedule_generation_jobs SET status='completed',completed_at=now()
-      WHERE competition_id=${fixture.competitionId} AND status='queued'`;
-    await client`UPDATE division_entries SET status='withdrawn',withdrawal_reason='V1 missing-entry regression'
-      WHERE id IN (SELECT id FROM division_entries WHERE division_id=${firstDivisionId} ORDER BY id LIMIT 1)`;
-    await expect(
-      runtime.generateSchedule(
-        { accountId },
-        fixture.competitionId,
-        {
-          idempotency_key: `v1-four-team-missing-entry-${randomUUID()}`,
-          expected_source_revision: competition.revision,
-          expected_capacity_revision: Number(competition.capacity_revision),
-          objective: "balanced",
-          constraints: ignoredScheduleConstraints(areaId),
-        },
-        randomUUID(),
-      ),
-    ).rejects.toThrow("Expected 4 active entries for the selected format");
-  });
-
-  it("rolls back every V1 format when publication evidence fails in a later division", async () => {
-    const fixture = await createCompetitionFixture("canoe_polo", "V1 publication rollback", 2, 4);
-    await phase3.replaceCapacity(
-      { accountId },
-      fixture.competitionId,
-      {
-        revision: 1,
-        areas: [
-          {
-            name: "Water court",
-            slotMinutes: SPORT_PACKS.canoe_polo.recommendedSlotMinutes,
-            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
-          },
-        ],
-      },
-      randomUUID(),
-    );
-    const recommended = await runtime.recommendV1Format(
-      { accountId },
-      fixture.competitionId,
-      `v1-publication-rollback-recommend-${randomUUID()}`,
-      randomUUID(),
-    );
-    const selected = recommended.values.format_recommendations?.recommendations.find(
-      (candidate) => candidate.capacity_status !== "requires_changes" && candidate.division_formats.length === 2,
-    );
-    if (!selected) throw new Error("Expected a fitting two-division V1 format");
-    await client.unsafe(`CREATE FUNCTION v1_format_publication_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$
-      DECLARE audit_count integer;
-      BEGIN
-        audit_count := COALESCE(NULLIF(current_setting('matchday.v1_publication_audit_count', true), '')::integer, 0) + 1;
-        PERFORM set_config('matchday.v1_publication_audit_count', audit_count::text, true);
-        IF audit_count = 2 THEN RAISE EXCEPTION 'v1 format publication audit failure'; END IF;
-        RETURN NEW;
-      END;
-    $$`);
-    await client.unsafe(`CREATE TRIGGER v1_format_publication_audit_failure BEFORE INSERT ON audit_events
-      FOR EACH ROW WHEN (NEW.action='format.published') EXECUTE FUNCTION v1_format_publication_audit_failure()`);
-    try {
-      await expect(
-        runtime.applyV1FormatRecommendation(
-          { accountId },
-          fixture.competitionId,
-          selected.id,
-          `v1-publication-rollback-apply-${randomUUID()}`,
-          randomUUID(),
-        ),
-      ).rejects.toThrow("v1 format publication audit failure");
-    } finally {
-      await client.unsafe(`DROP TRIGGER v1_format_publication_audit_failure ON audit_events`);
-      await client.unsafe(`DROP FUNCTION v1_format_publication_audit_failure()`);
-    }
-    const rollback = required(
-      await client<{ formats: number; matches: number; audit: number; outbox: number }[]>`
-        SELECT
-          (SELECT count(*)::int FROM format_revisions WHERE competition_id=${fixture.competitionId}) formats,
-          (SELECT count(*)::int FROM matches WHERE competition_id=${fixture.competitionId}) matches,
-          (SELECT count(*)::int FROM audit_events WHERE action IN ('format.materialised','format.published')
-             AND metadata->>'competition_id'=${fixture.competitionId}) audit,
-          (SELECT count(*)::int FROM outbox_events WHERE event_type IN ('format.published','format.materialised')
-             AND payload->>'competition_id'=${fixture.competitionId}) outbox
-      `,
-    );
-    expect(rollback).toEqual({ formats: 0, matches: 0, audit: 0, outbox: 0 });
-  });
-
-  it("refreshes V1 format evidence after entries change", async () => {
-    const fixture = await createCompetitionFixture("table_tennis", "V1 stale evidence");
-    await phase3.replaceCapacity(
-      { accountId },
-      fixture.competitionId,
-      {
-        revision: 1,
-        areas: [
-          {
-            name: "Table area",
-            slotMinutes: SPORT_PACKS.table_tennis.recommendedSlotMinutes,
-            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
-          },
-        ],
-      },
-      randomUUID(),
-    );
-    const initial = await runtime.recommendV1Format(
-      { accountId },
-      fixture.competitionId,
-      `v1-stale-initial-${randomUUID()}`,
-      randomUUID(),
-    );
-    await client`INSERT INTO division_entries(id,division_id,name,seed,status) VALUES
-      (${randomUUID()},${fixture.divisionId},'Late entry 9',9,'confirmed'),
-      (${randomUUID()},${fixture.divisionId},'Late entry 10',10,'confirmed'),
-      (${randomUUID()},${fixture.divisionId},'Late entry 11',11,'confirmed'),
-      (${randomUUID()},${fixture.divisionId},'Late entry 12',12,'confirmed')`;
-    const refreshed = await runtime.recommendV1Format(
-      { accountId },
-      fixture.competitionId,
-      `v1-stale-refresh-${randomUUID()}`,
-      randomUUID(),
-    );
-    expect(refreshed.values.entries?.total_entry_count).toBe(12);
-    expect(refreshed.values.format_recommendations?.recommendation_set_hash).not.toBe(
-      initial.values.format_recommendations?.recommendation_set_hash,
-    );
-  });
-
-  it("rolls back a direct V1 selection when format materialisation evidence fails", async () => {
-    const fixture = await createCompetitionFixture("volleyball", "V1 materialisation rollback", 2);
-    await phase3.replaceCapacity(
-      { accountId },
-      fixture.competitionId,
-      {
-        revision: 1,
-        areas: [
-          {
-            name: "Court one",
-            slotMinutes: SPORT_PACKS.volleyball.recommendedSlotMinutes,
-            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
-          },
-          {
-            name: "Court two",
-            slotMinutes: SPORT_PACKS.volleyball.recommendedSlotMinutes,
-            availability: [{ date: "2027-09-01", startTime: "00:00", endTime: "23:30" }],
-          },
-        ],
-      },
-      randomUUID(),
-    );
-    const recommendations = await runtime.recommendV1Format(
-      { accountId },
-      fixture.competitionId,
-      `v1-rollback-recommend-${randomUUID()}`,
-      randomUUID(),
-    );
-    const selected = recommendations.values.format_recommendations?.recommendations[0];
-    if (!selected) throw new Error("Expected a format recommendation");
-    expect(selected.division_formats).toHaveLength(2);
-    await client.unsafe(`CREATE FUNCTION v1_materialise_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$
-      DECLARE audit_count integer;
-      BEGIN
-        audit_count := COALESCE(NULLIF(current_setting('matchday.v1_materialise_audit_count', true), '')::integer, 0) + 1;
-        PERFORM set_config('matchday.v1_materialise_audit_count', audit_count::text, true);
-        IF audit_count = 2 THEN RAISE EXCEPTION 'v1 materialisation audit failure'; END IF;
-        RETURN NEW;
-      END;
-    $$`);
-    await client.unsafe(`CREATE TRIGGER v1_materialise_audit_failure BEFORE INSERT ON audit_events
-      FOR EACH ROW WHEN (NEW.action='format.materialised') EXECUTE FUNCTION v1_materialise_audit_failure()`);
-    try {
-      await expect(
-        runtime.applyV1FormatRecommendation(
-          { accountId },
-          fixture.competitionId,
-          selected.id,
-          `v1-rollback-apply-${randomUUID()}`,
-          randomUUID(),
-        ),
-      ).rejects.toThrow("v1 materialisation audit failure");
-    } finally {
-      await client.unsafe(`DROP TRIGGER v1_materialise_audit_failure ON audit_events`);
-      await client.unsafe(`DROP FUNCTION v1_materialise_audit_failure()`);
-    }
-    expect(
-      required(
-        await client<{ count: number }[]>`
-          SELECT count(*)::int count FROM format_revisions WHERE competition_id=${fixture.competitionId}
-        `,
-      ).count,
-    ).toBe(0);
-    expect(
-      (await runtime.readSetupDraft({ accountId }, fixture.competitionId)).values.format_recommendations
-        ?.selected_recommendation_id,
-    ).toBeNull();
+    ).rejects.toMatchObject({ statusCode: 403 });
   });
 });

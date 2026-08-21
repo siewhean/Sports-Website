@@ -1,4 +1,5 @@
 import type { Phase3SportCode } from "./phase-3.js";
+import type { GateCOfflineCanonicalCommand } from "./gate-c-offline.js";
 
 export type PublicParticipant = {
   id: string | null;
@@ -44,7 +45,7 @@ export type PublicCompetitionSummary = {
   timezone: string;
   starts_on: string;
   ends_on: string;
-  status: "active" | "completed" | "archived";
+  status: "active" | "published" | "live" | "completed" | "archived";
 };
 
 export type PublicCompetitionListing = {
@@ -60,7 +61,7 @@ export type PublicCompetitionProjection = {
     timezone: string;
     starts_on: string;
     ends_on: string;
-    status: "active" | "completed" | "archived";
+    status: "active" | "published" | "live" | "completed" | "archived";
   };
   divisions: PublicDivisionProjection[];
   /** @deprecated Use divisions. Retained as the first complete division package for compatibility. */
@@ -89,12 +90,19 @@ export type ResultMutationReceipt = {
 
 export type ScoringFinalisationReceipt = {
   match_id: string;
+  client_event_id: string;
+  event_id: string;
+  command_fingerprint: string;
+  outcome: "accepted" | "duplicate";
   sequence: number;
   aggregate_version: number;
   duplicate: boolean;
   home_score: number;
   away_score: number;
   result_version: number;
+  publication_version: number;
+  published_at: string;
+  server_received_at: string;
 };
 
 export type ScoringSessionState = {
@@ -109,6 +117,7 @@ export type ScoringSessionState = {
     away: { id: string | null; name: string | null };
   };
   access: {
+    principal_id: string;
     mode: "writer" | "candidate" | "viewer" | "transferred";
     permissions: Array<"score:read" | "score:write" | "score:reverse" | "score:finalise">;
     session_expires_at: string;
@@ -162,5 +171,10 @@ export type ScoringSessionState = {
     payload: Record<string, unknown>;
     correction_reason: string | null;
     occurred_at: string;
+  }>;
+  canonical_events: Array<{
+    event_id: string;
+    sequence: number;
+    command: GateCOfflineCanonicalCommand;
   }>;
 };

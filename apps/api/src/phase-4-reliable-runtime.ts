@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Phase4SetupAutosaveRequest,
   Phase4SetupAutosaveResponse,
@@ -8,6 +9,12 @@ import type {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
+import { GateCC4Operations } from "./gate-c-c4-operations.js";
+import { GateCC4PostgresPublicationPort } from "./gate-c-c4-postgres-publisher.js";
+import { GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
+import { GateCC4Runtime } from "./gate-c-c4-runtime.js";
+import type { Phase2Runtime } from "./phase-2-runtime.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import type { Phase4AiOptions, Phase4PublicProjectionPort } from "./phase-4-runtime.js";
@@ -49,6 +56,11 @@ function readOnlyDocument(document: Phase4SetupDocument): Phase4SetupDocument {
 }
 
 export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
+  readonly gateCC4: GateCC4Runtime;
+  readonly gateCC4Operations: GateCC4Operations;
+  readonly gateCC4Lifecycle: GateCC4LifecycleOperations;
+  readonly gateCC4PublicTruth: GateCC4PublicTruthRuntime;
+
   constructor(
     private readonly reliableSql: PostgresJsSql,
     phase3: Phase3Runtime,
@@ -56,8 +68,18 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     ai: Phase4AiOptions,
     private readonly reliableNow: () => Date = () => new Date(),
     publicProjection?: Phase4PublicProjectionPort,
+    gateCC4ProjectionRuntime?: Pick<Phase2Runtime, "writePublicProjection">,
+    gateCC4PublicOrigin = "http://localhost:3000",
   ) {
     super(reliableSql, phase3, enqueue, ai, reliableNow, publicProjection);
+    this.gateCC4 = new GateCC4Runtime(
+      reliableSql,
+      gateCC4ProjectionRuntime ? new GateCC4PostgresPublicationPort(gateCC4ProjectionRuntime, reliableNow) : undefined,
+      reliableNow,
+    );
+    this.gateCC4Operations = new GateCC4Operations(reliableSql, gateCC4PublicOrigin, reliableNow);
+    this.gateCC4Lifecycle = new GateCC4LifecycleOperations(reliableSql, reliableNow);
+    this.gateCC4PublicTruth = new GateCC4PublicTruthRuntime(reliableSql);
   }
 
   async ensureWritableOrganisation(actor: Phase3Actor, requestId: string): Promise<OrganisationBootstrapReceipt> {
@@ -105,7 +127,7 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
            RETURNING id,name`,
           [workspaceName, workspaceSlug, occurredAt],
         ),
-        "ORGANISATION_CREATE_FAILED",
+        ErrorCode.ORGANISATION_CREATE_FAILED,
         "The organiser workspace could not be created",
       );
       await tx.unsafe(
@@ -255,4 +277,3 @@ export class ReliableGateBPhase4Runtime extends GateBPhase4Runtime {
     return access.membership_role === "viewer" ? readOnlyDocument(document) : document;
   }
 }
-import { randomUUID } from "node:crypto";

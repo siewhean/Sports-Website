@@ -329,36 +329,21 @@ export function formatDuration(minutes: number): string {
 }
 
 export function formatScheduleTime(value: string, timeZone: string): string {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(new Date(value));
-    const hour = parts.find((p) => p.type === "hour")?.value.padStart(2, "0") ?? "00";
-    const minute = parts.find((p) => p.type === "minute")?.value.padStart(2, "0") ?? "00";
-    return `${hour}:${minute}`;
-  } catch {
-    return "00:00";
-  }
+  return new Intl.DateTimeFormat("en-SG", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
 }
 
 export function formatScheduleDay(value: string, timeZone: string): string {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-    }).formatToParts(new Date(value));
-    const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
-    const day = parts.find((p) => p.type === "day")?.value ?? "";
-    const month = parts.find((p) => p.type === "month")?.value ?? "";
-    return `${weekday}, ${day} ${month}`;
-  } catch {
-    return value;
-  }
+  return new Intl.DateTimeFormat("en-SG", {
+    timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  }).format(new Date(value));
 }
 
 export function assignmentForMatch(revision: ScheduleRevision | null, matchId: string): ScheduleAssignment | null {

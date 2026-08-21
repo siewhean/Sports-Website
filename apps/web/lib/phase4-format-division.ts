@@ -20,7 +20,7 @@ export function selectFormatDivision(
   return divisions.find((division) => division.id === requestedDivision) ?? null;
 }
 
-export function formatDivisionHref(competitionId: string, divisionId: string, advanced = false): string {
-  const query = new URLSearchParams(advanced ? { division: divisionId, advanced: "1" } : { division: divisionId });
+export function formatDivisionHref(competitionId: string, divisionId: string): string {
+  const query = new URLSearchParams({ division: divisionId });
   return `/organiser/competitions/${encodeURIComponent(competitionId)}/format?${query.toString()}`;
 }

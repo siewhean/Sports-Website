@@ -19,8 +19,8 @@ const sports = [
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
 test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo));
 
-async function openScoring(page: Page, sportId: string, advanced = true) {
-  await page.goto(`/score?sport=${sportId}${advanced ? "&advanced=1" : ""}`);
+async function openScoring(page: Page, sportId: string) {
+  await page.goto(`/score?sport=${sportId}`);
   await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();
@@ -99,21 +99,6 @@ test("@a11y 320px reflow keeps Basketball controls reachable with 48px targets",
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   await expect(page.getByRole("button", { name: "Review final score" })).toBeVisible();
   await assertNoWcagAOrAaViolations(page);
-});
-
-test("phone secondary scoring actions do not intercept final review", async ({ page }) => {
-  await openScoring(page, "canoe_polo", false);
-
-  const secondaryActions = page.locator("details");
-  await expect(secondaryActions.getByText("More match actions", { exact: true })).toBeVisible();
-  await secondaryActions.locator("summary").click();
-  await expect(secondaryActions).toHaveAttribute("open", "");
-
-  const review = page.getByRole("button", { name: "Review final score" });
-  await review.scrollIntoViewIfNeeded();
-  await expect(review).toBeVisible();
-  await review.click();
-  await expect(page.getByRole("heading", { name: /Marina Blue .* Harbour Gold/ })).toBeVisible();
 });
 
 test("recent canonical events are newest-first without changing the authoritative projection", async ({ page }) => {

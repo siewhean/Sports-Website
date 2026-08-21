@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
@@ -10,6 +10,7 @@ import { buildApp } from "../../src/app.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { reconcileScoringAccessHmacKeyring } from "../../src/scoring-access-hmac-keyring.js";
 import { RedisScoringAccessRateLimiter } from "../../src/scoring-access-rate-limit.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
@@ -20,7 +21,14 @@ const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis:/
 const schema = `test_scoring_multi_api_${randomUUID().replaceAll("-", "")}`;
 const namespace = `matchday:test:scoring-multi-api:${randomUUID()}:`;
 const guardKey = `${namespace.slice(0, -1)}-unrelated-guard`;
-const rateLimitSecret = "multi-api-rate-limit-hmac-secret";
+const rateLimitKeyring = {
+  primary: { version: "v2", secret: "multi-api-rate-limit-hmac-primary-secret" },
+  verificationOnly: [{ version: "v1", secret: "multi-api-rate-limit-hmac-previous-secret" }],
+  legacyV1MaterialCommitment: createHash("sha256")
+    .update("matchday:scoring-access-hmac-key-material:v1:\u0000", "utf8")
+    .update("multi-api-rate-limit-hmac-previous-secret", "utf8")
+    .digest("hex"),
+};
 const fallbackCodeSecret = "multi-api-fallback-code-hmac-secret";
 const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -48,6 +56,7 @@ describeInfra("scoring access rate limits across real API instances", () => {
     await dropTestSchema(databaseUrl, schema);
     await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
     sql = postgres(databaseUrl, { max: 6, onnotice: () => undefined, connection: { search_path: schema } });
+    await reconcileScoringAccessHmacKeyring(sql as unknown as PostgresJsSql, rateLimitKeyring);
     redisConnections = [
       new Redis(redisUrl, { maxRetriesPerRequest: 1 }),
       new Redis(redisUrl, { maxRetriesPerRequest: 1 }),
@@ -69,7 +78,7 @@ describeInfra("scoring access rate limits across real API instances", () => {
             sql as unknown as PostgresJsSql,
             phase2DomainAdapter,
             undefined,
-            new RedisScoringAccessRateLimiter(redis, rateLimitSecret, namespace),
+            new RedisScoringAccessRateLimiter(redis, rateLimitKeyring, namespace),
             fallbackCodeSecret,
           ),
           anonymousRateLimitMax: 1_000,
@@ -136,5 +145,12 @@ describeInfra("scoring access rate limits across real API instances", () => {
     expect(keys.join("\n")).not.toContain(pairCredential);
     expect(keys.join("\n")).not.toContain("127.0.0.1");
     expect(await redisConnections[0]!.get(guardKey)).toBe("preserve");
+    expect(
+      await sql`
+        SELECT DISTINCT hmac_key_version
+        FROM scoring_access_attempts
+        ORDER BY hmac_key_version
+      `,
+    ).toEqual([{ hmac_key_version: "v2" }]);
   });
 });

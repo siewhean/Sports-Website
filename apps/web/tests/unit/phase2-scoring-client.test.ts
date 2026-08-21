@@ -2,9 +2,13 @@ import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalSegmentNumber,
+  recoveredOfflineState,
   createScoringCommandPort,
   refreshScoringSessionAccess,
+  scoringRefreshFailureState,
   scoringSessionAnnouncement,
+  scoringMutationIsLocked,
+  terminalOfflineQueueState,
   scoringWriterAvailability,
   ScoringTransportError,
 } from "../../lib/phase2-scoring";
@@ -17,6 +21,7 @@ const eventId = "00000000-0000-4000-8000-000000000103";
 
 function sessionView(overrides: Partial<ScoringSessionView> = {}): ScoringSessionView {
   return {
+    principalId: "a".repeat(64),
     competitionSlug: "singapore-open",
     sportId: "canoe_polo",
     sportPackVersion: SPORT_PACKS.canoe_polo.version,
@@ -40,6 +45,7 @@ function sessionView(overrides: Partial<ScoringSessionView> = {}): ScoringSessio
       conflicts: [],
     },
     events: [],
+    canonicalEvents: [],
     throughSequence: 0,
     mode: "writer",
     permissions: ["score:read", "score:write"],
@@ -97,6 +103,95 @@ function stateResponse(
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("Gate C3 offline mutation gating", () => {
+  it("keeps valid offline recording writable after the ordinary writer lease expires", () => {
+    expect(
+      scoringMutationIsLocked({
+        writerState: "expiring",
+        offlineState: "offline-recording",
+        hasOfflineAuthorization: true,
+        pendingCount: 0,
+        queueLimit: 2_000,
+      }),
+    ).toBe(false);
+    expect(
+      scoringMutationIsLocked({
+        writerState: "expired",
+        offlineState: "pending-sync",
+        hasOfflineAuthorization: true,
+        pendingCount: 1,
+        queueLimit: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("classifies every terminal offline queue rejection for modal dismissal and status focus", () => {
+    for (const availability of ["recording_expired", "replay_expired", "pass_expired", "expired"]) {
+      expect(terminalOfflineQueueState(`Offline scoring cannot accept another command: ${availability}.`)).toBe(
+        "expired",
+      );
+    }
+    expect(terminalOfflineQueueState("Offline scoring cannot accept another command: revoked.")).toBe("revoked");
+    expect(terminalOfflineQueueState("Offline scoring cannot accept another command: transferred.")).toBe("read-only");
+    expect(terminalOfflineQueueState("Offline scoring cannot accept another command: completed.")).toBe("read-only");
+    expect(terminalOfflineQueueState("Offline scoring cannot accept another command: queue_full.")).toBeNull();
+    expect(terminalOfflineQueueState("The request was completed.")).toBeNull();
+  });
+
+  it("derives restart state from authoritative offline time boundaries", () => {
+    const common = {
+      status: "active" as const,
+      recordingExpiresAt: "2026-07-28T04:00:00.000Z",
+      replayExpiresAt: "2026-07-28T04:15:00.000Z",
+      passExpiresAt: "2026-07-28T05:00:00.000Z",
+      pendingCount: 1,
+    };
+    expect(recoveredOfflineState({ ...common, now: Date.parse("2026-07-28T03:59:59.999Z") })).toBe("pending-sync");
+    expect(recoveredOfflineState({ ...common, now: Date.parse(common.recordingExpiresAt) })).toBe("expired");
+    expect(recoveredOfflineState({ ...common, now: Date.parse(common.replayExpiresAt) })).toBe("expired");
+    expect(recoveredOfflineState({ ...common, now: Date.parse(common.passExpiresAt) })).toBe("expired");
+    expect(recoveredOfflineState({ ...common, status: "revoked", now: 0 })).toBe("revoked");
+    expect(recoveredOfflineState({ ...common, status: "transferred", now: 0 })).toBe("read-only");
+    expect(recoveredOfflineState({ ...common, status: "completed", now: 0 })).toBe("read-only");
+  });
+
+  it.each(["reconnecting", "replaying", "pending-finalisation", "conflict", "expired", "revoked", "read-only"])(
+    "keeps %s offline state read-only even with a retained authorization",
+    (offlineState) => {
+      expect(
+        scoringMutationIsLocked({
+          writerState: "active",
+          offlineState,
+          hasOfflineAuthorization: true,
+          pendingCount: 1,
+          queueLimit: 2_000,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("requires a retained authorization and enforces the unresolved-command cap", () => {
+    expect(
+      scoringMutationIsLocked({
+        writerState: "expired",
+        offlineState: "offline-recording",
+        hasOfflineAuthorization: false,
+        pendingCount: 0,
+        queueLimit: 2_000,
+      }),
+    ).toBe(true);
+    expect(
+      scoringMutationIsLocked({
+        writerState: "active",
+        offlineState: "offline-recording",
+        hasOfflineAuthorization: true,
+        pendingCount: 2_000,
+        queueLimit: 2_000,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("phase 2 browser scoring transport", () => {
@@ -182,6 +277,15 @@ describe("phase 2 browser scoring transport", () => {
     });
   });
 
+  it("classifies a cold-start network rejection as unavailable so IndexedDB recovery can run", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    await expect(createScoringCommandPort("api").recoverSession()).rejects.toMatchObject({
+      state: "unavailable",
+      message: "unavailable",
+    } satisfies Partial<ScoringTransportError>);
+  });
+
   it("appends the canonical match-start event before the UI enters live scoring", async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ sequence: 1 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -219,8 +323,32 @@ describe("phase 2 browser scoring transport", () => {
       .fn()
       .mockResolvedValueOnce(stateResponse())
       .mockResolvedValueOnce(stateResponse())
-      .mockResolvedValueOnce(Response.json({ sequence: 7 }))
-      .mockResolvedValueOnce(Response.json({ match_id: matchId, result_version: 2 }));
+      .mockResolvedValueOnce(
+        Response.json({
+          client_event_id: eventId,
+          event_id: eventId,
+          command_fingerprint: "a".repeat(64),
+          duplicate: false,
+          sequence: 7,
+          aggregate_version: 7,
+          server_received_at: "2026-07-28T00:00:00.000Z",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          client_event_id: "00000000-0000-4000-8000-000000000104",
+          event_id: "00000000-0000-4000-8000-000000000105",
+          command_fingerprint: "b".repeat(64),
+          duplicate: false,
+          match_id: matchId,
+          sequence: 8,
+          aggregate_version: 8,
+          result_version: 2,
+          publication_version: 2,
+          server_received_at: "2026-07-28T00:00:01.000Z",
+          published_at: "2026-07-28T00:00:01.000Z",
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
     const port = createScoringCommandPort("api");
     const accessToken = "one-time-access-secret-that-is-never-in-a-fetch-url-01";
@@ -240,11 +368,13 @@ describe("phase 2 browser scoring transport", () => {
       manualTime: "01:35",
     });
     const receipt = await port.finalizeResult({
+      clientEventId: "00000000-0000-4000-8000-000000000104",
       matchId,
       expectedSequence: session.throughSequence + 1,
       homeScore: 1,
       awayScore: 0,
       scorer: "A. Player",
+      occurredAt: "2026-07-28T00:00:00.500Z",
     });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
@@ -390,9 +520,8 @@ describe("phase 2 browser scoring transport", () => {
     expect(session).toMatchObject({ mode: "writer", generation: 3, readOnly: true });
   });
 
-  it("recovers a promoted candidate before heartbeat can use the new writer generation", async () => {
+  it("returns a promoted candidate recovery before a heartbeat can depend on its rotated cookie", async () => {
     const recovered = sessionView({ generation: 6 });
-    const heartbeaten = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:50.000Z" });
     const calls: string[] = [];
     const port = {
       recoverSession: vi.fn(async () => {
@@ -401,7 +530,7 @@ describe("phase 2 browser scoring transport", () => {
       }),
       heartbeat: vi.fn(async () => {
         calls.push("heartbeat");
-        return heartbeaten;
+        return recovered;
       }),
     };
 
@@ -412,11 +541,11 @@ describe("phase 2 browser scoring transport", () => {
         pendingEventCount: 0,
         pendingThroughSequence: null,
       },
-      true,
+      "promotion",
     );
 
-    expect(calls).toEqual(["recover", "heartbeat"]);
-    expect(session).toEqual(heartbeaten);
+    expect(calls).toEqual(["recover"]);
+    expect(session).toEqual(recovered);
   });
 
   it("does not heartbeat a candidate until authoritative recovery promotes it", async () => {
@@ -439,11 +568,92 @@ describe("phase 2 browser scoring transport", () => {
         pendingEventCount: 0,
         pendingThroughSequence: null,
       },
-      true,
+      "promotion",
     );
 
     expect(session).toEqual(candidate);
     expect(port.heartbeat).not.toHaveBeenCalled();
+  });
+
+  it("heartbeats an existing writer when no authoritative promotion recovery is required", async () => {
+    const heartbeaten = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:50.000Z" });
+    const port = {
+      recoverSession: vi.fn(async () => heartbeaten),
+      heartbeat: vi.fn(async () => heartbeaten),
+    };
+
+    const session = await refreshScoringSessionAccess(
+      port,
+      {
+        lastAcknowledgedSequence: 4,
+        pendingEventCount: 0,
+        pendingThroughSequence: null,
+      },
+      "none",
+    );
+
+    expect(session).toEqual(heartbeaten);
+    expect(port.recoverSession).not.toHaveBeenCalled();
+    expect(port.heartbeat).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers and then heartbeats an expiring writer to renew the authoritative lease", async () => {
+    const recovered = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:05.000Z" });
+    const heartbeaten = sessionView({ generation: 6, leaseExpiresAt: "2030-01-01T00:00:50.000Z" });
+    const calls: string[] = [];
+    const port = {
+      recoverSession: vi.fn(async () => {
+        calls.push("recover");
+        return recovered;
+      }),
+      heartbeat: vi.fn(async () => {
+        calls.push("heartbeat");
+        return heartbeaten;
+      }),
+    };
+
+    const session = await refreshScoringSessionAccess(
+      port,
+      {
+        lastAcknowledgedSequence: 4,
+        pendingEventCount: 0,
+        pendingThroughSequence: null,
+      },
+      "renewal",
+    );
+
+    expect(calls).toEqual(["recover", "heartbeat"]);
+    expect(session).toEqual(heartbeaten);
+  });
+
+  it("preserves authenticated context when a background refresh is transiently unavailable", () => {
+    expect(scoringRefreshFailureState("candidate", new ScoringTransportError("unavailable"), true)).toBe("candidate");
+    expect(scoringRefreshFailureState("active", new ScoringTransportError("unavailable"), true)).toBe("expiring");
+    expect(scoringRefreshFailureState("transferred", new Error("malformed transient response"), true)).toBe(
+      "transferred",
+    );
+  });
+
+  it("delegates terminal refresh failures and unauthenticated failures to the access error handler", () => {
+    for (const state of ["access", "conflict", "expired", "invalid", "rate_limited", "revoked"] as const) {
+      expect(scoringRefreshFailureState("active", new ScoringTransportError(state), true)).toBeNull();
+    }
+    expect(scoringRefreshFailureState("candidate", new ScoringTransportError("unavailable"), false)).toBeNull();
+  });
+
+  it("fails active scoring writes closed while transient refresh recovery retries", () => {
+    const writerState = scoringRefreshFailureState("active", new ScoringTransportError("unavailable"), true);
+
+    expect(writerState).toBe("expiring");
+    expect(
+      scoringMutationIsLocked({
+        writerState: writerState ?? "active",
+        offlineState: "online",
+        hasOfflineAuthorization: false,
+        pendingCount: 0,
+        queueLimit: 2_000,
+      }),
+    ).toBe(true);
   });
 
   it("does not apply a pre-event refresh after a newer scoring append succeeds", async () => {
@@ -465,6 +675,29 @@ describe("phase 2 browser scoring transport", () => {
 
     expect(appendReceipt).toEqual({ sequence: 5, syncState: "acknowledged" });
     expect(committed).toEqual([]);
+  });
+
+  it("lets a terminal mutation drain an active heartbeat without aborting it", async () => {
+    let resolveRefresh: (value: ScoringSessionView) => void = () => undefined;
+    const refresh = new Promise<ScoringSessionView>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const fence = new LatestRequestFence();
+    const run = fence.run(
+      () => refresh,
+      () => undefined,
+    );
+    let idle = false;
+    const wait = fence.waitForIdle().then(() => {
+      idle = true;
+    });
+
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    resolveRefresh(sessionView({ generation: 6 }));
+    await Promise.all([run, wait]);
+
+    expect(idle).toBe(true);
   });
 
   it("removes recovered cards that have a card reversal event", async () => {

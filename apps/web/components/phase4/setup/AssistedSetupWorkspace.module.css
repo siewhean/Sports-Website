@@ -82,7 +82,7 @@
   width: 30px;
   height: 30px;
   margin-left: 4px;
-  border: 1px solid var(--hairline);
+  border: 1px solid #91958f;
   border-radius: 50%;
   background: var(--canvas);
   font-family: var(--font-mono);
@@ -114,7 +114,7 @@
 }
 .stepRail li[data-complete="true"] button > span:first-child {
   border-color: var(--signal-strong);
-  color: var(--success);
+  color: #668100;
 }
 .stepRail button:disabled {
   opacity: 0.54;
@@ -190,8 +190,8 @@
 }
 .issueSummary {
   display: block;
-  border-color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  border-color: #e7b448;
+  background: #fffaf0;
 }
 .issueSummary ul {
   margin: 6px 0 0;
@@ -214,7 +214,7 @@
 .aiBrief > svg {
   width: 24px;
   height: 24px;
-  color: var(--success);
+  color: #6f8907;
 }
 .aiBrief h2 {
   margin: 0;
@@ -291,7 +291,7 @@
   width: 100%;
   min-height: 48px;
   padding: 10px 12px;
-  border: 1px solid var(--hairline);
+  border: 1px solid #9ea19b;
   border-radius: 4px;
   background: var(--surface);
   color: var(--ink);
@@ -351,7 +351,7 @@
 }
 .summaryRail {
   padding: 24px;
-  border: 1px solid var(--hairline);
+  border: 1px solid #b9bbb5;
   border-radius: 12px;
 }
 .summaryRail > p {
@@ -361,7 +361,7 @@
 }
 .summaryRail > strong {
   display: block;
-  color: var(--success);
+  color: #668100;
   font-family: var(--font-mono);
   font-size: 3.7rem;
   font-weight: 450;
@@ -397,7 +397,7 @@
   align-items: center;
   gap: 8px;
   min-height: 44px;
-  color: var(--success);
+  color: #547000;
   font-size: 0.78rem;
   font-weight: 650;
   text-decoration: underline;
@@ -546,11 +546,11 @@
   height: 28px;
   border: 1px solid var(--warning);
   border-radius: 50%;
-  color: var(--warning);
+  color: #946600;
 }
 .review li[data-ready="true"] > span {
   border-color: var(--signal-strong);
-  color: var(--success);
+  color: #668100;
 }
 .review li svg {
   width: 16px;
@@ -650,7 +650,7 @@
   min-height: 86px;
   padding: 16px clamp(26px, 6vw, 86px);
   border-top: 1px solid var(--hairline);
-  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  background: rgb(255 255 255 / 96%);
 }
 .actions button {
   display: inline-flex;
@@ -670,7 +670,7 @@
   transform: translateY(1px);
 }
 .back {
-  border: 1px solid var(--hairline);
+  border: 1px solid #92958f;
   background: var(--surface);
 }
 .continue {
@@ -800,7 +800,7 @@
     position: fixed;
     z-index: 3;
     padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
-    background: color-mix(in srgb, var(--surface) 98%, transparent);
+    background: rgb(255 255 255 / 98%);
   }
   .actions button {
     min-height: 56px;

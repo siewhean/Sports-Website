@@ -7,7 +7,12 @@ import type {
   PublicDivisionProjection,
 } from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
-import { isPublicCompetitionListing, isPublicCompetitionProjection, publicSportName } from "@/lib/phase2-public";
+import {
+  isGateCC4PublicCompetitionProjection,
+  isPublicCompetitionListing,
+  publicSportName,
+  type GateCC4PublicCompetitionProjection,
+} from "@/lib/phase2-public";
 import {
   demoCompetitionReadPort,
   type CompetitionReadPort,
@@ -209,18 +214,33 @@ export function toCompetitionSummaryView(entry: PublicCompetitionSummary): Compe
   };
 }
 
+function publicHeadersMatchProjection(response: Response, projection: GateCC4PublicCompetitionProjection): boolean {
+  const quotedEtag = `"${projection.freshness.etag}"`;
+  return (
+    response.headers.get("etag") === quotedEtag &&
+    response.headers.get("x-matchday-schedule-version") === String(projection.freshness.schedule_version) &&
+    response.headers.get("x-matchday-result-version") === String(projection.freshness.result_version) &&
+    response.headers.get("x-matchday-projection-version") === String(projection.freshness.projection_version)
+  );
+}
+
+function canonicalProjection(value: unknown): GateCC4PublicCompetitionProjection | null {
+  return isGateCC4PublicCompetitionProjection(value) ? value : null;
+}
+
 const apiCompetitionReadPort: CompetitionReadPort = {
   async getBySlug(slug) {
     const baseUrl = apiBaseUrl();
     if (!baseUrl || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null;
     try {
-      const response = await fetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}`, {
+      const response = await fetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, {
         headers: { accept: "application/json" },
         cache: "no-store",
       });
       if (!response.ok) return null;
-      const payload: unknown = await response.json();
-      return isPublicCompetitionProjection(payload) ? toCompetitionView(payload) : null;
+      const projection = canonicalProjection(await response.json());
+      if (!projection || !publicHeadersMatchProjection(response, projection)) return null;
+      return toCompetitionView(projection);
     } catch {
       return null;
     }

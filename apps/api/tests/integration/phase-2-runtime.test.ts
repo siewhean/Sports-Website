@@ -3,21 +3,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
-import { createDefaultFormatTemplates, SPORT_PACKS } from "@matchday/domain";
+import { SPORT_PACKS } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../../src/app.js";
-import { ApiError, ErrorCode } from "../../src/errors.js";
+import { ApiError } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
-import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 import {
   Phase2Runtime,
   type PersistedScoreEvent,
   type Phase2Actor,
   type ScoringSessionAuth,
 } from "../../src/phase-2-runtime.js";
-import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { NoopScoringAccessRateLimiter } from "../../src/scoring-access-rate-limit.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
@@ -440,6 +438,15 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       },
       randomUUID(),
     );
+    await expect(
+      runtime.scoringSessionRateLimitSubject(expiringSession.session_id, expiringSession.session_token),
+    ).resolves.toBe(expiringPass.id);
+    await expect(
+      runtime.scoringSessionRateLimitSubject(expiringSession.session_id, "wrong".repeat(10)),
+    ).resolves.toBeNull();
+    await expect(
+      runtime.scoringSessionRateLimitSubject("not-a-uuid", expiringSession.session_token),
+    ).resolves.toBeNull();
     const futureRuntime = new Phase2Runtime(
       client as unknown as PostgresJsSql,
       phase2DomainAdapter,
@@ -460,6 +467,15 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         generation: null,
       }),
     ).rejects.toMatchObject({ statusCode: 403, code: "SCORING_SESSION_EXPIRED" });
+    await expect(
+      futureRuntime.scoringSessionRateLimitSubject(expiringSession.session_id, expiringSession.session_token),
+    ).resolves.toBeNull();
+    await client`
+      UPDATE scoring_access_sessions SET revoked_at=now() WHERE id=${expiringSession.session_id}
+    `;
+    await expect(
+      runtime.scoringSessionRateLimitSubject(expiringSession.session_id, expiringSession.session_token),
+    ).resolves.toBeNull();
     const deniedAttempts = await client<
       {
         outcome: string;
@@ -555,7 +571,8 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       ),
     ).toMatchObject({ duplicate: false, sequence: 1 });
     const goalId = randomUUID();
-    await appendCanonicalCanoeEvent(
+    const goalRequestId = randomUUID();
+    const goalReceipt = await appendCanonicalCanoeEvent(
       runtime,
       writerAuth,
       {
@@ -569,8 +586,71 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         correctionReason: null,
         occurredAt: new Date("2026-08-01T01:01:32.000Z"),
       },
-      randomUUID(),
+      goalRequestId,
     );
+    expect(goalReceipt).toMatchObject({ duplicate: false, sequence: 2 });
+    expect(
+      await client<
+        {
+          audit_count: number;
+          audit_metadata_type: string;
+          audit_competition_id: string;
+          audit_after_state_type: string;
+          audit_after_event_type: string;
+          audit_before_state_is_null: boolean;
+          outbox_count: number;
+          outbox_payload_type: string;
+          outbox_competition_id: string;
+          outbox_match_id: string;
+        }[]
+      >`
+        SELECT
+          (SELECT count(*)::integer FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended'
+               AND target_type='match'
+               AND target_id=${firstMatch.id}) AS audit_count,
+          (SELECT jsonb_typeof(metadata) FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_metadata_type,
+          (SELECT metadata->>'competition_id' FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_competition_id,
+          (SELECT jsonb_typeof(after_state) FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_after_state_type,
+          (SELECT after_state->>'event_type' FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_after_event_type,
+          (SELECT before_state IS NULL FROM audit_events
+             WHERE request_id=${goalRequestId}
+               AND action='scoring_event.appended') AS audit_before_state_is_null,
+          (SELECT count(*)::integer FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}
+               AND event_type='scoring_event.appended'
+               AND aggregate_type='match'
+               AND aggregate_id=${firstMatch.id}) AS outbox_count,
+          (SELECT jsonb_typeof(payload) FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_payload_type,
+          (SELECT payload->>'competition_id' FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_competition_id,
+          (SELECT payload->>'match_id' FROM outbox_events
+             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_match_id
+      `,
+    ).toEqual([
+      {
+        audit_count: 1,
+        audit_metadata_type: "object",
+        audit_competition_id: competition.id,
+        audit_after_state_type: "object",
+        audit_after_event_type: "goal",
+        audit_before_state_is_null: true,
+        outbox_count: 1,
+        outbox_payload_type: "object",
+        outbox_competition_id: competition.id,
+        outbox_match_id: firstMatch.id,
+      },
+    ]);
     expect(
       await appendCanonicalCanoeEvent(
         runtime,
@@ -596,7 +676,290 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       score: { home: 1, away: 0 },
       through_sequence: 2,
       writer: { generation: 1 },
+      canonical_events: [
+        {
+          event_id: expect.any(String),
+          sequence: 1,
+          command: {
+            kind: "event",
+            client_event_id: startId,
+            expected_sequence: 0,
+            type: "match_started",
+          },
+        },
+        {
+          event_id: expect.any(String),
+          sequence: 2,
+          command: {
+            kind: "event",
+            client_event_id: goalId,
+            expected_sequence: 1,
+            type: "goal",
+          },
+        },
+      ],
     });
+    let offlineAuthority = await runtime.issueOfflineAuthorization(
+      writerAuth,
+      {
+        deviceId: writerDeviceId,
+        lastAcknowledgedSequence: state.through_sequence,
+        pendingEventCount: 0,
+        pendingThroughSequence: state.through_sequence,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v5",
+      },
+      randomUUID(),
+    );
+    expect(offlineAuthority).toMatchObject({
+      generation: writer.generation,
+      match_id: firstMatch.id,
+    });
+    await expect(
+      runtime.issueOfflineAuthorization(
+        writerAuth,
+        {
+          deviceId: writerDeviceId,
+          resumeSecret: offlineAuthority.resume_secret,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 1,
+          pendingThroughSequence: state.through_sequence,
+          lastReportedLocalSequence: 1,
+          queueFingerprint: "a".repeat(64),
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_QUEUE_SUMMARY_INVALID" });
+    await expect(
+      runtime.issueOfflineAuthorization(
+        writerAuth,
+        {
+          deviceId: writerDeviceId,
+          resumeSecret: offlineAuthority.resume_secret,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 2,
+          pendingThroughSequence: state.through_sequence + 2,
+          lastReportedLocalSequence: 1,
+          queueFingerprint: "b".repeat(64),
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_QUEUE_SUMMARY_INVALID" });
+    const storedOfflineSecret = await client<{ resume_secret_hash: Buffer; hash_bytes: number }[]>`
+      SELECT resume_secret_hash,octet_length(resume_secret_hash)::integer AS hash_bytes
+      FROM scoring_offline_authorizations WHERE id=${offlineAuthority.authorization_id}
+    `;
+    expect(storedOfflineSecret).toMatchObject([{ hash_bytes: 32 }]);
+    expect(storedOfflineSecret[0]?.resume_secret_hash.toString("utf8")).not.toContain(offlineAuthority.resume_secret);
+    const expiredAuthorizationId = offlineAuthority.authorization_id;
+    const expiryRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      () => new Date(new Date(offlineAuthority.replay_expires_at).getTime() + 1),
+      undefined,
+      fallbackCodeHmacSecret,
+    );
+    await expect(
+      expiryRuntime.resumeOfflineAuthorization(
+        offlineAuthority.authorization_id,
+        {
+          resumeSecret: offlineAuthority.resume_secret,
+          deviceId: writerDeviceId,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 0,
+          pendingThroughSequence: state.through_sequence,
+          lastReportedLocalSequence: 0,
+          queueFingerprint: null,
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_AUTHORIZATION_EXPIRED" });
+    expect(
+      await client`
+        SELECT
+          (SELECT status FROM scoring_offline_authorizations
+           WHERE id=${expiredAuthorizationId}) AS status,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${expiredAuthorizationId}
+             AND action='scoring_offline_authorization.expired') AS expired_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${expiredAuthorizationId}
+             AND event_type='scoring_offline_authorization.expired') AS expired_outbox
+      `,
+    ).toEqual([{ status: "expired", expired_audits: 1, expired_outbox: 1 }]);
+    offlineAuthority = await runtime.issueOfflineAuthorization(
+      writerAuth,
+      {
+        deviceId: writerDeviceId,
+        lastAcknowledgedSequence: state.through_sequence,
+        pendingEventCount: 0,
+        pendingThroughSequence: state.through_sequence,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v4",
+      },
+      randomUUID(),
+    );
+    expect(offlineAuthority.authorization_id).not.toBe(expiredAuthorizationId);
+    await expect(
+      runtime.issueOfflineAuthorization(
+        writerAuth,
+        {
+          deviceId: writerDeviceId,
+          lastAcknowledgedSequence: state.through_sequence,
+          pendingEventCount: 0,
+          pendingThroughSequence: state.through_sequence,
+          lastReportedLocalSequence: 0,
+          queueFingerprint: null,
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_AUTHORIZATION_DENIED" });
+    const renewedOffline = await runtime.issueOfflineAuthorization(
+      writerAuth,
+      {
+        deviceId: writerDeviceId,
+        resumeSecret: offlineAuthority.resume_secret,
+        lastAcknowledgedSequence: state.through_sequence,
+        pendingEventCount: 0,
+        pendingThroughSequence: state.through_sequence,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v4",
+      },
+      randomUUID(),
+    );
+    expect(renewedOffline).toMatchObject({
+      authorization_id: offlineAuthority.authorization_id,
+      resume_secret: offlineAuthority.resume_secret,
+    });
+    await client`UPDATE match_writer_leases SET expires_at=acquired_at+interval '1 millisecond'
+      WHERE match_id=${firstMatch.id}`;
+    const reservedCandidate = await runtime.exchangeAccess(
+      {
+        token: pass.token,
+        expectedMatchId: firstMatch.id,
+        deviceId: randomUUID(),
+        ipAddress: "198.51.100.203",
+      },
+      randomUUID(),
+    );
+    expect(reservedCandidate).toMatchObject({ mode: "candidate", generation: null });
+    const reservedTakeover = await runtime.requestTakeover(
+      {
+        sessionId: reservedCandidate.session_id,
+        sessionToken: reservedCandidate.session_token,
+        generation: null,
+      },
+      { pendingEventCount: 0, pendingThroughSequence: state.through_sequence },
+      randomUUID(),
+    );
+    expect(reservedTakeover).toMatchObject({ status: "pending", incumbent_pending_state: "unknown" });
+    await expect(
+      runtime.resolveTakeover(
+        actor,
+        competition.id,
+        reservedTakeover.id,
+        {
+          decision: "approve",
+          overrideAcknowledged: false,
+          reason: "Attempt without pending work acknowledgement",
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({
+      code: "TAKEOVER_OVERRIDE_ACKNOWLEDGEMENT_REQUIRED",
+    });
+    const resumeInput = {
+      resumeSecret: offlineAuthority.resume_secret,
+      deviceId: writerDeviceId,
+      lastAcknowledgedSequence: state.through_sequence,
+      pendingEventCount: 0,
+      pendingThroughSequence: state.through_sequence,
+      lastReportedLocalSequence: 0,
+      queueFingerprint: null,
+      indexeddbSchemaVersion: 1,
+      serviceWorkerVersion: "gate-c-c3-v4",
+    } as const;
+    const resumedOffline = await runtime.resumeOfflineAuthorization(
+      offlineAuthority.authorization_id,
+      resumeInput,
+      randomUUID(),
+    );
+    expect(resumedOffline).toMatchObject({
+      session: { session_id: writer.session_id, generation: writer.generation },
+      offline: { authorization_id: offlineAuthority.authorization_id, generation: writer.generation },
+    });
+    expect(resumedOffline.offline.resume_secret).toBe(offlineAuthority.resume_secret);
+    const lostResponseRecovery = await runtime.resumeOfflineAuthorization(
+      offlineAuthority.authorization_id,
+      resumeInput,
+      randomUUID(),
+    );
+    expect(lostResponseRecovery.offline.resume_secret).toBe(offlineAuthority.resume_secret);
+    const secondApiRuntime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      undefined,
+      undefined,
+      fallbackCodeHmacSecret,
+    );
+    const concurrentResumes = await Promise.all([
+      runtime.resumeOfflineAuthorization(offlineAuthority.authorization_id, resumeInput, randomUUID()),
+      secondApiRuntime.resumeOfflineAuthorization(offlineAuthority.authorization_id, resumeInput, randomUUID()),
+    ]);
+    expect(new Set(concurrentResumes.map((result) => result.offline.resume_secret))).toEqual(
+      new Set([offlineAuthority.resume_secret]),
+    );
+    const repeatedRecovery = await runtime.resumeOfflineAuthorization(
+      offlineAuthority.authorization_id,
+      resumeInput,
+      randomUUID(),
+    );
+    expect(repeatedRecovery.offline.resume_secret).toBe(offlineAuthority.resume_secret);
+    writerAuth.sessionToken = repeatedRecovery.session.session_token;
+    await expect(
+      runtime.appendCanonicalScoreEvent(
+        writerAuth,
+        {
+          client_event_id: randomUUID(),
+          type: "incident",
+          occurred_at: "2000-01-01T00:00:00.000Z",
+          segment_number: 1,
+          manual_time_seconds: 0,
+          reason: "Must be rejected before the authority window",
+        },
+        state.through_sequence,
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_RECORDING_EXPIRED" });
+    await expect(
+      runtime.appendCanonicalScoreEvent(
+        writerAuth,
+        {
+          client_event_id: randomUUID(),
+          type: "incident",
+          occurred_at: offlineAuthority.recording_expires_at,
+          segment_number: 1,
+          manual_time_seconds: 0,
+          reason: "Must be rejected at the recording boundary",
+        },
+        state.through_sequence,
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "OFFLINE_RECORDING_EXPIRED" });
     const viewerPass = await runtime.createAccessPass(
       actor,
       competition.id,
@@ -649,7 +1012,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
     const retainedStaleSubmission = await client<
       {
-        after_state: string;
+        after_state: string | Record<string, unknown>;
         metadata: string | Record<string, unknown>;
       }[]
     >`
@@ -658,7 +1021,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         AND action='scoring_event.stale_submission_rejected'
     `;
     expect({
-      after_state: JSON.parse(retainedStaleSubmission[0]?.after_state ?? "{}"),
+      after_state:
+        typeof retainedStaleSubmission[0]?.after_state === "string"
+          ? JSON.parse(retainedStaleSubmission[0].after_state)
+          : retainedStaleSubmission[0]?.after_state,
       metadata:
         typeof retainedStaleSubmission[0]?.metadata === "string"
           ? JSON.parse(retainedStaleSubmission[0].metadata)
@@ -684,19 +1050,49 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         manualEventSeconds: 0,
         payload: {},
         correctionReason: null,
-        occurredAt: new Date("2026-08-01T01:10:00.000Z"),
+        occurredAt: new Date(),
       },
       randomUUID(),
     );
     const finalEventId = randomUUID();
     const final = await runtime.finalise(writerAuth, finalEventId, randomUUID());
     expect(Object.keys(final).sort()).toEqual(
-      ["aggregate_version", "away_score", "duplicate", "home_score", "match_id", "result_version", "sequence"].sort(),
+      [
+        "aggregate_version",
+        "away_score",
+        "client_event_id",
+        "command_fingerprint",
+        "duplicate",
+        "event_id",
+        "home_score",
+        "match_id",
+        "outcome",
+        "publication_version",
+        "published_at",
+        "result_version",
+        "sequence",
+        "server_received_at",
+      ].sort(),
     );
     expect(final).toMatchObject({ home_score: 1, away_score: 0, result_version: 1 });
     const duplicateFinal = await runtime.finalise(writerAuth, finalEventId, randomUUID());
     expect(Object.keys(duplicateFinal).sort()).toEqual(
-      ["aggregate_version", "away_score", "duplicate", "home_score", "match_id", "result_version", "sequence"].sort(),
+      [
+        "aggregate_version",
+        "away_score",
+        "client_event_id",
+        "command_fingerprint",
+        "duplicate",
+        "event_id",
+        "home_score",
+        "match_id",
+        "outcome",
+        "publication_version",
+        "published_at",
+        "result_version",
+        "sequence",
+        "server_received_at",
+      ].sort(),
     );
     expect(duplicateFinal).toMatchObject({
       duplicate: true,
@@ -715,28 +1111,6 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(publicResult.publication).toEqual({ schedule_version: 1, result_version: 1 });
     expect(publicResult.competition).toMatchObject({ name: "Singapore Open", status: "active" });
     expect(publicResult.division).toMatchObject({ id: division.id, name: "Open" });
-    await runtime.createCompetition(
-      actor,
-      {
-        organisationId,
-        name: "Draft Cup",
-        slug: "draft-cup-unpublished",
-        timezone: "Asia/Singapore",
-        startsOn: "2026-09-01",
-        endsOn: "2026-09-01",
-      },
-      randomUUID(),
-    );
-    const listing = await runtime.publicCompetitions();
-    const listedSlugs = listing.competitions.map((entry) => entry.slug);
-    expect(listedSlugs).toContain("singapore-open-phase-2");
-    expect(listedSlugs).not.toContain("draft-cup-unpublished");
-    expect(listing.competitions.find((entry) => entry.slug === "singapore-open-phase-2")).toMatchObject({
-      name: "Singapore Open",
-      status: "active",
-      sport_code: "canoe_polo",
-      timezone: "Asia/Singapore",
-    });
     expect(publicResult.schedule[0]).toMatchObject({
       home: { name: expect.stringMatching(/^Team /) },
       away: { name: expect.stringMatching(/^Team /) },
@@ -761,17 +1135,11 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       phase2Runtime: runtime,
     });
     try {
-      const publicResponse = await publicApp.inject({
+      const removedLegacyPublicResponse = await publicApp.inject({
         method: "GET",
         url: "/api/v1/public/competitions/singapore-open-phase-2",
       });
-      expect(publicResponse.statusCode).toBe(200);
-      expect(publicResponse.json()).toMatchObject({
-        competition: { status: "active", name: "Singapore Open" },
-        division: { name: "Open" },
-        results: [{ home: { name: expect.stringMatching(/^Team /) }, away: { name: expect.stringMatching(/^Team /) } }],
-      });
-      expect(publicResponse.body).not.toMatch(/primary_email|session_token|short_code|secret_hash|"draft"/);
+      expect(removedLegacyPublicResponse.statusCode).toBe(404);
     } finally {
       await publicApp.close();
     }
@@ -963,7 +1331,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "STALE_WRITER_GENERATION" });
     const transferredStaleEvidence = await client<
       {
-        after_state: string;
+        after_state: string | Record<string, unknown>;
         metadata: string | Record<string, unknown>;
       }[]
     >`
@@ -972,7 +1340,10 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         AND action='scoring_event.stale_submission_rejected'
     `;
     expect({
-      after_state: JSON.parse(transferredStaleEvidence[0]?.after_state ?? "{}"),
+      after_state:
+        typeof transferredStaleEvidence[0]?.after_state === "string"
+          ? JSON.parse(transferredStaleEvidence[0].after_state)
+          : transferredStaleEvidence[0]?.after_state,
       metadata:
         typeof transferredStaleEvidence[0]?.metadata === "string"
           ? JSON.parse(transferredStaleEvidence[0].metadata)
@@ -1926,8 +2297,9 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     if (!transferFirstWriterPass?.token || !transferFirstCandidatePass?.token) {
       throw new Error("Expected transfer-first access secrets");
     }
+    const transferFirstDeviceId = randomUUID();
     const transferFirstWriter = await runtime.exchangeAccess(
-      { token: transferFirstWriterPass.token, deviceId: randomUUID(), ipAddress: "203.0.113.73" },
+      { token: transferFirstWriterPass.token, deviceId: transferFirstDeviceId, ipAddress: "203.0.113.73" },
       randomUUID(),
     );
     const transferFirstWriterAuth = {
@@ -1961,6 +2333,20 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       { lastAcknowledgedSequence: 1, pendingEventCount: 0, pendingThroughSequence: 1 },
       randomUUID(),
     );
+    const transferFirstOffline = await runtime.issueOfflineAuthorization(
+      transferFirstWriterAuth,
+      {
+        deviceId: transferFirstDeviceId,
+        lastAcknowledgedSequence: 1,
+        pendingEventCount: 0,
+        pendingThroughSequence: 1,
+        lastReportedLocalSequence: 0,
+        queueFingerprint: null,
+        indexeddbSchemaVersion: 1,
+        serviceWorkerVersion: "gate-c-c3-v4",
+      },
+      randomUUID(),
+    );
     const transferFirstTakeover = await runtime.requestTakeover(
       {
         sessionId: transferFirstCandidate.session_id,
@@ -1970,19 +2356,59 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
       { pendingEventCount: 0, pendingThroughSequence: 0 },
       randomUUID(),
     );
-    await expect(
+    expect(transferFirstTakeover).toMatchObject({ incumbent_pending_state: "unknown" });
+    const resumeTakeoverRace = await Promise.allSettled([
       runtime.resolveTakeover(
         actor,
         competition.id,
         transferFirstTakeover.id,
         {
           decision: "approve",
-          overrideAcknowledged: false,
-          reason: "Transfer wins before finalisation",
+          overrideAcknowledged: true,
+          reason: "Offline state acknowledged before transfer wins",
         },
         randomUUID(),
       ),
-    ).resolves.toMatchObject({ status: "approved", generation: transferFirstReplacementGeneration });
+      runtime.resumeOfflineAuthorization(
+        transferFirstOffline.authorization_id,
+        {
+          resumeSecret: transferFirstOffline.resume_secret,
+          deviceId: transferFirstDeviceId,
+          lastAcknowledgedSequence: 1,
+          pendingEventCount: 0,
+          pendingThroughSequence: 1,
+          lastReportedLocalSequence: 0,
+          queueFingerprint: null,
+          indexeddbSchemaVersion: 1,
+          serviceWorkerVersion: "gate-c-c3-v4",
+        },
+        randomUUID(),
+      ),
+    ]);
+    expect(resumeTakeoverRace[0]).toMatchObject({
+      status: "fulfilled",
+      value: { status: "approved", generation: transferFirstReplacementGeneration },
+    });
+    if (resumeTakeoverRace[1].status === "rejected") {
+      expect(resumeTakeoverRace[1].reason).toMatchObject({
+        code: expect.stringMatching(/OFFLINE_AUTHORIZATION_(TRANSFERRED|DENIED)/),
+      });
+    } else {
+      transferFirstWriterAuth.sessionToken = resumeTakeoverRace[1].value.session.session_token;
+    }
+    expect(
+      await client`
+        SELECT
+          (SELECT status FROM scoring_offline_authorizations
+           WHERE id=${transferFirstOffline.authorization_id}) AS authorization_status,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${transferFirstOffline.authorization_id}
+             AND action='scoring_offline_authorization.transferred') AS transferred_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${transferFirstOffline.authorization_id}
+             AND event_type='scoring_offline_authorization.transferred') AS transferred_outbox
+      `,
+    ).toEqual([{ authorization_status: "transferred", transferred_audits: 1, transferred_outbox: 1 }]);
     const staleFinaliseRequestId = randomUUID();
     await expect(runtime.finalise(transferFirstWriterAuth, randomUUID(), staleFinaliseRequestId)).rejects.toMatchObject(
       { code: "STALE_WRITER_GENERATION" },
@@ -2024,11 +2450,6 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(workspace.access_passes.find((entry) => entry.id === legacyFallbackPass.id)).toMatchObject({
       fallback_code_status: "available",
     });
-    expect(workspace.divisions.flatMap((division) => division.entries)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: expect.any(String), name: expect.any(String), revision: expect.any(Number) }),
-      ]),
-    );
     expect(JSON.stringify(workspace.access_passes)).not.toContain(pass.token);
     const retainedDomainEvidence = JSON.stringify(
       await client`
@@ -2133,308 +2554,80 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     await client`UPDATE competitions
       SET status=archived_from_status,archived_from_status=NULL
       WHERE id=${competition.id}`;
-    await expect(runtime.revokeAccessPass(actor, competition.id, pass.id, randomUUID())).resolves.toMatchObject({
-      id: pass.id,
-      revoked: true,
-    });
+    const revokeResumeRace = await Promise.allSettled([
+      runtime.revokeAccessPass(actor, competition.id, pass.id, randomUUID()),
+      secondApiRuntime.resumeOfflineAuthorization(offlineAuthority.authorization_id, resumeInput, randomUUID()),
+    ]);
+    expect(revokeResumeRace[0]).toMatchObject({ status: "fulfilled", value: { id: pass.id, revoked: true } });
+    if (revokeResumeRace[1].status === "rejected") {
+      expect(revokeResumeRace[1].reason).toMatchObject({
+        code: expect.stringMatching(/OFFLINE_AUTHORIZATION_(REVOKED|DENIED)/),
+      });
+    } else {
+      writerAuth.sessionToken = revokeResumeRace[1].value.session.session_token;
+    }
+    expect(
+      await client`SELECT status FROM scoring_offline_authorizations
+        WHERE id=${offlineAuthority.authorization_id}`,
+    ).toEqual([{ status: "revoked" }]);
+    expect(
+      await client`
+        SELECT
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.issued') AS issued_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.issued') AS issued_outbox,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.renewed') AS renewed_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.renewed') AS renewed_outbox,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.resumed') AS resumed_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.resumed') AS resumed_outbox,
+          (SELECT count(*)::integer FROM audit_events
+           WHERE target_id=${offlineAuthority.authorization_id}
+             AND action='scoring_offline_authorization.revoked') AS revoked_audits,
+          (SELECT count(*)::integer FROM outbox_events
+           WHERE aggregate_id=${offlineAuthority.authorization_id}
+             AND event_type='scoring_offline_authorization.revoked') AS revoked_outbox
+      `,
+    ).toEqual([
+      {
+        issued_audits: 1,
+        issued_outbox: 1,
+        renewed_audits: 1,
+        renewed_outbox: 1,
+        resumed_audits: revokeResumeRace[1].status === "fulfilled" ? 6 : 5,
+        resumed_outbox: 0,
+        revoked_audits: 1,
+        revoked_outbox: 1,
+      },
+    ]);
+    await expect(
+      runtime.revokeOfflineAuthorization(
+        offlineAuthority.authorization_id,
+        { resumeSecret: offlineAuthority.resume_secret, deviceId: writerDeviceId },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ status: "revoked", duplicate: true });
     await expect(runtime.scoringSessionState(writerAuth)).rejects.toMatchObject({
       statusCode: 403,
       code: "SCORING_SESSION_REVOKED",
     });
 
     await expect(client`DELETE FROM competitions WHERE id=${competition.id}`).rejects.toThrow(
-      /result_conflicts is append-only|canonical score events are append-only/i,
+      /result_conflicts is append-only|canonical score events are append-only|Gate C4 result repair facts are append-only/i,
     );
     expect(await client`SELECT count(*)::integer AS count FROM competitions WHERE id=${competition.id}`).toEqual([
       { count: 1 },
     ]);
-  }, 30_000);
-
-  it("resolves complete canonical pools into semis, leaves incomplete pools unresolved, and fences protected targets", async () => {
-    const actor = { accountId };
-    await client`UPDATE sport_pack_versions
-      SET status='active',revision=2,activated_at=now(),activated_by=${accountId}
-      WHERE sport_code='canoe_polo' AND version=${SPORT_PACKS.canoe_polo.version} AND status='draft'`;
-    const phase3 = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
-    const competition = await phase3.createCompetition(
-      actor,
-      {
-        organisationId,
-        name: "Canonical pool advancement",
-        slug: `canonical-pool-advancement-${randomUUID()}`,
-        sportCode: "canoe_polo",
-        venue: "Pool Hall",
-        address: "8 Match Road",
-        countryCode: "SG",
-        startsOn: "2027-08-01",
-        endsOn: "2027-08-02",
-        timezone: "Asia/Singapore",
-        locale: "en-SG",
-      },
-      randomUUID(),
-    );
-    const createdDivision = await phase3.createDivision(
-      actor,
-      competition.id,
-      { name: "Championship", entryLimit: 8 },
-      randomUUID(),
-      randomUUID(),
-    );
-    const divisionId =
-      createdDivision &&
-      typeof createdDivision === "object" &&
-      "id" in createdDivision &&
-      typeof createdDivision.id === "string"
-        ? createdDivision.id
-        : (() => {
-            throw new Error("Expected created division id");
-          })();
-    await phase3.replaceCapacity(
-      actor,
-      competition.id,
-      {
-        revision: 1,
-        areas: [
-          {
-            name: "Pool",
-            slotMinutes: 30,
-            availability: [{ date: "2027-08-01", startTime: "08:00", endTime: "20:00" }],
-          },
-        ],
-      },
-      randomUUID(),
-    );
-    for (let seed = 1; seed <= 8; seed += 1) {
-      await phase3.mutateEntry(
-        actor,
-        competition.id,
-        divisionId,
-        { action: "create", name: `Pool team ${seed}`, seed },
-        randomUUID(),
-        randomUUID(),
-      );
-    }
-    const graph = createDefaultFormatTemplates(8).find((template) => template.strategy === "championship_focus")?.graph;
-    if (!graph) throw new Error("Expected eight-team championship focus graph");
-    const format = await phase3.createFormatRevision(actor, competition.id, divisionId, graph, randomUUID());
-    await client`SELECT phase4_materialize_format_revision(${format.id})`;
-    await phase3.publishFormat(actor, competition.id, format.id, format.definition_hash, randomUUID());
-
-    const groupMatches = await client<
-      {
-        id: string;
-        graph_pool_id: string;
-        home_entry_id: string;
-        away_entry_id: string;
-        home_seed: number;
-        away_seed: number;
-      }[]
-    >`
-      SELECT match.id,match.graph_pool_id,match.home_entry_id,match.away_entry_id,
-             home.seed::int AS home_seed,away.seed::int AS away_seed
-      FROM matches match
-      JOIN division_entries home ON home.id=match.home_entry_id
-      JOIN division_entries away ON away.id=match.away_entry_id
-      WHERE match.division_id=${divisionId} AND match.graph_stage_id='groups'
-      ORDER BY match.graph_pool_id,match.ordinal`;
-    expect(groupMatches).toHaveLength(12);
-    const incomplete = groupMatches.find((match) => match.graph_pool_id === "G1");
-    if (!incomplete) throw new Error("Expected G1 pool fixture");
-    for (const match of groupMatches.filter((candidate) => candidate.id !== incomplete.id)) {
-      const homeWins = match.home_seed < match.away_seed;
-      await client`UPDATE matches SET state='final' WHERE id=${match.id}`;
-      await client`INSERT INTO match_result_snapshots
-        (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
-        VALUES (${match.id},1,1,${homeWins ? 2 : 0},${homeWins ? 0 : 2},'final',
-          ${client.json({ segments: [{ home: homeWins ? 2 : 0, away: homeWins ? 0 : 2 }] })})`;
-    }
-    await client`UPDATE competition_publications SET result_version=1 WHERE competition_id=${competition.id}`;
-    const invokeRecalculation = async (resultVersion: number) => {
-      await client.begin(async (tx) =>
-        (
-          runtime as unknown as {
-            recalculateDivision(
-              transaction: PostgresJsSql,
-              competitionId: string,
-              divisionId: string,
-              version: number,
-            ): Promise<void>;
-          }
-        ).recalculateDivision(tx as unknown as PostgresJsSql, competition.id, divisionId, resultVersion),
-      );
-    };
-    await invokeRecalculation(1);
-    const incompleteSlots = await client<{ group_id: string; entry_id: string | null }[]>`
-      SELECT source.source_group_id AS group_id,slot.entry_id
-      FROM format_match_sources source
-      JOIN advancement_slots slot ON slot.match_id=source.match_id AND slot.slot=source.slot
-      WHERE source.format_revision_id=${format.id} AND source.source_kind='stage_rank'
-      ORDER BY source.source_group_id,source.source_rank`;
-    const incompleteG1Slots = incompleteSlots.filter((slot) => slot.group_id === "G1");
-    expect(incompleteG1Slots).toHaveLength(2);
-    expect(incompleteG1Slots.every((slot) => slot.entry_id === null)).toBe(true);
-
-    const incompleteHomeWins = incomplete.home_seed < incomplete.away_seed;
-    await client`UPDATE matches SET state='final' WHERE id=${incomplete.id}`;
-    await client`INSERT INTO match_result_snapshots
-      (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
-      VALUES (${incomplete.id},2,1,${incompleteHomeWins ? 2 : 0},${incompleteHomeWins ? 0 : 2},'final',
-        ${client.json({ segments: [{ home: incompleteHomeWins ? 2 : 0, away: incompleteHomeWins ? 0 : 2 }] })})`;
-    await client`UPDATE competition_publications SET result_version=2 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(2);
-    const completeSlots = await client<{ match_id: string; slot: string; entry_id: string | null }[]>`
-      SELECT slot.match_id,slot.slot,slot.entry_id
-      FROM advancement_slots slot
-      JOIN matches match ON match.id=slot.match_id
-      WHERE slot.competition_id=${competition.id} AND match.graph_stage_id='championship'
-      ORDER BY slot.match_id,slot.slot`;
-    expect(completeSlots).toHaveLength(6);
-    expect(completeSlots.filter((slot) => slot.entry_id !== null)).toHaveLength(4);
-    expect(completeSlots.filter((slot) => slot.entry_id === null)).toHaveLength(2);
-    expect(
-      await client<{ state: string }[]>`
-        SELECT state FROM matches
-        WHERE id = ANY(${client.array(completeSlots.filter((slot) => slot.entry_id === null).map((slot) => slot.match_id))}::uuid[])`,
-    ).toEqual(expect.arrayContaining([expect.objectContaining({ state: "pending" })]));
-
-    // Finish both semis so the winner/loser-dependent final and bronze slots
-    // become ready, then remove both source results as an organiser reopen
-    // would. Historical snapshots must not keep downstream entrants alive.
-    const semiMatches = await client<{ id: string }[]>`
-      SELECT DISTINCT match.id
-      FROM matches match
-      JOIN advancement_slots slot ON slot.match_id=match.id
-      WHERE match.division_id=${divisionId} AND match.graph_stage_id='championship'
-        AND match.home_entry_id IS NOT NULL AND match.away_entry_id IS NOT NULL
-      ORDER BY match.id`;
-    expect(semiMatches).toHaveLength(2);
-    for (const [index, match] of semiMatches.entries()) {
-      await client`UPDATE matches SET state='final' WHERE id=${match.id}`;
-      await client`INSERT INTO match_result_snapshots
-        (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
-        VALUES (${match.id},3,1,${index === 0 ? 2 : 0},${index === 0 ? 0 : 2},'final',
-          ${client.json({ segments: [{ home: index === 0 ? 2 : 0, away: index === 0 ? 0 : 2 }] })})`;
-    }
-    await client`UPDATE competition_publications SET result_version=3 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(3);
-    const populatedDownstream = await client<{ match_id: string; slot: string; entry_id: string; state: string }[]>`
-      SELECT slot.match_id,slot.slot,slot.entry_id,match.state
-      FROM advancement_slots slot
-      JOIN matches match ON match.id=slot.match_id
-      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
-      WHERE slot.competition_id=${competition.id} AND source.source_kind IN ('winner','loser')
-      ORDER BY slot.match_id,slot.slot`;
-    expect(populatedDownstream).toHaveLength(4);
-    expect(populatedDownstream.every((slot) => slot.entry_id !== null && slot.state === "ready")).toBe(true);
-
-    await client`UPDATE matches SET state='in_progress' WHERE id = ANY(${client.array(semiMatches.map((match) => match.id))}::uuid[])`;
-    await client`UPDATE competition_publications SET result_version=4 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(4);
-    const clearedDownstream = await client<
-      { match_id: string; slot: string; entry_id: string | null; state: string }[]
-    >`
-      SELECT slot.match_id,slot.slot,slot.entry_id,match.state
-      FROM advancement_slots slot
-      JOIN matches match ON match.id=slot.match_id
-      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
-      WHERE slot.competition_id=${competition.id} AND source.source_kind IN ('winner','loser')
-      ORDER BY slot.match_id,slot.slot`;
-    expect(clearedDownstream).toHaveLength(4);
-    expect(clearedDownstream.every((slot) => slot.entry_id === null && slot.state === "pending")).toBe(true);
-
-    // A newer draft has a deliberately different topology. Recalculation is
-    // bound to the published revision: a draft must never rewrite the live
-    // qualification slots before it is materialised and published.
-    const draftGraph = createDefaultFormatTemplates(8).find(
-      (template) => template.strategy === "compact_knockout",
-    )?.graph;
-    if (!draftGraph) throw new Error("Expected compact knockout draft graph");
-    await phase3.createFormatRevision(actor, competition.id, divisionId, draftGraph, randomUUID());
-    await client`UPDATE competition_publications SET result_version=5 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(5);
-    expect(
-      await client<{ match_id: string; slot: string; entry_id: string | null }[]>`
-        SELECT slot.match_id,slot.slot,slot.entry_id
-        FROM advancement_slots slot
-        JOIN matches match ON match.id=slot.match_id
-        WHERE slot.competition_id=${competition.id} AND match.graph_stage_id='championship'
-        ORDER BY slot.match_id,slot.slot`,
-    ).toEqual(completeSlots);
-
-    const protectedTarget = await client<{ match_id: string; slot: string; entry_id: string }[]>`
-      SELECT slot.match_id,slot.slot,slot.entry_id
-      FROM advancement_slots slot
-      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
-      WHERE slot.competition_id=${competition.id} AND source.source_group_id='G1' AND source.source_rank=1
-      LIMIT 1`;
-    const target = protectedTarget[0];
-    if (!target) throw new Error("Expected automatic G1 rank-one target");
-    const finalisedTarget = await client<{ match_id: string; slot: string; entry_id: string }[]>`
-      SELECT slot.match_id,slot.slot,slot.entry_id
-      FROM advancement_slots slot
-      JOIN format_match_sources source ON source.match_id=slot.match_id AND source.slot=slot.slot
-      WHERE slot.competition_id=${competition.id} AND source.source_group_id='G2' AND source.source_rank=1
-      LIMIT 1`;
-    const finalTarget = finalisedTarget[0];
-    if (!finalTarget) throw new Error("Expected automatic G2 rank-one target");
-    await client`UPDATE matches SET state='in_progress' WHERE id=${target.match_id}`;
-    await client`UPDATE matches SET state='final' WHERE id=${finalTarget.match_id}`;
-    for (const match of groupMatches.filter(
-      (candidate) => candidate.graph_pool_id === "G1" || candidate.graph_pool_id === "G2",
-    )) {
-      const initialHomeWins = match.home_seed < match.away_seed;
-      await client`INSERT INTO match_result_snapshots
-        (match_id,result_version,through_sequence,home_score,away_score,state,snapshot)
-        VALUES (${match.id},6,2,${initialHomeWins ? 0 : 2},${initialHomeWins ? 2 : 0},'corrected',
-          ${client.json({
-            corrected: true,
-            segments: [{ home: initialHomeWins ? 0 : 2, away: initialHomeWins ? 2 : 0 }],
-          })})`;
-    }
-    const correctedRankOne = (groupId: string) => {
-      const candidates = new Map<string, number>();
-      for (const match of groupMatches.filter((candidate) => candidate.graph_pool_id === groupId)) {
-        candidates.set(match.home_entry_id, match.home_seed);
-        candidates.set(match.away_entry_id, match.away_seed);
-      }
-      const winner = [...candidates.entries()].sort((left, right) => right[1] - left[1])[0]?.[0];
-      if (!winner) throw new Error(`Expected ${groupId} rank-one candidate after corrected results`);
-      return winner;
-    };
-    // Every G1/G2 final was reversed above. The highest seed therefore wins all
-    // three pool fixtures and is the new rank-one candidate; prove that either
-    // protected target would otherwise change before exercising the fence.
-    expect(correctedRankOne("G1")).not.toBe(target.entry_id);
-    expect(correctedRankOne("G2")).not.toBe(finalTarget.entry_id);
-    await client`UPDATE competition_publications SET result_version=6 WHERE competition_id=${competition.id}`;
-    await invokeRecalculation(6);
-    expect(
-      await client<
-        { entry_id: string }[]
-      >`SELECT entry_id FROM advancement_slots WHERE match_id=${target.match_id} AND slot=${target.slot}`,
-    ).toEqual([{ entry_id: target.entry_id }]);
-    expect(
-      await client<
-        { entry_id: string }[]
-      >`SELECT entry_id FROM advancement_slots WHERE match_id=${finalTarget.match_id} AND slot=${finalTarget.slot}`,
-    ).toEqual([{ entry_id: finalTarget.entry_id }]);
-    expect(
-      await client<{ reason: string; target_slot_id: string }[]>`
-        SELECT reason,target_slot_id FROM advancement_conflicts
-        WHERE competition_id=${competition.id} AND result_version=6
-        ORDER BY created_at DESC`,
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          reason: "downstream_match_started",
-          target_slot_id: `${target.match_id}:${target.slot}`,
-        }),
-        expect.objectContaining({
-          reason: "downstream_match_started",
-          target_slot_id: `${finalTarget.match_id}:${finalTarget.slot}`,
-        }),
-      ]),
-    );
   }, 30_000);
 
   it("uses opaque namespaced match UUIDs and rejects non-finalisable score streams", () => {
@@ -2459,6 +2652,6 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
         awayEntryId: entriesA[1]?.id ?? "",
       }),
     ).toThrow("Match has not started");
-    expect(new ApiError(409, ErrorCode.STALE_WRITER_GENERATION, "stale").statusCode).toBe(409);
+    expect(new ApiError(409, "STALE_WRITER_GENERATION", "stale").statusCode).toBe(409);
   });
 });

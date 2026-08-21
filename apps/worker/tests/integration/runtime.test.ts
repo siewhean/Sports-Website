@@ -6,6 +6,40 @@ import { describe, expect, it, vi } from "vitest";
 import { WorkerRuntime, type WorkerMetrics } from "../../src/index.js";
 
 describe("WorkerRuntime with Redis", () => {
+  it("keeps identically named queues isolated by an explicit prefix", async () => {
+    const queueName = `matchday-c5-prefix-test-${randomUUID()}`;
+    const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/14";
+    const prefixA = `matchday-c5-${randomUUID()}`;
+    const prefixB = `matchday-c5-${randomUUID()}`;
+    const handledA = vi.fn(async () => ({ correlationId: "prefix-a", handledAt: "2026-08-04T00:00:00.000Z" }));
+    const handledB = vi.fn(async () => ({ correlationId: "prefix-b", handledAt: "2026-08-04T00:00:00.000Z" }));
+    const first = new WorkerRuntime({
+      queueName,
+      queuePrefix: prefixA,
+      redisUrl,
+      concurrency: 1,
+      handleProbe: handledA,
+    });
+    const second = new WorkerRuntime({
+      queueName,
+      queuePrefix: prefixB,
+      redisUrl,
+      concurrency: 1,
+      handleProbe: handledB,
+    });
+
+    await Promise.all([first.start(), second.start()]);
+    await Promise.all([
+      first.enqueueProbe({ correlationId: "prefix-a", requestedAt: "2026-08-04T00:00:00.000Z" }, "same-key"),
+      second.enqueueProbe({ correlationId: "prefix-b", requestedAt: "2026-08-04T00:00:00.000Z" }, "same-key"),
+    ]);
+    await waitUntil(() => handledA.mock.calls.length === 1 && handledB.mock.calls.length === 1);
+
+    expect(handledA).toHaveBeenCalledOnce();
+    expect(handledB).toHaveBeenCalledOnce();
+    await Promise.all([first.stop(), second.stop()]);
+  });
+
   it("deduplicates public projection purges using the prior published version", async () => {
     const handled = vi.fn(async () => ({ purgedAt: "2026-07-17T00:00:00.000Z" }));
     const runtime = new WorkerRuntime({

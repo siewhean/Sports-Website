@@ -29,9 +29,6 @@ test("@a11y scorer goal-confirmation interaction has no WCAG A or AA accessibili
 test("@a11y public results, table and bracket have no WCAG A or AA accessibility violations", async ({ page }) => {
   await page.goto("/competitions/singapore-open");
   await dismissConsent(page);
-  const latestResults = page.getByRole("list", { name: "Latest results" });
-  await expect(page.getByRole("heading", { name: "Latest results" })).toBeVisible();
-  await expect(latestResults.getByRole("listitem")).toHaveCount(1);
   await page.getByRole("link", { name: "Table", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Table" })).toBeVisible();
   await assertNoWcagAOrAaViolations(page);

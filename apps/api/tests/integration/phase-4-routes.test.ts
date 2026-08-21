@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
-import { ApiError, ErrorCode } from "../../src/errors.js";
+import { ApiError } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import type { Phase4Runtime } from "../../src/phase-4-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
@@ -74,7 +74,7 @@ function runtime() {
     })),
     recoverQueuedScheduleJobs: vi.fn(async () => ({ recovered: 0, failed: 0 })),
     archiveFormatTemplate: vi.fn(async () => {
-      throw new ApiError(409, ErrorCode.TEMPLATE_ARCHIVED, "Template is already archived");
+      throw new ApiError(409, "TEMPLATE_ARCHIVED", "Template is already archived");
     }),
   } as unknown as Phase4Runtime;
 }

@@ -1,23 +1,18 @@
 .form {
   display: grid;
-  gap: 1.75rem;
-  max-width: 62rem;
+  gap: 1.25rem;
+  max-width: 54rem;
 }
 
 .intro {
   max-width: 64ch;
-  margin: 0;
-  color: var(--ink-muted);
-  font-size: 1rem;
-  line-height: 1.65;
+  color: var(--foundation-ink-muted, #475569);
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1.25rem 1rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--hairline);
+  gap: 1rem;
 }
 
 .field,
@@ -33,86 +28,60 @@
 
 .field label,
 .wide label {
-  color: var(--ink);
-  font-size: 0.78rem;
-  font-weight: 740;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  font-weight: 700;
 }
 
 .field input,
 .field select,
 .wide input {
   width: 100%;
-  min-height: 3rem;
-  border: 1px solid var(--hairline);
-  border-radius: 0.65rem;
-  padding: 0.7rem 0.85rem;
-  color: var(--ink);
-  background: var(--surface);
+  min-height: 2.75rem;
+  border: 1px solid #94a3b8;
+  border-radius: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  color: #0f172a;
+  background: #fff;
   font: inherit;
-  transition:
-    border-color 160ms var(--ease-out),
-    box-shadow 160ms var(--ease-out),
-    background-color 160ms var(--ease-out);
-}
-
-.field input:hover,
-.field select:hover,
-.wide input:hover {
-  border-color: var(--ink-muted);
 }
 
 .field input:focus-visible,
 .field select:focus-visible,
 .wide input:focus-visible,
 .submit:focus-visible {
-  outline: 3px solid var(--focus);
+  outline: 3px solid #f59e0b;
   outline-offset: 2px;
 }
 
 .hint {
   margin: 0;
-  color: var(--ink-muted);
+  color: #475569;
   font-size: 0.875rem;
 }
 
 .error {
   margin: 0;
-  color: var(--danger);
+  color: #9f1239;
   font-weight: 650;
 }
 
 .summary {
-  border-left: 0.3rem solid var(--danger);
-  padding: 0.9rem 1rem;
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
-  line-height: 1.5;
+  border-left: 0.3rem solid #be123c;
+  padding: 0.75rem 1rem;
+  color: #881337;
+  background: #fff1f2;
 }
 
 .submit {
   justify-self: start;
-  min-height: 3rem;
+  min-height: 2.75rem;
   border: 0;
   border-radius: 999px;
   padding: 0.7rem 1.2rem;
-  color: var(--surface);
-  background: var(--ink);
+  color: #fff;
+  background: #172554;
   font: inherit;
   font-weight: 750;
   cursor: pointer;
-  transition:
-    transform 140ms var(--ease-out),
-    background-color 180ms var(--ease-out);
-}
-
-.submit:not(:disabled):hover {
-  background: color-mix(in srgb, var(--ink) 88%, var(--surface));
-}
-
-.submit:not(:disabled):active {
-  transform: scale(0.98);
 }
 
 .submit:disabled {
@@ -128,7 +97,7 @@
   justify-self: start;
   border: 0;
   padding: 0;
-  color: var(--ink);
+  color: #172554;
   background: transparent;
   font: inherit;
   font-weight: 750;
@@ -136,39 +105,8 @@
   cursor: pointer;
 }
 
-.signIn {
-  justify-self: start;
-  min-height: 2.75rem;
-  padding: 0.65rem 0.9rem;
-  min-height: 3rem;
-  border: 1px solid var(--ink);
-  border-radius: 999px;
-  color: var(--ink);
-  font-size: 0.9rem;
-  font-weight: 720;
-  text-decoration: none;
-  transition:
-    transform 140ms var(--ease-out),
-    background-color 180ms var(--ease-out),
-    color 180ms var(--ease-out);
-}
-
-.signIn:hover {
-  background: var(--ink);
-  color: var(--surface);
-}
-
-.signIn:active {
-  transform: scale(0.98);
-}
-
-.signIn:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 3px;
-}
-
 .retry:focus-visible {
-  outline: 3px solid var(--focus);
+  outline: 3px solid #f59e0b;
   outline-offset: 3px;
 }
 

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { Gauge, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
-import { translate as t } from "@matchday/ui";
 import {
   capacityMutationBody,
   parseCapacityResponse,
@@ -307,68 +306,60 @@ function WindowGroup({
           {kind === "availability" ? phase3CapacityCopy.addWindow : phase3CapacityCopy.addBreak}
         </button>
       </header>
-      {windows.map((window, windowIndex) => {
-        const crossMidnightHelpId = `${kind}-${areaIndex}-${windowIndex}-cross-midnight-help`;
-        return (
-          <div className={styles.windowRow} key={window.id}>
-            <div className={styles.window}>
-              <Field label={phase3CapacityCopy.date}>
-                <input
-                  type="date"
-                  value={window.date}
-                  aria-invalid={Boolean(windowErrors[windowIndex])}
-                  aria-describedby={windowErrors[windowIndex] ? `${kind}-${areaIndex}-${windowIndex}-error` : undefined}
-                  onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { date: event.target.value })}
-                />
-              </Field>
-              <Field label={phase3CapacityCopy.starts}>
-                <input
-                  type="time"
-                  value={window.startTime}
-                  aria-invalid={Boolean(windowErrors[windowIndex])}
-                  aria-describedby={windowErrors[windowIndex] ? `${kind}-${areaIndex}-${windowIndex}-error` : undefined}
-                  onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { startTime: event.target.value })}
-                />
-              </Field>
-              <Field label={phase3CapacityCopy.ends}>
-                <input
-                  type="time"
-                  value={window.endTime}
-                  aria-invalid={Boolean(windowErrors[windowIndex])}
-                  aria-describedby={windowErrors[windowIndex] ? `${kind}-${areaIndex}-${windowIndex}-error` : undefined}
-                  onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { endTime: event.target.value })}
-                />
-              </Field>
-              <label className={styles.checkbox}>
-                <input
-                  type="checkbox"
-                  checked={window.crossMidnight}
-                  aria-describedby={crossMidnightHelpId}
-                  onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { crossMidnight: event.target.checked })}
-                />
-                <span>
-                  {phase3CapacityCopy.crossMidnight}
-                  <br />
-                  <small id={crossMidnightHelpId}>{t("prototype.813643f18b43")}</small>
-                </span>
-              </label>
-              <button
-                className={styles.iconButton}
-                type="button"
-                aria-label={`${phase3CapacityCopy.remove} ${title.toLowerCase()} ${windowIndex + 1}`}
-                onClick={() => onRemove(areaIndex, kind, windowIndex)}
-              >
-                <Trash aria-hidden="true" />
-              </button>
-            </div>
-            {windowErrors[windowIndex] ? (
-              <p id={`${kind}-${areaIndex}-${windowIndex}-error`} className={styles.formError} role="alert">
-                {windowErrors[windowIndex]}
-              </p>
-            ) : null}
+      {windows.map((window, windowIndex) => (
+        <div className={styles.windowRow} key={window.id}>
+          <div className={styles.window}>
+            <Field label={phase3CapacityCopy.date}>
+              <input
+                type="date"
+                value={window.date}
+                aria-invalid={Boolean(windowErrors[windowIndex])}
+                aria-describedby={windowErrors[windowIndex] ? `${kind}-${areaIndex}-${windowIndex}-error` : undefined}
+                onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { date: event.target.value })}
+              />
+            </Field>
+            <Field label={phase3CapacityCopy.starts}>
+              <input
+                type="time"
+                value={window.startTime}
+                aria-invalid={Boolean(windowErrors[windowIndex])}
+                aria-describedby={windowErrors[windowIndex] ? `${kind}-${areaIndex}-${windowIndex}-error` : undefined}
+                onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { startTime: event.target.value })}
+              />
+            </Field>
+            <Field label={phase3CapacityCopy.ends}>
+              <input
+                type="time"
+                value={window.endTime}
+                aria-invalid={Boolean(windowErrors[windowIndex])}
+                aria-describedby={windowErrors[windowIndex] ? `${kind}-${areaIndex}-${windowIndex}-error` : undefined}
+                onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { endTime: event.target.value })}
+              />
+            </Field>
+            <label className={styles.checkbox}>
+              <input
+                type="checkbox"
+                checked={window.crossMidnight}
+                onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { crossMidnight: event.target.checked })}
+              />
+              <span>{phase3CapacityCopy.crossMidnight}</span>
+            </label>
+            <button
+              className={styles.iconButton}
+              type="button"
+              aria-label={`${phase3CapacityCopy.remove} ${title.toLowerCase()} ${windowIndex + 1}`}
+              onClick={() => onRemove(areaIndex, kind, windowIndex)}
+            >
+              <Trash aria-hidden="true" />
+            </button>
           </div>
-        );
-      })}
+          {windowErrors[windowIndex] ? (
+            <p id={`${kind}-${areaIndex}-${windowIndex}-error`} className={styles.formError} role="alert">
+              {windowErrors[windowIndex]}
+            </p>
+          ) : null}
+        </div>
+      ))}
       {error ? (
         <p className={styles.formError} role="alert">
           {error}

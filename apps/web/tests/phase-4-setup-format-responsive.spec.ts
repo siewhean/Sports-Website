@@ -20,7 +20,7 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
 });
 
 test("format designer visual canvas remains horizontally navigable", async ({ page }) => {
-  await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+  await page.goto("/organiser/competitions/singapore-open/format");
   await dismissConsent(page);
   await page.getByRole("button", { name: "Visual", exact: true }).click();
   const canvas = page.getByTestId("format-canvas");
@@ -49,7 +49,7 @@ test("recommendation evidence stays accessible without phone overflow", async ({
 
 test("format designer defaults to structured manual mode on phones", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("phone"), "Phone-only default");
-  await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+  await page.goto("/organiser/competitions/singapore-open/format");
   await dismissConsent(page);
   await expect(page.getByRole("button", { name: /Manual/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("heading", { name: "Stages and advancement" })).toBeVisible();
@@ -68,7 +68,7 @@ test("format designer defaults to structured manual mode on phones", async ({ pa
 });
 
 test("format designer switches authoritative divisions without sharing draft lineage", async ({ page }) => {
-  await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+  await page.goto("/organiser/competitions/singapore-open/format");
   await dismissConsent(page);
   const designer = page.getByTestId("phase4-format-designer");
   const division = page.getByRole("combobox", { name: "Division" });
@@ -78,13 +78,13 @@ test("format designer switches authoritative divisions without sharing draft lin
   await expect(designer).toHaveAttribute("data-draft-id", "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed");
 
   await division.selectOption("women");
-  await expect(page).toHaveURL(/\/format\?division=women&advanced=1$/);
+  await expect(page).toHaveURL(/\/format\?division=women$/);
   await expect(division).toHaveValue("women");
   await expect(designer).toHaveAttribute("data-division-id", "women");
   await expect(designer).toHaveAttribute("data-draft-id", "6b3f7665-c8cd-47e5-b243-fae28f56f6fe");
 
   await division.selectOption("open");
-  await expect(page).toHaveURL(/\/format\?division=open&advanced=1$/);
+  await expect(page).toHaveURL(/\/format\?division=open$/);
   await expect(designer).toHaveAttribute("data-division-id", "open");
   await expect(designer).toHaveAttribute("data-draft-id", "5a2f6554-b7bc-46d4-a132-e9f17e45e5ed");
   expect(
@@ -94,7 +94,7 @@ test("format designer switches authoritative divisions without sharing draft lin
 
 test("format designer tablet keeps the complete graph and inspector reachable", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("tablet"), "Tablet reachability only");
-  await page.goto("/organiser/competitions/singapore-open/format?advanced=1");
+  await page.goto("/organiser/competitions/singapore-open/format");
   await dismissConsent(page);
   const canvas = page.getByTestId("format-canvas");
   const finalStage = canvas.locator('[data-stage-id="stage-final"]');

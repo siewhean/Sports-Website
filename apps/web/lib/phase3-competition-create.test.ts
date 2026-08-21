@@ -7,7 +7,6 @@ import {
   parseCompetitionOrganisationBootstrapReceipt,
   parseCompetitionOrganisationOptions,
   phase3CompetitionSports,
-  slugifyCompetitionName,
   type CompetitionCreateDraft,
 } from "./phase3-competition-create";
 
@@ -62,11 +61,14 @@ describe("competition creation contract", () => {
     expect(competitionCreateFieldOrder.indexOf("name")).toBeLessThan(competitionCreateFieldOrder.indexOf("sport_code"));
   });
 
-  it("allows only a missing organisation when the first-workspace bootstrap is explicit", () => {
+  it("allows only the absent organisation field when first-workspace bootstrap is active", () => {
     const withoutOrganisation = { ...validDraft, organisation_id: "" };
-
     expect(firstInvalidCompetitionCreateField(withoutOrganisation)).toBe("organisation_id");
-    expect(firstInvalidCompetitionCreateField(withoutOrganisation, { allowOrganisationBootstrap: true })).toBeNull();
+    expect(
+      firstInvalidCompetitionCreateField(withoutOrganisation, {
+        allowOrganisationBootstrap: true,
+      }),
+    ).toBeNull();
     expect(
       firstInvalidCompetitionCreateField({ ...withoutOrganisation, name: "" }, { allowOrganisationBootstrap: true }),
     ).toBe("name");
@@ -89,31 +91,31 @@ describe("competition creation contract", () => {
   });
 
   it("accepts only unique writable organisation options", () => {
-    const owner = { id: validDraft.organisation_id, name: "National Sports", role: "owner" };
+    const owner = {
+      id: validDraft.organisation_id,
+      name: "National Sports",
+      role: "owner",
+    };
     expect(parseCompetitionOrganisationOptions([owner])).toEqual([owner]);
     expect(parseCompetitionOrganisationOptions([{ ...owner, role: "viewer" }])).toBeNull();
     expect(parseCompetitionOrganisationOptions([owner, owner])).toBeNull();
   });
 
-  it("accepts only an exact first-workspace bootstrap receipt", () => {
+  it("accepts only exact first-workspace bootstrap receipts", () => {
     const receipt = {
       id: validDraft.organisation_id,
-      name: "National Sports",
+      name: "Organiser workspace",
       role: "owner",
       created: true,
     };
     expect(parseCompetitionOrganisationBootstrapReceipt(receipt)).toEqual(receipt);
-    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, extra: true })).toBeNull();
+    expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, role: "viewer" })).toBeNull();
+    expect(
+      parseCompetitionOrganisationBootstrapReceipt({
+        ...receipt,
+        unexpected_private_field: "rejected-fixture",
+      }),
+    ).toBeNull();
     expect(parseCompetitionOrganisationBootstrapReceipt({ ...receipt, created: "true" })).toBeNull();
-  });
-
-  it("derives a slug that the field's own validation always accepts", () => {
-    expect(slugifyCompetitionName("National Open 2027!")).toBe("national-open-2027");
-    expect(slugifyCompetitionName("Café  de Paris")).toBe("cafe-de-paris");
-    expect(slugifyCompetitionName("  --Leading and trailing--  ")).toBe("leading-and-trailing");
-    expect(slugifyCompetitionName("a".repeat(200))).toHaveLength(120);
-    expect(isCompetitionCreateRequest({ ...validCommand, slug: slugifyCompetitionName("New Zealand Masters") })).toBe(
-      true,
-    );
   });
 });

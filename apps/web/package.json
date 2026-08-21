@@ -10,10 +10,11 @@
     "check:i18n": "node scripts/check-hardcoded-user-strings.mjs --self-test",
     "lint": "pnpm check:i18n && eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run lib/*.test.ts tests/unit",
     "test:unit": "vitest run lib/*.test.ts tests/unit",
-    "test:e2e": "env -u NO_COLOR playwright test --grep-invert 'visual baseline(s)?'",
+    "test:e2e": "env -u NO_COLOR playwright test",
     "test:a11y": "env -u NO_COLOR playwright test --grep '@a11y'",
-    "test:visual": "env -u NO_COLOR playwright test --grep 'visual baseline(s)?' ${CI:+-u}"
+    "test:visual": "env -u NO_COLOR playwright test --grep 'visual baseline(s)?'"
   },
   "dependencies": {
     "@gsap/react": "2.1.2",
@@ -38,6 +39,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint": "9.39.5",
     "eslint-config-next": "16.2.11",
+    "fake-indexeddb": "6.2.5",
     "typescript": "5.9.3",
     "vitest": "4.1.10"
   }

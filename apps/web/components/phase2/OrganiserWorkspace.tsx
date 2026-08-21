@@ -12,7 +12,7 @@ import {
   Warning,
 } from "@phosphor-icons/react/dist/ssr";
 import {
-  v1OrganiserSections,
+  organiserSections,
   phase2Competition,
   phase2Copy,
   phase2Machine,
@@ -23,10 +23,6 @@ import {
 import { SurfaceStatePanel } from "./SurfaceState";
 import { AccessPassManager } from "@/components/phase5/AccessPassManager";
 
-// Named aliases for a handful of packages/ui/src/translate.ts catalogue ids
-// used below. The catalogue keeps its own hash-style ids (it may be synced
-// from an external string source), this map just gives the call sites in
-// this file something readable to point at instead of an opaque hash.
 function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
   const shared: Record<OrganiserSection, { title: string; intro: string }> = {
     "control-room": { title: phase2Copy.controlTitle, intro: phase2Copy.controlIntro },
@@ -56,8 +52,16 @@ function sectionMeta(competition: CompetitionView, section: OrganiserSection): {
   return shared[section];
 }
 
-function navigation() {
-  return v1OrganiserSections;
+function navigation(competition: CompetitionView) {
+  return organiserSections.map((item) => {
+    if (item.id === "settings")
+      return { ...item, short: t("prototype.74a883a037bc"), label: `${competition.sport} settings` };
+    if (item.id === "entries")
+      return { ...item, short: t("prototype.7cb76b4af12a"), label: t("prototype.10beee7f51f8") };
+    if (item.id === "format")
+      return { ...item, short: t("prototype.2f343666aaa8"), label: t("prototype.675eeee2578b") };
+    return item;
+  });
 }
 
 export function OrganiserWorkspace({
@@ -125,7 +129,7 @@ export function OrganiserWorkspace({
       ) : null}
       <div className="p2-organiser__layout">
         <nav className="p2-organiser__nav" aria-label={phase2Copy.organiserNav}>
-          {navigation().map((item) => (
+          {navigation(competition).map((item) => (
             <Link
               key={item.id}
               href={item.id === "control-room" ? organiserBase : `${organiserBase}/${item.id}`}
@@ -271,10 +275,6 @@ function ControlRoom({ competition }: { competition: CompetitionView }) {
             </li>
           ))}
         </ol>
-        <Link className="p2-button p2-button--dark" href={`/organiser/competitions/${competition.id}/access`}>
-          {phase2Copy.issueScorerAccess}
-          <ArrowRight aria-hidden="true" />
-        </Link>
       </section>
       <section className="p2-readiness" aria-labelledby="readiness-title">
         <header>

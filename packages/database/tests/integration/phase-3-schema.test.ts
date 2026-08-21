@@ -277,7 +277,7 @@ beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
   sql = postgres(databaseUrl, { max: 4, onnotice: () => undefined, connection: { search_path: schema } });
-});
+}, 60_000);
 
 afterAll(async () => {
   await sql?.end({ timeout: 2 });

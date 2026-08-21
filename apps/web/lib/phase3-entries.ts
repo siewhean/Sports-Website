@@ -3,7 +3,6 @@ export type EntryEditorEntry = Readonly<{
   name: string;
   seed: number | null;
   status: string;
-  revision: number;
 }>;
 
 export type EntryEditorDivision = Readonly<{
@@ -45,15 +44,6 @@ export const phase3EntriesCopy = {
   entryName: "Entry name",
   seed: "Seed",
   addEntry: "Add entry",
-  optionalSeed: "Seed (optional)",
-  editEntry: "Edit",
-  removeEntry: "Remove",
-  confirmRemoveEntry: "Remove entry?",
-  removeEntryDescription: "Remove {entryName} from this division. This cannot be undone.",
-  cancel: "Cancel",
-  saveEntry: "Save changes",
-  entryUpdated: "Entry updated.",
-  entryRemoved: "Entry removed.",
   confirmed: "Confirmed entries",
   freeUsage: "Free-plan entry usage",
   freeLimit: "16 entries maximum across this competition",
@@ -159,17 +149,10 @@ export function parseCreatedEntry(value: unknown, expectedDivisionId?: string): 
     (expectedDivisionId !== undefined && item.division_id !== expectedDivisionId) ||
     typeof item.name !== "string" ||
     (item.status !== "active" && item.status !== "confirmed") ||
-    !(item.seed === null || item.seed === undefined || integer(item.seed, 1)) ||
-    !(item.revision === undefined || integer(item.revision, 1))
+    !(item.seed === null || integer(item.seed, 1))
   )
     return null;
-  return {
-    id: item.id,
-    name: item.name,
-    seed: (item.seed as number | null) ?? null,
-    status: item.status,
-    revision: integer(item.revision, 1) ? (item.revision as number) : 1,
-  };
+  return { id: item.id, name: item.name, seed: item.seed as number | null, status: item.status };
 }
 
 export function totalActiveEntries(divisions: readonly EntryEditorDivision[]): number {

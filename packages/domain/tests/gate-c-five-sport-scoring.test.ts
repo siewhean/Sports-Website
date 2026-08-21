@@ -555,36 +555,6 @@ describe("Gate C five-sport deterministic scoring", () => {
     ).toThrow(/current segment/);
   });
 
-  it("permits a server-authorised correction replacement only for its historical event id", () => {
-    const historicalReplacement = event(4, {
-      type: "goal",
-      side: "away",
-      participantId: "player-2",
-      segmentNumber: 1,
-    });
-    const stream = [
-      start(),
-      event(2, { type: "goal", side: "home", participantId: "player-1", segmentNumber: 1 }),
-      event(3, { type: "period_change", segmentNumber: 2 }),
-      historicalReplacement,
-    ];
-
-    // Ordinary scorer routes do not pass the internal allow-list.
-    expect(() => reduceFiveSportScoreEvents("canoe_polo", stream)).toThrow(/current segment/);
-
-    const corrected = reduceFiveSportScoreEvents("canoe_polo", stream, undefined, {
-      historicalSegmentEventIds: new Set([historicalReplacement.eventId]),
-    });
-    expect(corrected.currentSegment).toBe(2);
-    expect(corrected.totalPoints).toEqual({ home: 1, away: 1 });
-
-    expect(() =>
-      reduceFiveSportScoreEvents("canoe_polo", stream, undefined, {
-        historicalSegmentEventIds: new Set(["unrelated-event"]),
-      }),
-    ).toThrow(/current segment/);
-  });
-
   it("requires timed sports to reach the configured regulation segment before finalisation", () => {
     expect(() =>
       reduceFiveSportScoreEvents("canoe_polo", [

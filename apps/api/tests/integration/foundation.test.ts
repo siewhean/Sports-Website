@@ -53,7 +53,7 @@ describe("foundation API controls", () => {
     expect(first.headers["x-content-type-options"]).toBe("nosniff");
     expect(first.headers["x-frame-options"]).toBe("DENY");
     expect(first.headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
-    expect(first.headers["permissions-policy"]).toContain("camera=()");
+    expect(first.headers["permissions-policy"]).toContain("camera=(self)");
     expect(first.headers["x-ratelimit-limit"]).toBe("2");
     await app.inject({ method: "GET", url: "/api/v1/status" });
     expect((await app.inject({ method: "GET", url: "/api/v1/status" })).statusCode).toBe(429);
@@ -77,7 +77,7 @@ describe("foundation API controls", () => {
     });
     apps.push(app);
     const response = await app.inject({ method: "GET", url: "/api/v1/status" });
-    expect(response.headers["strict-transport-security"]).toContain("max-age=63072000");
+    expect(response.headers["strict-transport-security"]).toContain("max-age=31536000");
     expect(response.headers["strict-transport-security"]).toContain("includeSubDomains");
   });
 

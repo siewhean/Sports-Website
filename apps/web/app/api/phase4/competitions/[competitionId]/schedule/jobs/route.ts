@@ -1,22 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "@/lib/phase3-settings-command.server";
-import {
-  parseScheduleJobEnvelope,
-  parseScheduleJobView,
-  phase4ScheduleCopy,
-  phase4ScheduleMachine,
-} from "@/lib/phase4-schedule";
-import { forwardScheduleRead } from "@/lib/phase4-schedule-command.server";
-
-export async function GET(request: NextRequest, { params }: { params: Promise<{ competitionId: string }> }) {
-  const { competitionId } = await params;
-  return forwardScheduleRead(
-    request,
-    `/api/v1/competitions/${encodeURIComponent(competitionId)}/schedule-jobs`,
-    (value) => Array.isArray(value) && value.every((job) => parseScheduleJobView(job) !== null),
-  );
-}
+import { parseScheduleJobEnvelope, phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ competitionId: string }> }) {
   const { competitionId } = await params;

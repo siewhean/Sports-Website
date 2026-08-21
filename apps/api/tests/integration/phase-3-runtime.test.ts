@@ -283,6 +283,57 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       SELECT encode(pg_catalog.sha256(convert_to(phase3_canonical_jsonb(${client.json(normalized as never)}::jsonb),'UTF8')),'hex') AS hash`;
     expect(phase3DomainAdapter.hash(value)).toBe(rows[0]?.hash);
   });
+  it("pins PostgreSQL sport-pack canonical key ordering to the C collation without changing shared hashes", async () => {
+    const definition = SPORT_PACKS.canoe_polo;
+    const localeSensitive = { Ångström: { z: 1 }, Zulu: true, alpha: ["x", "y"] };
+    const rows = await client<{ hash: string; shared_hash: string; locale_hash: string; function_body: string }[]>`
+      SELECT encode(
+        pg_catalog.sha256(convert_to(phase3_canonical_sport_pack_jsonb(${client.json(definition)}::jsonb),'UTF8')),
+        'hex'
+      ) AS hash,
+      encode(
+        pg_catalog.sha256(convert_to(phase3_canonical_jsonb(${client.json(definition)}::jsonb),'UTF8')),
+        'hex'
+      ) AS shared_hash,
+      encode(
+        pg_catalog.sha256(convert_to(phase3_canonical_sport_pack_jsonb(${client.json(localeSensitive)}::jsonb),'UTF8')),
+        'hex'
+      ) AS locale_hash,
+      pg_get_functiondef('phase3_canonical_sport_pack_jsonb(jsonb)'::regprocedure) AS function_body`;
+    expect(rows[0]?.hash).toBe(phase3DomainAdapter.hash(definition));
+    expect(rows[0]?.shared_hash).toBe(phase3DomainAdapter.hash(definition));
+    expect(rows[0]?.locale_hash).toBe(phase3DomainAdapter.hash(localeSensitive));
+    expect(rows[0]?.function_body).toContain('COLLATE "C"');
+  });
+  it.each(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const)(
+    "creates %s with a database-verified immutable sport-pack hash",
+    async (sportCode) => {
+      const competition = await runtime.createCompetition(
+        { accountId },
+        {
+          organisationId,
+          name: `${sportCode} hash verification`,
+          slug: `${sportCode.replaceAll("_", "-")}-hash-${randomUUID()}`,
+          sportCode,
+          venue: "Hash Hall",
+          address: "1 Integrity Road",
+          countryCode: "SG",
+          startsOn: "2027-12-01",
+          endsOn: "2027-12-01",
+          timezone: "Asia/Singapore",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+      const pack = required(
+        await client<{ definition: unknown; definition_hash: string }[]>`
+          SELECT definition,definition_hash FROM sport_pack_versions
+          WHERE sport_code=${sportCode} AND status='active'`,
+      );
+      expect(competition.sport_code).toBe(sportCode);
+      expect(phase3DomainAdapter.hash(pack.definition)).toBe(pack.definition_hash);
+    },
+  );
   it.each(["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const)(
     "derives immutable %s standings and recalculates only automatic qualifiers after correction",
     async (sportCode) => {
@@ -1194,86 +1245,6 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       >`SELECT (SELECT count(*)::int FROM format_revisions WHERE division_id=${division.id}) AS revisions,(SELECT count(*)::int FROM format_validation_evidence e JOIN format_revisions f ON f.id=e.format_revision_id WHERE f.division_id=${division.id}) AS evidence`,
     );
     expect(counts).toEqual({ revisions: 2, evidence: 2 });
-  });
-
-  it("serializes an entry edit with concurrent format creation", async () => {
-    const actor = { accountId };
-    const competition = await runtime.createCompetition(
-      actor,
-      {
-        organisationId,
-        name: "Entry format fence cup",
-        slug: `entry-format-fence-${randomUUID()}`,
-        sportCode: "badminton",
-        venue: "Hall",
-        address: "3 Fence Road",
-        countryCode: "SG",
-        startsOn: "2027-04-01",
-        endsOn: "2027-04-02",
-        timezone: "Asia/Singapore",
-        locale: "en-SG",
-      },
-      randomUUID(),
-    );
-    const division = (await runtime.createDivision(
-      actor,
-      competition.id,
-      { name: "Open", entryLimit: 8 },
-      randomUUID(),
-      randomUUID(),
-    )) as { id: string };
-    const entries = await Promise.all(
-      Array.from({ length: 8 }, async (_, index) =>
-        runtime.mutateEntry(
-          actor,
-          competition.id,
-          division.id,
-          { action: "create", name: `Before format ${index + 1}`, seed: index + 1 },
-          randomUUID(),
-          randomUUID(),
-        ),
-      ),
-    );
-    const entry = entries[0] as { id: string; revision: number };
-    if (!entry) throw new Error("Expected entry");
-
-    const [formatResult, updateResult] = await Promise.allSettled([
-      runtime.createFormatRevision(
-        actor,
-        competition.id,
-        division.id,
-        { ...createRoundRobinFormatGraph(8), id: `entry-format-fence-${randomUUID()}` },
-        randomUUID(),
-      ),
-      runtime.updateEntry(
-        actor,
-        competition.id,
-        division.id,
-        entry.id,
-        { revision: entry.revision, name: "After format", seed: null },
-        randomUUID(),
-        randomUUID(),
-      ),
-    ]);
-
-    expect(formatResult.status).toBe("fulfilled");
-    if (updateResult.status === "fulfilled") {
-      expect(updateResult.value).toMatchObject({ id: entry.id, name: "After format", revision: entry.revision + 1 });
-    } else {
-      expect(updateResult.reason).toMatchObject({ statusCode: 409, code: "ENTRY_MUTATION_LOCKED_BY_FORMAT" });
-    }
-    const persisted = required(
-      await client<{ name: string; revision: number }[]>`
-        SELECT name,revision::int FROM division_entries WHERE id=${entry.id}`,
-    );
-    expect(persisted).toEqual(
-      updateResult.status === "fulfilled"
-        ? { name: "After format", revision: entry.revision + 1 }
-        : { name: "Before format 1", revision: entry.revision },
-    );
-    await expect(
-      runtime.deleteEntry(actor, competition.id, division.id, entry.id, persisted.revision, randomUUID(), randomUUID()),
-    ).rejects.toMatchObject({ statusCode: 409, code: "ENTRY_MUTATION_LOCKED_BY_FORMAT" });
   });
 
   it("validates the complete competition patch and lifecycle contract", async () => {

@@ -31,7 +31,7 @@ export type RetainedArtifact = {
   size_bytes: number;
 };
 
-export type GateCEvidenceScope = "gate-c-access" | "gate-c-c2";
+export type GateCEvidenceScope = "gate-c-access" | "gate-c-c2" | "gate-c-c3" | "gate-c-c5";
 
 export function redactedIdentifierHash(
   scope: GateCEvidenceScope,

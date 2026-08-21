@@ -15,7 +15,234 @@ import {
   type ActiveTraceContextAdapter,
   type ErrorReportContext,
   type SpanLike,
+  assertWorkloadBudget,
+  assertC5OperationBudget,
+  assertC5WorkloadProfile,
+  C5_WORKLOAD_BUDGETS,
+  C5WorkloadFailureError,
+  executeC5Workload,
+  summarizeWorkload,
 } from "./index.js";
+
+describe("C5 workload summaries", () => {
+  it("uses deterministic nearest-rank percentiles and separates expected failures", () => {
+    const summary = summarizeWorkload([
+      { durationMs: 10, outcome: "success" },
+      { durationMs: 20, outcome: "success" },
+      { durationMs: 30, outcome: "expected_failure" },
+      { durationMs: 40, outcome: "unexpected_failure" },
+    ]);
+    expect(summary).toMatchObject({
+      sampleCount: 4,
+      successfulCount: 2,
+      expectedFailureCount: 1,
+      unexpectedFailureCount: 1,
+      errorRate: 0.25,
+      p50Ms: 20,
+      p95Ms: 40,
+      p99Ms: 40,
+      maxMs: 40,
+    });
+  });
+
+  it("fails closed for invalid samples and budget breaches", () => {
+    expect(() => summarizeWorkload([])).toThrow("at least one sample");
+    expect(() => summarizeWorkload([{ durationMs: -1, outcome: "success" }])).toThrow("non-negative");
+    const summary = summarizeWorkload([{ durationMs: 501, outcome: "unexpected_failure" }]);
+    expect(() => assertWorkloadBudget(summary, { maxP95Ms: 500, maxUnexpectedErrorRate: 0 })).toThrow("exceeds");
+  });
+
+  it("requires an approved, bounded pilot profile before generating C5 traffic", () => {
+    const profile = {
+      profileId: "pilot-20-scorekeepers",
+      durationSeconds: 300,
+      scorekeeperCount: 20,
+      publicReaderCount: 40,
+      organiserWorkerCount: 2,
+      approval: {
+        owner: "Event Operations",
+        approvedAtUtc: "2026-08-04T00:00:00Z",
+        reference: "OPS-42",
+      },
+    } as const;
+    expect(() => assertC5WorkloadProfile(profile)).not.toThrow();
+    expect(() => assertC5WorkloadProfile({ ...profile, publicReaderCount: 0 })).toThrow("publicReaderCount");
+    expect(() => assertC5WorkloadProfile({ ...profile, approval: { ...profile.approval, reference: " " } })).toThrow(
+      "approval reference",
+    );
+    expect(() =>
+      assertC5WorkloadProfile({ ...profile, approval: { ...profile.approval, approvedAtUtc: "today" } }),
+    ).toThrow("approval timestamp");
+    expect(() =>
+      assertC5WorkloadProfile({ ...profile, approval: { ...profile.approval, approvedAtUtc: "2026-02-30T00:00:00Z" } }),
+    ).toThrow("approval timestamp");
+  });
+
+  it("binds every C5 operation to its documented fail-closed budget", () => {
+    const withinScoreWriteBudget = summarizeWorkload([{ durationMs: 500, outcome: "success" }]);
+    expect(() =>
+      assertC5OperationBudget("score_event_acknowledgement", withinScoreWriteBudget, { passed: true }),
+    ).not.toThrow();
+    expect(C5_WORKLOAD_BUDGETS.public_result_convergence.maxP95Ms).toBe(2_000);
+    expect(() =>
+      assertC5OperationBudget(
+        "public_current_conditional_read",
+        summarizeWorkload([{ durationMs: 501, outcome: "success" }]),
+        { passed: true },
+      ),
+    ).toThrow("exceeds");
+    expect(() =>
+      assertC5OperationBudget("lease_takeover", summarizeWorkload([{ durationMs: 1, outcome: "success" }]), {
+        passed: false,
+        failureCode: "stale_generation_accepted",
+      }),
+    ).toThrow("correctness oracle failed: stale_generation_accepted");
+  });
+
+  it("bounds concurrent execution by the approved operation role and propagates correctness failures", async () => {
+    let now = 0;
+    const seenWorkers = new Set<number>();
+    const receipt = await executeC5Workload(
+      {
+        operation: "repair_publication",
+        profile: {
+          profileId: "pilot-operations",
+          durationSeconds: 1,
+          scorekeeperCount: 5,
+          publicReaderCount: 7,
+          organiserWorkerCount: 2,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 2,
+        operationTimeoutMs: 100,
+      },
+      async ({ workerIndex }) => {
+        seenWorkers.add(workerIndex);
+        now += 1;
+        return { outcome: "success", correctness: { passed: true } };
+      },
+      () => now,
+    );
+    expect(receipt.workerCount).toBe(2);
+    expect(receipt.summary.sampleCount).toBe(2);
+    expect(seenWorkers).toEqual(new Set([0, 1]));
+
+    await expect(
+      executeC5Workload(
+        {
+          operation: "lease_takeover",
+          profile: {
+            profileId: "pilot-operations",
+            durationSeconds: 1,
+            scorekeeperCount: 1,
+            publicReaderCount: 1,
+            organiserWorkerCount: 1,
+            approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+          },
+          maximumSamples: 1,
+          operationTimeoutMs: 100,
+        },
+        async () => ({ outcome: "expected_failure", correctness: { passed: false, failureCode: "stale_writer" } }),
+        () => 0,
+      ),
+    ).rejects.toThrow("correctness oracle failed: stale_writer");
+  });
+
+  it("fails closed when a traffic adapter ignores its abort signal", async () => {
+    const failure = await executeC5Workload(
+      {
+        operation: "score_event_acknowledgement",
+        profile: {
+          profileId: "pilot-timeout",
+          durationSeconds: 1,
+          scorekeeperCount: 1,
+          publicReaderCount: 1,
+          organiserWorkerCount: 1,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 1,
+        operationTimeoutMs: 1,
+      },
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { outcome: "success", correctness: { passed: true } };
+      },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+    expect((failure as C5WorkloadFailureError).receipt).toMatchObject({
+      timeoutCount: 1,
+      correctness: { passed: false, failureCode: "C5WorkloadTimeoutError" },
+    });
+  });
+
+  it("retains malformed adapter results as an inspectable failed receipt", async () => {
+    const failure = await executeC5Workload(
+      {
+        operation: "score_event_acknowledgement",
+        profile: {
+          profileId: "pilot-malformed-adapter",
+          durationSeconds: 1,
+          scorekeeperCount: 1,
+          publicReaderCount: 1,
+          organiserWorkerCount: 1,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 1,
+        operationTimeoutMs: 100,
+      },
+      async () => ({ outcome: "invalid" as never, correctness: { passed: "true" as never } }),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+    expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
+  });
+
+  it.each([null, { toString: () => "valid_code" }])(
+    "rejects a non-string adapter failure code",
+    async (failureCode) => {
+      const failure = await executeC5Workload(
+        {
+          operation: "score_event_acknowledgement",
+          profile: {
+            profileId: "pilot-invalid-failure-code",
+            durationSeconds: 1,
+            scorekeeperCount: 1,
+            publicReaderCount: 1,
+            organiserWorkerCount: 1,
+            approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+          },
+          maximumSamples: 1,
+          operationTimeoutMs: 100,
+        },
+        async () => ({ outcome: "success", correctness: { passed: false, failureCode: failureCode as never } }),
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+      expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
+    },
+  );
+
+  it("bounds a non-settling adapter after its abort grace window", async () => {
+    const startedAt = performance.now();
+    const failure = await executeC5Workload(
+      {
+        operation: "score_event_acknowledgement",
+        profile: {
+          profileId: "pilot-nonsettling-adapter",
+          durationSeconds: 1,
+          scorekeeperCount: 1,
+          publicReaderCount: 1,
+          organiserWorkerCount: 1,
+          approval: { owner: "Event Operations", approvedAtUtc: "2026-08-04T00:00:00Z", reference: "OPS-42" },
+        },
+        maximumSamples: 1,
+        operationTimeoutMs: 1,
+      },
+      async () => new Promise(() => undefined),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(C5WorkloadFailureError);
+    expect((failure as C5WorkloadFailureError).receipt.correctness).toMatchObject({ passed: false });
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+});
 
 describe("structured logging and redaction", () => {
   it("redacts case-insensitive secrets at arbitrary depth without mutating input", () => {

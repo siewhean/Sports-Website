@@ -17,7 +17,6 @@ assert(manifestAssets.size === manifest.assets.length, "Manifest contains duplic
 const configuredBaseUrl = process.env.ASSET_VERIFY_BASE_URL;
 const baseUrl = configuredBaseUrl ?? "http://127.0.0.1:3217";
 const baseProtocol = new URL(baseUrl).protocol;
-const requestTimeoutMs = 10_000;
 let child;
 
 try {
@@ -26,7 +25,6 @@ try {
       cwd: root,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
     });
     let output = "";
     child.stdout.on("data", (chunk) => (output += String(chunk)));
@@ -106,14 +104,18 @@ try {
   await serviceWorker.body?.cancel();
   console.log(`Origin asset delivery verified for build ${manifest.buildId} (${manifest.assetCount} assets)`);
 } finally {
-  await terminateChildTree(child);
+  if (child !== undefined && child.exitCode === null) {
+    child.kill("SIGTERM");
+    await Promise.race([
+      new Promise((resolve) => child.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
 }
 
 async function fetchChecked(url, init) {
-  const response = await fetch(url, {
-    ...init,
-    signal: init?.signal ?? AbortSignal.timeout(requestTimeoutMs),
-  });
+  const response = await fetch(url, init);
   assert(response.ok, `${url} returned ${response.status}`);
   return response;
 }
@@ -145,14 +147,12 @@ function assertAssetBytes(manifestAsset, bytes) {
   assert(digest === manifestAsset.sha256, `${manifestAsset.path} SHA-256 does not match the manifest`);
 }
 
-async function waitUntilReady(url, childProcess, getOutput) {
+async function waitUntilReady(url, process, getOutput) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
-      throw new Error(`Web server exited before readiness:\n${getOutput()}`);
-    }
+    if (process.exitCode !== null) throw new Error(`Web server exited before readiness:\n${getOutput()}`);
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+      const response = await fetch(url);
       if (response.ok) {
         await response.body?.cancel();
         return;
@@ -163,64 +163,6 @@ async function waitUntilReady(url, childProcess, getOutput) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${url}:\n${getOutput()}`);
-}
-
-async function terminateChildTree(childProcess) {
-  if (childProcess === undefined) return;
-
-  if (process.platform !== "win32" && childProcess.pid !== undefined) {
-    signalProcessGroup(childProcess.pid, "SIGTERM");
-    await waitForProcessGroupExit(childProcess.pid, 5_000);
-    if (processGroupExists(childProcess.pid)) {
-      signalProcessGroup(childProcess.pid, "SIGKILL");
-      await waitForProcessGroupExit(childProcess.pid, 1_000);
-    }
-  } else {
-    if (childProcess.exitCode === null && childProcess.signalCode === null) {
-      childProcess.kill("SIGTERM");
-      await waitForExit(childProcess, 5_000);
-    }
-    if (childProcess.exitCode === null && childProcess.signalCode === null) {
-      childProcess.kill("SIGKILL");
-      await waitForExit(childProcess, 1_000);
-    }
-  }
-
-  childProcess.stdout?.destroy();
-  childProcess.stderr?.destroy();
-}
-
-function signalProcessGroup(pid, signal) {
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
-}
-
-function processGroupExists(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") return false;
-    throw error;
-  }
-}
-
-async function waitForProcessGroupExit(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline && processGroupExists(pid)) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-}
-
-async function waitForExit(childProcess, timeoutMs) {
-  if (childProcess.exitCode !== null || childProcess.signalCode !== null) return;
-  await Promise.race([
-    new Promise((resolve) => childProcess.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
-  ]);
 }
 
 function assert(condition, message) {
@@ -234,9 +176,6 @@ function requestStatus(url, headers = {}) {
     const request = client.get(parsed, { headers }, (response) => {
       response.resume();
       resolve(response.statusCode ?? 0);
-    });
-    request.setTimeout(requestTimeoutMs, () => {
-      request.destroy(new Error(`Timed out requesting ${url} after ${requestTimeoutMs}ms`));
     });
     request.on("error", reject);
   });

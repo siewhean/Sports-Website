@@ -34,6 +34,8 @@ export interface WorkerRuntimeHooks {
 
 export interface WorkerRuntimeOptions {
   queueName: string;
+  /** Optional BullMQ prefix used only by explicitly isolated local runs. */
+  queuePrefix?: string;
   redisUrl: string;
   concurrency?: number;
   hooks?: WorkerRuntimeHooks;
@@ -69,6 +71,7 @@ export class WorkerRuntime {
     this.#queue = new DurableJobQueue<WorkerJobRegistry>({
       queueName: this.#options.queueName,
       connection: this.#connection,
+      ...(this.#options.queuePrefix === undefined ? {} : { prefix: this.#options.queuePrefix }),
       onFailure: ({ error }) => this.setHealth("degraded", error.message),
       onDeadLettered: (event) => this.handleDeadLettered(event),
       ...this.#options.queueDefaults,

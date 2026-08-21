@@ -4,7 +4,7 @@ import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
 import { cookies, headers } from "next/headers";
 import type { Phase4FormatBuilderDocument, Phase4FormatDraftView } from "@matchday/contracts";
-import { cookieHostMatches } from "@/lib/phase2-organiser";
+import { requestCanForwardSessionCookie } from "@/lib/phase3-origin";
 import {
   parseOrganiserTemplateList,
   parseFormatWorkspaceResponse,
@@ -26,7 +26,7 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookie(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!cookieHostMatches(requestHeaders.get("host"), apiUrl.hostname)) return null;
+  if (!requestCanForwardSessionCookie(requestHeaders, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN)) return null;
   const store = await cookies();
   for (const name of ["__Host-matchday_session", "matchday_session"]) {
     const value = store.get(name)?.value;
@@ -52,7 +52,6 @@ function unavailable(
     organisationId: "",
     sportCode,
     draft: null,
-    revisions: [],
     templates: [],
   };
 }
@@ -294,7 +293,6 @@ export async function getFormatBuilderDocument(input: {
       organisationId: "79685f62-e0f7-4c41-a329-5532bf41cfa2",
       sportCode: input.sportCode,
       draft: demoDraft(input.competitionId, input.divisionId, state === "read-only"),
-      revisions: [],
       templates: [],
     };
   }
@@ -397,7 +395,6 @@ export async function getFormatBuilderDocument(input: {
       organisationId: context.organisationId,
       sportCode: context.sportCode,
       draft: parsed.draft,
-      revisions: parsed.revisions,
       templates,
     };
   } catch {

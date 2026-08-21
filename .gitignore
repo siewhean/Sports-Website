@@ -12,3 +12,5 @@ apps/api/openapi.generated.json
 .env*
 !.env.example
 .vercel
+.agents/
+dump.rdb

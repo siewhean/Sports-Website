@@ -7,7 +7,7 @@ test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo))
 
 test("phase 4 schedule visual baselines", async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop-chromium") await page.setViewportSize({ width: 1568, height: 1003 });
-  await page.goto("/organiser/competitions/singapore-open/schedule?advanced=1");
+  await page.goto("/organiser/competitions/singapore-open/schedule");
   await dismissConsent(page);
   await hidePrivacyControl(page);
   await expect(page.getByTestId("phase4-schedule")).toBeVisible();

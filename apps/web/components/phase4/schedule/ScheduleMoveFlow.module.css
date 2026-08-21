@@ -1,7 +1,9 @@
 .page {
-  --muted: var(--ink-muted);
-  --line: var(--hairline);
-  --paper: var(--canvas);
+  --ink: #171918;
+  --muted: #646863;
+  --line: #d3d4ce;
+  --paper: #f7f6f0;
+  --signal: #b7dc22;
   width: min(100%, 52rem);
   min-height: 100dvh;
   margin: 0 auto;
@@ -91,20 +93,19 @@
   min-height: 44px;
   align-items: center;
   gap: 0.45rem;
-  color: var(--ink);
+  color: #aa4a06;
   font-size: 0.78rem;
 }
 
 .heading > span svg {
   width: 1.15rem;
   height: 1.15rem;
-  color: color-mix(in srgb, var(--warning) 60%, var(--ink));
 }
 
 .slotSummary {
   border: 1px solid var(--line);
   border-radius: 0.55rem;
-  background: var(--surface);
+  background: #fff;
   padding: 0 1rem;
 }
 
@@ -135,7 +136,7 @@
 }
 
 .slotSummary > div:last-child strong {
-  color: var(--success);
+  color: #526b00;
 }
 
 .boundary,
@@ -146,21 +147,17 @@
   align-items: flex-start;
   margin-top: 1.2rem;
   padding: 0.9rem 1rem;
-  border: 1px solid color-mix(in srgb, var(--warning) 60%, var(--ink));
+  border: 1px solid #d49b5f;
   border-radius: 0.45rem;
-  color: var(--ink);
+  color: #914507;
   font-size: 0.8rem;
   line-height: 1.4;
 }
 
-.validation svg {
-  color: color-mix(in srgb, var(--warning) 60%, var(--ink));
-}
-
 .boundary,
 .error {
-  border-color: var(--danger);
-  color: var(--danger);
+  border-color: #bc8d82;
+  color: #842f26;
 }
 
 .boundary svg,
@@ -211,8 +208,8 @@
   height: 2.7rem;
   place-items: center;
   border-radius: 50%;
-  background: var(--signal-strong);
-  color: var(--ink);
+  background: #89ad00;
+  color: #171918;
   font:
     700 1rem/1 var(--font-geist-mono),
     monospace;
@@ -240,7 +237,7 @@
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 0.55rem;
-  background: var(--surface);
+  background: #fff;
 }
 
 .dayChoices label,
@@ -261,7 +258,7 @@
 
 .dayChoices label:has(input:checked),
 .choices label:has(input:checked) {
-  box-shadow: inset 3px 0 var(--signal-strong);
+  box-shadow: inset 3px 0 #83a700;
 }
 
 .dayChoices input,
@@ -270,7 +267,7 @@
   height: 1.35rem;
   flex: 0 0 1.35rem;
   margin: 0;
-  accent-color: var(--signal-strong);
+  accent-color: #789700;
 }
 
 .dayChoices > label > svg {
@@ -310,8 +307,8 @@
 
 .choices label[data-disabled="true"] {
   cursor: not-allowed;
-  color: var(--muted);
-  background: var(--surface-subtle);
+  color: #777974;
+  background: #f3f2ed;
 }
 
 .slotDisclosure {
@@ -344,7 +341,7 @@
 
 .consequences p {
   margin: 0;
-  color: var(--ink-muted);
+  color: #464944;
   font-size: 0.79rem;
   line-height: 1.45;
 }
@@ -360,11 +357,11 @@
 }
 
 .consequences .valid {
-  border: 1px solid var(--success);
+  border: 1px solid #a8bf42;
   border-radius: 0.45rem;
-  background: var(--surface-subtle);
+  background: #f4f7e7;
   padding-inline: 0.8rem;
-  color: var(--success);
+  color: #587000;
 }
 
 .validating {
@@ -380,7 +377,7 @@
   width: 2.5rem;
   height: 0.35rem;
   border-radius: 1rem;
-  background: linear-gradient(90deg, var(--hairline) 20%, var(--signal-strong) 50%, var(--hairline) 80%);
+  background: linear-gradient(90deg, #cbd2ad 20%, #89ad00 50%, #cbd2ad 80%);
   background-size: 200% 100%;
   animation: move-check 1.1s ease-in-out infinite;
 }
@@ -398,7 +395,7 @@
   margin: 0 auto;
   padding: 0.8rem clamp(1rem, 4vw, 2rem) max(0.8rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
-  background: color-mix(in srgb, var(--canvas) 96%, transparent);
+  background: rgb(247 246 240 / 96%);
   backdrop-filter: blur(10px);
 }
 
@@ -420,7 +417,7 @@
 }
 
 .actions button {
-  border-color: var(--signal-strong);
+  border-color: #759400;
   background: var(--signal);
 }
 

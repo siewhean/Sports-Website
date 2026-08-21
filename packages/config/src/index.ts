@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { getDomain } from "tldts";
 import { z } from "zod";
+import { loadScoringFallbackHmacKeyring, type ScoringFallbackHmacKeyring } from "./scoring-fallback-keyring.js";
 
 const environmentSchema = z.enum(["local", "test", "staging", "production"]);
 const logLevelSchema = z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
@@ -19,6 +20,31 @@ const redisUrlSchema = z
   });
 const identityProviderSchema = z.enum(["disabled", "oidc"]);
 const identityRecoveryModeSchema = z.enum(["hosted"]);
+const scoringAccessHmacKeyVersionSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u, {
+  message: "Scoring access rate-limit HMAC key versions must be lowercase machine identifiers",
+});
+const scoringAccessHmacKeySchema = z
+  .object({
+    version: scoringAccessHmacKeyVersionSchema,
+    secret: z.string().min(32).max(1_024),
+  })
+  .strict();
+const scoringAccessHmacKeyringSchema = z
+  .object({
+    primary: scoringAccessHmacKeySchema,
+    verificationOnly: z.array(scoringAccessHmacKeySchema).max(7).default([]),
+  })
+  .strict()
+  .superRefine((keyring, context) => {
+    const versions = [keyring.primary.version, ...keyring.verificationOnly.map((key) => key.version)];
+    const secrets = [keyring.primary.secret, ...keyring.verificationOnly.map((key) => key.secret)];
+    if (new Set(versions).size !== versions.length) {
+      context.addIssue({ code: "custom", message: "Scoring access rate-limit HMAC key versions must be unique" });
+    }
+    if (new Set(secrets).size !== secrets.length) {
+      context.addIssue({ code: "custom", message: "Scoring access rate-limit HMAC key material must be unique" });
+    }
+  });
 
 const rawConfigSchema = z.object({
   APP_ENV: environmentSchema.default("local"),
@@ -26,9 +52,21 @@ const rawConfigSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   API_ALLOWED_ORIGINS: z.string().default("http://127.0.0.1:3000,http://localhost:3000"),
   API_TRUSTED_PROXIES: z.string().default(""),
+  MATCHDAY_PUBLIC_ORIGIN: optionalUrlSchema,
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
   SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-scoring-access-rate-key"),
+  SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).max(16_384).optional(),
+  ),
+  SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+  ),
   SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: z
     .string()
     .min(32)
@@ -77,18 +115,6 @@ const rawConfigSchema = z.object({
 
 export type AppEnvironment = z.infer<typeof environmentSchema>;
 
-export type SchedulerConfig = {
-  environment: AppEnvironment;
-  databaseUrl: string;
-  redisUrl: string;
-  logLevel: z.infer<typeof logLevelSchema>;
-  telemetry: {
-    enabled: boolean;
-    endpoint?: string;
-    metricExportIntervalMs: number;
-  };
-};
-
 export type AppConfig = {
   environment: AppEnvironment;
   api: {
@@ -97,11 +123,18 @@ export type AppConfig = {
     allowedOrigins: readonly string[];
     trustedProxies: readonly string[];
   };
+  publicOrigin?: string;
   databaseUrl: string;
   redisUrl: string;
   scoringAccess: {
     rateLimitHmacSecret: string;
+    rateLimitHmacKeyring: {
+      primary: { version: string; secret: string };
+      verificationOnly: readonly { version: string; secret: string }[];
+      legacyV1MaterialCommitment?: string;
+    };
     fallbackCodeHmacSecret: string;
+    fallbackCodeHmacKeyring: ScoringFallbackHmacKeyring;
   };
   logLevel: z.infer<typeof logLevelSchema>;
   deepHealthToken?: string;
@@ -154,6 +187,28 @@ function isIpOrCidr(value: string): boolean {
   if (!/^\d+$/.test(prefix)) return false;
   const bits = Number(prefix);
   return bits >= 1 && bits <= (family === 4 ? 32 : 128);
+}
+
+function validatedPublicOrigin(value: string, environment: AppEnvironment): string {
+  const url = new URL(value);
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash ||
+    value !== url.origin
+  ) {
+    throw new Error(
+      "MATCHDAY_PUBLIC_ORIGIN must be one canonical HTTP(S) origin without credentials, path, query, or fragment",
+    );
+  }
+  if (url.protocol !== "https:" && !((environment === "local" || environment === "test") && loopback)) {
+    throw new Error("MATCHDAY_PUBLIC_ORIGIN must use HTTPS outside local/test and HTTP is allowed only for loopback");
+  }
+  return url.origin;
 }
 
 function validatedIdentityUrl(
@@ -240,75 +295,34 @@ function validatedEdgePurgeUrl(value: string, environment: AppEnvironment): stri
   return url.href;
 }
 
-const schedulerConfigSchema = z.object({
-  APP_ENV: environmentSchema,
-  DATABASE_URL: databaseUrlSchema,
-  REDIS_URL: redisUrlSchema,
-  LOG_LEVEL: logLevelSchema.default("info"),
-  OTEL_ENABLED: z
-    .enum(["true", "false"])
-    .default("false")
-    .transform((value) => value === "true"),
-  OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrlSchema,
-  OTEL_METRIC_EXPORT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
-});
-
-function validatedTelemetry(
+function parseScoringAccessRateLimitHmacKeyring(
+  rawKeyring: string | undefined,
+  legacySecret: string,
   environment: AppEnvironment,
-  enabled: boolean,
-  rawEndpoint: string | undefined,
-  metricExportIntervalMs: number,
-): SchedulerConfig["telemetry"] {
-  let endpoint: string | undefined;
-  if (rawEndpoint) {
-    const url = new URL(rawEndpoint);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
+): AppConfig["scoringAccess"]["rateLimitHmacKeyring"] {
+  if (!rawKeyring) {
+    if (environment !== "local" && environment !== "test") {
+      throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING must be explicitly configured outside local/test");
     }
-    if (environment === "production" && url.protocol !== "https:") {
-      throw new Error("Production OTLP endpoints must use HTTPS");
-    }
-    if (url.username || url.password || url.search || url.hash) {
-      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
-    }
-    endpoint = url.toString().replace(/\/$/, "");
+    return {
+      primary: { version: "v1", secret: legacySecret },
+      verificationOnly: [],
+    };
   }
-  if (enabled && !endpoint) {
-    throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT is required when telemetry is enabled");
-  }
-  if (environment === "production" && !enabled) {
-    throw new Error("OTEL_ENABLED must be true in production");
-  }
-  return {
-    enabled,
-    metricExportIntervalMs,
-    ...(endpoint ? { endpoint } : {}),
-  };
-}
 
-/**
- * Scheduler processes no HTTP requests or identity flows. Keep its deployment
- * boundary limited to its queue and persistence dependencies so it cannot
- * accidentally require (or receive) API/OIDC credentials.
- */
-export function parseSchedulerConfig(source: NodeJS.ProcessEnv): SchedulerConfig {
-  const parsed = schedulerConfigSchema.parse(source);
-  return {
-    environment: parsed.APP_ENV,
-    databaseUrl: parsed.DATABASE_URL,
-    redisUrl: parsed.REDIS_URL,
-    logLevel: parsed.LOG_LEVEL,
-    telemetry: validatedTelemetry(
-      parsed.APP_ENV,
-      parsed.OTEL_ENABLED,
-      parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
-      parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
-    ),
-  };
-}
-
-export function loadSchedulerConfig(): SchedulerConfig {
-  return parseSchedulerConfig(process.env);
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(rawKeyring);
+  } catch {
+    throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING must be valid JSON");
+  }
+  const parsed = scoringAccessHmacKeyringSchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw new Error(
+      "SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING must contain one primary key and unique verification-only keys",
+    );
+  }
+  return parsed.data;
 }
 
 export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
@@ -318,6 +332,12 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   requireProductionValue(parsed.APP_ENV, source, "DEEP_HEALTH_TOKEN");
   requireProductionValue(parsed.APP_ENV, source, "API_ALLOWED_ORIGINS");
   requireProductionValue(parsed.APP_ENV, source, "OTEL_EXPORTER_OTLP_ENDPOINT");
+  const publicOrigin = parsed.MATCHDAY_PUBLIC_ORIGIN
+    ? validatedPublicOrigin(parsed.MATCHDAY_PUBLIC_ORIGIN, parsed.APP_ENV)
+    : undefined;
+  if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !publicOrigin) {
+    throw new Error("MATCHDAY_PUBLIC_ORIGIN must be explicitly configured outside local/test");
+  }
   if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.IDENTITY_CSRF_HMAC_SECRET) {
     throw new Error("IDENTITY_CSRF_HMAC_SECRET must be explicitly configured outside local/test");
   }
@@ -385,6 +405,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     validatedIdentityUrl(required.IDENTITY_OIDC_ISSUER as string, parsed.APP_ENV, "IDENTITY_OIDC_ISSUER");
     const cookieSite = validatedCookieSite(required.IDENTITY_COOKIE_SITE as string, parsed.APP_ENV);
     requireCookieSite(required.IDENTITY_OIDC_CALLBACK_URI as string, cookieSite, "IDENTITY_OIDC_CALLBACK_URI");
+    if (publicOrigin) requireCookieSite(publicOrigin, cookieSite, "MATCHDAY_PUBLIC_ORIGIN");
     for (const origin of allowedOrigins) requireCookieSite(origin, cookieSite, "API_ALLOWED_ORIGINS");
     for (const redirect of postAuthRedirectUris) {
       requireCookieSite(redirect, cookieSite, "IDENTITY_POST_AUTH_REDIRECT_URIS");
@@ -411,22 +432,108 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       cookieSite: cookieSite.origin,
     };
   }
-  if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
-    throw new Error("SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET must be explicitly configured outside local/test");
+  const rateLimitHmacKeyring = parseScoringAccessRateLimitHmacKeyring(
+    parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING,
+    parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET,
+    parsed.APP_ENV,
+  );
+  const includesLegacyV1 = [rateLimitHmacKeyring.primary, ...rateLimitHmacKeyring.verificationOnly].some(
+    (key) => key.version === "v1",
+  );
+  if (
+    parsed.APP_ENV !== "local" &&
+    parsed.APP_ENV !== "test" &&
+    includesLegacyV1 &&
+    !parsed.SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT
+  ) {
+    throw new Error(
+      "SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT is required while v1 retains C1-C4 rate-limit state",
+    );
   }
   if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && !source.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET) {
     throw new Error("SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET must be explicitly configured outside local/test");
   }
-  if (parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET === parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET) {
-    throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+
+  const fallbackCodeHmacKeyring = loadScoringFallbackHmacKeyring(
+    parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    parsed.APP_ENV,
+    source,
+  );
+
+  const fallbackSecrets = [
+    parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+    fallbackCodeHmacKeyring.primary.secret,
+    ...fallbackCodeHmacKeyring.verificationOnly.map((key) => key.secret),
+  ];
+
+  const rateLimitSecrets = [
+    rateLimitHmacKeyring.primary.secret,
+    ...rateLimitHmacKeyring.verificationOnly.map((key) => key.secret),
+    ...(parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET ? [parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET] : []),
+  ];
+
+  for (const secret of fallbackSecrets) {
+    if (rateLimitSecrets.includes(secret)) {
+      throw new Error("Scoring access fallback-code and rate-limit HMAC secrets must be different");
+    }
+    if (parsed.IDENTITY_CSRF_HMAC_SECRET && secret === parsed.IDENTITY_CSRF_HMAC_SECRET) {
+      throw new Error("Scoring access fallback-code HMAC secret and identity CSRF key must be different");
+    }
+    if (parsed.IDENTITY_FLOW_SEAL_KEY && secret === parsed.IDENTITY_FLOW_SEAL_KEY) {
+      throw new Error("Scoring access fallback-code HMAC secret and identity flow seal key must be different");
+    }
+    if (parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET && secret === parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET) {
+      throw new Error("Scoring access fallback-code HMAC secret and identity provider-event key must be different");
+    }
+    if (parsed.IDENTITY_OIDC_CLIENT_SECRET && secret === parsed.IDENTITY_OIDC_CLIENT_SECRET) {
+      throw new Error("Scoring access fallback-code HMAC secret and OIDC client secret must be different");
+    }
+    if (parsed.DEEP_HEALTH_TOKEN && secret === parsed.DEEP_HEALTH_TOKEN) {
+      throw new Error("Scoring access fallback-code HMAC secret and deep health token must be different");
+    }
+    if (parsed.EDGE_CACHE_PURGE_BEARER_TOKEN && secret === parsed.EDGE_CACHE_PURGE_BEARER_TOKEN) {
+      throw new Error("Scoring access fallback-code HMAC secret and edge cache purge token must be different");
+    }
   }
 
-  const telemetry = validatedTelemetry(
-    parsed.APP_ENV,
-    parsed.OTEL_ENABLED,
-    parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
-    parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
-  );
+  for (const secret of rateLimitSecrets) {
+    if (parsed.IDENTITY_CSRF_HMAC_SECRET && secret === parsed.IDENTITY_CSRF_HMAC_SECRET) {
+      throw new Error("Scoring access rate-limit HMAC secret and identity CSRF key must be different");
+    }
+    if (parsed.IDENTITY_FLOW_SEAL_KEY && secret === parsed.IDENTITY_FLOW_SEAL_KEY) {
+      throw new Error("Scoring access rate-limit HMAC secret and identity flow seal key must be different");
+    }
+    if (parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET && secret === parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET) {
+      throw new Error("Scoring access rate-limit HMAC secret and identity provider-event key must be different");
+    }
+    if (parsed.IDENTITY_OIDC_CLIENT_SECRET && secret === parsed.IDENTITY_OIDC_CLIENT_SECRET) {
+      throw new Error("Scoring access rate-limit HMAC secret and OIDC client secret must be different");
+    }
+    if (parsed.DEEP_HEALTH_TOKEN && secret === parsed.DEEP_HEALTH_TOKEN) {
+      throw new Error("Scoring access rate-limit HMAC secret and deep health token must be different");
+    }
+    if (parsed.EDGE_CACHE_PURGE_BEARER_TOKEN && secret === parsed.EDGE_CACHE_PURGE_BEARER_TOKEN) {
+      throw new Error("Scoring access rate-limit HMAC secret and edge cache purge token must be different");
+    }
+  }
+
+  let telemetryEndpoint: string | undefined;
+  if (parsed.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    const url = new URL(parsed.OTEL_EXPORTER_OTLP_ENDPOINT);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
+    }
+    if (parsed.APP_ENV === "production" && url.protocol !== "https:") {
+      throw new Error("Production OTLP endpoints must use HTTPS");
+    }
+    if (url.username || url.password || url.search || url.hash) {
+      throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
+    }
+    telemetryEndpoint = url.toString().replace(/\/$/, "");
+  }
+  if (parsed.OTEL_ENABLED && !telemetryEndpoint) {
+    throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT is required when telemetry is enabled");
+  }
 
   let edgeCache: AppConfig["edgeCache"];
   if (parsed.EDGE_CACHE_PURGE_ENDPOINT && parsed.EDGE_CACHE_PURGE_BEARER_TOKEN) {
@@ -447,11 +554,19 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       allowedOrigins,
       trustedProxies,
     },
+    ...(publicOrigin ? { publicOrigin } : {}),
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
     scoringAccess: {
-      rateLimitHmacSecret: parsed.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET,
+      rateLimitHmacSecret: rateLimitHmacKeyring.primary.secret,
+      rateLimitHmacKeyring: {
+        ...rateLimitHmacKeyring,
+        ...(parsed.SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT
+          ? { legacyV1MaterialCommitment: parsed.SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT }
+          : {}),
+      },
       fallbackCodeHmacSecret: parsed.SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET,
+      fallbackCodeHmacKeyring,
     },
     logLevel: parsed.LOG_LEVEL,
     ...(parsed.DEEP_HEALTH_TOKEN ? { deepHealthToken: parsed.DEEP_HEALTH_TOKEN } : {}),
@@ -467,12 +582,20 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       ...(oidc ? { oidc } : {}),
     },
     ...(edgeCache ? { edgeCache } : {}),
-    telemetry,
+    telemetry: {
+      enabled: parsed.OTEL_ENABLED,
+      metricExportIntervalMs: parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
+      ...(telemetryEndpoint ? { endpoint: telemetryEndpoint } : {}),
+    },
   };
 }
 
 export function loadConfig(): AppConfig {
   return parseConfig(process.env);
+}
+
+export function loadSchedulerConfig(): AppConfig {
+  return loadConfig();
 }
 
 function redactUrl(value: string): string {
@@ -489,10 +612,18 @@ export function safeConfigSummary(config: AppConfig) {
       ...config.api,
       allowedOrigins: config.api.allowedOrigins.map(redactUrl),
     },
+    publicOrigin: config.publicOrigin,
     databaseUrl: redactUrl(config.databaseUrl),
     redisUrl: redactUrl(config.redisUrl),
     scoringAccess: {
-      rateLimitHmacSecretConfigured: Boolean(config.scoringAccess.rateLimitHmacSecret),
+      rateLimitHmacPrimaryVersion: config.scoringAccess.rateLimitHmacKeyring.primary.version,
+      rateLimitHmacVerificationOnlyVersions: config.scoringAccess.rateLimitHmacKeyring.verificationOnly.map(
+        (key) => key.version,
+      ),
+      fallbackCodeHmacPrimaryVersion: config.scoringAccess.fallbackCodeHmacKeyring.primary.version,
+      fallbackCodeHmacVerificationOnlyVersions: config.scoringAccess.fallbackCodeHmacKeyring.verificationOnly.map(
+        (key) => key.version,
+      ),
       fallbackCodeHmacSecretConfigured: Boolean(config.scoringAccess.fallbackCodeHmacSecret),
     },
     logLevel: config.logLevel,
@@ -522,3 +653,18 @@ export function safeConfigSummary(config: AppConfig) {
     },
   };
 }
+
+export {
+  loadScoringFallbackHmacKeyring,
+  parseScoringFallbackHmacKeyring,
+  scoringFallbackKeySchema,
+  scoringFallbackKeyVersionSchema,
+  scoringFallbackKeyringSchema,
+  type ScoringFallbackHmacKey,
+  type ScoringFallbackHmacKeyring,
+} from "./scoring-fallback-keyring.js";
+
+export {
+  parseAuthenticationAssurancePolicy,
+  type AuthenticationAssurancePolicyConfig,
+} from "./authentication-assurance.js";
