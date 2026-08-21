@@ -115,10 +115,6 @@ export async function verifyVercelDeployment(options = {}) {
     fs.mkdirSync(outDir, { recursive: true });
     fs.writeFileSync(path.join(outDir, "vercel-response.json"), JSON.stringify(normalized, null, 2) + "\n", "utf8");
 
-    const docsPath = path.join(rootDir, "docs", "qa", "deployment-evidence.json");
-    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
-    fs.writeFileSync(docsPath, JSON.stringify(normalized, null, 2) + "\n", "utf8");
-
     return { verified: true, mode: "live_api", releaseEligible: true, deployment: normalized };
   }
 

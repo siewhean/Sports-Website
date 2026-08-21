@@ -95,6 +95,8 @@ describe("verifyVercelDeployment", () => {
 
   it("uses the live API result as release-eligible evidence", async () => {
     const originalFetch = globalThis.fetch;
+    const documentationPath = path.join(rootDir, "docs", "qa", "deployment-evidence.json");
+    const documentationBefore = fs.readFileSync(documentationPath, "utf8");
     globalThis.fetch = async () =>
       new Response(
         JSON.stringify({
@@ -122,6 +124,7 @@ describe("verifyVercelDeployment", () => {
       expect(result.deployment.verification_mode).toBe("live_api");
       expect(result.deployment.project_id).toBe(MATCHDAY_VERCEL_PROJECT_ID);
       expect(result.deployment.team_id).toBe(MATCHDAY_VERCEL_TEAM_ID);
+      expect(fs.readFileSync(documentationPath, "utf8")).toBe(documentationBefore);
     } finally {
       globalThis.fetch = originalFetch;
     }
