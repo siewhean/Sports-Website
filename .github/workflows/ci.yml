@@ -44,6 +44,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test:unit
+      - run: pnpm test:seal:gate-c
+      - run: pnpm test:evidence:gate-c
+      - run: pnpm test:vercel:verify
 
   integration:
     runs-on: ubuntu-latest
