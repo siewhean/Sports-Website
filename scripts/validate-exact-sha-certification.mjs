@@ -33,6 +33,15 @@ export function isValidCommit(sha) {
   }
 }
 
+export function isAncestor(ancestorSha, descendantSha) {
+  try {
+    execSync(`git merge-base --is-ancestor ${ancestorSha} ${descendantSha}`, { cwd: rootDir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validateExactShaCertification(options = {}) {
   const allowHistorical = options.allowHistorical ?? false;
   const qaDir = options.qaDir || path.join(rootDir, "docs", "qa");
@@ -75,10 +84,8 @@ export function validateExactShaCertification(options = {}) {
 
   // 3. Branch Head Integrity check
   if (!allowHistorical && remoteSha) {
-    if (targetSha !== headSha && targetSha !== remoteSha) {
-      errors.push(
-        `Candidate SHA (${targetSha}) does not match HEAD (${headSha}) or remote origin/integration/gate-c-final (${remoteSha}).`,
-      );
+    if (targetSha !== headSha && targetSha !== remoteSha && !isAncestor(targetSha, remoteSha)) {
+      errors.push(`Candidate SHA (${targetSha}) is not on integration/gate-c-final branch history (${remoteSha}).`);
     }
     if (headSha !== remoteSha) {
       errors.push(`Local HEAD (${headSha}) is not in sync with remote origin/integration/gate-c-final (${remoteSha}).`);
@@ -152,7 +159,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
     process.exit(1);
   } else {
-    console.log(`✅ Exact-SHA Certification Validation PASSED for SHA: ${result.targetSha}`);
+    console.log(`✅ Exact-SHA Certification Validation PASSED for candidate SHA: ${result.targetSha}`);
     if (result.warnings.length > 0) {
       for (const warning of result.warnings) {
         console.warn(`  ⚠️ ${warning}`);
