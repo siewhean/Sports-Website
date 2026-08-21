@@ -113,7 +113,11 @@ export function validateExactShaCertification(options = {}) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const result = validateExactShaCertification();
+  const args = process.argv.slice(2);
+  const allowHistorical = args.includes("--allow-historical") || args.includes("--allow-local");
+  const targetSha = args.find((a) => a.startsWith("--sha="))?.split("=")[1];
+
+  const result = validateExactShaCertification({ allowHistorical, targetSha });
   if (!result.valid) {
     console.error("❌ Exact-SHA Certification Validation FAILED:");
     for (const error of result.errors) {

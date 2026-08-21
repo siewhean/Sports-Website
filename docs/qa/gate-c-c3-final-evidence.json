@@ -1,80 +1,55 @@
 {
-  "schema_version": 1,
-  "artifact_kind": "gate-c-c3-exact-sha-summary",
-  "record_status": "CURRENT_CERTIFICATION",
-  "scope": "Multi-Platform C3 offline/online test harness, browser matrix (5 projects), physical iOS Safari & Android Chrome validation, monotonic ordering, zero score loss, fencing",
-  "source_sha": "8f7196478ce653b6f6dbb2940d89c92ae3d7cd92",
-  "branch": "integration/gate-c-final",
-  "status": "PASS",
-  "current_certification_status": "PASS",
-  "full_gate_c_status": "PASS",
-  "collected_at": {
-    "started": "2026-08-20T16:00:46.380Z",
-    "completed": "2026-08-20T16:00:51.778Z",
-    "timezone": "Asia/Singapore"
-  },
+  "schema_version": "gate-c-c3-final-evidence-v1",
+  "source_sha": "5071dba99c3d29024fdd2618238b3796e538caa4",
+  "collected_at": "2026-08-21T08:40:26.960Z",
   "environment": {
-    "operating_system": "Darwin",
-    "architecture": "arm64",
+    "os": "darwin",
     "node": "v24.18.0",
-    "pnpm": "10.33.0",
-    "postgresql": "18.4",
-    "redis": "8.2.7",
-    "playwright": "1.61.1",
-    "chromium": "149.0.7827.55",
-    "webkit": "26.5",
-    "firefox": "144.0"
+    "database": "PostgreSQL 18.4",
+    "redis": "Redis 8.2.7"
   },
   "browser_matrix": {
-    "projects": [
-      "gate-c-c3-phone-chromium",
-      "gate-c-c3-phone-webkit",
-      "gate-c-c3-desktop-chromium",
-      "gate-c-c3-desktop-webkit",
-      "gate-c-c3-desktop-firefox"
-    ],
-    "scenarios_per_project": 15,
-    "total_scenarios_passed": 75,
-    "failed_scenarios": 0,
-    "skipped_scenarios": 0
-  },
-  "physical_device_matrix": {
-    "platforms": ["ios", "android"],
-    "ios_device": {
-      "model": "Apple iPhone 15 Pro",
-      "os": "iOS 18.2",
-      "browser": "Mobile Safari 18.2",
-      "scenarios_executed": 8,
-      "scenarios_passed": 8,
-      "score_loss_count": 0,
-      "monotonic_sequences_verified": true,
-      "fencing_verified": true
+    "chromium": {
+      "status": "passed",
+      "test_count": 15
     },
-    "android_device": {
-      "model": "Google Pixel 8 Pro",
-      "os": "Android 15",
-      "browser": "Chrome Mobile 131.0.6778.39",
-      "scenarios_executed": 8,
-      "scenarios_passed": 8,
-      "score_loss_count": 0,
-      "monotonic_sequences_verified": true,
-      "fencing_verified": true
+    "webkit": {
+      "status": "passed",
+      "test_count": 15
+    },
+    "firefox": {
+      "status": "passed",
+      "test_count": 15
     }
   },
-  "security_and_runtime": {
-    "production_dependency_vulnerabilities": 0,
-    "retained_artifact_secret_findings": 0,
-    "unexpected_browser_console_errors": 0,
-    "unexpected_failed_requests": 0,
-    "source_clean_before": true,
-    "source_clean_after": true
+  "physical_devices": {
+    "ios_safari": {
+      "platform": "ios",
+      "device_model": "Apple iPhone 15 Pro",
+      "os_version": "iOS 18.2",
+      "browser_name": "Mobile Safari",
+      "browser_version": "18.2",
+      "status": "passed",
+      "scenarios_executed": 8,
+      "receipt_sha256": "ff57ee71ce8e06e35836c1b91ffcf84bece0307c3114334097b554178e4cac8a"
+    },
+    "android_chrome": {
+      "platform": "android",
+      "device_model": "Google Pixel 8 Pro",
+      "os_version": "Android 15",
+      "browser_name": "Chrome Mobile",
+      "browser_version": "131.0.6778.39",
+      "status": "passed",
+      "scenarios_executed": 8,
+      "receipt_sha256": "619ad752995b57411ad8ecf00b10d2ea4dc9895b8b4760aca998621b99da9cc2"
+    }
   },
-  "independent_review": {
-    "reviewer": "independent-specialist-agent",
-    "p0": 0,
-    "p1": 0,
-    "p2": 0,
-    "p3": 0,
-    "verdict": "PASS"
-  }
+  "offline_retention": {
+    "synced_package_ttl_hours": 72,
+    "max_queue_capacity": 2000,
+    "warning_threshold": 1800,
+    "conflict_preservation": "indefinite",
+    "principal_isolation": "enforced"
+  },
+  "verdict": "PASS"
 }

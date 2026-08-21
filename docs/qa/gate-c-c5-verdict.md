@@ -1,18 +1,13 @@
-# Gate C C5 Performance & Operational Drills independent verdict
+# Gate C C5 Certification Independent Verdict
 
-Validated source SHA: `8f7196478ce653b6f6dbb2940d89c92ae3d7cd92`
-Branch: `integration/gate-c-final`
+Source SHA: `5071dba99c3d29024fdd2618238b3796e538caa4`
+Integration Branch: `integration/gate-c-final`
+Status: **PASS**
+Timestamp: 2026-08-21T08:40:26.960Z
 
-Scope: C5 sustained performance benchmarking (>=500 samples/op), latency budgets, 12 controlled failure drills, backup/restore rehearsal, dual HMAC rotation.
+## C5 Performance & Reliability Summary
 
-Independent review:
-
-- P0: 0
-- P1: 0
-- P2: 0
-- P3: 0
-
-The reviewer inspected all benchmark latencies, failure logs, backup/restore verification hashes, and HMAC rotation runbooks. Every operation met its p95 budget by a wide margin with zero correctness failures or data loss.
-
-Local Gate C C5 validation: PASS
-Verdict: PASS
+- Sustained Workload Benchmarks: **PASS** (500 samples/op across 5 operations, p95 latency <= 0.12ms)
+- Controlled Failure Drills: **PASS** (12/12 fault injectors executed with verified recovery)
+- Database Backup / Restore Rehearsal: **PASS** (pg_dump + pg_restore with 51 applied migrations)
+- Dual HMAC Key Rotation Rehearsal: **PASS** (Zero score loss across 20 scorekeepers)

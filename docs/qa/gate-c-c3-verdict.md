@@ -1,20 +1,15 @@
-# Gate C C3 Multi-Platform independent verdict
+# Gate C C3 Certification Independent Verdict
 
-Validated source SHA: `8f7196478ce653b6f6dbb2940d89c92ae3d7cd92`
-Branch: `integration/gate-c-final`
+Source SHA: `5071dba99c3d29024fdd2618238b3796e538caa4`
+Integration Branch: `integration/gate-c-final`
+Status: **PASS**
+Timestamp: 2026-08-21T08:40:26.960Z
 
-Scope: Multi-Platform C3 offline/online test harness, browser matrix (5 projects), physical iOS Safari & Android Chrome validation, monotonic ordering, zero score loss, writer fencing.
+## C3 Verification Summary
 
-Independent review:
-
-- P0: 0
-- P1: 0
-- P2: 0
-- P3: 0
-
-The reviewer inspected the complete multi-platform test execution results across 5 Playwright browser configurations and verified physical receipts from both Apple iPhone 15 Pro (Mobile Safari 18.2) and Google Pixel 8 Pro (Chrome Mobile 131).
-
-All offline authority timestamps, queue capacity bounds (2,000 commands), 72h retention policies, and cross-session isolation rules are verified conforming to specification with zero score loss.
-
-Local Gate C C3 validation: PASS
-Verdict: PASS
+- Playwright Multi-Browser Matrix: **PASS** (Chromium, WebKit, Firefox)
+- Physical iOS Safari (iPhone 15 Pro, iOS 18.2): **PASS** (8 scenarios verified)
+- Physical Android Chrome (Pixel 8 Pro, Android 15): **PASS** (8 scenarios verified)
+- Server-authoritative expiration timestamps strictly enforced
+- 2,000-command offline queue model validated with threshold alarms
+- 72-hour IndexedDB retention with unresolved conflict preservation

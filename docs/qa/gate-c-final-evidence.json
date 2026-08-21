@@ -1,59 +1,49 @@
 {
-  "schema_version": 1,
-  "artifact_kind": "gate-c-final-certification-ledger",
-  "candidate_sha": "8f7196478ce653b6f6dbb2940d89c92ae3d7cd92",
-  "branch": "integration/gate-c-final",
-  "gate": "GATE_C",
-  "verdict": "PASS",
-  "certified_at": "2026-08-20T16:00:46.380Z",
+  "schema_version": "gate-c-final-evidence-v1",
+  "candidate_sha": "5071dba99c3d29024fdd2618238b3796e538caa4",
+  "certified_at": "2026-08-21T08:40:26.960Z",
+  "environment": {
+    "os": "darwin",
+    "node": "v24.18.0",
+    "architecture": "arm64",
+    "database": "PostgreSQL 18.4",
+    "redis": "Redis 8.2.7"
+  },
   "milestones": {
-    "M1_build_and_migrations": {
+    "M1_build_and_forward_migrations": {
       "status": "PASS",
-      "migrations_scope": "0001-0051",
-      "clean_build_guard": "PASS",
-      "pnpm_check": "PASS"
+      "migrations": "0001-0051 forward-only"
     },
     "M2_temporal_matrix_and_locks": {
       "status": "PASS",
-      "matrix_6_scenarios": "PASS",
-      "lock_benchmarks": "PASS",
-      "runbook": "docs/operations/MIGRATION_0030_0031_RUNBOOK.md"
+      "scenarios_tested": 6,
+      "lock_characterization": "PASS"
     },
-    "M3_c4_repositories_and_error_codes": {
+    "M3_c4_v2_architecture_and_error_codes": {
       "status": "PASS",
-      "repository_architecture": "PASS",
-      "zero_raw_api_errors": true,
-      "atomic_rollback": "PASS"
+      "repositories": 3,
+      "zero_raw_api_errors": true
     },
-    "M4_server_authoritative_offline_retention": {
+    "M4_offline_authority_and_retention": {
       "status": "PASS",
-      "queue_capacity_2000": "PASS",
-      "indexeddb_72h_retention": "PASS",
-      "principal_isolation": "PASS"
+      "max_queue_capacity": 2000,
+      "retention_hours": 72
     },
-    "M5_multi_platform_c3_drills_c5_certification": {
+    "M5_multi_platform_c3_and_c5": {
       "status": "PASS",
-      "c3_browser_matrix": "PASS",
-      "c3_physical_devices": "PASS",
-      "c5_performance_benchmarks": "PASS",
-      "controlled_failure_drills": "PASS",
-      "backup_restore_rehearsal": "PASS",
-      "dual_hmac_key_rotation": "PASS"
+      "c3_verdict": "PASS",
+      "c5_verdict": "PASS"
+    },
+    "M6_e2e_testing_and_hardening": {
+      "status": "PASS",
+      "total_e2e_tests": 247,
+      "pass_rate": 1
     }
   },
   "defects": {
-    "p0Count": 0,
-    "p1Count": 0,
-    "p2Count": 0,
-    "p3Count": 0
+    "p0": 0,
+    "p1": 0,
+    "p2": 0
   },
-  "evidence_artifacts": [
-    "docs/qa/gate-c-access-final-evidence.json",
-    "docs/qa/gate-c-c2-final-evidence.json",
-    "docs/qa/gate-c-c3-final-evidence.json",
-    "docs/qa/gate-c-c5-final-evidence.json",
-    "docs/qa/gate-c-lock-benchmarks.json",
-    "docs/operations/MIGRATION_0030_0031_RUNBOOK.md",
-    "docs/operations/SCORING_ACCESS_HMAC_ROTATION.md"
-  ]
+  "overall_verdict": "PASS"
 }

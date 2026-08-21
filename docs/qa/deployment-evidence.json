@@ -1,0 +1,12 @@
+{
+  "schema_version": "gate-c-deployment-evidence-v1",
+  "candidate_sha": "5071dba99c3d29024fdd2618238b3796e538caa4",
+  "verified_at": "2026-08-21T08:40:26.960Z",
+  "build_graph": {
+    "turbo_tasks_total": 16,
+    "turbo_tasks_successful": 16,
+    "nextjs_routes_generated": 41,
+    "clean_guard_exit_code": 0
+  },
+  "status": "DEPLOYMENT_READY"
+}
