@@ -1,689 +1,619 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { execFileSync, spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import postgres from "postgres";
-import { Redis } from "ioredis";
-import Fastify from "fastify";
+import { parseConfig } from "@matchday/config";
+import { dropTestSchema, migrateDatabase } from "@matchday/database";
+import { hashSessionSecret, systemClock, type PostgresJsSql } from "@matchday/identity";
 import {
-  C5_CONTROLLED_FAILURES,
   C5_WORKLOAD_OPERATIONS,
-  executeC5IntegratedWorkload,
-  validateC5IntegratedWorkloadReceipt,
-  type C5ApprovedWorkloadPlan,
-  type C5ControlledFailure,
-  type C5ControlledFailureHook,
-  type C5FaultInjector,
-  type C5IntegratedWorkloadReceipt,
+  executeC5Workload,
   type C5WorkloadExecutor,
   type C5WorkloadOperation,
+  type C5WorkloadProfile,
+  type C5WorkloadReceipt,
 } from "@matchday/observability";
+import { Redis } from "ioredis";
+import postgres, { type Sql } from "postgres";
+import { buildApp } from "../src/app.js";
+import { GateCC4LifecycleOperations } from "../src/gate-c-c4-lifecycle.js";
+import { GateCC4Operations } from "../src/gate-c-c4-operations.js";
+import { GateCC4PostgresPublisher } from "../src/gate-c-c4-postgres-publisher.js";
+import { GateCC4PublicTruthRuntime } from "../src/gate-c-c4-public-truth.js";
+import { GateCC4Runtime } from "../src/gate-c-c4-runtime.js";
+import { createGateCC5LeaseTakeoverExecutor, type GateCC5LeaseSession } from "../src/gate-c-c5-lease-takeover.js";
+import { createGateCC5PublicCurrentExecutor } from "../src/gate-c-c5-public-current.js";
 import {
-  gateCC5RetainedArtifactRoot,
-  verifyGateCC5RetainedArtifacts,
-  type GateCC5FaultArtifactPaths,
-  type GateCC5RetainedArtifacts,
-} from "./gate-c-c5-retained-artifacts.js";
-import { parseConfig } from "@matchday/config";
+  createGateCC5PublicResultConvergenceExecutor,
+  type GateCC5PublicResultConvergenceTarget,
+} from "../src/gate-c-c5-public-result-convergence.js";
+import {
+  createGateCC5RepairPublicationExecutor,
+  type GateCC5RepairPublicationTarget,
+} from "../src/gate-c-c5-repair-publication.js";
+import {
+  createGateCC5ScoreWriteResource,
+  issueGateCC5ScoreWriteSessions,
+  type GateCC5ScoreWriteResource,
+} from "../src/gate-c-c5-score-write.js";
+import { PostgresIdentityUnitOfWork } from "../src/identity-postgres.js";
+import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
+import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
+import { Phase2Runtime } from "../src/phase-2-runtime.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const migrationsDirectory = path.join(root, "packages/database/migrations");
+const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
+const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/14";
+const webOrigin = "http://localhost:3199";
+const minimumSamples = 500;
 
-function sha256(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
-export const approvedC5WorkloadPlan: C5ApprovedWorkloadPlan = {
-  profile: {
-    profileId: "c5-certification-workload",
-    durationSeconds: 1,
-    scorekeeperCount: 5,
-    publicReaderCount: 10,
-    organiserWorkerCount: 5,
-    approval: {
-      owner: "platform-qa",
-      approvedAtUtc: "2026-08-20T00:00:00.000Z",
-      reference: "OPS-C5-CERTIFICATION-2026-08",
-    },
+export const approvedC5WorkloadProfile: C5WorkloadProfile = {
+  profileId: "gate-c-real-runtime-certification-v2",
+  durationSeconds: 900,
+  scorekeeperCount: 5,
+  publicReaderCount: 10,
+  organiserWorkerCount: 5,
+  approval: {
+    owner: "matchday-platform-qa",
+    approvedAtUtc: "2026-08-21T00:00:00.000Z",
+    reference: "GATE-C-C5-REAL-RUNTIME-V2",
   },
-  minimumSamplesPerOperation: 500,
 };
 
-export function createSyntheticExecutors(): Record<C5WorkloadOperation, C5WorkloadExecutor> {
-  return {
-    score_event_acknowledgement: async () => ({ outcome: "success", correctness: { passed: true } }),
-    public_current_conditional_read: async () => ({ outcome: "success", correctness: { passed: true } }),
-    public_result_convergence: async () => ({ outcome: "success", correctness: { passed: true } }),
-    lease_takeover: async () => ({ outcome: "success", correctness: { passed: true } }),
-    repair_publication: async () => ({ outcome: "success", correctness: { passed: true } }),
-  };
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-export async function createControlledFailureHooks(
-  retainedRoot: string,
-  sourceSha: string,
-  options: { databaseUrl?: string; redisUrl?: string } = {},
-): Promise<{
-  hooks: Record<C5ControlledFailure, C5ControlledFailureHook>;
-  artifacts: GateCC5RetainedArtifacts;
+function sourceSha(): string {
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+}
+
+function assertCleanSourceTree(): void {
+  const dirty = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  if (dirty) throw new Error(`Refusing C5 certification on a dirty source tree:\n${dirty}`);
+}
+
+function scoringAuth(session: { session_id: string; session_token: string; generation: number | null }) {
+  if (session.generation === null) throw new Error("C5 fixture did not acquire a writer generation");
+  return { sessionId: session.session_id, sessionToken: session.session_token, generation: session.generation };
+}
+
+async function seedIdentity(sql: Sql): Promise<{
+  accountId: string;
+  organisationId: string;
+  organiserCookie: string;
 }> {
-  const artifactsRecord: Record<string, GateCC5FaultArtifactPaths> = {};
-  const hooksRecord: Partial<Record<C5ControlledFailure, C5ControlledFailureHook>> = {};
+  const accountId = randomUUID();
+  const organisationId = randomUUID();
+  await sql.begin(async (tx) => {
+    await tx`
+      INSERT INTO accounts (id,primary_email,display_name,email_verified_at)
+      VALUES (${accountId},${`gate-c-c5-${accountId}@example.test`},'Gate C C5 Organiser',now())
+    `;
+    await tx`
+      INSERT INTO organisations (id,name,slug)
+      VALUES (${organisationId},'Gate C C5 Organisation',${`gate-c-c5-${organisationId.slice(0, 8)}`})
+    `;
+    await tx`
+      INSERT INTO organisation_memberships (organisation_id,account_id,role,status)
+      VALUES (${organisationId},${accountId},'owner','active')
+    `;
+  });
+  const sessionId = randomUUID();
+  const sessionSecret = randomBytes(32).toString("base64url");
+  const now = new Date();
+  await sql`INSERT INTO identity_sessions(
+    id,account_id,secret_hash,created_at,last_seen_at,idle_expires_at,absolute_expires_at
+  ) VALUES(
+    ${sessionId},${accountId},${hashSessionSecret(sessionSecret)},${now},${now},
+    ${new Date(now.getTime() + 60 * 60_000)},${new Date(now.getTime() + 12 * 60 * 60_000)}
+  )`;
+  return { accountId, organisationId, organiserCookie: `matchday_session=${sessionId}.${sessionSecret}` };
+}
 
-  const config = parseConfig(process.env);
-  const dbUrl = options.databaseUrl || config.databaseUrl;
-  const redUrl = options.redisUrl || config.redisUrl;
+type CompetitionFixture = {
+  competitionId: string;
+  divisionId: string;
+  slug: string;
+  matches: Array<{ id: string; homeEntryId: string | null; awayEntryId: string | null }>;
+};
 
-  const drillDetails: Record<
-    C5ControlledFailure,
+async function createCompetitionFixture(
+  phase2: Phase2Runtime,
+  actor: { accountId: string },
+  organisationId: string,
+  key: string,
+  entryCount: 8 | 16 = 8,
+): Promise<CompetitionFixture> {
+  const competition = await phase2.createCompetition(
+    actor,
     {
-      injector: C5FaultInjector;
-      oracle: string;
-      executeRealFault: () => Promise<{ injectionLog: string; recoveryLog: string; cleanupLog: string }>;
-    }
-  > = {
-    postgres_interruption: {
-      injector: "process_signal",
-      oracle: "retry_after_postgres_recovery",
-      executeRealFault: async () => {
-        // Phase 1: Inject fault via real PostgreSQL backend termination
-        const adminSql = postgres(dbUrl, { max: 1 });
-        const appSql = postgres(dbUrl, { max: 1 });
-
-        const [pidRow] = await appSql<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
-        const victimPid = pidRow?.pid;
-
-        let injectionError = "";
-        try {
-          if (victimPid) {
-            await adminSql`SELECT pg_terminate_backend(${victimPid})`;
-            await appSql`SELECT 1`;
-          }
-        } catch (err) {
-          injectionError = err instanceof Error ? err.message : String(err);
-        }
-
-        // Phase 2: Observe failure & recover
-        const recoveredSql = postgres(dbUrl, { max: 1 });
-        const [recoveredRow] = await recoveredSql<{ ok: number }[]>`SELECT 1 AS ok`;
-        const recoveredOk = recoveredRow?.ok === 1;
-
-        // Phase 3: Cleanup
-        await appSql.end({ timeout: 1 }).catch(() => undefined);
-        await adminSql.end({ timeout: 1 }).catch(() => undefined);
-        await recoveredSql.end({ timeout: 1 }).catch(() => undefined);
-
-        return {
-          injectionLog: `[DRILL: postgres_interruption] Injected pg_terminate_backend on PID ${victimPid}. App query failed as expected: ${injectionError}`,
-          recoveryLog: `[DRILL: postgres_interruption] Recovered new connection successfully: SELECT 1 returned ok=${recoveredOk}. Monotonic invariants preserved.`,
-          cleanupLog: `[DRILL: postgres_interruption] Administrative connection closed. Pool restored to normal baseline.`,
-        };
-      },
+      organisationId,
+      name: `Gate C C5 ${key}`,
+      slug: `gate-c-c5-${key}`.replace(/[^a-z0-9-]/gu, "-").slice(0, 100),
+      timezone: "UTC",
+      startsOn: "2026-08-21",
+      endsOn: "2026-08-22",
     },
-    redis_interruption: {
-      injector: "network_proxy",
-      oracle: "retry_after_redis_recovery",
-      executeRealFault: async () => {
-        const client = new Redis(redUrl, { maxRetriesPerRequest: 1 });
-        const prePing = await client.ping();
-
-        // Inject fault by disconnecting client and asserting failure
-        client.disconnect();
-        let pingFailed = false;
-        try {
-          await client.ping();
-        } catch {
-          pingFailed = true;
-        }
-
-        // Recover by creating clean client
-        const recoveryClient = new Redis(redUrl, { maxRetriesPerRequest: 1 });
-        const postPing = await recoveryClient.ping();
-        await recoveryClient.quit();
-
-        return {
-          injectionLog: `[DRILL: redis_interruption] Pre-state ping: ${prePing}. Injected socket disconnect. Ping failed: ${pingFailed}`,
-          recoveryLog: `[DRILL: redis_interruption] Recovered client ping: ${postPing}. Rate limit and lease fencing intact.`,
-          cleanupLog: `[DRILL: redis_interruption] Closed recovery Redis client cleanly.`,
-        };
-      },
+    randomUUID(),
+  );
+  const division = await phase2.createDivision(
+    actor,
+    competition.competition.id,
+    { name: "Open", teamLimit: entryCount },
+    randomUUID(),
+  );
+  await phase2.replaceEntries(
+    actor,
+    competition.competition.id,
+    division.id,
+    Array.from({ length: entryCount }, (_, index) => ({ name: `Team ${index + 1}`, seed: index + 1 })),
+    randomUUID(),
+  );
+  await phase2.replaceCapacity(
+    actor,
+    competition.competition.id,
+    {
+      playingAreas: [
+        { name: "Court 1", displayOrder: 1 },
+        { name: "Court 2", displayOrder: 2 },
+      ],
+      intervals: [
+        { startsAt: "2026-08-21T08:00:00.000Z", endsAt: "2026-08-21T20:00:00.000Z" },
+        { startsAt: "2026-08-22T08:00:00.000Z", endsAt: "2026-08-22T20:00:00.000Z" },
+      ],
     },
-    api_interruption: {
-      injector: "process_signal",
-      oracle: "worker_drained_and_relaunched",
-      executeRealFault: async () => {
-        // Spawn ephemeral API helper
-        const childServer = Fastify({ logger: false });
-        childServer.get("/health", async () => ({ status: "healthy" }));
-        const addr = await childServer.listen({ port: 0, host: "127.0.0.1" });
-        const childPort = Number(new URL(addr).port);
-
-        const initialHealth = await fetch(`http://127.0.0.1:${childPort}/health`).then((r) => r.status);
-        await childServer.close();
-
-        let postCloseFailed = false;
-        try {
-          await fetch(`http://127.0.0.1:${childPort}/health`);
-        } catch {
-          postCloseFailed = true;
-        }
-
-        return {
-          injectionLog: `[DRILL: api_interruption] API health initially ${initialHealth}. Injected server close. Post-close request failed: ${postCloseFailed}`,
-          recoveryLog: `[DRILL: api_interruption] Server drained connections and shut down cleanly with 0 score loss.`,
-          cleanupLog: `[DRILL: api_interruption] Temporary listener released on port ${childPort}.`,
-        };
-      },
-    },
-    web_interruption: {
-      injector: "network_proxy",
-      oracle: "offline_storage_engaged_cleanly",
-      executeRealFault: async () => {
-        return {
-          injectionLog: `[DRILL: web_interruption] Disconnected network transport; offline IndexedDB queue engaged.`,
-          recoveryLog: `[DRILL: web_interruption] Network restored; offline command queue replayed in strict sequence with zero score loss.`,
-          cleanupLog: `[DRILL: web_interruption] Replay buffer reconciled; completed packages tagged for retention.`,
-        };
-      },
-    },
-    worker_interruption: {
-      injector: "process_signal",
-      oracle: "worker_job_requeued_safely",
-      executeRealFault: async () => {
-        const testJobId = `job-${randomUUID()}`;
-        return {
-          injectionLog: `[DRILL: worker_interruption] Claimed job ${testJobId} interrupted mid-execution.`,
-          recoveryLog: `[DRILL: worker_interruption] Outbox job recovered by secondary worker; exactly-once execution verified.`,
-          cleanupLog: `[DRILL: worker_interruption] Worker lock released and state converged.`,
-        };
-      },
-    },
-    latency: {
-      injector: "bounded_delay",
-      oracle: "timeout_grace_observed",
-      executeRealFault: async () => {
-        const start = performance.now();
-        await new Promise((r) => setTimeout(r, 50));
-        const duration = performance.now() - start;
-        return {
-          injectionLog: `[DRILL: latency] Injected 50ms transport delay. Measured delay: ${duration.toFixed(1)}ms.`,
-          recoveryLog: `[DRILL: latency] Client observed bounded latency within SLA; retry loop unneeded.`,
-          cleanupLog: `[DRILL: latency] Transport delay removed.`,
-        };
-      },
-    },
-    connection_pressure: {
-      injector: "connection_limit",
-      oracle: "pool_exhaustion_queued_safely",
-      executeRealFault: async () => {
-        const constrainedSql = postgres(dbUrl, { max: 2 });
-        const start = performance.now();
-        await Promise.all([
-          constrainedSql`SELECT pg_sleep(0.02)`,
-          constrainedSql`SELECT pg_sleep(0.02)`,
-          constrainedSql`SELECT 1`,
-        ]);
-        const elapsed = performance.now() - start;
-        await constrainedSql.end();
-        return {
-          injectionLog: `[DRILL: connection_pressure] Constrained pool to max=2 with 3 concurrent queries. Queue elapsed: ${elapsed.toFixed(1)}ms.`,
-          recoveryLog: `[DRILL: connection_pressure] All queued transactions completed without deadlock.`,
-          cleanupLog: `[DRILL: connection_pressure] Constrained pool terminated.`,
-        };
-      },
-    },
-    outbox_delay: {
-      injector: "bounded_delay",
-      oracle: "eventual_convergence_verified",
-      executeRealFault: async () => {
-        return {
-          injectionLog: `[DRILL: outbox_delay] Outbox dispatcher paused; 5 events enqueued in durable storage.`,
-          recoveryLog: `[DRILL: outbox_delay] Dispatcher resumed; all 5 events processed in strict sequence; public projection converged.`,
-          cleanupLog: `[DRILL: outbox_delay] Outbox queue returned to 0 pending.`,
-        };
-      },
-    },
-    disk_pressure: {
-      injector: "filesystem_limit",
-      oracle: "quota_boundary_enforced",
-      executeRealFault: async () => {
-        return {
-          injectionLog: `[DRILL: disk_pressure] Storage quota threshold reached.`,
-          recoveryLog: `[DRILL: disk_pressure] Retention manager purged synced packages older than 72h; pending commands and unresolved conflicts preserved.`,
-          cleanupLog: `[DRILL: disk_pressure] Storage utilization reduced beneath warning watermark.`,
-        };
-      },
-    },
-    pdf_failure: {
-      injector: "command",
-      oracle: "fallback_export_resilience_confirmed",
-      executeRealFault: async () => {
-        return {
-          injectionLog: `[DRILL: pdf_failure] Injected missing font in PDF renderer.`,
-          recoveryLog: `[DRILL: pdf_failure] Export endpoint safely engaged fallback text export with typed error code.`,
-          cleanupLog: `[DRILL: pdf_failure] Default renderer font configuration restored.`,
-        };
-      },
-    },
-    backup_restore: {
-      injector: "command",
-      oracle: "pg_dump_restore_verified_with_zero_loss",
-      executeRealFault: async () => {
-        return {
-          injectionLog: `[DRILL: backup_restore] Verified database snapshot and pg_dump integrity.`,
-          recoveryLog: `[DRILL: backup_restore] Restored into staging database; row counts, scoring events, and publication state identical.`,
-          cleanupLog: `[DRILL: backup_restore] Disposable restore database dropped.`,
-        };
-      },
-    },
-    projection_regeneration: {
-      injector: "command",
-      oracle: "public_projection_rebuilt_identically",
-      executeRealFault: async () => {
-        return {
-          injectionLog: `[DRILL: projection_regeneration] Public projection cache invalidated in PostgreSQL.`,
-          recoveryLog: `[DRILL: projection_regeneration] Rebuilt public projection from canonical domain events; regenerated hash matches original.`,
-          cleanupLog: `[DRILL: projection_regeneration] Public cache restored.`,
-        };
-      },
-    },
-  };
-
-  for (const fault of C5_CONTROLLED_FAILURES) {
-    const drill = drillDetails[fault];
-    const hook: C5ControlledFailureHook = async () => {
-      const faultDir = path.join(retainedRoot, fault);
-      await mkdir(faultDir, { recursive: true });
-
-      const start = performance.now();
-      const logs = await drill.executeRealFault();
-      await new Promise((r) => setTimeout(r, 250));
-      const duration = performance.now() - start;
-
-      const injectionPath = path.join(faultDir, "injection.log");
-      const recoveryPath = path.join(faultDir, "recovery.log");
-      const cleanupPath = path.join(faultDir, "cleanup.log");
-
-      await writeFile(injectionPath, logs.injectionLog + "\n", "utf8");
-      await writeFile(recoveryPath, logs.recoveryLog + "\n", "utf8");
-      await writeFile(cleanupPath, logs.cleanupLog + "\n", "utf8");
-
-      const injectionSha = sha256(logs.injectionLog + "\n");
-      const recoverySha = sha256(logs.recoveryLog + "\n");
-      const cleanupSha = sha256(logs.cleanupLog + "\n");
-
-      const faultReceipt = {
-        source_sha: sourceSha,
-        fault,
-        evidence_type: "operational_drill",
-        injector: drill.injector,
-        injection_started_at: new Date(Date.now() - duration).toISOString(),
-        failure_observed_at: new Date(Date.now() - duration / 2).toISOString(),
-        recovery_completed_at: new Date().toISOString(),
-        actual_action: drill.oracle,
-        injection_evidence_sha256: injectionSha,
-        recovery_evidence_sha256: recoverySha,
-        cleanup_evidence_sha256: cleanupSha,
-        recovery_observed: true,
-        cleanup_observed: true,
-        invariants: {
-          score_loss_count: 0,
-          duplicate_effect_count: 0,
-          stale_writer_accept_count: 0,
-        },
-        status: "PASS",
-      };
-
-      const receiptPath = path.join(faultDir, "receipt.json");
-      await writeFile(receiptPath, JSON.stringify(faultReceipt, null, 2) + "\n", "utf8");
-
-      return {
-        fault,
-        injector: drill.injector,
-        injection_evidence_sha256: injectionSha,
-        recovery_evidence_sha256: recoverySha,
-        cleanup_evidence_sha256: cleanupSha,
-        recovery_observed: true,
-        cleanup_observed: true,
-        recovery_oracle: drill.oracle,
-      };
-    };
-
-    hooksRecord[fault] = hook;
-    artifactsRecord[fault] = {
-      injection: `${fault}/injection.log`,
-      recovery: `${fault}/recovery.log`,
-      cleanup: `${fault}/cleanup.log`,
-    };
-  }
-
-  const artifacts: GateCC5RetainedArtifacts = artifactsRecord as GateCC5RetainedArtifacts;
-
+    randomUUID(),
+  );
+  const format = await phase2.generateFormat(actor, competition.competition.id, division.id, randomUUID());
+  const schedule = await phase2.generateSchedule(actor, competition.competition.id, format.id, randomUUID());
+  await phase2.publishSchedule(actor, competition.competition.id, schedule.id, randomUUID());
   return {
-    hooks: hooksRecord as Record<C5ControlledFailure, C5ControlledFailureHook>,
-    artifacts,
+    competitionId: competition.competition.id,
+    divisionId: division.id,
+    slug: competition.competition.slug,
+    matches: format.matches.map((match) => ({
+      id: match.id,
+      homeEntryId: match.homeEntryId ?? null,
+      awayEntryId: match.awayEntryId ?? null,
+    })),
   };
 }
 
-export async function runC5BenchmarkAndEvidence(
-  options: {
-    mode?: "certification" | "synthetic";
-    sourceSha?: string;
-    databaseUrl?: string;
-    redisUrl?: string;
-  } = {},
-): Promise<{
-  receipt: C5IntegratedWorkloadReceipt;
-  retainedArtifacts: GateCC5RetainedArtifacts;
-  hmacDrill: {
-    rateLimitHmacRotationPassed: boolean;
-    fallbackCodeHmacRotationPassed: boolean;
-    observedAt: string;
+async function createConvergenceTarget(
+  phase2: Phase2Runtime,
+  actor: { accountId: string },
+  organisationId: string,
+  apiOrigin: string,
+  index: number,
+): Promise<GateCC5PublicResultConvergenceTarget> {
+  const fixture = await createCompetitionFixture(phase2, actor, organisationId, `convergence-${index}`);
+  const match = fixture.matches.find((candidate) => candidate.homeEntryId && candidate.awayEntryId);
+  if (!match) throw new Error(`C5 convergence fixture ${index} has no fully resolved match`);
+  const pass = await phase2.createAccessPass(
+    actor,
+    fixture.competitionId,
+    match.id,
+    {
+      expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+      role: "scorekeeper",
+      idempotencyKey: `c5-convergence-${index}`,
+    },
+    randomUUID(),
+  );
+  const session = await phase2.exchangeAccess(
+    {
+      token: pass.token,
+      expectedMatchId: match.id,
+      deviceId: randomUUID(),
+      deviceLabel: `C5 convergence ${index}`,
+      ipAddress: "127.0.0.1",
+    },
+    randomUUID(),
+  );
+  const auth = scoringAuth(session);
+  const warm = await phase2.appendCanonicalScoreEvent(
+    auth,
+    {
+      client_event_id: randomUUID(),
+      type: "match_started",
+      occurred_at: new Date().toISOString(),
+      segment_number: 1,
+      manual_time_seconds: 0,
+    },
+    0,
+    randomUUID(),
+  );
+  return {
+    apiOrigin,
+    competitionSlug: fixture.slug,
+    matchId: match.id,
+    expectedPublicResultVersion: 1,
+    sessionId: session.session_id,
+    sessionToken: session.session_token,
+    generation: auth.generation,
+    expectedSequence: warm.aggregate_version,
+    finalisationClientEventId: randomUUID(),
   };
-}> {
+}
+
+async function createRepairTarget(
+  sql: Sql,
+  phase2: Phase2Runtime,
+  actor: { accountId: string },
+  organisationId: string,
+  organiserCookie: string,
+  apiOrigin: string,
+  index: number,
+): Promise<GateCC5RepairPublicationTarget> {
+  const fixture = await createCompetitionFixture(phase2, actor, organisationId, `repair-${index}`);
+  const source = (
+    await sql<{ match_id: string; downstream_match_id: string; division_id: string }[]>`
+      SELECT source.id AS match_id,dependency.match_id AS downstream_match_id,source.division_id
+      FROM match_dependencies dependency
+      JOIN matches source ON source.id=dependency.source_match_id
+      JOIN matches downstream ON downstream.id=dependency.match_id
+      WHERE source.competition_id=${fixture.competitionId}
+        AND downstream.state IN ('pending','ready')
+      ORDER BY source.ordinal,source.id,dependency.match_id
+      LIMIT 1
+    `
+  )[0];
+  if (!source) throw new Error(`C5 repair fixture ${index} has no dependency target`);
+  const entries = await sql<{ id: string }[]>`
+    SELECT id FROM division_entries
+    WHERE division_id=${source.division_id} AND status IN ('active','confirmed')
+    ORDER BY seed,id LIMIT 2
+  `;
+  if (!entries[0] || !entries[1]) throw new Error(`C5 repair fixture ${index} has insufficient entries`);
+  await sql`UPDATE matches SET home_entry_id=${entries[0].id},away_entry_id=${entries[1].id} WHERE id=${source.match_id}`;
+
+  const pass = await phase2.createAccessPass(
+    actor,
+    fixture.competitionId,
+    source.match_id,
+    {
+      expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+      role: "scorekeeper",
+      idempotencyKey: `c5-repair-score-${index}`,
+    },
+    randomUUID(),
+  );
+  const session = await phase2.exchangeAccess(
+    {
+      token: pass.token,
+      expectedMatchId: source.match_id,
+      deviceId: randomUUID(),
+      deviceLabel: `C5 repair scorer ${index}`,
+      ipAddress: "127.0.0.1",
+    },
+    randomUUID(),
+  );
+  const auth = scoringAuth(session);
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString(), segment_number: 1, manual_time_seconds: 0 },
+    0,
+    randomUUID(),
+  );
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    { client_event_id: randomUUID(), type: "goal", occurred_at: new Date().toISOString(), team_slot: "home", participant_id: "C5 scorer", segment_number: 1, manual_time_seconds: 60 },
+    1,
+    randomUUID(),
+  );
+  await phase2.appendCanonicalScoreEvent(
+    auth,
+    { client_event_id: randomUUID(), type: "period_change", occurred_at: new Date().toISOString(), segment_number: 2, manual_time_seconds: 0 },
+    2,
+    randomUUID(),
+  );
+  await phase2.finalise(auth, randomUUID(), randomUUID(), 3);
+  await sql`UPDATE matches SET state='in_progress' WHERE id=${source.downstream_match_id}`;
+  const correctionClientEventId = randomUUID();
+  await phase2.correctCanonicalMatch(
+    actor,
+    fixture.competitionId,
+    source.match_id,
+    {
+      clientEventId: correctionClientEventId,
+      reason: "Gate C C5 controlled correction before repair publication.",
+      expectedAggregateVersion: 4,
+      events: [
+        { client_event_id: randomUUID(), type: "goal", occurred_at: new Date().toISOString(), team_slot: "away", participant_id: "C5 scorer", segment_number: 2, manual_time_seconds: 60 },
+        { client_event_id: randomUUID(), type: "goal", occurred_at: new Date().toISOString(), team_slot: "away", participant_id: "C5 scorer", segment_number: 2, manual_time_seconds: 120 },
+      ],
+    },
+    randomUUID(),
+  );
+  const correction = (
+    await sql<{ id: string }[]>`
+      SELECT id FROM score_correction_transactions
+      WHERE match_id=${source.match_id} AND client_event_id=${correctionClientEventId}
+    `
+  )[0];
+  if (!correction) throw new Error(`C5 repair fixture ${index} correction transaction missing`);
+  return {
+    apiOrigin,
+    webOrigin,
+    competitionId: fixture.competitionId,
+    correctionTransactionId: correction.id,
+    organiserCookie,
+  };
+}
+
+async function mapConcurrent<T>(count: number, concurrency: number, create: (index: number) => Promise<T>): Promise<T[]> {
+  const output = new Array<T>(count);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
+      while (true) {
+        const index = next++;
+        if (index >= count) return;
+        output[index] = await create(index);
+      }
+    }),
+  );
+  return output;
+}
+
+export function createSyntheticExecutors(): Record<C5WorkloadOperation, C5WorkloadExecutor> {
+  return Object.fromEntries(
+    C5_WORKLOAD_OPERATIONS.map((operation) => [
+      operation,
+      async () => ({ outcome: "success" as const, correctness: { passed: true as const } }),
+    ]),
+  ) as Record<C5WorkloadOperation, C5WorkloadExecutor>;
+}
+
+async function runSynthetic(source: string) {
+  const executors = createSyntheticExecutors();
+  const operations = {} as Record<C5WorkloadOperation, C5WorkloadReceipt>;
+  const profile = { ...approvedC5WorkloadProfile, durationSeconds: 1 };
+  for (const operation of C5_WORKLOAD_OPERATIONS) {
+    operations[operation] = await executeC5Workload(
+      { operation, profile, maximumSamples: minimumSamples, operationTimeoutMs: 5_000 },
+      executors[operation],
+    );
+  }
+  return {
+    artifact_kind: "gate-c-c5-synthetic-benchmark",
+    source_sha: source,
+    evidence_type: "synthetic",
+    status: "NOT_RELEASE_EVIDENCE",
+    runtime: { application: "synthetic", benchmark_owned_routes: true },
+    environment: {},
+    operations,
+  };
+}
+
+export async function runC5BenchmarkAndEvidence(options: { mode?: "certification" | "synthetic" } = {}) {
   const mode = options.mode ?? "certification";
-  const sourceSha =
-    options.sourceSha ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const retainedRoot = gateCC5RetainedArtifactRoot(sourceSha);
+  const source = sourceSha();
+  if (mode === "synthetic") return runSynthetic(source);
+  assertCleanSourceTree();
 
-  const { hooks, artifacts } = await createControlledFailureHooks(retainedRoot, sourceSha, options);
+  const schema = `gate_c_c5_${process.pid}_${randomBytes(4).toString("hex")}`;
+  await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+  const sql = postgres(databaseUrl, {
+    max: 30,
+    onnotice: () => undefined,
+    connection: { search_path: `${schema},public` },
+  });
+  const identitySql = sql as unknown as PostgresJsSql;
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
+  const csrfSecret = randomBytes(32).toString("base64url");
+  const fallbackSecret = randomBytes(32).toString("base64url");
+  const config = parseConfig({
+    ...process.env,
+    APP_ENV: "test",
+    API_HOST: "127.0.0.1",
+    API_PORT: "4199",
+    API_ALLOWED_ORIGINS: webOrigin,
+    MATCHDAY_PUBLIC_ORIGIN: webOrigin,
+    DATABASE_URL: databaseUrl,
+    REDIS_URL: redisUrl,
+    IDENTITY_CSRF_HMAC_SECRET: csrfSecret,
+    SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: fallbackSecret,
+    LOG_LEVEL: "silent",
+  });
+  const identity = new IdentityApiRuntime(
+    new UnavailableIdentityProvider(),
+    new PostgresIdentityUnitOfWork(identitySql),
+    csrfSecret,
+    systemClock,
+  );
+  const phase2 = new Phase2Runtime(identitySql, phase2DomainAdapter, undefined, undefined, fallbackSecret);
+  const c4Publisher = new GateCC4PostgresPublisher(phase2);
+  const c4Runtime = new GateCC4Runtime(identitySql, c4Publisher);
+  const c4Operations = new GateCC4Operations(identitySql, webOrigin);
+  const c4Lifecycle = new GateCC4LifecycleOperations(identitySql);
+  const c4PublicTruth = new GateCC4PublicTruthRuntime(identitySql);
+  let app: Awaited<ReturnType<typeof buildApp>> | null = null;
+  let scoreResource: GateCC5ScoreWriteResource | null = null;
 
-  let executors: Record<C5WorkloadOperation, C5WorkloadExecutor>;
-
-  const config = parseConfig(process.env);
-
-  if (mode === "synthetic") {
-    executors = createSyntheticExecutors();
-  } else {
-    // Real Matchday Fastify server connected to PostgreSQL & Redis
-    const sql = postgres(options.databaseUrl || config.databaseUrl, { max: 10 });
-    const redis = new Redis(options.redisUrl || config.redisUrl, { maxRetriesPerRequest: 1 });
-
-    const server = Fastify({ logger: false });
-    const slug = `c5-comp-${randomUUID().slice(0, 8)}`;
-    const matchId = `match-${randomUUID()}`;
-    const compId = `comp-${randomUUID()}`;
-    const sessionId = `session-${randomUUID()}`;
-    const sessionToken = "s".repeat(32);
-    const etagValue = `"c5-v100-${randomUUID().slice(0, 8)}"`;
-
-    let currentSequence = 0;
-    let currentResultVersion = 100;
-    let currentGeneration = 1;
-    let currentRevision = 1;
-
-    // 1. Score Event Route
-    server.post("/api/v1/scoring/events", async (req, reply) => {
-      const gen = Number(req.headers["x-writer-generation"] || "1");
-      if (gen < currentGeneration) {
-        return reply.status(409).send({
-          error: { code: "STALE_WRITER_GENERATION", message: "Stale writer generation" },
-        });
-      }
-      currentSequence += 1;
-      return reply.status(200).send({
-        client_event_id: (req.body as any)?.client_event_id || randomUUID(),
-        outcome: "accepted",
-        sequence: currentSequence,
-        aggregate_version: currentSequence,
-      });
-    });
-
-    // 2. Public Current Route
-    server.get(`/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, async (req, reply) => {
-      const ifNoneMatch = req.headers["if-none-match"];
-      if (ifNoneMatch === etagValue) {
-        return reply
-          .status(304)
-          .headers({
-            etag: etagValue,
-            "last-modified": "Mon, 03 Aug 2026 00:00:00 GMT",
-            "cache-control": "public, max-age=30",
-          })
-          .send();
-      }
-      return reply
-        .status(200)
-        .headers({
-          etag: etagValue,
-          "last-modified": "Mon, 03 Aug 2026 00:00:00 GMT",
-          "cache-control": "public, max-age=30",
-        })
-        .send({
-          publication: { result_version: currentResultVersion },
-          freshness: { result_version: currentResultVersion },
-          divisions: [{ results: [{ id: matchId, state: "final" }] }],
-        });
-    });
-
-    // 3. Finalise Route
-    server.post("/api/v1/scoring/finalise", async (_req, reply) => {
-      currentResultVersion += 1;
-      return reply.status(200).send({
-        outcome: "accepted",
-        result_version: currentResultVersion,
-      });
-    });
-
-    // 4. Lease Takeover Routes
-    server.post("/api/v1/scoring/takeover-requests", async (_req, reply) => {
-      return reply.status(201).send({ id: "takeover-req-01" });
-    });
-
-    server.post(
-      `/api/v1/competitions/${encodeURIComponent(compId)}/takeover-requests/takeover-req-01/approve`,
-      async (_req, reply) => {
-        currentGeneration += 1;
-        return reply.status(200).send({ generation: currentGeneration });
+  try {
+    const identitySeed = await seedIdentity(sql);
+    const actor = { accountId: identitySeed.accountId };
+    app = await buildApp({
+      config,
+      probes: {
+        database: async () => (await sql<{ ok: number }[]>`SELECT 1 AS ok`)[0]?.ok === 1,
+        queue: async () => true,
+        redis: async () => (await redis.ping()) === "PONG",
       },
-    );
-
-    // 5. Repair Publication Routes
-    server.post(`/api/v1/competitions/${encodeURIComponent(compId)}/repairs/analyse`, async (_req, reply) => {
-      return reply.status(200).send({
-        repair: { id: "repair-01" },
-        latest_revision: { revision_number: currentRevision },
-        actions: [{ match_id: matchId, slot: "home", source_action: "automatic_update" }],
-      });
+      rateLimitRedis: redis,
+      rateLimitNameSpace: `matchday:gate-c-c5:${source.slice(0, 12)}:${randomUUID()}:`,
+      identityRuntime: identity,
+      phase2Runtime: phase2,
+      gateCC4Runtime: c4Runtime,
+      gateCC4Operations: c4Operations,
+      gateCC4Lifecycle: c4Lifecycle,
+      gateCC4PublicTruthRuntime: c4PublicTruth,
+      scoringAccessHmacKeySql: identitySql,
     });
-
-    server.post(
-      `/api/v1/competitions/${encodeURIComponent(compId)}/repairs/repair-01/revisions/:revId/publish`,
-      async (_req, reply) => {
-        currentRevision += 1;
-        return reply.status(200).send({ status: "published", revision_number: currentRevision });
-      },
-    );
-
-    const address = await server.listen({ port: 0, host: "127.0.0.1" });
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
     const apiOrigin = address.replace("[::1]", "127.0.0.1");
 
-    executors = {
-      score_event_acknowledgement: async (invocation) => {
-        await new Promise((r) => setTimeout(r, 1));
-        const clientEventId = randomUUID();
-        const response = await fetch(`${apiOrigin}/api/v1/scoring/events`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-scoring-session-id": sessionId,
-            "x-scoring-session-token": sessionToken,
-            "x-writer-generation": String(currentGeneration),
-          },
-          body: JSON.stringify({
-            client_event_id: clientEventId,
-            expected_sequence: currentSequence,
-            type: "goal",
-            team_slot: "home",
-            occurred_at: new Date().toISOString(),
-          }),
-          signal: invocation.signal,
-        }).catch(() => null);
+    const scoreFixture = await createCompetitionFixture(phase2, actor, identitySeed.organisationId, "score", 16);
+    const scoreMatches = scoreFixture.matches.filter((match) => match.homeEntryId && match.awayEntryId).slice(0, 5);
+    if (scoreMatches.length !== 5) throw new Error("C5 score benchmark requires five fully resolved matches");
+    const scoreSessions = await issueGateCC5ScoreWriteSessions(
+      phase2,
+      actor,
+      apiOrigin,
+      scoreMatches.map((match) => ({ competitionId: scoreFixture.competitionId, matchId: match.id, expectedSequence: 0 })),
+    );
+    scoreResource = await createGateCC5ScoreWriteResource(scoreSessions, { durationSeconds: 900 });
 
-        if (!response || response.status !== 200) {
-          return {
-            outcome: "unexpected_failure",
-            correctness: {
-              passed: false,
-              failureCode: `score_write_http_${response ? response.status : "network_error"}`,
-            },
-          };
-        }
-        return { outcome: "success", correctness: { passed: true } };
-      },
+    const publicFixture = await createCompetitionFixture(phase2, actor, identitySeed.organisationId, "public");
+    const publicExecutor = createGateCC5PublicCurrentExecutor({ apiOrigin, competitionSlug: publicFixture.slug });
 
-      public_current_conditional_read: async (invocation) => {
-        await new Promise((r) => setTimeout(r, 1));
-        const res = await fetch(`${apiOrigin}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, {
-          headers: { "if-none-match": etagValue },
-          signal: invocation.signal,
-        }).catch(() => null);
+    process.stdout.write("Provisioning 500 real public-convergence targets...\n");
+    const convergenceTargets = await mapConcurrent(minimumSamples, 8, (index) =>
+      createConvergenceTarget(phase2, actor, identitySeed.organisationId, apiOrigin, index),
+    );
+    const convergenceExecutor = createGateCC5PublicResultConvergenceExecutor(convergenceTargets);
 
-        if (!res || res.status !== 304) {
-          return {
-            outcome: "unexpected_failure",
-            correctness: {
-              passed: false,
-              failureCode: `conditional_read_http_${res ? res.status : "network_error"}`,
-            },
-          };
-        }
-        return { outcome: "success", correctness: { passed: true } };
-      },
-
-      public_result_convergence: async (invocation) => {
-        await new Promise((r) => setTimeout(r, 1));
-        const res = await fetch(`${apiOrigin}/api/v1/scoring/finalise`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ match_id: matchId }),
-          signal: invocation.signal,
-        }).catch(() => null);
-
-        if (!res || res.status !== 200) {
-          return {
-            outcome: "unexpected_failure",
-            correctness: {
-              passed: false,
-              failureCode: `finalise_http_${res ? res.status : "network_error"}`,
-            },
-          };
-        }
-        return { outcome: "success", correctness: { passed: true } };
-      },
-
-      lease_takeover: async (invocation) => {
-        await new Promise((r) => setTimeout(r, 1));
-        const res = await fetch(
-          `${apiOrigin}/api/v1/competitions/${encodeURIComponent(compId)}/takeover-requests/takeover-req-01/approve`,
+    const leaseFixture = await createCompetitionFixture(phase2, actor, identitySeed.organisationId, "lease", 16);
+    const leaseMatches = leaseFixture.matches.filter((match) => match.homeEntryId && match.awayEntryId).slice(0, 5);
+    if (leaseMatches.length !== 5) throw new Error("C5 lease benchmark requires five fully resolved matches");
+    const leaseBase = await issueGateCC5ScoreWriteSessions(
+      phase2,
+      actor,
+      apiOrigin,
+      leaseMatches.map((match) => ({ competitionId: leaseFixture.competitionId, matchId: match.id, expectedSequence: 0 })),
+    );
+    const leaseSessions: GateCC5LeaseSession[] = leaseBase.map((session) => ({
+      apiOrigin,
+      webOrigin,
+      competitionId: session.competitionId,
+      matchId: session.matchId,
+      activeSessionId: session.sessionId,
+      activeSessionToken: session.sessionToken,
+      activeGeneration: session.generation,
+      activeExpectedSequence: session.expectedSequence,
+      organiserCookie: identitySeed.organiserCookie,
+      createCandidate: async () => {
+        const pass = await phase2.createAccessPass(
+          actor,
+          session.competitionId,
+          session.matchId,
           {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({}),
-            signal: invocation.signal,
+            expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+            role: "scorekeeper",
+            idempotencyKey: `c5-lease-candidate-${randomUUID()}`,
           },
-        ).catch(() => null);
-
-        if (!res || res.status !== 200) {
-          return {
-            outcome: "unexpected_failure",
-            correctness: {
-              passed: false,
-              failureCode: `lease_takeover_http_${res ? res.status : "network_error"}`,
-            },
-          };
-        }
-        return { outcome: "success", correctness: { passed: true } };
-      },
-
-      repair_publication: async (invocation) => {
-        await new Promise((r) => setTimeout(r, 1));
-        const res = await fetch(
-          `${apiOrigin}/api/v1/competitions/${encodeURIComponent(compId)}/repairs/repair-01/revisions/rev-01/publish`,
+          randomUUID(),
+        );
+        const candidate = await phase2.exchangeAccess(
           {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({}),
-            signal: invocation.signal,
+            token: pass.token,
+            expectedMatchId: session.matchId,
+            deviceId: randomUUID(),
+            deviceLabel: "C5 takeover candidate",
+            ipAddress: "127.0.0.1",
           },
-        ).catch(() => null);
-
-        if (!res || res.status !== 200) {
-          return {
-            outcome: "unexpected_failure",
-            correctness: {
-              passed: false,
-              failureCode: `repair_publish_http_${res ? res.status : "network_error"}`,
-            },
-          };
+          randomUUID(),
+        );
+        if (candidate.mode !== "candidate" || candidate.generation !== session.generation) {
+          throw new Error("C5 takeover candidate did not enter candidate mode at the active generation");
         }
-        return { outcome: "success", correctness: { passed: true } };
+        return { sessionId: candidate.session_id, sessionToken: candidate.session_token };
       },
+    }));
+    const leaseExecutors = leaseSessions.map((session) => createGateCC5LeaseTakeoverExecutor(session));
+    const leaseExecutor: C5WorkloadExecutor = (invocation) => leaseExecutors[invocation.workerIndex]!(invocation);
+
+    process.stdout.write("Provisioning 500 real repair-publication targets...\n");
+    const repairTargets = await mapConcurrent(minimumSamples, 6, (index) =>
+      createRepairTarget(
+        sql,
+        phase2,
+        actor,
+        identitySeed.organisationId,
+        identitySeed.organiserCookie,
+        apiOrigin,
+        index,
+      ),
+    );
+    const repairExecutor = createGateCC5RepairPublicationExecutor(repairTargets);
+
+    const executors: Record<C5WorkloadOperation, C5WorkloadExecutor> = {
+      score_event_acknowledgement: scoreResource.executor,
+      public_current_conditional_read: publicExecutor,
+      public_result_convergence: convergenceExecutor,
+      lease_takeover: leaseExecutor,
+      repair_publication: repairExecutor,
     };
+    const operations = {} as Record<C5WorkloadOperation, C5WorkloadReceipt>;
+    for (const operation of C5_WORKLOAD_OPERATIONS) {
+      process.stdout.write(`Running real C5 operation: ${operation}\n`);
+      operations[operation] = await executeC5Workload(
+        {
+          operation,
+          profile: approvedC5WorkloadProfile,
+          maximumSamples: minimumSamples,
+          operationTimeoutMs: 60_000,
+        },
+        executors[operation],
+      );
+    }
+
+    const postgresVersion = (await sql<{ version: string }[]>`SHOW server_version`)[0]?.version ?? "unknown";
+    const redisInfo = await redis.info("server");
+    const redisVersion = redisInfo.match(/^redis_version:([^\r\n]+)$/mu)?.[1] ?? "unknown";
+    const receipt = {
+      artifact_kind: "gate-c-c5-real-infrastructure-benchmark",
+      source_sha: source,
+      evidence_type: "real_infrastructure",
+      status: "PASS",
+      collected_at: new Date().toISOString(),
+      runtime: {
+        application: "matchday-api",
+        benchmark_owned_routes: false,
+        api_origin_sha256: sha256(apiOrigin),
+        app_composition: "buildApp",
+      },
+      environment: {
+        postgresql_version: postgresVersion,
+        redis_version: redisVersion,
+        postgresql_identifier_sha256: sha256(`${databaseUrl}#${schema}`),
+        redis_identifier_sha256: sha256(redisUrl),
+      },
+      operations,
+    };
+    const out = path.join(root, "artifacts", "qa", "gate-c-c5", source);
+    await mkdir(out, { recursive: true });
+    await writeFile(path.join(out, "benchmark.json"), `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+    return receipt;
+  } finally {
+    await scoreResource?.close().catch(() => undefined);
+    await app?.close().catch(() => undefined);
+    await redis.quit().catch(() => undefined);
+    await sql.end({ timeout: 5 }).catch(() => undefined);
+    await dropTestSchema(databaseUrl, schema).catch(() => undefined);
   }
-
-  const receipt = await executeC5IntegratedWorkload({
-    sourceSha,
-    plan: approvedC5WorkloadPlan,
-    maximumSamples: approvedC5WorkloadPlan.minimumSamplesPerOperation,
-    operationTimeoutMs: 5000,
-    executors,
-    controlledFailureHooks: hooks,
-    postgresqlIdentifier: options.databaseUrl || config.databaseUrl,
-    redisNamespace: `matchday:${config.environment}:c5-benchmark`,
-  });
-
-  await verifyGateCC5RetainedArtifacts({
-    retainedRoot,
-    sourceSha,
-    receipt,
-    artifacts,
-  });
-
-  // Execute genuine HMAC key rotation drills
-  const hmacDrill = {
-    rateLimitHmacRotationPassed: true,
-    fallbackCodeHmacRotationPassed: true,
-    observedAt: new Date().toISOString(),
-    details: {
-      rate_limit_keyring: {
-        primary_key_fingerprint: sha256("primary-rate-limit-key-v2").slice(0, 16),
-        verification_key_fingerprints: [sha256("primary-rate-limit-key-v1").slice(0, 16)],
-        rotation_status: "PASS",
-      },
-      fallback_code_keyring: {
-        primary_key_fingerprint: sha256("primary-fallback-key-v2").slice(0, 16),
-        verification_key_fingerprints: [sha256("primary-fallback-key-v1").slice(0, 16)],
-        rotation_status: "PASS",
-      },
-    },
-  };
-
-  const c5Dir = path.join(root, "artifacts", "qa", "gate-c-c5", sourceSha);
-  await mkdir(c5Dir, { recursive: true });
-  await writeFile(path.join(c5Dir, "benchmark.json"), JSON.stringify(receipt, null, 2) + "\n", "utf8");
-  await writeFile(path.join(c5Dir, "hmac-rotation.json"), JSON.stringify(hmacDrill, null, 2) + "\n", "utf8");
-
-  return { receipt, retainedArtifacts: artifacts, hmacDrill };
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const modeArg = args.find((a) => a.startsWith("--mode="))?.split("=")[1];
-  const mode = modeArg === "synthetic" ? "synthetic" : "certification";
-
-  const { receipt, hmacDrill } = await runC5BenchmarkAndEvidence({ mode });
-  const sha = receipt.source_sha || (receipt as any).sourceSha;
-  process.stdout.write(`\n✅ C5 Benchmark and Operational Hardening PASSED for SHA: ${sha}\n`);
-  process.stdout.write(`HMAC rotation verification: ${hmacDrill.rateLimitHmacRotationPassed ? "PASS" : "FAIL"}\n`);
+  const mode = process.argv.includes("--mode=synthetic") ? "synthetic" : "certification";
+  const receipt = await runC5BenchmarkAndEvidence({ mode });
+  if (mode === "synthetic") {
+    process.stdout.write("C5 synthetic benchmark completed (NOT RELEASE EVIDENCE).\n");
+    return;
+  }
+  process.stdout.write(`C5 real Matchday benchmark PASSED for ${receipt.source_sha}.\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void main().catch((err) => {
-    process.stderr.write(
-      `❌ C5 Benchmark Execution FAILED: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
-    );
+  void main().catch((error) => {
+    process.stderr.write(`C5 benchmark FAILED: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
     process.exit(1);
   });
 }
