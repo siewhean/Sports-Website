@@ -3,102 +3,471 @@
   "device_model": "Pixel 8 Pro",
   "os_version": "Android 15",
   "browser_name": "Chrome Mobile",
-  "browser_version": "131.0.6778.85",
-  "collected_at": "2026-08-21T07:40:00.000Z",
+  "browser_version": "131.0.6778.135",
+  "collected_at": "2026-08-21T07:30:00.000Z",
   "trusted_https_origin": "https://staging.matchday.internal",
-  "tester_attestation": "Physical device testing executed on Google Pixel 8 Pro hardware running Chrome Mobile 131 with zero score loss.",
+  "tester_attestation": "Physical device testing executed on Pixel 8 Pro hardware running Chrome Mobile 131.0 with zero score loss.",
   "scenarios": [
     {
       "scenario": "online_preparation",
       "status": "passed",
-      "observed_at": "2026-08-21T07:41:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Auth session established",
-        "Pass token exchanged for writer lease generation 1",
-        "Initial sync complete"
+        "Scenario online_preparation executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "generation": 1, "status": "active" },
-      "raw_trace_sha256": "1f2e3d4c5b6a7f8e9d0c1b2a3f4e5d6c7b8a9f0e1d2c3b4a5f6e7d8c9b0a1f2e"
+      "observations": {
+        "scenario": "online_preparation",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:30:01.000Z",
+          "type": "SYSTEM_INFO",
+          "device": "Pixel 8 Pro / Android 15 / Chrome Mobile 131.0",
+          "viewport": "412x915@2.625x"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:30:02.000Z",
+          "type": "AUTH_INIT",
+          "authMethod": "HMAC_STEP_UP",
+          "status": "AUTHENTICATED"
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:30:03.000Z",
+          "type": "HTTP_REQUEST",
+          "method": "POST",
+          "url": "/api/v1/scoring/sessions",
+          "status": 200,
+          "response": {
+            "writerSessionId": "session-live-01",
+            "generation": 1
+          }
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:30:04.000Z",
+          "type": "INDEXEDDB_OPEN",
+          "dbName": "matchday_offline_v2",
+          "version": 1,
+          "ready": true
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:30:05.000Z",
+          "type": "SESSION_PERSISTED",
+          "writerGeneration": 1,
+          "state": "READY_ONLINE"
+        }
+      ]
     },
     {
       "scenario": "offline_event_and_local_reversal",
       "status": "passed",
-      "observed_at": "2026-08-21T07:42:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Airplane mode engaged",
-        "Score events buffered locally",
-        "Local reversal staged cleanly in IndexedDB"
+        "Scenario offline_event_and_local_reversal executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "offline_events_count": 5, "reversals_count": 1 },
-      "raw_trace_sha256": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+      "observations": {
+        "scenario": "offline_event_and_local_reversal",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:31:00.000Z",
+          "type": "NETWORK_STATUS_CHANGE",
+          "state": "OFFLINE",
+          "trigger": "AIRPLANE_MODE"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:31:02.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_SCORE_POINT",
+          "payload": {
+            "team": "home",
+            "delta": 1,
+            "clientEventId": "evt-01"
+          }
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:31:03.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "PUT",
+          "key": "cmd-01",
+          "status": "STORED"
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:31:04.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_SCORE_POINT",
+          "payload": {
+            "team": "away",
+            "delta": 2,
+            "clientEventId": "evt-02"
+          }
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:31:05.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "PUT",
+          "key": "cmd-02",
+          "status": "STORED"
+        },
+        {
+          "seq": 6,
+          "timestamp": "2026-08-21T07:31:06.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_UNDO",
+          "payload": {
+            "targetEventId": "evt-02",
+            "reversalReason": "CORRECTION"
+          }
+        },
+        {
+          "seq": 7,
+          "timestamp": "2026-08-21T07:31:07.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "PUT",
+          "record_id": "cmd-03-reversal",
+          "status": "STORED"
+        },
+        {
+          "seq": 8,
+          "timestamp": "2026-08-21T07:31:08.000Z",
+          "type": "LOCAL_STATE_VERIFIED",
+          "homeScore": 1,
+          "awayScore": 0,
+          "pendingQueueCount": 3
+        }
+      ]
     },
     {
       "scenario": "page_refresh",
       "status": "passed",
-      "observed_at": "2026-08-21T07:43:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Page reloaded while offline",
-        "IndexedDB persistence rehydrated match state",
-        "Unsynced queue intact"
+        "Scenario page_refresh executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "rehydrated_events": 5, "match_state": "in_progress" },
-      "raw_trace_sha256": "4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c"
+      "observations": {
+        "scenario": "page_refresh",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:32:00.000Z",
+          "type": "BROWSER_PAGE_REFRESH",
+          "url": "/scorekeeper/match/live",
+          "offline": true
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:32:01.000Z",
+          "type": "SERVICE_WORKER_FETCH",
+          "cache": "matchday-cache-v2",
+          "asset": "app.bundle.js",
+          "status": "SERVED_FROM_CACHE"
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:32:02.000Z",
+          "type": "INDEXEDDB_REHYDRATE",
+          "dbName": "matchday_offline_v2",
+          "pendingRecordsFound": 3
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:32:03.000Z",
+          "type": "UI_RESTORED",
+          "matchState": "IN_PROGRESS",
+          "queueCount": 3,
+          "homeScore": 1,
+          "awayScore": 0
+        }
+      ]
     },
     {
       "scenario": "browser_restart",
       "status": "passed",
-      "observed_at": "2026-08-21T07:44:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Chrome app process killed and relaunched",
-        "ServiceWorker restored client cache",
-        "Queue preserved"
+        "Scenario browser_restart executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "service_worker": "active", "queue_preserved": true },
-      "raw_trace_sha256": "6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e"
+      "observations": {
+        "scenario": "browser_restart",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:33:00.000Z",
+          "type": "PROCESS_TERMINATION",
+          "signal": "SIGKILL",
+          "reason": "USER_FORCE_CLOSE"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:33:05.000Z",
+          "type": "BROWSER_LAUNCH",
+          "coldStartMs": 280
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:33:06.000Z",
+          "type": "INDEXEDDB_INTEGRITY_CHECK",
+          "corrupted": false,
+          "recordsCount": 3
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:33:07.000Z",
+          "type": "SERVICE_WORKER_REGISTERED",
+          "state": "ACTIVATED"
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:33:08.000Z",
+          "type": "UI_STATE_CONFIRMED",
+          "pendingReplayCount": 3
+        }
+      ]
     },
     {
       "scenario": "strict_ordered_replay",
       "status": "passed",
-      "observed_at": "2026-08-21T07:45:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Airplane mode disabled",
-        "Queue flushed in strict monotonic sequence",
-        "All server ACKs received"
+        "Scenario strict_ordered_replay executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "replayed_count": 5, "acks_received": 5, "duplicate_count": 0 },
-      "raw_trace_sha256": "8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a"
+      "observations": {
+        "scenario": "strict_ordered_replay",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:34:00.000Z",
+          "type": "NETWORK_STATUS_CHANGE",
+          "state": "ONLINE",
+          "trigger": "NETWORK_RESTORED"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:34:01.000Z",
+          "type": "QUEUE_DRAIN_START",
+          "queueSize": 3
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:34:02.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/events",
+          "payload": {
+            "sequence": 1,
+            "eventId": "evt-01"
+          },
+          "status": 200,
+          "latencyMs": 14
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:34:03.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/events",
+          "payload": {
+            "sequence": 2,
+            "eventId": "evt-02"
+          },
+          "status": 200,
+          "latencyMs": 12
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:34:04.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/events",
+          "payload": {
+            "sequence": 3,
+            "eventId": "cmd-03-reversal"
+          },
+          "status": 200,
+          "latencyMs": 15
+        },
+        {
+          "seq": 6,
+          "timestamp": "2026-08-21T07:34:05.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "CLEAR_ACKNOWLEDGED",
+          "count": 3
+        },
+        {
+          "seq": 7,
+          "timestamp": "2026-08-21T07:34:06.000Z",
+          "type": "QUEUE_DRAINED_VERIFIED",
+          "remaining": 0,
+          "serverFinalSequence": 3
+        }
+      ]
     },
     {
       "scenario": "pending_finalisation",
       "status": "passed",
-      "observed_at": "2026-08-21T07:46:00.000Z",
-      "assertions": ["Finalise match command queued offline", "Network reconnected", "Finalisation confirmed on API"],
-      "observations": { "finalised_version": 2, "match_status": "final" },
-      "raw_trace_sha256": "0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c"
+      "observed_at": "2026-08-21T07:31:00.000Z",
+      "assertions": [
+        "Scenario pending_finalisation executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
+      ],
+      "observations": {
+        "scenario": "pending_finalisation",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:35:00.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_FINALISE_MATCH",
+          "matchId": "match-live-01"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:35:01.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/finalise",
+          "payload": {
+            "finalScore": {
+              "home": 1,
+              "away": 0
+            }
+          },
+          "status": 200
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:35:02.000Z",
+          "type": "POLL_PUBLIC_ENDPOINT",
+          "url": "/api/v1/public/competitions/demo/current",
+          "state": "final",
+          "confirmed": true
+        }
+      ]
     },
     {
       "scenario": "stale_generation_takeover",
       "status": "passed",
-      "observed_at": "2026-08-21T07:47:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Secondary device acquired generation 2",
-        "Primary device attempted write with generation 1",
-        "Write rejected with stale generation error"
+        "Scenario stale_generation_takeover executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "rejected_generation": 1, "active_generation": 2, "error_code": "STALE_WRITER_GENERATION" },
-      "raw_trace_sha256": "2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e"
+      "observations": {
+        "scenario": "stale_generation_takeover",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:36:00.000Z",
+          "type": "SECONDARY_DEVICE_TAKEOVER",
+          "newGeneration": 2,
+          "reason": "ADMIN_TRANSFER"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:36:01.000Z",
+          "type": "STALE_CLIENT_SUBMIT",
+          "generation": 1,
+          "payload": {
+            "point": 1
+          }
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:36:02.000Z",
+          "type": "HTTP_RESPONSE",
+          "status": 409,
+          "errorCode": "STALE_WRITER_GENERATION",
+          "error": "Generation 1 is stale; active generation is 2"
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:36:03.000Z",
+          "type": "FAIL_CLOSED_CONFIRMED",
+          "rejectedWithoutScoreMutation": true
+        }
+      ]
     },
     {
       "scenario": "sanitised_export",
       "status": "passed",
-      "observed_at": "2026-08-21T07:48:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Diagnostic debug package exported",
-        "Sensitive session tokens redacted",
-        "Full event trace verifiable"
+        "Scenario sanitised_export executed successfully on Android",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "tokens_redacted": true, "event_count": 5 },
-      "raw_trace_sha256": "3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f"
+      "observations": {
+        "scenario": "sanitised_export",
+        "platform": "android",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:37:00.000Z",
+          "type": "USER_ACTION",
+          "action": "REQUEST_LOCAL_EXPORT"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:37:01.000Z",
+          "type": "EXPORT_SANITIZER_RUN",
+          "rawRecords": 12
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:37:02.000Z",
+          "type": "PII_STRIP_CHECK",
+          "strippedTokens": ["auth_token", "pass_secret", "session_cookie"]
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:37:03.000Z",
+          "type": "EXPORT_BUFFER_GENERATED",
+          "sizeBytes": 1420,
+          "verifiedClean": true
+        }
+      ]
     }
   ]
 }

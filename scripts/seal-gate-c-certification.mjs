@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,12 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
+
+function sha256(content) {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+const FORBIDDEN_PLACEHOLDER_REGEX = /^(?:abc123def456|placeholder|dummy|test-dummy|mock-hash|foo|bar)$/i;
 
 export const REQUIRED_FAULTS = [
   "postgres_interruption",
@@ -23,40 +30,86 @@ export const REQUIRED_FAULTS = [
   "projection_regeneration",
 ];
 
+export const C5_OPERATION_BUDGETS = {
+  score_event_acknowledgement: 500,
+  public_current_conditional_read: 500,
+  public_result_convergence: 2000,
+  lease_takeover: 2000,
+  repair_publication: 2000,
+};
+
 export function sealGateCCertification(options = {}) {
   const targetSha = options.candidateSha || execSync("git rev-parse HEAD", { cwd: rootDir, encoding: "utf8" }).trim();
   const qaDir = options.qaDir || path.join(rootDir, "docs", "qa");
   const artifactsRoot = options.artifactsDir || path.join(rootDir, "artifacts", "qa");
   const timestamp = new Date().toISOString();
 
-  // 1. Validate Imported C3 Physical Receipts
-  const iosReceiptPath = path.join(artifactsRoot, "gate-c-c3", targetSha, "physical", "ios", "receipt.json");
-  const androidReceiptPath = path.join(artifactsRoot, "gate-c-c3", targetSha, "physical", "android", "receipt.json");
+  // 1. Cryptographic Validation of C3 Physical Device Receipts & Raw Traces
+  for (const platform of ["ios", "android"]) {
+    const platformDir = path.join(artifactsRoot, "gate-c-c3", targetSha, "physical", platform);
+    const receiptPath = path.join(platformDir, "receipt.json");
 
-  if (!fs.existsSync(iosReceiptPath)) {
-    throw new Error(`Missing iOS physical device receipt for SHA ${targetSha} at ${iosReceiptPath}`);
-  }
-  if (!fs.existsSync(androidReceiptPath)) {
-    throw new Error(`Missing Android physical device receipt for SHA ${targetSha} at ${androidReceiptPath}`);
+    if (!fs.existsSync(receiptPath)) {
+      throw new Error(`Missing ${platform} physical device receipt for SHA ${targetSha} at ${receiptPath}`);
+    }
+
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+
+    if (receipt.source_sha !== targetSha) {
+      throw new Error(
+        `${platform} physical receipt source_sha (${receipt.source_sha}) does not match candidate target SHA (${targetSha})`,
+      );
+    }
+    if (receipt.status !== "passed") {
+      throw new Error(`${platform} physical device testing did not pass (${receipt.status})`);
+    }
+    if (!Array.isArray(receipt.scenarios) || receipt.scenarios.length < 8) {
+      throw new Error(`${platform} physical receipt has fewer than 8 required scenarios`);
+    }
+
+    // Verify canonical receipt hash
+    const base = { ...receipt };
+    delete base.receipt_sha256;
+    const computedReceiptHash = sha256(JSON.stringify(base));
+    if (receipt.receipt_sha256 !== computedReceiptHash) {
+      throw new Error(
+        `${platform} physical receipt hash mismatch (computed: ${computedReceiptHash}, recorded: ${receipt.receipt_sha256})`,
+      );
+    }
+
+    // Verify individual scenario trace files
+    for (const scenario of receipt.scenarios) {
+      const scenarioId = scenario.scenario_id;
+      if (FORBIDDEN_PLACEHOLDER_REGEX.test(scenario.raw_trace_sha256 || "")) {
+        throw new Error(`Placeholder hash detected in ${platform} scenario ${scenarioId}`);
+      }
+
+      const tracePath = path.join(platformDir, "traces", `${scenarioId}.trace.json`);
+      if (!fs.existsSync(tracePath)) {
+        throw new Error(`Missing raw trace file for ${platform} scenario ${scenarioId} at ${tracePath}`);
+      }
+
+      const traceContent = fs.readFileSync(tracePath, "utf8");
+      const computedTraceHash = sha256(traceContent);
+      if (computedTraceHash !== scenario.raw_trace_sha256) {
+        throw new Error(`Raw trace hash mismatch for ${platform} scenario ${scenarioId}`);
+      }
+
+      const traceJson = JSON.parse(traceContent);
+      if (!traceJson.events || !Array.isArray(traceJson.events) || traceJson.events.length === 0) {
+        throw new Error(`Raw trace file for ${platform} scenario ${scenarioId} contains no event stream`);
+      }
+    }
   }
 
-  const iosReceipt = JSON.parse(fs.readFileSync(iosReceiptPath, "utf8"));
-  const androidReceipt = JSON.parse(fs.readFileSync(androidReceiptPath, "utf8"));
+  const iosReceipt = JSON.parse(
+    fs.readFileSync(path.join(artifactsRoot, "gate-c-c3", targetSha, "physical", "ios", "receipt.json"), "utf8"),
+  );
+  const androidReceipt = JSON.parse(
+    fs.readFileSync(path.join(artifactsRoot, "gate-c-c3", targetSha, "physical", "android", "receipt.json"), "utf8"),
+  );
 
-  if (iosReceipt.source_sha !== targetSha || androidReceipt.source_sha !== targetSha) {
-    throw new Error("Physical receipt source_sha does not match candidate target SHA");
-  }
-  if (iosReceipt.status !== "passed" || androidReceipt.status !== "passed") {
-    throw new Error("Physical device testing did not pass");
-  }
-  if (!Array.isArray(iosReceipt.scenarios) || iosReceipt.scenarios.length < 8) {
-    throw new Error("iOS physical receipt has incomplete scenario execution");
-  }
-  if (!Array.isArray(androidReceipt.scenarios) || androidReceipt.scenarios.length < 8) {
-    throw new Error("Android physical receipt has incomplete scenario execution");
-  }
-
-  // 2. Validate Real C5 Benchmark Execution
+  // 2. Validate Real C5 Benchmark Execution & Latency Budgets
   const c5BenchmarkPath = path.join(artifactsRoot, "gate-c-c5", targetSha, "benchmark.json");
   if (!fs.existsSync(c5BenchmarkPath)) {
     throw new Error(`Missing C5 benchmark receipt for SHA ${targetSha} at ${c5BenchmarkPath}`);
@@ -65,59 +118,114 @@ export function sealGateCCertification(options = {}) {
   const c5Receipt = JSON.parse(fs.readFileSync(c5BenchmarkPath, "utf8"));
   const c5Sha = c5Receipt.source_sha || c5Receipt.sourceSha || c5Receipt.candidate_sha;
   if (c5Sha !== targetSha) {
-    throw new Error("C5 benchmark receipt sourceSha does not match candidate target SHA");
+    throw new Error(`C5 benchmark receipt source_sha (${c5Sha}) does not match candidate target SHA (${targetSha})`);
   }
   if (!c5Receipt.operations || typeof c5Receipt.operations !== "object") {
     throw new Error("C5 benchmark receipt operations are missing or malformed");
   }
 
-  for (const [opName, op] of Object.entries(c5Receipt.operations)) {
+  for (const [opName, maxBudget] of Object.entries(C5_OPERATION_BUDGETS)) {
+    const op = c5Receipt.operations[opName];
+    if (!op) {
+      throw new Error(`Missing required C5 operation: ${opName}`);
+    }
+
     const summary = op.summary || op;
     const sampleCount = summary.sampleCount ?? summary.sample_count ?? 0;
-    const errorCount = summary.errorCount ?? summary.unexpectedFailureCount ?? summary.error_count ?? 0;
+    const errorCount = summary.unexpectedFailureCount ?? summary.errorCount ?? summary.error_count ?? 0;
+    const p95Ms = summary.p95Ms ?? summary.p95_ms ?? 0;
 
     if (sampleCount < 500) {
       throw new Error(`C5 operation ${opName} has fewer than 500 measured samples (${sampleCount})`);
     }
     if (errorCount > 0) {
-      throw new Error(`C5 operation ${opName} has ${errorCount} errors`);
+      throw new Error(`C5 operation ${opName} has ${errorCount} unexpected failures`);
+    }
+    if (p95Ms > maxBudget) {
+      throw new Error(`C5 operation ${opName} exceeded p95 latency budget: ${p95Ms.toFixed(1)}ms > ${maxBudget}ms`);
     }
   }
 
-  // 3. Validate All 12 Controlled Failure Drills
+  // 3. Cryptographic Validation of All 12 Controlled Failure Drill Retained Logs
   const c5RetainedDir = path.join(artifactsRoot, "gate-c-c5", targetSha, "retained");
   const failureReceipts = {};
 
   for (const fault of REQUIRED_FAULTS) {
-    const faultReceiptPath = path.join(c5RetainedDir, fault, "receipt.json");
-    if (!fs.existsSync(faultReceiptPath)) {
-      throw new Error(`Missing fault drill receipt for ${fault} at ${faultReceiptPath}`);
+    const faultDir = path.join(c5RetainedDir, fault);
+    const faultReceiptPath = path.join(faultDir, "receipt.json");
+    const injectionLogPath = path.join(faultDir, "injection.log");
+    const recoveryLogPath = path.join(faultDir, "recovery.log");
+    const cleanupLogPath = path.join(faultDir, "cleanup.log");
+
+    if (
+      !fs.existsSync(faultReceiptPath) ||
+      !fs.existsSync(injectionLogPath) ||
+      !fs.existsSync(recoveryLogPath) ||
+      !fs.existsSync(cleanupLogPath)
+    ) {
+      throw new Error(`Missing retained failure drill logs for ${fault} in ${faultDir}`);
     }
+
     const receipt = JSON.parse(fs.readFileSync(faultReceiptPath, "utf8"));
+    const injectionHash = sha256(fs.readFileSync(injectionLogPath));
+    const recoveryHash = sha256(fs.readFileSync(recoveryLogPath));
+    const cleanupHash = sha256(fs.readFileSync(cleanupLogPath));
+
+    if (receipt.injection_evidence_sha256 !== injectionHash) {
+      throw new Error(`Injection log hash mismatch for fault ${fault}`);
+    }
+    if (receipt.recovery_evidence_sha256 !== recoveryHash) {
+      throw new Error(`Recovery log hash mismatch for fault ${fault}`);
+    }
+    if (receipt.cleanup_evidence_sha256 !== cleanupHash) {
+      throw new Error(`Cleanup log hash mismatch for fault ${fault}`);
+    }
     if (!receipt.recovery_observed || !receipt.cleanup_observed) {
       throw new Error(`Fault drill ${fault} did not observe clean recovery/cleanup`);
     }
+
     failureReceipts[fault] = receipt;
   }
 
-  // 4. Validate Deployment Evidence
-  const deploymentPath = path.join(qaDir, "deployment-evidence.json");
-  if (!fs.existsSync(deploymentPath)) {
-    throw new Error(`Missing deployment evidence at ${deploymentPath}`);
-  }
-  const deploymentEvidence = JSON.parse(fs.readFileSync(deploymentPath, "utf8"));
-  if (deploymentEvidence.candidate_sha !== targetSha) {
-    throw new Error(
-      `Deployment evidence candidate_sha (${deploymentEvidence.candidate_sha}) does not match target SHA (${targetSha})`,
-    );
-  }
-  if (deploymentEvidence.state !== "READY") {
-    throw new Error(`Deployment evidence state is not READY (${deploymentEvidence.state})`);
+  // 4. Validate HMAC Rotation Drills
+  const hmacPath = path.join(artifactsRoot, "gate-c-c5", targetSha, "hmac-rotation.json");
+  if (fs.existsSync(hmacPath)) {
+    const hmacReceipt = JSON.parse(fs.readFileSync(hmacPath, "utf8"));
+    if (!hmacReceipt.rateLimitHmacRotationPassed || !hmacReceipt.fallbackCodeHmacRotationPassed) {
+      throw new Error("HMAC dual-key rotation drill did not pass");
+    }
   }
 
-  // 5. Aggregate and Seal Final Ledgers
+  // 5. Validate Vercel Deployment Evidence
+  const deploymentArtifactPath = path.join(artifactsRoot, "deployment", "vercel-response.json");
+  const deploymentDocsPath = path.join(qaDir, "deployment-evidence.json");
+
+  let deploymentEvidence;
+  if (fs.existsSync(deploymentArtifactPath)) {
+    deploymentEvidence = JSON.parse(fs.readFileSync(deploymentArtifactPath, "utf8"));
+  } else if (fs.existsSync(deploymentDocsPath)) {
+    deploymentEvidence = JSON.parse(fs.readFileSync(deploymentDocsPath, "utf8"));
+  } else {
+    throw new Error("Missing Vercel deployment evidence in artifacts/qa/deployment/ or docs/qa/");
+  }
+
+  const deploySha = deploymentEvidence.git_commit_sha || deploymentEvidence.candidate_sha;
+  if (deploySha !== targetSha) {
+    throw new Error(`Deployment evidence commit SHA (${deploySha}) does not match candidate target SHA (${targetSha})`);
+  }
+  if (deploymentEvidence.state !== "READY" && deploymentEvidence.readyState !== "READY") {
+    throw new Error(`Deployment state is not READY (${deploymentEvidence.state || deploymentEvidence.readyState})`);
+  }
+  const deploymentId = deploymentEvidence.deployment_id || deploymentEvidence.id || deploymentEvidence.uid;
+  if (!deploymentId || !deploymentId.startsWith("dpl_")) {
+    throw new Error(`Invalid Vercel deployment ID: ${deploymentId}`);
+  }
+
+  // Write deployment evidence to docs/qa/
   fs.mkdirSync(qaDir, { recursive: true });
+  fs.writeFileSync(deploymentDocsPath, JSON.stringify(deploymentEvidence, null, 2) + "\n", "utf8");
 
+  // 6. Aggregate and Seal Final Ledgers
   // A. candidate-release.json
   const candidateRelease = {
     releaseId: `gate-c-certified-${targetSha.slice(0, 10)}`,
@@ -158,7 +266,7 @@ export function sealGateCCertification(options = {}) {
     current_certification_status: "PASS",
     full_gate_c_status: "PASS",
     collected_at: {
-      started: iosReceipt.collected_at,
+      started: iosReceipt.collected_at || timestamp,
       completed: timestamp,
       timezone: "Asia/Singapore",
     },

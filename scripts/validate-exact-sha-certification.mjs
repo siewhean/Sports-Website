@@ -8,6 +8,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 
+export const EVIDENCE_ONLY_ALLOWLIST_PATTERNS = [
+  /^docs\/qa\//,
+  /^artifacts\/qa\//,
+  /^fixtures\//,
+  /^scripts\/.*certification.*/,
+  /^scripts\/.*evidence.*/,
+  /^scripts\/verify-vercel-deployment\.mjs$/,
+  /^scripts\/verify-vercel-deployment\.test\.mjs$/,
+  /^scripts\/record-vercel-deployment\.mjs$/,
+  /^\.githooks\//,
+];
+
 export function getExactHeadSha() {
   try {
     return execSync("git rev-parse HEAD", { cwd: rootDir, encoding: "utf8" }).trim();
@@ -39,6 +51,28 @@ export function isAncestor(ancestorSha, descendantSha) {
     return true;
   } catch {
     return false;
+  }
+}
+
+export function validatePostCandidateDiff(candidateSha, headSha) {
+  if (candidateSha === headSha) return [];
+  try {
+    const diffOutput = execSync(`git diff --name-only ${candidateSha}..${headSha}`, {
+      cwd: rootDir,
+      encoding: "utf8",
+    }).trim();
+    if (!diffOutput) return [];
+    const changedFiles = diffOutput.split("\n").filter(Boolean);
+    const disallowed = [];
+    for (const file of changedFiles) {
+      const allowed = EVIDENCE_ONLY_ALLOWLIST_PATTERNS.some((pattern) => pattern.test(file));
+      if (!allowed) {
+        disallowed.push(file);
+      }
+    }
+    return disallowed;
+  } catch (err) {
+    return [`git diff failed: ${err.message}`];
   }
 }
 
@@ -83,7 +117,20 @@ export function validateExactShaCertification(options = {}) {
     errors.push(`Target SHA (${targetSha}) is not a valid commit in the repository.`);
   }
 
-  // 3. Branch Head Integrity check
+  // 3. Branch Head Integrity check & Post-Candidate Diff Allowlist
+  if (checkGit && targetSha !== headSha) {
+    if (!isAncestor(targetSha, headSha)) {
+      errors.push(`Candidate SHA (${targetSha}) is not an ancestor of current HEAD (${headSha}).`);
+    } else {
+      const disallowedChanges = validatePostCandidateDiff(targetSha, headSha);
+      if (disallowedChanges.length > 0) {
+        errors.push(
+          `Post-candidate commits modified disallowed runtime/application files: ${disallowedChanges.join(", ")}. Post-freeze commits may only touch evidence documents, artifacts, fixtures, or certification scripts.`,
+        );
+      }
+    }
+  }
+
   if (checkGit && !allowHistorical && remoteSha) {
     if (targetSha !== headSha && targetSha !== remoteSha && !isAncestor(targetSha, remoteSha)) {
       errors.push(`Candidate SHA (${targetSha}) is not on integration/gate-c-final branch history (${remoteSha}).`);
@@ -112,7 +159,6 @@ export function validateExactShaCertification(options = {}) {
           errors.push(`${filename} SHA (${fileSha}) does not match target SHA (${targetSha}).`);
         }
 
-        // Check required provenance metadata
         if (!data.collected_at && !data.certified_at) {
           errors.push(`${filename} is missing collected_at / certified_at timestamp.`);
         }

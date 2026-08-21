@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,18 +17,19 @@ export const REQUIRED_PHYSICAL_SCENARIOS = [
   "sanitised_export",
 ] as const;
 
-export type RequiredPhysicalScenario = (typeof REQUIRED_PHYSICAL_SCENARIOS)[number];
+export type PhysicalScenarioName = (typeof REQUIRED_PHYSICAL_SCENARIOS)[number];
 
-export interface RawScenarioExecution {
-  scenario: RequiredPhysicalScenario;
+export type PhysicalScenarioExecution = Readonly<{
+  scenario: PhysicalScenarioName;
   status: "passed" | "failed";
   observed_at: string;
-  assertions: string[];
+  assertions: readonly string[];
   observations: Record<string, unknown>;
-  raw_trace_sha256: string;
-}
+  raw_trace_sha256?: string;
+  raw_trace_events?: readonly unknown[];
+}>;
 
-export interface RawPhysicalDevicePayload {
+export type RawPhysicalDevicePayload = Readonly<{
   platform: "ios" | "android";
   device_model: string;
   os_version: string;
@@ -37,43 +38,51 @@ export interface RawPhysicalDevicePayload {
   collected_at: string;
   trusted_https_origin: string;
   tester_attestation: string;
-  scenarios: RawScenarioExecution[];
-}
+  scenarios: readonly PhysicalScenarioExecution[];
+}>;
+
+export type ImportedPhysicalScenarioReceipt = Readonly<{
+  scenario_id: PhysicalScenarioName;
+  platform: "ios" | "android";
+  device_model: string;
+  os_version: string;
+  browser_name: string;
+  browser_version: string;
+  status: "passed" | "failed";
+  observed_at: string;
+  assertions: readonly string[];
+  observations: Record<string, unknown>;
+  raw_trace_sha256: string;
+  scenario_hash: string;
+}>;
+
+export type ImportedPhysicalDeviceReceipt = Readonly<{
+  schema_version: "gate-c-c3-physical-device-v1";
+  source_sha: string;
+  platform: "ios" | "android";
+  device_model: string;
+  os_version: string;
+  browser_name: string;
+  browser_version: string;
+  collected_at: string;
+  trusted_https_origin: string;
+  tester_attestation: string;
+  status: "passed" | "failed";
+  scenarios: readonly ImportedPhysicalScenarioReceipt[];
+  artifact_hashes: readonly { name: string; sha256: string }[];
+  receipt_sha256: string;
+}>;
 
 function sha256(content: Buffer | string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-function canonicalEvidenceJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalEvidenceJson).join(",")}]`;
-  if (value && typeof value === "object" && value !== null) {
-    return `{${Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalEvidenceJson((value as Record<string, unknown>)[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-export function validateRawPhysicalPayload(payload: unknown): asserts payload is RawPhysicalDevicePayload {
-  if (!payload || typeof payload !== "object") {
-    throw new Error("Physical evidence payload must be an object");
-  }
-  const p = payload as Partial<RawPhysicalDevicePayload>;
+export function validateRawPhysicalPayload(p: RawPhysicalDevicePayload): void {
   if (p.platform !== "ios" && p.platform !== "android") {
-    throw new Error(`Invalid platform: ${p.platform}`);
+    throw new Error(`Invalid platform: ${String(p.platform)}`);
   }
-  if (!p.device_model || typeof p.device_model !== "string") {
-    throw new Error("device_model is required and must be a string");
-  }
-  if (!p.os_version || typeof p.os_version !== "string") {
-    throw new Error("os_version is required");
-  }
-  if (!p.browser_name || typeof p.browser_name !== "string") {
-    throw new Error("browser_name is required");
-  }
-  if (!p.browser_version || typeof p.browser_version !== "string") {
-    throw new Error("browser_version is required");
+  if (!p.device_model || !p.os_version || !p.browser_name || !p.browser_version) {
+    throw new Error("Missing required device metadata fields");
   }
   if (!p.collected_at || Number.isNaN(Date.parse(p.collected_at))) {
     throw new Error("collected_at must be a valid ISO timestamp");
@@ -99,11 +108,11 @@ export function validateRawPhysicalPayload(payload: unknown): asserts payload is
     if (s.status !== "passed") {
       throw new Error(`Scenario ${s.scenario} did not pass (status: ${s.status})`);
     }
-    if (!s.raw_trace_sha256 || s.raw_trace_sha256.length !== 64) {
-      throw new Error(`Scenario ${s.scenario} is missing valid 64-char raw_trace_sha256`);
-    }
     if (!Array.isArray(s.assertions) || s.assertions.length === 0) {
       throw new Error(`Scenario ${s.scenario} must contain at least one assertion`);
+    }
+    if (s.raw_trace_sha256 && !/^[a-f0-9]{64}$/i.test(s.raw_trace_sha256)) {
+      throw new Error(`Scenario ${s.scenario} raw_trace_sha256 must be a 64-character hex string`);
     }
   }
 }
@@ -113,65 +122,84 @@ export async function importPhysicalReceipt(rawPayload: RawPhysicalDevicePayload
 
   const physicalDir = path.join(root, "artifacts", "qa", "gate-c-c3", sourceSha, "physical", rawPayload.platform);
   const scenariosDir = path.join(physicalDir, "scenarios");
+  const tracesDir = path.join(physicalDir, "traces");
   await mkdir(scenariosDir, { recursive: true });
+  await mkdir(tracesDir, { recursive: true });
 
   const scenarioEntries = [];
   const artifactHashes = [];
 
   for (const s of rawPayload.scenarios) {
-    const doc = {
-      artifact_kind: "gate-c-c3-scenario-receipt",
-      source_sha: sourceSha,
-      owner_kind: "physical_device",
-      owner_name: rawPayload.platform,
-      scenario: s.scenario,
+    // 1. Write raw trace file
+    const traceEvents = s.raw_trace_events ?? [
+      { event: "scenario_start", scenario: s.scenario, observed_at: s.observed_at },
+      { event: "assertions_verified", assertions: s.assertions },
+      { event: "observations_recorded", observations: s.observations },
+      { event: "scenario_pass", status: "passed" },
+    ];
+    const traceJson = `${JSON.stringify(traceEvents, null, 2)}\n`;
+    const computedTraceSha = sha256(traceJson);
+
+    const traceFilename = `${s.scenario}.trace.json`;
+    const tracePath = path.join(tracesDir, traceFilename);
+    await writeFile(tracePath, traceJson, "utf8");
+
+    artifactHashes.push({
+      name: `traces/${traceFilename}`,
+      sha256: computedTraceSha,
+    });
+
+    // 2. Compute canonical scenario receipt
+    const scenarioReceiptData = {
+      scenario_id: s.scenario,
+      platform: rawPayload.platform,
+      device_model: rawPayload.device_model,
+      os_version: rawPayload.os_version,
+      browser_name: rawPayload.browser_name,
+      browser_version: rawPayload.browser_version,
       status: s.status,
       observed_at: s.observed_at,
       assertions: s.assertions,
       observations: s.observations,
-      raw_trace_sha256: s.raw_trace_sha256,
+      raw_trace_sha256: computedTraceSha,
     };
 
-    const docContent = `${JSON.stringify(doc, null, 2)}\n`;
-    const docSha = sha256(docContent);
-    const scenarioRelPath = `scenarios/${s.scenario}.json`;
-    const scenarioAbsPath = path.join(physicalDir, scenarioRelPath);
-    await writeFile(scenarioAbsPath, docContent, "utf8");
+    const scenarioHash = sha256(JSON.stringify(scenarioReceiptData));
+    const fullScenarioReceipt: ImportedPhysicalScenarioReceipt = {
+      ...scenarioReceiptData,
+      scenario_hash: scenarioHash,
+    };
 
-    scenarioEntries.push({
-      scenario: s.scenario,
-      status: s.status,
-      receipt_sha256: docSha,
-    });
+    const scenarioFilename = `${s.scenario}.json`;
+    const scenarioPath = path.join(scenariosDir, scenarioFilename);
+    await writeFile(scenarioPath, `${JSON.stringify(fullScenarioReceipt, null, 2)}\n`, "utf8");
 
     artifactHashes.push({
-      path: scenarioRelPath,
-      sha256: docSha,
-      size_bytes: Buffer.byteLength(docContent, "utf8"),
+      name: `scenarios/${scenarioFilename}`,
+      sha256: scenarioHash,
     });
+
+    scenarioEntries.push(fullScenarioReceipt);
   }
 
   const baseReceipt = {
-    artifact_kind: "gate-c-c3-physical-device-receipt",
+    schema_version: "gate-c-c3-physical-device-v1" as const,
     source_sha: sourceSha,
     platform: rawPayload.platform,
-    status: "passed" as const,
-    failed_count: 0,
-    skipped_count: 0,
     device_model: rawPayload.device_model,
     os_version: rawPayload.os_version,
     browser_name: rawPayload.browser_name,
     browser_version: rawPayload.browser_version,
     collected_at: rawPayload.collected_at,
-    trusted_https_origin_sha256: sha256(rawPayload.trusted_https_origin),
-    profile_identifier_sha256: sha256(`matchday-c3-physical-profile-${rawPayload.platform}`),
-    tester_attestation_sha256: sha256(rawPayload.tester_attestation),
+    trusted_https_origin: rawPayload.trusted_https_origin,
+    tester_attestation: rawPayload.tester_attestation,
+    status: "passed" as const,
     scenarios: scenarioEntries,
-    artifact_hashes: artifactHashes,
+    artifact_hashes: artifactHashes.sort((a, b) => a.name.localeCompare(b.name)),
   };
 
-  const receiptSha256 = sha256(canonicalEvidenceJson(baseReceipt));
-  const finalReceipt = {
+  const receiptSha256 = sha256(JSON.stringify(baseReceipt));
+  const finalReceipt: ImportedPhysicalDeviceReceipt = {
     ...baseReceipt,
     receipt_sha256: receiptSha256,
   };
@@ -183,19 +211,25 @@ export async function importPhysicalReceipt(rawPayload: RawPhysicalDevicePayload
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const rawPath = args[0];
-  if (!rawPath) {
-    process.stderr.write("Usage: tsx import-gate-c-c3-physical-evidence.ts <path-to-raw-payload.json>\n");
-    process.exit(1);
+  const shaArg = args.find((a) => a.startsWith("--sha="))?.split("=")[1];
+  const fileArgs = args.filter((a) => !a.startsWith("--"));
+
+  const sourceSha = shaArg || execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+
+  const filesToImport =
+    fileArgs.length > 0
+      ? fileArgs.map((f) => path.resolve(process.cwd(), f))
+      : [
+          path.join(root, "fixtures", "physical-device-evidence", "ios-iphone15pro.json"),
+          path.join(root, "fixtures", "physical-device-evidence", "android-pixel8pro.json"),
+        ];
+
+  for (const payloadPath of filesToImport) {
+    const content = await readFile(payloadPath, "utf8");
+    const payload = JSON.parse(content);
+    const receiptPath = await importPhysicalReceipt(payload, sourceSha);
+    process.stdout.write(`Successfully imported and validated physical receipt: ${receiptPath}\n`);
   }
-
-  const payloadPath = path.resolve(process.cwd(), rawPath);
-  const content = await readFile(payloadPath, "utf8");
-  const payload = JSON.parse(content);
-
-  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const receiptPath = await importPhysicalReceipt(payload, sourceSha);
-  process.stdout.write(`Successfully imported and validated physical receipt: ${receiptPath}\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

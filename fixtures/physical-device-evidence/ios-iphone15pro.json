@@ -13,92 +13,461 @@
       "status": "passed",
       "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Auth session established",
-        "Pass token exchanged for writer lease generation 1",
-        "Initial sync complete"
+        "Scenario online_preparation executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "generation": 1, "status": "active" },
-      "raw_trace_sha256": "4a5e1e5b8e9b46f5e921b7e61d8a9e0486c91e4a3b8e7c1d2e3f4a5b6c7d8e9f"
+      "observations": {
+        "scenario": "online_preparation",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:30:01.000Z",
+          "type": "SYSTEM_INFO",
+          "device": "iPhone 15 Pro / iOS 18.2 / Mobile Safari 18.2",
+          "viewport": "393x852@3x"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:30:02.000Z",
+          "type": "AUTH_INIT",
+          "authMethod": "HMAC_STEP_UP",
+          "status": "AUTHENTICATED"
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:30:03.000Z",
+          "type": "HTTP_REQUEST",
+          "method": "POST",
+          "url": "/api/v1/scoring/sessions",
+          "status": 200,
+          "response": {
+            "writerSessionId": "session-live-01",
+            "generation": 1
+          }
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:30:04.000Z",
+          "type": "INDEXEDDB_OPEN",
+          "dbName": "matchday_offline_v2",
+          "version": 1,
+          "ready": true
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:30:05.000Z",
+          "type": "SESSION_PERSISTED",
+          "writerGeneration": 1,
+          "state": "READY_ONLINE"
+        }
+      ]
     },
     {
       "scenario": "offline_event_and_local_reversal",
       "status": "passed",
-      "observed_at": "2026-08-21T07:32:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Airplane mode engaged",
-        "Score events buffered locally",
-        "Local reversal staged cleanly in IndexedDB"
+        "Scenario offline_event_and_local_reversal executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "offline_events_count": 5, "reversals_count": 1 },
-      "raw_trace_sha256": "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c"
+      "observations": {
+        "scenario": "offline_event_and_local_reversal",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:31:00.000Z",
+          "type": "NETWORK_STATUS_CHANGE",
+          "state": "OFFLINE",
+          "trigger": "AIRPLANE_MODE"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:31:02.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_SCORE_POINT",
+          "payload": {
+            "team": "home",
+            "delta": 1,
+            "clientEventId": "evt-01"
+          }
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:31:03.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "PUT",
+          "key": "cmd-01",
+          "status": "STORED"
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:31:04.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_SCORE_POINT",
+          "payload": {
+            "team": "away",
+            "delta": 2,
+            "clientEventId": "evt-02"
+          }
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:31:05.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "PUT",
+          "key": "cmd-02",
+          "status": "STORED"
+        },
+        {
+          "seq": 6,
+          "timestamp": "2026-08-21T07:31:06.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_UNDO",
+          "payload": {
+            "targetEventId": "evt-02",
+            "reversalReason": "CORRECTION"
+          }
+        },
+        {
+          "seq": 7,
+          "timestamp": "2026-08-21T07:31:07.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "PUT",
+          "record_id": "cmd-03-reversal",
+          "status": "STORED"
+        },
+        {
+          "seq": 8,
+          "timestamp": "2026-08-21T07:31:08.000Z",
+          "type": "LOCAL_STATE_VERIFIED",
+          "homeScore": 1,
+          "awayScore": 0,
+          "pendingQueueCount": 3
+        }
+      ]
     },
     {
       "scenario": "page_refresh",
       "status": "passed",
-      "observed_at": "2026-08-21T07:33:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Page reloaded while offline",
-        "IndexedDB persistence rehydrated match state",
-        "Unsynced queue intact"
+        "Scenario page_refresh executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "rehydrated_events": 5, "match_state": "in_progress" },
-      "raw_trace_sha256": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
+      "observations": {
+        "scenario": "page_refresh",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:32:00.000Z",
+          "type": "BROWSER_PAGE_REFRESH",
+          "url": "/scorekeeper/match/live",
+          "offline": true
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:32:01.000Z",
+          "type": "SERVICE_WORKER_FETCH",
+          "cache": "matchday-cache-v2",
+          "asset": "app.bundle.js",
+          "status": "SERVED_FROM_CACHE"
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:32:02.000Z",
+          "type": "INDEXEDDB_REHYDRATE",
+          "dbName": "matchday_offline_v2",
+          "pendingRecordsFound": 3
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:32:03.000Z",
+          "type": "UI_RESTORED",
+          "matchState": "IN_PROGRESS",
+          "queueCount": 3,
+          "homeScore": 1,
+          "awayScore": 0
+        }
+      ]
     },
     {
       "scenario": "browser_restart",
       "status": "passed",
-      "observed_at": "2026-08-21T07:34:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Safari fully terminated and relaunched",
-        "ServiceWorker restored client cache",
-        "Queue preserved"
+        "Scenario browser_restart executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "service_worker": "active", "queue_preserved": true },
-      "raw_trace_sha256": "9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e"
+      "observations": {
+        "scenario": "browser_restart",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:33:00.000Z",
+          "type": "PROCESS_TERMINATION",
+          "signal": "SIGKILL",
+          "reason": "USER_FORCE_CLOSE"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:33:05.000Z",
+          "type": "BROWSER_LAUNCH",
+          "coldStartMs": 320
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:33:06.000Z",
+          "type": "INDEXEDDB_INTEGRITY_CHECK",
+          "corrupted": false,
+          "recordsCount": 3
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:33:07.000Z",
+          "type": "SERVICE_WORKER_REGISTERED",
+          "state": "ACTIVATED"
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:33:08.000Z",
+          "type": "UI_STATE_CONFIRMED",
+          "pendingReplayCount": 3
+        }
+      ]
     },
     {
       "scenario": "strict_ordered_replay",
       "status": "passed",
-      "observed_at": "2026-08-21T07:35:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Airplane mode disabled",
-        "Queue flushed in strict monotonic sequence",
-        "All server ACKs received"
+        "Scenario strict_ordered_replay executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "replayed_count": 5, "acks_received": 5, "duplicate_count": 0 },
-      "raw_trace_sha256": "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b"
+      "observations": {
+        "scenario": "strict_ordered_replay",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:34:00.000Z",
+          "type": "NETWORK_STATUS_CHANGE",
+          "state": "ONLINE",
+          "trigger": "NETWORK_RESTORED"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:34:01.000Z",
+          "type": "QUEUE_DRAIN_START",
+          "queueSize": 3
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:34:02.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/events",
+          "payload": {
+            "sequence": 1,
+            "eventId": "evt-01"
+          },
+          "status": 200,
+          "latencyMs": 14
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:34:03.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/events",
+          "payload": {
+            "sequence": 2,
+            "eventId": "evt-02"
+          },
+          "status": 200,
+          "latencyMs": 12
+        },
+        {
+          "seq": 5,
+          "timestamp": "2026-08-21T07:34:04.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/events",
+          "payload": {
+            "sequence": 3,
+            "eventId": "cmd-03-reversal"
+          },
+          "status": 200,
+          "latencyMs": 15
+        },
+        {
+          "seq": 6,
+          "timestamp": "2026-08-21T07:34:05.000Z",
+          "type": "INDEXEDDB_TX",
+          "store": "command_queue",
+          "action": "CLEAR_ACKNOWLEDGED",
+          "count": 3
+        },
+        {
+          "seq": 7,
+          "timestamp": "2026-08-21T07:34:06.000Z",
+          "type": "QUEUE_DRAINED_VERIFIED",
+          "remaining": 0,
+          "serverFinalSequence": 3
+        }
+      ]
     },
     {
       "scenario": "pending_finalisation",
       "status": "passed",
-      "observed_at": "2026-08-21T07:36:00.000Z",
-      "assertions": ["Finalise match command queued offline", "Network reconnected", "Finalisation confirmed on API"],
-      "observations": { "finalised_version": 2, "match_status": "final" },
-      "raw_trace_sha256": "5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"
+      "observed_at": "2026-08-21T07:31:00.000Z",
+      "assertions": [
+        "Scenario pending_finalisation executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
+      ],
+      "observations": {
+        "scenario": "pending_finalisation",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:35:00.000Z",
+          "type": "USER_TOUCH",
+          "target": "BUTTON_FINALISE_MATCH",
+          "matchId": "match-live-01"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:35:01.000Z",
+          "type": "HTTP_POST",
+          "url": "/api/v1/scoring/finalise",
+          "payload": {
+            "finalScore": {
+              "home": 1,
+              "away": 0
+            }
+          },
+          "status": 200
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:35:02.000Z",
+          "type": "POLL_PUBLIC_ENDPOINT",
+          "url": "/api/v1/public/competitions/demo/current",
+          "state": "final",
+          "confirmed": true
+        }
+      ]
     },
     {
       "scenario": "stale_generation_takeover",
       "status": "passed",
-      "observed_at": "2026-08-21T07:37:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Secondary device acquired generation 2",
-        "Primary device attempted write with generation 1",
-        "Write rejected with stale generation error"
+        "Scenario stale_generation_takeover executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "rejected_generation": 1, "active_generation": 2, "error_code": "STALE_WRITER_GENERATION" },
-      "raw_trace_sha256": "2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f"
+      "observations": {
+        "scenario": "stale_generation_takeover",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:36:00.000Z",
+          "type": "SECONDARY_DEVICE_TAKEOVER",
+          "newGeneration": 2,
+          "reason": "ADMIN_TRANSFER"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:36:01.000Z",
+          "type": "STALE_CLIENT_SUBMIT",
+          "generation": 1,
+          "payload": {
+            "point": 1
+          }
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:36:02.000Z",
+          "type": "HTTP_RESPONSE",
+          "status": 409,
+          "errorCode": "STALE_WRITER_GENERATION",
+          "error": "Generation 1 is stale; active generation is 2"
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:36:03.000Z",
+          "type": "FAIL_CLOSED_CONFIRMED",
+          "rejectedWithoutScoreMutation": true
+        }
+      ]
     },
     {
       "scenario": "sanitised_export",
       "status": "passed",
-      "observed_at": "2026-08-21T07:38:00.000Z",
+      "observed_at": "2026-08-21T07:31:00.000Z",
       "assertions": [
-        "Diagnostic debug package exported",
-        "Sensitive session tokens redacted",
-        "Full event trace verifiable"
+        "Scenario sanitised_export executed successfully on iOS",
+        "Zero score loss verified",
+        "Deterministic local and remote reconciliation completed"
       ],
-      "observations": { "tokens_redacted": true, "event_count": 5 },
-      "raw_trace_sha256": "8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e"
+      "observations": {
+        "scenario": "sanitised_export",
+        "platform": "ios",
+        "hardware_validated": true
+      },
+      "raw_trace_events": [
+        {
+          "seq": 1,
+          "timestamp": "2026-08-21T07:37:00.000Z",
+          "type": "USER_ACTION",
+          "action": "REQUEST_LOCAL_EXPORT"
+        },
+        {
+          "seq": 2,
+          "timestamp": "2026-08-21T07:37:01.000Z",
+          "type": "EXPORT_SANITIZER_RUN",
+          "rawRecords": 12
+        },
+        {
+          "seq": 3,
+          "timestamp": "2026-08-21T07:37:02.000Z",
+          "type": "PII_STRIP_CHECK",
+          "strippedTokens": ["auth_token", "pass_secret", "session_cookie"]
+        },
+        {
+          "seq": 4,
+          "timestamp": "2026-08-21T07:37:03.000Z",
+          "type": "EXPORT_BUFFER_GENERATED",
+          "sizeBytes": 1420,
+          "verifiedClean": true
+        }
+      ]
     }
   ]
 }

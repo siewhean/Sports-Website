@@ -113,5 +113,41 @@ test("exact-sha certification validator", async (t) => {
     );
   });
 
+  await t.test("allows post-candidate evidence paths and rejects application runtime paths", async () => {
+    const { EVIDENCE_ONLY_ALLOWLIST_PATTERNS } = await import("./validate-exact-sha-certification.mjs");
+    const allowedFiles = [
+      "docs/qa/candidate-release.json",
+      "artifacts/qa/gate-c-c3/abc/receipt.json",
+      "fixtures/physical-device-evidence/ios-iphone15pro.json",
+      "scripts/seal-gate-c-certification.mjs",
+      "scripts/verify-vercel-deployment.mjs",
+      "scripts/record-vercel-deployment.mjs",
+      ".githooks/pre-push",
+    ];
+    for (const f of allowedFiles) {
+      assert.strictEqual(
+        EVIDENCE_ONLY_ALLOWLIST_PATTERNS.some((p) => p.test(f)),
+        true,
+        `Expected ${f} to be allowed`,
+      );
+    }
+
+    const disallowedFiles = [
+      "apps/api/src/app.ts",
+      "apps/web/app/page.tsx",
+      "packages/domain/src/scoring.ts",
+      "infra/migrations/0036_test.sql",
+      "turbo.json",
+      "package.json",
+    ];
+    for (const f of disallowedFiles) {
+      assert.strictEqual(
+        EVIDENCE_ONLY_ALLOWLIST_PATTERNS.some((p) => p.test(f)),
+        false,
+        `Expected ${f} to be disallowed`,
+      );
+    }
+  });
+
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

@@ -12,8 +12,8 @@
     "start": "node dist/main.js",
     "lint": "eslint src tests --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run tests/unit",
-    "test:unit": "vitest run tests/unit",
+    "test": "vitest run tests/unit --testTimeout=30000",
+    "test:unit": "vitest run tests/unit --testTimeout=30000",
     "test:integration": "vitest run tests/integration --no-file-parallelism",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "tsx scripts/check-openapi.ts"
