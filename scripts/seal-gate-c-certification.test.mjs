@@ -5,20 +5,77 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { REQUIRED_FAULTS, sealGateCCertification } from "./seal-gate-c-certification.mjs";
+import {
+  MATCHDAY_GATE_C_BRANCH,
+  MATCHDAY_VERCEL_PROJECT_ID,
+  MATCHDAY_VERCEL_TEAM_ID,
+} from "./verify-vercel-deployment.mjs";
 
 function sha256(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
-function setupValidWorkspace(candidateSha) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matchday-seal-test-"));
-  const qaDir = path.join(tempDir, "docs", "qa");
-  const artifactsDir = path.join(tempDir, "artifacts", "qa");
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf8");
+}
 
-  fs.mkdirSync(qaDir, { recursive: true });
+function setupLaneLedger(artifactsDir, candidateSha, directoryName, artifactKind) {
+  const ledgerDir = path.join(artifactsDir, directoryName, candidateSha, "ledgers", "2026-08-21-test-ledger");
+  const logPath = path.join(ledgerDir, "logs", "evidence.log");
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.writeFileSync(logPath, "all checks passed\n", "utf8");
+  const bytes = fs.readFileSync(logPath);
+  const commands = ["migrations", "backup", "integration", "secrets", "build"].map((label) => ({
+    label,
+    command: `pnpm ${label}`,
+    exit_code: 0,
+  }));
+  const ledger = {
+    schema_version: 1,
+    artifact_kind: artifactKind,
+    source_sha: candidateSha,
+    source_guard: { clean_before: true, clean_after: true },
+    environment: { node_version: process.version },
+    commands,
+    runs: [1, 2].map((run_number) => ({ run_number, receipt: { source_sha: candidateSha } })),
+    artifacts: [
+      {
+        path: "logs/evidence.log",
+        sha256: sha256(bytes),
+        size_bytes: bytes.byteLength,
+      },
+    ],
+  };
+  writeJson(path.join(ledgerDir, "ledger.json"), ledger);
+}
 
-  // 1. Setup C3 Physical Receipts and Raw Traces
-  const scenarioList = [
+function setupC3(artifactsDir, candidateSha) {
+  const runDir = path.join(artifactsDir, "gate-c-c3", candidateSha, "runs", "2026-08-21-browser-run");
+  const projects = ["chromium-phone", "webkit-phone", "chromium-desktop", "webkit-desktop", "firefox-desktop"].map(
+    (name, index) => {
+      const projectName = `gate-c-c3-${name}`;
+      const evidencePath = `${projectName}/project-evidence.json`;
+      writeJson(path.join(runDir, evidencePath), {
+        source_sha: candidateSha,
+        project_name: projectName,
+        pass_count: 15,
+        failed_count: 0,
+        skipped_count: 0,
+      });
+      return { project_name: projectName, pass_count: 15, evidence_path: evidencePath, index };
+    },
+  );
+  writeJson(path.join(runDir, "run-evidence.json"), {
+    artifact_kind: "gate-c-c3-run-evidence",
+    source_sha: candidateSha,
+    pass_count: 75,
+    failed_count: 0,
+    skipped_count: 0,
+    projects,
+  });
+
+  const scenarios = [
     "online_preparation",
     "offline_event_and_local_reversal",
     "page_refresh",
@@ -28,154 +85,187 @@ function setupValidWorkspace(candidateSha) {
     "stale_generation_takeover",
     "sanitised_export",
   ];
-
   for (const platform of ["ios", "android"]) {
     const platformDir = path.join(artifactsDir, "gate-c-c3", candidateSha, "physical", platform);
-    const tracesDir = path.join(platformDir, "traces");
-    fs.mkdirSync(tracesDir, { recursive: true });
-
-    const scenarios = scenarioList.map((s) => {
-      const traceContent = JSON.stringify({
-        scenario_id: s,
+    const receiptScenarios = scenarios.map((scenario) => {
+      const trace = JSON.stringify([{ seq: 1, scenario, platform, observed: true }], null, 2) + "\n";
+      const tracePath = path.join(platformDir, "traces", `${scenario}.trace.json`);
+      fs.mkdirSync(path.dirname(tracePath), { recursive: true });
+      fs.writeFileSync(tracePath, trace, "utf8");
+      const base = {
+        scenario_id: scenario,
         platform,
-        events: [{ type: "goal", timestamp: "2026-08-21T00:00:00Z" }],
-      });
-      const tracePath = path.join(tracesDir, `${s}.trace.json`);
-      fs.writeFileSync(tracePath, traceContent, "utf8");
-      const traceHash = sha256(traceContent);
-
-      return {
-        scenario_id: s,
         status: "passed",
-        raw_trace_sha256: traceHash,
+        raw_trace_sha256: sha256(trace),
       };
+      return { ...base, scenario_hash: sha256(JSON.stringify(base)) };
     });
-
-    const rawReceipt = {
+    const baseReceipt = {
       source_sha: candidateSha,
       platform,
       status: "passed",
       device_model: platform === "ios" ? "iPhone 15 Pro" : "Pixel 8 Pro",
       os_version: platform === "ios" ? "iOS 18.2" : "Android 15",
       browser_name: platform === "ios" ? "Mobile Safari" : "Chrome Mobile",
-      browser_version: "1.0",
+      browser_version: "test",
       collected_at: "2026-08-21T00:00:00.000Z",
-      scenarios,
+      scenarios: receiptScenarios,
     };
-
-    const receiptHash = sha256(JSON.stringify(rawReceipt));
-    const finalReceipt = {
-      ...rawReceipt,
-      receipt_sha256: receiptHash,
-    };
-
-    fs.writeFileSync(path.join(platformDir, "receipt.json"), JSON.stringify(finalReceipt, null, 2), "utf8");
+    writeJson(path.join(platformDir, "receipt.json"), {
+      ...baseReceipt,
+      receipt_sha256: sha256(JSON.stringify(baseReceipt)),
+    });
   }
+}
 
-  // 2. Setup C5 Benchmark Receipt
+function setupC4(artifactsDir, candidateSha) {
+  writeJson(path.join(artifactsDir, "gate-c-c4", candidateSha, "run-evidence.json"), {
+    artifact_kind: "gate-c-c4-exact-sha-evidence",
+    record_status: "CURRENT_CERTIFICATION",
+    source_sha: candidateSha,
+    status: "PASS",
+    environment: { node_version: process.version },
+    checks: { zero_partial_state_verified: true, publication_and_public_truth: "PASS" },
+    outputs: {
+      unit_test_summary_sha256: sha256("unit pass"),
+      e2e_test_summary_sha256: sha256("e2e pass"),
+    },
+  });
+}
+
+function setupC5(artifactsDir, candidateSha) {
   const c5Dir = path.join(artifactsDir, "gate-c-c5", candidateSha);
-  fs.mkdirSync(c5Dir, { recursive: true });
+  const operation = (p95Ms) => ({
+    summary: {
+      sampleCount: 500,
+      successfulCount: 500,
+      unexpectedFailureCount: 0,
+      p95Ms,
+    },
+    correctness: { passed: true },
+  });
+  writeJson(path.join(c5Dir, "benchmark.json"), {
+    artifact_kind: "gate-c-c5-real-infrastructure-benchmark",
+    source_sha: candidateSha,
+    evidence_type: "real_infrastructure",
+    status: "PASS",
+    runtime: { application: "matchday-api", benchmark_owned_routes: false },
+    environment: { postgresql_version: "18.4", redis_version: "8.2" },
+    operations: {
+      score_event_acknowledgement: operation(25),
+      public_current_conditional_read: operation(20),
+      public_result_convergence: operation(100),
+      lease_takeover: operation(80),
+      repair_publication: operation(90),
+    },
+  });
 
-  const dummyOperations = {
-    score_event_acknowledgement: { sampleCount: 500, unexpectedFailureCount: 0, p95Ms: 12.5 },
-    public_current_conditional_read: { sampleCount: 500, unexpectedFailureCount: 0, p95Ms: 8.2 },
-    public_result_convergence: { sampleCount: 500, unexpectedFailureCount: 0, p95Ms: 15.0 },
-    lease_takeover: { sampleCount: 500, unexpectedFailureCount: 0, p95Ms: 22.0 },
-    repair_publication: { sampleCount: 500, unexpectedFailureCount: 0, p95Ms: 18.0 },
-  };
-
-  fs.writeFileSync(
-    path.join(c5Dir, "benchmark.json"),
-    JSON.stringify({ source_sha: candidateSha, operations: dummyOperations }, null, 2),
-    "utf8",
-  );
-
-  // 3. Setup 12 Controlled Failure Receipts and Retained Logs
-  const c5RetainedDir = path.join(c5Dir, "retained");
   for (const fault of REQUIRED_FAULTS) {
-    const faultDir = path.join(c5RetainedDir, fault);
+    const faultDir = path.join(c5Dir, "retained", fault);
+    const logs = {
+      injection: `${fault}: real fault observed\n`,
+      recovery: `${fault}: recovery observed\n`,
+      cleanup: `${fault}: cleanup observed\n`,
+    };
     fs.mkdirSync(faultDir, { recursive: true });
-
-    const injLog = `[DRILL: ${fault}] Injection verified\n`;
-    const recLog = `[DRILL: ${fault}] Recovery verified\n`;
-    const clnLog = `[DRILL: ${fault}] Cleanup verified\n`;
-
-    fs.writeFileSync(path.join(faultDir, "injection.log"), injLog, "utf8");
-    fs.writeFileSync(path.join(faultDir, "recovery.log"), recLog, "utf8");
-    fs.writeFileSync(path.join(faultDir, "cleanup.log"), clnLog, "utf8");
-
-    const faultReceipt = {
+    for (const [name, content] of Object.entries(logs)) fs.writeFileSync(path.join(faultDir, `${name}.log`), content);
+    writeJson(path.join(faultDir, "receipt.json"), {
+      source_sha: candidateSha,
       fault,
+      evidence_type: "operational_drill",
+      status: "PASS",
+      actual_action: `inject_${fault}`,
+      injection_observed: true,
       recovery_observed: true,
       cleanup_observed: true,
-      injection_evidence_sha256: sha256(injLog),
-      recovery_evidence_sha256: sha256(recLog),
-      cleanup_evidence_sha256: sha256(clnLog),
-    };
-
-    fs.writeFileSync(path.join(faultDir, "receipt.json"), JSON.stringify(faultReceipt, null, 2), "utf8");
+      invariants_verified: true,
+      invariants: { score_loss_count: 0, duplicate_effect_count: 0, stale_writer_accept_count: 0 },
+      injection_evidence_sha256: sha256(logs.injection),
+      recovery_evidence_sha256: sha256(logs.recovery),
+      cleanup_evidence_sha256: sha256(logs.cleanup),
+    });
   }
 
-  // 4. Setup HMAC Rotation Receipt
-  fs.writeFileSync(
-    path.join(c5Dir, "hmac-rotation.json"),
-    JSON.stringify({ rateLimitHmacRotationPassed: true, fallbackCodeHmacRotationPassed: true }, null, 2),
-    "utf8",
-  );
+  const rotation = {
+    status: "PASS",
+    new_primary_issuance_verified: true,
+    old_material_overlap_verified: true,
+    ambiguity_failed_closed: true,
+    retirement_verified: true,
+    key_fingerprints: [sha256("new"), sha256("old")],
+  };
+  writeJson(path.join(c5Dir, "hmac-rotation.json"), {
+    artifact_kind: "gate-c-c5-hmac-rotation",
+    source_sha: candidateSha,
+    evidence_type: "operational_drill",
+    status: "PASS",
+    rate_limit: rotation,
+    fallback_code: { ...rotation, key_fingerprints: [sha256("fallback-new"), sha256("fallback-old")] },
+  });
+}
 
-  // 5. Setup Deployment Evidence
-  const deploymentPayload = {
-    schema_version: "gate-c-vercel-deployment-v1",
+function setupDeployment(artifactsDir, candidateSha) {
+  writeJson(path.join(artifactsDir, "deployment", "vercel-response.json"), {
+    schema_version: "gate-c-vercel-deployment-v2",
     candidate_sha: candidateSha,
     provider: "vercel",
-    deployment_id: "dpl_gate_c_test_deployment",
+    project_id: MATCHDAY_VERCEL_PROJECT_ID,
+    team_id: MATCHDAY_VERCEL_TEAM_ID,
+    deployment_id: "dpl_1234567890abcdefghijklmnopqr",
+    url: "https://candidate.example.vercel.app",
+    git_branch: MATCHDAY_GATE_C_BRANCH,
+    git_commit_sha: candidateSha,
+    environment: "preview",
     state: "READY",
-  };
+    verification_mode: "live_api",
+    release_eligible: true,
+  });
+}
 
-  const deploymentDir = path.join(artifactsDir, "deployment");
-  fs.mkdirSync(deploymentDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(deploymentDir, "vercel-response.json"),
-    JSON.stringify(deploymentPayload, null, 2),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(qaDir, "deployment-evidence.json"), JSON.stringify(deploymentPayload, null, 2), "utf8");
-
+function setupValidWorkspace(candidateSha) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matchday-seal-test-"));
+  const qaDir = path.join(tempDir, "docs", "qa");
+  const artifactsDir = path.join(tempDir, "artifacts", "qa");
+  fs.mkdirSync(qaDir, { recursive: true });
+  setupLaneLedger(artifactsDir, candidateSha, "gate-c-access", "gate-c-access-exact-sha-ledger");
+  setupLaneLedger(artifactsDir, candidateSha, "gate-c-c2", "gate-c-c2-exact-sha-ledger");
+  setupC3(artifactsDir, candidateSha);
+  setupC4(artifactsDir, candidateSha);
+  setupC5(artifactsDir, candidateSha);
+  setupDeployment(artifactsDir, candidateSha);
   return { tempDir, qaDir, artifactsDir };
 }
 
-test("gate-c evidence-only sealer", async (t) => {
+test("Gate C evidence-only sealer", async (t) => {
   const candidateSha = "1111111111111111111111111111111111111111";
 
-  await t.test("fails when iOS physical receipt is missing", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    fs.rmSync(path.join(artifactsDir, "gate-c-c3", candidateSha, "physical", "ios", "receipt.json"));
-
-    assert.throws(
-      () => sealGateCCertification({ candidateSha, qaDir, artifactsDir }),
-      /Missing ios physical device receipt/,
-    );
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  await t.test("fails if C1 exact-SHA execution ledger is absent", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    fs.rmSync(path.join(ws.artifactsDir, "gate-c-access"), { recursive: true, force: true });
+    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /C1 access/);
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when physical receipt hash is tampered", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    const receiptPath = path.join(artifactsDir, "gate-c-c3", candidateSha, "physical", "ios", "receipt.json");
-    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-    receipt.receipt_sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
-    fs.writeFileSync(receiptPath, JSON.stringify(receipt));
-
-    assert.throws(
-      () => sealGateCCertification({ candidateSha, qaDir, artifactsDir }),
-      /physical receipt hash mismatch/,
+  await t.test("fails if a retained lane artifact is tampered", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(
+      ws.artifactsDir,
+      "gate-c-c2",
+      candidateSha,
+      "ledgers",
+      "2026-08-21-test-ledger",
+      "logs",
+      "evidence.log",
     );
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.writeFileSync(file, "tampered\n");
+    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /immutable manifest/);
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when physical trace file is missing or corrupted", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    const tracePath = path.join(
-      artifactsDir,
+  await t.test("fails if a physical trace is tampered", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(
+      ws.artifactsDir,
       "gate-c-c3",
       candidateSha,
       "physical",
@@ -183,79 +273,62 @@ test("gate-c evidence-only sealer", async (t) => {
       "traces",
       "online_preparation.trace.json",
     );
-    fs.writeFileSync(tracePath, JSON.stringify({ events: [] }), "utf8");
-
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir, artifactsDir }), /Raw trace hash mismatch/);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.writeFileSync(file, "[]\n");
+    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /Raw trace hash mismatch/);
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when C5 benchmark receipt is missing", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    fs.rmSync(path.join(artifactsDir, "gate-c-c5", candidateSha, "benchmark.json"));
-
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir, artifactsDir }), /Missing C5 benchmark receipt/);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  await t.test("rejects a benchmark that is not real Matchday infrastructure", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "benchmark.json");
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    value.runtime.benchmark_owned_routes = true;
+    writeJson(file, value);
+    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /real Matchday infrastructure/);
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when C5 benchmark operation has fewer than 500 samples", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    const benchmarkPath = path.join(artifactsDir, "gate-c-c5", candidateSha, "benchmark.json");
-    const benchmark = JSON.parse(fs.readFileSync(benchmarkPath, "utf8"));
-    benchmark.operations.score_event_acknowledgement.sampleCount = 499;
-    fs.writeFileSync(benchmarkPath, JSON.stringify(benchmark));
-
-    assert.throws(
-      () => sealGateCCertification({ candidateSha, qaDir, artifactsDir }),
-      /fewer than 500 measured samples/,
-    );
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  await t.test("rejects narrative-only fault receipts", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "retained", "web_interruption", "receipt.json");
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    delete value.injection_observed;
+    writeJson(file, value);
+    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /not genuine/);
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when C5 operation exceeds p95 latency budget", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    const benchmarkPath = path.join(artifactsDir, "gate-c-c5", candidateSha, "benchmark.json");
-    const benchmark = JSON.parse(fs.readFileSync(benchmarkPath, "utf8"));
-    benchmark.operations.score_event_acknowledgement.p95Ms = 600; // budget is 500ms
-    fs.writeFileSync(benchmarkPath, JSON.stringify(benchmark));
-
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir, artifactsDir }), /exceeded p95 latency budget/);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  await t.test("rejects hard-coded HMAC PASS without rotation observations", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "hmac-rotation.json");
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    value.rate_limit.retirement_verified = false;
+    writeJson(file, value);
+    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /mandatory observation/);
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when a controlled failure drill log hash is mismatched", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    const faultDir = path.join(artifactsDir, "gate-c-c5", candidateSha, "retained", "postgres_interruption");
-    fs.writeFileSync(path.join(faultDir, "injection.log"), "tampered log\n", "utf8");
-
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir, artifactsDir }), /Injection log hash mismatch/);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  await t.test("rejects artifact-only Vercel deployment evidence", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(ws.artifactsDir, "deployment", "vercel-response.json");
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    value.verification_mode = "artifact_payload";
+    value.release_eligible = false;
+    writeJson(file, value);
+    assert.throws(() => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }), /live READY exact-candidate/);
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
-  await t.test("fails when deployment evidence is not READY", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-    const depPath = path.join(artifactsDir, "deployment", "vercel-response.json");
-    const dep = JSON.parse(fs.readFileSync(depPath, "utf8"));
-    dep.state = "BUILDING";
-    fs.writeFileSync(depPath, JSON.stringify(dep));
-
-    assert.throws(() => sealGateCCertification({ candidateSha, qaDir, artifactsDir }), /Deployment state is not READY/);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  await t.test("successfully seals all artifacts when evidence is complete and authentic", () => {
-    const { tempDir, qaDir, artifactsDir } = setupValidWorkspace(candidateSha);
-
-    const result = sealGateCCertification({ candidateSha, qaDir, artifactsDir });
-    assert.equal(result.status, "CERTIFIED");
-    assert.equal(result.verdict, "PASS");
-    assert.equal(result.candidateSha, candidateSha);
-
-    assert.ok(fs.existsSync(path.join(qaDir, "candidate-release.json")));
-    assert.ok(fs.existsSync(path.join(qaDir, "gate-c-c3-final-evidence.json")));
-    assert.ok(fs.existsSync(path.join(qaDir, "gate-c-c5-final-evidence.json")));
-    assert.ok(fs.existsSync(path.join(qaDir, "gate-c-final-evidence.json")));
-    assert.ok(fs.existsSync(path.join(qaDir, "gate-c-verdict.md")));
-
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  await t.test("seals only when every required retained receipt is valid", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const result = sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir });
+    assert.deepEqual(result, { candidateSha, status: "CERTIFIED", verdict: "PASS" });
+    const c1 = JSON.parse(fs.readFileSync(path.join(ws.qaDir, "gate-c-c1-final-evidence.json"), "utf8"));
+    const c4 = JSON.parse(fs.readFileSync(path.join(ws.qaDir, "gate-c-c4-final-evidence.json"), "utf8"));
+    const release = JSON.parse(fs.readFileSync(path.join(ws.qaDir, "candidate-release.json"), "utf8"));
+    assert.equal(c1.source_receipt.sha256.length, 64);
+    assert.equal(c4.checks.zero_partial_state_verified, true);
+    assert.equal(release.deployment.verification_mode, "live_api");
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 });
