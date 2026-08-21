@@ -405,40 +405,8 @@ async function mapConcurrent<T>(
   return output;
 }
 
-export function createSyntheticExecutors(): Record<C5WorkloadOperation, C5WorkloadExecutor> {
-  return Object.fromEntries(
-    C5_WORKLOAD_OPERATIONS.map((operation) => [
-      operation,
-      async () => ({ outcome: "success" as const, correctness: { passed: true as const } }),
-    ]),
-  ) as unknown as Record<C5WorkloadOperation, C5WorkloadExecutor>;
-}
-
-async function runSynthetic(source: string) {
-  const executors = createSyntheticExecutors();
-  const operations = {} as Record<C5WorkloadOperation, C5WorkloadReceipt>;
-  const profile = { ...approvedC5WorkloadProfile, durationSeconds: 1 };
-  for (const operation of C5_WORKLOAD_OPERATIONS) {
-    operations[operation] = await executeC5Workload(
-      { operation, profile, maximumSamples: minimumSamples, operationTimeoutMs: 5_000 },
-      executors[operation],
-    );
-  }
-  return {
-    artifact_kind: "gate-c-c5-synthetic-benchmark",
-    source_sha: source,
-    evidence_type: "synthetic",
-    status: "NOT_RELEASE_EVIDENCE",
-    runtime: { application: "synthetic", benchmark_owned_routes: true },
-    environment: {},
-    operations,
-  };
-}
-
-export async function runC5BenchmarkAndEvidence(options: { mode?: "certification" | "synthetic" } = {}) {
-  const mode = options.mode ?? "certification";
+export async function runC5BenchmarkAndEvidence() {
   const source = sourceSha();
-  if (mode === "synthetic") return runSynthetic(source);
   assertCleanSourceTree();
 
   const schema = `gate_c_c5_${process.pid}_${randomBytes(4).toString("hex")}`;
@@ -641,10 +609,13 @@ export async function runC5BenchmarkAndEvidence(options: { mode?: "certification
     const redisInfo = await redis.info("server");
     const redisVersion = redisInfo.match(/^redis_version:([^\r\n]+)$/mu)?.[1] ?? "unknown";
     const receipt = {
-      artifact_kind: "gate-c-c5-real-infrastructure-benchmark",
+      artifact_kind: "gate-c-c5-unsealed-real-infrastructure-observation",
       source_sha: source,
       evidence_type: "real_infrastructure",
-      status: "PASS",
+      // This runner does not itself execute the full controlled-failure suite.
+      // It is an operational benchmark observation only; the integrated C5
+      // workload runner is the sole certification evidence authority.
+      status: "NOT_CERTIFICATION_EVIDENCE",
       collected_at: new Date().toISOString(),
       runtime: {
         application: "matchday-api",
@@ -674,13 +645,8 @@ export async function runC5BenchmarkAndEvidence(options: { mode?: "certification
 }
 
 async function main(): Promise<void> {
-  const mode = process.argv.includes("--mode=synthetic") ? "synthetic" : "certification";
-  const receipt = await runC5BenchmarkAndEvidence({ mode });
-  if (mode === "synthetic") {
-    process.stdout.write("C5 synthetic benchmark completed (NOT RELEASE EVIDENCE).\n");
-    return;
-  }
-  process.stdout.write(`C5 real Matchday benchmark PASSED for ${receipt.source_sha}.\n`);
+  const receipt = await runC5BenchmarkAndEvidence();
+  process.stdout.write(`C5 real Matchday benchmark observation completed for ${receipt.source_sha}.\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
