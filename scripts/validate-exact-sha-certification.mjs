@@ -164,7 +164,17 @@ export function validateExactShaCertification(options = {}) {
       errors.push(`Candidate SHA (${targetSha}) is not on integration/gate-c-final branch history (${remoteSha}).`);
     }
     if (headSha !== remoteSha) {
-      errors.push(`Local HEAD (${headSha}) is not in sync with remote origin/integration/gate-c-final (${remoteSha}).`);
+      if (!isAncestor(remoteSha, headSha) && !isAncestor(headSha, remoteSha)) {
+        errors.push(`Local HEAD (${headSha}) has diverged from remote origin/integration/gate-c-final (${remoteSha}).`);
+      } else if (!isAncestor(remoteSha, headSha)) {
+        errors.push(
+          `Local HEAD (${headSha}) is behind remote origin/integration/gate-c-final (${remoteSha}). Run git pull.`,
+        );
+      } else {
+        warnings.push(
+          `Local HEAD (${headSha}) is ahead of remote origin/integration/gate-c-final (${remoteSha}) by unpushed commits.`,
+        );
+      }
     }
   }
 
