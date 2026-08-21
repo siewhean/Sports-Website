@@ -26,6 +26,11 @@ import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { V1Phase3Runtime } from "./phase-3-v1-runtime.js";
 import { phase4AiProviderFromEnvironment } from "./phase-4-ai-provider.js";
 import { V1Phase4Runtime } from "./phase-4-v1-runtime.js";
+import { GateCC4Runtime } from "./gate-c-c4-runtime.js";
+import { GateCC4PostgresPublisher } from "./gate-c-c4-postgres-publisher.js";
+import { GateCC4Operations } from "./gate-c-c4-operations.js";
+import { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
+import { GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
@@ -117,6 +122,20 @@ const phase4Runtime = new V1Phase4Runtime(
   undefined,
   phase2Runtime,
 );
+
+// Gate C is part of the production API composition, not an evidence-only
+// harness. Reuse the canonical Phase 2 projection writer so repair publication
+// and public truth execute against the same database transaction boundaries as
+// the rest of Matchday.
+const gateCC4Publisher = new GateCC4PostgresPublisher(phase2Runtime);
+const gateCC4Runtime = new GateCC4Runtime(identitySql, gateCC4Publisher);
+const gateCC4Operations = new GateCC4Operations(
+  identitySql,
+  config.publicOrigin ?? config.api.allowedOrigins[0] ?? "http://127.0.0.1:3000",
+);
+const gateCC4Lifecycle = new GateCC4LifecycleOperations(identitySql);
+const gateCC4PublicTruthRuntime = new GateCC4PublicTruthRuntime(identitySql);
+
 const app = await buildApp({
   config,
   probes: createDependencyProbes(config),
@@ -133,6 +152,11 @@ const app = await buildApp({
   phase2Runtime,
   phase3Runtime,
   phase4Runtime,
+  gateCC4Runtime,
+  gateCC4Operations,
+  gateCC4Lifecycle,
+  gateCC4PublicTruthRuntime,
+  scoringAccessHmacKeySql: identitySql,
   closeIdentityResources: async () => {
     await Promise.all([inlineScheduler.stop(), scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
   },
