@@ -533,10 +533,11 @@ test("the certified final evidence documents expose only the active schema-2 rec
   assert.doesNotMatch(markdown, /HISTORICAL\/SUPERSEDED/u);
 });
 
-test("package gate executes evidence tests and pnpm check includes that gate", async () => {
+test("source gate executes evidence tests before final certification", async () => {
   const packageJson = JSON.parse(await readFile(path.join(REPOSITORY_ROOT, "package.json"), "utf8"));
   assert.equal(packageJson.scripts["test:evidence:phase4"], "node --test scripts/write-browser-gate-evidence.test.mjs");
-  assert.match(packageJson.scripts.check, /\bpnpm test:evidence:phase4\b/u);
+  assert.match(packageJson.scripts["check:source"], /\bpnpm test:evidence:phase4\b/u);
+  assert.match(packageJson.scripts.check, /^pnpm check:source && pnpm evidence:gate-c:verify$/u);
 });
 
 test("test process itself uses the pinned Node runtime", () => {

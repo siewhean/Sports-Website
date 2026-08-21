@@ -52,7 +52,7 @@ export const requiredLocalCommands = [
   { label: "a11y", command: "pnpm", args: ["test:a11y"] },
   { label: "visual", command: "pnpm", args: ["test:visual"] },
   { label: "diff-check", command: "git", args: ["diff", "--check"] },
-  { label: "check", command: "pnpm", args: ["check"], forceTurbo: true },
+  { label: "check-source", command: "pnpm", args: ["check:source"], forceTurbo: true },
 ];
 
 export const requiredLocalCommandLabels = requiredLocalCommands.map(({ label }) => label);

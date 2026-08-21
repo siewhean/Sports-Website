@@ -44,7 +44,7 @@ test("Gate C access ledger includes the complete local acceptance command set", 
     "a11y",
     "visual",
     "diff-check",
-    "check",
+    "check-source",
   ]);
 });
 
