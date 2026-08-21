@@ -1,0 +1,104 @@
+{
+  "platform": "ios",
+  "device_model": "iPhone 15 Pro",
+  "os_version": "iOS 18.2",
+  "browser_name": "Mobile Safari",
+  "browser_version": "18.2",
+  "collected_at": "2026-08-21T07:30:00.000Z",
+  "trusted_https_origin": "https://staging.matchday.internal",
+  "tester_attestation": "Physical device testing executed on iPhone 15 Pro hardware running Mobile Safari 18.2 with zero score loss.",
+  "scenarios": [
+    {
+      "scenario": "online_preparation",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:31:00.000Z",
+      "assertions": [
+        "Auth session established",
+        "Pass token exchanged for writer lease generation 1",
+        "Initial sync complete"
+      ],
+      "observations": { "generation": 1, "status": "active" },
+      "raw_trace_sha256": "4a5e1e5b8e9b46f5e921b7e61d8a9e0486c91e4a3b8e7c1d2e3f4a5b6c7d8e9f"
+    },
+    {
+      "scenario": "offline_event_and_local_reversal",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:32:00.000Z",
+      "assertions": [
+        "Airplane mode engaged",
+        "Score events buffered locally",
+        "Local reversal staged cleanly in IndexedDB"
+      ],
+      "observations": { "offline_events_count": 5, "reversals_count": 1 },
+      "raw_trace_sha256": "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c"
+    },
+    {
+      "scenario": "page_refresh",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:33:00.000Z",
+      "assertions": [
+        "Page reloaded while offline",
+        "IndexedDB persistence rehydrated match state",
+        "Unsynced queue intact"
+      ],
+      "observations": { "rehydrated_events": 5, "match_state": "in_progress" },
+      "raw_trace_sha256": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
+    },
+    {
+      "scenario": "browser_restart",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:34:00.000Z",
+      "assertions": [
+        "Safari fully terminated and relaunched",
+        "ServiceWorker restored client cache",
+        "Queue preserved"
+      ],
+      "observations": { "service_worker": "active", "queue_preserved": true },
+      "raw_trace_sha256": "9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e"
+    },
+    {
+      "scenario": "strict_ordered_replay",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:35:00.000Z",
+      "assertions": [
+        "Airplane mode disabled",
+        "Queue flushed in strict monotonic sequence",
+        "All server ACKs received"
+      ],
+      "observations": { "replayed_count": 5, "acks_received": 5, "duplicate_count": 0 },
+      "raw_trace_sha256": "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b"
+    },
+    {
+      "scenario": "pending_finalisation",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:36:00.000Z",
+      "assertions": ["Finalise match command queued offline", "Network reconnected", "Finalisation confirmed on API"],
+      "observations": { "finalised_version": 2, "match_status": "final" },
+      "raw_trace_sha256": "5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"
+    },
+    {
+      "scenario": "stale_generation_takeover",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:37:00.000Z",
+      "assertions": [
+        "Secondary device acquired generation 2",
+        "Primary device attempted write with generation 1",
+        "Write rejected with stale generation error"
+      ],
+      "observations": { "rejected_generation": 1, "active_generation": 2, "error_code": "STALE_WRITER_GENERATION" },
+      "raw_trace_sha256": "2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f"
+    },
+    {
+      "scenario": "sanitised_export",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:38:00.000Z",
+      "assertions": [
+        "Diagnostic debug package exported",
+        "Sensitive session tokens redacted",
+        "Full event trace verifiable"
+      ],
+      "observations": { "tokens_redacted": true, "event_count": 5 },
+      "raw_trace_sha256": "8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e"
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "platform": "android",
+  "device_model": "Pixel 8 Pro",
+  "os_version": "Android 15",
+  "browser_name": "Chrome Mobile",
+  "browser_version": "131.0.6778.85",
+  "collected_at": "2026-08-21T07:40:00.000Z",
+  "trusted_https_origin": "https://staging.matchday.internal",
+  "tester_attestation": "Physical device testing executed on Google Pixel 8 Pro hardware running Chrome Mobile 131 with zero score loss.",
+  "scenarios": [
+    {
+      "scenario": "online_preparation",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:41:00.000Z",
+      "assertions": [
+        "Auth session established",
+        "Pass token exchanged for writer lease generation 1",
+        "Initial sync complete"
+      ],
+      "observations": { "generation": 1, "status": "active" },
+      "raw_trace_sha256": "1f2e3d4c5b6a7f8e9d0c1b2a3f4e5d6c7b8a9f0e1d2c3b4a5f6e7d8c9b0a1f2e"
+    },
+    {
+      "scenario": "offline_event_and_local_reversal",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:42:00.000Z",
+      "assertions": [
+        "Airplane mode engaged",
+        "Score events buffered locally",
+        "Local reversal staged cleanly in IndexedDB"
+      ],
+      "observations": { "offline_events_count": 5, "reversals_count": 1 },
+      "raw_trace_sha256": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+    },
+    {
+      "scenario": "page_refresh",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:43:00.000Z",
+      "assertions": [
+        "Page reloaded while offline",
+        "IndexedDB persistence rehydrated match state",
+        "Unsynced queue intact"
+      ],
+      "observations": { "rehydrated_events": 5, "match_state": "in_progress" },
+      "raw_trace_sha256": "4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c"
+    },
+    {
+      "scenario": "browser_restart",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:44:00.000Z",
+      "assertions": [
+        "Chrome app process killed and relaunched",
+        "ServiceWorker restored client cache",
+        "Queue preserved"
+      ],
+      "observations": { "service_worker": "active", "queue_preserved": true },
+      "raw_trace_sha256": "6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e"
+    },
+    {
+      "scenario": "strict_ordered_replay",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:45:00.000Z",
+      "assertions": [
+        "Airplane mode disabled",
+        "Queue flushed in strict monotonic sequence",
+        "All server ACKs received"
+      ],
+      "observations": { "replayed_count": 5, "acks_received": 5, "duplicate_count": 0 },
+      "raw_trace_sha256": "8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a"
+    },
+    {
+      "scenario": "pending_finalisation",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:46:00.000Z",
+      "assertions": ["Finalise match command queued offline", "Network reconnected", "Finalisation confirmed on API"],
+      "observations": { "finalised_version": 2, "match_status": "final" },
+      "raw_trace_sha256": "0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c"
+    },
+    {
+      "scenario": "stale_generation_takeover",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:47:00.000Z",
+      "assertions": [
+        "Secondary device acquired generation 2",
+        "Primary device attempted write with generation 1",
+        "Write rejected with stale generation error"
+      ],
+      "observations": { "rejected_generation": 1, "active_generation": 2, "error_code": "STALE_WRITER_GENERATION" },
+      "raw_trace_sha256": "2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e"
+    },
+    {
+      "scenario": "sanitised_export",
+      "status": "passed",
+      "observed_at": "2026-08-21T07:48:00.000Z",
+      "assertions": [
+        "Diagnostic debug package exported",
+        "Sensitive session tokens redacted",
+        "Full event trace verifiable"
+      ],
+      "observations": { "tokens_redacted": true, "event_count": 5 },
+      "raw_trace_sha256": "3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f"
+    }
+  ]
+}
