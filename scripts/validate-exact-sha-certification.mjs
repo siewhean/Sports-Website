@@ -73,7 +73,7 @@ export function isAncestor(ancestorSha, descendantSha) {
 }
 
 export function validatePostCandidateDiff(candidateSha, headSha) {
-  if (candidateSha === headSha) return [];
+  if (candidateSha === headSha) return { disallowed: [], audit: [] };
   try {
     const commitsOutput = execSync(`git log --oneline --reverse ${candidateSha}..${headSha}`, {
       cwd: rootDir,
@@ -81,6 +81,7 @@ export function validatePostCandidateDiff(candidateSha, headSha) {
     }).trim();
     const commitLines = commitsOutput ? commitsOutput.split("\n").filter(Boolean) : [];
     const disallowed = [];
+    const audit = [];
 
     for (const commitLine of commitLines) {
       const commitSha = commitLine.split(" ")[0];
@@ -91,14 +92,15 @@ export function validatePostCandidateDiff(candidateSha, headSha) {
       const files = commitDiff.split("\n").filter(Boolean);
       for (const file of files) {
         const allowed = EVIDENCE_ONLY_ALLOWLIST_PATTERNS.some((pattern) => pattern.test(file));
+        audit.push({ commit: commitLine, file, allowed });
         if (!allowed) {
           disallowed.push(`[${commitLine}] ${file}`);
         }
       }
     }
-    return disallowed;
+    return { disallowed, audit };
   } catch (err) {
-    return [`git diff failed: ${err.message}`];
+    return { disallowed: [`git diff failed: ${err.message}`], audit: [] };
   }
 }
 
@@ -148,7 +150,7 @@ export function validateExactShaCertification(options = {}) {
     if (!isAncestor(targetSha, headSha)) {
       errors.push(`Candidate SHA (${targetSha}) is not an ancestor of current HEAD (${headSha}).`);
     } else {
-      const disallowedChanges = validatePostCandidateDiff(targetSha, headSha);
+      const { disallowed: disallowedChanges, audit } = validatePostCandidateDiff(targetSha, headSha);
       if (disallowedChanges.length > 0) {
         errors.push(
           `Post-candidate commits modified disallowed runtime/application files: ${disallowedChanges.join(", ")}. Post-freeze commits may only touch evidence documents, artifacts, fixtures, or certification scripts.`,
