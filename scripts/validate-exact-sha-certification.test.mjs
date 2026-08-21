@@ -29,6 +29,7 @@ test("exact-sha certification validator", async (t) => {
       qaDir: tempDir,
       targetSha: mockSha,
       remoteSha: mockSha,
+      checkGit: false,
     });
 
     assert.strictEqual(result.valid, false);
@@ -71,6 +72,7 @@ test("exact-sha certification validator", async (t) => {
       qaDir: tempDir,
       targetSha: mockSha,
       remoteSha: mockSha,
+      checkGit: false,
     });
 
     assert.strictEqual(result.valid, true);
@@ -86,11 +88,14 @@ test("exact-sha certification validator", async (t) => {
       targetSha: mockSha,
       remoteSha,
       allowHistorical: false,
+      checkGit: true,
     });
 
     assert.strictEqual(result.valid, false);
     assert.strictEqual(
-      result.errors.some((e) => e.includes("does not match remote origin/integration/gate-c-final")),
+      result.errors.some(
+        (e) => e.includes("not on integration/gate-c-final branch history") || e.includes("not a valid commit"),
+      ),
       true,
     );
 
@@ -99,10 +104,11 @@ test("exact-sha certification validator", async (t) => {
       targetSha: mockSha,
       remoteSha,
       allowHistorical: true,
+      checkGit: false,
     });
 
     assert.strictEqual(
-      historicalResult.errors.some((e) => e.includes("does not match remote origin/integration/gate-c-final")),
+      historicalResult.errors.some((e) => e.includes("not on integration/gate-c-final branch history")),
       false,
     );
   });

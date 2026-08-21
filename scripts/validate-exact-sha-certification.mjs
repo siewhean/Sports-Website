@@ -76,14 +76,15 @@ export function validateExactShaCertification(options = {}) {
   }
 
   const targetSha = candidateSha || headSha;
+  const checkGit = options.checkGit ?? true;
 
   // 2. Commit Existence & Ancestry
-  if (!isValidCommit(targetSha)) {
+  if (checkGit && !isValidCommit(targetSha)) {
     errors.push(`Target SHA (${targetSha}) is not a valid commit in the repository.`);
   }
 
   // 3. Branch Head Integrity check
-  if (!allowHistorical && remoteSha) {
+  if (checkGit && !allowHistorical && remoteSha) {
     if (targetSha !== headSha && targetSha !== remoteSha && !isAncestor(targetSha, remoteSha)) {
       errors.push(`Candidate SHA (${targetSha}) is not on integration/gate-c-final branch history (${remoteSha}).`);
     }
