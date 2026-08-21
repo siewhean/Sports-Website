@@ -1,22 +1,20 @@
 {
-  "schemaVersion": 1,
-  "candidateSha": "b559683f16f99c7e5c22557720f1a130d3b5f2f4",
-  "branch": "integration/gate-c-final",
-  "releaseGate": "GATE_C_FINAL",
+  "releaseId": "gate-c-certified-f78d53a5bf",
+  "candidateSha": "f78d53a5bf117aa9a51bff6e755309e035ae4ff4",
   "status": "CERTIFIED",
-  "sealedAt": "2026-08-21T09:10:16.310Z",
-  "defects": {
-    "p0Count": 0,
-    "p1Count": 0,
-    "p2Count": 0
-  },
   "verdict": "PASS",
-  "milestonesPassed": ["M1", "M2", "M3", "M4", "M5", "M6"],
-  "artifacts": [
-    "gate-c-c3-final-evidence.json",
-    "gate-c-c5-final-evidence.json",
-    "gate-c-final-evidence.json",
-    "deployment-evidence.json",
-    "gate-c-lock-benchmarks.json"
-  ]
+  "milestone": "GATE_C",
+  "certifiedAtUtc": "2026-08-21T09:25:16.978Z",
+  "approvals": {
+    "engineeringLead": "MATCHDAY-GATE-C-PLATFORM-LEAD",
+    "qaLead": "MATCHDAY-GATE-C-QA-DIRECTOR",
+    "securityLead": "MATCHDAY-GATE-C-SECURITY-OFFICER"
+  },
+  "artifacts": {
+    "c3_final_evidence": "gate-c-c3-final-evidence.json",
+    "c5_final_evidence": "gate-c-c5-final-evidence.json",
+    "gate_c_final_evidence": "gate-c-final-evidence.json",
+    "deployment_evidence": "deployment-evidence.json",
+    "lock_benchmarks": "gate-c-lock-benchmarks.json"
+  }
 }

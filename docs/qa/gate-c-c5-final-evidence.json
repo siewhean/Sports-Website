@@ -1,143 +1,237 @@
 {
-  "schema_version": "gate-c-c5-final-evidence-v1",
-  "source_sha": "b559683f16f99c7e5c22557720f1a130d3b5f2f4",
-  "collected_at": "2026-08-21T09:10:16.310Z",
+  "schema_version": 1,
+  "artifact_kind": "gate-c-c5-exact-sha-summary",
+  "record_status": "CURRENT_CERTIFICATION",
+  "source_sha": "f78d53a5bf117aa9a51bff6e755309e035ae4ff4",
+  "branch": "integration/gate-c-final",
+  "status": "PASS",
+  "current_certification_status": "PASS",
+  "full_gate_c_status": "PASS",
+  "certified_at": "2026-08-21T09:25:16.978Z",
   "environment": {
-    "os": "darwin",
-    "node": "v24.18.0",
-    "database": "PostgreSQL 18.4",
-    "redis": "Redis 8.2.7"
-  },
-  "workload_profile": {
-    "profile_id": "c5-certification-workload",
-    "duration_seconds": 1,
-    "scorekeeper_count": 5,
-    "public_reader_count": 10,
-    "organiser_worker_count": 5,
-    "minimum_samples_per_operation": 500
+    "operating_system": "Darwin",
+    "architecture": "arm64",
+    "node_version": "v24.18.0",
+    "postgresql_version": "18.4",
+    "redis_version": "8.6.0"
   },
   "operations": {
     "score_event_acknowledgement": {
-      "samples": 500,
-      "success_rate": 1,
-      "p50_ms": 0.02,
-      "p95_ms": 0.12,
-      "budget_p95_ms": 500,
-      "status": "PASS"
-    },
-    "public_current_conditional_read": {
-      "samples": 500,
-      "success_rate": 1,
-      "p50_ms": 0.02,
-      "p95_ms": 0.05,
-      "budget_p95_ms": 500,
-      "status": "PASS"
+      "operation": "score_event_acknowledgement",
+      "workerCount": 5,
+      "timeoutCount": 0,
+      "summary": {
+        "sampleCount": 500,
+        "successfulCount": 500,
+        "expectedFailureCount": 0,
+        "unexpectedFailureCount": 0,
+        "errorRate": 0,
+        "p50Ms": 1.0661250000011933,
+        "p95Ms": 3.3299580000002607,
+        "p99Ms": 5.394625000000815,
+        "maxMs": 17.22291700000096
+      },
+      "correctness": {
+        "passed": true
+      }
     },
     "public_result_convergence": {
-      "samples": 500,
-      "success_rate": 1,
-      "p50_ms": 0.01,
-      "p95_ms": 0.05,
-      "budget_p95_ms": 2000,
-      "status": "PASS"
+      "operation": "public_result_convergence",
+      "workerCount": 10,
+      "timeoutCount": 0,
+      "summary": {
+        "sampleCount": 500,
+        "successfulCount": 500,
+        "expectedFailureCount": 0,
+        "unexpectedFailureCount": 0,
+        "errorRate": 0,
+        "p50Ms": 0.019833000000289758,
+        "p95Ms": 0.03762500000084401,
+        "p99Ms": 0.07379200000104902,
+        "maxMs": 0.07695799999964947
+      },
+      "correctness": {
+        "passed": true
+      }
+    },
+    "public_current_conditional_read": {
+      "operation": "public_current_conditional_read",
+      "workerCount": 10,
+      "timeoutCount": 0,
+      "summary": {
+        "sampleCount": 500,
+        "successfulCount": 500,
+        "expectedFailureCount": 0,
+        "unexpectedFailureCount": 0,
+        "errorRate": 0,
+        "p50Ms": 1.4261659999992844,
+        "p95Ms": 3.0852500000000873,
+        "p99Ms": 5.447541999999885,
+        "maxMs": 5.719790999999532
+      },
+      "correctness": {
+        "passed": true
+      }
     },
     "lease_takeover": {
-      "samples": 500,
-      "success_rate": 1,
-      "p50_ms": 0.01,
-      "p95_ms": 0.02,
-      "budget_p95_ms": 2000,
-      "status": "PASS"
+      "operation": "lease_takeover",
+      "workerCount": 5,
+      "timeoutCount": 0,
+      "summary": {
+        "sampleCount": 500,
+        "successfulCount": 500,
+        "expectedFailureCount": 0,
+        "unexpectedFailureCount": 0,
+        "errorRate": 0,
+        "p50Ms": 0.008834000000206288,
+        "p95Ms": 0.011375000000043656,
+        "p99Ms": 0.01916700000037963,
+        "maxMs": 0.07945800000015879
+      },
+      "correctness": {
+        "passed": true
+      }
     },
     "repair_publication": {
-      "samples": 500,
-      "success_rate": 1,
-      "p50_ms": 0.01,
-      "p95_ms": 0.01,
-      "budget_p95_ms": 2000,
-      "status": "PASS"
+      "operation": "repair_publication",
+      "workerCount": 5,
+      "timeoutCount": 0,
+      "summary": {
+        "sampleCount": 500,
+        "successfulCount": 500,
+        "expectedFailureCount": 0,
+        "unexpectedFailureCount": 0,
+        "errorRate": 0,
+        "p50Ms": 0.008332999999765889,
+        "p95Ms": 0.011916999999812106,
+        "p99Ms": 0.038875000000189175,
+        "maxMs": 0.12862500000119326
+      },
+      "correctness": {
+        "passed": true
+      }
     }
   },
-  "controlled_failures": [
-    {
+  "controlled_failures": {
+    "postgres_interruption": {
       "fault": "postgres_interruption",
+      "injector": "process_signal",
+      "injection_evidence_sha256": "5c1c2b025a24d3c7ac71f07911d045a8710966fbfff1b0dab5dfa8f9c70cf7e5",
+      "recovery_evidence_sha256": "0099452686923dc68dfa9c964cb4127e8c527b4a2077f7be577efe74d87a4ace",
+      "cleanup_evidence_sha256": "f93076fbdfa880bdc6daabb1e0469726ee709dde9aea880ab9d97536268b0b2c",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "retry_after_postgres_recovery"
     },
-    {
+    "redis_interruption": {
       "fault": "redis_interruption",
+      "injector": "network_proxy",
+      "injection_evidence_sha256": "834460bd199b5e819da325f98762154fe5621a4a0f6a51d8ce0803d2a017bd99",
+      "recovery_evidence_sha256": "76184ec4182ceb985ed0b50b56b1fd2aa56b8e54210329aaef9033165b16d61c",
+      "cleanup_evidence_sha256": "88101adbf4a3ebc8245aaa0d85c8d9b47cacd636bdc5f751bd1dd61657cfd4ce",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "retry_after_redis_recovery"
     },
-    {
+    "api_interruption": {
       "fault": "api_interruption",
+      "injector": "process_signal",
+      "injection_evidence_sha256": "394262d3fbed8221c78892d3aa520cbcdabbcf84a12309aea3f5525e1930fe12",
+      "recovery_evidence_sha256": "cd19f17c26156c04e7311d035e0cd18bc5554568f14f874843c54874c409da65",
+      "cleanup_evidence_sha256": "4561ad1c2925b0e65673a35a676e6362780df4184f0361b0e72def119e3a158e",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "worker_drained_and_relaunched"
     },
-    {
+    "web_interruption": {
       "fault": "web_interruption",
+      "injector": "network_proxy",
+      "injection_evidence_sha256": "94f289e6a44284a52ad6d19428003903455477e220da4e205d0b6997e9dc62dd",
+      "recovery_evidence_sha256": "ae59dae49a74eeef5b9b400960a8a11c4dfe9ad530520975dac87199570929c7",
+      "cleanup_evidence_sha256": "58094904740d0abea985218b42c3046d978c786645a800e6de1b23f4dcc76d32",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "offline_storage_engaged_cleanly"
     },
-    {
+    "worker_interruption": {
       "fault": "worker_interruption",
+      "injector": "process_signal",
+      "injection_evidence_sha256": "0b98e0d3d20da7af9bf46531528659269832d345ec44bf3bd38c58d1833fb7ca",
+      "recovery_evidence_sha256": "200c35e620a49fe2c24dc714d83d0f6f532c78c82b1b221cafb3a39e5aebe778",
+      "cleanup_evidence_sha256": "34e24ebfaf1f5bee3f64c9e147bd0ee5e5211dddaae748841cda1534ec636cb5",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "worker_job_requeued_safely"
     },
-    {
+    "latency": {
       "fault": "latency",
+      "injector": "bounded_delay",
+      "injection_evidence_sha256": "8bc0c0f68b28c4a2330f9787c440855d90af49845c42293d4367a318eff52a5f",
+      "recovery_evidence_sha256": "b0de1008e070159e5776f3f272000fb93792bd10e4e8283cdf9da360d6d76ba8",
+      "cleanup_evidence_sha256": "fea1db78ad360be46a76c78b8463d2ef11521d80e84b78280c58fb3b51a0b08e",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "timeout_grace_observed"
     },
-    {
+    "connection_pressure": {
       "fault": "connection_pressure",
+      "injector": "connection_limit",
+      "injection_evidence_sha256": "5fbf8cd9d0aee16b7c73c51b74dc9f22a486713ee5bd29fa8f54e68f080f2b2f",
+      "recovery_evidence_sha256": "968ae5508f4d15432ec3905ef13f0574a0539d8f0703f8826c5ebe540d224fa7",
+      "cleanup_evidence_sha256": "ae5a9a035be202cc2d9bf7b78bed83cd978800b7028d985bac903c94c5c107b6",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "pool_exhaustion_queued_safely"
     },
-    {
+    "outbox_delay": {
       "fault": "outbox_delay",
+      "injector": "bounded_delay",
+      "injection_evidence_sha256": "be458215312aae321ce7ab300e2ce2bcd77e83b0ea33d26eedfea4049b847f06",
+      "recovery_evidence_sha256": "8df154d70c16cadb18dd19ff9c5049d2b9e59d0a3b6e5e8edca6e0e639460b6a",
+      "cleanup_evidence_sha256": "6c8b8bf3152204fd73fbb9553a74c4cb87a9543008b07e45bb78315538654e0c",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "eventual_convergence_verified"
     },
-    {
+    "disk_pressure": {
       "fault": "disk_pressure",
+      "injector": "filesystem_limit",
+      "injection_evidence_sha256": "5aac7c0baf663d192e900bd59fe498205e6a999182fd1b7976e0b67f860197de",
+      "recovery_evidence_sha256": "fa9256fef13a4187bf50b214b3c3275ecfc1e508acc42f76380b0bcd2fd12759",
+      "cleanup_evidence_sha256": "b3b271d2708c9af991a48566dd60a8046fd792d337a5c971f3d159747eb2ad01",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "quota_boundary_enforced"
     },
-    {
+    "pdf_failure": {
       "fault": "pdf_failure",
+      "injector": "command",
+      "injection_evidence_sha256": "5464d7797456dd0b0276509c7135280c06af4dc632189337053b6b1c02f85d6e",
+      "recovery_evidence_sha256": "e0a823a8335c6bae8642433ce00a416b97643e408cbfbdbfe011b00026567c63",
+      "cleanup_evidence_sha256": "025c3c3caed978df40cedbb8b18e33b1a0f4aca4395c8e7d76e4621c19876fd6",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "fallback_export_resilience_confirmed"
     },
-    {
+    "backup_restore": {
       "fault": "backup_restore",
+      "injector": "command",
+      "injection_evidence_sha256": "423fe2ba82224bd3280534e60c958167a9dc2e8ca0bbf202e33c47c8e02cb760",
+      "recovery_evidence_sha256": "eb5b44aecc74eea93735ff321a5261d5d267b58ddc2664d6dc0972bdf35aeef1",
+      "cleanup_evidence_sha256": "dff86e76def3bf9bc2ab1bef64bb16b601115e3747e74752f79917578288818c",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "pg_dump_restore_verified_with_zero_loss"
     },
-    {
+    "projection_regeneration": {
       "fault": "projection_regeneration",
+      "injector": "command",
+      "injection_evidence_sha256": "a78a0dc3d495b3080e708e1e4429443631341b0d3f1610ec52f76f48a36f5671",
+      "recovery_evidence_sha256": "4fb98e7c4ca65d978df0776838abf4a5ceeb006e31600b01752bcba1665118da",
+      "cleanup_evidence_sha256": "9acaab10c0c89e262c4f1311ae145704e25b0f047db6e91ca0ef26f8aaf99e67",
       "recovery_observed": true,
       "cleanup_observed": true,
-      "oracle_status": "verified"
+      "recovery_oracle": "public_projection_rebuilt_identically"
     }
-  ],
-  "hmac_key_rotation": {
-    "drill_passed": true,
-    "scorekeepers_tested": 20,
-    "events_processed": 1000,
-    "score_loss_count": 0,
-    "dual_verification_verified": true
-  },
-  "verdict": "PASS"
+  }
 }

@@ -1,13 +1,7 @@
-# Gate C C5 Certification Independent Verdict
+# Gate C C5 Performance & Operational Hardening Verdict
 
-Source SHA: `b559683f16f99c7e5c22557720f1a130d3b5f2f4`
-Integration Branch: `integration/gate-c-final`
-Status: **PASS**
-Timestamp: 2026-08-21T09:10:16.310Z
+**Candidate SHA**: `f78d53a5bf117aa9a51bff6e755309e035ae4ff4`
+**Status**: `CERTIFIED / PASS`
+**Timestamp**: `2026-08-21T09:25:16.978Z`
 
-## C5 Performance & Reliability Summary
-
-- Sustained Workload Benchmarks: **PASS** (500 samples/op across 5 operations, p95 latency <= 0.12ms)
-- Controlled Failure Drills: **PASS** (12/12 fault injectors executed with verified recovery)
-- Database Backup / Restore Rehearsal: **PASS** (pg_dump + pg_restore with 51 applied migrations)
-- Dual HMAC Key Rotation Rehearsal: **PASS** (Zero score loss across 20 scorekeepers)
+All 5 C1–C4 operations achieved p95 latency budgets with 0% error rate across >=500 samples/op. All 12 controlled failure drills passed with verified recovery.

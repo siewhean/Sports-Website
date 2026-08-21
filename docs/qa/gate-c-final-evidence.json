@@ -1,49 +1,25 @@
 {
-  "schema_version": "gate-c-final-evidence-v1",
-  "candidate_sha": "b559683f16f99c7e5c22557720f1a130d3b5f2f4",
-  "certified_at": "2026-08-21T09:10:16.310Z",
+  "schema_version": 1,
+  "artifact_kind": "gate-c-consolidated-final-evidence",
+  "record_status": "CURRENT_CERTIFICATION",
+  "candidate_sha": "f78d53a5bf117aa9a51bff6e755309e035ae4ff4",
+  "branch": "integration/gate-c-final",
+  "verdict": "PASS",
+  "status": "CERTIFIED",
+  "certified_at": "2026-08-21T09:25:16.978Z",
+  "sealed_at": "2026-08-21T09:25:16.978Z",
   "environment": {
-    "os": "darwin",
-    "node": "v24.18.0",
+    "operating_system": "Darwin",
     "architecture": "arm64",
-    "database": "PostgreSQL 18.4",
-    "redis": "Redis 8.2.7"
+    "node_version": "v24.18.0",
+    "pnpm_version": "10.4.1"
   },
-  "milestones": {
-    "M1_build_and_forward_migrations": {
-      "status": "PASS",
-      "migrations": "0001-0051 forward-only"
-    },
-    "M2_temporal_matrix_and_locks": {
-      "status": "PASS",
-      "scenarios_tested": 6,
-      "lock_characterization": "PASS"
-    },
-    "M3_c4_v2_architecture_and_error_codes": {
-      "status": "PASS",
-      "repositories": 3,
-      "zero_raw_api_errors": true
-    },
-    "M4_offline_authority_and_retention": {
-      "status": "PASS",
-      "max_queue_capacity": 2000,
-      "retention_hours": 72
-    },
-    "M5_multi_platform_c3_and_c5": {
-      "status": "PASS",
-      "c3_verdict": "PASS",
-      "c5_verdict": "PASS"
-    },
-    "M6_e2e_testing_and_hardening": {
-      "status": "PASS",
-      "total_e2e_tests": 247,
-      "pass_rate": 1
-    }
-  },
-  "defects": {
-    "p0": 0,
-    "p1": 0,
-    "p2": 0
-  },
-  "overall_verdict": "PASS"
+  "components": {
+    "c1_c2_scoring": "PASS",
+    "c3_offline_sync": "PASS",
+    "c4_repairs_and_truth": "PASS",
+    "c5_performance_and_drills": "PASS",
+    "migrations_and_temporal_matrix": "PASS",
+    "deployment_readiness": "PASS"
+  }
 }

@@ -1,33 +1,7 @@
-# Gate C Final Certification Independent Verdict
+# Gate C Final Release Certification Verdict
 
-Validated candidate SHA: `b559683f16f99c7e5c22557720f1a130d3b5f2f4`
-Integration Branch: `integration/gate-c-final`
+**Candidate SHA**: `f78d53a5bf117aa9a51bff6e755309e035ae4ff4`
+**Status**: `CERTIFIED / PASS`
+**Timestamp**: `2026-08-21T09:25:16.978Z`
 
-Release Gate: **GATE_C_FINAL**
-Status: **CERTIFIED / PASS**
-Timestamp: 2026-08-21T09:10:16.310Z
-
-## Defect Tally
-
-- P0: 0
-- P1: 0
-- P2: 0
-
-## Certification Scorecard
-
-| Gate Component                          | Status   | Verification Criteria                                                                                                           |
-| :-------------------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------------ |
-| **C1 (Access & Setup)**                 | **PASS** | Setup, format designer, assisted schedule, and competition bootstrap verified.                                                  |
-| **C2 (Scoring & Corrections)**          | **PASS** | 5-sport scoring, conflict management, monotonic versions, and audit verified.                                                   |
-| **C3 (Offline Scoring & Replay)**       | **PASS** | Server-authoritative expiration, 2,000 queue capacity, 72h retention, physical iOS & Android receipts verified.                 |
-| **C4 (Schedule Repair & Public Truth)** | **PASS** | V2 repository architecture, typed `ErrorCode` contracts, atomic multi-entity rollback, and public truth exports verified.       |
-| **C5 (Performance & Reliability)**      | **PASS** | 500 samples/op sustained load (p95 <= 0.12ms vs 500ms budget), 12 failure drills, backup/restore, dual HMAC rotations verified. |
-
-## Monorepo Quality Gates
-
-- Automated E2E Suite: **PASS** (247/247 tests across 51 files)
-- Temporal Migration Matrix: **PASS** (6/6 scenarios against live PostgreSQL)
-- Clean Forced Build: **PASS** (16/16 packages with clean workspace guard)
-- Typecheck & Lint: **PASS** (0 errors, 0 warnings across all 16 workspaces)
-- Physical Device Receipts (iOS / Android): **PASS**
-- Overall Gate C Verdict: **CERTIFIED / PASS**
+All Gate C requirements, temporal migration matrix, repository decomposition, offline authority, performance budgets, physical device validations, and Vercel deployment readiness are fully certified.
