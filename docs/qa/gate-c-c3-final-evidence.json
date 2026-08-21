@@ -1,7 +1,7 @@
 {
   "schema_version": "gate-c-c3-final-evidence-v1",
-  "source_sha": "5071dba99c3d29024fdd2618238b3796e538caa4",
-  "collected_at": "2026-08-21T08:40:26.960Z",
+  "source_sha": "b559683f16f99c7e5c22557720f1a130d3b5f2f4",
+  "collected_at": "2026-08-21T09:10:16.310Z",
   "environment": {
     "os": "darwin",
     "node": "v24.18.0",
@@ -31,7 +31,7 @@
       "browser_version": "18.2",
       "status": "passed",
       "scenarios_executed": 8,
-      "receipt_sha256": "ff57ee71ce8e06e35836c1b91ffcf84bece0307c3114334097b554178e4cac8a"
+      "receipt_sha256": "938ce7e3e0198e736e19d2d0e6a662c6ec8820a1b9b02e5f73a32ea4d493d4b9"
     },
     "android_chrome": {
       "platform": "android",
@@ -41,7 +41,7 @@
       "browser_version": "131.0.6778.39",
       "status": "passed",
       "scenarios_executed": 8,
-      "receipt_sha256": "619ad752995b57411ad8ecf00b10d2ea4dc9895b8b4760aca998621b99da9cc2"
+      "receipt_sha256": "714215e31c725ba13deb147d7fa132e0e3dd08439c595bc1753424cfd2644851"
     }
   },
   "offline_retention": {

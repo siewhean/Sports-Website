@@ -24,28 +24,36 @@ export function getRemoteBranchSha(branchName = "origin/integration/gate-c-final
   }
 }
 
+export function isValidCommit(sha) {
+  try {
+    execSync(`git cat-file -e ${sha}^{commit}`, { cwd: rootDir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validateExactShaCertification(options = {}) {
   const allowHistorical = options.allowHistorical ?? false;
-  const targetSha = options.targetSha || getExactHeadSha();
-  const remoteSha = options.remoteSha ?? getRemoteBranchSha();
   const qaDir = options.qaDir || path.join(rootDir, "docs", "qa");
+  const headSha = getExactHeadSha();
+  const remoteSha = options.remoteSha ?? getRemoteBranchSha();
 
   const errors = [];
   const warnings = [];
 
-  // 1. Branch Head Integrity check
-  if (!allowHistorical && remoteSha && targetSha !== remoteSha) {
-    errors.push(`Local HEAD (${targetSha}) does not match remote origin/integration/gate-c-final (${remoteSha}).`);
-  }
-
-  // 2. Candidate release record
+  // 1. Candidate release record
   const candidateReleasePath = path.join(qaDir, "candidate-release.json");
+  let candidateSha = options.targetSha;
+
   if (fs.existsSync(candidateReleasePath)) {
     try {
       const data = JSON.parse(fs.readFileSync(candidateReleasePath, "utf8"));
-      if (data.candidateSha !== targetSha) {
+      if (!candidateSha) {
+        candidateSha = data.candidateSha;
+      } else if (data.candidateSha !== candidateSha) {
         errors.push(
-          `candidate-release.json candidateSha (${data.candidateSha}) does not match target SHA (${targetSha}).`,
+          `candidate-release.json candidateSha (${data.candidateSha}) does not match target SHA (${candidateSha}).`,
         );
       }
       if (data.verdict === "PASS" && data.status !== "CERTIFIED") {
@@ -58,7 +66,26 @@ export function validateExactShaCertification(options = {}) {
     warnings.push("candidate-release.json does not exist.");
   }
 
-  // 3. Evidence JSON files check
+  const targetSha = candidateSha || headSha;
+
+  // 2. Commit Existence & Ancestry
+  if (!isValidCommit(targetSha)) {
+    errors.push(`Target SHA (${targetSha}) is not a valid commit in the repository.`);
+  }
+
+  // 3. Branch Head Integrity check
+  if (!allowHistorical && remoteSha) {
+    if (targetSha !== headSha && targetSha !== remoteSha) {
+      errors.push(
+        `Candidate SHA (${targetSha}) does not match HEAD (${headSha}) or remote origin/integration/gate-c-final (${remoteSha}).`,
+      );
+    }
+    if (headSha !== remoteSha) {
+      errors.push(`Local HEAD (${headSha}) is not in sync with remote origin/integration/gate-c-final (${remoteSha}).`);
+    }
+  }
+
+  // 4. Evidence JSON files check
   const evidenceFiles = [
     "gate-c-c3-final-evidence.json",
     "gate-c-c5-final-evidence.json",
@@ -90,7 +117,7 @@ export function validateExactShaCertification(options = {}) {
     }
   }
 
-  // 4. Markdown Verdict files check
+  // 5. Markdown Verdict files check
   const verdictFiles = ["gate-c-c3-verdict.md", "gate-c-c5-verdict.md", "gate-c-verdict.md"];
 
   for (const filename of verdictFiles) {

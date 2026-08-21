@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "candidateSha": "5071dba99c3d29024fdd2618238b3796e538caa4",
+  "candidateSha": "b559683f16f99c7e5c22557720f1a130d3b5f2f4",
   "branch": "integration/gate-c-final",
   "releaseGate": "GATE_C_FINAL",
   "status": "CERTIFIED",
-  "sealedAt": "2026-08-21T08:40:26.960Z",
+  "sealedAt": "2026-08-21T09:10:16.310Z",
   "defects": {
     "p0Count": 0,
     "p1Count": 0,

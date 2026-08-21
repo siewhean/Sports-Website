@@ -1,7 +1,7 @@
 {
   "schema_version": "gate-c-deployment-evidence-v1",
-  "candidate_sha": "5071dba99c3d29024fdd2618238b3796e538caa4",
-  "verified_at": "2026-08-21T08:40:26.960Z",
+  "candidate_sha": "b559683f16f99c7e5c22557720f1a130d3b5f2f4",
+  "verified_at": "2026-08-21T09:10:16.310Z",
   "build_graph": {
     "turbo_tasks_total": 16,
     "turbo_tasks_successful": 16,

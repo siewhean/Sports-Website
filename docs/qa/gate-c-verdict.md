@@ -1,11 +1,11 @@
 # Gate C Final Certification Independent Verdict
 
-Validated candidate SHA: `5071dba99c3d29024fdd2618238b3796e538caa4`
+Validated candidate SHA: `b559683f16f99c7e5c22557720f1a130d3b5f2f4`
 Integration Branch: `integration/gate-c-final`
 
 Release Gate: **GATE_C_FINAL**
 Status: **CERTIFIED / PASS**
-Timestamp: 2026-08-21T08:40:26.960Z
+Timestamp: 2026-08-21T09:10:16.310Z
 
 ## Defect Tally
 
