@@ -41,6 +41,8 @@ import { PostgresIdentityUnitOfWork } from "../src/identity-postgres.js";
 import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
 import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
+import { FallbackKeyringPhase2Runtime } from "../src/phase-2-fallback-keyring-runtime.js";
+import { RedisScoringAccessRateLimiter } from "../src/scoring-access-rate-limit.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const migrationsDirectory = path.join(root, "packages/database/migrations");
@@ -130,12 +132,13 @@ async function createCompetitionFixture(
   key: string,
   entryCount: 8 | 16 = 8,
 ): Promise<CompetitionFixture> {
+  const slug = `gate-c-c5-${key}`.replace(/[^a-z0-9-]/gu, "-").slice(0, 100);
   const competition = await phase2.createCompetition(
     actor,
     {
       organisationId,
       name: `Gate C C5 ${key}`,
-      slug: `gate-c-c5-${key}`.replace(/[^a-z0-9-]/gu, "-").slice(0, 100),
+      slug,
       timezone: "UTC",
       startsOn: "2026-08-21",
       endsOn: "2026-08-22",
@@ -144,39 +147,39 @@ async function createCompetitionFixture(
   );
   const division = await phase2.createDivision(
     actor,
-    competition.competition.id,
+    competition.id,
     { name: "Open", teamLimit: entryCount },
     randomUUID(),
   );
   await phase2.replaceEntries(
     actor,
-    competition.competition.id,
+    competition.id,
     division.id,
     Array.from({ length: entryCount }, (_, index) => ({ name: `Team ${index + 1}`, seed: index + 1 })),
     randomUUID(),
   );
   await phase2.replaceCapacity(
     actor,
-    competition.competition.id,
-    {
-      playingAreas: [
-        { name: "Court 1", displayOrder: 1 },
-        { name: "Court 2", displayOrder: 2 },
-      ],
-      intervals: [
-        { startsAt: "2026-08-21T08:00:00.000Z", endsAt: "2026-08-21T20:00:00.000Z" },
-        { startsAt: "2026-08-22T08:00:00.000Z", endsAt: "2026-08-22T20:00:00.000Z" },
-      ],
-    },
+    competition.id,
+    [
+      {
+        name: "Court 1",
+        windows: [{ startsAt: "2026-08-21T08:00:00.000Z", endsAt: "2026-08-22T20:00:00.000Z" }],
+      },
+      {
+        name: "Court 2",
+        windows: [{ startsAt: "2026-08-21T08:00:00.000Z", endsAt: "2026-08-22T20:00:00.000Z" }],
+      },
+    ],
     randomUUID(),
   );
-  const format = await phase2.generateFormat(actor, competition.competition.id, division.id, randomUUID());
-  const schedule = await phase2.generateSchedule(actor, competition.competition.id, format.id, randomUUID());
-  await phase2.publishSchedule(actor, competition.competition.id, schedule.id, randomUUID());
+  const format = await phase2.generateFormat(actor, competition.id, division.id, randomUUID());
+  const schedule = await phase2.generateSchedule(actor, competition.id, format.id, randomUUID());
+  await phase2.publishSchedule(actor, competition.id, schedule.id, randomUUID());
   return {
-    competitionId: competition.competition.id,
+    competitionId: competition.id,
     divisionId: division.id,
-    slug: competition.competition.slug,
+    slug,
     matches: format.matches.map((match) => ({
       id: match.id,
       homeEntryId: match.homeEntryId ?? null,
@@ -206,6 +209,7 @@ async function createConvergenceTarget(
     },
     randomUUID(),
   );
+  if (!pass.token) throw new Error(`C5 convergence fixture ${index} pass issuance returned no one-time token`);
   const session = await phase2.exchangeAccess(
     {
       token: pass.token,
@@ -231,14 +235,12 @@ async function createConvergenceTarget(
   );
   return {
     apiOrigin,
-    competitionSlug: fixture.slug,
+    slug: fixture.slug,
     matchId: match.id,
-    expectedPublicResultVersion: 1,
     sessionId: session.session_id,
     sessionToken: session.session_token,
-    generation: auth.generation,
+    writerGeneration: auth.generation,
     expectedSequence: warm.aggregate_version,
-    finalisationClientEventId: randomUUID(),
   };
 }
 
@@ -284,6 +286,7 @@ async function createRepairTarget(
     },
     randomUUID(),
   );
+  if (!pass.token) throw new Error(`C5 repair fixture ${index} pass issuance returned no one-time token`);
   const session = await phase2.exchangeAccess(
     {
       token: pass.token,
@@ -297,19 +300,39 @@ async function createRepairTarget(
   const auth = scoringAuth(session);
   await phase2.appendCanonicalScoreEvent(
     auth,
-    { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString(), segment_number: 1, manual_time_seconds: 0 },
+    {
+      client_event_id: randomUUID(),
+      type: "match_started",
+      occurred_at: new Date().toISOString(),
+      segment_number: 1,
+      manual_time_seconds: 0,
+    },
     0,
     randomUUID(),
   );
   await phase2.appendCanonicalScoreEvent(
     auth,
-    { client_event_id: randomUUID(), type: "goal", occurred_at: new Date().toISOString(), team_slot: "home", participant_id: "C5 scorer", segment_number: 1, manual_time_seconds: 60 },
+    {
+      client_event_id: randomUUID(),
+      type: "goal",
+      occurred_at: new Date().toISOString(),
+      team_slot: "home",
+      participant_id: "C5 scorer",
+      segment_number: 1,
+      manual_time_seconds: 60,
+    },
     1,
     randomUUID(),
   );
   await phase2.appendCanonicalScoreEvent(
     auth,
-    { client_event_id: randomUUID(), type: "period_change", occurred_at: new Date().toISOString(), segment_number: 2, manual_time_seconds: 0 },
+    {
+      client_event_id: randomUUID(),
+      type: "period_change",
+      occurred_at: new Date().toISOString(),
+      segment_number: 2,
+      manual_time_seconds: 0,
+    },
     2,
     randomUUID(),
   );
@@ -325,8 +348,24 @@ async function createRepairTarget(
       reason: "Gate C C5 controlled correction before repair publication.",
       expectedAggregateVersion: 4,
       events: [
-        { client_event_id: randomUUID(), type: "goal", occurred_at: new Date().toISOString(), team_slot: "away", participant_id: "C5 scorer", segment_number: 2, manual_time_seconds: 60 },
-        { client_event_id: randomUUID(), type: "goal", occurred_at: new Date().toISOString(), team_slot: "away", participant_id: "C5 scorer", segment_number: 2, manual_time_seconds: 120 },
+        {
+          client_event_id: randomUUID(),
+          type: "goal",
+          occurred_at: new Date().toISOString(),
+          team_slot: "away",
+          participant_id: "C5 scorer",
+          segment_number: 2,
+          manual_time_seconds: 60,
+        },
+        {
+          client_event_id: randomUUID(),
+          type: "goal",
+          occurred_at: new Date().toISOString(),
+          team_slot: "away",
+          participant_id: "C5 scorer",
+          segment_number: 2,
+          manual_time_seconds: 120,
+        },
       ],
     },
     randomUUID(),
@@ -347,7 +386,11 @@ async function createRepairTarget(
   };
 }
 
-async function mapConcurrent<T>(count: number, concurrency: number, create: (index: number) => Promise<T>): Promise<T[]> {
+async function mapConcurrent<T>(
+  count: number,
+  concurrency: number,
+  create: (index: number) => Promise<T>,
+): Promise<T[]> {
   const output = new Array<T>(count);
   let next = 0;
   await Promise.all(
@@ -368,7 +411,7 @@ export function createSyntheticExecutors(): Record<C5WorkloadOperation, C5Worklo
       operation,
       async () => ({ outcome: "success" as const, correctness: { passed: true as const } }),
     ]),
-  ) as Record<C5WorkloadOperation, C5WorkloadExecutor>;
+  ) as unknown as Record<C5WorkloadOperation, C5WorkloadExecutor>;
 }
 
 async function runSynthetic(source: string) {
@@ -409,6 +452,7 @@ export async function runC5BenchmarkAndEvidence(options: { mode?: "certification
   const redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
   const csrfSecret = randomBytes(32).toString("base64url");
   const fallbackSecret = randomBytes(32).toString("base64url");
+  const rateLimitSecret = randomBytes(32).toString("base64url");
   const config = parseConfig({
     ...process.env,
     APP_ENV: "test",
@@ -419,6 +463,7 @@ export async function runC5BenchmarkAndEvidence(options: { mode?: "certification
     DATABASE_URL: databaseUrl,
     REDIS_URL: redisUrl,
     IDENTITY_CSRF_HMAC_SECRET: csrfSecret,
+    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: rateLimitSecret,
     SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: fallbackSecret,
     LOG_LEVEL: "silent",
   });
@@ -428,7 +473,17 @@ export async function runC5BenchmarkAndEvidence(options: { mode?: "certification
     csrfSecret,
     systemClock,
   );
-  const phase2 = new Phase2Runtime(identitySql, phase2DomainAdapter, undefined, undefined, fallbackSecret);
+  const phase2 = new FallbackKeyringPhase2Runtime(
+    identitySql,
+    phase2DomainAdapter,
+    config.scoringAccess.fallbackCodeHmacKeyring,
+    undefined,
+    new RedisScoringAccessRateLimiter(
+      redis,
+      config.scoringAccess.rateLimitHmacKeyring,
+      `matchday:gate-c-c5:${source.slice(0, 12)}:${randomUUID()}:scoring-access:`,
+    ),
+  );
   const c4Publisher = new GateCC4PostgresPublisher(phase2);
   const c4Runtime = new GateCC4Runtime(identitySql, c4Publisher);
   const c4Operations = new GateCC4Operations(identitySql, webOrigin);
@@ -467,12 +522,16 @@ export async function runC5BenchmarkAndEvidence(options: { mode?: "certification
       phase2,
       actor,
       apiOrigin,
-      scoreMatches.map((match) => ({ competitionId: scoreFixture.competitionId, matchId: match.id, expectedSequence: 0 })),
+      scoreMatches.map((match) => ({
+        competitionId: scoreFixture.competitionId,
+        matchId: match.id,
+        expectedSequence: 0,
+      })),
     );
     scoreResource = await createGateCC5ScoreWriteResource(scoreSessions, { durationSeconds: 900 });
 
     const publicFixture = await createCompetitionFixture(phase2, actor, identitySeed.organisationId, "public");
-    const publicExecutor = createGateCC5PublicCurrentExecutor({ apiOrigin, competitionSlug: publicFixture.slug });
+    const publicExecutor = createGateCC5PublicCurrentExecutor({ apiOrigin, slug: publicFixture.slug });
 
     process.stdout.write("Provisioning 500 real public-convergence targets...\n");
     const convergenceTargets = await mapConcurrent(minimumSamples, 8, (index) =>
@@ -487,47 +546,60 @@ export async function runC5BenchmarkAndEvidence(options: { mode?: "certification
       phase2,
       actor,
       apiOrigin,
-      leaseMatches.map((match) => ({ competitionId: leaseFixture.competitionId, matchId: match.id, expectedSequence: 0 })),
+      leaseMatches.map((match) => ({
+        competitionId: leaseFixture.competitionId,
+        matchId: match.id,
+        expectedSequence: 0,
+      })),
     );
-    const leaseSessions: GateCC5LeaseSession[] = leaseBase.map((session) => ({
-      apiOrigin,
-      webOrigin,
-      competitionId: session.competitionId,
-      matchId: session.matchId,
-      activeSessionId: session.sessionId,
-      activeSessionToken: session.sessionToken,
-      activeGeneration: session.generation,
-      activeExpectedSequence: session.expectedSequence,
-      organiserCookie: identitySeed.organiserCookie,
-      createCandidate: async () => {
-        const pass = await phase2.createAccessPass(
-          actor,
-          session.competitionId,
-          session.matchId,
-          {
-            expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
-            role: "scorekeeper",
-            idempotencyKey: `c5-lease-candidate-${randomUUID()}`,
-          },
-          randomUUID(),
-        );
-        const candidate = await phase2.exchangeAccess(
-          {
-            token: pass.token,
-            expectedMatchId: session.matchId,
-            deviceId: randomUUID(),
-            deviceLabel: "C5 takeover candidate",
-            ipAddress: "127.0.0.1",
-          },
-          randomUUID(),
-        );
-        if (candidate.mode !== "candidate" || candidate.generation !== session.generation) {
-          throw new Error("C5 takeover candidate did not enter candidate mode at the active generation");
-        }
-        return { sessionId: candidate.session_id, sessionToken: candidate.session_token };
-      },
-    }));
-    const leaseExecutors = leaseSessions.map((session) => createGateCC5LeaseTakeoverExecutor(session));
+    const leaseExecutors = leaseBase.map((session, index) => {
+      const match = leaseMatches[index];
+      if (!match) throw new Error("C5 takeover fixture match is missing");
+      const incumbent: GateCC5LeaseSession = {
+        sessionId: session.sessionId,
+        sessionToken: session.sessionToken,
+        generation: session.writerGeneration,
+      };
+      return createGateCC5LeaseTakeoverExecutor({
+        apiOrigin,
+        webOrigin,
+        competitionId: leaseFixture.competitionId,
+        organiserCookie: identitySeed.organiserCookie,
+        incumbent,
+        createCandidate: async () => {
+          const pass = await phase2.createAccessPass(
+            actor,
+            leaseFixture.competitionId,
+            match.id,
+            {
+              expiresAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+              role: "scorekeeper",
+              idempotencyKey: `c5-lease-candidate-${randomUUID()}`,
+            },
+            randomUUID(),
+          );
+          if (!pass.token) throw new Error("C5 takeover candidate pass issuance returned no one-time token");
+          const candidate = await phase2.exchangeAccess(
+            {
+              token: pass.token,
+              expectedMatchId: match.id,
+              deviceId: randomUUID(),
+              deviceLabel: "C5 takeover candidate",
+              ipAddress: "127.0.0.1",
+            },
+            randomUUID(),
+          );
+          if (candidate.mode !== "candidate" || candidate.generation !== session.writerGeneration) {
+            throw new Error("C5 takeover candidate did not enter candidate mode at the active generation");
+          }
+          return {
+            sessionId: candidate.session_id,
+            sessionToken: candidate.session_token,
+            generation: candidate.generation,
+          };
+        },
+      });
+    });
     const leaseExecutor: C5WorkloadExecutor = (invocation) => leaseExecutors[invocation.workerIndex]!(invocation);
 
     process.stdout.write("Provisioning 500 real repair-publication targets...\n");
@@ -613,7 +685,9 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void main().catch((error) => {
-    process.stderr.write(`C5 benchmark FAILED: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.stderr.write(
+      `C5 benchmark FAILED: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+    );
     process.exit(1);
   });
 }
