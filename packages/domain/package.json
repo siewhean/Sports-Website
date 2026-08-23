@@ -15,5 +15,8 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "lint": "eslint . --max-warnings=0"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1"
   }
 }
