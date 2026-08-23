@@ -20,6 +20,8 @@ test("source verification is executable before final certification evidence exis
   assert.match(source, /\bpnpm test:e2e\b/u);
   assert.match(source, /\bpnpm test:a11y\b/u);
   assert.match(source, /\bpnpm test:visual\b/u);
+  assert.match(source, /\bpnpm test:vercel:build\b/u);
+  assert.equal(scripts["test:vercel:build"], "node scripts/verify-vercel-equivalent-build.mjs");
   assert.doesNotMatch(source, /\bevidence:gate-c:verify\b/u);
   assert.doesNotMatch(source, /\bevidence:gate-c:seal\b/u);
 });
