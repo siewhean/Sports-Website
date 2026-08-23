@@ -57,7 +57,7 @@ export async function verifyVercelEquivalentBuild(options = {}) {
     execute("git", ["diff", "--exit-code", "--", "pnpm-lock.yaml"], directory);
     const afterInstall = execute("git", ["status", "--porcelain", "--untracked-files=all"], directory).trim();
     if (afterInstall) throw new Error(`Frozen install modified the clean worktree:\n${afterInstall}`);
-    execute("pnpm", ["--filter", "@matchday/web", "build"], directory, {
+    execute("pnpm", ["turbo", "run", "build", "--filter=@matchday/web...", "--force"], directory, {
       CI: "1",
       NODE_ENV: "production",
       MATCHDAY_PHASE2_DATA_MODE: "",
