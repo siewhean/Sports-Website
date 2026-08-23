@@ -122,7 +122,7 @@ function validateC4Receipt(artifactsRoot, targetSha) {
   const receipt = readJson(receiptPath, "C4 exact-SHA run evidence");
   if (
     receipt.artifact_kind !== "gate-c-c4-exact-sha-evidence" ||
-    receipt.record_status !== "CURRENT_CERTIFICATION" ||
+    receipt.record_status !== "UNSEALED_COLLECTOR" ||
     receipt.source_sha !== targetSha ||
     receipt.status !== "PASS"
   ) {
@@ -238,23 +238,26 @@ export const C5_OPERATION_BUDGETS = {
   repair_publication: 2000,
 };
 
-function validateC5Benchmark(artifactsRoot, targetSha) {
-  const benchmarkPath = path.join(artifactsRoot, "gate-c-c5", targetSha, "benchmark.json");
-  const benchmark = readJson(benchmarkPath, "C5 benchmark receipt");
+function validateC5Certification(artifactsRoot, targetSha) {
+  const certificationPath = path.join(artifactsRoot, "gate-c-c5", targetSha, "certification.json");
+  const certification = readJson(certificationPath, "C5 integrated certification receipt");
+  const receipt = certification.receipt;
   if (
-    benchmark.source_sha !== targetSha ||
-    benchmark.evidence_type !== "real_infrastructure" ||
-    benchmark.runtime?.application !== "matchday-api" ||
-    benchmark.runtime?.benchmark_owned_routes !== false ||
-    benchmark.status !== "PASS"
+    !receipt ||
+    receipt.artifact_kind !== "gate-c-c5-integrated-workload-receipt" ||
+    receipt.source_sha !== targetSha ||
+    !Number.isSafeInteger(receipt.minimum_samples_per_operation) ||
+    receipt.minimum_samples_per_operation < 500 ||
+    !Number.isFinite(receipt.duration_ms) ||
+    receipt.duration_ms <= 0
   ) {
-    throw new Error("C5 benchmark is not release-eligible real Matchday infrastructure evidence");
+    throw new Error("C5 certification is not an exact-SHA integrated workload receipt");
   }
-  if (!benchmark.operations || typeof benchmark.operations !== "object") {
-    throw new Error("C5 benchmark operations are missing or malformed");
+  if (!receipt.operations || typeof receipt.operations !== "object") {
+    throw new Error("C5 certification operations are missing or malformed");
   }
   for (const [name, budget] of Object.entries(C5_OPERATION_BUDGETS)) {
-    const operation = benchmark.operations[name];
+    const operation = receipt.operations[name];
     if (!operation) throw new Error(`Missing required C5 operation: ${name}`);
     const summary = operation.summary || operation;
     const sampleCount = summary.sampleCount ?? summary.sample_count ?? 0;
@@ -271,50 +274,41 @@ function validateC5Benchmark(artifactsRoot, targetSha) {
       throw new Error(`C5 operation ${name} exceeded p95 latency budget: ${String(p95)}ms > ${budget}ms`);
     }
   }
-  return { data: benchmark, evidence: fileEvidence(benchmarkPath), path: benchmarkPath };
-}
-
-function validateFaults(artifactsRoot, targetSha) {
-  const retained = path.join(artifactsRoot, "gate-c-c5", targetSha, "retained");
-  const receipts = {};
-  for (const fault of REQUIRED_FAULTS) {
-    const faultDir = path.join(retained, fault);
-    const receiptPath = path.join(faultDir, "receipt.json");
-    const receipt = readJson(receiptPath, `${fault} fault receipt`);
-    if (
-      receipt.source_sha !== targetSha ||
-      receipt.fault !== fault ||
-      receipt.evidence_type !== "operational_drill" ||
-      receipt.status !== "PASS" ||
-      receipt.injection_observed !== true ||
-      receipt.recovery_observed !== true ||
-      receipt.cleanup_observed !== true ||
-      receipt.invariants_verified !== true ||
-      typeof receipt.actual_action !== "string" ||
-      receipt.actual_action.length < 3
-    ) {
-      throw new Error(`Fault drill ${fault} is not genuine fail/recover/invariant evidence`);
-    }
-    if (
-      receipt.invariants?.score_loss_count !== 0 ||
-      receipt.invariants?.duplicate_effect_count !== 0 ||
-      receipt.invariants?.stale_writer_accept_count !== 0
-    ) {
-      throw new Error(`Fault drill ${fault} violated a Gate C invariant`);
-    }
-    for (const [file, field] of [
-      ["injection.log", "injection_evidence_sha256"],
-      ["recovery.log", "recovery_evidence_sha256"],
-      ["cleanup.log", "cleanup_evidence_sha256"],
-    ]) {
-      const full = path.join(faultDir, file);
-      if (!fs.existsSync(full)) throw new Error(`Missing retained ${fault}/${file}`);
-      const digest = sha256(fs.readFileSync(full));
-      if (receipt[field] !== digest) throw new Error(`${fault}/${file} hash mismatch`);
-    }
-    receipts[fault] = receipt;
+  if (!Array.isArray(receipt.controlled_failures) || !certification.retained_artifacts) {
+    throw new Error("C5 certification is missing controlled fault evidence");
   }
-  return receipts;
+  const retained = path.join(artifactsRoot, "gate-c-c5", targetSha, "retained");
+  const faults = {};
+  for (const fault of REQUIRED_FAULTS) {
+    const faultReceipt = receipt.controlled_failures.filter((candidate) => candidate?.fault === fault);
+    const paths = certification.retained_artifacts[fault];
+    if (
+      faultReceipt.length !== 1 ||
+      !paths ||
+      faultReceipt[0].recovery_observed !== true ||
+      faultReceipt[0].cleanup_observed !== true ||
+      typeof faultReceipt[0].recovery_oracle !== "string"
+    ) {
+      throw new Error(`Fault drill ${fault} is missing integrated fail/recover/cleanup evidence`);
+    }
+    for (const [key, field] of [
+      ["injection", "injection_evidence_sha256"],
+      ["recovery", "recovery_evidence_sha256"],
+      ["cleanup", "cleanup_evidence_sha256"],
+    ]) {
+      const relative = paths[key];
+      if (typeof relative !== "string" || path.isAbsolute(relative) || relative.split(/[\\/]/u).includes("..")) {
+        throw new Error(`Fault drill ${fault} has an unsafe retained log path`);
+      }
+      const full = safeRelative(retained, path.join(retained, relative), `Fault drill ${fault}`);
+      if (!fs.existsSync(full)) throw new Error(`Missing retained ${fault}/${key} log`);
+      if (fs.lstatSync(full).isSymbolicLink()) throw new Error(`Retained ${fault}/${key} log must not be a symlink`);
+      const digest = sha256(fs.readFileSync(full));
+      if (faultReceipt[0][field] !== digest) throw new Error(`${fault}/${key} log hash mismatch`);
+    }
+    faults[fault] = faultReceipt[0];
+  }
+  return { data: receipt, faults, evidence: fileEvidence(certificationPath), path: certificationPath };
 }
 
 function validateHmac(artifactsRoot, targetSha) {
@@ -407,8 +401,8 @@ export function sealGateCCertification(options = {}) {
   const ios = validatePhysicalPlatform(artifactsRoot, targetSha, "ios");
   const android = validatePhysicalPlatform(artifactsRoot, targetSha, "android");
   const c4 = validateC4Receipt(artifactsRoot, targetSha);
-  const c5 = validateC5Benchmark(artifactsRoot, targetSha);
-  const faults = validateFaults(artifactsRoot, targetSha);
+  const c5 = validateC5Certification(artifactsRoot, targetSha);
+  const faults = c5.faults;
   const hmac = validateHmac(artifactsRoot, targetSha);
   const deployment = validateDeployment(artifactsRoot, qaDir, targetSha);
 
@@ -490,8 +484,11 @@ export function sealGateCCertification(options = {}) {
       branch: MATCHDAY_GATE_C_BRANCH,
       status: "PASS",
       collected_at: timestamp,
-      environment: c5.data.environment,
-      source_receipts: { benchmark: laneEvidence.c5, hmac: laneEvidence.hmac },
+      environment: {
+        profile_id: c5.data.profile_id,
+        minimum_samples_per_operation: c5.data.minimum_samples_per_operation,
+      },
+      source_receipts: { certification: laneEvidence.c5, hmac: laneEvidence.hmac },
       operations: c5.data.operations,
       controlled_failures: faults,
       hmac_rotation: hmac.data,

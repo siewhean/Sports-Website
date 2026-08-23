@@ -1,23 +1,11 @@
 {
-  "releaseId": "gate-c-certified-2800bc0fa2",
-  "candidateSha": "2800bc0fa2c8b23c92b6e9ba1962fb22092207c8",
-  "status": "CERTIFIED",
-  "verdict": "PASS",
-  "milestone": "GATE_C",
-  "certifiedAtUtc": "2026-08-21T14:20:52.035Z",
-  "approvals": {
-    "engineeringLead": "MATCHDAY-GATE-C-PLATFORM-LEAD",
-    "qaLead": "MATCHDAY-GATE-C-QA-DIRECTOR",
-    "securityLead": "MATCHDAY-GATE-C-SECURITY-OFFICER"
-  },
-  "artifacts": {
-    "c1_final_evidence": "gate-c-c1-final-evidence.json",
-    "c2_final_evidence": "gate-c-c2-final-evidence.json",
-    "c3_final_evidence": "gate-c-c3-final-evidence.json",
-    "c4_final_evidence": "gate-c-c4-final-evidence.json",
-    "c5_final_evidence": "gate-c-c5-final-evidence.json",
-    "gate_c_final_evidence": "gate-c-final-evidence.json",
-    "deployment_evidence": "deployment-evidence.json",
-    "lock_benchmarks": "gate-c-lock-benchmarks.json"
-  }
+  "schema_version": 1,
+  "releaseId": "gate-c-current-unsealed",
+  "candidateSha": null,
+  "record_status": "NO_CURRENT_CERTIFICATION",
+  "status": "BLOCKED",
+  "verdict": "BLOCKED",
+  "updatedAtUtc": "2026-08-23T00:00:00.000Z",
+  "reason": "The prior 2800bc certification artifacts are historical only. A new immutable integration/gate-c-final candidate requires exact-SHA controlled-staging, physical-device, and live-provider evidence before the sealer may create current certification artifacts.",
+  "historical_record": "history/gate-c/2800bc0fa2c8b23c92b6e9ba1962fb22092207c8/candidate-release.json"
 }

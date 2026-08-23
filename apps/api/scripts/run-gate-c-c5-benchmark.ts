@@ -8,12 +8,17 @@ import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import { hashSessionSecret, systemClock, type PostgresJsSql } from "@matchday/identity";
 import {
   C5_WORKLOAD_OPERATIONS,
+  executeC5IntegratedWorkload,
   executeC5Workload,
+  type C5ApprovedWorkloadPlan,
+  type C5ControlledFailureHook,
+  type C5IntegratedWorkloadReceipt,
   type C5WorkloadExecutor,
   type C5WorkloadOperation,
   type C5WorkloadProfile,
   type C5WorkloadReceipt,
 } from "@matchday/observability";
+import { createGateCC5ControlledStagingFaultHooks } from "./gate-c-c5-controlled-staging-faults.js";
 import { Redis } from "ioredis";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../src/app.js";
@@ -405,7 +410,14 @@ async function mapConcurrent<T>(
   return output;
 }
 
-export async function runC5BenchmarkAndEvidence() {
+export type GateCC5ControlledStagingRequest = Readonly<{
+  plan: C5ApprovedWorkloadPlan;
+  maximumSamples: number;
+  operationTimeoutMs: number;
+  retainedRoot: string;
+}>;
+
+export async function runC5BenchmarkAndEvidence(controlledStaging?: GateCC5ControlledStagingRequest) {
   const source = sourceSha();
   assertCleanSourceTree();
 
@@ -591,6 +603,24 @@ export async function runC5BenchmarkAndEvidence() {
       lease_takeover: leaseExecutor,
       repair_publication: repairExecutor,
     };
+    if (controlledStaging) {
+      const hooks: Record<string, C5ControlledFailureHook> = createGateCC5ControlledStagingFaultHooks({
+        retainedRoot: controlledStaging.retainedRoot,
+      });
+      return executeC5IntegratedWorkload({
+        sourceSha: source,
+        plan: controlledStaging.plan,
+        maximumSamples: controlledStaging.maximumSamples,
+        operationTimeoutMs: controlledStaging.operationTimeoutMs,
+        executors,
+        controlledFailureHooks: hooks as Record<
+          import("@matchday/observability").C5ControlledFailure,
+          C5ControlledFailureHook
+        >,
+        postgresqlIdentifier: `${databaseUrl}#${schema}`,
+        redisNamespace: `matchday:gate-c-c5:${source.slice(0, 12)}`,
+      });
+    }
     const operations = {} as Record<C5WorkloadOperation, C5WorkloadReceipt>;
     for (const operation of C5_WORKLOAD_OPERATIONS) {
       process.stdout.write(`Running real C5 operation: ${operation}\n`);

@@ -121,7 +121,7 @@ function setupC3(artifactsDir, candidateSha) {
 function setupC4(artifactsDir, candidateSha) {
   writeJson(path.join(artifactsDir, "gate-c-c4", candidateSha, "run-evidence.json"), {
     artifact_kind: "gate-c-c4-exact-sha-evidence",
-    record_status: "CURRENT_CERTIFICATION",
+    record_status: "UNSEALED_COLLECTOR",
     source_sha: candidateSha,
     status: "PASS",
     environment: { node_version: process.version },
@@ -136,30 +136,31 @@ function setupC4(artifactsDir, candidateSha) {
 function setupC5(artifactsDir, candidateSha) {
   const c5Dir = path.join(artifactsDir, "gate-c-c5", candidateSha);
   const operation = (p95Ms) => ({
+    operation: "placeholder",
+    workerCount: 1,
+    timeoutCount: 0,
     summary: {
       sampleCount: 500,
       successfulCount: 500,
+      expectedFailureCount: 0,
       unexpectedFailureCount: 0,
+      errorRate: 0,
+      p50Ms: 1,
       p95Ms,
+      p99Ms: p95Ms,
+      maxMs: p95Ms,
     },
     correctness: { passed: true },
   });
-  writeJson(path.join(c5Dir, "benchmark.json"), {
-    artifact_kind: "gate-c-c5-real-infrastructure-benchmark",
-    source_sha: candidateSha,
-    evidence_type: "real_infrastructure",
-    status: "PASS",
-    runtime: { application: "matchday-api", benchmark_owned_routes: false },
-    environment: { postgresql_version: "18.4", redis_version: "8.2" },
-    operations: {
-      score_event_acknowledgement: operation(25),
-      public_current_conditional_read: operation(20),
-      public_result_convergence: operation(100),
-      lease_takeover: operation(80),
-      repair_publication: operation(90),
-    },
-  });
-
+  const operations = {
+    score_event_acknowledgement: { ...operation(25), operation: "score_event_acknowledgement" },
+    public_current_conditional_read: { ...operation(20), operation: "public_current_conditional_read" },
+    public_result_convergence: { ...operation(100), operation: "public_result_convergence" },
+    lease_takeover: { ...operation(80), operation: "lease_takeover" },
+    repair_publication: { ...operation(90), operation: "repair_publication" },
+  };
+  const retained_artifacts = {};
+  const controlled_failures = [];
   for (const fault of REQUIRED_FAULTS) {
     const faultDir = path.join(c5Dir, "retained", fault);
     const logs = {
@@ -169,22 +170,38 @@ function setupC5(artifactsDir, candidateSha) {
     };
     fs.mkdirSync(faultDir, { recursive: true });
     for (const [name, content] of Object.entries(logs)) fs.writeFileSync(path.join(faultDir, `${name}.log`), content);
-    writeJson(path.join(faultDir, "receipt.json"), {
-      source_sha: candidateSha,
+    retained_artifacts[fault] = {
+      injection: `${fault}/injection.log`,
+      recovery: `${fault}/recovery.log`,
+      cleanup: `${fault}/cleanup.log`,
+    };
+    controlled_failures.push({
       fault,
-      evidence_type: "operational_drill",
-      status: "PASS",
-      actual_action: `inject_${fault}`,
-      injection_observed: true,
       recovery_observed: true,
       cleanup_observed: true,
-      invariants_verified: true,
-      invariants: { score_loss_count: 0, duplicate_effect_count: 0, stale_writer_accept_count: 0 },
+      recovery_oracle: "recovery_verified",
+      injector: "command",
       injection_evidence_sha256: sha256(logs.injection),
       recovery_evidence_sha256: sha256(logs.recovery),
       cleanup_evidence_sha256: sha256(logs.cleanup),
     });
   }
+  writeJson(path.join(c5Dir, "certification.json"), {
+    receipt: {
+      artifact_kind: "gate-c-c5-integrated-workload-receipt",
+      source_sha: candidateSha,
+      profile_id: "gate-c-test-profile",
+      approval_reference_sha256: sha256("approval"),
+      workload_plan_sha256: sha256("plan"),
+      minimum_samples_per_operation: 500,
+      duration_ms: 4_500_000,
+      operations,
+      controlled_failures,
+      postgresql_identifier_sha256: sha256("postgres"),
+      redis_namespace_sha256: sha256("redis"),
+    },
+    retained_artifacts,
+  });
 
   const rotation = {
     status: "PASS",
@@ -289,26 +306,28 @@ test("Gate C evidence-only sealer", async (t) => {
 
   await t.test("rejects a benchmark that is not real Matchday infrastructure", () => {
     const ws = setupValidWorkspace(candidateSha);
-    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "benchmark.json");
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "certification.json");
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
-    value.runtime.benchmark_owned_routes = true;
+    value.receipt.minimum_samples_per_operation = 499;
     writeJson(file, value);
     assert.throws(
       () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
-      /real Matchday infrastructure/,
+      /integrated workload receipt/,
     );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
 
   await t.test("rejects narrative-only fault receipts", () => {
     const ws = setupValidWorkspace(candidateSha);
-    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "retained", "web_interruption", "receipt.json");
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "certification.json");
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
-    delete value.injection_observed;
+    value.receipt.controlled_failures = value.receipt.controlled_failures.filter(
+      (entry) => entry.fault !== "web_interruption",
+    );
     writeJson(file, value);
     assert.throws(
       () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
-      /not genuine/,
+      /missing integrated/,
     );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });

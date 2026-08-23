@@ -80,6 +80,7 @@ function physicalReceipt(platform) {
   }));
   const receipt = {
     artifact_kind: "gate-c-c3-physical-device-receipt",
+    schema_version: 2,
     source_sha: sourceSha,
     platform,
     status: "passed",
@@ -89,10 +90,19 @@ function physicalReceipt(platform) {
     os_version: "1",
     browser_name: platform === "ios" ? "Safari" : "Chrome",
     browser_version: "1",
+    capture_id_sha256: uniqueHash(`${platform}-capture`),
+    collector_sha256: uniqueHash(`${platform}-collector`),
+    device_run_id_sha256: uniqueHash(`${platform}-run`),
+    captured_at: "2026-07-28T00:00:00.000Z",
     collected_at: "2026-07-28T00:00:00.000Z",
     trusted_https_origin_sha256: hashes,
     profile_identifier_sha256: uniqueHash(`${platform}-profile`),
     tester_attestation_sha256: uniqueHash(`${platform}-attestation`),
+    deployment: {
+      deployment_id: "dpl_1234567890abcdefghijklmnopqr",
+      build_id: "build-123",
+      route_manifest_sha256: uniqueHash(`${platform}-routes`),
+    },
     scenarios,
     artifact_hashes: scenarios.map((scenario) => ({
       path: `scenarios/${scenario.scenario}.json`,

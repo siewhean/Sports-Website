@@ -271,6 +271,7 @@ export function validateGateCC3PhysicalReceipts(receipts, sourceSha) {
   for (const receipt of receipts) {
     if (
       receipt?.artifact_kind !== "gate-c-c3-physical-device-receipt" ||
+      receipt?.schema_version !== 2 ||
       receipt?.source_sha !== sourceSha ||
       !gateCC3PhysicalPlatforms.includes(receipt?.platform) ||
       receipt?.status !== "passed" ||
@@ -281,7 +282,12 @@ export function validateGateCC3PhysicalReceipts(receipts, sourceSha) {
       !receipt?.browser_name?.trim() ||
       !receipt?.browser_version?.trim() ||
       !Number.isFinite(Date.parse(receipt?.collected_at ?? "")) ||
+      !Number.isFinite(Date.parse(receipt?.captured_at ?? "")) ||
       !receipt?.trusted_https_origin_sha256 ||
+      !receipt?.deployment ||
+      !/^dpl_[A-Za-z0-9]+$/u.test(receipt.deployment.deployment_id ?? "") ||
+      !receipt.deployment.build_id?.trim() ||
+      !receipt.deployment.route_manifest_sha256 ||
       !Array.isArray(receipt?.artifact_hashes) ||
       receipt.artifact_hashes.length < 1
     ) {
@@ -291,6 +297,10 @@ export function validateGateCC3PhysicalReceipts(receipts, sourceSha) {
     assertHash(receipt.profile_identifier_sha256, `${receipt.platform} profile identifier`);
     assertHash(receipt.receipt_sha256, `${receipt.platform} journey receipt`);
     assertHash(receipt.tester_attestation_sha256, `${receipt.platform} tester attestation`);
+    assertHash(receipt.capture_id_sha256, `${receipt.platform} capture identifier`);
+    assertHash(receipt.collector_sha256, `${receipt.platform} collector`);
+    assertHash(receipt.device_run_id_sha256, `${receipt.platform} device run identifier`);
+    assertHash(receipt.deployment.route_manifest_sha256, `${receipt.platform} approved route manifest`);
     const { receipt_sha256: claimedReceiptHash, ...unsignedReceipt } = receipt;
     if (createHash("sha256").update(canonicalEvidenceJson(unsignedReceipt)).digest("hex") !== claimedReceiptHash) {
       throw new Error(`${receipt.platform} physical receipt hash is not bound to its canonical contents`);

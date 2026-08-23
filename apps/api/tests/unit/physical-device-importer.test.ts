@@ -7,6 +7,7 @@ import {
 
 describe("physical device evidence importer validator", () => {
   const validPayload: RawPhysicalDevicePayload = {
+    source_sha: "a".repeat(40),
     platform: "ios",
     device_model: "Apple iPhone 15 Pro",
     os_version: "iOS 18.2",
@@ -20,6 +21,9 @@ describe("physical device evidence importer validator", () => {
     collected_at: new Date().toISOString(),
     trusted_https_origin: "https://staging.matchday.example.test",
     tester_attestation: "Verified on physical hardware by QA Team",
+    deployment_id: "dpl_1234567890abcdefghijklmnopqr",
+    build_id: "build-123",
+    route_manifest_sha256: "b".repeat(64),
     scenarios: REQUIRED_PHYSICAL_SCENARIOS.map((scenario) => ({
       scenario,
       status: "passed",
@@ -32,7 +36,7 @@ describe("physical device evidence importer validator", () => {
   };
 
   it("accepts a valid physical device execution payload with provenance and raw trace events", () => {
-    expect(() => validateRawPhysicalPayload(validPayload)).not.toThrow();
+    expect(() => validateRawPhysicalPayload(validPayload, validPayload.source_sha)).not.toThrow();
   });
 
   it("rejects payload missing provenance fields", () => {
@@ -40,7 +44,7 @@ describe("physical device evidence importer validator", () => {
       ...validPayload,
       capture_id: "",
     };
-    expect(() => validateRawPhysicalPayload(invalid)).toThrow(/provenance fields/);
+    expect(() => validateRawPhysicalPayload(invalid, validPayload.source_sha)).toThrow(/provenance/);
   });
 
   it("rejects payload missing raw trace events", () => {
@@ -51,7 +55,7 @@ describe("physical device evidence importer validator", () => {
         raw_trace_events: [] as unknown[],
       })),
     };
-    expect(() => validateRawPhysicalPayload(invalid)).toThrow(/requires externally captured raw trace events/);
+    expect(() => validateRawPhysicalPayload(invalid, validPayload.source_sha)).toThrow(/passing retained trace/);
   });
 
   it("rejects payload missing required scenario", () => {
@@ -59,7 +63,7 @@ describe("physical device evidence importer validator", () => {
       ...validPayload,
       scenarios: validPayload.scenarios.slice(0, 3),
     };
-    expect(() => validateRawPhysicalPayload(invalid)).toThrow(/Missing required scenario execution/);
+    expect(() => validateRawPhysicalPayload(invalid, validPayload.source_sha)).toThrow(/each required scenario/);
   });
 
   it("rejects non-HTTPS trusted origin", () => {
@@ -67,7 +71,7 @@ describe("physical device evidence importer validator", () => {
       ...validPayload,
       trusted_https_origin: "http://insecure.test",
     };
-    expect(() => validateRawPhysicalPayload(invalid)).toThrow(/trusted_https_origin/);
+    expect(() => validateRawPhysicalPayload(invalid, validPayload.source_sha)).toThrow(/HTTPS origin/);
   });
 
   it("rejects invalid raw trace hash length", () => {
@@ -75,6 +79,6 @@ describe("physical device evidence importer validator", () => {
       ...validPayload,
       scenarios: validPayload.scenarios.map((s) => ({ ...s, raw_trace_sha256: "short-hash" })),
     };
-    expect(() => validateRawPhysicalPayload(invalid)).toThrow(/raw_trace_sha256/);
+    expect(() => validateRawPhysicalPayload(invalid, validPayload.source_sha)).toThrow(/raw_trace_sha256/);
   });
 });

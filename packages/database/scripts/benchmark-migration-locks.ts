@@ -5,11 +5,11 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
-import { parseConfig } from "@matchday/config";
 import { dropTestSchema, migrateDatabase } from "../src/migrations.js";
 
-const config = parseConfig(process.env);
-const databaseUrl = config.databaseUrl;
+const configuredDatabaseUrl = process.env.DATABASE_URL;
+if (!configuredDatabaseUrl) throw new Error("DATABASE_URL is required for the isolated Gate C C2 benchmark");
+const databaseUrl: string = configuredDatabaseUrl;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../migrations");
 
 interface LockSample {
@@ -49,6 +49,10 @@ interface RollbackBenchmarkResult {
 }
 
 interface GateCLockBenchmarkReport {
+  schemaVersion: 2;
+  artifactKind: "gate-c-c2-migration-lock-benchmark";
+  sourceSha: string;
+  executionClassification: "controlled_staging_observation";
   timestamp: string;
   engine: string;
   postgresVersion: string;
@@ -66,7 +70,8 @@ interface GateCLockBenchmarkReport {
   recommendations: {
     lockTimeoutSec: number;
     statementTimeoutSec: number;
-    maintenanceWindowRequired: boolean;
+    maintenanceWindowRequired: true;
+    writeDrainRequired: true;
     operationalAdvice: string[];
   };
 }
@@ -477,7 +482,16 @@ async function benchmarkAbortRollback(): Promise<RollbackBenchmarkResult> {
 }
 
 async function main(): Promise<void> {
+  if (process.env.GATE_C_C2_CONTROLLED_STAGING !== "1") {
+    throw new Error("Refusing migration-lock benchmark without GATE_C_C2_CONTROLLED_STAGING=1");
+  }
   console.log("Starting Gate C 0030/0031 Production Lock Benchmarks...");
+  const sourceSha = (await import("node:child_process"))
+    .execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."),
+      encoding: "utf8",
+    })
+    .trim();
 
   const mainSql = postgres(databaseUrl, { max: 1 });
   let postgresVersion = "unknown";
@@ -612,6 +626,10 @@ async function main(): Promise<void> {
   const abortRollback = await benchmarkAbortRollback();
 
   const report: GateCLockBenchmarkReport = {
+    schemaVersion: 2,
+    artifactKind: "gate-c-c2-migration-lock-benchmark",
+    sourceSha,
+    executionClassification: "controlled_staging_observation",
     timestamp: new Date().toISOString(),
     engine: "PostgreSQL",
     postgresVersion,
@@ -634,31 +652,25 @@ async function main(): Promise<void> {
     recommendations: {
       lockTimeoutSec: 3,
       statementTimeoutSec: 30,
-      maintenanceWindowRequired: false,
+      maintenanceWindowRequired: true,
+      writeDrainRequired: true,
       operationalAdvice: [
-        "Migration 0030 and 0031 acquire AccessExclusiveLock on scheduled_matches and canonical_score_events for < 20ms under zero/read traffic.",
-        "Under concurrent writer mutations, set lock_timeout = '3s' to prevent DDL blocking long transaction queues.",
-        "Pre-migration validation scripts should be executed 24h before deployment to ensure preflight conditions are satisfied.",
-        "If a preflight validation fails during deployment, PostgreSQL transaction guarantees atomic rollback in < 15ms with 0 dangling table locks.",
+        "This benchmark is an observation collector, never a Gate C PASS receipt.",
+        "Maintain a write drain and approved maintenance window until a representative controlled-staging execution demonstrates safe reader and canonical writer outcomes.",
+        "Set lock_timeout = '3s' and statement_timeout = '30s'; treat timeout or deadlock observations as failed evidence, not retry-only success.",
       ],
     },
   };
 
   const jsonContent = JSON.stringify(report, null, 2);
 
-  // Save to repoRoot docs/qa/gate-c-lock-benchmarks.json and artifacts/qa/gate-c-locks/evidence.json
+  // Observations belong only under the ignored exact-SHA artifact root. Never rewrite historical docs/qa evidence.
   const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../../../..");
-  const docsQaPath = path.resolve(repoRoot, "docs/qa/gate-c-lock-benchmarks.json");
-  const artifactsPath = path.resolve(repoRoot, "artifacts/qa/gate-c-locks/evidence.json");
-
-  await mkdir(path.dirname(docsQaPath), { recursive: true });
+  const artifactsPath = path.resolve(repoRoot, "artifacts/qa/gate-c-c2", sourceSha, "migration-lock-benchmark.json");
   await mkdir(path.dirname(artifactsPath), { recursive: true });
-
-  await writeFile(docsQaPath, jsonContent, "utf-8");
   await writeFile(artifactsPath, jsonContent, "utf-8");
 
   console.log(`Gate C Lock Benchmarks generated successfully:`);
-  console.log(`- ${docsQaPath}`);
   console.log(`- ${artifactsPath}`);
   console.log(jsonContent);
 }

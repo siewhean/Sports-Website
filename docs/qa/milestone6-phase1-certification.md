@@ -1,13 +1,20 @@
-# Milestone 6 Phase 1: Full E2E Test Suite & Quality Gate Certification
+# Historical Milestone 6 Phase 1 source-suite record
 
 ## Executive Summary
 
-- **Gate**: Milestone 6 Phase 1 (Full E2E Test Suite Verification & Monorepo Quality Gate)
-- **Status**: **CERTIFIED / PASS**
+- **Scope**: Milestone 6 Phase 1 source-suite observation (Full E2E Test Suite Verification & Monorepo Quality Gate)
+- **Record status**: **HISTORICAL — NOT A CURRENT GATE C CERTIFICATION**
 - **Date**: 2026-08-21
 - **Node.js Environment**: `v24.18.0` via NVM (`/Users/Siew Hean/.nvm/versions/node/v24.18.0/bin`)
 - **Package Manager**: `pnpm@10.33.0`
 - **Test Runner**: Vitest `4.1.10`
+
+This document preserves a historical source-suite observation. It is not bound
+to the active `integration/gate-c-final` candidate and does not prove
+controlled-staging drills, physical-device execution, or a live provider
+deployment. The only current Gate C release status is
+[`gate-c-current-status.md`](./gate-c-current-status.md); current final
+evidence may be created only by the Gate C sealer.
 
 ---
 

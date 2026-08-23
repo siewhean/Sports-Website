@@ -38,6 +38,8 @@ export const REQUIRED_VERDICT_FILES = [
   "gate-c-verdict.md",
 ];
 
+export const NO_CURRENT_CERTIFICATION = "NO_CURRENT_CERTIFICATION";
+
 export function getExactHeadSha() {
   try {
     return execSync("git rev-parse HEAD", { cwd: rootDir, encoding: "utf8" }).trim();
@@ -126,6 +128,9 @@ export function validateExactShaCertification(options = {}) {
         errors.push(
           `candidate-release.json candidateSha (${data.candidateSha}) does not match target SHA (${candidateSha}).`,
         );
+      }
+      if (data.record_status === NO_CURRENT_CERTIFICATION) {
+        errors.push("No current Gate C certification exists; run the exact-SHA collectors and sealer.");
       }
       if (data.verdict === "PASS" && data.status !== "CERTIFIED") {
         errors.push(`candidate-release.json verdict is PASS but status is not CERTIFIED (${data.status}).`);

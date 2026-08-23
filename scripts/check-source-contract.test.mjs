@@ -17,6 +17,7 @@ test("source verification is executable before final certification evidence exis
   assert.match(source, /\bpnpm ci:assert-clean-outputs\b/u);
   assert.match(source, /\bpnpm test:vercel:build\b/u);
   assert.equal(scripts["test:vercel:build"], "node scripts/verify-vercel-equivalent-build.mjs");
+  assert.equal(scripts["evidence:gate-c-c4:run"], "pnpm --filter @matchday/api exec tsx scripts/run-gate-c-c4-e2e.ts");
   assert.doesNotMatch(source, /\bevidence:gate-c:verify\b/u);
   assert.doesNotMatch(source, /\bevidence:gate-c:seal\b/u);
   for (const nonSourceGate of [

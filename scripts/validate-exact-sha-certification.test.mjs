@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   EVIDENCE_ONLY_ALLOWLIST_PATTERNS,
+  NO_CURRENT_CERTIFICATION,
   REQUIRED_EVIDENCE_FILES,
   REQUIRED_VERDICT_FILES,
   validateExactShaCertification,
@@ -180,6 +181,34 @@ test("exact-sha certification validator", async (t) => {
     assert.strictEqual(result.valid, false);
     assert.strictEqual(
       result.errors.some((e) => e.includes("Missing required candidate-release.json artifact")),
+      true,
+    );
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails closed when the active release record declares no current certification", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exact-sha-test-"));
+    const mockSha = "3333333333333333333333333333333333333333";
+    fs.writeFileSync(
+      path.join(tempDir, "candidate-release.json"),
+      JSON.stringify({
+        candidateSha: null,
+        record_status: NO_CURRENT_CERTIFICATION,
+        status: "BLOCKED",
+        verdict: "BLOCKED",
+      }),
+    );
+
+    const result = validateExactShaCertification({
+      qaDir: tempDir,
+      targetSha: mockSha,
+      remoteSha: mockSha,
+      checkGit: false,
+    });
+
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(
+      result.errors.some((error) => error.includes("No current Gate C certification exists")),
       true,
     );
     fs.rmSync(tempDir, { recursive: true, force: true });
