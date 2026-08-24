@@ -198,7 +198,9 @@ export async function verifyVercelDeployment(options = {}) {
   if (requestedDeploymentId) {
     const payloadId = parsed.deployment_id || parsed.id || parsed.uid;
     if (payloadId !== requestedDeploymentId) {
-      throw new Error(`Deployment payload ${String(payloadId)} does not match requested deployment ${requestedDeploymentId}`);
+      throw new Error(
+        `Deployment payload ${String(payloadId)} does not match requested deployment ${requestedDeploymentId}`,
+      );
     }
   }
   validateDeploymentShape(parsed, targetSha, { projectId, teamId });

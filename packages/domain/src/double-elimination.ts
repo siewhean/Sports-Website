@@ -46,12 +46,14 @@ function freezeDeep<T>(value: T): Readonly<T> {
   return value;
 }
 
-function createEliminationRounds(input: Readonly<{
-  sources: readonly FormatParticipantSource[];
-  stageId: string;
-  orderStart: number;
-  purpose: FormatGraphMatch["purpose"];
-}>): EliminationRounds {
+function createEliminationRounds(
+  input: Readonly<{
+    sources: readonly FormatParticipantSource[];
+    stageId: string;
+    orderStart: number;
+    purpose: FormatGraphMatch["purpose"];
+  }>,
+): EliminationRounds {
   if (input.sources.length < 2) throw new Error(`${input.stageId} requires at least two participants`);
   let current = [...input.sources];
   const matches: FormatGraphMatch[] = [];
@@ -100,10 +102,12 @@ function createEliminationRounds(input: Readonly<{
   };
 }
 
-function lowerBracket(input: Readonly<{
-  upperRounds: readonly (readonly string[])[];
-  orderStart: number;
-}>): Readonly<{
+function lowerBracket(
+  input: Readonly<{
+    upperRounds: readonly (readonly string[])[];
+    orderStart: number;
+  }>,
+): Readonly<{
   matches: readonly FormatGraphMatch[];
   winner: FormatParticipantSource;
   nextOrder: number;

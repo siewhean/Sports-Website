@@ -46,15 +46,18 @@ describe("Phase 6 double elimination", () => {
     }
   });
 
-  it.each(DEFAULT_COUNTS)("eliminates lower-bracket losers and advances each lower winner for %i entries", (entryCount) => {
-    const definition = createDoubleEliminationFormat(entryCount);
-    const lower = definition.graph.matches.filter((match) => match.stageId === "lower-bracket");
+  it.each(DEFAULT_COUNTS)(
+    "eliminates lower-bracket losers and advances each lower winner for %i entries",
+    (entryCount) => {
+      const definition = createDoubleEliminationFormat(entryCount);
+      const lower = definition.graph.matches.filter((match) => match.stageId === "lower-bracket");
 
-    for (const match of lower) {
-      expect(sourceUses(definition.graph.matches, `loser:${match.id}`)).toBe(0);
-      expect(sourceUses(definition.graph.matches, `winner:${match.id}`)).toBe(1);
-    }
-  });
+      for (const match of lower) {
+        expect(sourceUses(definition.graph.matches, `loser:${match.id}`)).toBe(0);
+        expect(sourceUses(definition.graph.matches, `winner:${match.id}`)).toBe(1);
+      }
+    },
+  );
 
   it("uses an if-required reset only when the lower-bracket champion wins grand final one", () => {
     const definition = createDoubleEliminationFormat(8);
