@@ -66,6 +66,7 @@ describe("RSC navigation cancellation", () => {
 
   it("ignores only a same-origin cancelled GET RSC navigation", () => {
     expect(isExpectedRscNavigationCancellation(cancellation)).toBe(true);
+    expect(isExpectedRscNavigationCancellation({ ...cancellation, failure: "net::ERR_ABORTED" })).toBe(true);
   });
 
   it.each([
