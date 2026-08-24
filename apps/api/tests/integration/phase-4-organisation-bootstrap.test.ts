@@ -130,8 +130,8 @@ describeInfrastructure("organiser workspace bootstrap", () => {
           organisation_id: string;
           target_type: string;
           target_id: string;
-          after_state: { name: string; role: string };
-          metadata: { bootstrap: boolean };
+          after_state: { name: string; role: string } | string;
+          metadata: { bootstrap: boolean } | string;
         }[]
       >`
         SELECT actor_type,organisation_id,target_type,target_id,after_state,metadata
@@ -141,7 +141,11 @@ describeInfrastructure("organiser workspace bootstrap", () => {
           AND action='organisation.created'
       `,
     );
-    expect(audit).toEqual({
+    expect({
+      ...audit,
+      after_state: typeof audit.after_state === "string" ? JSON.parse(audit.after_state) : audit.after_state,
+      metadata: typeof audit.metadata === "string" ? JSON.parse(audit.metadata) : audit.metadata,
+    }).toEqual({
       actor_type: "account",
       organisation_id: workspaceId,
       target_type: "organisation",
@@ -155,7 +159,7 @@ describeInfrastructure("organiser workspace bootstrap", () => {
         {
           aggregate_id: string;
           idempotency_key: string;
-          payload: { organisation_id: string; owner_account_id: string; bootstrap: boolean };
+          payload: { organisation_id: string; owner_account_id: string; bootstrap: boolean } | string;
         }[]
       >`
         SELECT aggregate_id,idempotency_key,payload
@@ -163,7 +167,10 @@ describeInfrastructure("organiser workspace bootstrap", () => {
         WHERE idempotency_key=${outboxKey}
       `,
     );
-    expect(outbox).toEqual({
+    expect({
+      ...outbox,
+      payload: typeof outbox.payload === "string" ? JSON.parse(outbox.payload) : outbox.payload,
+    }).toEqual({
       aggregate_id: workspaceId,
       idempotency_key: outboxKey,
       payload: {

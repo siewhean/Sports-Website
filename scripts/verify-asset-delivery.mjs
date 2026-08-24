@@ -5,6 +5,7 @@ import https from "node:https";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { terminateChildTree } from "./asset-verifier-process.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = path.join(root, "artifacts/deployment-manifest.json");
@@ -17,6 +18,7 @@ assert(manifestAssets.size === manifest.assets.length, "Manifest contains duplic
 const configuredBaseUrl = process.env.ASSET_VERIFY_BASE_URL;
 const baseUrl = configuredBaseUrl ?? "http://127.0.0.1:3217";
 const baseProtocol = new URL(baseUrl).protocol;
+const requestTimeoutMs = 10_000;
 let child;
 
 try {
@@ -25,6 +27,7 @@ try {
       cwd: root,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
     let output = "";
     child.stdout.on("data", (chunk) => (output += String(chunk)));
@@ -104,18 +107,14 @@ try {
   await serviceWorker.body?.cancel();
   console.log(`Origin asset delivery verified for build ${manifest.buildId} (${manifest.assetCount} assets)`);
 } finally {
-  if (child !== undefined && child.exitCode === null) {
-    child.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => child.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
-    ]);
-    if (child.exitCode === null) child.kill("SIGKILL");
-  }
+  await terminateChildTree(child);
 }
 
 async function fetchChecked(url, init) {
-  const response = await fetch(url, init);
+  const response = await fetch(url, {
+    ...init,
+    signal: init?.signal ?? AbortSignal.timeout(requestTimeoutMs),
+  });
   assert(response.ok, `${url} returned ${response.status}`);
   return response;
 }
@@ -147,12 +146,14 @@ function assertAssetBytes(manifestAsset, bytes) {
   assert(digest === manifestAsset.sha256, `${manifestAsset.path} SHA-256 does not match the manifest`);
 }
 
-async function waitUntilReady(url, process, getOutput) {
+async function waitUntilReady(url, childProcess, getOutput) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (process.exitCode !== null) throw new Error(`Web server exited before readiness:\n${getOutput()}`);
+    if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
+      throw new Error(`Web server exited before readiness:\n${getOutput()}`);
+    }
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
       if (response.ok) {
         await response.body?.cancel();
         return;
@@ -176,6 +177,9 @@ function requestStatus(url, headers = {}) {
     const request = client.get(parsed, { headers }, (response) => {
       response.resume();
       resolve(response.statusCode ?? 0);
+    });
+    request.setTimeout(requestTimeoutMs, () => {
+      request.destroy(new Error(`Timed out requesting ${url} after ${requestTimeoutMs}ms`));
     });
     request.on("error", reject);
   });
