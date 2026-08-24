@@ -195,14 +195,14 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
   // ---------------------------------------------------------------------------
   // Scenario 1: Empty DB
   // ---------------------------------------------------------------------------
-  it("Scenario 1: Empty DB - applies all 51 migrations idempotently from clean state", async () => {
+  it("Scenario 1: Empty DB - applies all 52 migrations idempotently from clean state", async () => {
     const schema = await createIsolatedSchema("s1_empty");
     const allExpectedMigrations = (await readdir(migrationsDirectory))
       .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
       .sort();
-    expect(allExpectedMigrations).toHaveLength(51);
+    expect(allExpectedMigrations).toHaveLength(52);
 
-    // 1st run: all 51 migrations apply
+    // 1st run: all 52 migrations apply
     const firstRun = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
     expect(firstRun.applied).toEqual(allExpectedMigrations);
     expect(firstRun.current).toEqual(allExpectedMigrations);
@@ -223,11 +223,11 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       `;
       expect(extension).toEqual({ namespace: "public" });
 
-      // Verify schema_migrations table has all 51 migrations with valid SHA256 checksums
+      // Verify schema_migrations table has all 52 migrations with valid SHA256 checksums
       const recordedMigrations = await sql<{ name: string; checksum: string }[]>`
         SELECT name, checksum FROM schema_migrations ORDER BY name
       `;
-      expect(recordedMigrations).toHaveLength(51);
+      expect(recordedMigrations).toHaveLength(52);
       expect(recordedMigrations.map((r) => r.name)).toEqual(allExpectedMigrations);
       expect(recordedMigrations.every((r) => /^[0-9a-f]{64}$/u.test(r.checksum))).toBe(true);
 
@@ -252,9 +252,9 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
   }, 30_000);
 
   // ---------------------------------------------------------------------------
-  // Scenario 2: Historical pre-C2 populated dataset (migrated to 0027 -> forward 0028..0051)
+  // Scenario 2: Historical pre-C2 populated dataset (migrated to 0027 -> forward 0028..0052)
   // ---------------------------------------------------------------------------
-  it("Scenario 2: Historical pre-C2 - upgrades populated 0027 dataset forward through 0028..0051", async () => {
+  it("Scenario 2: Historical pre-C2 - upgrades populated 0027 dataset forward through 0028..0052", async () => {
     const schema = await createIsolatedSchema("s2_prec2");
     const { directory: copiedDir, allMigrations } = await copyMigrationsThrough(
       "0027_phase4_schedule_stage_dependencies.sql",
@@ -411,11 +411,11 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       `;
       expect(preAudit).toBeTruthy();
 
-      // Now copy forward migrations 0028..0051 into directory
+      // Now copy forward migrations 0028..0052 into directory
       const forwardMigrationNames = allMigrations.filter((name) => name >= "0028_gate_c_access_foundation.sql");
       await copyMigrationFiles(copiedDir, forwardMigrationNames);
 
-      // Run forward migrations to HEAD (0051)
+      // Run forward migrations to HEAD (0052)
       const forwardMigrate = await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });
       expect(forwardMigrate.applied).toEqual(forwardMigrationNames);
       expect(forwardMigrate.current).toEqual(allMigrations);
@@ -466,7 +466,7 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
   // ---------------------------------------------------------------------------
   // Scenario 3: Current-main DB (0032–0035 with unseeded entries & identity assurance)
   // ---------------------------------------------------------------------------
-  it("Scenario 3: Current-main DB - upgrades populated 0035 state forward through 0036..0051", async () => {
+  it("Scenario 3: Current-main DB - upgrades populated 0035 state forward through 0036..0052", async () => {
     const schema = await createIsolatedSchema("s3_currentmain");
     const { directory: copiedDir, allMigrations } = await copyMigrationsThrough(
       "0035_identity_authentication_assurance.sql",
@@ -580,9 +580,9 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       `;
       expect(assuranceRows).toHaveLength(3);
 
-      // 4. Now copy and apply forward Gate C migrations 0036..0051
+      // 4. Now copy and apply forward Gate C migrations 0036..0052
       const forwardGateCMigrations = allMigrations.filter((name) => name >= "0036_gate_c_offline_replay.sql");
-      expect(forwardGateCMigrations).toHaveLength(16);
+      expect(forwardGateCMigrations).toHaveLength(17);
       await copyMigrationFiles(copiedDir, forwardGateCMigrations);
 
       const upgradeResult = await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });
@@ -857,9 +857,9 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
   }, 30_000);
 
   // ---------------------------------------------------------------------------
-  // Scenario 6: Repaired malformed DB -> clean upgrade to HEAD (0051)
+  // Scenario 6: Repaired malformed DB -> clean upgrade to HEAD (0052)
   // ---------------------------------------------------------------------------
-  it("Scenario 6: Repaired malformed DB - cleanly upgrades to HEAD (0051) after data remediation", async () => {
+  it("Scenario 6: Repaired malformed DB - cleanly upgrades to HEAD (0052) after data remediation", async () => {
     const schema = await createIsolatedSchema("s6_repaired");
     const { directory: copiedDir, allMigrations } = await copyMigrationsThrough("0029_gate_c_five_sport_scoring.sql");
     await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });
@@ -979,13 +979,13 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
         WHERE corrected_match_id=${matchId} AND status='acknowledged' AND acknowledgement_reason IS NULL`;
       await sql`ALTER TABLE result_conflicts ENABLE TRIGGER result_conflicts_lifecycle_guard`;
 
-      // Copy all forward migrations 0030..0051
+      // Copy all forward migrations 0030..0052
       const forwardMigrations = allMigrations.filter(
         (name) => name >= "0030_gate_c_published_schedule_participants.sql",
       );
       await copyMigrationFiles(copiedDir, forwardMigrations);
 
-      // Now run forward migration across all remaining migrations to HEAD (0051)
+      // Now run forward migration across all remaining migrations to HEAD (0052)
       const upgradeResult = await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });
       expect(upgradeResult.applied).toEqual(forwardMigrations);
       expect(upgradeResult.current).toEqual(allMigrations);
