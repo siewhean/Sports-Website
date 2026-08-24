@@ -258,7 +258,7 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ code: "23505" });
+    ).rejects.toMatchObject({ statusCode: 409, code: "REVISION_CONFLICT" });
     await expect(
       runtime.saveFormatRevision(
         { accountId },
@@ -1342,7 +1342,7 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
           { idempotency_key: randomUUID(), expected_revision: accepted.revision },
           randomUUID(),
         ),
-      ).rejects.toMatchObject({ code: "ACCESS_DENIED", statusCode: 403 });
+      ).rejects.toMatchObject({ code: "COMPETITION_ACCESS_DENIED", statusCode: 404 });
     }
 
     const failingProjectionRuntime = new Phase4Runtime(

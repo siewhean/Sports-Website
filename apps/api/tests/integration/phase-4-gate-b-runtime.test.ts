@@ -941,7 +941,7 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
         `viewer-create-${randomUUID()}`,
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    ).rejects.toMatchObject({ statusCode: 404, code: "COMPETITION_ACCESS_DENIED" });
     expect(await evidenceCounts()).toEqual(beforeCreate);
 
     await runtime.createSetupDraft(

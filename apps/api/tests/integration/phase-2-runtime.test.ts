@@ -277,7 +277,7 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     if (!legacyFallbackPass.token) throw new Error("Expected legacy fallback token");
     await client`
       UPDATE scoring_access_passes
-      SET short_code_hash=NULL,fallback_code_hash_version='rotation_required'
+      SET short_code_hash=NULL,fallback_code_hmac_key_version=NULL,fallback_code_hash_version='rotation_required'
       WHERE id=${legacyFallbackPass.id}
     `;
     expect(
