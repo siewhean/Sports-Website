@@ -10,6 +10,7 @@ import {
   type ScoringAccessRateLimitHeaders,
   type ScoringAccessRateLimiter,
 } from "./scoring-access-rate-limit.js";
+import { ApiError, ErrorCode } from "./errors.js";
 import { Phase2Runtime, type Phase2DomainAdapter } from "./phase-2-runtime.js";
 
 export type FallbackExchangeInput = {
@@ -113,6 +114,37 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
         ),
       );
     }
+  }
+
+  /**
+   * The configured keyring is immutable for the process lifetime, whereas the
+   * durable registry can be promoted or retired by another instance. Consult
+   * that registry within every fallback-code transaction so an old process
+   * cannot keep issuing with a demoted primary or validating a retired key.
+   */
+  protected override async assertFallbackCodeHmacKeyVersion(
+    purpose: "issue" | "verify",
+    tx: PostgresJsSql,
+  ): Promise<void> {
+    const row = (
+      await tx.unsafe<{ status: "primary" | "verification_only" | "retired" }>(
+        "SELECT status FROM scoring_fallback_code_hmac_key_versions WHERE key_version=$1 FOR SHARE",
+        [this.fallbackCodeHmacKeyVersion],
+      )
+    )[0];
+    if (purpose === "issue" && row?.status === "primary") return;
+    if (purpose === "verify" && (row?.status === "primary" || row?.status === "verification_only")) return;
+    const code =
+      row?.status === "retired"
+        ? "FALLBACK_HMAC_KEY_VERSION_RETIRED"
+        : row
+          ? "FALLBACK_HMAC_KEY_VERSION_ACTIVE_STATE"
+          : "FALLBACK_HMAC_KEY_VERSION_UNKNOWN";
+    const message =
+      purpose === "issue"
+        ? "Fallback-code HMAC key version is not an active primary version"
+        : "Fallback-code HMAC key version is unavailable for verification";
+    throw new ApiError(purpose === "issue" ? 409 : 403, ErrorCode[code], message);
   }
 
   private async keyForPresentedFallbackCode(shortCode: string): Promise<ScoringFallbackHmacKey> {

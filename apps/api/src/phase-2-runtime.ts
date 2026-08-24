@@ -654,7 +654,7 @@ export class Phase2Runtime {
     fallbackCodeHmacSecret?: string,
     private readonly fallbackCodeGenerator: () => string = randomFallbackCode,
     private readonly takeoverRequestTtlMs = 5 * 60_000,
-    private readonly fallbackCodeHmacKeyVersion = "v1",
+    protected readonly fallbackCodeHmacKeyVersion = "v1",
   ) {
     if (!fallbackCodeHmacSecret || Buffer.byteLength(fallbackCodeHmacSecret, "utf8") < 32) {
       throw new Error("Scoring fallback-code HMAC secret must contain at least 32 bytes.");
@@ -720,6 +720,17 @@ export class Phase2Runtime {
         ? "SCORING_ACCESS_HMAC_KEY_VERSION_RETIRED"
         : "SCORING_ACCESS_HMAC_KEY_VERSION_UNKNOWN";
     throw new ApiError(409, code, "Scoring access HMAC key version is not an active primary version");
+  }
+
+  /**
+   * Implementations with a durable fallback-code HMAC registry override this
+   * hook. Keeping it inside the same transaction as the access-pass mutation
+   * prevents a stale in-memory runtime from issuing (or rotating) a code after
+   * its configured primary has been demoted or retired.
+   */
+  protected async assertFallbackCodeHmacKeyVersion(_purpose: "issue" | "verify", _tx: PostgresJsSql): Promise<void> {
+    void _purpose;
+    void _tx;
   }
 
   private async requireCompetitionAccess(
@@ -1583,6 +1594,7 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
+      await this.assertFallbackCodeHmacKeyVersion("issue", tx);
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
       const normalized =
         typeof input === "string"
@@ -1750,6 +1762,7 @@ export class Phase2Runtime {
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
+      await this.assertFallbackCodeHmacKeyVersion("issue", tx);
       const competition = await this.requireCompetitionAccess(tx, competitionId, actor);
       const pass = required(
         await tx.unsafe<{ id: string; match_id: string; revoked_at: Date | string | null; expires_at: Date | string }>(
@@ -2487,6 +2500,7 @@ export class Phase2Runtime {
         if (Boolean(input.token) === Boolean(input.shortCode)) {
           throw new ApiError(400, ErrorCode.ACCESS_SECRET_AMBIGUOUS, "Provide exactly one access token or short code");
         }
+        if (input.shortCode) await this.assertFallbackCodeHmacKeyVersion("verify", tx);
         const digest = input.token ? hashSecret(presented) : hashFallbackCode(presented, this.fallbackCodeHmacSecret);
         const column = input.token ? "secret_hash" : "short_code_hash";
         const loadPass = (lock: boolean) =>
