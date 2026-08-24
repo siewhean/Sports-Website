@@ -319,11 +319,51 @@ function validateHmac(artifactsRoot, targetSha) {
     receipt.source_sha !== targetSha ||
     receipt.evidence_type !== "operational_drill" ||
     receipt.status !== "PASS" ||
+    !/^([a-f0-9]{64})$/u.test(receipt.control_plane_sha256 || "") ||
+    !/^([a-f0-9]{64})$/u.test(receipt.attestation_nonce_sha256 || "") ||
+    !/^([a-f0-9]{64})$/u.test(receipt.run_id_sha256 || "") ||
+    !/^([a-f0-9]{64})$/u.test(receipt.deployment_id_sha256 || "") ||
+    !/^([a-f0-9]{64})$/u.test(receipt.build_id_sha256 || "") ||
+    !/^([a-f0-9]{64})$/u.test(receipt.operator_attestation_sha256 || "") ||
+    typeof receipt.drill_log !== "string" ||
+    path.isAbsolute(receipt.drill_log) ||
+    receipt.drill_log.split(/[\\/]/u).includes("..") ||
+    !/^([a-f0-9]{64})$/u.test(receipt.drill_log_sha256 || "") ||
     receipt.rate_limit?.status !== "PASS" ||
     receipt.fallback_code?.status !== "PASS"
   ) {
     throw new Error("HMAC rotation receipt does not prove both genuine keyring rotations");
   }
+  const drillLog = safeRelative(path.dirname(file), path.join(path.dirname(file), receipt.drill_log), "HMAC drill log");
+  const drillDirectory = path.dirname(drillLog);
+  const expectedDrillDirectory = path.join(artifactsRoot, "gate-c-c5", targetSha, "hmac-rotation");
+  if (
+    !fs.existsSync(drillLog) ||
+    fs.lstatSync(drillLog).isSymbolicLink() ||
+    drillDirectory !== expectedDrillDirectory ||
+    fs.lstatSync(expectedDrillDirectory).isSymbolicLink()
+  ) {
+    throw new Error("HMAC rotation receipt is missing a retained non-symlink drill log");
+  }
+  if (sha256(fs.readFileSync(drillLog)) !== receipt.drill_log_sha256) {
+    throw new Error("HMAC rotation drill log hash mismatch");
+  }
+  let drillAttestation;
+  try {
+    drillAttestation = JSON.parse(fs.readFileSync(drillLog, "utf8"));
+  } catch {
+    throw new Error("HMAC rotation drill log is not JSON");
+  }
+  if (
+    !drillAttestation ||
+    drillAttestation.source_sha !== targetSha ||
+    sha256(drillAttestation.attestation_nonce || "") !== receipt.attestation_nonce_sha256 ||
+    sha256(drillAttestation.run_id || "") !== receipt.run_id_sha256 ||
+    sha256(drillAttestation.deployment_id || "") !== receipt.deployment_id_sha256 ||
+    sha256(drillAttestation.build_id || "") !== receipt.build_id_sha256 ||
+    sha256(drillAttestation.attestation || "") !== receipt.operator_attestation_sha256
+  )
+    throw new Error("HMAC rotation drill provenance hash mismatch");
   for (const [name, rotation] of [
     ["rate_limit", receipt.rate_limit],
     ["fallback_code", receipt.fallback_code],
@@ -331,11 +371,38 @@ function validateHmac(artifactsRoot, targetSha) {
     if (
       rotation.new_primary_issuance_verified !== true ||
       rotation.old_material_overlap_verified !== true ||
+      rotation.premature_retirement_refused !== true ||
+      rotation.audited_retirement_verified !== true ||
       rotation.ambiguity_failed_closed !== true ||
-      rotation.retirement_verified !== true
+      rotation.retirement_verified !== true ||
+      rotation.retired_key_rejected !== true ||
+      typeof rotation.recovery_oracle !== "string" ||
+      !/^[a-z][a-z0-9_]{2,199}$/u.test(rotation.recovery_oracle)
     ) {
       throw new Error(`HMAC ${name} rotation is missing a mandatory observation`);
     }
+    const rawRotation = drillAttestation[name];
+    const rotationFields = [
+      "new_primary_issuance_verified",
+      "old_material_overlap_verified",
+      "premature_retirement_refused",
+      "audited_retirement_verified",
+      "retirement_verified",
+      "retired_key_rejected",
+      "ambiguity_failed_closed",
+      "recovery_oracle",
+    ];
+    if (
+      !rawRotation ||
+      rotationFields.some((field) => rotation[field] !== rawRotation[field]) ||
+      !Array.isArray(rotation.key_fingerprints) ||
+      rotation.key_fingerprints.length < 2 ||
+      new Set(rotation.key_fingerprints).size !== rotation.key_fingerprints.length ||
+      !Array.isArray(rawRotation.key_fingerprints) ||
+      rawRotation.key_fingerprints.length !== rotation.key_fingerprints.length ||
+      rawRotation.key_fingerprints.some((value, index) => value !== rotation.key_fingerprints[index])
+    )
+      throw new Error(`HMAC ${name} rotation is not bound to the retained drill attestation`);
     for (const fingerprint of rotation.key_fingerprints || []) assertSha256(fingerprint, `${name} key fingerprint`);
   }
   return { data: receipt, evidence: fileEvidence(file), path: file };

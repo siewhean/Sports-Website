@@ -17,8 +17,20 @@ function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function commandEnvironmentKey(fault: C5ControlledFailure, phase: "INJECT" | "RECOVER" | "CLEANUP"): string {
+type DrillPhase = "PRECONDITION" | "INJECT" | "DEGRADATION" | "RECOVER" | "INVARIANT" | "CLEANUP";
+
+function commandEnvironmentKey(fault: C5ControlledFailure, phase: DrillPhase): string {
   return `GATE_C_C5_${fault.toUpperCase()}_${phase}_COMMAND`;
+}
+
+function unavailable(fault: C5ControlledFailure, phase: string): string {
+  return `${fault}:${phase}:NOT_REACHED\n`;
+}
+
+function failed(fault: C5ControlledFailure, phase: string): string {
+  // Do not retain a provider error message: those often include command-line
+  // context or credentials. The command itself is the secure-system record.
+  return `${fault}:${phase}:FAILED\n`;
 }
 
 async function invoke(command: string, fault: C5ControlledFailure, phase: string): Promise<string> {
@@ -57,24 +69,56 @@ export function createGateCC5ControlledStagingFaultHooks(
     C5_CONTROLLED_FAILURES.map((fault) => [
       fault,
       async (): Promise<C5ControlledFailureReceipt> => {
-        const commands = {
+        const commands: Record<
+          "precondition" | "injection" | "degradation" | "recovery" | "invariant" | "cleanup",
+          string | undefined
+        > = {
+          precondition: environment[commandEnvironmentKey(fault, "PRECONDITION")],
           injection: environment[commandEnvironmentKey(fault, "INJECT")],
+          degradation: environment[commandEnvironmentKey(fault, "DEGRADATION")],
           recovery: environment[commandEnvironmentKey(fault, "RECOVER")],
+          invariant: environment[commandEnvironmentKey(fault, "INVARIANT")],
           cleanup: environment[commandEnvironmentKey(fault, "CLEANUP")],
         };
-        if (!commands.injection || !commands.recovery || !commands.cleanup) {
-          throw new Error(`Gate C C5 ${fault} requires INJECT, RECOVER and CLEANUP controlled-staging commands`);
+        if (Object.values(commands).some((command) => !command)) {
+          throw new Error(
+            `Gate C C5 ${fault} requires PRECONDITION, INJECT, DEGRADATION, RECOVER, INVARIANT and CLEANUP controlled-staging commands`,
+          );
         }
         const directory = path.join(input.retainedRoot, fault);
         await mkdir(directory, { recursive: true });
-        const injection = await invoke(commands.injection, fault, "injection");
-        const recovery = await invoke(commands.recovery, fault, "recovery");
-        const cleanup = await invoke(commands.cleanup, fault, "cleanup");
-        await Promise.all([
-          writeFile(path.join(directory, "injection.log"), injection, { encoding: "utf8", flag: "wx", mode: 0o600 }),
-          writeFile(path.join(directory, "recovery.log"), recovery, { encoding: "utf8", flag: "wx", mode: 0o600 }),
-          writeFile(path.join(directory, "cleanup.log"), cleanup, { encoding: "utf8", flag: "wx", mode: 0o600 }),
-        ]);
+        let injection = "";
+        let recovery = "";
+        let cleanup = "";
+        let phaseFailure: unknown;
+        try {
+          injection += await invoke(commands.precondition!, fault, "precondition");
+          injection += await invoke(commands.injection!, fault, "injection");
+          injection += await invoke(commands.degradation!, fault, "degradation");
+          recovery += await invoke(commands.recovery!, fault, "recovery");
+          recovery += await invoke(commands.invariant!, fault, "invariant");
+        } catch (error) {
+          phaseFailure = error;
+          injection ||= failed(fault, "fault_phase");
+          recovery ||= unavailable(fault, "recovery");
+        } finally {
+          try {
+            cleanup = await invoke(commands.cleanup!, fault, "cleanup");
+          } catch {
+            cleanup = failed(fault, "cleanup");
+          }
+          injection ||= unavailable(fault, "injection");
+          recovery ||= unavailable(fault, "recovery");
+          await Promise.all([
+            writeFile(path.join(directory, "injection.log"), injection, { encoding: "utf8", flag: "wx", mode: 0o600 }),
+            writeFile(path.join(directory, "recovery.log"), recovery, { encoding: "utf8", flag: "wx", mode: 0o600 }),
+            writeFile(path.join(directory, "cleanup.log"), cleanup, { encoding: "utf8", flag: "wx", mode: 0o600 }),
+          ]);
+        }
+        if (phaseFailure) throw phaseFailure;
+        if (cleanup.includes(":FAILED\n")) {
+          throw new Error(`Gate C C5 ${fault} cleanup command failed after the controlled drill`);
+        }
         return {
           fault,
           injector: "command",

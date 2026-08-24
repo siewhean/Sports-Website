@@ -207,15 +207,44 @@ function setupC5(artifactsDir, candidateSha) {
     status: "PASS",
     new_primary_issuance_verified: true,
     old_material_overlap_verified: true,
+    premature_retirement_refused: true,
+    audited_retirement_verified: true,
     ambiguity_failed_closed: true,
     retirement_verified: true,
+    retired_key_rejected: true,
     key_fingerprints: [sha256("new"), sha256("old")],
+    recovery_oracle: "rotation_recovered",
   };
+  const hmacLog =
+    JSON.stringify({
+      source_sha: candidateSha,
+      run_id: "test-run",
+      deployment_id: "test-deployment",
+      build_id: "test-build",
+      attestation: "test-attestation",
+      attestation_nonce: "test-nonce",
+      rate_limit: { ...rotation, status: undefined },
+      fallback_code: {
+        ...rotation,
+        status: undefined,
+        key_fingerprints: [sha256("fallback-new"), sha256("fallback-old")],
+      },
+    }) + "\n";
+  fs.mkdirSync(path.join(c5Dir, "hmac-rotation"), { recursive: true });
+  fs.writeFileSync(path.join(c5Dir, "hmac-rotation", "drill.log"), hmacLog, "utf8");
   writeJson(path.join(c5Dir, "hmac-rotation.json"), {
     artifact_kind: "gate-c-c5-hmac-rotation",
     source_sha: candidateSha,
     evidence_type: "operational_drill",
     status: "PASS",
+    control_plane_sha256: sha256("https://control.example.test"),
+    attestation_nonce_sha256: sha256("test-nonce"),
+    run_id_sha256: sha256("test-run"),
+    deployment_id_sha256: sha256("test-deployment"),
+    build_id_sha256: sha256("test-build"),
+    operator_attestation_sha256: sha256("test-attestation"),
+    drill_log: "hmac-rotation/drill.log",
+    drill_log_sha256: sha256(hmacLog),
     rate_limit: rotation,
     fallback_code: { ...rotation, key_fingerprints: [sha256("fallback-new"), sha256("fallback-old")] },
   });
@@ -337,6 +366,68 @@ test("Gate C evidence-only sealer", async (t) => {
     const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "hmac-rotation.json");
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
     value.rate_limit.retirement_verified = false;
+    writeJson(file, value);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /mandatory observation/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("rejects a tampered or escaped HMAC drill log", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "hmac-rotation.json");
+    const log = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "hmac-rotation", "drill.log");
+    fs.writeFileSync(log, "tampered\n", "utf8");
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /drill log hash mismatch/,
+    );
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    value.drill_log = "../outside.log";
+    writeJson(file, value);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /genuine keyring rotations/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("rejects a missing HMAC drill log", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    fs.rmSync(path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "hmac-rotation", "drill.log"));
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /missing a retained non-symlink drill log/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("rejects disconnected HMAC provenance hashes", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "hmac-rotation.json");
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    value.run_id_sha256 = sha256("forged-run");
+    writeJson(file, value);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /provenance hash mismatch/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("rejects forged HMAC nonce, lifecycle and fingerprints", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const file = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "hmac-rotation.json");
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    value.attestation_nonce_sha256 = sha256("forged-nonce");
+    writeJson(file, value);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /provenance hash mismatch/,
+    );
+    value.attestation_nonce_sha256 = sha256("test-nonce");
+    value.rate_limit.retired_key_rejected = false;
     writeJson(file, value);
     assert.throws(
       () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),

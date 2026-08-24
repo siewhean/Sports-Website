@@ -46,6 +46,45 @@ Expected artifacts: `artifacts/qa/gate-c-c3/<candidate-sha>/physical/{ios,androi
 
 PASS oracle: both importer receipts pass `pnpm evidence:gate-c-c3:run`; hashes reopen against retained bytes; each iOS/Android receipt matches the same exact `READY` deployment/build/origin and approved route manifest; all eight scenarios pass exactly once. Failure to meet any condition is `BLOCKED`, never PASS.
 
+## C5 controlled-staging workload and HMAC lifecycle drills
+
+Required resources: a non-production API, web, worker-control and identity deployment; a disposable PostgreSQL schema and Redis namespace behind that deployment; authenticated C5 control-plane endpoints; and an operator-owned executable outside this checkout that runs the real rate-limit and fallback-code A-to-B lifecycle drills. Do not use local Fastify, loopback URLs, production origins, or an in-repository shell wrapper.
+
+```sh
+export PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"
+export CANDIDATE_SHA="$(git rev-parse HEAD)"
+export GATE_C_C5_STAGING_OPT_IN=1
+export GATE_C_C5_IDENTITY_BEARER_TOKEN='<32-plus-byte-staging-control-token>'
+export GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET='<32-plus-byte-shared-staging-attestation-secret>'
+export GATE_C_C5_DEPLOYMENT_ID='dpl_<exact-candidate-staging-deployment>'
+export GATE_C_C5_BUILD_ID='<exact-candidate-provider-build-id>'
+export GATE_C_C5_API_PROBE_URL='https://<staging-api>/health'
+export GATE_C_C5_WEB_PROBE_URL='https://<staging-web>/health'
+export GATE_C_C5_WORKER_PROBE_URL='https://<staging-worker-control>/health'
+export GATE_C_C5_IDENTITY_PROBE_URL='https://<staging-identity>/me'
+export GATE_C_C5_POSTGRES_IDENTIFIER='controlled-staging-postgres-schema-id'
+export GATE_C_C5_REDIS_NAMESPACE='matchday:staging:gate-c-c5:<run-id>:'
+export GATE_C_C5_SCORE_EVENT_ACK_ENDPOINT='https://<staging-control>/c5/score-event-acknowledgement'
+export GATE_C_C5_PUBLIC_CURRENT_ENDPOINT='https://<staging-control>/c5/public-current'
+export GATE_C_C5_PUBLIC_CONVERGENCE_ENDPOINT='https://<staging-control>/c5/public-convergence'
+export GATE_C_C5_LEASE_TAKEOVER_ENDPOINT='https://<staging-control>/c5/lease-takeover'
+export GATE_C_C5_REPAIR_PUBLICATION_ENDPOINT='https://<staging-control>/c5/repair-publication'
+export GATE_C_C5_WORKLOAD_PROFILE_JSON='<approved 900-second profile JSON>'
+export GATE_C_C5_MINIMUM_SAMPLES=500
+export GATE_C_C5_MAXIMUM_SAMPLES=1000000
+export GATE_C_C5_OPERATION_TIMEOUT_MS=30000
+# Set all 72 variables: GATE_C_C5_<FAULT>_{PRECONDITION,INJECT,DEGRADATION,RECOVER,INVARIANT,CLEANUP}_COMMAND
+export GATE_C_C5_HMAC_DRILL_OPT_IN=1
+export GATE_C_C5_HMAC_CONTROL_PLANE_URL='https://<staging-control>/hmac/health'
+export GATE_C_C5_HMAC_OPERATOR_TOKEN='<32-plus-byte-staging-hmac-control-token>'
+export GATE_C_C5_HMAC_DRILL_RUNNER='/opt/matchday-gate-c-operators/run-hmac-rotation-drill'
+pnpm evidence:gate-c-c5:run
+```
+
+Expected artifacts: `artifacts/qa/gate-c-c5/<candidate-sha>/certification.json`, the 36 retained fault logs, and `artifacts/qa/gate-c-c5/<candidate-sha>/hmac-rotation.json` plus its hash-bound `hmac-rotation/drill.log`.
+
+PASS oracle: each of five operations has 500 successful samples, zero timeout/unexpected failures, and its budget; every response has the signed exact SHA/run/deployment/build provenance from its distinct component origin; every fault hook proves precondition, injection, degradation, recovery, invariant and cleanup; and the external HMAC attestation proves new-primary issuance, overlap verification, premature-retirement refusal, audited retirement, retired-key rejection and ambiguity failure for both keyrings. The sealer rehashes all retained bytes.
+
 ## Provider deployment evidence
 
 Required credentials: `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`, and `VERCEL_TEAM_ID` for the dedicated staging project.

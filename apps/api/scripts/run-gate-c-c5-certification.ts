@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { type C5ApprovedWorkloadPlan, type C5IntegratedWorkloadReceipt } from "@matchday/observability";
 
 import { gateCC5RetainedArtifactRoot, verifyGateCC5RetainedArtifacts } from "./gate-c-c5-retained-artifacts.js";
+import { createGateCC5ControlledStagingRuntime } from "./gate-c-c5-controlled-staging-runtime.js";
+import { runGateCC5HmacRotationDrill } from "./run-gate-c-c5-hmac-rotation.js";
 import { parseGateCC5WorkloadProfile } from "./gate-c-c5-workload-profile.js";
 import { runC5BenchmarkAndEvidence } from "./run-gate-c-c5-benchmark.js";
 
@@ -45,8 +47,8 @@ async function writeCertification(output: string, receipt: unknown, artifacts: u
 
 /**
  * Authoritative C5 entry point. It deliberately has no local/default runtime:
- * certification is valid only when a controlled-staging adapter supplies real
- * Postgres, Redis, API/web/worker paths, and actual fault injection hooks.
+ * certification is valid only when the controlled-staging adapter invokes real
+ * deployed API/web/worker/identity endpoints and actual fault hooks.
  */
 export async function runGateCC5Certification(environment: NodeJS.ProcessEnv = process.env): Promise<string> {
   if (environment.GATE_C_C5_STAGING_OPT_IN !== "1") {
@@ -82,11 +84,13 @@ export async function runGateCC5Certification(environment: NodeJS.ProcessEnv = p
   const output = path.join(path.dirname(retainedRoot), "certification.json");
   const plan: C5ApprovedWorkloadPlan = { profile, minimumSamplesPerOperation };
   {
+    const runtime = await createGateCC5ControlledStagingRuntime({ retainedRoot, sourceSha, environment });
     const receipt = (await runC5BenchmarkAndEvidence({
       plan,
       maximumSamples,
       operationTimeoutMs,
       retainedRoot,
+      runtime,
     })) as C5IntegratedWorkloadReceipt;
     const retainedArtifacts = Object.fromEntries(
       receipt.controlled_failures.map((failure) => [
@@ -104,6 +108,7 @@ export async function runGateCC5Certification(environment: NodeJS.ProcessEnv = p
       receipt,
       artifacts: retainedArtifacts,
     });
+    await runGateCC5HmacRotationDrill({ sourceSha, environment });
     requireCleanSourceTree();
     if (exactSourceSha() !== sourceSha) throw new Error("Gate C C5 source changed during certification");
     await writeCertification(output, receipt, retainedArtifacts);
