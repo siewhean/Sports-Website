@@ -135,6 +135,30 @@ function setupC4(artifactsDir, candidateSha) {
 
 function setupC5(artifactsDir, candidateSha) {
   const c5Dir = path.join(artifactsDir, "gate-c-c5", candidateSha);
+  const retainedAttestation = (fault, lane) => {
+    const lanePhases = {
+      injection: ["PRECONDITION", "INJECT", "DEGRADATION"],
+      recovery: ["RECOVER", "INVARIANT"],
+      cleanup: ["CLEANUP"],
+    };
+    return JSON.stringify({
+      artifact_kind: "gate-c-c5-sanitized-fault-attestations-v1",
+      lane,
+      phases: lanePhases[lane].map((phase) => ({
+        protocol: "gate-c-c5-fault-attestation-v1",
+        source_sha: candidateSha,
+        run_id: "controlled-staging-run-1",
+        deployment_id: "dpl-controlled-staging-1",
+        build_id: "build-controlled-staging-1",
+        component: "gate_c_runner",
+        fault,
+        phase,
+        nonce_sha256: sha256(`${fault}:${phase}:nonce`),
+        observation_sha256: sha256(`${fault}:${phase}:observation`),
+        attestation_sha256: sha256(`${fault}:${phase}:attestation`),
+      })),
+    });
+  };
   const operation = (p95Ms) => ({
     operation: "placeholder",
     workerCount: 1,
@@ -164,9 +188,9 @@ function setupC5(artifactsDir, candidateSha) {
   for (const fault of REQUIRED_FAULTS) {
     const faultDir = path.join(c5Dir, "retained", fault);
     const logs = {
-      injection: `${fault}: real fault observed\n`,
-      recovery: `${fault}: recovery observed\n`,
-      cleanup: `${fault}: cleanup observed\n`,
+      injection: retainedAttestation(fault, "injection"),
+      recovery: retainedAttestation(fault, "recovery"),
+      cleanup: retainedAttestation(fault, "cleanup"),
     };
     fs.mkdirSync(faultDir, { recursive: true });
     for (const [name, content] of Object.entries(logs)) fs.writeFileSync(path.join(faultDir, `${name}.log`), content);
@@ -524,6 +548,72 @@ test("Gate C evidence-only sealer", async (t) => {
     assert.throws(
       () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
       /missing integrated/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("rejects stale or malformed hash-listed retained C5 attestations", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const certificationPath = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "certification.json");
+    const stalePath = path.join(
+      ws.artifactsDir,
+      "gate-c-c5",
+      candidateSha,
+      "retained",
+      "postgres_interruption",
+      "injection.log",
+    );
+    const certification = JSON.parse(fs.readFileSync(certificationPath, "utf8"));
+    const stale = JSON.parse(fs.readFileSync(stalePath, "utf8"));
+    stale.phases[0].source_sha = "2".repeat(40);
+    fs.writeFileSync(stalePath, JSON.stringify(stale), "utf8");
+    certification.receipt.controlled_failures.find(
+      (entry) => entry.fault === "postgres_interruption",
+    ).injection_evidence_sha256 = sha256(fs.readFileSync(stalePath));
+    writeJson(certificationPath, certification);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /invalid signed phase evidence/,
+    );
+
+    setupC5(ws.artifactsDir, candidateSha);
+    const malformed = JSON.parse(fs.readFileSync(stalePath, "utf8"));
+    [malformed.phases[0], malformed.phases[1]] = [malformed.phases[1], malformed.phases[0]];
+    fs.writeFileSync(stalePath, JSON.stringify(malformed), "utf8");
+    const replacement = JSON.parse(fs.readFileSync(certificationPath, "utf8"));
+    replacement.receipt.controlled_failures.find(
+      (entry) => entry.fault === "postgres_interruption",
+    ).injection_evidence_sha256 = sha256(fs.readFileSync(stalePath));
+    writeJson(certificationPath, replacement);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /invalid signed phase evidence/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("rejects hash-listed retained C5 artifacts with split run provenance", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const certificationPath = path.join(ws.artifactsDir, "gate-c-c5", candidateSha, "certification.json");
+    const retainedPath = path.join(
+      ws.artifactsDir,
+      "gate-c-c5",
+      candidateSha,
+      "retained",
+      "postgres_interruption",
+      "cleanup.log",
+    );
+    const artifact = JSON.parse(fs.readFileSync(retainedPath, "utf8"));
+    artifact.phases[0].run_id = "stale-run";
+    fs.writeFileSync(retainedPath, JSON.stringify(artifact), "utf8");
+    const certification = JSON.parse(fs.readFileSync(certificationPath, "utf8"));
+    certification.receipt.controlled_failures.find(
+      (entry) => entry.fault === "postgres_interruption",
+    ).cleanup_evidence_sha256 = sha256(fs.readFileSync(retainedPath));
+    writeJson(certificationPath, certification);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /one exact source\/run\/deployment\/build provenance/,
     );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });

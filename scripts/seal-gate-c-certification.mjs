@@ -442,6 +442,148 @@ export const C5_OPERATION_BUDGETS = {
   repair_publication: 2000,
 };
 
+const C5_FAULT_INJECTORS = new Set([
+  "process_signal",
+  "network_proxy",
+  "connection_limit",
+  "bounded_delay",
+  "filesystem_limit",
+  "command",
+]);
+const C5_RETAINED_PHASES = {
+  injection: ["PRECONDITION", "INJECT", "DEGRADATION"],
+  recovery: ["RECOVER", "INVARIANT"],
+  cleanup: ["CLEANUP"],
+};
+
+function plainRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null ? value : null;
+}
+
+function hasExactKeys(value, keys) {
+  const observed = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return observed.length === expected.length && observed.every((key, index) => key === expected[index]);
+}
+
+function assertC5RetainedRelativePath(value, label) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    path.isAbsolute(value) ||
+    value.includes("\\") ||
+    path.posix.normalize(value) !== value ||
+    value === "." ||
+    value === ".." ||
+    value.startsWith("../")
+  ) {
+    throw new Error(`C5 retained ${label} has an unsafe artifact path`);
+  }
+}
+
+function parseC5RetainedAttestation(content, { targetSha, fault, lane }) {
+  let artifact;
+  try {
+    artifact = JSON.parse(content.toString("utf8"));
+  } catch {
+    throw new Error(`C5 retained ${fault}/${lane} is not signed-attestation JSON`);
+  }
+  artifact = plainRecord(artifact);
+  const expectedPhases = C5_RETAINED_PHASES[lane];
+  if (
+    !artifact ||
+    artifact.artifact_kind !== "gate-c-c5-sanitized-fault-attestations-v1" ||
+    artifact.lane !== lane ||
+    !Array.isArray(artifact.phases) ||
+    artifact.phases.length !== expectedPhases.length
+  ) {
+    throw new Error(`C5 retained ${fault}/${lane} has incomplete phase evidence`);
+  }
+  return artifact.phases.map((value, index) => {
+    const phase = plainRecord(value);
+    if (
+      !phase ||
+      !hasExactKeys(phase, [
+        "protocol",
+        "source_sha",
+        "run_id",
+        "deployment_id",
+        "build_id",
+        "component",
+        "fault",
+        "phase",
+        "nonce_sha256",
+        "observation_sha256",
+        "attestation_sha256",
+      ]) ||
+      phase.protocol !== "gate-c-c5-fault-attestation-v1" ||
+      phase.source_sha !== targetSha ||
+      phase.fault !== fault ||
+      phase.phase !== expectedPhases[index] ||
+      !["run_id", "deployment_id", "build_id", "component"].every(
+        (field) => typeof phase[field] === "string" && phase[field],
+      )
+    ) {
+      throw new Error(`C5 retained ${fault}/${lane} has invalid signed phase evidence`);
+    }
+    for (const field of ["nonce_sha256", "observation_sha256", "attestation_sha256"]) {
+      assertSha256(phase[field], `C5 retained ${fault}/${lane}/${field}`);
+    }
+    return phase;
+  });
+}
+
+/**
+ * Keep the evidence sealer independent of the TypeScript collector: a hash
+ * listed by certification.json is not sufficient unless its retained file is
+ * a complete, exact-SHA C5 phase attestation.
+ */
+function validateC5RetainedArtifacts({ retainedRoot, targetSha, receipt, artifacts }) {
+  if (!plainRecord(artifacts) || !hasExactKeys(artifacts, REQUIRED_FAULTS)) {
+    throw new Error("C5 certification has unsupported retained fault records");
+  }
+  const provenance = new Set();
+  for (const fault of REQUIRED_FAULTS) {
+    const paths = plainRecord(artifacts[fault]);
+    if (!paths || !hasExactKeys(paths, ["injection", "recovery", "cleanup"])) {
+      throw new Error(`C5 retained ${fault} has an invalid artifact record`);
+    }
+    const failure = receipt.controlled_failures.find((candidate) => candidate?.fault === fault);
+    if (!failure || !C5_FAULT_INJECTORS.has(failure.injector)) {
+      throw new Error(`C5 retained ${fault} has invalid controlled-failure provenance`);
+    }
+    for (const [lane, receiptHashField] of [
+      ["injection", "injection_evidence_sha256"],
+      ["recovery", "recovery_evidence_sha256"],
+      ["cleanup", "cleanup_evidence_sha256"],
+    ]) {
+      const relativePath = paths[lane];
+      assertC5RetainedRelativePath(relativePath, `${fault}/${lane}`);
+      const fullPath = safeRelative(
+        retainedRoot,
+        path.join(retainedRoot, relativePath),
+        `C5 retained ${fault}/${lane}`,
+      );
+      const metadata = fs.lstatSync(fullPath);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        throw new Error(`C5 retained ${fault}/${lane} must be a regular non-symlink file`);
+      }
+      const content = fs.readFileSync(fullPath);
+      if (sha256(content) !== failure[receiptHashField]) {
+        throw new Error(`C5 retained ${fault}/${lane} hash does not match its receipt evidence`);
+      }
+      for (const phase of parseC5RetainedAttestation(content, { targetSha, fault, lane })) {
+        provenance.add(`${phase.source_sha}\u0000${phase.run_id}\u0000${phase.deployment_id}\u0000${phase.build_id}`);
+      }
+    }
+  }
+  if (provenance.size !== 1) {
+    throw new Error("C5 retained fault attestations are not bound to one exact source/run/deployment/build provenance");
+  }
+}
+
 function validateC5Certification(artifactsRoot, targetSha) {
   const certificationPath = path.join(artifactsRoot, "gate-c-c5", targetSha, "certification.json");
   const certification = readJson(certificationPath, "C5 integrated certification receipt");
@@ -495,23 +637,14 @@ function validateC5Certification(artifactsRoot, targetSha) {
     ) {
       throw new Error(`Fault drill ${fault} is missing integrated fail/recover/cleanup evidence`);
     }
-    for (const [key, field] of [
-      ["injection", "injection_evidence_sha256"],
-      ["recovery", "recovery_evidence_sha256"],
-      ["cleanup", "cleanup_evidence_sha256"],
-    ]) {
-      const relative = paths[key];
-      if (typeof relative !== "string" || path.isAbsolute(relative) || relative.split(/[\\/]/u).includes("..")) {
-        throw new Error(`Fault drill ${fault} has an unsafe retained log path`);
-      }
-      const full = safeRelative(retained, path.join(retained, relative), `Fault drill ${fault}`);
-      if (!fs.existsSync(full)) throw new Error(`Missing retained ${fault}/${key} log`);
-      if (fs.lstatSync(full).isSymbolicLink()) throw new Error(`Retained ${fault}/${key} log must not be a symlink`);
-      const digest = sha256(fs.readFileSync(full));
-      if (faultReceipt[0][field] !== digest) throw new Error(`${fault}/${key} log hash mismatch`);
-    }
     faults[fault] = faultReceipt[0];
   }
+  validateC5RetainedArtifacts({
+    retainedRoot: retained,
+    targetSha,
+    receipt,
+    artifacts: certification.retained_artifacts,
+  });
   return { data: receipt, faults, evidence: fileEvidence(certificationPath), path: certificationPath };
 }
 
