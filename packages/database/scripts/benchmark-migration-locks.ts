@@ -229,20 +229,20 @@ async function preparePopulatedSchema(
   await dropTestSchema(databaseUrl, schema);
 
   const tempMigrationsDir = await mkdtemp(path.join(os.tmpdir(), "matchday-bench-"));
-  await cp(migrationsDirectory, tempMigrationsDir, { recursive: true });
-
-  const allMigrations = (await readdir(tempMigrationsDir)).filter((n) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(n)).sort();
-
-  // Keep only migrations up to 0029
-  await Promise.all(
-    allMigrations
-      .filter((n) => n > "0029_gate_c_five_sport_scoring.sql")
-      .map((n) => rm(path.join(tempMigrationsDir, n))),
-  );
-
-  await migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema });
-
   try {
+    await cp(migrationsDirectory, tempMigrationsDir, { recursive: true });
+
+    const allMigrations = (await readdir(tempMigrationsDir)).filter((n) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(n)).sort();
+
+    // Keep only migrations up to 0029
+    await Promise.all(
+      allMigrations
+        .filter((n) => n > "0029_gate_c_five_sport_scoring.sql")
+        .map((n) => rm(path.join(tempMigrationsDir, n))),
+    );
+
+    await migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema });
+
     const sql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
     const accountId = randomUUID();
     const fixtureRows = c2MigrationLockFixtureExpectedRows(fixtureProfile);
@@ -420,10 +420,13 @@ async function preparePopulatedSchema(
   } catch (error) {
     // A failed observation must not leave its disposable staging schema or
     // copied migration directory behind for the next controlled run.
-    await Promise.allSettled([
-      dropTestSchema(databaseUrl, schema),
-      rm(tempMigrationsDir, { recursive: true, force: true }),
-    ]);
+    const cleanup = await cleanupC2MigrationLockResources(
+      () => dropTestSchema(databaseUrl, schema),
+      () => rm(tempMigrationsDir, { recursive: true, force: true }),
+    );
+    if (cleanup.failures.length > 0) {
+      throw new Error(`C2 fixture setup cleanup failed: ${cleanup.failures.join("; ")}`, { cause: error });
+    }
     throw error;
   }
 }
