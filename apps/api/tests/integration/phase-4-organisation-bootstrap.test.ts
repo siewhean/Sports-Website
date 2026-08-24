@@ -82,7 +82,9 @@ describeInfrastructure("organiser workspace bootstrap", () => {
     expect(replay).toMatchObject({ id: results[0]!.id, role: "owner", created: false });
 
     const workspaceId = results[0]!.id;
-    const outboxKey = `organisation.bootstrap:${accountId}`;
+    // The durable runtime scopes this replay key to both the owner and the
+    // provisioned aggregate. A bare account key is not the outbox contract.
+    const outboxKey = `organisation.bootstrap:${accountId}:${workspaceId}`;
     const counts = required(
       await client<
         {
@@ -102,7 +104,11 @@ describeInfrastructure("organiser workspace bootstrap", () => {
           (SELECT count(*)::int FROM organisation_memberships
             WHERE account_id=${accountId} AND role='owner' AND status='active') AS membership_count,
           (SELECT count(*)::int FROM audit_events
-            WHERE actor_account_id=${accountId} AND action='organisation.created') AS audit_count,
+            WHERE actor_account_id=${accountId}
+              AND organisation_id=${workspaceId}
+              AND action='organisation.created'
+              AND target_type='organisation'
+              AND target_id=${workspaceId}) AS audit_count,
           (SELECT count(*)::int FROM outbox_events
             WHERE aggregate_type='organisation'
               AND aggregate_id=${workspaceId}
@@ -115,6 +121,33 @@ describeInfrastructure("organiser workspace bootstrap", () => {
       membership_count: 1,
       audit_count: 1,
       outbox_count: 1,
+    });
+
+    const audit = required(
+      await client<
+        {
+          actor_type: string;
+          organisation_id: string;
+          target_type: string;
+          target_id: string;
+          after_state: { name: string; role: string };
+          metadata: { bootstrap: boolean };
+        }[]
+      >`
+        SELECT actor_type,organisation_id,target_type,target_id,after_state,metadata
+        FROM audit_events
+        WHERE actor_account_id=${accountId}
+          AND organisation_id=${workspaceId}
+          AND action='organisation.created'
+      `,
+    );
+    expect(audit).toEqual({
+      actor_type: "account",
+      organisation_id: workspaceId,
+      target_type: "organisation",
+      target_id: workspaceId,
+      after_state: { name: results[0]!.name, role: "owner" },
+      metadata: { bootstrap: true },
     });
 
     const outbox = required(
