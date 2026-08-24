@@ -24,6 +24,7 @@ describe("Gate C C5 controlled staging runtime", () => {
         environment: {
           GATE_C_C5_IDENTITY_BEARER_TOKEN: "x".repeat(32),
           GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET: "a".repeat(32),
+          GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET: "b".repeat(32),
           GATE_C_C5_DEPLOYMENT_ID: "dpl_staging",
           GATE_C_C5_BUILD_ID: "build_staging",
         },
@@ -39,6 +40,7 @@ describe("Gate C C5 controlled staging runtime", () => {
         environment: {
           GATE_C_C5_IDENTITY_BEARER_TOKEN: "x".repeat(32),
           GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET: "a".repeat(32),
+          GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET: "b".repeat(32),
           GATE_C_C5_DEPLOYMENT_ID: "dpl_staging",
           GATE_C_C5_BUILD_ID: "build_staging",
           GATE_C_C5_API_PROBE_URL: "https://localhost/health",
@@ -87,6 +89,7 @@ describe("Gate C C5 controlled staging runtime", () => {
     const environment = {
       GATE_C_C5_IDENTITY_BEARER_TOKEN: "x".repeat(32),
       GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET: "a".repeat(32),
+      GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET: "b".repeat(32),
       GATE_C_C5_DEPLOYMENT_ID: "dpl_staging",
       GATE_C_C5_BUILD_ID: "build_staging",
       GATE_C_C5_API_PROBE_URL: "https://api.staging.example.test/health",

@@ -321,6 +321,10 @@ export async function createGateCC5ControlledStagingRuntime(
   if (Buffer.byteLength(componentAttestationSecret, "utf8") < 32) {
     throw new Error("Gate C C5 component attestation secret must contain at least 32 bytes");
   }
+  const faultAttestationSecret = required(environment, "GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET");
+  if (Buffer.byteLength(faultAttestationSecret, "utf8") < 32) {
+    throw new Error("Gate C C5 fault attestation secret must contain at least 32 bytes");
+  }
   const runId = randomUUID();
   const deploymentId = required(environment, "GATE_C_C5_DEPLOYMENT_ID");
   const buildId = required(environment, "GATE_C_C5_BUILD_ID");
@@ -372,7 +376,15 @@ export async function createGateCC5ControlledStagingRuntime(
   ) as Record<C5WorkloadOperation, C5WorkloadExecutor>;
   return {
     executors,
-    controlledFailureHooks: createGateCC5ControlledStagingFaultHooks({ retainedRoot: input.retainedRoot, environment }),
+    controlledFailureHooks: createGateCC5ControlledStagingFaultHooks({
+      retainedRoot: input.retainedRoot,
+      sourceSha: input.sourceSha,
+      runId,
+      deploymentId,
+      buildId,
+      faultAttestationSecret,
+      environment,
+    }),
     postgresqlIdentifier: identifier(environment, "GATE_C_C5_POSTGRES_IDENTIFIER"),
     redisNamespace: identifier(environment, "GATE_C_C5_REDIS_NAMESPACE"),
   };

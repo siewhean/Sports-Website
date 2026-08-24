@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   C5_CONTROLLED_FAILURES,
@@ -16,6 +16,30 @@ import {
 const sourceSha = "c".repeat(40);
 const retainedRoot = gateCC5RetainedArtifactRoot(sourceSha);
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+const lanePhases = {
+  injection: ["PRECONDITION", "INJECT", "DEGRADATION"],
+  recovery: ["RECOVER", "INVARIANT"],
+  cleanup: ["CLEANUP"],
+} as const;
+function retainedArtifact(fault: C5ControlledFailure, lane: keyof typeof lanePhases): string {
+  return JSON.stringify({
+    artifact_kind: "gate-c-c5-sanitized-fault-attestations-v1",
+    lane,
+    phases: lanePhases[lane].map((phase) => ({
+      protocol: "gate-c-c5-fault-attestation-v1",
+      source_sha: sourceSha,
+      run_id: "run-1",
+      deployment_id: "dpl-1",
+      build_id: "build-1",
+      component: "test",
+      fault,
+      phase,
+      nonce_sha256: hash(`${fault}:${phase}:nonce`),
+      observation_sha256: hash(`${fault}:${phase}:observation`),
+      attestation_sha256: hash(`${fault}:${phase}:attestation`),
+    })),
+  });
+}
 
 afterEach(async () => {
   await rm(path.dirname(retainedRoot), { recursive: true, force: true });
@@ -35,9 +59,9 @@ async function createFixture(): Promise<{
     const recovery = `${fault}/recovery.log`;
     const cleanup = `${fault}/cleanup.log`;
     const contents = {
-      injection: `inject_${fault}`,
-      recovery: `recover_${fault}`,
-      cleanup: `cleanup_${fault}`,
+      injection: retainedArtifact(fault, "injection"),
+      recovery: retainedArtifact(fault, "recovery"),
+      cleanup: retainedArtifact(fault, "cleanup"),
     };
     await Promise.all(
       Object.entries({ injection, recovery, cleanup }).map(async ([kind, relativePath]) => {
@@ -80,7 +104,7 @@ describe("C5 retained drill artifacts", () => {
 
     await writeFile(
       path.join(retainedRoot, artifacts.redis_interruption.recovery),
-      "recover_redis_interruption",
+      retainedArtifact("redis_interruption", "recovery"),
       "utf8",
     );
     await rm(path.join(retainedRoot, artifacts.api_interruption.injection));
@@ -122,5 +146,39 @@ describe("C5 retained drill artifacts", () => {
         artifacts,
       }),
     ).rejects.toThrow("invalid api_interruption evidence");
+  });
+
+  it("rejects missing, reordered, and unsigned per-phase fault attestations", async () => {
+    const { receipt, artifacts } = await createFixture();
+    const file = path.join(retainedRoot, artifacts.web_interruption.injection);
+    const artifact = JSON.parse(await readFile(file, "utf8"));
+    artifact.phases.pop();
+    await writeFile(file, JSON.stringify(artifact), "utf8");
+    const missingPhaseReceipt = {
+      ...receipt,
+      controlled_failures: receipt.controlled_failures.map((failure) =>
+        failure.fault === "web_interruption"
+          ? { ...failure, injection_evidence_sha256: hash(JSON.stringify(artifact)) }
+          : failure,
+      ),
+    };
+    await expect(
+      verifyGateCC5RetainedArtifacts({ retainedRoot, sourceSha, receipt: missingPhaseReceipt, artifacts }),
+    ).rejects.toThrow("incomplete phase evidence");
+    await writeFile(file, retainedArtifact("web_interruption", "injection"), "utf8");
+    const reordered = JSON.parse(await readFile(file, "utf8"));
+    [reordered.phases[0], reordered.phases[1]] = [reordered.phases[1], reordered.phases[0]];
+    await writeFile(file, JSON.stringify(reordered), "utf8");
+    const reorderedReceipt = {
+      ...receipt,
+      controlled_failures: receipt.controlled_failures.map((failure) =>
+        failure.fault === "web_interruption"
+          ? { ...failure, injection_evidence_sha256: hash(JSON.stringify(reordered)) }
+          : failure,
+      ),
+    };
+    await expect(
+      verifyGateCC5RetainedArtifacts({ retainedRoot, sourceSha, receipt: reorderedReceipt, artifacts }),
+    ).rejects.toThrow("invalid signed phase evidence");
   });
 });

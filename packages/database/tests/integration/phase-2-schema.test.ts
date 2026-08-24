@@ -175,12 +175,21 @@ async function createWorld(): Promise<World> {
 
   const passA = randomUUID();
   const passB = randomUUID();
+  // The Phase 2 fixture creates legacy v1 fallback-code passes directly. Keep
+  // its provenance row explicit so it remains valid against an upgraded schema
+  // as well as one bootstrapped from migration 0052.
+  await sql`
+    INSERT INTO scoring_fallback_code_hmac_key_versions (key_version, material_commitment, status)
+    VALUES ('v1', decode(repeat('00', 32), 'hex'), 'primary')
+    ON CONFLICT (key_version) DO NOTHING
+  `;
   await sql`
     INSERT INTO scoring_access_passes (
-      id, competition_id, match_id, secret_hash, short_code_hash, fallback_code_hash_version, expires_at, created_by
+      id, competition_id, match_id, secret_hash, short_code_hash, fallback_code_hash_version,
+      fallback_code_hmac_key_version, expires_at, created_by
     ) VALUES
-      (${passA}, ${competitionA}, ${matchA}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', '2030-08-01T12:00:00Z', ${accountA}),
-      (${passB}, ${competitionB}, ${matchB}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', '2030-08-02T12:00:00Z', ${accountB})
+      (${passA}, ${competitionA}, ${matchA}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', 'v1', '2030-08-01T12:00:00Z', ${accountA}),
+      (${passB}, ${competitionB}, ${matchB}, ${randomBytes(32)}, ${randomBytes(32)}, 'hmac_sha256_v1', 'v1', '2030-08-02T12:00:00Z', ${accountB})
   `;
 
   const sessionA = randomUUID();

@@ -17,6 +17,11 @@ const secretLikeContent =
 const maximumArtifactBytes = 5 * 1024 * 1024;
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const recoveryOraclePattern = /^[a-z][a-z0-9_]{2,199}$/u;
+const faultPhaseLanes = {
+  injection: ["PRECONDITION", "INJECT", "DEGRADATION"],
+  recovery: ["RECOVER", "INVARIANT"],
+  cleanup: ["CLEANUP"],
+} as const;
 
 export type GateCC5FaultArtifactPaths = Readonly<{
   injection: string;
@@ -108,6 +113,67 @@ async function readRetainedArtifact(root: string, relativePath: string): Promise
     throw new Error("Gate C C5 retained artifact contains secret-like content");
   }
   return content;
+}
+
+function validateSanitizedFaultArtifact(
+  content: Buffer,
+  sourceSha: string,
+  fault: C5ControlledFailure,
+  lane: keyof typeof faultPhaseLanes,
+): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(content.toString("utf8"));
+  } catch {
+    throw new Error(`Gate C C5 retained ${fault}/${lane} artifact is not signed-attestation JSON`);
+  }
+  const artifact = record(value);
+  const phases = artifact?.phases;
+  if (
+    !artifact ||
+    artifact.artifact_kind !== "gate-c-c5-sanitized-fault-attestations-v1" ||
+    artifact.lane !== lane ||
+    !Array.isArray(phases) ||
+    phases.length !== faultPhaseLanes[lane].length
+  ) {
+    throw new Error(`Gate C C5 retained ${fault}/${lane} artifact has incomplete phase evidence`);
+  }
+  for (const [index, expectedPhase] of faultPhaseLanes[lane].entries()) {
+    const phase = record(phases[index]);
+    if (
+      !phase ||
+      !hasExactKeys(phase, [
+        "protocol",
+        "source_sha",
+        "run_id",
+        "deployment_id",
+        "build_id",
+        "component",
+        "fault",
+        "phase",
+        "nonce_sha256",
+        "observation_sha256",
+        "attestation_sha256",
+      ]) ||
+      phase.protocol !== "gate-c-c5-fault-attestation-v1" ||
+      phase.source_sha !== sourceSha ||
+      phase.fault !== fault ||
+      phase.phase !== expectedPhase ||
+      typeof phase.run_id !== "string" ||
+      !phase.run_id ||
+      typeof phase.deployment_id !== "string" ||
+      !phase.deployment_id ||
+      typeof phase.build_id !== "string" ||
+      !phase.build_id ||
+      typeof phase.component !== "string" ||
+      !phase.component ||
+      ![phase.nonce_sha256, phase.observation_sha256, phase.attestation_sha256].every(
+        (hash) => typeof hash === "string" && sha256Pattern.test(hash),
+      )
+    ) {
+      throw new Error(`Gate C C5 retained ${fault}/${lane} artifact has invalid signed phase evidence`);
+    }
+  }
 }
 
 function parseFaultEvidenceReceipt(value: unknown, sourceSha: string): GateCC5FaultEvidenceReceipt {
@@ -214,6 +280,9 @@ export async function verifyGateCC5RetainedArtifacts(
     ) {
       throw new Error(`Gate C C5 retained artifact hash does not match ${fault} receipt evidence`);
     }
+    validateSanitizedFaultArtifact(injection, input.sourceSha, fault, "injection");
+    validateSanitizedFaultArtifact(recovery, input.sourceSha, fault, "recovery");
+    validateSanitizedFaultArtifact(cleanup, input.sourceSha, fault, "cleanup");
     verified.push({ fault, ...hashes });
   }
   return verified;

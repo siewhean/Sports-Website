@@ -56,6 +56,7 @@ export CANDIDATE_SHA="$(git rev-parse HEAD)"
 export GATE_C_C5_STAGING_OPT_IN=1
 export GATE_C_C5_IDENTITY_BEARER_TOKEN='<32-plus-byte-staging-control-token>'
 export GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET='<32-plus-byte-shared-staging-attestation-secret>'
+export GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET='<separate-32-plus-byte-staging-fault-attestation-secret>'
 export GATE_C_C5_DEPLOYMENT_ID='dpl_<exact-candidate-staging-deployment>'
 export GATE_C_C5_BUILD_ID='<exact-candidate-provider-build-id>'
 export GATE_C_C5_API_PROBE_URL='https://<staging-api>/health'
@@ -74,6 +75,9 @@ export GATE_C_C5_MINIMUM_SAMPLES=500
 export GATE_C_C5_MAXIMUM_SAMPLES=1000000
 export GATE_C_C5_OPERATION_TIMEOUT_MS=30000
 # Set all 72 variables: GATE_C_C5_<FAULT>_{PRECONDITION,INJECT,DEGRADATION,RECOVER,INVARIANT,CLEANUP}_COMMAND
+# Each executable must return exactly one signed control-plane JSON attestation
+# bound to the supplied SHA/run/deployment/build/component/fault/phase/nonce.
+# Arbitrary stdout is rejected and only hashes are retained.
 export GATE_C_C5_HMAC_DRILL_OPT_IN=1
 export GATE_C_C5_HMAC_CONTROL_PLANE_URL='https://<staging-control>/hmac/health'
 export GATE_C_C5_HMAC_OPERATOR_TOKEN='<32-plus-byte-staging-hmac-control-token>'

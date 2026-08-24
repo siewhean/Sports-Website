@@ -117,6 +117,210 @@ function validateLaneLedger({ artifactsRoot, targetSha, directoryName, artifactK
   return { data: ledger, evidence: fileEvidence(ledgerPath), path: ledgerPath };
 }
 
+const C2_PROFILE_KEYS = {
+  baseline: "Baseline",
+  publicReads: "PublicReads",
+  organiserReads: "OrganiserReads",
+  writerMutations: "WriterMutations",
+};
+
+const C2_MINIMUM_FIXTURE = {
+  competitions: 3,
+  divisionsPerCompetition: 2,
+  matchesPerDivision: 12,
+  scoreEventsPerMatch: 16,
+  scoringSessionsPerMatch: 1,
+  resultConflictsPerCompetition: 2,
+};
+
+function assertFiniteNonNegative(value, label) {
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be a finite non-negative number`);
+}
+
+function validateC2MigrationLockBenchmark(artifactsRoot, targetSha) {
+  const c2Directory = path.join(artifactsRoot, "gate-c-c2", targetSha);
+  const reportPath = path.join(c2Directory, "migration-lock-benchmark.json");
+  if (!fs.existsSync(reportPath)) {
+    throw new Error(`Missing C2 controlled-staging migration lock benchmark: ${reportPath}`);
+  }
+  if (fs.lstatSync(reportPath).isSymbolicLink()) {
+    throw new Error("C2 controlled-staging migration lock benchmark must not be a symlink");
+  }
+  const report = readJson(reportPath, "C2 controlled-staging migration lock benchmark");
+  if (
+    report?.schemaVersion !== 3 ||
+    report?.artifactKind !== "gate-c-c2-migration-lock-benchmark" ||
+    report?.sourceSha !== targetSha ||
+    report?.executionClassification !== "controlled_staging_observation" ||
+    typeof report?.timestamp !== "string" ||
+    !Number.isFinite(Date.parse(report.timestamp)) ||
+    report?.engine !== "PostgreSQL" ||
+    typeof report?.postgresVersion !== "string" ||
+    report.postgresVersion.trim() === "" ||
+    report.postgresVersion === "unknown"
+  ) {
+    throw new Error("C2 controlled-staging migration lock benchmark is not a current exact-SHA PostgreSQL receipt");
+  }
+  assertSha256(report.database?.databaseNameHash, "C2 database identifier hash");
+  assertFiniteNonNegative(report.database?.databaseSizeBytes, "C2 database size");
+
+  const fixture = report.fixtureProfile;
+  if (!fixture || fixture.name !== "representative-c2-v1") {
+    throw new Error("C2 controlled-staging benchmark lacks the representative fixture profile");
+  }
+  for (const [key, minimum] of Object.entries(C2_MINIMUM_FIXTURE)) {
+    if (!Number.isSafeInteger(fixture[key]) || fixture[key] < minimum) {
+      throw new Error(`C2 controlled-staging fixture ${key} is below the representative minimum`);
+    }
+  }
+  const expectedRows = {
+    competitions: fixture.competitions,
+    divisions: fixture.competitions * fixture.divisionsPerCompetition,
+    matches: fixture.competitions * fixture.divisionsPerCompetition * fixture.matchesPerDivision,
+    scheduledMatches: fixture.competitions * fixture.divisionsPerCompetition * fixture.matchesPerDivision,
+    scoreEvents:
+      fixture.competitions * fixture.divisionsPerCompetition * fixture.matchesPerDivision * fixture.scoreEventsPerMatch,
+    scoringSessions:
+      fixture.competitions *
+      fixture.divisionsPerCompetition *
+      fixture.matchesPerDivision *
+      fixture.scoringSessionsPerMatch,
+    resultConflicts: fixture.competitions * fixture.resultConflictsPerCompetition,
+  };
+  for (const [key, expected] of Object.entries(expectedRows)) {
+    if (report.fixtureRows?.[key] !== expected) {
+      throw new Error(`C2 controlled-staging fixture row outcome is inconsistent for ${key}`);
+    }
+  }
+
+  if (!report.profiles || typeof report.profiles !== "object") {
+    throw new Error("C2 controlled-staging benchmark has no profile outcomes");
+  }
+  for (const [key, profileName] of Object.entries(C2_PROFILE_KEYS)) {
+    const profile = report.profiles[key];
+    if (!profile || profile.profileName !== profileName || typeof profile.description !== "string") {
+      throw new Error(`C2 controlled-staging profile ${key} is missing or malformed`);
+    }
+    for (const field of ["migration0030DurationMs", "migration0031DurationMs", "totalDurationMs", "lockWaitQueueMax"]) {
+      assertFiniteNonNegative(profile[field], `C2 ${key}/${field}`);
+    }
+    if (!profile.tableLockModes || typeof profile.tableLockModes !== "object") {
+      throw new Error(`C2 controlled-staging profile ${key} has no lock observations`);
+    }
+    for (const field of ["min", "p50", "p95", "max"]) {
+      assertFiniteNonNegative(profile.concurrentQueryLatenciesMs?.[field], `C2 ${key}/latency/${field}`);
+    }
+    if (
+      profile.totalDurationMs < profile.migration0030DurationMs ||
+      profile.totalDurationMs < profile.migration0031DurationMs
+    ) {
+      throw new Error(`C2 controlled-staging profile ${key} has inconsistent migration timing`);
+    }
+    for (const field of [
+      "concurrentQueriesExecuted",
+      "concurrentQueriesBlocked",
+      "concurrentQueriesTimedOut",
+      "concurrentQueriesDeadlocked",
+    ]) {
+      if (!Number.isSafeInteger(profile[field]) || profile[field] < 0) {
+        throw new Error(`C2 ${key}/${field} must be a non-negative integer`);
+      }
+    }
+    if (profile.concurrentQueriesTimedOut !== 0 || profile.concurrentQueriesDeadlocked !== 0) {
+      throw new Error(`C2 controlled-staging profile ${key} observed a timeout or deadlock`);
+    }
+    if (key !== "baseline" && profile.concurrentQueriesExecuted < 1) {
+      throw new Error(`C2 controlled-staging profile ${key} did not retain successful concurrent traffic`);
+    }
+    if (JSON.stringify(profile.fixtureRows) !== JSON.stringify(expectedRows)) {
+      throw new Error(`C2 controlled-staging profile ${key} has inconsistent fixture row outcomes`);
+    }
+    if (
+      !profile.cleanup ||
+      profile.cleanup.schemaDropped !== true ||
+      profile.cleanup.temporaryMigrationDirectoryRemoved !== true ||
+      !Array.isArray(profile.cleanup.failures) ||
+      profile.cleanup.failures.length !== 0
+    ) {
+      throw new Error(`C2 controlled-staging profile ${key} has incomplete cleanup evidence`);
+    }
+    const raw = profile.retainedRawLog;
+    const rawFilename = `${key.replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}.json`;
+    const expectedRawPath = `artifacts/qa/gate-c-c2/${targetSha}/raw/${rawFilename}`;
+    if (!raw || raw.path !== expectedRawPath) {
+      throw new Error(`C2 controlled-staging profile ${key} has an unexpected raw observation path`);
+    }
+    assertSha256(raw.sha256, `C2 ${key} raw observation hash`);
+    const rawPath = path.join(c2Directory, "raw", rawFilename);
+    if (fs.lstatSync(rawPath).isSymbolicLink()) {
+      throw new Error(`C2 controlled-staging profile ${key} raw observation must not be a symlink`);
+    }
+    const rawBytes = fs.readFileSync(rawPath);
+    if (sha256(rawBytes) !== raw.sha256)
+      throw new Error(`C2 controlled-staging profile ${key} raw observation hash mismatch`);
+    const rawObservation = readJson(rawPath, `C2 ${key} raw observation`);
+    const traffic = rawObservation?.traffic;
+    const summaryTraffic = {
+      executed: profile.concurrentQueriesExecuted,
+      blocked: profile.concurrentQueriesBlocked,
+      timedOut: profile.concurrentQueriesTimedOut,
+      deadlocked: profile.concurrentQueriesDeadlocked,
+    };
+    if (
+      !Array.isArray(rawObservation?.lockSamples) ||
+      !traffic ||
+      Object.entries(summaryTraffic).some(([field, value]) => traffic[field] !== value) ||
+      !Array.isArray(traffic.latencies) ||
+      rawObservation.lockSamples.some(
+        (sample) =>
+          !sample ||
+          typeof sample.tableName !== "string" ||
+          typeof sample.lockMode !== "string" ||
+          typeof sample.granted !== "boolean" ||
+          typeof sample.querySnippet !== "string" ||
+          !Number.isFinite(sample.timestampMs),
+      )
+    ) {
+      throw new Error(`C2 controlled-staging profile ${key} raw observation is inconsistent with its summary`);
+    }
+  }
+  const abort = report.abortRollback;
+  if (
+    !abort ||
+    typeof abort.scenario !== "string" ||
+    abort.scenario.trim() === "" ||
+    typeof abort.preflightFailureTriggered !== "string" ||
+    abort.preflightFailureTriggered.trim() === "" ||
+    abort.lockReleaseVerified !== true ||
+    abort.postRollbackLocksRemaining !== 0 ||
+    !abort.cleanup ||
+    abort.cleanup.schemaDropped !== true ||
+    abort.cleanup.temporaryMigrationDirectoryRemoved !== true ||
+    !Array.isArray(abort.cleanup.failures) ||
+    abort.cleanup.failures.length !== 0
+  ) {
+    throw new Error("C2 controlled-staging abort/rollback cleanup evidence is incomplete");
+  }
+  assertFiniteNonNegative(abort.ddlAttemptDurationMs, "C2 abort/rollback DDL duration");
+  assertFiniteNonNegative(abort.rollbackDurationMs, "C2 abort/rollback duration");
+  if (
+    !report.cleanup ||
+    report.cleanup.schemasDropped !== 5 ||
+    report.cleanup.temporaryMigrationDirectoriesRemoved !== 5 ||
+    !Array.isArray(report.cleanup.cleanupFailures) ||
+    report.cleanup.cleanupFailures.length !== 0
+  ) {
+    throw new Error("C2 controlled-staging aggregate cleanup evidence is incomplete");
+  }
+  if (
+    report.recommendations?.maintenanceWindowRequired !== true ||
+    report.recommendations?.writeDrainRequired !== true
+  ) {
+    throw new Error("C2 controlled-staging benchmark must retain the maintenance and write-drain conclusion");
+  }
+  return { data: report, evidence: fileEvidence(reportPath), path: reportPath };
+}
+
 function validateC4Receipt(artifactsRoot, targetSha) {
   const receiptPath = path.join(artifactsRoot, "gate-c-c4", targetSha, "run-evidence.json");
   const receipt = readJson(receiptPath, "C4 exact-SHA run evidence");
@@ -464,6 +668,7 @@ export function sealGateCCertification(options = {}) {
     artifactKind: "gate-c-c2-exact-sha-ledger",
     label: "C2 scoring",
   });
+  const c2MigrationLock = validateC2MigrationLockBenchmark(artifactsRoot, targetSha);
   const c3Browser = validateC3BrowserRun(artifactsRoot, targetSha);
   const ios = validatePhysicalPlatform(artifactsRoot, targetSha, "ios");
   const android = validatePhysicalPlatform(artifactsRoot, targetSha, "android");
@@ -476,6 +681,7 @@ export function sealGateCCertification(options = {}) {
   const laneEvidence = {
     c1: { receipt: relative(rootDir, c1.path), sha256: c1.evidence.sha256 },
     c2: { receipt: relative(rootDir, c2.path), sha256: c2.evidence.sha256 },
+    c2_migration_lock: { receipt: relative(rootDir, c2MigrationLock.path), sha256: c2MigrationLock.evidence.sha256 },
     c3_browser: { receipt: relative(rootDir, c3Browser.path), sha256: c3Browser.evidence.sha256 },
     c3_ios: { receipt: relative(rootDir, ios.path), sha256: ios.evidence.sha256 },
     c3_android: { receipt: relative(rootDir, android.path), sha256: android.evidence.sha256 },
@@ -508,9 +714,16 @@ export function sealGateCCertification(options = {}) {
       status: "PASS",
       collected_at: timestamp,
       environment: c2.data.environment,
-      source_receipt: laneEvidence.c2,
+      source_receipts: { scoring: laneEvidence.c2, migration_lock: laneEvidence.c2_migration_lock },
       command_count: c2.data.commands.length,
       independent_run_count: c2.data.runs.length,
+      controlled_staging: {
+        profile: c2MigrationLock.data.fixtureProfile,
+        fixture_rows: c2MigrationLock.data.fixtureRows,
+        database_size_bytes: c2MigrationLock.data.database.databaseSizeBytes,
+        maintenance_window_required: c2MigrationLock.data.recommendations.maintenanceWindowRequired,
+        write_drain_required: c2MigrationLock.data.recommendations.writeDrainRequired,
+      },
     },
     c3: {
       schema_version: 2,
@@ -582,7 +795,10 @@ export function sealGateCCertification(options = {}) {
     certified_at: timestamp,
     components: {
       c1_access_and_leasing: { status: "PASS", evidence: laneEvidence.c1 },
-      c2_scoring_and_projection: { status: "PASS", evidence: laneEvidence.c2 },
+      c2_scoring_and_projection: {
+        status: "PASS",
+        evidence: { scoring: laneEvidence.c2, migration_lock: laneEvidence.c2_migration_lock },
+      },
       c3_offline_sync: { status: "PASS", evidence: laneEvidence.c3_browser },
       c4_repairs_and_truth: { status: "PASS", evidence: laneEvidence.c4 },
       c5_performance_and_drills: { status: "PASS", evidence: laneEvidence.c5 },

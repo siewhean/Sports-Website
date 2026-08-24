@@ -18,9 +18,13 @@ creates a C5 `PASS` record from this document or from the observation benchmark.
   external control-plane endpoints.
 - For every one of the twelve fault names, six executable command variables:
   `GATE_C_C5_<FAULT>_{PRECONDITION,INJECT,DEGRADATION,RECOVER,INVARIANT,CLEANUP}_COMMAND`.
-  Each must be an approved controlled-staging probe emitting one bounded,
-  sanitised assertion line. The retained injection log binds precondition,
-  injection and observed degradation; recovery binds recovery and invariant.
+  Each must be an operator-owned program that sends the supplied challenge to
+  the staging control plane and prints exactly one signed JSON attestation.
+  Plain stdout (including `printf`) is rejected. The runner supplies the exact
+  SHA, run/deployment/build IDs, expected component, fault, phase and a fresh
+  nonce in `GATE_C_C5_FAULT_*`; the response must bind all of them plus a
+  bounded observation. Retained artifacts contain identifiers and SHA-256s of
+  nonce/observation/attestation only, never raw command stdout.
 - An operator-owned HMAC drill executable outside this checkout. It must run
   both real rate-limit and fallback-code A-to-B lifecycle drills through the
   staging control plane; the normal workload runner cannot supply its receipt.
@@ -34,6 +38,7 @@ and pnpm `10.33.0`:
 export GATE_C_C5_STAGING_OPT_IN=1
 export GATE_C_C5_IDENTITY_BEARER_TOKEN='<32-plus-byte-staging-control-token>'
 export GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET='<32-plus-byte-shared-staging-attestation-secret>'
+export GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET='<separate-32-plus-byte-staging-fault-attestation-secret>'
 export GATE_C_C5_DEPLOYMENT_ID='dpl_<exact-candidate-staging-deployment>'
 export GATE_C_C5_BUILD_ID='<exact-candidate-provider-build-id>'
 export GATE_C_C5_API_PROBE_URL='https://<staging-api>/health'

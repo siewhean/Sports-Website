@@ -268,6 +268,94 @@ function setupDeployment(artifactsDir, candidateSha) {
   });
 }
 
+function setupC2MigrationLockBenchmark(artifactsDir, candidateSha) {
+  const directory = path.join(artifactsDir, "gate-c-c2", candidateSha);
+  const fixtureProfile = {
+    name: "representative-c2-v1",
+    competitions: 3,
+    divisionsPerCompetition: 2,
+    matchesPerDivision: 12,
+    scoreEventsPerMatch: 16,
+    scoringSessionsPerMatch: 1,
+    resultConflictsPerCompetition: 2,
+  };
+  const fixtureRows = {
+    competitions: 3,
+    divisions: 6,
+    matches: 72,
+    scheduledMatches: 72,
+    scoreEvents: 1152,
+    scoringSessions: 72,
+    resultConflicts: 6,
+  };
+  const profileNames = {
+    baseline: "Baseline",
+    publicReads: "PublicReads",
+    organiserReads: "OrganiserReads",
+    writerMutations: "WriterMutations",
+  };
+  const profiles = {};
+  for (const [key, profileName] of Object.entries(profileNames)) {
+    const traffic = {
+      executed: key === "baseline" ? 0 : 5,
+      blocked: 0,
+      timedOut: 0,
+      deadlocked: 0,
+      latencies: key === "baseline" ? [] : [1, 2, 3, 4, 5],
+    };
+    const raw = { lockSamples: [], traffic };
+    const rawFilename = `${key.replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}.json`;
+    const rawPath = path.join(directory, "raw", rawFilename);
+    const rawContent = JSON.stringify(raw, null, 2);
+    fs.mkdirSync(path.dirname(rawPath), { recursive: true });
+    fs.writeFileSync(rawPath, rawContent, "utf8");
+    profiles[key] = {
+      profileName,
+      description: `${profileName} controlled staging profile`,
+      migration0030DurationMs: 12,
+      migration0031DurationMs: 8,
+      totalDurationMs: 20,
+      tableLockModes: {},
+      lockWaitQueueMax: 0,
+      concurrentQueriesExecuted: traffic.executed,
+      concurrentQueriesBlocked: traffic.blocked,
+      concurrentQueriesTimedOut: traffic.timedOut,
+      concurrentQueriesDeadlocked: traffic.deadlocked,
+      concurrentQueryLatenciesMs: { min: 0, p50: 0, p95: 0, max: 0 },
+      fixtureRows,
+      cleanup: { schemaDropped: true, temporaryMigrationDirectoryRemoved: true, failures: [] },
+      retainedRawLog: {
+        path: `artifacts/qa/gate-c-c2/${candidateSha}/raw/${rawFilename}`,
+        sha256: sha256(rawContent),
+      },
+    };
+  }
+  writeJson(path.join(directory, "migration-lock-benchmark.json"), {
+    schemaVersion: 3,
+    artifactKind: "gate-c-c2-migration-lock-benchmark",
+    sourceSha: candidateSha,
+    executionClassification: "controlled_staging_observation",
+    timestamp: "2026-08-24T00:00:00.000Z",
+    engine: "PostgreSQL",
+    postgresVersion: "16.4",
+    database: { databaseNameHash: sha256("controlled-staging"), databaseSizeBytes: 1024 },
+    fixtureProfile,
+    fixtureRows,
+    profiles,
+    abortRollback: {
+      scenario: "Malformed pre-0030 writer generation preflight abort",
+      preflightFailureTriggered: "writer generation preflight failed",
+      ddlAttemptDurationMs: 5,
+      rollbackDurationMs: 5,
+      postRollbackLocksRemaining: 0,
+      lockReleaseVerified: true,
+      cleanup: { schemaDropped: true, temporaryMigrationDirectoryRemoved: true, failures: [] },
+    },
+    recommendations: { maintenanceWindowRequired: true, writeDrainRequired: true },
+    cleanup: { schemasDropped: 5, temporaryMigrationDirectoriesRemoved: 5, cleanupFailures: [] },
+  });
+}
+
 function setupValidWorkspace(candidateSha) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matchday-seal-test-"));
   const qaDir = path.join(tempDir, "docs", "qa");
@@ -275,6 +363,7 @@ function setupValidWorkspace(candidateSha) {
   fs.mkdirSync(qaDir, { recursive: true });
   setupLaneLedger(artifactsDir, candidateSha, "gate-c-access", "gate-c-access-exact-sha-ledger");
   setupLaneLedger(artifactsDir, candidateSha, "gate-c-c2", "gate-c-c2-exact-sha-ledger");
+  setupC2MigrationLockBenchmark(artifactsDir, candidateSha);
   setupC3(artifactsDir, candidateSha);
   setupC4(artifactsDir, candidateSha);
   setupC5(artifactsDir, candidateSha);
@@ -310,6 +399,84 @@ test("Gate C evidence-only sealer", async (t) => {
     assert.throws(
       () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
       /immutable manifest/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails if the exact-SHA controlled-staging C2 migration receipt is absent", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    fs.rmSync(path.join(ws.artifactsDir, "gate-c-c2", candidateSha, "migration-lock-benchmark.json"));
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /C2 controlled-staging migration lock benchmark/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails if the C2 migration receipt is malformed or bound to another SHA", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const receipt = path.join(ws.artifactsDir, "gate-c-c2", candidateSha, "migration-lock-benchmark.json");
+    fs.writeFileSync(receipt, "{ nope", "utf8");
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /Malformed JSON/,
+    );
+    setupC2MigrationLockBenchmark(ws.artifactsDir, candidateSha);
+    const value = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    value.sourceSha = "2".repeat(40);
+    writeJson(receipt, value);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /exact-SHA PostgreSQL receipt/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails if C2 raw observations are tampered or their outcome summary is forged", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const raw = path.join(ws.artifactsDir, "gate-c-c2", candidateSha, "raw", "writer-mutations.json");
+    fs.writeFileSync(raw, '{"lockSamples":[],"traffic":{"executed":5}}\n', "utf8");
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /raw observation hash mismatch/,
+    );
+    setupC2MigrationLockBenchmark(ws.artifactsDir, candidateSha);
+    const receipt = path.join(ws.artifactsDir, "gate-c-c2", candidateSha, "migration-lock-benchmark.json");
+    const value = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    value.profiles.writerMutations.concurrentQueriesExecuted = 0;
+    writeJson(receipt, value);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /did not retain successful concurrent traffic/,
+    );
+    fs.rmSync(ws.tempDir, { recursive: true, force: true });
+  });
+
+  await t.test("fails if C2 fixture, timeout, or cleanup evidence is incomplete", () => {
+    const ws = setupValidWorkspace(candidateSha);
+    const receipt = path.join(ws.artifactsDir, "gate-c-c2", candidateSha, "migration-lock-benchmark.json");
+    const value = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    value.fixtureRows.scoreEvents = 1;
+    writeJson(receipt, value);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /fixture row outcome/,
+    );
+    setupC2MigrationLockBenchmark(ws.artifactsDir, candidateSha);
+    const timeout = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    timeout.profiles.publicReads.concurrentQueriesTimedOut = 1;
+    writeJson(receipt, timeout);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /timeout or deadlock/,
+    );
+    setupC2MigrationLockBenchmark(ws.artifactsDir, candidateSha);
+    const cleanup = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    cleanup.cleanup.schemasDropped = 4;
+    writeJson(receipt, cleanup);
+    assert.throws(
+      () => sealGateCCertification({ candidateSha, qaDir: ws.qaDir, artifactsDir: ws.artifactsDir }),
+      /aggregate cleanup evidence/,
     );
     fs.rmSync(ws.tempDir, { recursive: true, force: true });
   });
