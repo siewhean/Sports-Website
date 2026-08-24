@@ -95,6 +95,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
       fallbackKeyring.primary.secret,
       fallbackCodeGenerator,
       takeoverRequestTtlMs,
+      fallbackKeyring.primary.version,
     );
     parseScoringFallbackHmacKeyring(fallbackKeyring);
     for (const key of fallbackKeyring.verificationOnly) {
@@ -108,6 +109,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
           key.secret,
           fallbackCodeGenerator,
           takeoverRequestTtlMs,
+          key.version,
         ),
       );
     }

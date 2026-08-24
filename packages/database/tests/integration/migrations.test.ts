@@ -143,6 +143,7 @@ describe("foundation migrations", () => {
         "0049_phase3_sport_pack_hash_collation_fence.sql",
         "0050_phase3_sport_pack_hash_scope_fence.sql",
         "0051_gate_c_fallback_code_history_uniqueness.sql",
+        "0052_gate_c_fallback_code_hmac_key_versions.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {

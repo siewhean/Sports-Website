@@ -9,7 +9,7 @@ import { Type } from "@sinclair/typebox";
 import Fastify, { LogController, type FastifyInstance, type FastifyRequest } from "fastify";
 import type { Redis } from "ioredis";
 import type { ApiErrorEnvelope, DependencyStatus, HealthStatus } from "@matchday/contracts";
-import type { AppConfig } from "@matchday/config";
+import type { AppConfig, ScoringFallbackHmacKeyring } from "@matchday/config";
 import { IdentityError, systemClock, type Clock } from "@matchday/identity";
 import { createLogger } from "@matchday/observability";
 import { ApiError, ErrorCode } from "./errors.js";
@@ -38,6 +38,7 @@ import type { GateCC4Operations } from "./gate-c-c4-operations.js";
 import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { registerGateCC4PublicTruthRoutes, type GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { registerScoringAccessHmacKeyringRoutes } from "./scoring-access-hmac-keyring-routes.js";
+import { registerScoringFallbackHmacKeyringRoutes } from "./scoring-fallback-hmac-keyring-routes.js";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 import type { PostgresJsSql } from "@matchday/identity";
 
@@ -125,6 +126,8 @@ export type BuildAppOptions = {
   gateCC4Lifecycle?: GateCC4LifecycleOperations;
   gateCC4PublicTruthRuntime?: GateCC4PublicTruthRuntime;
   scoringAccessHmacKeySql?: PostgresJsSql;
+  scoringFallbackHmacKeySql?: PostgresJsSql;
+  scoringFallbackHmacKeyring?: ScoringFallbackHmacKeyring;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -545,6 +548,15 @@ export async function buildApp(options: BuildAppOptions) {
     if (options.scoringAccessHmacKeySql) {
       await registerScoringAccessHmacKeyringRoutes(app as unknown as FastifyInstance, {
         sql: options.scoringAccessHmacKeySql,
+        identityRuntime: options.identityRuntime,
+        identityRequests,
+        allowedOrigins: options.config.api.allowedOrigins,
+      });
+    }
+    if (options.scoringFallbackHmacKeySql && options.scoringFallbackHmacKeyring) {
+      await registerScoringFallbackHmacKeyringRoutes(app as unknown as FastifyInstance, {
+        sql: options.scoringFallbackHmacKeySql,
+        configuredKeyring: options.scoringFallbackHmacKeyring,
         identityRuntime: options.identityRuntime,
         identityRequests,
         allowedOrigins: options.config.api.allowedOrigins,

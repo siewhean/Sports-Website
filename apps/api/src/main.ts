@@ -22,6 +22,7 @@ import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 import { FallbackKeyringPhase2Runtime } from "./phase-2-fallback-keyring-runtime.js";
 import { RedisScoringAccessRateLimiter } from "./scoring-access-rate-limit.js";
 import { reconcileScoringAccessHmacKeyring } from "./scoring-access-hmac-keyring.js";
+import { reconcileScoringFallbackHmacKeyring } from "./scoring-fallback-hmac-keyring.js";
 import { verifiedScoringRateLimitSessionId } from "./scoring-rate-limit-identity.js";
 import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import { V1Phase3Runtime } from "./phase-3-v1-runtime.js";
@@ -89,6 +90,7 @@ const identityRuntime = new IdentityAssuranceRuntime(
   assurancePolicy,
 );
 await reconcileScoringAccessHmacKeyring(identitySql, config.scoringAccess.rateLimitHmacKeyring);
+await reconcileScoringFallbackHmacKeyring(identitySql, config.scoringAccess.fallbackCodeHmacKeyring);
 const phase2Runtime = new FallbackKeyringPhase2Runtime(
   identitySql,
   phase2DomainAdapter,
@@ -159,6 +161,8 @@ const app = await buildApp({
   gateCC4Lifecycle,
   gateCC4PublicTruthRuntime,
   scoringAccessHmacKeySql: identitySql,
+  scoringFallbackHmacKeySql: identitySql,
+  scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,
   closeIdentityResources: async () => {
     await Promise.all([inlineScheduler.stop(), scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
   },

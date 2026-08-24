@@ -654,11 +654,15 @@ export class Phase2Runtime {
     fallbackCodeHmacSecret?: string,
     private readonly fallbackCodeGenerator: () => string = randomFallbackCode,
     private readonly takeoverRequestTtlMs = 5 * 60_000,
+    private readonly fallbackCodeHmacKeyVersion = "v1",
   ) {
     if (!fallbackCodeHmacSecret || Buffer.byteLength(fallbackCodeHmacSecret, "utf8") < 32) {
       throw new Error("Scoring fallback-code HMAC secret must contain at least 32 bytes.");
     }
     this.fallbackCodeHmacSecret = fallbackCodeHmacSecret;
+    if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(fallbackCodeHmacKeyVersion)) {
+      throw new Error("Fallback-code HMAC key version must be a lowercase machine identifier.");
+    }
     if (!Number.isInteger(takeoverRequestTtlMs) || takeoverRequestTtlMs <= 0) {
       throw new Error("Takeover request TTL must be a positive integer.");
     }
@@ -1660,7 +1664,7 @@ export class Phase2Runtime {
             tx.unsafe<{ id: string }>(
               `INSERT INTO scoring_access_passes (
                  competition_id,match_id,secret_hash,short_code_hash,expires_at,created_by,
-                 role,scope,issuance_idempotency_key,fallback_code_hash_version
+                 role,scope,issuance_idempotency_key,fallback_code_hash_version,fallback_code_hmac_key_version
                ) VALUES (
                  $1,$2,$3,$4,$5,$6,$7,
                  CASE WHEN $7='viewer'
@@ -1668,7 +1672,7 @@ export class Phase2Runtime {
                    ELSE '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
                  END,
                  $8,
-                 'hmac_sha256_v1'
+                 'hmac_sha256_v1',$9
                ) ON CONFLICT (short_code_hash)
                  WHERE short_code_hash IS NOT NULL
                    AND revoked_at IS NULL
@@ -1683,6 +1687,7 @@ export class Phase2Runtime {
                 actor.accountId,
                 normalized.role,
                 normalized.idempotencyKey,
+                this.fallbackCodeHmacKeyVersion,
               ],
             ),
           );
@@ -1777,7 +1782,8 @@ export class Phase2Runtime {
               `UPDATE scoring_access_passes
                SET short_code_hash=$3,
                    fallback_code_rotated_at=$4,
-                   fallback_code_hash_version='hmac_sha256_v1'
+                   fallback_code_hash_version='hmac_sha256_v1',
+                   fallback_code_hmac_key_version=$5
                WHERE id=$1
                  AND competition_id=$2
                  AND NOT EXISTS (
@@ -1788,7 +1794,7 @@ export class Phase2Runtime {
                       AND revoked_at IS NULL
                  )
                RETURNING id`,
-              [passId, competitionId, candidateHash, this.now()],
+              [passId, competitionId, candidateHash, this.now(), this.fallbackCodeHmacKeyVersion],
             ),
           );
           if (!rows[0]) {
