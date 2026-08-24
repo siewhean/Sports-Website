@@ -7,6 +7,7 @@ import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
 import {
+  promoteScoringFallbackHmacKeyVersion,
   reconcileScoringFallbackHmacKeyring,
   retireScoringFallbackHmacKeyVersion,
 } from "../../src/scoring-fallback-hmac-keyring.js";
@@ -37,6 +38,69 @@ function canonicalHash(value: unknown): string {
     return JSON.stringify(item);
   };
   return createHash("sha256").update(canonical(value)).digest("hex");
+}
+
+async function seedResolvedMatch(admin: string) {
+  const organisationId = randomUUID();
+  const competitionId = randomUUID();
+  const divisionId = randomUUID();
+  const revisionId = randomUUID();
+  const matchId = randomUUID();
+  const homeEntryId = randomUUID();
+  const awayEntryId = randomUUID();
+  const graph = {
+    id: revisionId,
+    schemaVersion: 1,
+    entryCount: 2,
+    stages: [
+      {
+        id: "final-stage",
+        label: "Final",
+        kind: "single_elimination",
+        order: 1,
+        groupIds: [],
+        groupSize: null,
+        outputRanks: 2,
+        matchIds: [matchId],
+      },
+    ],
+    matches: [
+      {
+        id: matchId,
+        stageId: "final-stage",
+        round: 1,
+        order: 1,
+        purpose: "championship",
+        home: { type: "entry_seed", seed: 1 },
+        away: { type: "entry_seed", seed: 2 },
+      },
+    ],
+    terminalMatchIds: [matchId],
+  };
+  await sql.begin(async (tx) => {
+    await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisationId},'Fallback transaction organisation',${`fallback-transaction-${randomUUID()}`})`;
+    await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES(${organisationId},${admin},'owner','active')`;
+  });
+  await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on)
+    VALUES(${competitionId},${organisationId},${admin},'Fallback transaction competition',${`fallback-transaction-${randomUUID()}`},'canoe_polo','UTC','2030-01-01','2030-01-01')`;
+  await sql`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competitionId},'Open',8)`;
+  await sql`INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,status,created_by,validation_contract)
+    VALUES(${revisionId},${competitionId},${divisionId},1,${sql.json(graph)},${canonicalHash(graph)},'draft',${admin},'phase3')`;
+  await sql`INSERT INTO division_entries(id,division_id,name,seed)
+    VALUES(${homeEntryId},${divisionId},'Home',1),(${awayEntryId},${divisionId},'Away',2)`;
+  await sql`INSERT INTO matches(id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,home_entry_id,away_entry_id)
+    VALUES(${matchId},${competitionId},${divisionId},${revisionId},'M1','group',1,1,${homeEntryId},${awayEntryId})`;
+  return { competitionId, matchId };
+}
+
+async function waitForAdvisoryLock(lockId: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const row = (await sql.unsafe<{ acquired: boolean }[]>("SELECT pg_try_advisory_lock($1) AS acquired", [lockId]))[0];
+    if (!row?.acquired) return;
+    await sql.unsafe("SELECT pg_advisory_unlock($1)", [lockId]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for test transaction to acquire its advisory lock");
 }
 
 describeInfra("fallback-code HMAC durable lifecycle", () => {
@@ -293,5 +357,289 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     );
     expect(JSON.stringify(audits)).not.toContain(legacy);
     expect(JSON.stringify(audits)).not.toContain(replacement);
+  });
+
+  it("linearizes stale-runtime issuance and verification against durable promotion and retirement without partial credentials", async () => {
+    const now = new Date();
+    const admin = randomUUID();
+    // The preceding lifecycle test leaves its explicitly promoted v2 primary
+    // in this shared migrated schema. Reuse that known material so this test
+    // exercises a real long-running-process transition instead of resetting
+    // durable lifecycle state outside the implementation under test.
+    const v2 = "fallback-hmac-replacement-b-material-32-bytes";
+    const txv1 = "fallback-hmac-transaction-v1-material-32-bytes";
+    const v3 = "fallback-hmac-transaction-v3-material-32-bytes";
+    const initial = {
+      primary: { version: "v2", secret: v2 },
+      verificationOnly: [
+        { version: "txv1", secret: txv1 },
+        { version: "txv3", secret: v3 },
+      ],
+    };
+    await sql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${admin},${`${admin}@example.test`},'Fallback transaction admin')`;
+    await sql`INSERT INTO account_platform_roles(account_id,role,granted_at,reason) VALUES(${admin},'platform_admin',${now},'test')`;
+    await reconcileScoringFallbackHmacKeyring(sql as unknown as PostgresJsSql, initial, now);
+    const { competitionId, matchId } = await seedResolvedMatch(admin);
+    const staleRuntime = new FallbackKeyringPhase2Runtime(
+      sql as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      initial,
+    );
+    const lockId = 717_533_091;
+    await sql.unsafe(`
+      CREATE FUNCTION test_fallback_hmac_issue_pause() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.issuance_idempotency_key LIKE 'linearized-%' THEN
+          PERFORM pg_advisory_xact_lock(${lockId});
+          PERFORM pg_sleep(0.35);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER test_fallback_hmac_issue_pause
+      BEFORE INSERT ON scoring_access_passes
+      FOR EACH ROW EXECUTE FUNCTION test_fallback_hmac_issue_pause();
+    `);
+    const linearizedIssue = staleRuntime.createAccessPass(
+      { accountId: admin },
+      competitionId,
+      matchId,
+      { expiresAt: "2030-01-02T00:00:00.000Z", role: "scorekeeper", idempotencyKey: `linearized-${randomUUID()}` },
+      randomUUID(),
+    );
+    await waitForAdvisoryLock(lockId);
+    let promotionFinished = false;
+    const promotion = promoteScoringFallbackHmacKeyVersion(
+      sql as unknown as PostgresJsSql,
+      {
+        keyVersion: "txv1",
+        accountId: admin,
+        requestId: `promote-v2-${randomUUID()}`,
+        reason: "Linearization test",
+        configuredKeyring: initial,
+      },
+      now,
+    ).then(() => {
+      promotionFinished = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(promotionFinished).toBe(false);
+    const issuedUnderV1 = await linearizedIssue;
+    await promotion;
+    await sql.unsafe(
+      "DROP TRIGGER test_fallback_hmac_issue_pause ON scoring_access_passes; DROP FUNCTION test_fallback_hmac_issue_pause()",
+      [],
+    );
+    await expect(
+      sql<
+        { fallback_code_hmac_key_version: string }[]
+      >`SELECT fallback_code_hmac_key_version FROM scoring_access_passes WHERE id=${issuedUnderV1.id}`,
+    ).resolves.toEqual([{ fallback_code_hmac_key_version: "v2" }]);
+    await expect(
+      staleRuntime.createAccessPass(
+        { accountId: admin },
+        competitionId,
+        matchId,
+        {
+          expiresAt: "2030-01-02T00:00:00.000Z",
+          role: "scorekeeper",
+          idempotencyKey: `after-promotion-${randomUUID()}`,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "FALLBACK_HMAC_KEY_VERSION_ACTIVE_STATE", statusCode: 409 });
+
+    // A process restarted with B can issue B codes while retaining A only for
+    // verification. The old A code remains valid until retirement commits.
+    const v2Primary = {
+      primary: { version: "txv1", secret: txv1 },
+      verificationOnly: [
+        { version: "v2", secret: v2 },
+        { version: "txv3", secret: v3 },
+      ],
+    };
+    await reconcileScoringFallbackHmacKeyring(sql as unknown as PostgresJsSql, v2Primary, now);
+    const restartedRuntime = new FallbackKeyringPhase2Runtime(
+      sql as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      v2Primary,
+    );
+    const issuedUnderTxv1 = await restartedRuntime.createAccessPass(
+      { accountId: admin },
+      competitionId,
+      matchId,
+      {
+        expiresAt: "2030-01-02T00:00:00.000Z",
+        role: "scorekeeper",
+        idempotencyKey: `issued-under-txv1-${randomUUID()}`,
+      },
+      randomUUID(),
+    );
+    await expect(
+      restartedRuntime.exchangeAccess(
+        { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.70" },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ match_id: matchId });
+
+    // A transaction that reaches the guarded verification path before a
+    // retirement request holds the registry lock through session creation;
+    // retirement must wait and then refuse because this key is still primary.
+    await sql.unsafe(`
+      CREATE FUNCTION test_fallback_hmac_exchange_pause() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.access_pass_id='${issuedUnderTxv1.id}' THEN
+          PERFORM pg_advisory_xact_lock(${lockId});
+          PERFORM pg_sleep(0.35);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER test_fallback_hmac_exchange_pause
+      BEFORE INSERT ON scoring_access_sessions
+      FOR EACH ROW EXECUTE FUNCTION test_fallback_hmac_exchange_pause();
+    `);
+    const exchangeBeforeRetirement = restartedRuntime.exchangeAccess(
+      { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.71" },
+      randomUUID(),
+    );
+    await waitForAdvisoryLock(lockId);
+    let retirementFinished = false;
+    const blockedRetirement = retireScoringFallbackHmacKeyVersion(
+      sql as unknown as PostgresJsSql,
+      { keyVersion: "txv1", accountId: admin, requestId: `retire-wait-${randomUUID()}`, reason: "Linearization test" },
+      now,
+    ).finally(() => {
+      retirementFinished = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(retirementFinished).toBe(false);
+    await expect(exchangeBeforeRetirement).resolves.toMatchObject({ match_id: matchId });
+    await expect(blockedRetirement).rejects.toMatchObject({
+      code: "FALLBACK_HMAC_KEY_VERSION_PRIMARY",
+      statusCode: 409,
+    });
+    await sql.unsafe(
+      "DROP TRIGGER test_fallback_hmac_exchange_pause ON scoring_access_sessions; DROP FUNCTION test_fallback_hmac_exchange_pause()",
+      [],
+    );
+
+    // A failed credential insertion or exchange must roll back all mutations.
+    await sql.unsafe(`
+      CREATE FUNCTION test_fallback_hmac_force_rollback() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.issuance_idempotency_key LIKE 'rollback-%' THEN
+          RAISE EXCEPTION 'test fallback credential rollback';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER test_fallback_hmac_force_rollback
+      BEFORE INSERT ON scoring_access_passes
+      FOR EACH ROW EXECUTE FUNCTION test_fallback_hmac_force_rollback();
+    `);
+    const rollbackKey = `rollback-${randomUUID()}`;
+    await expect(
+      restartedRuntime.createAccessPass(
+        { accountId: admin },
+        competitionId,
+        matchId,
+        { expiresAt: "2030-01-02T00:00:00.000Z", role: "scorekeeper", idempotencyKey: rollbackKey },
+        randomUUID(),
+      ),
+    ).rejects.toThrow(/test fallback credential rollback/i);
+    await expect(
+      sql<
+        { count: string }[]
+      >`SELECT count(*)::text AS count FROM scoring_access_passes WHERE issuance_idempotency_key=${rollbackKey}`,
+    ).resolves.toEqual([{ count: "0" }]);
+    await sql.unsafe(
+      "DROP TRIGGER test_fallback_hmac_force_rollback ON scoring_access_passes; DROP FUNCTION test_fallback_hmac_force_rollback()",
+      [],
+    );
+
+    await sql.unsafe(`
+      CREATE FUNCTION test_fallback_hmac_session_rollback() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.access_pass_id='${issuedUnderTxv1.id}' THEN
+          RAISE EXCEPTION 'test fallback session rollback';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER test_fallback_hmac_session_rollback
+      BEFORE INSERT ON scoring_access_sessions
+      FOR EACH ROW EXECUTE FUNCTION test_fallback_hmac_session_rollback();
+    `);
+    const sessionCountBeforeRollback = await sql<
+      { count: string }[]
+    >`SELECT count(*)::text AS count FROM scoring_access_sessions WHERE access_pass_id=${issuedUnderTxv1.id}`;
+    await expect(
+      restartedRuntime.exchangeAccess(
+        { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.72" },
+        randomUUID(),
+      ),
+    ).rejects.toThrow(/test fallback session rollback/i);
+    await expect(
+      sql<
+        { count: string }[]
+      >`SELECT count(*)::text AS count FROM scoring_access_sessions WHERE access_pass_id=${issuedUnderTxv1.id}`,
+    ).resolves.toEqual(sessionCountBeforeRollback);
+    await sql.unsafe(
+      "DROP TRIGGER test_fallback_hmac_session_rollback ON scoring_access_sessions; DROP FUNCTION test_fallback_hmac_session_rollback()",
+      [],
+    );
+
+    // Lifecycle operations serialize under the same durable lock. One duplicate
+    // promotion and one duplicate retirement must fail deterministically rather
+    // than deadlock; a process with A retained in memory then rejects A once it
+    // is durably retired.
+    const concurrentPromotions = await Promise.allSettled([
+      promoteScoringFallbackHmacKeyVersion(
+        sql as unknown as PostgresJsSql,
+        {
+          keyVersion: "txv3",
+          accountId: admin,
+          requestId: `promote-v3-a-${randomUUID()}`,
+          reason: "Concurrency test",
+          configuredKeyring: v2Primary,
+        },
+        now,
+      ),
+      promoteScoringFallbackHmacKeyVersion(
+        sql as unknown as PostgresJsSql,
+        {
+          keyVersion: "txv3",
+          accountId: admin,
+          requestId: `promote-v3-b-${randomUUID()}`,
+          reason: "Concurrency test",
+          configuredKeyring: v2Primary,
+        },
+        now,
+      ),
+    ]);
+    expect(concurrentPromotions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(concurrentPromotions.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await sql`UPDATE scoring_access_passes SET revoked_at=${now},revoked_by=${admin} WHERE id=${issuedUnderTxv1.id}`;
+    const concurrentRetirements = await Promise.allSettled([
+      retireScoringFallbackHmacKeyVersion(
+        sql as unknown as PostgresJsSql,
+        { keyVersion: "txv1", accountId: admin, requestId: `retire-a-${randomUUID()}`, reason: "Concurrency test" },
+        now,
+      ),
+      retireScoringFallbackHmacKeyVersion(
+        sql as unknown as PostgresJsSql,
+        { keyVersion: "txv1", accountId: admin, requestId: `retire-b-${randomUUID()}`, reason: "Concurrency test" },
+        now,
+      ),
+    ]);
+    expect(concurrentRetirements.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(concurrentRetirements.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await expect(
+      restartedRuntime.exchangeAccess(
+        { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.73" },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "FALLBACK_HMAC_KEY_VERSION_RETIRED", statusCode: 403 });
   });
 });
