@@ -19,6 +19,19 @@ function exactHeadSha() {
   return execSync("git rev-parse HEAD", { cwd: rootDir, encoding: "utf8" }).trim();
 }
 
+function validateHttpsUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`Invalid Vercel deployment URL: ${String(value)}`);
+  }
+  if (url.protocol !== "https:" || !url.hostname || url.username || url.password) {
+    throw new Error(`Vercel deployment URL must be credential-free HTTPS: ${String(value)}`);
+  }
+  return url.toString();
+}
+
 function validateDeploymentShape(parsed, targetSha, options = {}) {
   const deploymentId = parsed.deployment_id || parsed.id || parsed.uid;
   if (!deploymentId || !dplPattern.test(deploymentId)) {
@@ -50,13 +63,37 @@ function validateDeploymentShape(parsed, targetSha, options = {}) {
     throw new Error(`Deployment team ${String(teamId)} is not the Matchday Vercel team`);
   }
 
-  return { deploymentId, state, branch, projectId, teamId };
+  const deploymentUrl = validateHttpsUrl(parsed.url);
+  return { deploymentId, deploymentUrl, state, branch, projectId, teamId };
+}
+
+function selectLiveDeployment(deployments, targetSha, requestedDeploymentId) {
+  const exact = deployments.filter(
+    (candidate) =>
+      candidate?.meta?.githubCommitSha === targetSha && candidate?.meta?.githubCommitRef === MATCHDAY_GATE_C_BRANCH,
+  );
+  if (requestedDeploymentId) {
+    const requested = exact.find((candidate) => (candidate?.uid || candidate?.id) === requestedDeploymentId);
+    if (!requested) {
+      throw new Error(
+        `Vercel deployment ${requestedDeploymentId} was not found for ${MATCHDAY_GATE_C_BRANCH} at candidate SHA ${targetSha}`,
+      );
+    }
+    return requested;
+  }
+  const ready = exact.find((candidate) => (candidate?.readyState || candidate?.state) === "READY");
+  return ready ?? exact[0];
 }
 
 export async function verifyVercelDeployment(options = {}) {
   const targetSha = options.candidateSha || exactHeadSha();
   if (!shaPattern.test(targetSha)) {
     throw new Error(`Invalid target candidate SHA: ${targetSha}`);
+  }
+
+  const requestedDeploymentId = options.deploymentId || process.env.VERCEL_DEPLOYMENT_ID;
+  if (requestedDeploymentId && !dplPattern.test(requestedDeploymentId)) {
+    throw new Error(`Invalid requested Vercel deployment ID: ${String(requestedDeploymentId)}`);
   }
 
   const vercelToken = options.vercelToken || process.env.VERCEL_TOKEN || process.env.VERCEL_BEARER_TOKEN;
@@ -72,7 +109,7 @@ export async function verifyVercelDeployment(options = {}) {
     endpoint.searchParams.set("projectId", projectId);
     endpoint.searchParams.set("teamId", teamId);
     endpoint.searchParams.set("meta-githubCommitSha", targetSha);
-    endpoint.searchParams.set("limit", "20");
+    endpoint.searchParams.set("limit", "100");
 
     const res = await fetch(endpoint, {
       headers: { Authorization: `Bearer ${vercelToken}` },
@@ -83,10 +120,7 @@ export async function verifyVercelDeployment(options = {}) {
     }
 
     const data = await res.json();
-    const deployment = (data.deployments || []).find(
-      (candidate) =>
-        candidate?.meta?.githubCommitSha === targetSha && candidate?.meta?.githubCommitRef === MATCHDAY_GATE_C_BRANCH,
-    );
+    const deployment = selectLiveDeployment(data.deployments || [], targetSha, requestedDeploymentId);
     if (!deployment) {
       throw new Error(`No Vercel deployment found for ${MATCHDAY_GATE_C_BRANCH} at candidate SHA ${targetSha}`);
     }
@@ -135,6 +169,12 @@ export async function verifyVercelDeployment(options = {}) {
     throw new Error(`Malformed JSON in deployment payload at ${sourceFile}`);
   }
 
+  if (requestedDeploymentId) {
+    const payloadId = parsed.deployment_id || parsed.id || parsed.uid;
+    if (payloadId !== requestedDeploymentId) {
+      throw new Error(`Deployment payload ${String(payloadId)} does not match requested deployment ${requestedDeploymentId}`);
+    }
+  }
   validateDeploymentShape(parsed, targetSha, { projectId, teamId });
   return {
     verified: true,
@@ -148,7 +188,8 @@ export async function verifyVercelDeployment(options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const candidateSha = args.find((a) => a.startsWith("--sha="))?.split("=")[1];
-  verifyVercelDeployment({ candidateSha })
+  const deploymentId = args.find((a) => a.startsWith("--deployment-id="))?.split("=")[1];
+  verifyVercelDeployment({ candidateSha, deploymentId })
     .then((result) => {
       const suffix = result.releaseEligible ? "release-eligible" : "developer-only";
       console.log(

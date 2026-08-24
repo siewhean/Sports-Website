@@ -39,6 +39,7 @@ describe("verifyVercelDeployment", () => {
       project_id: MATCHDAY_VERCEL_PROJECT_ID,
       team_id: MATCHDAY_VERCEL_TEAM_ID,
       deployment_id: "dpl_1111111111111111111111111111",
+      url: "https://candidate.example.vercel.app",
       git_branch: MATCHDAY_GATE_C_BRANCH,
       git_commit_sha: dummySha,
       environment: "preview",
@@ -66,6 +67,7 @@ describe("verifyVercelDeployment", () => {
         project_id: "prj_wrong",
         team_id: MATCHDAY_VERCEL_TEAM_ID,
         deployment_id: "dpl_1111111111111111111111111111",
+        url: "https://candidate.example.vercel.app",
         git_branch: MATCHDAY_GATE_C_BRANCH,
         state: "READY",
       }),
@@ -84,6 +86,7 @@ describe("verifyVercelDeployment", () => {
         project_id: MATCHDAY_VERCEL_PROJECT_ID,
         team_id: MATCHDAY_VERCEL_TEAM_ID,
         deployment_id: "dpl_1111111111111111111111111111",
+        url: "https://candidate.example.vercel.app",
         git_branch: MATCHDAY_GATE_C_BRANCH,
         state: "BUILDING",
       }),
@@ -125,6 +128,78 @@ describe("verifyVercelDeployment", () => {
       expect(result.deployment.project_id).toBe(MATCHDAY_VERCEL_PROJECT_ID);
       expect(result.deployment.team_id).toBe(MATCHDAY_VERCEL_TEAM_ID);
       expect(fs.readFileSync(documentationPath, "utf8")).toBe(documentationBefore);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("prefers a READY exact-SHA deployment over a newer canceled exact-SHA deployment", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          deployments: [
+            {
+              uid: "dpl_canceled111111111111111111111",
+              url: "canceled.example.vercel.app",
+              created: Date.parse("2026-08-21T09:11:00.000Z"),
+              readyState: "CANCELED",
+              target: null,
+              meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+            },
+            {
+              uid: "dpl_ready22222222222222222222222",
+              url: "ready.example.vercel.app",
+              created: Date.parse("2026-08-21T09:10:00.000Z"),
+              readyState: "READY",
+              target: null,
+              meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    try {
+      const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token" });
+      expect(result.deployment.deployment_id).toBe("dpl_ready22222222222222222222222");
+      expect(result.deployment.state).toBe("READY");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("can require one explicit live deployment id for deterministic sealing", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          deployments: [
+            {
+              uid: "dpl_ready33333333333333333333333",
+              url: "ready-explicit.example.vercel.app",
+              created: Date.parse("2026-08-21T09:10:00.000Z"),
+              readyState: "READY",
+              target: null,
+              meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    try {
+      const result = await verifyVercelDeployment({
+        candidateSha: dummySha,
+        deploymentId: "dpl_ready33333333333333333333333",
+        vercelToken: "test-token",
+      });
+      expect(result.deployment.deployment_id).toBe("dpl_ready33333333333333333333333");
+      await expect(
+        verifyVercelDeployment({
+          candidateSha: dummySha,
+          deploymentId: "dpl_missing444444444444444444444",
+          vercelToken: "test-token",
+        }),
+      ).rejects.toThrow(/was not found/);
     } finally {
       globalThis.fetch = originalFetch;
     }
