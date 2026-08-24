@@ -29,6 +29,17 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
+      threshold: 0.25,
+      maxDiffPixelRatio: 0.15,
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    },
+  },
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: `http://127.0.0.1:${nextPort}`,
