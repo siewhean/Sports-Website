@@ -6,7 +6,8 @@ import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import postgres, { type Sql } from "postgres";
-import type { Phase3Runtime } from "../../src/phase-3-runtime.js";
+import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
+import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../../src/phase-4-reliable-runtime.js";
 import type { Phase4AiOptions } from "../../src/phase-4-runtime.js";
 
@@ -34,6 +35,7 @@ function required<T>(rows: readonly T[]): T {
 
 describeInfrastructure("organiser workspace bootstrap", () => {
   let client!: Sql;
+  let phase3!: Phase3Runtime;
   let runtime!: ReliableGateBPhase4Runtime;
 
   beforeAll(async () => {
@@ -44,9 +46,10 @@ describeInfrastructure("organiser workspace bootstrap", () => {
       onnotice: () => undefined,
       connection: { search_path: schema },
     });
+    phase3 = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
     runtime = new ReliableGateBPhase4Runtime(
       client as unknown as PostgresJsSql,
-      {} as unknown as Phase3Runtime,
+      phase3,
       {} as unknown as ScheduleEnqueuePort,
       disabledAi,
     );

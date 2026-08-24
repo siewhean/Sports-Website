@@ -419,7 +419,7 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
         },
         randomUUID(),
       ),
-    ).rejects.toMatchObject({ statusCode: 403, code: "ACCESS_DENIED" });
+    ).rejects.toMatchObject({ statusCode: 403, code: "ORGANISATION_ACCESS_DENIED" });
 
     await runtime.archiveFormatTemplate(
       { accountId },
