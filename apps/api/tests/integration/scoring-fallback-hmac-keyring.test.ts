@@ -226,6 +226,15 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
       phase2DomainAdapter,
       promoted,
     );
+    // This process has B configured as primary and retains A only as a
+    // verification delegate. The delegate must use the same durable status
+    // guard as the primary runtime, not merely trust its cached A secret.
+    await expect(
+      restartedRuntime.exchangeAccess(
+        { shortCode: overlapCode, deviceId: randomUUID(), ipAddress: "198.51.100.62" },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ match_id: matchId });
     const idempotencyKey = `restarted-primary-${randomUUID()}`;
     const issueInput = {
       expiresAt: "2030-01-02T00:00:00.000Z",
@@ -257,7 +266,10 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     });
     expect(retiredResponse.statusCode, retiredResponse.body).toBe(204);
     await expect(
-      staleRuntime.exchangeAccess(
+      sql<{ status: string }[]>`SELECT status FROM scoring_fallback_code_hmac_key_versions WHERE key_version='v1'`,
+    ).resolves.toEqual([{ status: "retired" }]);
+    await expect(
+      restartedRuntime.exchangeAccess(
         { shortCode: retiredCode, deviceId: randomUUID(), ipAddress: "198.51.100.61" },
         randomUUID(),
       ),

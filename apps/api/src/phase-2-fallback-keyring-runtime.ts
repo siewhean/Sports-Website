@@ -70,6 +70,66 @@ export function selectFallbackCodeKey(
   return candidate.key;
 }
 
+async function assertDurableFallbackCodeHmacKeyVersion(
+  purpose: "issue" | "verify",
+  tx: PostgresJsSql,
+  keyVersion: string,
+): Promise<void> {
+  const row = (
+    await tx.unsafe<{ status: "primary" | "verification_only" | "retired" }>(
+      "SELECT status FROM scoring_fallback_code_hmac_key_versions WHERE key_version=$1 FOR SHARE",
+      [keyVersion],
+    )
+  )[0];
+  if (purpose === "issue" && row?.status === "primary") return;
+  if (purpose === "verify" && (row?.status === "primary" || row?.status === "verification_only")) return;
+  const code =
+    row?.status === "retired"
+      ? "FALLBACK_HMAC_KEY_VERSION_RETIRED"
+      : row
+        ? "FALLBACK_HMAC_KEY_VERSION_ACTIVE_STATE"
+        : "FALLBACK_HMAC_KEY_VERSION_UNKNOWN";
+  const message =
+    purpose === "issue"
+      ? "Fallback-code HMAC key version is not an active primary version"
+      : "Fallback-code HMAC key version is unavailable for verification";
+  throw new ApiError(purpose === "issue" ? 409 : 403, ErrorCode[code], message);
+}
+
+/**
+ * Verification-only key material is deliberately retained in memory so an
+ * overlap window can validate codes minted by the previous primary. It must
+ * still consult the durable registry inside the delegate's exchange
+ * transaction: possessing an old secret is not authorization to use it.
+ */
+class DurableGuardedFallbackVerificationRuntime extends Phase2Runtime {
+  constructor(
+    sql: PostgresJsSql,
+    domain: Phase2DomainAdapter,
+    now: () => Date,
+    scoringAccessRateLimiter: ScoringAccessRateLimiter,
+    fallbackCodeHmacSecret: string,
+    fallbackCodeGenerator: (() => string) | undefined,
+    takeoverRequestTtlMs: number | undefined,
+    fallbackCodeHmacKeyVersion: string,
+  ) {
+    super(
+      sql,
+      domain,
+      now,
+      scoringAccessRateLimiter,
+      fallbackCodeHmacSecret,
+      fallbackCodeGenerator,
+      takeoverRequestTtlMs,
+      fallbackCodeHmacKeyVersion,
+    );
+  }
+
+  protected override assertFallbackCodeHmacKeyVersion(purpose: "issue" | "verify", tx: PostgresJsSql): Promise<void> {
+    return assertDurableFallbackCodeHmacKeyVersion(purpose, tx, this.fallbackCodeHmacKeyVersion);
+  }
+}
+
 /**
  * Phase2Runtime remains the single authority for credential validation,
  * rate-limiting, session issuance, audit, and writer fencing. This subclass
@@ -102,7 +162,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
     for (const key of fallbackKeyring.verificationOnly) {
       this.delegates.set(
         key.version,
-        new Phase2Runtime(
+        new DurableGuardedFallbackVerificationRuntime(
           keySql,
           domain,
           now,
@@ -126,25 +186,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
     purpose: "issue" | "verify",
     tx: PostgresJsSql,
   ): Promise<void> {
-    const row = (
-      await tx.unsafe<{ status: "primary" | "verification_only" | "retired" }>(
-        "SELECT status FROM scoring_fallback_code_hmac_key_versions WHERE key_version=$1 FOR SHARE",
-        [this.fallbackCodeHmacKeyVersion],
-      )
-    )[0];
-    if (purpose === "issue" && row?.status === "primary") return;
-    if (purpose === "verify" && (row?.status === "primary" || row?.status === "verification_only")) return;
-    const code =
-      row?.status === "retired"
-        ? "FALLBACK_HMAC_KEY_VERSION_RETIRED"
-        : row
-          ? "FALLBACK_HMAC_KEY_VERSION_ACTIVE_STATE"
-          : "FALLBACK_HMAC_KEY_VERSION_UNKNOWN";
-    const message =
-      purpose === "issue"
-        ? "Fallback-code HMAC key version is not an active primary version"
-        : "Fallback-code HMAC key version is unavailable for verification";
-    throw new ApiError(purpose === "issue" ? 409 : 403, ErrorCode[code], message);
+    return assertDurableFallbackCodeHmacKeyVersion(purpose, tx, this.fallbackCodeHmacKeyVersion);
   }
 
   private async keyForPresentedFallbackCode(shortCode: string): Promise<ScoringFallbackHmacKey> {
