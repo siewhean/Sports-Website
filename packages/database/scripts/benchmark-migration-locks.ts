@@ -6,6 +6,11 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { dropTestSchema, migrateDatabase } from "../src/migrations.js";
+import {
+  c2MigrationLockFixtureExpectedRows,
+  resolveC2MigrationLockFixtureProfile,
+  type C2MigrationLockFixtureProfile,
+} from "./migration-lock-profile.js";
 
 const configuredDatabaseUrl = process.env.DATABASE_URL;
 if (!configuredDatabaseUrl) throw new Error("DATABASE_URL is required for the isolated Gate C C2 benchmark");
@@ -31,11 +36,19 @@ interface ProfileResult {
   concurrentQueriesExecuted: number;
   concurrentQueriesBlocked: number;
   concurrentQueriesTimedOut: number;
+  concurrentQueriesDeadlocked: number;
   concurrentQueryLatenciesMs: {
     min: number;
     p50: number;
     p95: number;
     max: number;
+  };
+  fixtureRows: ReturnType<typeof c2MigrationLockFixtureExpectedRows>;
+  cleanup: { schemaDropped: boolean; temporaryMigrationDirectoryRemoved: boolean };
+  retainedRawLog?: { path: string; sha256: string };
+  rawObservation?: {
+    lockSamples: LockSample[];
+    traffic: { executed: number; blocked: number; timedOut: number; deadlocked: number; latencies: number[] };
   };
 }
 
@@ -46,17 +59,23 @@ interface RollbackBenchmarkResult {
   rollbackDurationMs: number;
   postRollbackLocksRemaining: number;
   lockReleaseVerified: boolean;
+  cleanup: { schemaDropped: boolean; temporaryMigrationDirectoryRemoved: boolean };
 }
 
 interface GateCLockBenchmarkReport {
-  schemaVersion: 2;
+  schemaVersion: 3;
   artifactKind: "gate-c-c2-migration-lock-benchmark";
   sourceSha: string;
   executionClassification: "controlled_staging_observation";
   timestamp: string;
   engine: string;
   postgresVersion: string;
-  syntheticVolume: {
+  database: {
+    databaseNameHash: string;
+    databaseSizeBytes: number;
+  };
+  fixtureProfile: C2MigrationLockFixtureProfile;
+  fixtureRows: {
     competitions: number;
     divisions: number;
     matches: number;
@@ -73,6 +92,11 @@ interface GateCLockBenchmarkReport {
     maintenanceWindowRequired: true;
     writeDrainRequired: true;
     operationalAdvice: string[];
+  };
+  cleanup: {
+    schemasDropped: number;
+    temporaryMigrationDirectoriesRemoved: number;
+    cleanupFailures: string[];
   };
 }
 
@@ -176,7 +200,18 @@ class LockMonitor {
   }
 }
 
-async function preparePopulatedSchema(prefix: string): Promise<{
+interface BenchmarkWriterTarget {
+  competitionId: string;
+  divisionId: string;
+  matchId: string;
+  accessSessionId: string;
+  nextVersion: number;
+}
+
+async function preparePopulatedSchema(
+  prefix: string,
+  fixtureProfile: C2MigrationLockFixtureProfile,
+): Promise<{
   schema: string;
   tempMigrationsDir: string;
   competitionId: string;
@@ -186,6 +221,8 @@ async function preparePopulatedSchema(prefix: string): Promise<{
   scheduleRevisionId: string;
   accessPassId: string;
   accessSessionId: string;
+  writerTargets: BenchmarkWriterTarget[];
+  fixtureRows: ReturnType<typeof c2MigrationLockFixtureExpectedRows>;
 }> {
   const schema = `test_bench_lock_${prefix}_${randomUUID().replaceAll("-", "")}`;
   await dropTestSchema(databaseUrl, schema);
@@ -204,92 +241,190 @@ async function preparePopulatedSchema(prefix: string): Promise<{
 
   await migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema });
 
-  const sql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
-  const accountId = randomUUID();
-  const organisationId = randomUUID();
-  const competitionId = randomUUID();
-  const divisionId = randomUUID();
-  const homeEntryId = randomUUID();
-  const awayEntryId = randomUUID();
-  const formatRevisionId = randomUUID();
-  const matchId = randomUUID();
-  const playingAreaId = randomUUID();
-  const scheduleRevisionId = randomUUID();
-  const accessPassId = randomUUID();
-  const accessSessionId = randomUUID();
-
   try {
-    await sql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${accountId},${`${accountId}@example.test`},'Bench Owner')`;
-    await sql.begin(async (tx) => {
-      await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisationId},'Bench Org',${`bench-org-${organisationId}`})`;
-      await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
-        VALUES(${organisationId},${accountId},'owner','active')`;
-    });
+    const sql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
+    const accountId = randomUUID();
+    const fixtureRows = c2MigrationLockFixtureExpectedRows(fixtureProfile);
+    const writerTargets: BenchmarkWriterTarget[] = [];
+    let firstCompetitionId = "";
+    let firstDivisionId = "";
+    let firstMatchId = "";
+    let firstScheduleRevisionId = "";
+    let firstAccessPassId = "";
+    let firstAccessSessionId = "";
 
-    const pack = { recommendedSlotMinutes: 30, recommendedSettings: { slotMinutes: 30 } };
-    const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) AS hash`;
-    await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
+    try {
+      await sql`INSERT INTO accounts(id,primary_email,display_name) VALUES(${accountId},${`${accountId}@example.test`},'Bench Owner')`;
+      const pack = { recommendedSlotMinutes: 30, recommendedSettings: { slotMinutes: 30 } };
+      const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) AS hash`;
+      await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
       VALUES('canoe_polo','bench-pack-v1',1,${sql.json(pack)},${packHash!.hash},'active',now())`;
 
-    await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,venue,address,country_code,locale,plan_tier)
-      VALUES(${competitionId},${organisationId},${accountId},'Bench Cup',${`bench-cup-${competitionId}`},'canoe_polo','Asia/Singapore','2027-01-01','2027-01-01','Arena','1 Road','SG','en-SG','organiser_pro')`;
-    await sql`INSERT INTO competition_sport_settings(competition_id,updated_by,sport_code,pack_version,pack_schema_version,recommended_snapshot,settings_override)
-      VALUES(${competitionId},${accountId},'canoe_polo','bench-pack-v1',1,'{}'::jsonb,'{}'::jsonb)`;
+      for (let competitionOrdinal = 1; competitionOrdinal <= fixtureProfile.competitions; competitionOrdinal += 1) {
+        const organisationId = randomUUID();
+        const competitionId = randomUUID();
+        const playingAreaId = randomUUID();
+        await sql.begin(async (tx) => {
+          await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisationId},${`Bench Org ${competitionOrdinal}`},${`bench-org-${organisationId}`})`;
+          await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+          VALUES(${organisationId},${accountId},'owner','active')`;
+        });
+        await sql`INSERT INTO competitions(id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,venue,address,country_code,locale,plan_tier)
+        VALUES(${competitionId},${organisationId},${accountId},${`Bench Cup ${competitionOrdinal}`},${`bench-cup-${competitionId}`},'canoe_polo','Asia/Singapore','2027-01-01','2027-01-01','Arena','1 Road','SG','en-SG','organiser_pro')`;
+        await sql`INSERT INTO competition_sport_settings(competition_id,updated_by,sport_code,pack_version,pack_schema_version,recommended_snapshot,settings_override)
+        VALUES(${competitionId},${accountId},'canoe_polo','bench-pack-v1',1,'{}'::jsonb,'{}'::jsonb)`;
+        await sql`INSERT INTO playing_areas(id,competition_id,name,slot_minutes) VALUES(${playingAreaId},${competitionId},'Pitch 1',30)`;
 
-    await sql`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competitionId},'Open',16)`;
-    await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status) VALUES
-      (${homeEntryId},${divisionId},'Home Team',1,'placeholder','confirmed'),
-      (${awayEntryId},${divisionId},'Away Team',2,'placeholder','confirmed')`;
+        for (let divisionOrdinal = 1; divisionOrdinal <= fixtureProfile.divisionsPerCompetition; divisionOrdinal += 1) {
+          const divisionId = randomUUID();
+          const homeEntryId = randomUUID();
+          const awayEntryId = randomUUID();
+          const formatRevisionId = randomUUID();
+          const scheduleRevisionId = randomUUID();
+          const matchIds = Array.from({ length: fixtureProfile.matchesPerDivision }, () => randomUUID());
+          await sql`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competitionId},${`Open ${divisionOrdinal}`},16)`;
+          await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status) VALUES
+          (${homeEntryId},${divisionId},'Home Team',1,'placeholder','confirmed'),
+          (${awayEntryId},${divisionId},'Away Team',2,'placeholder','confirmed')`;
+          const def = twoEntryDefinition(formatRevisionId, matchIds[0]!);
+          const [defHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(def)}) AS hash`;
+          await sql`INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract)
+          VALUES(${formatRevisionId},${competitionId},${divisionId},1,${sql.json(def)},${defHash!.hash},${accountId},'phase3')`;
+          await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,created_by)
+          VALUES(${scheduleRevisionId},${competitionId},${formatRevisionId},1,${sha256Digest(scheduleRevisionId)},${accountId})`;
 
-    const def = twoEntryDefinition(formatRevisionId, matchId);
-    const [defHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(def)}) AS hash`;
-    await sql`INSERT INTO format_revisions(id,competition_id,division_id,revision,definition,definition_hash,created_by,validation_contract)
-      VALUES(${formatRevisionId},${competitionId},${divisionId},1,${sql.json(def)},${defHash!.hash},${accountId},'phase3')`;
-
-    await sql`INSERT INTO matches(id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,home_entry_id,away_entry_id)
-      VALUES(${matchId},${competitionId},${divisionId},${formatRevisionId},'BENCH-FINAL','final',1,1,${homeEntryId},${awayEntryId})`;
-
-    await sql`INSERT INTO playing_areas(id,competition_id,name,slot_minutes) VALUES(${playingAreaId},${competitionId},'Pitch 1',30)`;
-    await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,created_by)
-      VALUES(${scheduleRevisionId},${competitionId},${formatRevisionId},1,${sha256Digest(scheduleRevisionId)},${accountId})`;
-
-    await sql`INSERT INTO scheduled_matches(schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at)
-      VALUES(${scheduleRevisionId},${matchId},${competitionId},${playingAreaId},'2027-01-01T08:00:00Z','2027-01-01T08:30:00Z')`;
-
-    await sql`INSERT INTO match_score_streams(match_id,competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version)
-      VALUES(${matchId},${competitionId},${divisionId},'canoe_polo','bench-pack-v1','{}'::jsonb,${"a".repeat(64)},0)`;
-
-    await sql`INSERT INTO scoring_access_passes(id,competition_id,match_id,secret_hash,short_code_hash,fallback_code_hash_version,expires_at,created_by)
-      VALUES(${accessPassId},${competitionId},${matchId},${randomBytes(32)},${randomBytes(32)},'hmac_sha256_v1','2100-01-01T12:00:00Z',${accountId})`;
-
-    await sql`INSERT INTO scoring_access_sessions(id,access_pass_id,competition_id,match_id,session_token_hash,generation,device_id_hash,issued_at,expires_at)
-      VALUES(${accessSessionId},${accessPassId},${competitionId},${matchId},${randomBytes(32)},7,${randomBytes(32)},'2027-01-01T08:00:00Z','2100-01-01T09:00:00Z')`;
-
-    // Populate batch of score events
-    for (let i = 1; i <= 20; i++) {
-      await sql`INSERT INTO canonical_score_events(
-        competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
-        command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
-      ) VALUES(
-        ${competitionId},${divisionId},${matchId},${randomUUID()},${i},${i},'goal',
-        '{"type":"goal"}'::jsonb,${sha256Digest(`event-${i}`)},${accessSessionId},7,now()
-      )`;
+          for (const [matchIndex, matchId] of matchIds.entries()) {
+            const accessPassId = randomUUID();
+            const accessSessionId = randomUUID();
+            await sql`INSERT INTO matches(id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,home_entry_id,away_entry_id)
+            VALUES(${matchId},${competitionId},${divisionId},${formatRevisionId},${`BENCH-${competitionOrdinal}-${divisionOrdinal}-${matchIndex + 1}`},'pool',1,${matchIndex + 1},${homeEntryId},${awayEntryId})`;
+            await sql`INSERT INTO scheduled_matches(schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at)
+            VALUES(${scheduleRevisionId},${matchId},${competitionId},${playingAreaId},'2027-01-01T08:00:00Z','2027-01-01T08:30:00Z')`;
+            await sql`INSERT INTO match_score_streams(match_id,competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version)
+            VALUES(${matchId},${competitionId},${divisionId},'canoe_polo','bench-pack-v1','{}'::jsonb,${sha256Digest(`stream-${matchId}`)},${fixtureProfile.scoreEventsPerMatch})`;
+            for (
+              let sessionOrdinal = 1;
+              sessionOrdinal <= fixtureProfile.scoringSessionsPerMatch;
+              sessionOrdinal += 1
+            ) {
+              const sessionPassId = sessionOrdinal === 1 ? accessPassId : randomUUID();
+              const sessionId = sessionOrdinal === 1 ? accessSessionId : randomUUID();
+              await sql`INSERT INTO scoring_access_passes(id,competition_id,match_id,secret_hash,short_code_hash,fallback_code_hash_version,expires_at,created_by)
+              VALUES(${sessionPassId},${competitionId},${matchId},${randomBytes(32)},${randomBytes(32)},'hmac_sha256_v1','2100-01-01T12:00:00Z',${accountId})`;
+              await sql`INSERT INTO scoring_access_sessions(id,access_pass_id,competition_id,match_id,session_token_hash,generation,device_id_hash,issued_at,expires_at,mode)
+              VALUES(${sessionId},${sessionPassId},${competitionId},${matchId},${randomBytes(32)},${sessionOrdinal},${randomBytes(32)},'2027-01-01T08:00:00Z','2100-01-01T09:00:00Z','writer')`;
+              await sql`INSERT INTO match_writer_leases(match_id,competition_id,access_session_id,generation,session_mode,expires_at)
+              VALUES(${matchId},${competitionId},${sessionId},${sessionOrdinal},'writer','2100-01-01T09:00:00Z')
+              ON CONFLICT (match_id) DO NOTHING`;
+            }
+            for (let eventOrdinal = 1; eventOrdinal <= fixtureProfile.scoreEventsPerMatch; eventOrdinal += 1) {
+              await sql`INSERT INTO canonical_score_events(competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp)
+              VALUES(${competitionId},${divisionId},${matchId},${randomUUID()},${eventOrdinal},${eventOrdinal},'goal','{"type":"goal"}'::jsonb,${sha256Digest(`event-${matchId}-${eventOrdinal}`)},${accessSessionId},1,now())`;
+            }
+            writerTargets.push({
+              competitionId,
+              divisionId,
+              matchId,
+              accessSessionId,
+              nextVersion: fixtureProfile.scoreEventsPerMatch + 1,
+            });
+            if (!firstMatchId) {
+              firstCompetitionId = competitionId;
+              firstDivisionId = divisionId;
+              firstMatchId = matchId;
+              firstScheduleRevisionId = scheduleRevisionId;
+              firstAccessPassId = accessPassId;
+              firstAccessSessionId = accessSessionId;
+            }
+          }
+          for (
+            let conflictOrdinal = 0;
+            conflictOrdinal < fixtureProfile.resultConflictsPerCompetition && conflictOrdinal < matchIds.length - 1;
+            conflictOrdinal += 1
+          ) {
+            if (divisionOrdinal !== 1) break;
+            await sql`INSERT INTO result_conflicts(competition_id,division_id,corrected_match_id,downstream_match_id,result_version,reason)
+            VALUES(${competitionId},${divisionId},${matchIds[conflictOrdinal]!},${matchIds[conflictOrdinal + 1]!},${conflictOrdinal + 1},'downstream_match_started')`;
+          }
+        }
+      }
+    } finally {
+      await sql.end({ timeout: 2 });
     }
-  } finally {
-    await sql.end({ timeout: 2 });
-  }
 
-  return {
-    schema,
-    tempMigrationsDir,
-    competitionId,
-    divisionId,
-    matchId,
-    accountId,
-    scheduleRevisionId,
-    accessPassId,
-    accessSessionId,
-  };
+    const countSql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
+    let observedRows:
+      | {
+          competitions: string;
+          divisions: string;
+          matches: string;
+          scheduled_matches: string;
+          score_events: string;
+          scoring_sessions: string;
+          result_conflicts: string;
+        }
+      | undefined;
+    try {
+      [observedRows] = await countSql<
+        {
+          competitions: string;
+          divisions: string;
+          matches: string;
+          scheduled_matches: string;
+          score_events: string;
+          scoring_sessions: string;
+          result_conflicts: string;
+        }[]
+      >`
+      SELECT
+        (SELECT count(*) FROM competitions)::text AS competitions,
+        (SELECT count(*) FROM divisions)::text AS divisions,
+        (SELECT count(*) FROM matches)::text AS matches,
+        (SELECT count(*) FROM scheduled_matches)::text AS scheduled_matches,
+        (SELECT count(*) FROM canonical_score_events)::text AS score_events,
+        (SELECT count(*) FROM scoring_access_sessions)::text AS scoring_sessions,
+        (SELECT count(*) FROM result_conflicts)::text AS result_conflicts
+    `;
+    } finally {
+      await countSql.end({ timeout: 2 });
+    }
+    const actualRows = {
+      competitions: Number(observedRows?.competitions ?? "0"),
+      divisions: Number(observedRows?.divisions ?? "0"),
+      matches: Number(observedRows?.matches ?? "0"),
+      scheduledMatches: Number(observedRows?.scheduled_matches ?? "0"),
+      scoreEvents: Number(observedRows?.score_events ?? "0"),
+      scoringSessions: Number(observedRows?.scoring_sessions ?? "0"),
+      resultConflicts: Number(observedRows?.result_conflicts ?? "0"),
+    };
+    if (JSON.stringify(actualRows) !== JSON.stringify(fixtureRows)) {
+      throw new Error(
+        `C2 fixture row-count mismatch: expected ${JSON.stringify(fixtureRows)}, got ${JSON.stringify(actualRows)}`,
+      );
+    }
+
+    return {
+      schema,
+      tempMigrationsDir,
+      competitionId: firstCompetitionId,
+      divisionId: firstDivisionId,
+      matchId: firstMatchId,
+      accountId,
+      scheduleRevisionId: firstScheduleRevisionId,
+      accessPassId: firstAccessPassId,
+      accessSessionId: firstAccessSessionId,
+      writerTargets,
+      fixtureRows: actualRows,
+    };
+  } catch (error) {
+    // A failed observation must not leave its disposable staging schema or
+    // copied migration directory behind for the next controlled run.
+    await Promise.allSettled([
+      dropTestSchema(databaseUrl, schema),
+      rm(tempMigrationsDir, { recursive: true, force: true }),
+    ]);
+    throw error;
+  }
 }
 
 function calculatePercentiles(latencies: number[]): { min: number; p50: number; p95: number; max: number } {
@@ -313,28 +448,36 @@ interface PreparedSchemaContext {
   scheduleRevisionId: string;
   accessPassId: string;
   accessSessionId: string;
+  writerTargets: BenchmarkWriterTarget[];
+  fixtureRows: ReturnType<typeof c2MigrationLockFixtureExpectedRows>;
 }
 
 async function benchmarkProfile(
   profileName: string,
   description: string,
+  fixtureProfile: C2MigrationLockFixtureProfile,
   trafficWorker:
     | ((
         sql: Sql,
         stopSignal: { stop: boolean },
         context: PreparedSchemaContext,
-      ) => Promise<{ executed: number; blocked: number; timedOut: number; latencies: number[] }>)
+      ) => Promise<{ executed: number; blocked: number; timedOut: number; deadlocked: number; latencies: number[] }>)
     | null,
 ): Promise<ProfileResult> {
-  const prepared = await preparePopulatedSchema(profileName.toLowerCase().replace(/[^a-z0-9]/g, "_"));
+  const prepared = await preparePopulatedSchema(profileName.toLowerCase().replace(/[^a-z0-9]/g, "_"), fixtureProfile);
   const { schema, tempMigrationsDir } = prepared;
   const monitor = new LockMonitor(schema);
 
   const trafficSql = postgres(databaseUrl, { max: 5, connection: { search_path: schema } });
   const stopSignal = { stop: false };
 
-  let trafficPromise: Promise<{ executed: number; blocked: number; timedOut: number; latencies: number[] }> | null =
-    null;
+  let trafficPromise: Promise<{
+    executed: number;
+    blocked: number;
+    timedOut: number;
+    deadlocked: number;
+    latencies: number[];
+  }> | null = null;
   if (trafficWorker) {
     trafficPromise = trafficWorker(trafficSql, stopSignal, prepared);
   }
@@ -376,7 +519,7 @@ async function benchmarkProfile(
   const m0031Duration = performance.now() - t1;
 
   stopSignal.stop = true;
-  let trafficStats = { executed: 0, blocked: 0, timedOut: 0, latencies: [] as number[] };
+  let trafficStats = { executed: 0, blocked: 0, timedOut: 0, deadlocked: 0, latencies: [] as number[] };
   if (trafficPromise) {
     trafficStats = await trafficPromise;
   }
@@ -417,12 +560,16 @@ async function benchmarkProfile(
     concurrentQueriesExecuted: trafficStats.executed,
     concurrentQueriesBlocked: trafficStats.blocked,
     concurrentQueriesTimedOut: trafficStats.timedOut,
+    concurrentQueriesDeadlocked: trafficStats.deadlocked,
     concurrentQueryLatenciesMs: calculatePercentiles(trafficStats.latencies),
+    fixtureRows: prepared.fixtureRows,
+    cleanup: { schemaDropped: true, temporaryMigrationDirectoryRemoved: true },
+    rawObservation: { lockSamples, traffic: trafficStats },
   };
 }
 
-async function benchmarkAbortRollback(): Promise<RollbackBenchmarkResult> {
-  const prepared = await preparePopulatedSchema("rollback_test");
+async function benchmarkAbortRollback(fixtureProfile: C2MigrationLockFixtureProfile): Promise<RollbackBenchmarkResult> {
+  const prepared = await preparePopulatedSchema("rollback_test", fixtureProfile);
   const { schema, tempMigrationsDir, matchId, competitionId, divisionId } = prepared;
 
   const sql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
@@ -478,6 +625,7 @@ async function benchmarkAbortRollback(): Promise<RollbackBenchmarkResult> {
     rollbackDurationMs: Math.round(attemptDuration * 100) / 100,
     postRollbackLocksRemaining: locksRemaining,
     lockReleaseVerified: locksRemaining === 0,
+    cleanup: { schemaDropped: true, temporaryMigrationDirectoryRemoved: true },
   };
 }
 
@@ -486,6 +634,7 @@ async function main(): Promise<void> {
     throw new Error("Refusing migration-lock benchmark without GATE_C_C2_CONTROLLED_STAGING=1");
   }
   console.log("Starting Gate C 0030/0031 Production Lock Benchmarks...");
+  const fixtureProfile = resolveC2MigrationLockFixtureProfile();
   const sourceSha = (await import("node:child_process"))
     .execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."),
@@ -495,26 +644,40 @@ async function main(): Promise<void> {
 
   const mainSql = postgres(databaseUrl, { max: 1 });
   let postgresVersion = "unknown";
+  let databaseNameHash = "unknown";
+  let databaseSizeBytes = 0;
   try {
     const [v] = await mainSql<{ server_version: string }[]>`SHOW server_version`;
     postgresVersion = v?.server_version ?? "unknown";
+    const [metadata] = await mainSql<{ name: string; size_bytes: string }[]>`
+      SELECT current_database() AS name, pg_database_size(current_database())::text AS size_bytes
+    `;
+    databaseNameHash = sha256Digest(metadata?.name ?? "unknown");
+    databaseSizeBytes = Number(metadata?.size_bytes ?? "0");
   } finally {
     await mainSql.end({ timeout: 2 });
   }
 
   // Profile 1: Baseline (No traffic)
   console.log("Benchmarking Profile 1: Baseline (No traffic)...");
-  const p1 = await benchmarkProfile("Baseline", "Isolated DDL execution with zero concurrent client traffic", null);
+  const p1 = await benchmarkProfile(
+    "Baseline",
+    "Isolated DDL execution with zero concurrent client traffic",
+    fixtureProfile,
+    null,
+  );
 
   // Profile 2: Public reads (concurrent SELECT on scheduled_matches and score events)
   console.log("Benchmarking Profile 2: Public reads...");
   const p2 = await benchmarkProfile(
     "PublicReads",
     "Continuous concurrent read queries against scheduled_matches and canonical_score_events",
+    fixtureProfile,
     async (sql, stopSignal) => {
       let executed = 0;
       let blocked = 0;
       let timedOut = 0;
+      let deadlocked = 0;
       const latencies: number[] = [];
       const workerCount = 5;
 
@@ -530,14 +693,15 @@ async function main(): Promise<void> {
             executed += 1;
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            if (/timeout/i.test(message)) timedOut += 1;
+            if (/deadlock/i.test(message)) deadlocked += 1;
+            else if (/timeout/i.test(message)) timedOut += 1;
           }
           await new Promise((r) => setImmediate(r));
         }
       };
 
       await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-      return { executed, blocked, timedOut, latencies };
+      return { executed, blocked, timedOut, deadlocked, latencies };
     },
   );
 
@@ -546,10 +710,12 @@ async function main(): Promise<void> {
   const p3 = await benchmarkProfile(
     "OrganiserReads",
     "Continuous concurrent organiser queries against result_conflicts and scoring_access_passes",
+    fixtureProfile,
     async (sql, stopSignal) => {
       let executed = 0;
       let blocked = 0;
       let timedOut = 0;
+      let deadlocked = 0;
       const latencies: number[] = [];
       const workerCount = 5;
 
@@ -565,14 +731,15 @@ async function main(): Promise<void> {
             executed += 1;
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            if (/timeout/i.test(message)) timedOut += 1;
+            if (/deadlock/i.test(message)) deadlocked += 1;
+            else if (/timeout/i.test(message)) timedOut += 1;
           }
           await new Promise((r) => setImmediate(r));
         }
       };
 
       await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-      return { executed, blocked, timedOut, latencies };
+      return { executed, blocked, timedOut, deadlocked, latencies };
     },
   );
 
@@ -580,15 +747,20 @@ async function main(): Promise<void> {
   console.log("Benchmarking Profile 4: Writer mutations...");
   const p4 = await benchmarkProfile(
     "WriterMutations",
-    "Continuous concurrent transactions attempting score appends and lease renewals during DDL",
+    "Continuous canonical score appends and writer-lease renewals during DDL",
+    fixtureProfile,
     async (sql, stopSignal, context) => {
       let executed = 0;
       let blocked = 0;
       let timedOut = 0;
+      let deadlocked = 0;
       const latencies: number[] = [];
       const workerCount = 3;
 
-      const runWorker = async () => {
+      const runWorker = async (workerIndex: number) => {
+        // Each worker owns a distinct stream so every operation is a canonical
+        // append rather than a lease-only synthetic write or an artificial race.
+        const target = context.writerTargets[workerIndex % context.writerTargets.length]!;
         while (!stopSignal.stop) {
           const start = performance.now();
           try {
@@ -596,13 +768,24 @@ async function main(): Promise<void> {
               await tx`
                 UPDATE scoring_access_sessions
                 SET expires_at = now() + interval '2 hours'
-                WHERE id = ${context.accessSessionId}
+                WHERE id = ${target.accessSessionId}
               `;
               await tx`
                 INSERT INTO match_writer_leases(match_id, competition_id, access_session_id, generation, session_mode, expires_at)
-                VALUES(${context.matchId}, ${context.competitionId}, ${context.accessSessionId}, 7, 'writer', now() + interval '1 hour')
+                VALUES(${target.matchId}, ${target.competitionId}, ${target.accessSessionId}, 1, 'writer', now() + interval '1 hour')
                 ON CONFLICT (match_id) DO UPDATE SET expires_at = EXCLUDED.expires_at
               `;
+              const version = target.nextVersion++;
+              await tx`
+                INSERT INTO canonical_score_events(
+                  competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+                  command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+                ) VALUES(
+                  ${target.competitionId},${target.divisionId},${target.matchId},${randomUUID()},${version},${version},'goal',
+                  '{"type":"goal"}'::jsonb,${sha256Digest(`runtime-event-${target.matchId}-${version}`)},${target.accessSessionId},1,now()
+                )
+              `;
+              await tx`UPDATE match_score_streams SET current_version=${version} WHERE match_id=${target.matchId}`;
             });
             const lat = performance.now() - start;
             latencies.push(lat);
@@ -610,38 +793,58 @@ async function main(): Promise<void> {
             executed += 1;
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            if (/timeout|deadlock/i.test(message)) timedOut += 1;
+            if (/deadlock/i.test(message)) deadlocked += 1;
+            else if (/timeout/i.test(message)) timedOut += 1;
           }
           await new Promise((r) => setTimeout(r, 20));
         }
       };
 
-      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-      return { executed, blocked, timedOut, latencies };
+      await Promise.all(Array.from({ length: workerCount }, (_, workerIndex) => runWorker(workerIndex)));
+      return { executed, blocked, timedOut, deadlocked, latencies };
     },
   );
 
   // Abort Rollback scenario
   console.log("Benchmarking Abort Rollback Behavior...");
-  const abortRollback = await benchmarkAbortRollback();
+  const abortRollback = await benchmarkAbortRollback(fixtureProfile);
+
+  const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../../../..");
+  const artifactDirectory = path.resolve(repoRoot, "artifacts/qa/gate-c-c2", sourceSha);
+  const retainedProfiles: Array<[string, ProfileResult]> = [
+    ["baseline", p1],
+    ["public-reads", p2],
+    ["organiser-reads", p3],
+    ["writer-mutations", p4],
+  ];
+  for (const [name, profile] of retainedProfiles) {
+    const rawObservation = profile.rawObservation;
+    if (!rawObservation) throw new Error(`C2 ${name} profile has no retained raw observation`);
+    const content = JSON.stringify(rawObservation, null, 2);
+    const logPath = path.resolve(artifactDirectory, "raw", `${name}.json`);
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(logPath, content, "utf-8");
+    profile.retainedRawLog = {
+      path: path.relative(repoRoot, logPath).split(path.sep).join("/"),
+      sha256: sha256Digest(content),
+    };
+    delete profile.rawObservation;
+  }
 
   const report: GateCLockBenchmarkReport = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     artifactKind: "gate-c-c2-migration-lock-benchmark",
     sourceSha,
     executionClassification: "controlled_staging_observation",
     timestamp: new Date().toISOString(),
     engine: "PostgreSQL",
     postgresVersion,
-    syntheticVolume: {
-      competitions: 1,
-      divisions: 1,
-      matches: 1,
-      scheduledMatches: 1,
-      scoreEvents: 20,
-      scoringSessions: 1,
-      resultConflicts: 1,
+    database: {
+      databaseNameHash,
+      databaseSizeBytes,
     },
+    fixtureProfile,
+    fixtureRows: p1.fixtureRows,
     profiles: {
       baseline: p1,
       publicReads: p2,
@@ -660,13 +863,21 @@ async function main(): Promise<void> {
         "Set lock_timeout = '3s' and statement_timeout = '30s'; treat timeout or deadlock observations as failed evidence, not retry-only success.",
       ],
     },
+    cleanup: {
+      schemasDropped:
+        [p1, p2, p3, p4].filter((profile) => profile.cleanup.schemaDropped).length +
+        (abortRollback.cleanup.schemaDropped ? 1 : 0),
+      temporaryMigrationDirectoriesRemoved:
+        [p1, p2, p3, p4].filter((profile) => profile.cleanup.temporaryMigrationDirectoryRemoved).length +
+        (abortRollback.cleanup.temporaryMigrationDirectoryRemoved ? 1 : 0),
+      cleanupFailures: [],
+    },
   };
 
   const jsonContent = JSON.stringify(report, null, 2);
 
   // Observations belong only under the ignored exact-SHA artifact root. Never rewrite historical docs/qa evidence.
-  const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../../../..");
-  const artifactsPath = path.resolve(repoRoot, "artifacts/qa/gate-c-c2", sourceSha, "migration-lock-benchmark.json");
+  const artifactsPath = path.resolve(artifactDirectory, "migration-lock-benchmark.json");
   await mkdir(path.dirname(artifactsPath), { recursive: true });
   await writeFile(artifactsPath, jsonContent, "utf-8");
 

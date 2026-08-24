@@ -10,12 +10,21 @@ Required resources: an isolated disposable PostgreSQL database with a non-produc
 export PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"
 export GATE_C_C2_CONTROLLED_STAGING=1
 export DATABASE_URL='postgresql://.../matchday_gate_c_staging?sslmode=require'
+# Default representative profile: 3 competitions, 6 divisions, 72 scheduled
+# matches, 1,152 canonical score events, 72 scoring sessions, 6 conflicts.
+# Override only when the approved controlled-staging profile requires it.
+export GATE_C_C2_FIXTURE_COMPETITIONS=3
+export GATE_C_C2_FIXTURE_DIVISIONS_PER_COMPETITION=2
+export GATE_C_C2_FIXTURE_MATCHES_PER_DIVISION=12
+export GATE_C_C2_FIXTURE_SCORE_EVENTS_PER_MATCH=16
+export GATE_C_C2_FIXTURE_SCORING_SESSIONS_PER_MATCH=1
+export GATE_C_C2_FIXTURE_RESULT_CONFLICTS_PER_COMPETITION=2
 pnpm --filter @matchday/database exec tsx scripts/benchmark-migration-locks.ts
 ```
 
-Expected artifact: `artifacts/qa/gate-c-c2/<candidate-sha>/migration-lock-benchmark.json`.
+Expected artifacts: `artifacts/qa/gate-c-c2/<candidate-sha>/migration-lock-benchmark.json` and the four retained sanitized profile logs under `raw/`, each hash-bound from the benchmark receipt.
 
-PASS oracle: the receipt is exact-SHA bound; representative fixture volume and canonical scoring writes are recorded; every reader/writer outcome, timeout/deadlock, lock and transaction duration, DB version and sanitized identifier hash is retained; the preflight-abort run proves cleanup. Until that execution is independently reviewed, the operational conclusion is **maintenance window plus write drain required**.
+PASS oracle: the observation receipt is exact-SHA bound; its explicitly selected profile and observed row counts are representative and recorded; writer traffic performs canonical score appends (not lease-only mutations); every reader/writer outcome, timeout/deadlock, lock and transaction duration, DB metadata/size and sanitized identifier hash is retained; and the preflight-abort plus every disposable schema/migration-directory cleanup outcome is retained. This collector is not a PASS receipt and cannot author Gate C PASS evidence. Until independently reviewed controlled-staging execution demonstrates otherwise, the operational conclusion is **maintenance window plus write drain required**.
 
 ## C3 physical-device evidence import
 
