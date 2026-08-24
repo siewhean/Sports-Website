@@ -126,7 +126,11 @@ describe("verifyVercelDeployment", () => {
         meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
       },
     ]);
-    const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token", fetchImpl: request });
+    const result = await verifyVercelDeployment({
+      candidateSha: dummySha,
+      vercelToken: "test-token",
+      fetchImpl: request,
+    });
     expect(result.verified).toBe(true);
     expect(result.mode).toBe("live_api");
     expect(result.releaseEligible).toBe(true);
@@ -175,7 +179,11 @@ describe("verifyVercelDeployment", () => {
         meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
       },
     ]);
-    const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token", fetchImpl: request });
+    const result = await verifyVercelDeployment({
+      candidateSha: dummySha,
+      vercelToken: "test-token",
+      fetchImpl: request,
+    });
     expect(result.deployment.deployment_id).toBe("dpl_ready22222222222222222222222");
     expect(result.deployment.state).toBe("READY");
   });

@@ -25,10 +25,23 @@ export default defineConfig({
     "**/gate-c-c3-real.spec.ts",
     "**/phase-2-real-api.spec.ts",
     "**/phase-4-real-api.spec.ts",
+    "**/v1-real-api.spec.ts",
+    "**/v1-competition-real-api.spec.ts",
   ],
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
+      threshold: 0.25,
+      maxDiffPixelRatio: 0.15,
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    },
+  },
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: `http://127.0.0.1:${nextPort}`,
