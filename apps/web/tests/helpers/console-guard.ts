@@ -89,8 +89,7 @@ export function isExpectedRscNavigationCancellation(input: {
   pageUrl: string;
   requestUrl: string;
 }): boolean {
-  if (!["Load request cancelled", "net::ERR_ABORTED"].includes(input.failure) || input.method !== "GET")
-    return false;
+  if (!["Load request cancelled", "net::ERR_ABORTED"].includes(input.failure) || input.method !== "GET") return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
