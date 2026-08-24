@@ -13,7 +13,7 @@ const gateCBranch = "integration/gate-c-final";
 const expectedInstallCommand = "cd ../.. && pnpm install --frozen-lockfile";
 const expectedBuildCommand = "cd ../.. && pnpm turbo run build --filter=@matchday/web... --force";
 const expectedIgnoreCommand =
-  'if [ "$VERCEL_GIT_COMMIT_REF" = "integration/gate-c-final" ]; then exit 1; fi; git diff --quiet "${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}" HEAD -- . ../../packages/contracts ../../packages/domain ../../packages/feature-flags ../../packages/ui ../../pnpm-lock.yaml ../../package.json ../../pnpm-workspace.yaml ../../turbo.json ../../tsconfig.base.json';
+  'if [ "$VERCEL_GIT_COMMIT_REF" = "integration/gate-c-final" ]; then exit 1; fi; git diff --quiet "${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}" HEAD -- . ../../packages ../../package.json ../../pnpm-lock.yaml ../../turbo.json';
 
 function execute(command, args, cwd, environment = {}) {
   return execFileSync(command, args, {
