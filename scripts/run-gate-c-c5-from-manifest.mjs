@@ -22,14 +22,7 @@ export const GATE_C_C5_STAGING_FAULTS = [
   "projection_regeneration",
 ];
 
-export const GATE_C_C5_STAGING_PHASES = [
-  "PRECONDITION",
-  "INJECT",
-  "DEGRADATION",
-  "RECOVER",
-  "INVARIANT",
-  "CLEANUP",
-];
+export const GATE_C_C5_STAGING_PHASES = ["PRECONDITION", "INJECT", "DEGRADATION", "RECOVER", "INVARIANT", "CLEANUP"];
 
 function exactObject(value, expectedKeys, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -139,7 +132,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     process.exitCode = runGateCC5FromManifest();
   } catch (error) {
-    process.stderr.write(`Gate C C5 staging orchestration FAILED: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `Gate C C5 staging orchestration FAILED: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
     process.exitCode = 1;
   }
 }
