@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { dropTestSchema, migrateDatabase } from "../src/migrations.js";
+import { cleanupC2MigrationLockResources, type C2CleanupOutcome } from "./migration-lock-cleanup.js";
 import {
   c2MigrationLockFixtureExpectedRows,
   resolveC2MigrationLockFixtureProfile,
@@ -44,7 +45,7 @@ interface ProfileResult {
     max: number;
   };
   fixtureRows: ReturnType<typeof c2MigrationLockFixtureExpectedRows>;
-  cleanup: { schemaDropped: boolean; temporaryMigrationDirectoryRemoved: boolean };
+  cleanup: C2CleanupOutcome;
   retainedRawLog?: { path: string; sha256: string };
   rawObservation?: {
     lockSamples: LockSample[];
@@ -59,7 +60,7 @@ interface RollbackBenchmarkResult {
   rollbackDurationMs: number;
   postRollbackLocksRemaining: number;
   lockReleaseVerified: boolean;
-  cleanup: { schemaDropped: boolean; temporaryMigrationDirectoryRemoved: boolean };
+  cleanup: C2CleanupOutcome;
 }
 
 interface GateCLockBenchmarkReport {
@@ -467,10 +468,8 @@ async function benchmarkProfile(
   const prepared = await preparePopulatedSchema(profileName.toLowerCase().replace(/[^a-z0-9]/g, "_"), fixtureProfile);
   const { schema, tempMigrationsDir } = prepared;
   const monitor = new LockMonitor(schema);
-
   const trafficSql = postgres(databaseUrl, { max: 5, connection: { search_path: schema } });
   const stopSignal = { stop: false };
-
   let trafficPromise: Promise<{
     executed: number;
     blocked: number;
@@ -481,7 +480,6 @@ async function benchmarkProfile(
   if (trafficWorker) {
     trafficPromise = trafficWorker(trafficSql, stopSignal, prepared);
   }
-
   monitor.start();
 
   async function runMigrationWithRetry(action: () => Promise<unknown>, maxRetries = 3): Promise<void> {
@@ -500,34 +498,54 @@ async function benchmarkProfile(
     }
   }
 
-  // Run migration 0030
-  await cp(
-    path.join(migrationsDirectory, "0030_gate_c_published_schedule_participants.sql"),
-    path.join(tempMigrationsDir, "0030_gate_c_published_schedule_participants.sql"),
-  );
-  const t0 = performance.now();
-  await runMigrationWithRetry(() => migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema }));
-  const m0030Duration = performance.now() - t0;
-
-  // Run migration 0031
-  await cp(
-    path.join(migrationsDirectory, "0031_gate_c_participant_snapshot_fencing.sql"),
-    path.join(tempMigrationsDir, "0031_gate_c_participant_snapshot_fencing.sql"),
-  );
-  const t1 = performance.now();
-  await runMigrationWithRetry(() => migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema }));
-  const m0031Duration = performance.now() - t1;
-
-  stopSignal.stop = true;
+  let m0030Duration = 0;
+  let m0031Duration = 0;
   let trafficStats = { executed: 0, blocked: 0, timedOut: 0, deadlocked: 0, latencies: [] as number[] };
-  if (trafficPromise) {
-    trafficStats = await trafficPromise;
-  }
-  await trafficSql.end({ timeout: 2 });
+  let lockSamples: LockSample[] = [];
+  let cleanup: C2CleanupOutcome | undefined;
+  let profileFailure: unknown;
 
-  const lockSamples = await monitor.stop();
-  await dropTestSchema(databaseUrl, schema);
-  await rm(tempMigrationsDir, { recursive: true, force: true });
+  monitor.start();
+  try {
+    await cp(
+      path.join(migrationsDirectory, "0030_gate_c_published_schedule_participants.sql"),
+      path.join(tempMigrationsDir, "0030_gate_c_published_schedule_participants.sql"),
+    );
+    const t0 = performance.now();
+    await runMigrationWithRetry(() => migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema }));
+    m0030Duration = performance.now() - t0;
+
+    await cp(
+      path.join(migrationsDirectory, "0031_gate_c_participant_snapshot_fencing.sql"),
+      path.join(tempMigrationsDir, "0031_gate_c_participant_snapshot_fencing.sql"),
+    );
+    const t1 = performance.now();
+    await runMigrationWithRetry(() => migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema }));
+    m0031Duration = performance.now() - t1;
+  } catch (error) {
+    profileFailure = error;
+  } finally {
+    stopSignal.stop = true;
+    const [traffic, connection, monitorResult] = await Promise.allSettled([
+      trafficPromise ?? Promise.resolve(trafficStats),
+      trafficSql.end({ timeout: 2 }),
+      monitor.stop(),
+    ]);
+    if (traffic.status === "fulfilled") trafficStats = traffic.value;
+    else profileFailure ??= traffic.reason;
+    if (connection.status === "rejected") profileFailure ??= connection.reason;
+    if (monitorResult.status === "fulfilled") lockSamples = monitorResult.value;
+    else profileFailure ??= monitorResult.reason;
+    cleanup = await cleanupC2MigrationLockResources(
+      () => dropTestSchema(databaseUrl, schema),
+      () => rm(tempMigrationsDir, { recursive: true, force: true }),
+    );
+  }
+  if (!cleanup) throw new Error(`C2 ${profileName} cleanup outcome was not collected`);
+  if (cleanup.failures.length > 0) {
+    throw new Error(`C2 ${profileName} cleanup failed: ${cleanup.failures.join("; ")}`, { cause: profileFailure });
+  }
+  if (profileFailure) throw profileFailure;
 
   const tableLockModes: Record<string, Set<string>> = {};
   let maxWaitQueue = 0;
@@ -563,7 +581,7 @@ async function benchmarkProfile(
     concurrentQueriesDeadlocked: trafficStats.deadlocked,
     concurrentQueryLatenciesMs: calculatePercentiles(trafficStats.latencies),
     fixtureRows: prepared.fixtureRows,
-    cleanup: { schemaDropped: true, temporaryMigrationDirectoryRemoved: true },
+    cleanup,
     rawObservation: { lockSamples, traffic: trafficStats },
   };
 }
@@ -571,52 +589,66 @@ async function benchmarkProfile(
 async function benchmarkAbortRollback(fixtureProfile: C2MigrationLockFixtureProfile): Promise<RollbackBenchmarkResult> {
   const prepared = await preparePopulatedSchema("rollback_test", fixtureProfile);
   const { schema, tempMigrationsDir, matchId, competitionId, divisionId } = prepared;
-
-  const sql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
-  try {
-    // Inject malformed writer generation
-    await sql`INSERT INTO canonical_score_events(
-      competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
-      command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
-    ) VALUES(
-      ${competitionId},${divisionId},${matchId},${randomUUID()},99,99,'goal',
-      '{"type":"goal"}'::jsonb,${sha256Digest("bad-gen")},${prepared.accessSessionId},999,now()
-    )`;
-  } finally {
-    await sql.end({ timeout: 2 });
-  }
-
-  await cp(
-    path.join(migrationsDirectory, "0030_gate_c_published_schedule_participants.sql"),
-    path.join(tempMigrationsDir, "0030_gate_c_published_schedule_participants.sql"),
-  );
-
   let failureTriggered = "";
-  const t0 = performance.now();
-  try {
-    await migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema });
-  } catch (err: unknown) {
-    failureTriggered = err instanceof Error ? err.message : String(err);
-  }
-  const attemptDuration = performance.now() - t0;
-
-  // Verify immediate lock release post-abort
-  const checkSql = postgres(databaseUrl, { max: 1 });
+  let attemptDuration = 0;
   let locksRemaining = 0;
+  let cleanup: C2CleanupOutcome | undefined;
+  let operationFailure: unknown;
   try {
-    const rows = await checkSql<{ count: string }[]>`
-      SELECT count(*)::text count
-      FROM pg_locks l
-      JOIN pg_class c ON c.oid = l.relation
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = ${schema}
-    `;
-    locksRemaining = parseInt(rows[0]?.count ?? "0", 10);
+    const sql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
+    try {
+      // Inject malformed writer generation.
+      await sql`INSERT INTO canonical_score_events(
+        competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+        command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp
+      ) VALUES(
+        ${competitionId},${divisionId},${matchId},${randomUUID()},99,99,'goal',
+        '{"type":"goal"}'::jsonb,${sha256Digest("bad-gen")},${prepared.accessSessionId},999,now()
+      )`;
+    } finally {
+      await sql.end({ timeout: 2 });
+    }
+
+    await cp(
+      path.join(migrationsDirectory, "0030_gate_c_published_schedule_participants.sql"),
+      path.join(tempMigrationsDir, "0030_gate_c_published_schedule_participants.sql"),
+    );
+    const t0 = performance.now();
+    try {
+      await migrateDatabase({ databaseUrl, migrationsDirectory: tempMigrationsDir, schema });
+    } catch (error: unknown) {
+      failureTriggered = error instanceof Error ? error.message : String(error);
+    }
+    attemptDuration = performance.now() - t0;
+
+    // Verify immediate lock release post-abort.
+    const checkSql = postgres(databaseUrl, { max: 1 });
+    try {
+      const rows = await checkSql<{ count: string }[]>`
+        SELECT count(*)::text count
+        FROM pg_locks l
+        JOIN pg_class c ON c.oid = l.relation
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = ${schema}
+      `;
+      locksRemaining = parseInt(rows[0]?.count ?? "0", 10);
+    } finally {
+      await checkSql.end({ timeout: 2 });
+    }
+  } catch (error) {
+    operationFailure = error;
   } finally {
-    await checkSql.end({ timeout: 2 });
-    await dropTestSchema(databaseUrl, schema);
-    await rm(tempMigrationsDir, { recursive: true, force: true });
+    cleanup = await cleanupC2MigrationLockResources(
+      () => dropTestSchema(databaseUrl, schema),
+      () => rm(tempMigrationsDir, { recursive: true, force: true }),
+    );
   }
+  if (!cleanup || cleanup.failures.length > 0) {
+    throw new Error(`C2 abort-rollback cleanup failed: ${cleanup?.failures.join("; ") ?? "outcome missing"}`, {
+      cause: operationFailure,
+    });
+  }
+  if (operationFailure) throw operationFailure;
 
   return {
     scenario: "Malformed pre-0030 writer generation preflight abort",
@@ -625,7 +657,7 @@ async function benchmarkAbortRollback(fixtureProfile: C2MigrationLockFixtureProf
     rollbackDurationMs: Math.round(attemptDuration * 100) / 100,
     postRollbackLocksRemaining: locksRemaining,
     lockReleaseVerified: locksRemaining === 0,
-    cleanup: { schemaDropped: true, temporaryMigrationDirectoryRemoved: true },
+    cleanup,
   };
 }
 
@@ -870,7 +902,7 @@ async function main(): Promise<void> {
       temporaryMigrationDirectoriesRemoved:
         [p1, p2, p3, p4].filter((profile) => profile.cleanup.temporaryMigrationDirectoryRemoved).length +
         (abortRollback.cleanup.temporaryMigrationDirectoryRemoved ? 1 : 0),
-      cleanupFailures: [],
+      cleanupFailures: [p1, p2, p3, p4, abortRollback].flatMap((result) => result.cleanup.failures),
     },
   };
 
