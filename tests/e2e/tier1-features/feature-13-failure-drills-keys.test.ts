@@ -26,12 +26,21 @@ describe("Tier 1 - Feature 13: Controlled Failure Drills & Key Rotations", () =>
     expect(C5_CONTROLLED_FAILURES.length).toBe(12);
   });
 
-  it("F13-T02: backup and restore verification shell script exists and contains validation logic", () => {
+  it("F13-T02: backup and restore verification keeps the guarded direct Docker-client path", () => {
     const scriptPath = path.join(rootDir, "scripts/verify-backup-restore.sh");
     expect(existsSync(scriptPath)).toBe(true);
     const content = readFileSync(scriptPath, "utf8");
     expect(content).toContain("pg_dump");
     expect(content).toContain("pg_restore");
+    expect(content).toContain('VERIFY_MODE="${BACKUP_VERIFY_MODE:-local}"');
+    expect(content).toContain('DIRECT_CLIENT_IMAGE="${BACKUP_VERIFY_DIRECT_CLIENT_IMAGE:-postgres:18.4-alpine}"');
+    expect(content).toContain('if [[ "$VERIFY_MODE" == "direct" ]]');
+    expect(content).toContain(
+      'docker run --rm --network host --volume "$DIRECT_BACKUP_DIRECTORY:/work" "$DIRECT_CLIENT_IMAGE"',
+    );
+    expect(content).toContain("assert_loopback_admin_url");
+    expect(content).toContain("assert_disposable_name");
+    expect(content).toContain("assert_direct_client_image");
   });
 
   it("F13-T03: parseScoringFallbackHmacKeyring parses valid primary and verificationOnly keys", () => {

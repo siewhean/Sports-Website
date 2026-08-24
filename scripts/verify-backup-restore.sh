@@ -9,7 +9,10 @@ RESTORE_DB="matchday_restore_test_${RUN_SUFFIX}"
 BACKUP_FILE="/tmp/${SOURCE_DB}.dump"
 LOCAL_ADMIN_DATABASE_URL="${BACKUP_VERIFY_ADMIN_DATABASE_URL:-postgres://matchday:matchday@127.0.0.1:5432/postgres}"
 POSTGRES_MODE="${BACKUP_VERIFY_POSTGRES_MODE:-local}"
+VERIFY_MODE="${BACKUP_VERIFY_MODE:-local}"
+DIRECT_CLIENT_IMAGE="${BACKUP_VERIFY_DIRECT_CLIENT_IMAGE:-postgres:18.4-alpine}"
 POSTGRES_CONTAINER_ID=""
+DIRECT_BACKUP_DIRECTORY=""
 
 assert_disposable_name() {
   local database_name="$1"
@@ -63,7 +66,44 @@ process.stdout.write(url.toString());
 NODE
 }
 
+assert_direct_client_image() {
+  # Keep the client image versioned and Alpine-based. The verification client is
+  # deliberately isolated from the runner's installed PostgreSQL tools so CI
+  # uses a client compatible with its PostgreSQL service.
+  if [[ ! "$DIRECT_CLIENT_IMAGE" =~ ^postgres:[0-9]+\.[0-9]+(\.[0-9]+)?-alpine$ ]]; then
+    echo "BACKUP_VERIFY_DIRECT_CLIENT_IMAGE must be a pinned PostgreSQL Alpine image." >&2
+    exit 1
+  fi
+}
+
+direct_postgres_tool() {
+  # GitHub Actions service containers expose PostgreSQL on loopback. Docker's
+  # host network lets this short-lived client reach only that guarded URL.
+  docker run --rm --network host --volume "$DIRECT_BACKUP_DIRECTORY:/work" "$DIRECT_CLIENT_IMAGE" "$@"
+}
+
+direct_backup_file() {
+  printf '/work/%s.dump' "$SOURCE_DB"
+}
+
 configure_postgres_mode() {
+  if [[ "$VERIFY_MODE" == "direct" ]]; then
+    if ! command -v docker >/dev/null 2>&1; then
+      echo "Direct backup verification requires Docker." >&2
+      exit 1
+    fi
+    assert_loopback_admin_url
+    assert_direct_client_image
+    DIRECT_BACKUP_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/matchday-backup-verify.XXXXXX")"
+    echo "Backup restore verification using a guarded direct PostgreSQL Docker client."
+    return
+  fi
+
+  if [[ "$VERIFY_MODE" != "local" ]]; then
+    echo "BACKUP_VERIFY_MODE must be local or direct." >&2
+    exit 1
+  fi
+
   if [[ "$POSTGRES_MODE" == "docker" ]]; then
     if ! command -v docker >/dev/null 2>&1; then
       echo "Docker mode requested but Docker is not installed." >&2
@@ -88,7 +128,9 @@ configure_postgres_mode() {
 postgres_createdb() {
   local database_name="$1"
   assert_disposable_name "$database_name"
-  if [[ "$POSTGRES_MODE" == "docker" ]]; then
+  if [[ "$VERIFY_MODE" == "direct" ]]; then
+    direct_postgres_tool createdb --maintenance-db="$LOCAL_ADMIN_DATABASE_URL" "$database_name"
+  elif [[ "$POSTGRES_MODE" == "docker" ]]; then
     docker exec "$POSTGRES_CONTAINER_ID" createdb -U matchday "$database_name"
   else
     psql "$LOCAL_ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${database_name};"
@@ -98,7 +140,9 @@ postgres_createdb() {
 postgres_dropdb() {
   local database_name="$1"
   assert_disposable_name "$database_name"
-  if [[ "$POSTGRES_MODE" == "docker" ]]; then
+  if [[ "$VERIFY_MODE" == "direct" ]]; then
+    direct_postgres_tool dropdb --if-exists --force --maintenance-db="$LOCAL_ADMIN_DATABASE_URL" "$database_name"
+  elif [[ "$POSTGRES_MODE" == "docker" ]]; then
     docker exec "$POSTGRES_CONTAINER_ID" dropdb --if-exists --force -U matchday "$database_name"
   else
     psql "$LOCAL_ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${database_name} WITH (FORCE);"
@@ -108,7 +152,9 @@ postgres_dropdb() {
 postgres_psql() {
   local database_name="$1"
   shift
-  if [[ "$POSTGRES_MODE" == "docker" ]]; then
+  if [[ "$VERIFY_MODE" == "direct" ]]; then
+    direct_postgres_tool psql --dbname="$(database_url "$database_name")" "$@"
+  elif [[ "$POSTGRES_MODE" == "docker" ]]; then
     docker exec "$POSTGRES_CONTAINER_ID" psql -U matchday -d "$database_name" "$@"
   else
     psql "$(database_url "$database_name")" "$@"
@@ -117,7 +163,9 @@ postgres_psql() {
 
 postgres_dump() {
   local database_name="$1"
-  if [[ "$POSTGRES_MODE" == "docker" ]]; then
+  if [[ "$VERIFY_MODE" == "direct" ]]; then
+    direct_postgres_tool pg_dump --dbname="$(database_url "$database_name")" --format=custom --file="$(direct_backup_file)"
+  elif [[ "$POSTGRES_MODE" == "docker" ]]; then
     docker exec "$POSTGRES_CONTAINER_ID" pg_dump -U matchday -d "$database_name" --format=custom --file="$BACKUP_FILE"
   else
     pg_dump "$(database_url "$database_name")" --format=custom --file="$BACKUP_FILE"
@@ -126,7 +174,9 @@ postgres_dump() {
 
 postgres_restore() {
   local database_name="$1"
-  if [[ "$POSTGRES_MODE" == "docker" ]]; then
+  if [[ "$VERIFY_MODE" == "direct" ]]; then
+    direct_postgres_tool pg_restore --dbname="$(database_url "$database_name")" --exit-on-error "$(direct_backup_file)"
+  elif [[ "$POSTGRES_MODE" == "docker" ]]; then
     docker exec "$POSTGRES_CONTAINER_ID" pg_restore -U matchday -d "$database_name" --exit-on-error "$BACKUP_FILE"
   else
     pg_restore --dbname="$(database_url "$database_name")" --exit-on-error "$BACKUP_FILE"
@@ -134,7 +184,9 @@ postgres_restore() {
 }
 
 remove_backup_file() {
-  if [[ "$POSTGRES_MODE" == "docker" ]]; then
+  if [[ "$VERIFY_MODE" == "direct" ]]; then
+    rm -rf "$DIRECT_BACKUP_DIRECTORY"
+  elif [[ "$POSTGRES_MODE" == "docker" ]]; then
     docker exec "$POSTGRES_CONTAINER_ID" rm -f "$BACKUP_FILE"
   else
     rm -f "$BACKUP_FILE"
