@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isExpectedFrameworkWarning,
+  isExpectedRscNavigationCancellation,
   isExpectedTeardownFontCancellation,
   isExpectedTeardownServiceWorkerCancellation,
   isExpectedTeardownStaticAssetCancellation,
@@ -52,6 +53,30 @@ describe("browser console guard", () => {
     { ...localFont, pageUrl: "about:blank" },
   ])("keeps genuine or unrelated request failures observable", (input) => {
     expect(isExpectedTeardownFontCancellation(input)).toBe(false);
+  });
+});
+
+describe("RSC navigation cancellation", () => {
+  const cancellation = {
+    failure: "Load request cancelled",
+    method: "GET",
+    pageUrl: "https://127.0.0.1:3100/organiser/competitions/cmp_sgopen_2026",
+    requestUrl: "https://127.0.0.1:3100/organiser/competitions/cmp_sgopen_2026/setup?_rsc=abc123",
+  };
+
+  it("ignores only a same-origin cancelled GET RSC navigation", () => {
+    expect(isExpectedRscNavigationCancellation(cancellation)).toBe(true);
+  });
+
+  it.each([
+    { ...cancellation, failure: "cancelled" },
+    { ...cancellation, method: "POST" },
+    { ...cancellation, requestUrl: "https://cdn.example.com/organiser?_rsc=abc123" },
+    { ...cancellation, requestUrl: "https://127.0.0.1:3100/api/competitions?_rsc=abc123" },
+    { ...cancellation, requestUrl: "https://127.0.0.1:3100/organiser/competitions/cmp_sgopen_2026/setup" },
+    { ...cancellation, pageUrl: "about:blank" },
+  ])("keeps genuine or unrelated request failures observable", (input) => {
+    expect(isExpectedRscNavigationCancellation(input)).toBe(false);
   });
 });
 

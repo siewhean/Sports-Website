@@ -83,6 +83,26 @@ export function isExpectedTeardownStaticAssetCancellation(input: {
   }
 }
 
+export function isExpectedRscNavigationCancellation(input: {
+  failure: string;
+  method: string;
+  pageUrl: string;
+  requestUrl: string;
+}): boolean {
+  if (input.failure !== "Load request cancelled" || input.method !== "GET") return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return (
+      pageUrl.origin === requestUrl.origin &&
+      !requestUrl.pathname.startsWith("/api/") &&
+      requestUrl.searchParams.has("_rsc")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function installConsoleGuard(page: Page) {
   const state: GuardState = { failures: [], allowed: [] };
   guards.set(page, state);
@@ -102,10 +122,15 @@ export function installConsoleGuard(page: Page) {
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "unknown error";
     const url = request.url();
-    // Next cancels speculative RSC prefetches when navigation makes them stale.
+    // WebKit reports stale same-origin Next RSC navigations using this exact
+    // cancellation message. Keep every other failed request observable.
     if (
-      (failure === "net::ERR_ABORTED" || failure === "cancelled" || failure === "NS_BINDING_ABORTED") &&
-      url.includes("_rsc=")
+      isExpectedRscNavigationCancellation({
+        failure,
+        method: request.method(),
+        pageUrl: page.url(),
+        requestUrl: url,
+      })
     )
       return;
     // WebKit may cancel an in-flight local font while a page or context is
