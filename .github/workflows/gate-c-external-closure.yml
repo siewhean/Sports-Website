@@ -93,9 +93,69 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  vercel-proof:
+    name: Vercel exact-SHA proof
+    if: ${{ inputs.verify_vercel || inputs.run_c5 }}
+    runs-on: ubuntu-latest
+    environment: gate-c-controlled-staging
+    timeout-minutes: 10
+    outputs:
+      deployment_id: ${{ steps.provider.outputs.deployment_id }}
+      build_id: ${{ steps.provider.outputs.build_id }}
+      deployment_url: ${{ steps.provider.outputs.deployment_url }}
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: prj_3y6T5b9aTxy1o6PbpGeK2vGiTkMk
+      VERCEL_TEAM_ID: team_EqEVvtYJl1XlrsIvRj266qnq
+      VERCEL_DEPLOYMENT_ID: ${{ inputs.vercel_deployment_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove immutable candidate checkout
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git fetch --no-tags origin integration/gate-c-final
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Verify live Vercel provider evidence and running build ID
+        id: provider
+        run: |
+          args=("--sha=$CANDIDATE_SHA")
+          if [ -n "$VERCEL_DEPLOYMENT_ID" ]; then args+=("--deployment-id=$VERCEL_DEPLOYMENT_ID"); fi
+          node scripts/verify-vercel-deployment.mjs "${args[@]}"
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const receipt = JSON.parse(fs.readFileSync("artifacts/qa/deployment/vercel-response.json", "utf8"));
+          const outputs = {
+            deployment_id: receipt.deployment_id,
+            build_id: receipt.provider_build_id,
+            deployment_url: receipt.url,
+          };
+          for (const [key, value] of Object.entries(outputs)) {
+            if (typeof value !== "string" || !value || /[\r\n]/u.test(value)) throw new Error(`Invalid Vercel ${key}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`, "utf8");
+          }
+          NODE
+      - name: Retain Vercel provider response
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gate-c-vercel-${{ inputs.candidate_sha }}
+          path: artifacts/qa/deployment/vercel-response.json
+          if-no-files-found: warn
+          retention-days: 30
+
   c5-staging:
     name: C5 controlled staging
-    needs: [c2-staging]
+    needs: [c2-staging, vercel-proof]
+    if: ${{ inputs.run_c5 }}
     runs-on: [self-hosted, linux, x64, gate-c-staging]
     environment: gate-c-controlled-staging
     timeout-minutes: 150
@@ -115,27 +175,22 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: ${{ inputs.run_c5 }}
         with:
           node-version-file: .nvmrc
       - name: Install pinned pnpm
-        if: ${{ inputs.run_c5 }}
         run: npm install --global pnpm@10.33.0
       - name: Frozen install
-        if: ${{ inputs.run_c5 }}
         run: pnpm install --frozen-lockfile
       - name: Validate staging orchestration contract
-        if: ${{ inputs.run_c5 }}
         run: node --test scripts/check-source-contract.test.mjs
       - name: Run real C5 staging workload, faults, and HMAC lifecycle
-        if: ${{ inputs.run_c5 }}
         env:
           GATE_C_C5_STAGING_OPT_IN: "1"
           GATE_C_C5_IDENTITY_BEARER_TOKEN: ${{ secrets.GATE_C_C5_IDENTITY_BEARER_TOKEN }}
           GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET: ${{ secrets.GATE_C_C5_COMPONENT_ATTESTATION_HMAC_SECRET }}
           GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET: ${{ secrets.GATE_C_C5_FAULT_ATTESTATION_HMAC_SECRET }}
-          GATE_C_C5_DEPLOYMENT_ID: ${{ vars.GATE_C_C5_DEPLOYMENT_ID }}
-          GATE_C_C5_BUILD_ID: ${{ vars.GATE_C_C5_BUILD_ID }}
+          GATE_C_C5_DEPLOYMENT_ID: ${{ needs.vercel-proof.outputs.deployment_id }}
+          GATE_C_C5_BUILD_ID: ${{ needs.vercel-proof.outputs.build_id }}
           GATE_C_C5_API_PROBE_URL: ${{ vars.GATE_C_C5_API_PROBE_URL }}
           GATE_C_C5_WEB_PROBE_URL: ${{ vars.GATE_C_C5_WEB_PROBE_URL }}
           GATE_C_C5_WORKER_PROBE_URL: ${{ vars.GATE_C_C5_WORKER_PROBE_URL }}
@@ -158,54 +213,12 @@ jobs:
           GATE_C_C5_HMAC_DRILL_RUNNER: ${{ vars.GATE_C_C5_HMAC_DRILL_RUNNER }}
         run: node scripts/run-gate-c-c5-from-manifest.mjs
       - name: Prove staging run did not mutate tracked source
-        if: ${{ inputs.run_c5 }}
         run: git diff --exit-code
       - name: Retain C5 certification evidence
-        if: ${{ always() && inputs.run_c5 }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gate-c-c5-${{ inputs.candidate_sha }}
           path: artifacts/qa/gate-c-c5/${{ inputs.candidate_sha }}/
           if-no-files-found: warn
-          retention-days: 30
-
-  vercel-proof:
-    name: Vercel exact-SHA proof
-    needs: [c2-staging, c5-staging]
-    if: ${{ always() && inputs.verify_vercel }}
-    runs-on: ubuntu-latest
-    environment: gate-c-controlled-staging
-    timeout-minutes: 10
-    env:
-      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_PROJECT_ID: prj_3y6T5b9aTxy1o6PbpGeK2vGiTkMk
-      VERCEL_TEAM_ID: team_EqEVvtYJl1XlrsIvRj266qnq
-      VERCEL_DEPLOYMENT_ID: ${{ inputs.vercel_deployment_id }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ inputs.candidate_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Prove immutable candidate checkout
-        run: |
-          [[ "$CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          git fetch --no-tags origin integration/gate-c-final
-          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .nvmrc
-      - name: Verify live Vercel provider evidence
-        run: |
-          args=("--sha=$CANDIDATE_SHA")
-          if [ -n "$VERCEL_DEPLOYMENT_ID" ]; then args+=("--deployment-id=$VERCEL_DEPLOYMENT_ID"); fi
-          node scripts/verify-vercel-deployment.mjs "${args[@]}"
-      - name: Retain Vercel provider response
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: gate-c-vercel-${{ inputs.candidate_sha }}
-          path: artifacts/qa/deployment/vercel-response.json
-          if-no-files-found: error
           retention-days: 30

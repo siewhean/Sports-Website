@@ -13,6 +13,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 
+function liveFetch(deployments, buildId = "matchday-build-12345678") {
+  return async (input) => {
+    const url = String(input);
+    if (url.startsWith("https://api.vercel.com/")) {
+      return new Response(JSON.stringify({ deployments }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("ok", {
+      status: 200,
+      headers: { "x-matchday-build-id": buildId },
+    });
+  };
+}
+
 describe("verifyVercelDeployment", () => {
   const dummySha = "1111111111111111111111111111111111111111";
   const artifactDir = path.join(rootDir, "artifacts", "qa", "deployment");
@@ -48,6 +64,7 @@ describe("verifyVercelDeployment", () => {
       verified_at: "2026-08-21T09:15:00.000Z",
       verification_mode: "live_api",
       release_eligible: true,
+      provider_build_id: "captured-build-12345678",
     };
     fs.writeFileSync(artifactPath, JSON.stringify(payload, null, 2), "utf8");
 
@@ -96,112 +113,98 @@ describe("verifyVercelDeployment", () => {
     await expect(verifyVercelDeployment({ candidateSha: dummySha })).rejects.toThrow(/READY/);
   });
 
-  it("uses the live API result as release-eligible evidence", async () => {
-    const originalFetch = globalThis.fetch;
+  it("uses the live API and running-origin build ID as release-eligible evidence", async () => {
     const documentationPath = path.join(rootDir, "docs", "qa", "deployment-evidence.json");
     const documentationBefore = fs.readFileSync(documentationPath, "utf8");
-    globalThis.fetch = async () =>
-      new Response(
-        JSON.stringify({
-          deployments: [
-            {
-              uid: "dpl_2222222222222222222222222222",
-              url: "candidate.example.vercel.app",
-              created: Date.parse("2026-08-21T09:10:00.000Z"),
-              readyState: "READY",
-              target: null,
-              meta: {
-                githubCommitSha: dummySha,
-                githubCommitRef: MATCHDAY_GATE_C_BRANCH,
-              },
-            },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    try {
-      const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token" });
-      expect(result.verified).toBe(true);
-      expect(result.mode).toBe("live_api");
-      expect(result.releaseEligible).toBe(true);
-      expect(result.deployment.verification_mode).toBe("live_api");
-      expect(result.deployment.project_id).toBe(MATCHDAY_VERCEL_PROJECT_ID);
-      expect(result.deployment.team_id).toBe(MATCHDAY_VERCEL_TEAM_ID);
-      expect(fs.readFileSync(documentationPath, "utf8")).toBe(documentationBefore);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    const request = liveFetch([
+      {
+        uid: "dpl_2222222222222222222222222222",
+        url: "candidate.example.vercel.app",
+        created: Date.parse("2026-08-21T09:10:00.000Z"),
+        readyState: "READY",
+        target: null,
+        meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+      },
+    ]);
+    const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token", fetchImpl: request });
+    expect(result.verified).toBe(true);
+    expect(result.mode).toBe("live_api");
+    expect(result.releaseEligible).toBe(true);
+    expect(result.deployment.verification_mode).toBe("live_api");
+    expect(result.deployment.project_id).toBe(MATCHDAY_VERCEL_PROJECT_ID);
+    expect(result.deployment.team_id).toBe(MATCHDAY_VERCEL_TEAM_ID);
+    expect(result.deployment.provider_build_id).toBe("matchday-build-12345678");
+    expect(fs.readFileSync(documentationPath, "utf8")).toBe(documentationBefore);
+  });
+
+  it("rejects a READY deployment whose running origin has no build provenance", async () => {
+    const request = liveFetch(
+      [
+        {
+          uid: "dpl_missingbuild22222222222222222",
+          url: "candidate.example.vercel.app",
+          created: Date.parse("2026-08-21T09:10:00.000Z"),
+          readyState: "READY",
+          target: null,
+          meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+        },
+      ],
+      "bad",
+    );
+    await expect(
+      verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token", fetchImpl: request }),
+    ).rejects.toThrow(/X-Matchday-Build-Id/);
   });
 
   it("prefers a READY exact-SHA deployment over a newer canceled exact-SHA deployment", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () =>
-      new Response(
-        JSON.stringify({
-          deployments: [
-            {
-              uid: "dpl_canceled111111111111111111111",
-              url: "canceled.example.vercel.app",
-              created: Date.parse("2026-08-21T09:11:00.000Z"),
-              readyState: "CANCELED",
-              target: null,
-              meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
-            },
-            {
-              uid: "dpl_ready22222222222222222222222",
-              url: "ready.example.vercel.app",
-              created: Date.parse("2026-08-21T09:10:00.000Z"),
-              readyState: "READY",
-              target: null,
-              meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
-            },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    try {
-      const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token" });
-      expect(result.deployment.deployment_id).toBe("dpl_ready22222222222222222222222");
-      expect(result.deployment.state).toBe("READY");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    const request = liveFetch([
+      {
+        uid: "dpl_canceled111111111111111111111",
+        url: "canceled.example.vercel.app",
+        created: Date.parse("2026-08-21T09:11:00.000Z"),
+        readyState: "CANCELED",
+        target: null,
+        meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+      },
+      {
+        uid: "dpl_ready22222222222222222222222",
+        url: "ready.example.vercel.app",
+        created: Date.parse("2026-08-21T09:10:00.000Z"),
+        readyState: "READY",
+        target: null,
+        meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+      },
+    ]);
+    const result = await verifyVercelDeployment({ candidateSha: dummySha, vercelToken: "test-token", fetchImpl: request });
+    expect(result.deployment.deployment_id).toBe("dpl_ready22222222222222222222222");
+    expect(result.deployment.state).toBe("READY");
   });
 
   it("can require one explicit live deployment id for deterministic sealing", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () =>
-      new Response(
-        JSON.stringify({
-          deployments: [
-            {
-              uid: "dpl_ready33333333333333333333333",
-              url: "ready-explicit.example.vercel.app",
-              created: Date.parse("2026-08-21T09:10:00.000Z"),
-              readyState: "READY",
-              target: null,
-              meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
-            },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    try {
-      const result = await verifyVercelDeployment({
+    const request = liveFetch([
+      {
+        uid: "dpl_ready33333333333333333333333",
+        url: "ready-explicit.example.vercel.app",
+        created: Date.parse("2026-08-21T09:10:00.000Z"),
+        readyState: "READY",
+        target: null,
+        meta: { githubCommitSha: dummySha, githubCommitRef: MATCHDAY_GATE_C_BRANCH },
+      },
+    ]);
+    const result = await verifyVercelDeployment({
+      candidateSha: dummySha,
+      deploymentId: "dpl_ready33333333333333333333333",
+      vercelToken: "test-token",
+      fetchImpl: request,
+    });
+    expect(result.deployment.deployment_id).toBe("dpl_ready33333333333333333333333");
+    await expect(
+      verifyVercelDeployment({
         candidateSha: dummySha,
-        deploymentId: "dpl_ready33333333333333333333333",
+        deploymentId: "dpl_missing444444444444444444444",
         vercelToken: "test-token",
-      });
-      expect(result.deployment.deployment_id).toBe("dpl_ready33333333333333333333333");
-      await expect(
-        verifyVercelDeployment({
-          candidateSha: dummySha,
-          deploymentId: "dpl_missing444444444444444444444",
-          vercelToken: "test-token",
-        }),
-      ).rejects.toThrow(/was not found/);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+        fetchImpl: request,
+      }),
+    ).rejects.toThrow(/was not found/);
   });
 });

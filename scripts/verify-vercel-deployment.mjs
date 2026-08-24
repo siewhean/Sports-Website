@@ -14,6 +14,7 @@ export const MATCHDAY_GATE_C_BRANCH = "integration/gate-c-final";
 
 const dplPattern = /^dpl_[A-Za-z0-9]+$/;
 const shaPattern = /^[a-f0-9]{40}$/;
+const buildIdPattern = /^[A-Za-z0-9._-]{8,128}$/;
 
 function exactHeadSha() {
   return execSync("git rev-parse HEAD", { cwd: rootDir, encoding: "utf8" }).trim();
@@ -67,6 +68,32 @@ function validateDeploymentShape(parsed, targetSha, options = {}) {
   return { deploymentId, deploymentUrl, state, branch, projectId, teamId };
 }
 
+async function probeProviderBuildId(deploymentUrl, request = fetch) {
+  const response = await request(deploymentUrl, {
+    method: "GET",
+    redirect: "follow",
+    headers: { accept: "text/html", "user-agent": "matchday-gate-c-verifier/1" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  const observedUrl = validateHttpsUrl(response.url || deploymentUrl);
+  if (new URL(observedUrl).origin !== new URL(deploymentUrl).origin) {
+    throw new Error(`Vercel deployment probe redirected to a different origin: ${observedUrl}`);
+  }
+  if (!response.ok) {
+    throw new Error(`Vercel deployment probe returned HTTP ${response.status}`);
+  }
+  const buildId = response.headers.get("x-matchday-build-id")?.trim();
+  if (!buildId || !buildIdPattern.test(buildId)) {
+    throw new Error("Vercel deployment did not expose a valid X-Matchday-Build-Id");
+  }
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The header is the evidence we need; body cancellation is best-effort.
+  }
+  return buildId;
+}
+
 function selectLiveDeployment(deployments, targetSha, requestedDeploymentId) {
   const exact = deployments.filter(
     (candidate) =>
@@ -99,6 +126,7 @@ export async function verifyVercelDeployment(options = {}) {
   const vercelToken = options.vercelToken || process.env.VERCEL_TOKEN || process.env.VERCEL_BEARER_TOKEN;
   const projectId = options.projectId || process.env.VERCEL_PROJECT_ID || MATCHDAY_VERCEL_PROJECT_ID;
   const teamId = options.teamId || process.env.VERCEL_TEAM_ID || MATCHDAY_VERCEL_TEAM_ID;
+  const request = options.fetchImpl || fetch;
 
   if (projectId !== MATCHDAY_VERCEL_PROJECT_ID || teamId !== MATCHDAY_VERCEL_TEAM_ID) {
     throw new Error("Gate C deployment verification must target the configured Matchday Vercel project and team");
@@ -111,7 +139,7 @@ export async function verifyVercelDeployment(options = {}) {
     endpoint.searchParams.set("meta-githubCommitSha", targetSha);
     endpoint.searchParams.set("limit", "100");
 
-    const res = await fetch(endpoint, {
+    const res = await request(endpoint, {
       headers: { Authorization: `Bearer ${vercelToken}` },
     });
 
@@ -143,7 +171,8 @@ export async function verifyVercelDeployment(options = {}) {
       release_eligible: true,
     };
 
-    validateDeploymentShape(normalized, targetSha, { projectId, teamId });
+    const shape = validateDeploymentShape(normalized, targetSha, { projectId, teamId });
+    normalized.provider_build_id = await probeProviderBuildId(shape.deploymentUrl, request);
 
     const outDir = path.join(rootDir, "artifacts", "qa", "deployment");
     fs.mkdirSync(outDir, { recursive: true });
@@ -152,9 +181,6 @@ export async function verifyVercelDeployment(options = {}) {
     return { verified: true, mode: "live_api", releaseEligible: true, deployment: normalized };
   }
 
-  // Developer-only immutable payload verification. This can establish that a
-  // captured response is internally consistent, but it is deliberately not
-  // sufficient for Gate C release certification.
   const artifactPath = path.join(rootDir, "artifacts", "qa", "deployment", "vercel-response.json");
   const docsPath = path.join(rootDir, "docs", "qa", "deployment-evidence.json");
   const sourceFile = fs.existsSync(artifactPath) ? artifactPath : fs.existsSync(docsPath) ? docsPath : null;
@@ -192,8 +218,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   verifyVercelDeployment({ candidateSha, deploymentId })
     .then((result) => {
       const suffix = result.releaseEligible ? "release-eligible" : "developer-only";
+      const build = result.deployment.provider_build_id ? ` build=${result.deployment.provider_build_id}` : "";
       console.log(
-        `✅ Vercel deployment verified (${result.mode}, ${suffix}): ${result.deployment.deployment_id} [READY]`,
+        `✅ Vercel deployment verified (${result.mode}, ${suffix}): ${result.deployment.deployment_id} [READY]${build}`,
       );
     })
     .catch((err) => {
