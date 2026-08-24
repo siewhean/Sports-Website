@@ -18,6 +18,7 @@ export function isRole(value: string): value is Role {
 export * from "./canoe-polo.js";
 export * from "./capacity.js";
 export * from "./format.js";
+export * from "./double-elimination.js";
 export * from "./format-builder.js";
 export * from "./schedule.js";
 export * from "./schedule-constraints.js";
