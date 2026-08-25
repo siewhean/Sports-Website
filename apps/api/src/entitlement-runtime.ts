@@ -17,26 +17,39 @@ import { ApiError } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 
 export function verifyStripeWebhookSignature(
-  signatureHeader: string,
-  payload: string | object,
-  secret: string = process.env.STRIPE_WEBHOOK_SECRET ?? "whsec_test_secret",
+  signatureHeader: string | undefined,
+  rawPayload: string,
+  secret: string | undefined = process.env.STRIPE_WEBHOOK_SECRET,
+  toleranceSeconds: number = 300,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
 ): boolean {
-  if (signatureHeader === "development-signature" || signatureHeader === "test-valid-signature") {
-    return true;
-  }
-  const payloadString = typeof payload === "string" ? payload : JSON.stringify(payload);
-  const elements = signatureHeader.split(",");
-  let timestamp = "";
-  const signatures: string[] = [];
-  for (const el of elements) {
-    const [key, value] = el.split("=");
-    if (key === "t") timestamp = value ?? "";
-    if (key === "v1" && value) signatures.push(value);
-  }
-  if (!timestamp || signatures.length === 0) {
+  if (!signatureHeader || typeof signatureHeader !== "string" || !secret || secret.trim() === "") {
     return false;
   }
-  const signedPayload = `${timestamp}.${payloadString}`;
+  const elements = signatureHeader.split(",");
+  let timestamp = 0;
+  const signatures: string[] = [];
+  for (const el of elements) {
+    const parts = el.split("=");
+    const key = parts[0]?.trim();
+    const value = parts.slice(1).join("=").trim();
+    if (key === "t" && value) {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isNaN(parsed) && Number.isSafeInteger(parsed) && parsed > 0) {
+        timestamp = parsed;
+      }
+    }
+    if (key === "v1" && value) {
+      signatures.push(value);
+    }
+  }
+  if (timestamp === 0 || signatures.length === 0) {
+    return false;
+  }
+  if (Math.abs(nowSeconds - timestamp) > toleranceSeconds) {
+    return false;
+  }
+  const signedPayload = `${timestamp}.${rawPayload}`;
   const hmac = createHmac("sha256", secret).update(signedPayload).digest("hex");
   return signatures.some((sig) => {
     try {
@@ -183,10 +196,12 @@ export class EntitlementRuntime {
   }
 
   async processBillingWebhook(
-    signature: string,
+    signature: string | undefined,
+    rawPayload: string,
     payload: BillingWebhookPayload,
+    secret: string | undefined = process.env.STRIPE_WEBHOOK_SECRET,
   ): Promise<{ processed: boolean; eventType: string }> {
-    const isValid = verifyStripeWebhookSignature(signature, payload);
+    const isValid = verifyStripeWebhookSignature(signature, rawPayload, secret);
     if (!isValid) {
       throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Invalid Stripe webhook signature");
     }

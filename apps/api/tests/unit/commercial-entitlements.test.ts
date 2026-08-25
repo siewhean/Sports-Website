@@ -55,16 +55,50 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     expect(summary.unlimited_entries_allowed).toBe(true);
   });
 
-  it("verifies webhook signatures with timing-safe HMAC-SHA256", () => {
-    const secret = "whsec_test_secret_123";
+  it("verifies webhook signatures with timing-safe HMAC-SHA256 and strict tolerance", () => {
+    const secret = "whsec_production_secret_test_1234567890";
     const payload = JSON.stringify({ id: "evt_123", type: "checkout.session.completed" });
-    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const now = Math.floor(Date.now() / 1000);
+    const timestamp = now.toString();
     const signature = createHmac("sha256", secret).update(`${timestamp}.${payload}`).digest("hex");
     const validHeader = `t=${timestamp},v1=${signature}`;
 
-    expect(verifyStripeWebhookSignature(validHeader, payload, secret)).toBe(true);
-    expect(verifyStripeWebhookSignature("t=123,v1=bad_signature", payload, secret)).toBe(false);
-    expect(verifyStripeWebhookSignature("malformed-header", payload, secret)).toBe(false);
+    // 1. Valid signature
+    expect(verifyStripeWebhookSignature(validHeader, payload, secret, 300, now)).toBe(true);
+
+    // 2. Invalid signature value
+    expect(
+      verifyStripeWebhookSignature(`t=${timestamp},v1=bad_hex_signature_deadbeef`, payload, secret, 300, now),
+    ).toBe(false);
+
+    // 3. Missing signature
+    expect(verifyStripeWebhookSignature(undefined, payload, secret)).toBe(false);
+    expect(verifyStripeWebhookSignature("", payload, secret)).toBe(false);
+    expect(verifyStripeWebhookSignature("malformed-header-without-v1", payload, secret)).toBe(false);
+
+    // 4. Missing secret (fails closed)
+    expect(verifyStripeWebhookSignature(validHeader, payload, undefined)).toBe(false);
+    expect(verifyStripeWebhookSignature(validHeader, payload, "")).toBe(false);
+
+    // 5. Expired timestamp (> 300 seconds old)
+    const expiredTimestamp = (now - 305).toString();
+    const expiredSig = createHmac("sha256", secret).update(`${expiredTimestamp}.${payload}`).digest("hex");
+    const expiredHeader = `t=${expiredTimestamp},v1=${expiredSig}`;
+    expect(verifyStripeWebhookSignature(expiredHeader, payload, secret, 300, now)).toBe(false);
+
+    // 6. Future timestamp beyond tolerance
+    const futureTimestamp = (now + 305).toString();
+    const futureSig = createHmac("sha256", secret).update(`${futureTimestamp}.${payload}`).digest("hex");
+    const futureHeader = `t=${futureTimestamp},v1=${futureSig}`;
+    expect(verifyStripeWebhookSignature(futureHeader, payload, secret, 300, now)).toBe(false);
+
+    // 7. Body tampering
+    const tamperedPayload = JSON.stringify({ id: "evt_123", type: "checkout.session.completed", extra: "injected" });
+    expect(verifyStripeWebhookSignature(validHeader, tamperedPayload, secret, 300, now)).toBe(false);
+
+    // 8. Rejection of legacy hardcoded signatures
+    expect(verifyStripeWebhookSignature("development-signature", payload, secret)).toBe(false);
+    expect(verifyStripeWebhookSignature("test-valid-signature", payload, secret)).toBe(false);
   });
 
   it("prevents IDOR: rejects branding mutation if competition does not belong to organisation", async () => {

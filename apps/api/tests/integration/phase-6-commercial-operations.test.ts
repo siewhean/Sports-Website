@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -108,11 +108,17 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
       },
     };
 
-    const firstResult = await entitlementRuntime.processBillingWebhook("sig-1", webhookPayload);
+    const secret = "test_webhook_secret_key";
+    const rawPayload = JSON.stringify(webhookPayload);
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = createHmac("sha256", secret).update(`${timestamp}.${rawPayload}`).digest("hex");
+    const sigHeader = `t=${timestamp},v1=${signature}`;
+
+    const firstResult = await entitlementRuntime.processBillingWebhook(sigHeader, rawPayload, webhookPayload, secret);
     expect(firstResult.processed).toBe(true);
 
     // Replay should be ignored idempotently
-    const replayResult = await entitlementRuntime.processBillingWebhook("sig-1", webhookPayload);
+    const replayResult = await entitlementRuntime.processBillingWebhook(sigHeader, rawPayload, webhookPayload, secret);
     expect(replayResult.processed).toBe(false);
 
     const updatedSummary = await entitlementRuntime.getBillingSummary(organisationId);

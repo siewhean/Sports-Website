@@ -75,8 +75,9 @@ export async function registerBillingRoutes(
       },
     },
     async (request) => {
-      const signature = (request.headers["stripe-signature"] as string) ?? "development-signature";
-      return options.runtime.processBillingWebhook(signature, request.body as BillingWebhookPayload);
+      const signature = request.headers["stripe-signature"] as string | undefined;
+      const rawBody = (request as unknown as { rawBody?: string }).rawBody ?? JSON.stringify(request.body);
+      return options.runtime.processBillingWebhook(signature, rawBody, request.body as BillingWebhookPayload);
     },
   );
 

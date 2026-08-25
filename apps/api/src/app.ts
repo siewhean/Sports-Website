@@ -173,6 +173,20 @@ export async function buildApp(options: BuildAppOptions) {
   const requestRoute = (request: FastifyRequest): string =>
     request.routeOptions.url || request.url.split("?", 1)[0] || "unknown";
 
+  app.addHook("preParsing", async (request, _reply, payload) => {
+    if (request.url.startsWith("/api/v1/billing/webhook")) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of payload) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
+      }
+      const rawBuffer = Buffer.concat(chunks);
+      (request as unknown as { rawBody: string }).rawBody = rawBuffer.toString("utf8");
+      const { Readable } = await import("node:stream");
+      return Readable.from([rawBuffer]);
+    }
+    return payload;
+  });
+
   app.addHook("onRequest", (request, _reply, done) => {
     const traceparent = request.raw.headers.traceparent;
     const tracestate = request.raw.headers.tracestate;
