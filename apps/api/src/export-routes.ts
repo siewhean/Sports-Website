@@ -136,7 +136,7 @@ export async function registerExportRoutes(
     },
   );
 
-  // Validate & Re-import competition archive
+  // Validate competition archive
   app.post<{ Body: { archive: unknown } }>(
     "/api/v1/competitions/exports/validate-archive",
     {
@@ -148,6 +148,31 @@ export async function registerExportRoutes(
     },
     async (request) => {
       return options.runtime.validateCompetitionArchive(request.body.archive);
+    },
+  );
+
+  // Import competition archive into organisation
+  app.post<{
+    Params: { organisationId: string };
+    Body: { archive: unknown; renameSuffix?: string };
+  }>(
+    "/api/v1/organisations/:organisationId/competitions/import-archive",
+    {
+      schema: {
+        params: Type.Object({ organisationId: Id }),
+        body: Type.Object({ archive: Json, renameSuffix: Type.Optional(Type.String()) }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["exports"],
+      },
+    },
+    async (request) => {
+      const actor = await requireActor(request);
+      return options.runtime.importCompetitionArchive(
+        actor,
+        request.params.organisationId,
+        request.body.archive,
+        request.body.renameSuffix,
+      );
     },
   );
 }

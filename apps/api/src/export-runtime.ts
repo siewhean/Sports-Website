@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
@@ -491,6 +492,264 @@ export class ExportRuntime {
       divisionsCount: divisions.length,
       entriesCount,
       matchesCount,
+    };
+  }
+
+  async importCompetitionArchive(
+    actor: Phase3Actor,
+    organisationId: string,
+    archive: unknown,
+    renameSuffix?: string,
+  ): Promise<{
+    competition_id: string;
+    name: string;
+    divisions_count: number;
+    entries_count: number;
+    matches_count: number;
+  }> {
+    const validation = this.validateCompetitionArchive(archive);
+    if (!validation.valid || !validation.competition) {
+      throw new ApiError(400, ErrorCode.REQUEST_INVALID, validation.error ?? "Invalid competition archive");
+    }
+
+    const doc = archive as {
+      schema_version: string;
+      competition: { id: string; name: string; sport_code: string; status?: string };
+      branding?: {
+        primary_color?: string | null;
+        secondary_color?: string | null;
+        logo_url?: string | null;
+        banner_url?: string | null;
+        hide_platform_badge?: boolean;
+      } | null;
+      sponsors?: Array<{
+        name: string;
+        tier: "headline" | "tier1" | "tier2" | "community";
+        logo_url?: string | null;
+        website_url?: string | null;
+        sort_order: number;
+      }>;
+      divisions?: Array<{
+        id: string;
+        name: string;
+        entries?: Array<{ id: string; name: string; seed?: number | null }>;
+        matches?: Array<{
+          id: string;
+          code: string;
+          stage: string;
+          home_entry_id?: string | null;
+          away_entry_id?: string | null;
+          state?: string;
+          scheduled_start?: string | null;
+        }>;
+      }>;
+    };
+
+    const sqlInstance = this.sql as unknown as {
+      begin?: <T>(cb: (tx: PostgresJsSql) => Promise<T>) => Promise<T>;
+    };
+    const beginFn =
+      typeof sqlInstance.begin === "function"
+        ? sqlInstance.begin.bind(sqlInstance)
+        : async <T>(cb: (tx: PostgresJsSql) => Promise<T>) => cb(this.sql);
+
+    return beginFn(async (tx: PostgresJsSql) => {
+      const member = (
+        await tx.unsafe<{ role: string }>(
+          `SELECT role FROM organisation_memberships WHERE organisation_id=$1 AND account_id=$2 AND status='active'`,
+          [organisationId, actor.accountId],
+        )
+      )[0];
+      const platformAdmin = (
+        await tx.unsafe<{ role: string }>(
+          `SELECT role FROM account_platform_roles WHERE account_id=$1 AND role='platform_admin'`,
+          [actor.accountId],
+        )
+      )[0];
+
+      if (!member && !platformAdmin) {
+        throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to target organisation");
+      }
+
+      const compId = randomUUID();
+      const baseName = doc.competition.name.trim();
+      const compName = renameSuffix ? `${baseName} ${renameSuffix}`.slice(0, 160) : baseName;
+      const baseSlug = compName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "")
+        .slice(0, 80);
+      const slug = `${baseSlug || "competition"}-${compId.slice(0, 8)}`;
+      const startsOn = new Date().toISOString().slice(0, 10);
+      const endsOn = new Date(Date.now() + 7 * 86400 * 1000).toISOString().slice(0, 10);
+
+      await tx.unsafe(
+        `INSERT INTO competitions (
+           id, organisation_id, created_by, name, slug, sport_code, timezone, starts_on, ends_on, status, plan_tier
+         ) VALUES ($1, $2, $3, $4, $5, $6, 'UTC', $7, $8, 'draft', 'free')`,
+        [compId, organisationId, actor.accountId, compName, slug, doc.competition.sport_code, startsOn, endsOn],
+      );
+
+      await tx.unsafe(
+        `INSERT INTO competition_sport_settings (competition_id, updated_by, sport_code)
+         VALUES ($1, $2, $3)`,
+        [compId, actor.accountId, doc.competition.sport_code],
+      );
+
+      await tx.unsafe(`INSERT INTO competition_publications (competition_id) VALUES ($1)`, [compId]);
+
+      if (doc.branding) {
+        await tx.unsafe(
+          `INSERT INTO competition_branding (
+             competition_id, primary_color, secondary_color, logo_url, banner_url, hide_platform_badge
+           ) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            compId,
+            doc.branding.primary_color ?? null,
+            doc.branding.secondary_color ?? null,
+            doc.branding.logo_url ?? null,
+            doc.branding.banner_url ?? null,
+            doc.branding.hide_platform_badge ?? false,
+          ],
+        );
+      }
+
+      if (Array.isArray(doc.sponsors)) {
+        for (const s of doc.sponsors) {
+          await tx.unsafe(
+            `INSERT INTO competition_sponsors (
+               competition_id, name, tier, logo_url, website_url, sort_order
+             ) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [compId, s.name.trim(), s.tier, s.logo_url ?? null, s.website_url ?? null, s.sort_order],
+          );
+        }
+      }
+
+      let totalEntries = 0;
+      let totalMatches = 0;
+
+      if (Array.isArray(doc.divisions)) {
+        for (const div of doc.divisions) {
+          const divId = randomUUID();
+          await tx.unsafe(
+            `INSERT INTO divisions (id, competition_id, name, team_limit)
+             VALUES ($1, $2, $3, 16)`,
+            [divId, compId, div.name.trim()],
+          );
+
+          const entryIdMap = new Map<string, string>();
+
+          if (Array.isArray(div.entries)) {
+            let seedCounter = 1;
+            for (const entry of div.entries) {
+              const entryId = randomUUID();
+              const seed = entry.seed ?? seedCounter++;
+              await tx.unsafe(
+                `INSERT INTO division_entries (id, division_id, name, seed, status)
+                 VALUES ($1, $2, $3, $4, 'confirmed')`,
+                [entryId, divId, entry.name.trim(), seed],
+              );
+              entryIdMap.set(entry.id, entryId);
+              totalEntries++;
+            }
+          }
+
+          if (Array.isArray(div.matches)) {
+            for (const match of div.matches) {
+              const matchId = randomUUID();
+              const homeId = match.home_entry_id ? (entryIdMap.get(match.home_entry_id) ?? null) : null;
+              const awayId = match.away_entry_id ? (entryIdMap.get(match.away_entry_id) ?? null) : null;
+              await tx.unsafe(
+                `INSERT INTO matches (
+                   id, competition_id, division_id, code, stage, state, home_entry_id, away_entry_id
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                [matchId, compId, divId, match.code, match.stage ?? "Main", match.state ?? "draft", homeId, awayId],
+              );
+              totalMatches++;
+            }
+          }
+        }
+      }
+
+      return {
+        competition_id: compId,
+        name: compName,
+        divisions_count: doc.divisions?.length ?? 0,
+        entries_count: totalEntries,
+        matches_count: totalMatches,
+      };
+    });
+  }
+
+  compareSemanticEquivalence(archiveA: unknown, archiveB: unknown): { equivalent: boolean; differences: string[] } {
+    const diffs: string[] = [];
+    const vA = this.validateCompetitionArchive(archiveA);
+    const vB = this.validateCompetitionArchive(archiveB);
+
+    if (!vA.valid || !vB.valid) {
+      return { equivalent: false, differences: ["One or both archives failed validation"] };
+    }
+
+    interface ArchivePayload {
+      competition: { sport_code: string; name: string };
+      divisions?: Array<{
+        name: string;
+        entries?: Array<{ name: string }>;
+        matches?: Array<{ code: string }>;
+      }>;
+    }
+
+    const a = archiveA as ArchivePayload;
+    const b = archiveB as ArchivePayload;
+
+    if (a.competition.sport_code !== b.competition.sport_code) {
+      diffs.push(`Sport code mismatch: ${a.competition.sport_code} vs ${b.competition.sport_code}`);
+    }
+
+    const divA = a.divisions ?? [];
+    const divB = b.divisions ?? [];
+
+    if (divA.length !== divB.length) {
+      diffs.push(`Division count mismatch: ${divA.length} vs ${divB.length}`);
+    } else {
+      for (const da of divA) {
+        const db = divB.find((d) => d.name === da.name);
+        if (!db) {
+          diffs.push(`Missing division in second archive: ${da.name}`);
+          continue;
+        }
+
+        const entriesA = da.entries ?? [];
+        const entriesB = db.entries ?? [];
+        if (entriesA.length !== entriesB.length) {
+          diffs.push(`Entry count mismatch in division ${da.name}: ${entriesA.length} vs ${entriesB.length}`);
+        } else {
+          for (const ea of entriesA) {
+            const eb = entriesB.find((e) => e.name === ea.name);
+            if (!eb) {
+              diffs.push(`Missing entry ${ea.name} in division ${da.name}`);
+            }
+          }
+        }
+
+        const matchesA = da.matches ?? [];
+        const matchesB = db.matches ?? [];
+        if (matchesA.length !== matchesB.length) {
+          diffs.push(`Match count mismatch in division ${da.name}: ${matchesA.length} vs ${matchesB.length}`);
+        } else {
+          for (const ma of matchesA) {
+            const mb = matchesB.find((m) => m.code === ma.code);
+            if (!mb) {
+              diffs.push(`Missing match ${ma.code} in division ${da.name}`);
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      equivalent: diffs.length === 0,
+      differences: diffs,
     };
   }
 }

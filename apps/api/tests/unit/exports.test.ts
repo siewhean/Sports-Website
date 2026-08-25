@@ -250,5 +250,118 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
     expect(validation.divisionsCount).toBe(1);
     expect(validation.entriesCount).toBe(1);
     expect(validation.matchesCount).toBe(1);
+
+    // Semantic equivalence of identical archives
+    const eqSelf = runtime.compareSemanticEquivalence(archive, archive);
+    expect(eqSelf.equivalent).toBe(true);
+    expect(eqSelf.differences).toHaveLength(0);
+
+    // Semantic equivalence detects division modifications
+    const modifiedArchive = JSON.parse(JSON.stringify(archive));
+    modifiedArchive.divisions[0].entries.push({ id: "e2", name: "Extra Team", seed: 2 });
+    const eqMod = runtime.compareSemanticEquivalence(archive, modifiedArchive);
+    expect(eqMod.equivalent).toBe(false);
+    expect(eqMod.differences.some((d) => d.includes("Entry count mismatch"))).toBe(true);
+  });
+
+  it("EXP-006: imports competition archive cleanly into target organisation", async () => {
+    const executedQueries: string[] = [];
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        executedQueries.push(query);
+        if (query.includes("FROM organisation_memberships")) {
+          return [{ role: "owner" }];
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const validArchive = {
+      schema_version: "1.0",
+      exported_at: "2026-08-25T00:00:00.000Z",
+      competition: {
+        id: "c-old",
+        name: "Spring Invitational",
+        sport_code: "volleyball",
+        status: "completed",
+      },
+      branding: {
+        primary_color: "#112233",
+        secondary_color: "#aabbcc",
+        hide_platform_badge: true,
+      },
+      sponsors: [{ name: "Sports Bar", tier: "headline", sort_order: 1 }],
+      divisions: [
+        {
+          id: "d-old",
+          name: "Division A",
+          entries: [
+            { id: "e-old-1", name: "Spikers", seed: 1 },
+            { id: "e-old-2", name: "Blockers", seed: 2 },
+          ],
+          matches: [
+            {
+              id: "m-old-1",
+              code: "M01",
+              stage: "Pool Play",
+              home_entry_id: "e-old-1",
+              away_entry_id: "e-old-2",
+              state: "completed",
+            },
+          ],
+        },
+      ],
+    };
+
+    const runtime = new ExportRuntime(mockSql);
+    const result = await runtime.importCompetitionArchive(adminActor, "org-dest-1", validArchive, "(Re-imported)");
+
+    expect(result.competition_id).toBeDefined();
+    expect(result.name).toBe("Spring Invitational (Re-imported)");
+    expect(result.divisions_count).toBe(1);
+    expect(result.entries_count).toBe(2);
+    expect(result.matches_count).toBe(1);
+
+    expect(executedQueries.some((q) => q.includes("INSERT INTO competitions") && q.includes("'draft'"))).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO competition_sport_settings"))).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO competition_branding"))).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO competition_sponsors"))).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO divisions"))).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO division_entries"))).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO matches"))).toBe(true);
+  });
+
+  it("EXP-006: rejects malformed archives and unauthorized import actors", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("FROM organisation_memberships")) {
+          return []; // non-member!
+        }
+        if (query.includes("FROM account_platform_roles")) {
+          return []; // non-admin!
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new ExportRuntime(mockSql);
+
+    // Malformed schema
+    const malformed = { schema_version: "2.0", competition: { name: "Bad" } };
+    expect(runtime.validateCompetitionArchive(malformed).valid).toBe(false);
+
+    await expect(runtime.importCompetitionArchive(adminActor, "org-1", malformed)).rejects.toThrow(
+      /Unsupported schema_version/,
+    );
+
+    // Valid archive but unauthorized actor
+    const validArchive = {
+      schema_version: "1.0",
+      competition: { id: "c1", name: "Valid", sport_code: "basketball" },
+      divisions: [],
+    };
+    await expect(runtime.importCompetitionArchive(adminActor, "org-1", validArchive)).rejects.toThrow(
+      /Access denied to target organisation/,
+    );
   });
 });
