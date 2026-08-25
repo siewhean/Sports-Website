@@ -207,21 +207,29 @@ export class AdminRuntime {
   async revokeAccessPass(actor: Phase3Actor, passId: string, reason?: string) {
     await this.assertPlatformAdmin(actor);
     const pass = (
-      await this.sql.unsafe<{ id: string; competition_id: string }>(
-        `SELECT id, competition_id FROM scoring_access_passes WHERE id=$1`,
+      await this.sql.unsafe<{ id: string; competition_id: string; revoked_at: Date | null }>(
+        `SELECT id, competition_id, revoked_at FROM scoring_access_passes WHERE id=$1`,
         [passId],
       )
     )[0];
     if (!pass) {
-      throw new ApiError(404, ErrorCode.NOT_FOUND, "Scoring access pass not found");
+      throw new ApiError(404, ErrorCode.ACCESS_PASS_NOT_FOUND, "Scoring access pass not found");
     }
 
+    const trimmedReason = reason?.trim();
+    const effectiveReason =
+      trimmedReason && trimmedReason.length >= 3 && trimmedReason.length <= 500 ? trimmedReason : "Admin revoked";
+
     await this.sql.unsafe(
-      `UPDATE scoring_access_passes SET revoked_at=now(), metadata = metadata || $2::jsonb WHERE id=$1`,
-      [passId, JSON.stringify({ revoke_reason: reason ?? "Admin revoked", revoked_by: actor.accountId })],
+      `UPDATE scoring_access_passes
+       SET revoked_at=now(),
+           revoked_by=$2,
+           revocation_reason=$3
+       WHERE id=$1`,
+      [passId, actor.accountId, effectiveReason],
     );
 
-    return { success: true, pass_id: passId, status: "revoked" };
+    return { success: true, pass_id: passId, status: "revoked", revocation_reason: effectiveReason };
   }
 
   async resetAccessPass(actor: Phase3Actor, passId: string) {
@@ -233,11 +241,16 @@ export class AdminRuntime {
       )
     )[0];
     if (!pass) {
-      throw new ApiError(404, ErrorCode.NOT_FOUND, "Scoring access pass not found");
+      throw new ApiError(404, ErrorCode.ACCESS_PASS_NOT_FOUND, "Scoring access pass not found");
     }
 
     await this.sql.unsafe(
-      `UPDATE scoring_access_passes SET revoked_at=NULL, expires_at=now() + interval '24 hours' WHERE id=$1`,
+      `UPDATE scoring_access_passes
+       SET revoked_at=NULL,
+           revoked_by=NULL,
+           revocation_reason=NULL,
+           expires_at=now() + interval '24 hours'
+       WHERE id=$1`,
       [passId],
     );
 

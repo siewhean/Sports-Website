@@ -79,14 +79,16 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
     expect(executedQueries.some((q) => q.includes("INSERT INTO entitlement_grants"))).toBe(true);
   });
 
-  it("ADM-004: manages scoring access passes (revoke and reset)", async () => {
+  it("ADM-004: manages scoring access passes (revoke and reset) with exact schema columns", async () => {
+    const executedQueries: string[] = [];
     const mockSql = {
       unsafe: (async (query: string) => {
+        executedQueries.push(query);
         if (query.includes("account_platform_roles")) {
           return [{ role: "platform_admin" }];
         }
         if (query.includes("FROM scoring_access_passes")) {
-          return [{ id: "pass-1", competition_id: "comp-1" }];
+          return [{ id: "pass-1", competition_id: "comp-1", revoked_at: null }];
         }
         return [];
       }) as PostgresJsSql["unsafe"],
@@ -95,10 +97,63 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
     const runtime = new AdminRuntime(mockSql);
     const revoked = await runtime.revokeAccessPass(adminActor, "pass-1", "Lost referee phone");
     expect(revoked.status).toBe("revoked");
+    expect(revoked.pass_id).toBe("pass-1");
+    expect(revoked.revocation_reason).toBe("Lost referee phone");
+    expect(executedQueries.some((q) => q.includes("SET revoked_at=now()") && q.includes("revocation_reason=$3"))).toBe(
+      true,
+    );
 
     const reset = await runtime.resetAccessPass(adminActor, "pass-1");
     expect(reset.status).toBe("active");
+    expect(reset.pass_id).toBe("pass-1");
     expect(reset.expires_at).toBeDefined();
+    expect(executedQueries.some((q) => q.includes("SET revoked_at=NULL") && q.includes("revocation_reason=NULL"))).toBe(
+      true,
+    );
+  });
+
+  it("ADM-004: rejects pass operations from non-platform admin actors", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("account_platform_roles")) {
+          return [];
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new AdminRuntime(mockSql);
+    const nonAdminActor = { accountId: "regular-user-id" };
+
+    await expect(runtime.revokeAccessPass(nonAdminActor, "pass-1", "Unauthorized revoke")).rejects.toThrow(
+      /Platform administrator privileges required/,
+    );
+    await expect(runtime.resetAccessPass(nonAdminActor, "pass-1")).rejects.toThrow(
+      /Platform administrator privileges required/,
+    );
+  });
+
+  it("ADM-004: rejects pass operations when pass does not exist", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("account_platform_roles")) {
+          return [{ role: "platform_admin" }];
+        }
+        if (query.includes("FROM scoring_access_passes")) {
+          return [];
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new AdminRuntime(mockSql);
+
+    await expect(runtime.revokeAccessPass(adminActor, "nonexistent-pass", "Lost device")).rejects.toThrow(
+      /Scoring access pass not found/,
+    );
+    await expect(runtime.resetAccessPass(adminActor, "nonexistent-pass")).rejects.toThrow(
+      /Scoring access pass not found/,
+    );
   });
 
   it("ADM-005: manages sport default configuration versions", async () => {
