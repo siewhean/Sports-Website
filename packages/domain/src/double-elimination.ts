@@ -308,3 +308,131 @@ export function buildDoubleEliminationFormatTemplate(entryCount: number): Format
     metrics: calculateFormatMetrics(format.graph),
   });
 }
+
+export type DoubleEliminationMatchRecord = {
+  matchId: string;
+  homeEntryId: string | null;
+  awayEntryId: string | null;
+  winnerEntryId: string | null;
+  loserEntryId: string | null;
+  state: "scheduled" | "in_progress" | "completed";
+};
+
+export type DoubleEliminationProgressionResult = {
+  matches: DoubleEliminationMatchRecord[];
+  isResetFinalRequired: boolean;
+  resetFinalMatch: DoubleEliminationMatchRecord | null;
+  championEntryId: string | null;
+  runnerUpEntryId: string | null;
+};
+
+/**
+ * Resolves match progression across upper bracket, lower bracket, and grand finals,
+ * dynamically determining whether the conditional reset match (GF2) is activated and resolved.
+ */
+export function resolveDoubleEliminationProgression(
+  format: DoubleEliminationFormat,
+  entryMap: ReadonlyMap<number, string>,
+  results: ReadonlyMap<string, { winnerEntryId: string; loserEntryId: string }>,
+): DoubleEliminationProgressionResult {
+  const resolvedMatches = new Map<string, DoubleEliminationMatchRecord>();
+
+  for (const match of format.graph.matches) {
+    let homeEntryId: string | null = null;
+    let awayEntryId: string | null = null;
+
+    if (match.home.type === "entry_seed") {
+      homeEntryId = entryMap.get(match.home.seed) ?? null;
+    } else if (match.home.type === "winner") {
+      homeEntryId = results.get(match.home.matchId)?.winnerEntryId ?? null;
+    } else if (match.home.type === "loser") {
+      homeEntryId = results.get(match.home.matchId)?.loserEntryId ?? null;
+    }
+
+    if (match.away.type === "entry_seed") {
+      awayEntryId = entryMap.get(match.away.seed) ?? null;
+    } else if (match.away.type === "winner") {
+      awayEntryId = results.get(match.away.matchId)?.winnerEntryId ?? null;
+    } else if (match.away.type === "loser") {
+      awayEntryId = results.get(match.away.matchId)?.loserEntryId ?? null;
+    }
+
+    const result = results.get(match.id);
+    const state: DoubleEliminationMatchRecord["state"] = result
+      ? "completed"
+      : homeEntryId && awayEntryId
+        ? "scheduled"
+        : "scheduled";
+
+    resolvedMatches.set(match.id, {
+      matchId: match.id,
+      homeEntryId,
+      awayEntryId,
+      winnerEntryId: result?.winnerEntryId ?? null,
+      loserEntryId: result?.loserEntryId ?? null,
+      state,
+    });
+  }
+
+  const firstFinal = resolvedMatches.get(format.firstFinalMatchId);
+  let isResetFinalRequired = false;
+  let resetFinalMatch: DoubleEliminationMatchRecord | null = null;
+  let championEntryId: string | null = null;
+  let runnerUpEntryId: string | null = null;
+
+  if (firstFinal && firstFinal.winnerEntryId && firstFinal.loserEntryId) {
+    // If lower bracket champion (away team) won GF1, upper bracket champion suffers their 1st loss -> Reset Final (GF2) is required!
+    if (firstFinal.winnerEntryId === firstFinal.awayEntryId) {
+      isResetFinalRequired = true;
+      const resetResult = results.get(format.resetFinal.match.id);
+      resetFinalMatch = {
+        matchId: format.resetFinal.match.id,
+        homeEntryId: firstFinal.homeEntryId,
+        awayEntryId: firstFinal.awayEntryId,
+        winnerEntryId: resetResult?.winnerEntryId ?? null,
+        loserEntryId: resetResult?.loserEntryId ?? null,
+        state: resetResult ? "completed" : "scheduled",
+      };
+
+      if (resetResult) {
+        championEntryId = resetResult.winnerEntryId;
+        runnerUpEntryId = resetResult.loserEntryId;
+      }
+    } else {
+      // Undefeated upper bracket champion won GF1 -> No reset needed, champion confirmed!
+      championEntryId = firstFinal.winnerEntryId;
+      runnerUpEntryId = firstFinal.loserEntryId;
+    }
+  }
+
+  return {
+    matches: Array.from(resolvedMatches.values()),
+    isResetFinalRequired,
+    resetFinalMatch,
+    championEntryId,
+    runnerUpEntryId,
+  };
+}
+
+/**
+ * Validates scheduling capacity for double elimination, ensuring available slots account
+ * for both guaranteed 2N-2 matches and conditional 2N-1 reset matches.
+ */
+export function evaluateDoubleEliminationScheduleCapacity(
+  entryCount: number,
+  availableSlots: number,
+): {
+  minimumSlotsRequired: number;
+  maximumSlotsWithReset: number;
+  fitsMinimum: boolean;
+  fitsWithReset: boolean;
+} {
+  const minimumSlotsRequired = entryCount * 2 - 2;
+  const maximumSlotsWithReset = entryCount * 2 - 1;
+  return {
+    minimumSlotsRequired,
+    maximumSlotsWithReset,
+    fitsMinimum: availableSlots >= minimumSlotsRequired,
+    fitsWithReset: availableSlots >= maximumSlotsWithReset,
+  };
+}

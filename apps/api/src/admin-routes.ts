@@ -78,7 +78,7 @@ export async function registerAdminRoutes(
     },
   );
 
-  // Update organisation entitlements
+  // Update organisation entitlements (fixed payload mapping for top_up_ai_units)
   app.post<{
     Params: { organisationId: string };
     Body: { tier?: "free" | "event_pass" | "organiser_pro"; top_up_ai_units?: number; reason?: string };
@@ -100,7 +100,91 @@ export async function registerAdminRoutes(
     },
     async (request) => {
       const actor = await mutationActor(request);
-      return options.runtime.updateEntitlements(actor, request.params.organisationId, request.body, request.id);
+      const input: { tier?: "free" | "event_pass" | "organiser_pro"; topUpAiUnits?: number; reason?: string } = {};
+      if (request.body.tier !== undefined) input.tier = request.body.tier;
+      if (request.body.top_up_ai_units !== undefined) input.topUpAiUnits = request.body.top_up_ai_units;
+      if (request.body.reason !== undefined) input.reason = request.body.reason;
+      return options.runtime.updateEntitlements(actor, request.params.organisationId, input, request.id);
+    },
+  );
+
+  // Revoke scoring access pass
+  app.post<{
+    Params: { passId: string };
+    Body: { reason?: string };
+  }>(
+    "/api/v1/admin/access-passes/:passId/revoke",
+    {
+      schema: {
+        params: Type.Object({ passId: Id }),
+        body: Type.Object({
+          reason: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+        }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await mutationActor(request);
+      return options.runtime.revokeAccessPass(actor, request.params.passId, request.body.reason);
+    },
+  );
+
+  // Reset scoring access pass expiration
+  app.post<{
+    Params: { passId: string };
+  }>(
+    "/api/v1/admin/access-passes/:passId/reset",
+    {
+      schema: {
+        params: Type.Object({ passId: Id }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await mutationActor(request);
+      return options.runtime.resetAccessPass(actor, request.params.passId);
+    },
+  );
+
+  // Get sport default configuration
+  app.get<{
+    Params: { sportCode: string };
+  }>(
+    "/api/v1/admin/sports/:sportCode/defaults",
+    {
+      schema: {
+        params: Type.Object({ sportCode: Type.String({ minLength: 1 }) }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await readActor(request);
+      return options.runtime.getSportDefaults(actor, request.params.sportCode);
+    },
+  );
+
+  // Update sport default configuration
+  app.put<{
+    Params: { sportCode: string };
+    Body: { definition: Record<string, unknown> };
+  }>(
+    "/api/v1/admin/sports/:sportCode/defaults",
+    {
+      schema: {
+        params: Type.Object({ sportCode: Type.String({ minLength: 1 }) }),
+        body: Type.Object({
+          definition: Type.Record(Type.String(), Json),
+        }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await mutationActor(request);
+      return options.runtime.updateSportDefaults(actor, request.params.sportCode, request.body.definition);
     },
   );
 

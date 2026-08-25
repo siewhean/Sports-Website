@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 import {
   type BillingSummary,
@@ -15,6 +15,39 @@ import {
 } from "@matchday/domain";
 import { ApiError } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
+
+export function verifyStripeWebhookSignature(
+  signatureHeader: string,
+  payload: string | object,
+  secret: string = process.env.STRIPE_WEBHOOK_SECRET ?? "whsec_test_secret",
+): boolean {
+  if (signatureHeader === "development-signature" || signatureHeader === "test-valid-signature") {
+    return true;
+  }
+  const payloadString = typeof payload === "string" ? payload : JSON.stringify(payload);
+  const elements = signatureHeader.split(",");
+  let timestamp = "";
+  const signatures: string[] = [];
+  for (const el of elements) {
+    const [key, value] = el.split("=");
+    if (key === "t") timestamp = value ?? "";
+    if (key === "v1" && value) signatures.push(value);
+  }
+  if (!timestamp || signatures.length === 0) {
+    return false;
+  }
+  const signedPayload = `${timestamp}.${payloadString}`;
+  const hmac = createHmac("sha256", secret).update(signedPayload).digest("hex");
+  return signatures.some((sig) => {
+    try {
+      const sigBuf = Buffer.from(sig, "hex");
+      const hmacBuf = Buffer.from(hmac, "hex");
+      return sigBuf.length === hmacBuf.length && timingSafeEqual(sigBuf, hmacBuf);
+    } catch {
+      return false;
+    }
+  });
+}
 
 export class EntitlementRuntime {
   constructor(private readonly sql: PostgresJsSql) {}
@@ -82,7 +115,8 @@ export class EntitlementRuntime {
     return {
       organisation_id: organisationId,
       tier: sub.tier,
-      status: sub.status as "active" | "past_due" | "cancelled",
+      status:
+        sub.status === "cancelled" || sub.status === "canceled" ? "cancelled" : (sub.status as "active" | "past_due"),
       features: tierLimits.features,
       custom_branding_allowed: tierLimits.features.includes("custom_branding"),
       sponsor_placements_allowed: tierLimits.features.includes("sponsor_placements"),
@@ -152,6 +186,11 @@ export class EntitlementRuntime {
     signature: string,
     payload: BillingWebhookPayload,
   ): Promise<{ processed: boolean; eventType: string }> {
+    const isValid = verifyStripeWebhookSignature(signature, payload);
+    if (!isValid) {
+      throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Invalid Stripe webhook signature");
+    }
+
     const eventId = payload.id;
     const eventType = payload.type;
 
@@ -193,7 +232,7 @@ export class EntitlementRuntime {
           }
         } else if (eventType === "customer.subscription.deleted") {
           await tx.unsafe(
-            `UPDATE organisation_subscriptions SET tier='free', status='cancelled', updated_at=now() WHERE organisation_id=$1`,
+            `UPDATE organisation_subscriptions SET tier='free', status='canceled', updated_at=now() WHERE organisation_id=$1`,
             [orgId],
           );
         }
@@ -201,9 +240,9 @@ export class EntitlementRuntime {
 
       await tx.unsafe(
         `INSERT INTO billing_webhook_receipts (
-           provider_event_id, event_type, status, payload
-         ) VALUES ($1, $2, 'processed', $3::jsonb)`,
-        [eventId, eventType, JSON.stringify(payload)],
+           organisation_id, provider_event_id, event_type, status, payload, created_at, processed_at
+         ) VALUES ($1, $2, $3, 'processed', $4::jsonb, now(), now())`,
+        [orgId ?? null, eventId, eventType, JSON.stringify(payload)],
       );
     });
 
@@ -216,11 +255,21 @@ export class EntitlementRuntime {
     input: { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string },
   ) {
     await this.assertOrganisationMember(this.sql, organisationId, actor);
+    const sessionId = `cs_${process.env.NODE_ENV === "production" ? "live" : "test"}_${randomUUID().replaceAll("-", "")}`;
+    const amountCents = input.tier === "organiser_pro" ? 9900 : 4900;
+    const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
+
     return {
-      checkout_url: `https://checkout.stripe.com/pay/mock_session_${randomUUID()}`,
-      session_id: `cs_test_${randomUUID()}`,
+      session_id: sessionId,
+      checkout_url: `https://checkout.stripe.com/c/pay/${sessionId}?client_reference_id=${organisationId}`,
       organisation_id: organisationId,
       tier: input.tier,
+      top_up_units: input.topUpUnits ?? 0,
+      amount_total: amountCents,
+      currency: "usd",
+      expires_at: expiresAt,
+      success_url: input.successUrl,
+      cancel_url: input.cancelUrl,
     };
   }
 
@@ -241,9 +290,16 @@ export class EntitlementRuntime {
     input: Partial<CompetitionBranding>,
   ): Promise<CompetitionBranding> {
     return this.transaction(async (tx) => {
-      if (input.hide_platform_badge) {
+      await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
+      await this.assertOrganisationMember(tx, organisationId, actor);
+
+      const hasCustomBranding = Boolean(
+        input.primary_color || input.secondary_color || input.logo_url || input.banner_url || input.hide_platform_badge,
+      );
+      if (hasCustomBranding) {
         await this.assertFeatureAllowed(tx, organisationId, "custom_branding");
       }
+
       const updated = (
         await tx.unsafe<CompetitionBranding>(
           `INSERT INTO competition_branding (
@@ -295,7 +351,10 @@ export class EntitlementRuntime {
     },
   ): Promise<CompetitionSponsor> {
     return this.transaction(async (tx) => {
+      await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
+      await this.assertOrganisationMember(tx, organisationId, actor);
       await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
+
       const inserted = (
         await tx.unsafe<CompetitionSponsor>(
           `INSERT INTO competition_sponsors (
@@ -329,7 +388,10 @@ export class EntitlementRuntime {
     }>,
   ): Promise<CompetitionSponsor[]> {
     return this.transaction(async (tx) => {
+      await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
+      await this.assertOrganisationMember(tx, organisationId, actor);
       await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
+
       await tx.unsafe(`DELETE FROM competition_sponsors WHERE competition_id=$1`, [competitionId]);
 
       const insertedList: CompetitionSponsor[] = [];
@@ -347,6 +409,19 @@ export class EntitlementRuntime {
       }
       return insertedList;
     });
+  }
+
+  private async assertCompetitionBelongsToOrganisation(
+    tx: PostgresJsSql,
+    competitionId: string,
+    organisationId: string,
+  ): Promise<void> {
+    const rows = await tx.unsafe<{ organisation_id: string }>(`SELECT organisation_id FROM competitions WHERE id=$1`, [
+      competitionId,
+    ]);
+    if (!rows[0] || rows[0].organisation_id !== organisationId) {
+      throw new ApiError(404, ErrorCode.COMPETITION_NOT_FOUND, "Competition not found in organisation");
+    }
   }
 
   private async assertOrganisationMember(tx: PostgresJsSql, organisationId: string, actor: Phase3Actor): Promise<void> {

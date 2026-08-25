@@ -459,6 +459,63 @@ export const messages = {
       "Full API & Federation data exchange access",
     ],
   },
+  onboarding: {
+    title: "Scorekeeper Onboarding & Operational Guide",
+    subtitle: "Everything you need to know about official scorekeeping on MATCHDAY.",
+    step1Title: "1. Accessing Your Match",
+    step1Body:
+      "Scan the court QR code or enter the 6-digit access PIN provided by the tournament organiser. No account creation required for appointed scorekeepers.",
+    step2Title: "2. Real-Time Scoring",
+    step2Body:
+      "Tap to record goals, points, fouls, and cards. Every action is timestamped with monotonic sequencing and instant undo capability.",
+    step3Title: "3. Seamless Offline Operation",
+    step3Body:
+      "If venue Wi-Fi or cellular drops, keep scoring without interruption. All events are buffered securely locally and sync automatically upon reconnection.",
+    step4Title: "4. Match Finalisation",
+    step4Body:
+      "Review the final score, confirm both team signatures, and submit. The published standings and next-round bracket update instantly.",
+    ctaStartScoring: "Open Scorekeeper App",
+  },
+  support: {
+    title: "Support & Help Center",
+    subtitle: "Find answers, operational guides, and contact tournament technical support.",
+    faqTitle: "Frequently Asked Questions",
+    faqs: [
+      {
+        question: "How does offline scoring handle network disconnection?",
+        answer:
+          "MATCHDAY scoring uses an offline-first IndexedDB buffer with cryptographic event fencing. You can score complete matches offline; events sync automatically when connectivity resumes.",
+      },
+      {
+        question: "What happens in a double elimination reset final?",
+        answer:
+          "If the lower bracket winner beats the upper bracket winner in Grand Final 1, MATCHDAY automatically generates and schedules the Grand Final Reset match (GF2).",
+      },
+      {
+        question: "How do I export schedule and standings data?",
+        answer:
+          "Navigate to your competition dashboard and select 'Exports' to download CSV tables, bracket trees, or the complete JSON archive.",
+      },
+      {
+        question: "How do AI assistant actions work?",
+        answer:
+          "AI actions convert plain-text briefs into competition structures, modify formats with natural language, and generate optimized rest schedules.",
+      },
+    ],
+    contactTitle: "Need Direct Assistance?",
+    contactBody: "Our technical operations team is available during scheduled tournament weekends.",
+    contactEmail: "support@matchday.app",
+  },
+  notifications: {
+    title: "Notification Preferences",
+    subtitle: "Configure email alerts and operational updates for your competitions.",
+    matchReminders: "Upcoming Match Reminders (30 mins before scheduled start)",
+    scheduleUpdates: "Schedule Change & Publication Alerts",
+    resultConflicts: "Result Collision & Takeover Alerts",
+    billingReceipts: "Billing Invoices & Renewal Receipts",
+    savePreferences: "Save Preferences",
+    preferencesSaved: "Notification preferences updated successfully",
+  },
 } as const;
 
 export function interpolate(message: string, values: Record<string, string | number>) {

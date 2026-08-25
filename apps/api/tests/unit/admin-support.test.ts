@@ -53,21 +53,94 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
     });
   });
 
-  it("ADM-004 / ADM-005: aggregates AI usage accounting & cost monitoring", async () => {
+  it("ADM-003: updates organisation entitlements and tops up AI units", async () => {
+    const executedQueries: string[] = [];
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        executedQueries.push(query);
+        if (query.includes("account_platform_roles")) {
+          return [{ role: "platform_admin" }];
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new AdminRuntime(mockSql);
+    const result = await runtime.updateEntitlements(
+      adminActor,
+      "org-1",
+      { tier: "organiser_pro", topUpAiUnits: 50, reason: "Customer requested upgrade" },
+      "req-1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.added_ai_units).toBe(50);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO organisation_subscriptions"))).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO entitlement_grants"))).toBe(true);
+  });
+
+  it("ADM-004: manages scoring access passes (revoke and reset)", async () => {
     const mockSql = {
       unsafe: (async (query: string) => {
         if (query.includes("account_platform_roles")) {
           return [{ role: "platform_admin" }];
         }
-        if (query.includes("sum(estimated_cost_usd)")) {
+        if (query.includes("FROM scoring_access_passes")) {
+          return [{ id: "pass-1", competition_id: "comp-1" }];
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new AdminRuntime(mockSql);
+    const revoked = await runtime.revokeAccessPass(adminActor, "pass-1", "Lost referee phone");
+    expect(revoked.status).toBe("revoked");
+
+    const reset = await runtime.resetAccessPass(adminActor, "pass-1");
+    expect(reset.status).toBe("active");
+    expect(reset.expires_at).toBeDefined();
+  });
+
+  it("ADM-005: manages sport default configuration versions", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("account_platform_roles")) {
+          return [{ role: "platform_admin" }];
+        }
+        if (query.includes("SELECT COALESCE(max(version), 0)")) {
+          return [{ max_version: 2 }];
+        }
+        if (query.includes("SELECT sport_code, version, definition FROM sport_pack_versions")) {
+          return [{ sport_code: "basketball", version: 2, definition: { slotMinutes: 20 } }];
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new AdminRuntime(mockSql);
+    const current = await runtime.getSportDefaults(adminActor, "basketball");
+    expect(current.version).toBe(2);
+
+    const updated = await runtime.updateSportDefaults(adminActor, "basketball", { slotMinutes: 25 });
+    expect(updated.version).toBe(3);
+    expect(updated.status).toBe("activated");
+  });
+
+  it("ADM-006 / ADM-007: aggregates AI usage accounting & cost monitoring", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("account_platform_roles")) {
+          return [{ role: "platform_admin" }];
+        }
+        if (query.includes("SELECT\n           count(*)::integer as total_requests")) {
           return [
             {
               total_requests: 100,
-              cache_hits: 20,
+              cache_hits: 25,
               total_prompt_tokens: 50000,
-              total_completion_tokens: 10000,
-              total_cost_usd: "0.250000",
-              avg_latency_ms: 120,
+              total_completion_tokens: 15000,
+              total_cost_usd: "0.125",
+              avg_latency_ms: 320,
             },
           ];
         }
@@ -75,9 +148,9 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
           return [
             {
               action: "text_to_brief",
-              request_count: 70,
-              total_tokens: 42000,
-              total_cost_usd: "0.175000",
+              request_count: 60,
+              total_tokens: 40000,
+              total_cost_usd: "0.080",
             },
           ];
         }
@@ -85,12 +158,12 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
       }) as PostgresJsSql["unsafe"],
     } as unknown as PostgresJsSql;
     const runtime = new AdminRuntime(mockSql);
-    const summary = await runtime.getAiAccountingSummary(adminActor);
+    const result = await runtime.getAiAccountingSummary(adminActor);
 
-    expect(summary.total_requests).toBe(100);
-    expect(summary.cache_hit_rate).toBe(0.2);
-    expect(summary.total_tokens).toBe(60000);
-    expect(summary.total_cost_usd).toBe(0.25);
-    expect(summary.actions).toHaveLength(1);
+    expect(result.total_requests).toBe(100);
+    expect(result.cache_hits).toBe(25);
+    expect(result.cache_hit_rate).toBe(0.25);
+    expect(result.total_cost_usd).toBe(0.125);
+    expect(result.actions).toHaveLength(1);
   });
 });

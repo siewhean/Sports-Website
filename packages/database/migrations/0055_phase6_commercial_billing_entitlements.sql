@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS organisation_subscriptions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organisation_id uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
   tier text NOT NULL CHECK (tier IN ('free', 'event_pass', 'organiser_pro')),
-  status text NOT NULL CHECK (status IN ('active', 'past_due', 'canceled', 'trialing')) DEFAULT 'active',
+  status text NOT NULL CHECK (status IN ('active', 'past_due', 'canceled', 'cancelled', 'trialing')) DEFAULT 'active',
   provider_customer_id text,
   provider_subscription_id text,
   current_period_start timestamptz NOT NULL DEFAULT now(),
@@ -30,12 +30,15 @@ CREATE INDEX IF NOT EXISTS entitlement_grants_org_idx ON entitlement_grants(orga
 
 CREATE TABLE IF NOT EXISTS billing_webhook_receipts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id uuid REFERENCES organisations(id) ON DELETE SET NULL,
   provider_event_id text NOT NULL UNIQUE,
   event_type text NOT NULL,
   payload jsonb NOT NULL,
   status text NOT NULL CHECK (status IN ('processed', 'failed', 'ignored')),
+  created_at timestamptz NOT NULL DEFAULT now(),
   processed_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS billing_webhook_receipts_org_idx ON billing_webhook_receipts(organisation_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS billing_usage_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

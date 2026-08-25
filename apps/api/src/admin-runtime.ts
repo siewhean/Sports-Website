@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 import { type SubscriptionTier, ErrorCode } from "@matchday/contracts";
 import { ApiError } from "./errors.js";
@@ -104,6 +104,17 @@ export class AdminRuntime {
       [orgId],
     );
 
+    const members = await this.sql.unsafe<{
+      account_id: string;
+      role: string;
+      status: string;
+      created_at: Date;
+    }>(
+      `SELECT account_id, role, status, created_at
+       FROM organisation_memberships WHERE organisation_id=$1 ORDER BY created_at DESC`,
+      [orgId],
+    );
+
     return {
       organisation: {
         id: org.id,
@@ -112,7 +123,7 @@ export class AdminRuntime {
       },
       subscription: sub
         ? {
-            tier: sub.tier,
+            tier: sub.tier as SubscriptionTier,
             status: sub.status,
             current_period_start: sub.current_period_start.toISOString(),
             current_period_end: sub.current_period_end ? sub.current_period_end.toISOString() : null,
@@ -130,6 +141,10 @@ export class AdminRuntime {
       competitions: competitions.map((c) => ({
         ...c,
         created_at: c.created_at.toISOString(),
+      })),
+      members: members.map((m) => ({
+        ...m,
+        created_at: m.created_at.toISOString(),
       })),
     };
   }
@@ -175,13 +190,110 @@ export class AdminRuntime {
           JSON.stringify({
             tier: input.tier,
             top_up_ai_units: input.topUpAiUnits,
-            reason: input.reason ?? "Admin grant",
+            reason: input.reason ?? "Administrative override",
           }),
         ],
       );
 
-      return { success: true };
+      return {
+        success: true,
+        organisation_id: orgId,
+        tier: input.tier,
+        added_ai_units: input.topUpAiUnits ?? 0,
+      };
     });
+  }
+
+  async revokeAccessPass(actor: Phase3Actor, passId: string, reason?: string) {
+    await this.assertPlatformAdmin(actor);
+    const pass = (
+      await this.sql.unsafe<{ id: string; competition_id: string }>(
+        `SELECT id, competition_id FROM scoring_access_passes WHERE id=$1`,
+        [passId],
+      )
+    )[0];
+    if (!pass) {
+      throw new ApiError(404, ErrorCode.NOT_FOUND, "Scoring access pass not found");
+    }
+
+    await this.sql.unsafe(
+      `UPDATE scoring_access_passes SET revoked_at=now(), metadata = metadata || $2::jsonb WHERE id=$1`,
+      [passId, JSON.stringify({ revoke_reason: reason ?? "Admin revoked", revoked_by: actor.accountId })],
+    );
+
+    return { success: true, pass_id: passId, status: "revoked" };
+  }
+
+  async resetAccessPass(actor: Phase3Actor, passId: string) {
+    await this.assertPlatformAdmin(actor);
+    const pass = (
+      await this.sql.unsafe<{ id: string; competition_id: string }>(
+        `SELECT id, competition_id FROM scoring_access_passes WHERE id=$1`,
+        [passId],
+      )
+    )[0];
+    if (!pass) {
+      throw new ApiError(404, ErrorCode.NOT_FOUND, "Scoring access pass not found");
+    }
+
+    await this.sql.unsafe(
+      `UPDATE scoring_access_passes SET revoked_at=NULL, expires_at=now() + interval '24 hours' WHERE id=$1`,
+      [passId],
+    );
+
+    return {
+      success: true,
+      pass_id: passId,
+      status: "active",
+      expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+    };
+  }
+
+  async getSportDefaults(actor: Phase3Actor, sportCode: string) {
+    await this.assertPlatformAdmin(actor);
+    const pack = (
+      await this.sql.unsafe<{ sport_code: string; version: number; definition: unknown }>(
+        `SELECT sport_code, version, definition FROM sport_pack_versions
+         WHERE sport_code=$1 AND status='activated' ORDER BY version DESC LIMIT 1`,
+        [sportCode],
+      )
+    )[0];
+    if (!pack) {
+      throw new ApiError(404, ErrorCode.NOT_FOUND, `Sport pack defaults not found for ${sportCode}`);
+    }
+    return {
+      sport_code: pack.sport_code,
+      version: pack.version,
+      definition: pack.definition,
+    };
+  }
+
+  async updateSportDefaults(actor: Phase3Actor, sportCode: string, definition: Record<string, unknown>) {
+    await this.assertPlatformAdmin(actor);
+    const definitionString = JSON.stringify(definition);
+    const hash = createHash("sha256").update(definitionString).digest("hex");
+
+    const latest = (
+      await this.sql.unsafe<{ max_version: number }>(
+        `SELECT COALESCE(max(version), 0)::integer as max_version FROM sport_pack_versions WHERE sport_code=$1`,
+        [sportCode],
+      )
+    )[0]!;
+
+    const nextVersion = latest.max_version + 1;
+
+    await this.sql.unsafe(
+      `INSERT INTO sport_pack_versions (sport_code, version, schema_version, definition, definition_hash, status, activated_at)
+       VALUES ($1, $2, 1, $3::jsonb, $4, 'activated', now())`,
+      [sportCode, nextVersion, definitionString, hash],
+    );
+
+    return {
+      sport_code: sportCode,
+      version: nextVersion,
+      definition_hash: hash,
+      status: "activated",
+    };
   }
 
   async getAiAccountingSummary(actor: Phase3Actor) {

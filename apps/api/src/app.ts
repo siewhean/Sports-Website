@@ -604,6 +604,7 @@ export async function buildApp(options: BuildAppOptions) {
   if (options.exportRuntime) {
     await registerExportRoutes(app as unknown as FastifyInstance, {
       runtime: options.exportRuntime,
+      identityRequests,
     });
   }
 

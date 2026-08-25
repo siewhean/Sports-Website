@@ -2649,9 +2649,21 @@ export class Phase4Runtime {
         );
         attempts = 1;
         durationMs = Date.now() - started;
-        outcome = "success";
-        cacheStatus = "miss";
-        result = { proposedDocument: response.proposedDocument, explanation: response.explanation };
+        const validation = validateFormatBuilderDocument(
+          wireDocumentToDomain(response.proposedDocument as Phase4FormatBuilderDocument),
+        );
+        if (!validation.valid) {
+          outcome = "manual_fallback";
+          failureCode = "unknown";
+          result = {
+            proposedDocument: input.current_document,
+            explanation: "AI proposed format failed domain validation rules",
+          };
+        } else {
+          outcome = "success";
+          cacheStatus = "miss";
+          result = { proposedDocument: response.proposedDocument, explanation: response.explanation };
+        }
         providerRequestId = response.providerRequestId;
         promptTemplateVersion = response.promptTemplateVersion;
         modelIdentifier = response.modelIdentifier;

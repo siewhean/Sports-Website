@@ -1,19 +1,76 @@
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
+import type { Phase3Actor } from "./phase-3-runtime.js";
+
+const escapeCsv = (val: string | number | null | undefined): string => {
+  if (val === null || val === undefined) return "";
+  const str = String(val);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+};
 
 export class ExportRuntime {
   constructor(private readonly sql: PostgresJsSql) {}
 
-  async generateCompetitionCsv(competitionId: string): Promise<string> {
+  private async assertExportAccess(
+    competitionId: string,
+    actor?: Phase3Actor,
+  ): Promise<{ organisationId: string; isPublished: boolean }> {
     const comp = (
-      await this.sql.unsafe<{ id: string; name: string; sport_code: string }>(
-        `SELECT id, name, sport_code FROM competitions WHERE id=$1`,
+      await this.sql.unsafe<{ id: string; organisation_id: string; status: string }>(
+        `SELECT id, organisation_id, status FROM competitions WHERE id=$1`,
         [competitionId],
       )
     )[0];
     if (!comp) {
       throw new ApiError(404, ErrorCode.COMPETITION_NOT_FOUND, "Competition not found");
     }
+
+    const published = (
+      await this.sql.unsafe<{ id: string }>(`SELECT id FROM published_schedules WHERE competition_id=$1 LIMIT 1`, [
+        competitionId,
+      ])
+    )[0];
+    const isPublished = Boolean(published);
+
+    if (!actor) {
+      // Unauthenticated / public caller: strictly requires published schedule
+      if (!isPublished) {
+        throw new ApiError(
+          403,
+          ErrorCode.ACCESS_DENIED,
+          "Unpublished competition schedule cannot be exported without organiser authentication",
+        );
+      }
+      return { organisationId: comp.organisation_id, isPublished: true };
+    }
+
+    // Authenticated caller: assert organisation membership or platform admin
+    const member = (
+      await this.sql.unsafe<{ role: string }>(
+        `SELECT role FROM organisation_memberships WHERE organisation_id=$1 AND account_id=$2 AND status='active'`,
+        [comp.organisation_id, actor.accountId],
+      )
+    )[0];
+
+    const platformAdmin = (
+      await this.sql.unsafe<{ role: string }>(
+        `SELECT role FROM account_platform_roles WHERE account_id=$1 AND role='platform_admin'`,
+        [actor.accountId],
+      )
+    )[0];
+
+    if (!member && !platformAdmin && !isPublished) {
+      throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to unpublished competition");
+    }
+
+    return { organisationId: comp.organisation_id, isPublished };
+  }
+
+  async generateCompetitionCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
+    await this.assertExportAccess(competitionId, actor);
 
     const matches = await this.sql.unsafe<{
       division_name: string;
@@ -56,15 +113,6 @@ export class ExportRuntime {
       "Scheduled Start",
     ];
 
-    const escapeCsv = (val: string | number | null | undefined) => {
-      if (val === null || val === undefined) return "";
-      const str = String(val);
-      if (/[",\n\r]/.test(str)) {
-        return `"${str.replace(/"/g, '""')}"`;
-      }
-      return str;
-    };
-
     const rows = matches.map((m) => [
       escapeCsv(m.division_name),
       escapeCsv(m.stage_name),
@@ -79,16 +127,184 @@ export class ExportRuntime {
     return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
   }
 
-  async generateCompetitionJson(competitionId: string): Promise<Record<string, unknown>> {
+  async generateStandingsCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
+    await this.assertExportAccess(competitionId, actor);
+
+    const standings = await this.sql.unsafe<{
+      division_name: string;
+      rank: number;
+      team_name: string;
+      played: number;
+      won: number;
+      drawn: number;
+      lost: number;
+      goals_for: number;
+      goals_against: number;
+      goal_diff: number;
+      points: number;
+    }>(
+      `SELECT
+         d.name as division_name,
+         e.name as team_name,
+         COALESCE(e.seed, 1) as rank,
+         COALESCE(s.played, 0) as played,
+         COALESCE(s.won, 0) as won,
+         COALESCE(s.drawn, 0) as drawn,
+         COALESCE(s.lost, 0) as lost,
+         COALESCE(s.goals_for, 0) as goals_for,
+         COALESCE(s.goals_against, 0) as goals_against,
+         COALESCE(s.goal_difference, 0) as goal_diff,
+         COALESCE(s.points, 0) as points
+       FROM division_entries e
+       JOIN divisions d ON d.id = e.division_id
+       LEFT JOIN (
+         SELECT entry_id, count(*)::integer as played,
+                count(*) FILTER (WHERE won)::integer as won,
+                count(*) FILTER (WHERE drawn)::integer as drawn,
+                count(*) FILTER (WHERE lost)::integer as lost,
+                sum(goals_for)::integer as goals_for,
+                sum(goals_against)::integer as goals_against,
+                sum(goals_for - goals_against)::integer as goal_difference,
+                sum(points)::integer as points
+         FROM (
+           SELECT home_entry_id as entry_id,
+                  home_score > away_score as won,
+                  home_score = away_score as drawn,
+                  home_score < away_score as lost,
+                  home_score as goals_for,
+                  away_score as goals_against,
+                  CASE WHEN home_score > away_score THEN 3 WHEN home_score = away_score THEN 1 ELSE 0 END as points
+           FROM matches WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
+           UNION ALL
+           SELECT away_entry_id as entry_id,
+                  away_score > home_score as won,
+                  home_score = away_score as drawn,
+                  away_score < home_score as lost,
+                  away_score as goals_for,
+                  home_score as goals_against,
+                  CASE WHEN away_score > home_score THEN 3 WHEN home_score = away_score THEN 1 ELSE 0 END as points
+           FROM matches WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
+         ) match_records
+         GROUP BY entry_id
+       ) s ON s.entry_id = e.id
+       WHERE d.competition_id = $1
+       ORDER BY d.name, COALESCE(s.points, 0) DESC, COALESCE(s.goal_difference, 0) DESC, e.name`,
+      [competitionId],
+    );
+
+    const headers = [
+      "Division",
+      "Rank",
+      "Team",
+      "Played",
+      "Won",
+      "Drawn",
+      "Lost",
+      "Goals For",
+      "Goals Against",
+      "Goal Difference",
+      "Points",
+    ];
+
+    const rows = standings.map((s) => [
+      escapeCsv(s.division_name),
+      escapeCsv(s.rank),
+      escapeCsv(s.team_name),
+      escapeCsv(s.played),
+      escapeCsv(s.won),
+      escapeCsv(s.drawn),
+      escapeCsv(s.lost),
+      escapeCsv(s.goals_for),
+      escapeCsv(s.goals_against),
+      escapeCsv(s.goal_diff),
+      escapeCsv(s.points),
+    ]);
+
+    return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+  }
+
+  async generateBracketCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
+    await this.assertExportAccess(competitionId, actor);
+
+    const bracketMatches = await this.sql.unsafe<{
+      division_name: string;
+      match_id: string;
+      stage: string;
+      home_name: string | null;
+      away_name: string | null;
+      state: string;
+    }>(
+      `SELECT
+         d.name as division_name,
+         m.code as match_id,
+         COALESCE(m.stage, 'Bracket') as stage,
+         e_home.name as home_name,
+         e_away.name as away_name,
+         m.state
+       FROM matches m
+       JOIN divisions d ON d.id = m.division_id
+       LEFT JOIN division_entries e_home ON e_home.id = m.home_entry_id
+       LEFT JOIN division_entries e_away ON e_away.id = m.away_entry_id
+       WHERE d.competition_id = $1
+       ORDER BY d.name, m.code`,
+      [competitionId],
+    );
+
+    const headers = ["Division", "Stage", "Match", "Home Team", "Away Team", "State"];
+    const rows = bracketMatches.map((b) => [
+      escapeCsv(b.division_name),
+      escapeCsv(b.stage),
+      escapeCsv(b.match_id),
+      escapeCsv(b.home_name ?? "TBD"),
+      escapeCsv(b.away_name ?? "TBD"),
+      escapeCsv(b.state),
+    ]);
+
+    return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+  }
+
+  async generateAuditHistoryExport(actor: Phase3Actor, competitionId: string): Promise<string> {
+    const { organisationId } = await this.assertExportAccess(competitionId, actor);
+
+    const events = await this.sql.unsafe<{
+      id: string;
+      action: string;
+      actor_account_id: string;
+      actor_type: string;
+      target_type: string;
+      target_id: string;
+      created_at: Date;
+    }>(
+      `SELECT id, action, actor_account_id, actor_type, target_type, target_id, created_at
+       FROM audit_events
+       WHERE organisation_id=$1 OR target_id=$2
+       ORDER BY created_at DESC
+       LIMIT 500`,
+      [organisationId, competitionId],
+    );
+
+    const headers = ["Timestamp", "Action", "Actor ID", "Actor Type", "Target Type", "Target ID"];
+    const rows = events.map((e) => [
+      escapeCsv(e.created_at.toISOString()),
+      escapeCsv(e.action),
+      escapeCsv(e.actor_account_id),
+      escapeCsv(e.actor_type),
+      escapeCsv(e.target_type),
+      escapeCsv(e.target_id),
+    ]);
+
+    return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+  }
+
+  async generateCompetitionJson(competitionId: string, actor?: Phase3Actor): Promise<Record<string, unknown>> {
+    await this.assertExportAccess(competitionId, actor);
+
     const comp = (
       await this.sql.unsafe<{ id: string; name: string; sport_code: string; status: string; created_at: Date }>(
         `SELECT id, name, sport_code, status, created_at FROM competitions WHERE id=$1`,
         [competitionId],
       )
-    )[0];
-    if (!comp) {
-      throw new ApiError(404, ErrorCode.COMPETITION_NOT_FOUND, "Competition not found");
-    }
+    )[0]!;
 
     const divisions = await this.sql.unsafe<{ id: string; name: string }>(
       `SELECT id, name FROM divisions WHERE competition_id=$1 ORDER BY created_at, name`,
@@ -123,6 +339,32 @@ export class ExportRuntime {
       [competitionId],
     );
 
+    const branding = (
+      await this.sql.unsafe<{
+        primary_color: string | null;
+        secondary_color: string | null;
+        logo_url: string | null;
+        banner_url: string | null;
+        hide_platform_badge: boolean;
+      }>(
+        `SELECT primary_color, secondary_color, logo_url, banner_url, hide_platform_badge
+         FROM competition_branding WHERE competition_id=$1`,
+        [competitionId],
+      )
+    )[0];
+
+    const sponsors = await this.sql.unsafe<{
+      name: string;
+      tier: string;
+      logo_url: string | null;
+      website_url: string | null;
+      sort_order: number;
+    }>(
+      `SELECT name, tier, logo_url, website_url, sort_order
+       FROM competition_sponsors WHERE competition_id=$1 ORDER BY sort_order`,
+      [competitionId],
+    );
+
     return {
       schema_version: "1.0",
       exported_at: new Date().toISOString(),
@@ -133,6 +375,14 @@ export class ExportRuntime {
         status: comp.status,
         created_at: comp.created_at.toISOString(),
       },
+      branding: branding ?? null,
+      sponsors: sponsors.map((s) => ({
+        name: s.name,
+        tier: s.tier,
+        logo_url: s.logo_url,
+        website_url: s.website_url,
+        sort_order: s.sort_order,
+      })),
       divisions: divisions.map((d) => ({
         id: d.id,
         name: d.name,
@@ -155,6 +405,62 @@ export class ExportRuntime {
             scheduled_start: m.scheduled_start ? m.scheduled_start.toISOString() : null,
           })),
       })),
+    };
+  }
+
+  validateCompetitionArchive(archive: unknown): {
+    valid: boolean;
+    competition?: { id: string; name: string; sport_code: string };
+    divisionsCount?: number;
+    entriesCount?: number;
+    matchesCount?: number;
+    error?: string;
+  } {
+    if (!archive || typeof archive !== "object") {
+      return { valid: false, error: "Archive must be a non-null object" };
+    }
+    const doc = archive as Record<string, unknown>;
+    if (doc.schema_version !== "1.0") {
+      return { valid: false, error: "Unsupported schema_version, expected '1.0'" };
+    }
+    const comp = doc.competition as Record<string, unknown> | undefined;
+    if (!comp || typeof comp.id !== "string" || typeof comp.name !== "string" || typeof comp.sport_code !== "string") {
+      return { valid: false, error: "Missing or invalid competition metadata in archive" };
+    }
+    const divisions = doc.divisions;
+    if (!Array.isArray(divisions)) {
+      return { valid: false, error: "Archive divisions must be an array" };
+    }
+
+    let entriesCount = 0;
+    let matchesCount = 0;
+
+    for (const div of divisions) {
+      if (!div || typeof div !== "object") {
+        return { valid: false, error: "Invalid division object in archive" };
+      }
+      const divisionObj = div as Record<string, unknown>;
+      if (typeof divisionObj.name !== "string") {
+        return { valid: false, error: "Invalid division object in archive" };
+      }
+      if (Array.isArray(divisionObj.entries)) {
+        entriesCount += divisionObj.entries.length;
+      }
+      if (Array.isArray(divisionObj.matches)) {
+        matchesCount += divisionObj.matches.length;
+      }
+    }
+
+    return {
+      valid: true,
+      competition: {
+        id: comp.id,
+        name: comp.name,
+        sport_code: comp.sport_code,
+      },
+      divisionsCount: divisions.length,
+      entriesCount,
+      matchesCount,
     };
   }
 }
