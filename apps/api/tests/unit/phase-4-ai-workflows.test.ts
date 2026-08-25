@@ -54,4 +54,27 @@ describe("Phase 4 AI Workflows (AI-007, AI-008, AI-009)", () => {
     expect(response.modelIdentifier).toBe("deterministic-stub-v1");
     expect(response.promptTokens).toBeGreaterThan(0);
   });
+
+  it("AI-016 & AI-017: enforces strict provenance tracking and cost/latency metrics", async () => {
+    const briefResponse = await stub.generateCompetitionBrief({
+      action: "text_to_brief",
+      schemaVersion: "1.0",
+      locale: "en-GB",
+      instruction: "Generate competition brief from organiser text",
+      organiserText:
+        'We want a basketball tournament called "Summer Slam" at City Arena with 8 teams across 2 divisions starting 2026-08-01 to 2026-08-03 with 2 courts and 30 minute slots',
+    });
+
+    expect(briefResponse.data.sport).toBe("basketball");
+    expect(briefResponse.data.name).toBe("Summer Slam");
+    expect(briefResponse.data.entry_count).toBe(8);
+    expect(briefResponse.data.division_count).toBe(2);
+    expect(briefResponse.providerRequestId).toBe("phase4-deterministic-stub-v1");
+    expect(briefResponse.promptTemplateVersion).toBe("1.0.0");
+    expect(briefResponse.modelIdentifier).toBe("deterministic-stub-v1");
+    expect(briefResponse.promptTokens).toBeGreaterThan(0);
+    expect(briefResponse.completionTokens).toBeGreaterThan(0);
+    expect(briefResponse.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(briefResponse.estimatedCostUsd).toBeGreaterThan(0);
+  });
 });
