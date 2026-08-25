@@ -1,6 +1,12 @@
 import type { Phase3SportCode } from "./phase-3.js";
 
-export const phase4AiActionKinds = ["text_to_brief", "format_recommendations"] as const;
+export const phase4AiActionKinds = [
+  "text_to_brief",
+  "format_recommendations",
+  "format_modification",
+  "schedule_preferences",
+  "repair_recommendations",
+] as const;
 export type Phase4AiActionKind = (typeof phase4AiActionKinds)[number];
 
 export const phase4AiMissingFields = [
@@ -111,6 +117,12 @@ export type Phase4AiAuditMetadata = {
   duration_ms: number;
   failure_code?: Phase4AiFailureCode;
   provider_request_id?: string;
+  prompt_template_version?: string;
+  model_identifier?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  latency_ms?: number;
+  estimated_cost_usd?: number;
 };
 
 export type Phase4AiBriefWorkflowState =

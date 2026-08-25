@@ -31,6 +31,41 @@ const initialDraft = (): CompetitionCreateDraft => ({
   locale: phase3CompetitionCreateMachine.defaults.locale,
 });
 
+const DRAFT_STORAGE_KEY = "matchday-competition-create-draft-v1";
+
+function loadSavedDraft(): Partial<CompetitionCreateDraft> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = sessionStorage.getItem(DRAFT_STORAGE_KEY) || localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistDraft(draft: CompetitionCreateDraft) {
+  if (typeof window === "undefined") return;
+  try {
+    const payload = JSON.stringify(draft);
+    sessionStorage.setItem(DRAFT_STORAGE_KEY, payload);
+    localStorage.setItem(DRAFT_STORAGE_KEY, payload);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function clearSavedDraft() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(DRAFT_STORAGE_KEY);
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 function upstreamMessage(payload: unknown, fallback: string): string {
   if (
     payload &&
@@ -48,7 +83,10 @@ function upstreamMessage(payload: unknown, fallback: string): string {
 
 export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   const router = useRouter();
-  const [draft, setDraft] = useState(initialDraft);
+  const [draft, setDraft] = useState<CompetitionCreateDraft>(() => ({
+    ...initialDraft(),
+    ...loadSavedDraft(),
+  }));
   const [organisations, setOrganisations] = useState<CompetitionOrganisationOption[]>([]);
   const [organisationsLoading, setOrganisationsLoading] = useState(true);
   const [organisationsError, setOrganisationsError] = useState("");
@@ -102,7 +140,11 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   }, [organisationLoadAttempt]);
 
   function update(field: CompetitionCreateField, value: string) {
-    setDraft((current) => ({ ...current, [field]: value }));
+    setDraft((current) => {
+      const next = { ...current, [field]: value };
+      persistDraft(next);
+      return next;
+    });
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
     setCommandError("");
     setAnnouncement("");
@@ -153,7 +195,11 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
           role: bootstrapReceipt.role,
         } satisfies CompetitionOrganisationOption;
         setOrganisations([option]);
-        setDraft((current) => ({ ...current, organisation_id: organisationId }));
+        setDraft((current) => {
+          const next = { ...current, organisation_id: organisationId };
+          persistDraft(next);
+          return next;
+        });
       }
 
       const response = await fetch("/api/phase3/competitions", {
@@ -173,6 +219,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
         requestAnimationFrame(() => errorRef.current?.focus());
         return;
       }
+      clearSavedDraft();
       setAnnouncement(messages.organiserCreate.created);
       router.push(`/organiser/competitions/${encodeURIComponent(receipt.id)}/setup`);
     } catch {

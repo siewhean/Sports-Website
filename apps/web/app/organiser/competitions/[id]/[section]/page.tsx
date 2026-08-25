@@ -4,6 +4,7 @@ import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { CapacityEditor } from "@/components/phase3/CapacityEditor";
 import { EntriesEditor } from "@/components/phase3/EntriesEditor";
 import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
+import { V1PublishWorkspace } from "@/components/phase4/schedule/V1PublishWorkspace";
 import { gateCC4Copy } from "@/lib/gate-c-c4";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
@@ -12,7 +13,11 @@ import { getCapacityDocument } from "@/lib/phase3-capacity.server";
 import { phase3EntriesCopy, phase3EntriesMachine, totalActiveEntries } from "@/lib/phase3-entries";
 import { phase3ResultsCopy, phase3ResultsMachine, resultVersionLabel } from "@/lib/phase3-results";
 import { getResultsDocument } from "@/lib/phase3-results.server";
+import { phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
+import { getScheduleDocument } from "@/lib/phase4-schedule.server";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+import { v1ScheduleProductionMachine } from "@/lib/v1-schedule-production";
+import { messages } from "@matchday/ui";
 
 export default async function CompetitionSectionPage({
   params,
@@ -129,6 +134,42 @@ export default async function CompetitionSectionPage({
             initialMatchId={query.match}
             enableRemoteOperations={!demoFixturesEnabled()}
           />
+        }
+      />
+    );
+  }
+  if (section === "publish") {
+    const document = await getScheduleDocument({
+      competitionId: result.competition.id,
+      competitionName: result.competition.name,
+      timeZone: result.competition.timezone,
+      publicationRevision: result.competition.publicationRevision,
+      ...(query.state ? { previewState: query.state } : {}),
+    });
+    return (
+      <OrganiserWorkspace
+        competition={result.competition}
+        section={v1ScheduleProductionMachine.publishSection}
+        sectionAction={null}
+        pageTitle={phase2Copy.publishTitle}
+        pageIntro={phase2Copy.publishIntro}
+        pageEyebrow={messages.metadata.schedulePublication}
+        syncLabel={
+          document.currentRevision
+            ? `${phase4ScheduleCopy.draft} ${document.currentRevision.revision}`
+            : phase4ScheduleCopy.saved
+        }
+        syncState={
+          document.state === phase4ScheduleMachine.offline
+            ? phase4ScheduleMachine.offline
+            : document.state === phase4ScheduleMachine.readOnly
+              ? phase4ScheduleMachine.readOnly
+              : document.state === phase4ScheduleMachine.ready
+                ? phase4ScheduleMachine.saved
+                : phase4ScheduleMachine.unavailable
+        }
+        sectionContent={
+          <V1PublishWorkspace document={document} competitionSlug={result.competition.slug ?? result.competition.id} />
         }
       />
     );

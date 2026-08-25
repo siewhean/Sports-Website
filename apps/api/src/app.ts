@@ -39,6 +39,12 @@ import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { registerGateCC4PublicTruthRoutes, type GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { registerScoringAccessHmacKeyringRoutes } from "./scoring-access-hmac-keyring-routes.js";
 import { registerScoringFallbackHmacKeyringRoutes } from "./scoring-fallback-hmac-keyring-routes.js";
+import { registerBillingRoutes } from "./billing-routes.js";
+import type { EntitlementRuntime } from "./entitlement-runtime.js";
+import { registerExportRoutes } from "./export-routes.js";
+import type { ExportRuntime } from "./export-runtime.js";
+import { registerAdminRoutes } from "./admin-routes.js";
+import type { AdminRuntime } from "./admin-runtime.js";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 import type { PostgresJsSql } from "@matchday/identity";
 
@@ -128,6 +134,9 @@ export type BuildAppOptions = {
   scoringAccessHmacKeySql?: PostgresJsSql;
   scoringFallbackHmacKeySql?: PostgresJsSql;
   scoringFallbackHmacKeyring?: ScoringFallbackHmacKeyring;
+  entitlementRuntime?: EntitlementRuntime;
+  exportRuntime?: ExportRuntime;
+  adminRuntime?: AdminRuntime;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -572,11 +581,29 @@ export async function buildApp(options: BuildAppOptions) {
         allowedOrigins: options.config.api.allowedOrigins,
       });
     }
+    if (options.entitlementRuntime) {
+      await registerBillingRoutes(app as unknown as FastifyInstance, {
+        runtime: options.entitlementRuntime,
+        identityRequests,
+      });
+    }
+    if (options.adminRuntime) {
+      await registerAdminRoutes(app as unknown as FastifyInstance, {
+        runtime: options.adminRuntime,
+        identityRequests,
+      });
+    }
   }
 
   if (options.gateCC4PublicTruthRuntime) {
     await registerGateCC4PublicTruthRoutes(app as unknown as FastifyInstance, {
       runtime: options.gateCC4PublicTruthRuntime,
+    });
+  }
+
+  if (options.exportRuntime) {
+    await registerExportRoutes(app as unknown as FastifyInstance, {
+      runtime: options.exportRuntime,
     });
   }
 

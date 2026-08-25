@@ -1,4 +1,5 @@
 import type { CompetitionEntry } from "./canoe-polo.js";
+import { buildDoubleEliminationFormatTemplate } from "./double-elimination.js";
 
 export type MatchParticipantSource =
   | { type: "entry"; entryId: string }
@@ -330,7 +331,8 @@ export type FormatMetrics = {
   readonly maximumMatches: number;
 };
 
-export type FormatTemplateStrategy = "full_placement" | "championship_focus" | "compact_knockout";
+export type FormatTemplateStrategy =
+  "full_placement" | "championship_focus" | "compact_knockout" | "double_elimination";
 
 export type FormatTemplate = {
   readonly id: string;
@@ -1567,14 +1569,22 @@ export function recommendCompetitionFormats(
   if (!Number.isSafeInteger(minimumGuaranteedMatches) || minimumGuaranteedMatches < 1)
     throw new Error("Minimum guaranteed matches must be a positive integer");
 
-  const strategies: readonly FormatTemplateStrategy[] = ["full_placement", "championship_focus", "compact_knockout"];
+  const strategies: readonly FormatTemplateStrategy[] = [
+    "full_placement",
+    "championship_focus",
+    "compact_knockout",
+    "double_elimination",
+  ];
   const candidates = strategies.flatMap((strategy): CompetitionFormatRecommendation[] => {
     const divisions = request.divisions.map((division) => {
       if (!defaultFormatEntryCounts.includes(division.entryCount as DefaultFormatEntryCount))
         throw new Error(`Division ${division.id} has an unsupported entry count`);
-      const template = createDefaultFormatTemplates(division.entryCount as DefaultFormatEntryCount).find(
-        (item) => item.strategy === strategy,
-      );
+      const template =
+        strategy === "double_elimination"
+          ? buildDoubleEliminationFormatTemplate(division.entryCount)
+          : createDefaultFormatTemplates(division.entryCount as DefaultFormatEntryCount).find(
+              (item) => item.strategy === strategy,
+            );
       if (!template) throw new Error(`Missing ${strategy} template for division ${division.id}`);
       if (!validateFormatGraph(template.graph).valid) return null;
       return {
@@ -1598,7 +1608,7 @@ export function recommendCompetitionFormats(
         ? "podium"
         : "champion";
     const hasKnockout = exactDivisions.every((division) =>
-      division.graph.stages.some((stage) => stage.kind === "single_elimination"),
+      division.graph.stages.some((stage) => stage.kind === "single_elimination" || stage.kind === "consolation"),
     );
     const usesCrossGroupQualification = exactDivisions.some((division) =>
       division.graph.matches.some((match) => match.home.type === "stage_rank" || match.away.type === "stage_rank"),
@@ -1620,13 +1630,17 @@ export function recommendCompetitionFormats(
             ? "Full placement"
             : strategy === "championship_focus"
               ? "Championship focus"
-              : "Compact knockout",
+              : strategy === "double_elimination"
+                ? "Double elimination"
+                : "Compact knockout",
         advantage:
           strategy === "full_placement"
             ? "Ranks every entry."
             : strategy === "championship_focus"
               ? "Keeps complete group play with shorter finals."
-              : "Uses the fewest match slots.",
+              : strategy === "double_elimination"
+                ? "Guarantees two matches per entrant with upper and lower brackets."
+                : "Uses the fewest match slots.",
         capacityStatus: fits ? (tight ? "tight" : "fits") : "requires_changes",
         scheduleFeasibility: fits ? "not_checked" : "infeasible",
         matchCount,
@@ -1641,9 +1655,9 @@ export function recommendCompetitionFormats(
   });
   const priority = request.priority ?? "simplicity";
   const preference: Record<typeof priority, readonly FormatTemplateStrategy[]> = {
-    speed: ["compact_knockout", "championship_focus", "full_placement"],
-    simplicity: ["championship_focus", "compact_knockout", "full_placement"],
-    participation: ["full_placement", "championship_focus", "compact_knockout"],
+    speed: ["compact_knockout", "double_elimination", "championship_focus", "full_placement"],
+    simplicity: ["championship_focus", "compact_knockout", "double_elimination", "full_placement"],
+    participation: ["full_placement", "double_elimination", "championship_focus", "compact_knockout"],
   };
   const order = new Map(preference[priority].map((strategy, index) => [strategy, index]));
   const sorted = [...candidates].sort(

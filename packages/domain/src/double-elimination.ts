@@ -4,6 +4,7 @@ import {
   type FormatGraph,
   type FormatGraphMatch,
   type FormatParticipantSource,
+  type FormatTemplate,
 } from "./format.js";
 
 export type DoubleEliminationResetFinal = Readonly<{
@@ -293,4 +294,17 @@ export function resolveDoubleEliminationResetFinal(
     throw new Error("Double elimination reset contract is not bound to the first final");
   }
   return firstFinalWinnerSlot === definition.resetFinal.requiredWhen.winnerSlot ? definition.resetFinal.match : null;
+}
+
+/** Build a format template adapter for double elimination. */
+export function buildDoubleEliminationFormatTemplate(entryCount: number): FormatTemplate {
+  const format = createDoubleEliminationFormat(entryCount);
+  return freezeDeep({
+    id: `${entryCount}-double_elimination`,
+    label: "Double elimination",
+    strategy: "double_elimination" as const,
+    advantage: "Every entrant is guaranteed at least two matches with upper and lower brackets.",
+    graph: format.graph,
+    metrics: calculateFormatMetrics(format.graph),
+  });
 }

@@ -733,7 +733,7 @@ describe("foundation migrations", () => {
           (
             await sql<
               { expiry: string }[]
-            >`SELECT phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz)::text expiry`
+            >`SELECT (phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz) AT TIME ZONE 'UTC')::text expiry`
           )[0]?.expiry,
         ).toContain("2027-02-28 10:15:00");
       } finally {

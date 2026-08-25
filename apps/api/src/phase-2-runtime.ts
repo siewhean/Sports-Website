@@ -5063,6 +5063,65 @@ export class Phase2Runtime {
         );
       }
     }
+    const grandFinal1 = (
+      await tx.unsafe<{
+        id: string;
+        format_revision_id: string;
+        competition_id: string;
+        division_id: string;
+        ordinal: number;
+        home_entry_id: string | null;
+        away_entry_id: string | null;
+        state: string;
+      }>(
+        `SELECT id,format_revision_id,competition_id,division_id,ordinal,home_entry_id,away_entry_id,state
+         FROM matches
+         WHERE division_id=$1 AND (graph_match_id='grand-final-1' OR code='grand-final-1')`,
+        [divisionId],
+      )
+    )[0];
+    if (grandFinal1 && ["final", "corrected"].includes(grandFinal1.state)) {
+      const gf1Result = (
+        await tx.unsafe<{ home_score: number; away_score: number }>(
+          `SELECT home_score, away_score FROM match_result_snapshots
+           WHERE match_id=$1 AND result_version<=$2 ORDER BY result_version DESC LIMIT 1`,
+          [grandFinal1.id, resultVersion],
+        )
+      )[0];
+      if (gf1Result && gf1Result.away_score > gf1Result.home_score) {
+        const existingReset = (
+          await tx.unsafe<{ id: string }>(
+            `SELECT id FROM matches WHERE division_id=$1 AND (graph_match_id='grand-final-reset' OR code='grand-final-reset')`,
+            [divisionId],
+          )
+        )[0];
+        if (!existingReset) {
+          const resetMatchId = randomUUID();
+          await tx.unsafe(
+            `INSERT INTO matches (
+               id, competition_id, division_id, format_revision_id, code, stage,
+               round_number, ordinal, graph_match_id, graph_stage_id, graph_purpose,
+               home_entry_id, away_entry_id, state
+             ) VALUES ($1,$2,$3,$4,'grand-final-reset','final',2,$5,'grand-final-reset','grand-final','championship',$6,$7,'ready')`,
+            [
+              resetMatchId,
+              competitionId,
+              divisionId,
+              grandFinal1.format_revision_id,
+              grandFinal1.ordinal + 1,
+              grandFinal1.home_entry_id,
+              grandFinal1.away_entry_id,
+            ],
+          );
+          await tx.unsafe(
+            `INSERT INTO match_dependencies (match_id, format_revision_id, slot, source_match_id, outcome)
+             VALUES ($1,$2,'home',$3,'winner'), ($1,$2,'away',$3,'loser')
+             ON CONFLICT DO NOTHING`,
+            [resetMatchId, grandFinal1.format_revision_id, grandFinal1.id],
+          );
+        }
+      }
+    }
     await tx.unsafe(
       `INSERT INTO bracket_snapshots (
          competition_id,division_id,result_version,bracket,conflicts

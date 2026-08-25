@@ -117,6 +117,23 @@ function integer(value: unknown, minimum = 0): value is number {
   return Number.isSafeInteger(value) && (value as number) >= minimum;
 }
 
+function allowedKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const present = Object.keys(value);
+  const requiredSet = new Set(required);
+  const optionalSet = new Set(optional);
+  for (const req of required) {
+    if (!present.includes(req)) return false;
+  }
+  for (const key of present) {
+    if (!requiredSet.has(key) && !optionalSet.has(key)) return false;
+  }
+  return true;
+}
+
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).sort().join(",") === [...keys].sort().join(",");
 }
@@ -290,19 +307,23 @@ export function parseFormatMaterialisation(value: unknown, formatId: string): Fo
     !item ||
     !exactKeys(item, ["revision", "materialised", "match_count", "materialisation_hash", "idempotent_replay"]) ||
     !revision ||
-    !exactKeys(revision, [
-      "revision_id",
-      "revision",
-      "parent_revision_id",
-      "root_revision_id",
-      "competition_id",
-      "division_id",
-      "status",
-      "definition_hash",
-      "document",
-      "created_at",
-      "published_at",
-    ]) ||
+    !allowedKeys(
+      revision,
+      [
+        "revision_id",
+        "revision",
+        "parent_revision_id",
+        "root_revision_id",
+        "competition_id",
+        "division_id",
+        "status",
+        "definition_hash",
+        "document",
+        "created_at",
+        "published_at",
+      ],
+      ["materialised"],
+    ) ||
     revision.revision_id !== formatId ||
     !integer(revision.revision, 1) ||
     !(revision.parent_revision_id === null || typeof revision.parent_revision_id === "string") ||
@@ -331,20 +352,24 @@ export function parseFormatPublication(value: unknown, formatId: string): Format
   const item = record(value);
   if (
     !item ||
-    !exactKeys(item, [
-      "revision_id",
-      "revision",
-      "parent_revision_id",
-      "root_revision_id",
-      "competition_id",
-      "division_id",
-      "status",
-      "definition_hash",
-      "document",
-      "created_at",
-      "published_at",
-      "idempotent_replay",
-    ]) ||
+    !allowedKeys(
+      item,
+      [
+        "revision_id",
+        "revision",
+        "parent_revision_id",
+        "root_revision_id",
+        "competition_id",
+        "division_id",
+        "status",
+        "definition_hash",
+        "document",
+        "created_at",
+        "published_at",
+        "idempotent_replay",
+      ],
+      ["materialised"],
+    ) ||
     item.revision_id !== formatId ||
     !integer(item.revision, 1) ||
     !(item.parent_revision_id === null || typeof item.parent_revision_id === "string") ||

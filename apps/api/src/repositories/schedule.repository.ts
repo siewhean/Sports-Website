@@ -118,8 +118,8 @@ export class ScheduleRepository {
     },
     executor: SqlExecutor = this.sql,
   ): Promise<{ id: string }> {
-    const warningsJson = typeof input.warnings === "string" ? input.warnings : JSON.stringify(input.warnings);
-    const qualityJson = typeof input.quality === "string" ? input.quality : JSON.stringify(input.quality);
+    const warningsVal = typeof input.warnings === "string" ? JSON.parse(input.warnings) : input.warnings;
+    const qualityVal = typeof input.quality === "string" ? JSON.parse(input.quality) : input.quality;
     const rows = await executor.unsafe<{ id: string }>(
       `INSERT INTO schedule_revisions(
          competition_id, format_revision_id, revision, input_hash, status, warnings, created_by,
@@ -131,10 +131,10 @@ export class ScheduleRepository {
         input.formatRevisionId,
         input.revision,
         input.inputHash,
-        warningsJson,
+        warningsVal,
         input.createdBy,
         input.parentRevisionId,
-        qualityJson,
+        qualityVal,
         input.sourceRepairRevisionId,
         input.updatedAt,
       ],

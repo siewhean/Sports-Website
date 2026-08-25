@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, CalendarDots, Clock, Trophy } from "@phosphor-icons/react/dist/ssr";
 import { ConnectivityStatus } from "@/components/foundation/ConnectivityStatus";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
+import { DoubleEliminationBracket } from "@/components/phase2/DoubleEliminationBracket";
 import { phase2Copy, type CompetitionView, type PublicDivisionView } from "@/lib/phase2";
 
 export function PublicCompetition({ competition }: { competition: CompetitionView }) {
@@ -241,19 +242,23 @@ function PublicDivisionSections({
           </div>
           <Trophy />
         </header>
-        <div className="p2-public-bracket">
-          {bracket.map((match) => (
-            <article key={match.id ?? `${match.round}-${match.fixture}`} data-match-id={match.id}>
-              <span>{match.round}</span>
-              <h3>{match.fixture}</h3>
-              <strong>{match.score}</strong>
-              <small>
-                <Clock />
-                {match.state}
-              </small>
-            </article>
-          ))}
-        </div>
+        {bracket.some((m) => m.stageKind === "upper" || m.stageKind === "lower" || m.stageKind === "grand_final") ? (
+          <DoubleEliminationBracket matches={bracket} divisionName={division.name} />
+        ) : (
+          <div className="p2-public-bracket">
+            {bracket.map((match) => (
+              <article key={match.id ?? `${match.round}-${match.fixture}`} data-match-id={match.id}>
+                <span>{match.round}</span>
+                <h3>{match.fixture}</h3>
+                <strong>{match.score}</strong>
+                <small>
+                  <Clock />
+                  {match.state}
+                </small>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </>
   );

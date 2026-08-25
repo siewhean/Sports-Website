@@ -402,8 +402,10 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   );
   await expect(page.getByText("This setup is read only").first()).toBeVisible();
 
-  await page.goto(`/competitions/${slug}`);
-  await expect(page.getByRole("heading", { name: "Phase 4 Browser Verified Cup" })).toBeVisible();
+  const publicPageResponse = await page.goto(`/competitions/${slug}`);
+  expect(publicPageResponse?.status(), `Public page load HTTP ${publicPageResponse?.status()}`).toBe(200);
+  await dismissConsent(page);
+  await expect(page.getByRole("heading", { name: "Phase 4 Browser Verified Cup" })).toBeVisible({ timeout: 15_000 });
   const publicTime = new Intl.DateTimeFormat("en-SG", {
     timeZone: "Asia/Singapore",
     hour: "2-digit",

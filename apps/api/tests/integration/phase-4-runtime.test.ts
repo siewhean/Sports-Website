@@ -3,7 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
-import { createDefaultFormatTemplates, generateConstraintAwareSchedule, type ScheduleProblem } from "@matchday/domain";
+import {
+  createDefaultFormatTemplates,
+  createDoubleEliminationFormat,
+  generateConstraintAwareSchedule,
+  type ScheduleProblem,
+} from "@matchday/domain";
 import type { Phase4FormatBuilderDocument, ScheduleConstraints, ScheduleJobInput } from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
 import {
@@ -1603,6 +1608,61 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
       code: "STALE_SCHEDULE_INPUT",
     });
   }, 15_000);
+
+  it("persists double-elimination format and materialises 2N-2 guaranteed matches", async () => {
+    const deCompetitionId = required(
+      await client<
+        { id: string }[]
+      >`INSERT INTO competitions(organisation_id,name,slug,sport_code,status,timezone,starts_on,ends_on,venue,created_by)
+        VALUES(${organisationId},'DE Open','de-open','basketball','draft','Asia/Singapore','2026-09-01','2026-09-03','Main Arena',${accountId}) RETURNING id`,
+    ).id;
+    const deDivisionId = required(
+      await client<{ id: string }[]>`INSERT INTO divisions(competition_id,name,team_limit)
+        VALUES(${deCompetitionId},'Open',8) RETURNING id`,
+    ).id;
+    for (let index = 1; index <= 8; index += 1) {
+      await client`INSERT INTO division_entries(division_id,name,seed,status)
+        VALUES(${deDivisionId},${`Team ${index}`},${index},'confirmed')`;
+    }
+    const deFormat = createDoubleEliminationFormat(8);
+    const saved = await runtime.saveFormatRevision(
+      { accountId },
+      deCompetitionId,
+      deDivisionId,
+      {
+        idempotency_key: randomUUID(),
+        draft_id: null,
+        parent_revision_id: null,
+        expected_revision: null,
+        document: {
+          schema_version: 1,
+          graph: deFormat.graph,
+          layout: {
+            schema_version: 1,
+            stage_positions: deFormat.graph.stages.map((stage, idx) => ({
+              stage_id: stage.id,
+              x: idx * 200,
+              y: 100,
+            })),
+          },
+        },
+      },
+      randomUUID(),
+    );
+    expect(saved.metrics.match_count).toBe(14);
+    expect(saved.metrics.guaranteed_matches).toBeGreaterThanOrEqual(2);
+
+    const materialised = await runtime.materialiseFormat({ accountId }, saved.draft_id, randomUUID(), randomUUID());
+    expect(materialised.match_count).toBe(14);
+    expect(materialised.materialised).toBe(true);
+
+    const matches = await client<
+      { id: string; graph_match_id: string }[]
+    >`SELECT id, graph_match_id FROM matches WHERE format_revision_id=${saved.draft_id}`;
+    expect(matches).toHaveLength(14);
+    expect(matches.some((m) => m.graph_match_id === "grand-final-1")).toBe(true);
+    expect(matches.some((m) => m.graph_match_id === "grand-final-reset")).toBe(false);
+  });
 });
 
 async function waitForCompletedScheduleJob(

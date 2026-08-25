@@ -32,6 +32,12 @@ export function createAiAuditMetadata(input: {
   durationMs: number;
   failureCode?: Phase4AiFailureCode;
   providerRequestId?: string;
+  promptTemplateVersion?: string;
+  modelIdentifier?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  latencyMs?: number;
+  estimatedCostUsd?: number;
 }): Phase4AiAuditMetadata {
   const providerRequestId =
     input.providerRequestId !== undefined && /^[A-Za-z0-9._:-]{1,128}$/.test(input.providerRequestId)
@@ -53,5 +59,11 @@ export function createAiAuditMetadata(input: {
     duration_ms: Math.max(0, Math.round(input.durationMs)),
     ...(input.failureCode === undefined ? {} : { failure_code: input.failureCode }),
     ...(providerRequestId === undefined ? {} : { provider_request_id: providerRequestId }),
+    ...(input.promptTemplateVersion === undefined ? {} : { prompt_template_version: input.promptTemplateVersion }),
+    ...(input.modelIdentifier === undefined ? {} : { model_identifier: input.modelIdentifier }),
+    ...(input.promptTokens === undefined ? {} : { prompt_tokens: input.promptTokens }),
+    ...(input.completionTokens === undefined ? {} : { completion_tokens: input.completionTokens }),
+    ...(input.latencyMs === undefined ? {} : { latency_ms: input.latencyMs }),
+    ...(input.estimatedCostUsd === undefined ? {} : { estimated_cost_usd: input.estimatedCostUsd }),
   };
 }

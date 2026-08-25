@@ -9,6 +9,12 @@ export {
   type AiProviderPort,
   type CompetitionBriefProviderRequest,
   type CompetitionBriefProviderResponse,
+  type FormatModifyProviderRequest,
+  type FormatModifyProviderResponse,
+  type SchedulePreferencesProviderRequest,
+  type SchedulePreferencesProviderResponse,
+  type RepairRecommendationsProviderRequest,
+  type RepairRecommendationsProviderResponse,
   type ProviderAttemptEvent,
   type ProviderExecutionResult,
 } from "./provider.js";

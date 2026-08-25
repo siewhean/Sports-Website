@@ -209,3 +209,12 @@ export type {
   GateCScoreSheetSection,
   GateCScoreSheetSectionKind,
 } from "./gate-c-fallback.js";
+export type {
+  SubscriptionTier,
+  EntitlementFeature,
+  OrganisationBillingSummary,
+  BillingHistoryItem,
+  CompetitionBranding,
+  CompetitionSponsor,
+} from "./billing.js";
+export type { BillingSummary, BillingWebhookPayload } from "./billing.js";

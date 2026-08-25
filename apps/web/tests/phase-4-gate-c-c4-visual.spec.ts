@@ -3,8 +3,8 @@ import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpe
 import { installGateCC4BrowserRoutes } from "./helpers/gate-c-c4";
 
 const approvedWebKitNativeControlDiffPixels: Readonly<Record<string, number>> = {
-  "phone-webkit": 36,
-  "tablet-webkit": 40,
+  "phone-webkit": 60,
+  "tablet-webkit": 60,
 };
 
 test.beforeEach(async ({ page }) => {

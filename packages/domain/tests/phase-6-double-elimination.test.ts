@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDoubleEliminationFormatTemplate,
   createDoubleEliminationFormat,
+  recommendCompetitionFormats,
   resolveDoubleEliminationResetFinal,
   validateFormatGraph,
   type FormatGraphMatch,
@@ -84,4 +86,30 @@ describe("Phase 6 double elimination", () => {
   it.each([0, 1, 1.5, Number.NaN])("rejects invalid entry count %s", (entryCount) => {
     expect(() => createDoubleEliminationFormat(entryCount)).toThrow(/at least two/);
   });
+
+  it("builds a valid double-elimination format template", () => {
+    const template = buildDoubleEliminationFormatTemplate(8);
+    expect(template.id).toBe("8-double_elimination");
+    expect(template.strategy).toBe("double_elimination");
+    expect(template.metrics.matchCount).toBe(14);
+    expect(template.metrics.guaranteedMatches).toBeGreaterThanOrEqual(2);
+    expect(validateFormatGraph(template.graph)).toEqual({ valid: true, issues: [] });
+  });
+
+  it.each([8, 12, 16, 24, 48] as const)(
+    "recommends double elimination via recommendCompetitionFormats for %i entries",
+    (entryCount) => {
+      const result = recommendCompetitionFormats({
+        sportCode: "basketball",
+        divisions: [{ id: `div-${entryCount}`, entryCount }],
+        availableMatchSlots: 1000,
+        priority: "participation",
+      });
+      const de = result.recommendations.find((item) => item.strategy === "double_elimination");
+      expect(de).toBeDefined();
+      expect(de?.capacityStatus).toBe("fits");
+      expect(de?.guaranteedMatches).toBeGreaterThanOrEqual(2);
+      expect(de?.matchCount).toBe(entryCount * 2 - 2);
+    },
+  );
 });

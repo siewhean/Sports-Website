@@ -66,11 +66,13 @@ describe("RSC navigation cancellation", () => {
 
   it("ignores only a same-origin cancelled GET RSC navigation", () => {
     expect(isExpectedRscNavigationCancellation(cancellation)).toBe(true);
+    expect(isExpectedRscNavigationCancellation({ ...cancellation, failure: "cancelled" })).toBe(true);
     expect(isExpectedRscNavigationCancellation({ ...cancellation, failure: "net::ERR_ABORTED" })).toBe(true);
+    expect(isExpectedRscNavigationCancellation({ ...cancellation, failure: "NS_BINDING_ABORTED" })).toBe(true);
   });
 
   it.each([
-    { ...cancellation, failure: "cancelled" },
+    { ...cancellation, failure: "failed" },
     { ...cancellation, method: "POST" },
     { ...cancellation, requestUrl: "https://cdn.example.com/organiser?_rsc=abc123" },
     { ...cancellation, requestUrl: "https://127.0.0.1:3100/api/competitions?_rsc=abc123" },
