@@ -148,7 +148,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     );
   });
 
-  it("creates structured checkout sessions with valid URLs and pricing", async () => {
+  it("creates real Stripe checkout session via configured provider client", async () => {
     const mockSql = {
       unsafe: (async (query: string) => {
         if (query.includes("FROM organisation_memberships")) {
@@ -158,18 +158,76 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       }) as PostgresJsSql["unsafe"],
     } as unknown as PostgresJsSql;
 
-    const runtime = new EntitlementRuntime(mockSql);
+    const mockStripeClient = {
+      createSession: async (params: {
+        organisationId: string;
+        tier: "event_pass" | "organiser_pro";
+        topUpUnits?: number;
+        successUrl: string;
+        cancelUrl: string;
+      }) => {
+        return {
+          sessionId: "cs_live_real_stripe_session_12345678",
+          checkoutUrl: `https://checkout.stripe.com/c/pay/cs_live_real_stripe_session_12345678`,
+          organisationId: params.organisationId,
+          tier: params.tier,
+          topUpUnits: params.topUpUnits ?? 0,
+          amountTotal: params.tier === "organiser_pro" ? 9900 : 4900,
+          currency: "usd",
+          expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+          successUrl: params.successUrl,
+          cancelUrl: params.cancelUrl,
+        };
+      },
+    };
+
+    const runtime = new EntitlementRuntime(mockSql, mockStripeClient);
     const actor = { accountId: "acc-1" };
 
     const session = await runtime.createCheckoutSession(actor, "org-1", {
       tier: "organiser_pro",
+      topUpUnits: 5,
       successUrl: "https://example.com/success",
       cancelUrl: "https://example.com/cancel",
     });
 
-    expect(session.session_id).toMatch(/^cs_/);
-    expect(session.checkout_url).toContain("https://checkout.stripe.com/c/pay/");
+    expect(session.session_id).toBe("cs_live_real_stripe_session_12345678");
+    expect(session.checkout_url).toBe("https://checkout.stripe.com/c/pay/cs_live_real_stripe_session_12345678");
+    expect(session.organisation_id).toBe("org-1");
+    expect(session.tier).toBe("organiser_pro");
+    expect(session.top_up_units).toBe(5);
     expect(session.amount_total).toBe(9900);
     expect(session.currency).toBe("usd");
+  });
+
+  it("fails safely with 503 when Stripe payment configuration is missing", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("FROM organisation_memberships")) {
+          return [{ "?column?": 1 }];
+        }
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtimeWithoutStripe = new EntitlementRuntime(mockSql, undefined);
+    const actor = { accountId: "acc-1" };
+
+    const originalKey = process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_SECRET_KEY;
+
+    try {
+      await expect(
+        runtimeWithoutStripe.createCheckoutSession(actor, "org-1", {
+          tier: "event_pass",
+          successUrl: "https://example.com/success",
+          cancelUrl: "https://example.com/cancel",
+        }),
+      ).rejects.toThrow(/Stripe payment provider is not configured/);
+    } finally {
+      if (originalKey !== undefined) {
+        process.env.STRIPE_SECRET_KEY = originalKey;
+      }
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 import {
   type BillingSummary,
@@ -15,6 +15,7 @@ import {
 } from "@matchday/domain";
 import { ApiError } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
+import { type StripeCheckoutClientPort, HttpStripeCheckoutClient } from "./stripe-checkout-client.js";
 
 export function verifyStripeWebhookSignature(
   signatureHeader: string | undefined,
@@ -63,7 +64,10 @@ export function verifyStripeWebhookSignature(
 }
 
 export class EntitlementRuntime {
-  constructor(private readonly sql: PostgresJsSql) {}
+  constructor(
+    private readonly sql: PostgresJsSql,
+    private readonly stripeClient?: StripeCheckoutClientPort,
+  ) {}
 
   private async transaction<T>(callback: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     const sqlInstance = this.sql as unknown as { begin?: (cb: (tx: PostgresJsSql) => Promise<T>) => Promise<T> };
@@ -270,21 +274,34 @@ export class EntitlementRuntime {
     input: { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string },
   ) {
     await this.assertOrganisationMember(this.sql, organisationId, actor);
-    const sessionId = `cs_${process.env.NODE_ENV === "production" ? "live" : "test"}_${randomUUID().replaceAll("-", "")}`;
-    const amountCents = input.tier === "organiser_pro" ? 9900 : 4900;
-    const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
+
+    const client =
+      this.stripeClient ??
+      (process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : null);
+
+    if (!client) {
+      throw new ApiError(503, ErrorCode.SERVICE_UNAVAILABLE, "Stripe payment provider is not configured");
+    }
+
+    const session = await client.createSession({
+      organisationId,
+      tier: input.tier,
+      topUpUnits: input.topUpUnits,
+      successUrl: input.successUrl,
+      cancelUrl: input.cancelUrl,
+    });
 
     return {
-      session_id: sessionId,
-      checkout_url: `https://checkout.stripe.com/c/pay/${sessionId}?client_reference_id=${organisationId}`,
-      organisation_id: organisationId,
-      tier: input.tier,
-      top_up_units: input.topUpUnits ?? 0,
-      amount_total: amountCents,
-      currency: "usd",
-      expires_at: expiresAt,
-      success_url: input.successUrl,
-      cancel_url: input.cancelUrl,
+      session_id: session.sessionId,
+      checkout_url: session.checkoutUrl,
+      organisation_id: session.organisationId,
+      tier: session.tier,
+      top_up_units: session.topUpUnits,
+      amount_total: session.amountTotal,
+      currency: session.currency,
+      expires_at: session.expiresAt,
+      success_url: session.successUrl,
+      cancel_url: session.cancelUrl,
     };
   }
 

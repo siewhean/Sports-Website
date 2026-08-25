@@ -34,6 +34,7 @@ import { GateCC4Operations } from "./gate-c-c4-operations.js";
 import { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { EntitlementRuntime } from "./entitlement-runtime.js";
+import { HttpStripeCheckoutClient } from "./stripe-checkout-client.js";
 import { ExportRuntime } from "./export-runtime.js";
 import { AdminRuntime } from "./admin-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
@@ -129,7 +130,10 @@ const phase4Runtime = new V1Phase4Runtime(
   undefined,
   phase2Runtime,
 );
-const entitlementRuntime = new EntitlementRuntime(identitySql);
+const entitlementRuntime = new EntitlementRuntime(
+  identitySql,
+  process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : undefined,
+);
 const exportRuntime = new ExportRuntime(identitySql);
 const adminRuntime = new AdminRuntime(identitySql);
 
