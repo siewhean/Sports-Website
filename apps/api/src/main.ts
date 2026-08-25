@@ -33,6 +33,9 @@ import { GateCC4PostgresPublisher } from "./gate-c-c4-postgres-publisher.js";
 import { GateCC4Operations } from "./gate-c-c4-operations.js";
 import { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
+import { EntitlementRuntime } from "./entitlement-runtime.js";
+import { ExportRuntime } from "./export-runtime.js";
+import { AdminRuntime } from "./admin-runtime.js";
 import { startApiTelemetry } from "./telemetry.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
@@ -126,6 +129,9 @@ const phase4Runtime = new V1Phase4Runtime(
   undefined,
   phase2Runtime,
 );
+const entitlementRuntime = new EntitlementRuntime(identitySql);
+const exportRuntime = new ExportRuntime(identitySql);
+const adminRuntime = new AdminRuntime(identitySql);
 
 // Gate C is part of the production API composition, not an evidence-only
 // harness. Reuse the canonical Phase 2 projection writer so repair publication
@@ -160,6 +166,9 @@ const app = await buildApp({
   gateCC4Operations,
   gateCC4Lifecycle,
   gateCC4PublicTruthRuntime,
+  entitlementRuntime,
+  exportRuntime,
+  adminRuntime,
   scoringAccessHmacKeySql: identitySql,
   scoringFallbackHmacKeySql: identitySql,
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,
