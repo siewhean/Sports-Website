@@ -17,7 +17,7 @@ export class ExportRuntime {
   private async assertExportAccess(
     competitionId: string,
     actor?: Phase3Actor,
-  ): Promise<{ organisationId: string; isPublished: boolean }> {
+  ): Promise<{ organisationId: string; isPublished: boolean; publishedRevisionId: string | null }> {
     const comp = (
       await this.sql.unsafe<{ id: string; organisation_id: string; status: string }>(
         `SELECT id, organisation_id, status FROM competitions WHERE id=$1`,
@@ -28,12 +28,22 @@ export class ExportRuntime {
       throw new ApiError(404, ErrorCode.COMPETITION_NOT_FOUND, "Competition not found");
     }
 
-    const published = (
-      await this.sql.unsafe<{ id: string }>(`SELECT id FROM published_schedules WHERE competition_id=$1 LIMIT 1`, [
-        competitionId,
-      ])
+    const publication = (
+      await this.sql.unsafe<{
+        published_schedule_revision_id: string | null;
+        schedule_published_at: Date | null;
+      }>(
+        `SELECT published_schedule_revision_id, schedule_published_at
+         FROM competition_publications
+         WHERE competition_id=$1`,
+        [competitionId],
+      )
     )[0];
-    const isPublished = Boolean(published);
+    const isPublished = Boolean(
+      publication?.published_schedule_revision_id &&
+      publication?.schedule_published_at &&
+      ["published", "active", "live", "completed", "archived"].includes(comp.status),
+    );
 
     if (!actor) {
       // Unauthenticated / public caller: strictly requires published schedule
@@ -44,7 +54,11 @@ export class ExportRuntime {
           "Unpublished competition schedule cannot be exported without organiser authentication",
         );
       }
-      return { organisationId: comp.organisation_id, isPublished: true };
+      return {
+        organisationId: comp.organisation_id,
+        isPublished: true,
+        publishedRevisionId: publication!.published_schedule_revision_id,
+      };
     }
 
     // Authenticated caller: assert organisation membership or platform admin
@@ -66,11 +80,16 @@ export class ExportRuntime {
       throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to unpublished competition");
     }
 
-    return { organisationId: comp.organisation_id, isPublished };
+    return {
+      organisationId: comp.organisation_id,
+      isPublished,
+      publishedRevisionId: publication?.published_schedule_revision_id ?? null,
+    };
   }
 
   async generateCompetitionCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    await this.assertExportAccess(competitionId, actor);
+    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
+    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
 
     const matches = await this.sql.unsafe<{
       division_name: string;
@@ -98,8 +117,9 @@ export class ExportRuntime {
        LEFT JOIN scheduled_matches sm ON sm.match_id = m.id
        LEFT JOIN playing_areas pa ON pa.id = sm.playing_area_id
        WHERE d.competition_id = $1
+         AND ($2::uuid IS NULL OR m.schedule_revision_id = $2)
        ORDER BY d.created_at, d.name, sm.starts_at NULLS LAST, m.code`,
-      [competitionId],
+      [competitionId, restrictToPublished ? publishedRevisionId : null],
     );
 
     const headers = [
@@ -128,7 +148,8 @@ export class ExportRuntime {
   }
 
   async generateStandingsCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    await this.assertExportAccess(competitionId, actor);
+    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
+    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
 
     const standings = await this.sql.unsafe<{
       division_name: string;
@@ -174,7 +195,9 @@ export class ExportRuntime {
                   home_score as goals_for,
                   away_score as goals_against,
                   CASE WHEN home_score > away_score THEN 3 WHEN home_score = away_score THEN 1 ELSE 0 END as points
-           FROM matches WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
+           FROM matches
+           WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
+             AND ($2::uuid IS NULL OR schedule_revision_id = $2)
            UNION ALL
            SELECT away_entry_id as entry_id,
                   away_score > home_score as won,
@@ -183,13 +206,15 @@ export class ExportRuntime {
                   away_score as goals_for,
                   home_score as goals_against,
                   CASE WHEN away_score > home_score THEN 3 WHEN home_score = away_score THEN 1 ELSE 0 END as points
-           FROM matches WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
+           FROM matches
+           WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
+             AND ($2::uuid IS NULL OR schedule_revision_id = $2)
          ) match_records
          GROUP BY entry_id
        ) s ON s.entry_id = e.id
        WHERE d.competition_id = $1
        ORDER BY d.name, COALESCE(s.points, 0) DESC, COALESCE(s.goal_difference, 0) DESC, e.name`,
-      [competitionId],
+      [competitionId, restrictToPublished ? publishedRevisionId : null],
     );
 
     const headers = [
@@ -224,7 +249,8 @@ export class ExportRuntime {
   }
 
   async generateBracketCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    await this.assertExportAccess(competitionId, actor);
+    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
+    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
 
     const bracketMatches = await this.sql.unsafe<{
       division_name: string;
@@ -246,8 +272,9 @@ export class ExportRuntime {
        LEFT JOIN division_entries e_home ON e_home.id = m.home_entry_id
        LEFT JOIN division_entries e_away ON e_away.id = m.away_entry_id
        WHERE d.competition_id = $1
+         AND ($2::uuid IS NULL OR m.schedule_revision_id = $2)
        ORDER BY d.name, m.code`,
-      [competitionId],
+      [competitionId, restrictToPublished ? publishedRevisionId : null],
     );
 
     const headers = ["Division", "Stage", "Match", "Home Team", "Away Team", "State"];
@@ -273,19 +300,20 @@ export class ExportRuntime {
       actor_type: string;
       target_type: string;
       target_id: string;
-      created_at: Date;
+      occurred_at: Date;
     }>(
-      `SELECT id, action, actor_account_id, actor_type, target_type, target_id, created_at
+      `SELECT id, action, actor_account_id, actor_type, target_type, target_id, occurred_at
        FROM audit_events
-       WHERE organisation_id=$1 OR target_id=$2
-       ORDER BY created_at DESC
+       WHERE (target_id = $1 OR metadata->>'competition_id' = $1)
+         AND (organisation_id = $2 OR organisation_id IS NULL)
+       ORDER BY occurred_at DESC
        LIMIT 500`,
-      [organisationId, competitionId],
+      [competitionId, organisationId],
     );
 
     const headers = ["Timestamp", "Action", "Actor ID", "Actor Type", "Target Type", "Target ID"];
     const rows = events.map((e) => [
-      escapeCsv(e.created_at.toISOString()),
+      escapeCsv(e.occurred_at.toISOString()),
       escapeCsv(e.action),
       escapeCsv(e.actor_account_id),
       escapeCsv(e.actor_type),
@@ -297,7 +325,8 @@ export class ExportRuntime {
   }
 
   async generateCompetitionJson(competitionId: string, actor?: Phase3Actor): Promise<Record<string, unknown>> {
-    await this.assertExportAccess(competitionId, actor);
+    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
+    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
 
     const comp = (
       await this.sql.unsafe<{ id: string; name: string; sport_code: string; status: string; created_at: Date }>(
@@ -335,8 +364,9 @@ export class ExportRuntime {
        JOIN divisions d ON d.id = m.division_id
        LEFT JOIN scheduled_matches sm ON sm.match_id = m.id
        WHERE d.competition_id=$1
+         AND ($2::uuid IS NULL OR m.schedule_revision_id = $2)
        ORDER BY d.created_at, d.name, sm.starts_at NULLS LAST, m.code`,
-      [competitionId],
+      [competitionId, restrictToPublished ? publishedRevisionId : null],
     );
 
     const branding = (

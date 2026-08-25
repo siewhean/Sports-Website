@@ -5,14 +5,16 @@ import { ExportRuntime } from "../../src/export-runtime.js";
 describe("Exports Runtime (EXP-003 through EXP-006)", () => {
   const adminActor = { accountId: "acc-1" };
 
-  it("EXP-003: formats competition matches into valid CSV rows", async () => {
+  it("EXP-003: formats competition matches into valid CSV rows for published schedule", async () => {
+    const executedQueries: string[] = [];
     const mockSql = {
       unsafe: (async (query: string) => {
+        executedQueries.push(query);
         if (query.includes("FROM competitions")) {
-          return [{ id: "c1", organisation_id: "org-1", status: "in_progress" }];
+          return [{ id: "c1", organisation_id: "org-1", status: "published" }];
         }
-        if (query.includes("FROM published_schedules")) {
-          return [{ id: "pub-1" }];
+        if (query.includes("FROM competition_publications")) {
+          return [{ published_schedule_revision_id: "rev-pub-1", schedule_published_at: new Date() }];
         }
         if (query.includes("FROM matches")) {
           return [
@@ -53,14 +55,14 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
     expect(csv).toContain('"Team, B"');
   });
 
-  it("EXP-004: exports standings and table CSV format", async () => {
+  it("EXP-004: exports standings and table CSV format strictly from published matches", async () => {
     const mockSql = {
       unsafe: (async (query: string) => {
         if (query.includes("FROM competitions")) {
           return [{ id: "c1", organisation_id: "org-1", status: "published" }];
         }
-        if (query.includes("FROM published_schedules")) {
-          return [{ id: "pub-1" }];
+        if (query.includes("FROM competition_publications")) {
+          return [{ published_schedule_revision_id: "rev-pub-1", schedule_published_at: new Date() }];
         }
         if (query.includes("FROM division_entries")) {
           return [
@@ -98,8 +100,8 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
         if (query.includes("FROM competitions")) {
           return [{ id: "c1", organisation_id: "org-1", status: "published" }];
         }
-        if (query.includes("FROM published_schedules")) {
-          return [{ id: "pub-1" }];
+        if (query.includes("FROM competition_publications")) {
+          return [{ published_schedule_revision_id: "rev-pub-1", schedule_published_at: new Date() }];
         }
         if (query.includes("FROM matches")) {
           return [
@@ -124,9 +126,11 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
     expect(bracketCsv).toContain("Championship,Grand Final,GF1,Phoenix,Titans,scheduled");
   });
 
-  it("EXP-005: exports competition manager audit history", async () => {
+  it("EXP-005: exports competition manager audit history strictly scoped to competition", async () => {
+    const executedQueries: string[] = [];
     const mockSql = {
       unsafe: (async (query: string) => {
+        executedQueries.push(query);
         if (query.includes("FROM competitions")) {
           return [{ id: "c1", organisation_id: "org-1", status: "published" }];
         }
@@ -142,7 +146,7 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
               actor_type: "account",
               target_type: "competition",
               target_id: "c1",
-              created_at: new Date("2026-08-25T12:00:00Z"),
+              occurred_at: new Date("2026-08-25T12:00:00Z"),
             },
           ];
         }
@@ -155,6 +159,7 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
 
     expect(auditCsv).toContain("Timestamp,Action,Actor ID,Actor Type,Target Type,Target ID");
     expect(auditCsv).toContain("2026-08-25T12:00:00.000Z,format.published,acc-1,account,competition,c1");
+    expect(executedQueries.some((q) => q.includes("target_id = $1") && q.includes("organisation_id = $2"))).toBe(true);
   });
 
   it("Security Boundary: rejects unauthenticated export of unpublished competition", async () => {
@@ -163,7 +168,7 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
         if (query.includes("FROM competitions")) {
           return [{ id: "c1", organisation_id: "org-1", status: "draft" }];
         }
-        if (query.includes("FROM published_schedules")) {
+        if (query.includes("FROM competition_publications")) {
           return []; // unpublished!
         }
         return [];
@@ -185,14 +190,14 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
               id: "c1",
               name: "Summer Championship",
               sport_code: "basketball",
-              status: "in_progress",
+              status: "published",
               created_at: new Date("2026-08-01T00:00:00Z"),
               organisation_id: "org-1",
             },
           ];
         }
-        if (query.includes("FROM published_schedules")) {
-          return [{ id: "pub-1" }];
+        if (query.includes("FROM competition_publications")) {
+          return [{ published_schedule_revision_id: "rev-pub-1", schedule_published_at: new Date() }];
         }
         if (query.includes("FROM divisions")) {
           return [{ id: "d1", name: "Premier Division", sort_order: 1 }];
