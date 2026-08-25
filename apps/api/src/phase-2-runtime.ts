@@ -5089,9 +5089,10 @@ export class Phase2Runtime {
         )
       )[0];
       if (gf1Result && gf1Result.away_score > gf1Result.home_score) {
+        // Lower bracket champion won GF1 -> Activate Grand Final Reset (GF2)
         const existingReset = (
-          await tx.unsafe<{ id: string }>(
-            `SELECT id FROM matches WHERE division_id=$1 AND (graph_match_id='grand-final-reset' OR code='grand-final-reset')`,
+          await tx.unsafe<{ id: string; state: string }>(
+            `SELECT id, state FROM matches WHERE division_id=$1 AND (graph_match_id='grand-final-reset' OR code='grand-final-reset')`,
             [divisionId],
           )
         )[0];
@@ -5119,8 +5120,33 @@ export class Phase2Runtime {
              ON CONFLICT DO NOTHING`,
             [resetMatchId, grandFinal1.format_revision_id, grandFinal1.id],
           );
+        } else if (["pending", "draft", "scheduled"].includes(existingReset.state)) {
+          await tx.unsafe(
+            `UPDATE matches SET home_entry_id=$2, away_entry_id=$3, state='ready'
+             WHERE id=$1`,
+            [existingReset.id, grandFinal1.home_entry_id, grandFinal1.away_entry_id],
+          );
         }
+      } else if (gf1Result && gf1Result.home_score >= gf1Result.away_score) {
+        // Upper bracket champion won GF1 -> Cancel / bypass GF2
+        await tx.unsafe(
+          `UPDATE matches SET state='cancelled'
+           WHERE division_id=$1 AND (graph_match_id='grand-final-reset' OR code='grand-final-reset')
+             AND state IN ('pending', 'draft', 'scheduled', 'ready')`,
+          [divisionId],
+        );
       }
+    }
+
+    const pendingMatches = await tx.unsafe<{ count: number }>(
+      `SELECT count(*)::integer as count FROM matches WHERE competition_id=$1 AND state NOT IN ('final', 'corrected', 'cancelled')`,
+      [competitionId],
+    );
+    if (pendingMatches[0]?.count === 0) {
+      await tx.unsafe(`UPDATE competitions SET status='completed', updated_at=$2 WHERE id=$1 AND status='active'`, [
+        competitionId,
+        this.now(),
+      ]);
     }
     await tx.unsafe(
       `INSERT INTO bracket_snapshots (

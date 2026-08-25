@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildDoubleEliminationFormatTemplate,
   createDoubleEliminationFormat,
+  evaluateDoubleEliminationScheduleCapacity,
   recommendCompetitionFormats,
+  resolveDoubleEliminationProgression,
   resolveDoubleEliminationResetFinal,
   validateFormatGraph,
   type FormatGraphMatch,
@@ -112,4 +114,84 @@ describe("Phase 6 double elimination", () => {
       expect(de?.matchCount).toBe(entryCount * 2 - 2);
     },
   );
+
+  it("evaluates double elimination scheduling capacity with and without reset final", () => {
+    const capacity8 = evaluateDoubleEliminationScheduleCapacity(8, 14);
+    expect(capacity8.minimumSlotsRequired).toBe(14);
+    expect(capacity8.maximumSlotsWithReset).toBe(15);
+    expect(capacity8.fitsMinimum).toBe(true);
+    expect(capacity8.fitsWithReset).toBe(false);
+
+    const capacity8WithBuffer = evaluateDoubleEliminationScheduleCapacity(8, 15);
+    expect(capacity8WithBuffer.fitsWithReset).toBe(true);
+  });
+
+  it("resolves progression when upper-bracket champion wins GF1 (no reset match required)", () => {
+    const format = createDoubleEliminationFormat(4);
+    const entryMap = new Map([
+      [1, "team-1"],
+      [2, "team-2"],
+      [3, "team-3"],
+      [4, "team-4"],
+    ]);
+
+    // upper-bracket-r1-m1: team-1 vs team-2 -> team-1 wins
+    // upper-bracket-r1-m2: team-3 vs team-4 -> team-3 wins
+    // upper-bracket-r2-m1 (upper final): team-1 vs team-3 -> team-1 wins (upper champion)
+    // lower-r1-m1: team-2 vs team-4 -> team-2 wins
+    // lower-r2-m1 (lower final): team-3 vs team-2 -> team-2 wins (lower champion)
+    // grand-final-1: team-1 (home) vs team-2 (away) -> team-1 (upper champion) wins!
+    const results = new Map([
+      ["upper-bracket-r1-m1", { winnerEntryId: "team-1", loserEntryId: "team-2" }],
+      ["upper-bracket-r1-m2", { winnerEntryId: "team-3", loserEntryId: "team-4" }],
+      ["upper-bracket-r2-m1", { winnerEntryId: "team-1", loserEntryId: "team-3" }],
+      ["lower-r1-m1", { winnerEntryId: "team-2", loserEntryId: "team-4" }],
+      ["lower-r2-m1", { winnerEntryId: "team-2", loserEntryId: "team-3" }],
+      [format.firstFinalMatchId, { winnerEntryId: "team-1", loserEntryId: "team-2" }],
+    ]);
+
+    const progression = resolveDoubleEliminationProgression(format, entryMap, results);
+    expect(progression.isResetFinalRequired).toBe(false);
+    expect(progression.championEntryId).toBe("team-1");
+    expect(progression.runnerUpEntryId).toBe("team-2");
+    expect(progression.resetFinalMatch).toBeNull();
+  });
+
+  it("resolves progression when lower-bracket champion wins GF1, activating GF2 reset match", () => {
+    const format = createDoubleEliminationFormat(4);
+    const entryMap = new Map([
+      [1, "team-1"],
+      [2, "team-2"],
+      [3, "team-3"],
+      [4, "team-4"],
+    ]);
+
+    // GF1: lower champion (team-2, away) defeats undefeated upper champion (team-1, home)
+    const resultsWithGF1Loss = new Map([
+      ["upper-bracket-r1-m1", { winnerEntryId: "team-1", loserEntryId: "team-2" }],
+      ["upper-bracket-r1-m2", { winnerEntryId: "team-3", loserEntryId: "team-4" }],
+      ["upper-bracket-r2-m1", { winnerEntryId: "team-1", loserEntryId: "team-3" }],
+      ["lower-r1-m1", { winnerEntryId: "team-2", loserEntryId: "team-4" }],
+      ["lower-r2-m1", { winnerEntryId: "team-2", loserEntryId: "team-3" }],
+      [format.firstFinalMatchId, { winnerEntryId: "team-2", loserEntryId: "team-1" }],
+    ]);
+
+    const progressionBeforeGF2 = resolveDoubleEliminationProgression(format, entryMap, resultsWithGF1Loss);
+    expect(progressionBeforeGF2.isResetFinalRequired).toBe(true);
+    expect(progressionBeforeGF2.resetFinalMatch).not.toBeNull();
+    expect(progressionBeforeGF2.resetFinalMatch?.state).toBe("scheduled");
+    expect(progressionBeforeGF2.championEntryId).toBeNull(); // not decided yet!
+
+    // Now GF2 is played: team-2 wins GF2 and becomes champion
+    const resultsWithGF2 = new Map([
+      ...resultsWithGF1Loss,
+      [format.resetFinal.match.id, { winnerEntryId: "team-2", loserEntryId: "team-1" }],
+    ]);
+
+    const progressionAfterGF2 = resolveDoubleEliminationProgression(format, entryMap, resultsWithGF2);
+    expect(progressionAfterGF2.isResetFinalRequired).toBe(true);
+    expect(progressionAfterGF2.resetFinalMatch?.state).toBe("completed");
+    expect(progressionAfterGF2.championEntryId).toBe("team-2");
+    expect(progressionAfterGF2.runnerUpEntryId).toBe("team-1");
+  });
 });
