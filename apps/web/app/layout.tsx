@@ -15,6 +15,11 @@ export const metadata: Metadata = {
   },
   description: messages.metadata.description,
   manifest: "/manifest.webmanifest",
+  openGraph: {
+    title: messages.metadata.defaultTitle,
+    description: messages.metadata.homeOpenGraphDescription,
+    siteName: messages.brand.name,
+  },
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
