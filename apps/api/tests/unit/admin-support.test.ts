@@ -156,17 +156,22 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
     );
   });
 
-  it("ADM-005: manages sport default configuration versions", async () => {
+  it("ADM-005: manages sport default configuration versions with active status and text versions", async () => {
+    const executedQueries: string[] = [];
     const mockSql = {
       unsafe: (async (query: string) => {
+        executedQueries.push(query);
         if (query.includes("account_platform_roles")) {
           return [{ role: "platform_admin" }];
         }
-        if (query.includes("SELECT COALESCE(max(version), 0)")) {
-          return [{ max_version: 2 }];
+        if (query.includes("SELECT version FROM sport_pack_versions WHERE sport_code=$1")) {
+          return [{ version: "2" }];
+        }
+        if (query.includes("SELECT version FROM sport_pack_versions WHERE sport_code=$1 AND status='active'")) {
+          return [{ version: "2" }];
         }
         if (query.includes("SELECT sport_code, version, definition FROM sport_pack_versions")) {
-          return [{ sport_code: "basketball", version: 2, definition: { slotMinutes: 20 } }];
+          return [{ sport_code: "basketball", version: "2", definition: { slotMinutes: 20 } }];
         }
         return [];
       }) as PostgresJsSql["unsafe"],
@@ -174,11 +179,17 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
 
     const runtime = new AdminRuntime(mockSql);
     const current = await runtime.getSportDefaults(adminActor, "basketball");
-    expect(current.version).toBe(2);
+    expect(current.version).toBe("2");
 
     const updated = await runtime.updateSportDefaults(adminActor, "basketball", { slotMinutes: 25 });
-    expect(updated.version).toBe(3);
-    expect(updated.status).toBe("activated");
+    expect(updated.version).toBe("3");
+    expect(updated.status).toBe("active");
+    expect(
+      executedQueries.some((q) => q.includes("UPDATE sport_pack_versions") && q.includes("SET status='superseded'")),
+    ).toBe(true);
+    expect(executedQueries.some((q) => q.includes("INSERT INTO sport_pack_versions") && q.includes("'active'"))).toBe(
+      true,
+    );
   });
 
   it("ADM-006 / ADM-007: aggregates AI usage accounting & cost monitoring", async () => {

@@ -265,14 +265,14 @@ export class AdminRuntime {
   async getSportDefaults(actor: Phase3Actor, sportCode: string) {
     await this.assertPlatformAdmin(actor);
     const pack = (
-      await this.sql.unsafe<{ sport_code: string; version: number; definition: unknown }>(
+      await this.sql.unsafe<{ sport_code: string; version: string; definition: unknown }>(
         `SELECT sport_code, version, definition FROM sport_pack_versions
-         WHERE sport_code=$1 AND status='activated' ORDER BY version DESC LIMIT 1`,
+         WHERE sport_code=$1 AND status='active' ORDER BY created_at DESC LIMIT 1`,
         [sportCode],
       )
     )[0];
     if (!pack) {
-      throw new ApiError(404, ErrorCode.NOT_FOUND, `Sport pack defaults not found for ${sportCode}`);
+      throw new ApiError(404, ErrorCode.SPORT_PACK_NOT_FOUND, `Sport pack defaults not found for ${sportCode}`);
     }
     return {
       sport_code: pack.sport_code,
@@ -286,27 +286,62 @@ export class AdminRuntime {
     const definitionString = JSON.stringify(definition);
     const hash = createHash("sha256").update(definitionString).digest("hex");
 
-    const latest = (
-      await this.sql.unsafe<{ max_version: number }>(
-        `SELECT COALESCE(max(version), 0)::integer as max_version FROM sport_pack_versions WHERE sport_code=$1`,
-        [sportCode],
-      )
-    )[0]!;
-
-    const nextVersion = latest.max_version + 1;
-
-    await this.sql.unsafe(
-      `INSERT INTO sport_pack_versions (sport_code, version, schema_version, definition, definition_hash, status, activated_at)
-       VALUES ($1, $2, 1, $3::jsonb, $4, 'activated', now())`,
-      [sportCode, nextVersion, definitionString, hash],
+    const existingRows = await this.sql.unsafe<{ version: string }>(
+      `SELECT version FROM sport_pack_versions WHERE sport_code=$1`,
+      [sportCode],
     );
 
-    return {
-      sport_code: sportCode,
-      version: nextVersion,
-      definition_hash: hash,
-      status: "activated",
+    let maxInt = 0;
+    for (const r of existingRows) {
+      const parsed = Number.parseInt(r.version, 10);
+      if (!Number.isNaN(parsed) && Number.isSafeInteger(parsed) && parsed > maxInt) {
+        maxInt = parsed;
+      }
+    }
+    const nextVersion = maxInt > 0 ? (maxInt + 1).toString() : `v${existingRows.length + 1}`;
+
+    const sqlInstance = this.sql as unknown as {
+      begin?: <T>(cb: (tx: PostgresJsSql) => Promise<T>) => Promise<T>;
     };
+    const beginFn =
+      typeof sqlInstance.begin === "function"
+        ? sqlInstance.begin.bind(sqlInstance)
+        : async <T>(cb: (tx: PostgresJsSql) => Promise<T>) => cb(this.sql);
+
+    return beginFn(async (tx: PostgresJsSql) => {
+      const currentActive = (
+        await tx.unsafe<{ version: string }>(
+          `SELECT version FROM sport_pack_versions WHERE sport_code=$1 AND status='active' FOR UPDATE`,
+          [sportCode],
+        )
+      )[0];
+
+      if (currentActive) {
+        await tx.unsafe(
+          `UPDATE sport_pack_versions
+           SET status='superseded',
+               superseded_at=now(),
+               superseded_by=$2,
+               superseded_by_version=$3
+           WHERE sport_code=$1 AND version=$4 AND status='active'`,
+          [sportCode, actor.accountId, nextVersion, currentActive.version],
+        );
+      }
+
+      await tx.unsafe(
+        `INSERT INTO sport_pack_versions (
+           sport_code, version, schema_version, definition, definition_hash, status, created_by, created_at, activated_at, activated_by
+         ) VALUES ($1, $2, 1, $3::jsonb, $4, 'active', $5, now(), now(), $5)`,
+        [sportCode, nextVersion, definitionString, hash, actor.accountId],
+      );
+
+      return {
+        sport_code: sportCode,
+        version: nextVersion,
+        definition_hash: hash,
+        status: "active",
+      };
+    });
   }
 
   async getAiAccountingSummary(actor: Phase3Actor) {
