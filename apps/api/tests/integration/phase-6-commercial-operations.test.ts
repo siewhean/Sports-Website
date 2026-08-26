@@ -99,9 +99,11 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
         object: {
           customer: "cus_123",
           subscription: "sub_123",
-          organisation_id: organisationId,
-          tier: "event_pass" as const,
-          top_up_units: 10,
+          metadata: {
+            organisation_id: organisationId,
+            tier: "event_pass" as const,
+            top_up_units: "10",
+          },
           amount_total: 4900,
           currency: "usd",
         },
@@ -163,10 +165,11 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
 
     await client`INSERT INTO divisions (competition_id, name, team_limit) VALUES (${compId}, 'Open Div', 16)`;
 
-    const csv = await exportRuntime.generateCompetitionCsv(compId);
+    const actor = { accountId: ownerAccountId };
+    const csv = await exportRuntime.generateCompetitionCsv(compId, actor);
     expect(csv).toContain("Division,Stage,Match,Home Team,Away Team");
 
-    const json = await exportRuntime.generateCompetitionJson(compId);
+    const json = await exportRuntime.generateCompetitionJson(compId, actor);
     expect(json.schema_version).toBe("1.0");
     expect(json.competition).toMatchObject({ id: compId, name: "Export Open" });
   });
