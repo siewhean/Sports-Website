@@ -518,6 +518,7 @@ export const messages = {
     markRead: "Mark as read",
     empty: "No notifications",
     emptySubtitle: "You are all caught up!",
+    loading: "Loading notifications\u2026",
     unreadCount: "{count} unread",
     categories: {
       all: "All",

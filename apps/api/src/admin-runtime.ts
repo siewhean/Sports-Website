@@ -320,6 +320,7 @@ export class AdminRuntime {
         await tx.unsafe(
           `UPDATE sport_pack_versions
            SET status='superseded',
+               revision=revision+1,
                superseded_at=now(),
                superseded_by=$2,
                superseded_by_version=$3

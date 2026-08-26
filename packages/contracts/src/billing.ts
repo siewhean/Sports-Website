@@ -71,13 +71,18 @@ export type BillingWebhookPayload = {
   type: string;
   data: {
     object: {
-      customer?: string;
-      subscription?: string;
-      organisation_id?: string;
-      tier?: SubscriptionTier;
-      top_up_units?: number;
-      amount_total?: number;
-      currency?: string;
+      // Checkout Session / Subscription fields (Stripe may return null for optional relations)
+      id?: string | null;
+      customer?: string | null;
+      subscription?: string | null;
+      client_reference_id?: string | null;
+      amount_total?: number | null;
+      currency?: string | null;
+      metadata?: {
+        organisation_id?: string;
+        tier?: string;
+        top_up_units?: string; // Stripe metadata values are always strings
+      } | null;
     };
   };
 };

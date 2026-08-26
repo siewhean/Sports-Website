@@ -32,6 +32,7 @@
     "@matchday/domain": "workspace:*",
     "@matchday/identity": "workspace:*",
     "@matchday/jobs": "workspace:*",
+    "@matchday/notifications": "workspace:*",
     "@matchday/observability": "workspace:*",
     "@matchday/scheduler": "workspace:*",
     "@opentelemetry/api": "1.9.1",

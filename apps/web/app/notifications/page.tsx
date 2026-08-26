@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatDateTime, interpolate, messages } from "@matchday/ui";
+import { gateCC4Http } from "@/lib/gate-c-c4-http";
 
 export interface InAppNotification {
   id: string;
@@ -10,6 +11,31 @@ export interface InAppNotification {
   content: string;
   timestamp: string;
   read: boolean;
+}
+
+function toInAppNotification(record: {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  readAt: string | null;
+}): InAppNotification {
+  const validCategories = Object.keys(
+    messages.notifications.categories,
+  ) as (keyof typeof messages.notifications.categories)[];
+  const category: keyof typeof messages.notifications.categories = validCategories.includes(
+    record.type as keyof typeof messages.notifications.categories,
+  )
+    ? (record.type as keyof typeof messages.notifications.categories)
+    : messages.notifications.sampleAlerts[0].category;
+  return {
+    id: record.id,
+    category,
+    heading: typeof record.payload.heading === "string" ? record.payload.heading : record.type,
+    content: typeof record.payload.content === "string" ? record.payload.content : "",
+    timestamp: record.createdAt,
+    read: record.readAt !== null,
+  };
 }
 
 const INITIAL_NOTIFICATIONS: InAppNotification[] = messages.notifications.sampleAlerts.map((alert, index) => ({
@@ -33,6 +59,31 @@ export default function NotificationsPage() {
     billingReceipts: true,
   });
 
+  useEffect(() => {
+    fetch("/api/notifications")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((page: { items?: unknown[] } | null) => {
+        if (page?.items && Array.isArray(page.items)) {
+          setNotifications(
+            page.items
+              .filter(
+                (
+                  item,
+                ): item is {
+                  id: string;
+                  type: string;
+                  payload: Record<string, unknown>;
+                  createdAt: string;
+                  readAt: string | null;
+                } => Boolean(item && typeof item === "object"),
+              )
+              .map(toInAppNotification),
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   const categories = [
@@ -51,10 +102,12 @@ export default function NotificationsPage() {
 
   const markAsRead = (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+    fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: gateCC4Http.methodPost }).catch(() => {});
   };
 
   const markAllAsRead = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    fetch("/api/notifications/read-all", { method: gateCC4Http.methodPost }).catch(() => {});
   };
 
   const handleSubmitPreferences = (e: React.FormEvent) => {

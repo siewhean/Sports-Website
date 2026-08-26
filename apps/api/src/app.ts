@@ -45,6 +45,8 @@ import { registerExportRoutes } from "./export-routes.js";
 import type { ExportRuntime } from "./export-runtime.js";
 import { registerAdminRoutes } from "./admin-routes.js";
 import type { AdminRuntime } from "./admin-runtime.js";
+import { registerNotificationRoutes } from "./notification-routes.js";
+import type { NotificationService } from "@matchday/notifications";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 import type { PostgresJsSql } from "@matchday/identity";
 
@@ -137,6 +139,7 @@ export type BuildAppOptions = {
   entitlementRuntime?: EntitlementRuntime;
   exportRuntime?: ExportRuntime;
   adminRuntime?: AdminRuntime;
+  notificationService?: NotificationService;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -604,6 +607,12 @@ export async function buildApp(options: BuildAppOptions) {
     if (options.adminRuntime) {
       await registerAdminRoutes(app as unknown as FastifyInstance, {
         runtime: options.adminRuntime,
+        identityRequests,
+      });
+    }
+    if (options.notificationService) {
+      await registerNotificationRoutes(app as unknown as FastifyInstance, {
+        notificationService: options.notificationService,
         identityRequests,
       });
     }

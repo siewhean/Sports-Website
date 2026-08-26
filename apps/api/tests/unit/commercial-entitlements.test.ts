@@ -230,4 +230,216 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       }
     }
   });
+
+  // --- Stripe webhook metadata reading tests (BIL-015 through BIL-019) ---
+
+  it("BIL-015: reads organisation_id from metadata.organisation_id not data.object root", async () => {
+    const secret = "whsec_test_bil015";
+    const now = Math.floor(Date.now() / 1000);
+    const calls: string[] = [];
+
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        calls.push(query.trim().split("\n")[0]!);
+        if (query.includes("billing_webhook_receipts") && query.includes("SELECT")) return [];
+        if (query.includes("INSERT INTO billing_webhook_receipts")) return [];
+        if (query.includes("INSERT INTO organisation_subscriptions")) return [];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new EntitlementRuntime(mockSql);
+
+    const payload = {
+      id: "evt_bil015",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_test_abc",
+          customer: "cus_abc",
+          subscription: null,
+          metadata: {
+            organisation_id: "org-from-metadata",
+            tier: "event_pass",
+            top_up_units: "0",
+          },
+        },
+      },
+    };
+
+    const rawPayload = JSON.stringify(payload);
+    const ts = now.toString();
+    const sig = createHmac("sha256", secret).update(`${ts}.${rawPayload}`).digest("hex");
+    const header = `t=${ts},v1=${sig}`;
+
+    const result = await runtime.processBillingWebhook(header, rawPayload, payload, secret);
+    expect(result.processed).toBe(true);
+    expect(result.eventType).toBe("checkout.session.completed");
+    // Should have issued an INSERT into organisation_subscriptions
+    expect(calls.some((c) => c.includes("INSERT INTO organisation_subscriptions"))).toBe(true);
+  });
+
+  it("BIL-016: reads tier from metadata.tier and parses top_up_units from string", async () => {
+    const secret = "whsec_test_bil016";
+    const now = Math.floor(Date.now() / 1000);
+    const insertedGrants: unknown[][] = [];
+
+    const mockSql = {
+      unsafe: (async (query: string, params?: unknown[]) => {
+        if (query.includes("billing_webhook_receipts") && query.includes("SELECT")) return [];
+        if (query.includes("INSERT INTO entitlement_grants")) {
+          insertedGrants.push(params ?? []);
+          return [];
+        }
+        if (query.includes("INSERT INTO organisation_subscriptions")) return [];
+        if (query.includes("INSERT INTO billing_webhook_receipts")) return [];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new EntitlementRuntime(mockSql);
+
+    const payload = {
+      id: "evt_bil016",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_test_def",
+          customer: "cus_def",
+          subscription: "sub_def",
+          metadata: {
+            organisation_id: "org-bil016",
+            tier: "organiser_pro",
+            top_up_units: "10", // string, as Stripe always sends
+          },
+        },
+      },
+    };
+
+    const rawPayload = JSON.stringify(payload);
+    const ts = now.toString();
+    const sig = createHmac("sha256", secret).update(`${ts}.${rawPayload}`).digest("hex");
+    const header = `t=${ts},v1=${sig}`;
+
+    await runtime.processBillingWebhook(header, rawPayload, payload, secret);
+
+    // top_up_units "10" should be parsed to integer 10
+    expect(insertedGrants.length).toBe(1);
+    const grantParams = insertedGrants[0] as unknown[];
+    expect(grantParams[0]).toBe("org-bil016");
+    expect(grantParams[1]).toBe("organiser_pro");
+    expect(grantParams[2]).toBe(10);
+  });
+
+  it("BIL-017: top_up_units = '0' does not insert entitlement_grants row", async () => {
+    const secret = "whsec_test_bil017";
+    const now = Math.floor(Date.now() / 1000);
+    const insertedGrants: unknown[][] = [];
+
+    const mockSql = {
+      unsafe: (async (query: string, params?: unknown[]) => {
+        if (query.includes("billing_webhook_receipts") && query.includes("SELECT")) return [];
+        if (query.includes("INSERT INTO entitlement_grants")) {
+          insertedGrants.push(params ?? []);
+          return [];
+        }
+        if (query.includes("INSERT INTO organisation_subscriptions")) return [];
+        if (query.includes("INSERT INTO billing_webhook_receipts")) return [];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new EntitlementRuntime(mockSql);
+
+    const payload = {
+      id: "evt_bil017",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          metadata: {
+            organisation_id: "org-bil017",
+            tier: "event_pass",
+            top_up_units: "0",
+          },
+        },
+      },
+    };
+
+    const rawPayload = JSON.stringify(payload);
+    const ts = now.toString();
+    const sig = createHmac("sha256", secret).update(`${ts}.${rawPayload}`).digest("hex");
+    const header = `t=${ts},v1=${sig}`;
+
+    await runtime.processBillingWebhook(header, rawPayload, payload, secret);
+    expect(insertedGrants.length).toBe(0);
+  });
+
+  it("BIL-018: customer.subscription.deleted resolves org via provider_subscription_id DB lookup", async () => {
+    const secret = "whsec_test_bil018";
+    const now = Math.floor(Date.now() / 1000);
+    const updatedOrgs: string[] = [];
+
+    const mockSql = {
+      unsafe: (async (query: string, params?: unknown[]) => {
+        if (query.includes("billing_webhook_receipts") && query.includes("SELECT")) return [];
+        if (query.includes("SELECT organisation_id FROM organisation_subscriptions")) {
+          // Resolve sub_del999 -> org-resolved-from-db
+          return [{ organisation_id: "org-resolved-from-db" }];
+        }
+        if (query.includes("UPDATE organisation_subscriptions") && query.includes("canceled")) {
+          updatedOrgs.push((params as string[])[0]!);
+          return [];
+        }
+        if (query.includes("INSERT INTO billing_webhook_receipts")) return [];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new EntitlementRuntime(mockSql);
+
+    // For customer.subscription.deleted, data.object IS the Subscription — its root id is the sub ID
+    const payload = {
+      id: "evt_bil018",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_del999", // subscription ID at root, no organisation_id here
+        },
+      },
+    };
+
+    const rawPayload = JSON.stringify(payload);
+    const ts = now.toString();
+    const sig = createHmac("sha256", secret).update(`${ts}.${rawPayload}`).digest("hex");
+    const header = `t=${ts},v1=${sig}`;
+
+    const result = await runtime.processBillingWebhook(header, rawPayload, payload, secret);
+    expect(result.processed).toBe(true);
+    expect(updatedOrgs).toEqual(["org-resolved-from-db"]);
+  });
+
+  it("BIL-019: invalid Stripe webhook signature is rejected with 401", async () => {
+    const secret = "whsec_test_bil019";
+    const now = Math.floor(Date.now() / 1000);
+
+    const mockSql = {
+      unsafe: (async () => []) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new EntitlementRuntime(mockSql);
+
+    const payload = {
+      id: "evt_bil019",
+      type: "checkout.session.completed",
+      data: { object: { metadata: { organisation_id: "org-1" } } },
+    };
+
+    const rawPayload = JSON.stringify(payload);
+    const ts = now.toString();
+    const badHeader = `t=${ts},v1=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef`;
+
+    await expect(runtime.processBillingWebhook(badHeader, rawPayload, payload, secret)).rejects.toThrow(
+      /Invalid Stripe webhook signature/,
+    );
+  });
 });

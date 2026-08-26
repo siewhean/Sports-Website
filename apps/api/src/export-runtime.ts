@@ -116,9 +116,9 @@ export class ExportRuntime {
        LEFT JOIN division_entries e_home ON e_home.id = m.home_entry_id
        LEFT JOIN division_entries e_away ON e_away.id = m.away_entry_id
        LEFT JOIN scheduled_matches sm ON sm.match_id = m.id
+         AND ($2::uuid IS NULL OR sm.schedule_revision_id = $2)
        LEFT JOIN playing_areas pa ON pa.id = sm.playing_area_id
        WHERE d.competition_id = $1
-         AND ($2::uuid IS NULL OR m.schedule_revision_id = $2)
        ORDER BY d.created_at, d.name, sm.starts_at NULLS LAST, m.code`,
       [competitionId, restrictToPublished ? publishedRevisionId : null],
     );
@@ -149,8 +149,7 @@ export class ExportRuntime {
   }
 
   async generateStandingsCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
-    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
+    await this.assertExportAccess(competitionId, actor);
 
     const standings = await this.sql.unsafe<{
       division_name: string;
@@ -189,33 +188,49 @@ export class ExportRuntime {
                 sum(goals_for - goals_against)::integer as goal_difference,
                 sum(points)::integer as points
          FROM (
-           SELECT home_entry_id as entry_id,
-                  home_score > away_score as won,
-                  home_score = away_score as drawn,
-                  home_score < away_score as lost,
-                  home_score as goals_for,
-                  away_score as goals_against,
-                  CASE WHEN home_score > away_score THEN 3 WHEN home_score = away_score THEN 1 ELSE 0 END as points
-           FROM matches
-           WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
-             AND ($2::uuid IS NULL OR schedule_revision_id = $2)
+           SELECT m.home_entry_id as entry_id,
+                  mrs.home_score > mrs.away_score as won,
+                  mrs.home_score = mrs.away_score as drawn,
+                  mrs.home_score < mrs.away_score as lost,
+                  mrs.home_score as goals_for,
+                  mrs.away_score as goals_against,
+                  CASE WHEN mrs.home_score > mrs.away_score THEN 3
+                       WHEN mrs.home_score = mrs.away_score THEN 1
+                       ELSE 0 END as points
+           FROM matches m
+           JOIN divisions d2 ON d2.id = m.division_id
+           JOIN (
+             SELECT DISTINCT ON (match_id) match_id, home_score, away_score
+             FROM match_result_snapshots
+             WHERE state IN ('final', 'corrected')
+             ORDER BY match_id, result_version DESC
+           ) mrs ON mrs.match_id = m.id
+           WHERE d2.competition_id = $1
            UNION ALL
-           SELECT away_entry_id as entry_id,
-                  away_score > home_score as won,
-                  home_score = away_score as drawn,
-                  away_score < home_score as lost,
-                  away_score as goals_for,
-                  home_score as goals_against,
-                  CASE WHEN away_score > home_score THEN 3 WHEN home_score = away_score THEN 1 ELSE 0 END as points
-           FROM matches
-           WHERE state = 'completed' AND home_score IS NOT NULL AND away_score IS NOT NULL
-             AND ($2::uuid IS NULL OR schedule_revision_id = $2)
+           SELECT m.away_entry_id as entry_id,
+                  mrs.away_score > mrs.home_score as won,
+                  mrs.home_score = mrs.away_score as drawn,
+                  mrs.away_score < mrs.home_score as lost,
+                  mrs.away_score as goals_for,
+                  mrs.home_score as goals_against,
+                  CASE WHEN mrs.away_score > mrs.home_score THEN 3
+                       WHEN mrs.home_score = mrs.away_score THEN 1
+                       ELSE 0 END as points
+           FROM matches m
+           JOIN divisions d2 ON d2.id = m.division_id
+           JOIN (
+             SELECT DISTINCT ON (match_id) match_id, home_score, away_score
+             FROM match_result_snapshots
+             WHERE state IN ('final', 'corrected')
+             ORDER BY match_id, result_version DESC
+           ) mrs ON mrs.match_id = m.id
+           WHERE d2.competition_id = $1
          ) match_records
          GROUP BY entry_id
        ) s ON s.entry_id = e.id
        WHERE d.competition_id = $1
        ORDER BY d.name, COALESCE(s.points, 0) DESC, COALESCE(s.goal_difference, 0) DESC, e.name`,
-      [competitionId, restrictToPublished ? publishedRevisionId : null],
+      [competitionId],
     );
 
     const headers = [
@@ -250,8 +265,7 @@ export class ExportRuntime {
   }
 
   async generateBracketCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
-    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
+    await this.assertExportAccess(competitionId, actor);
 
     const bracketMatches = await this.sql.unsafe<{
       division_name: string;
@@ -273,9 +287,8 @@ export class ExportRuntime {
        LEFT JOIN division_entries e_home ON e_home.id = m.home_entry_id
        LEFT JOIN division_entries e_away ON e_away.id = m.away_entry_id
        WHERE d.competition_id = $1
-         AND ($2::uuid IS NULL OR m.schedule_revision_id = $2)
        ORDER BY d.name, m.code`,
-      [competitionId, restrictToPublished ? publishedRevisionId : null],
+      [competitionId],
     );
 
     const headers = ["Division", "Stage", "Match", "Home Team", "Away Team", "State"];
@@ -364,8 +377,8 @@ export class ExportRuntime {
        FROM matches m
        JOIN divisions d ON d.id = m.division_id
        LEFT JOIN scheduled_matches sm ON sm.match_id = m.id
+         AND ($2::uuid IS NULL OR sm.schedule_revision_id = $2)
        WHERE d.competition_id=$1
-         AND ($2::uuid IS NULL OR m.schedule_revision_id = $2)
        ORDER BY d.created_at, d.name, sm.starts_at NULLS LAST, m.code`,
       [competitionId, restrictToPublished ? publishedRevisionId : null],
     );

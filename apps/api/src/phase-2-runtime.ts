@@ -5128,18 +5128,22 @@ export class Phase2Runtime {
           );
         }
       } else if (gf1Result && gf1Result.home_score >= gf1Result.away_score) {
-        // Upper bracket champion won GF1 -> Cancel / bypass GF2
-        await tx.unsafe(
-          `UPDATE matches SET state='cancelled'
-           WHERE division_id=$1 AND (graph_match_id='grand-final-reset' OR code='grand-final-reset')
-             AND state IN ('pending', 'draft', 'scheduled', 'ready')`,
-          [divisionId],
-        );
+        // Upper bracket champion won GF1 -> GF2 is not required; complete competition directly.
+        // We do NOT set state='cancelled' on GF2 — that value violates the matches.state CHECK constraint.
+        await tx.unsafe(`UPDATE competitions SET status='completed', updated_at=$2 WHERE id=$1 AND status='active'`, [
+          competitionId,
+          this.now(),
+        ]);
       }
     }
 
+    // General completion check: all matches in terminal states, excluding any un-played optional
+    // grand-final-reset match (GF2) that remains 'ready' when upper bracket won GF1.
     const pendingMatches = await tx.unsafe<{ count: number }>(
-      `SELECT count(*)::integer as count FROM matches WHERE competition_id=$1 AND state NOT IN ('final', 'corrected', 'cancelled')`,
+      `SELECT count(*)::integer as count FROM matches
+       WHERE competition_id=$1
+         AND state NOT IN ('final', 'corrected')
+         AND NOT (state = 'ready' AND (graph_match_id='grand-final-reset' OR code='grand-final-reset'))`,
       [competitionId],
     );
     if (pendingMatches[0]?.count === 0) {

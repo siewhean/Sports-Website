@@ -223,10 +223,17 @@ export class EntitlementRuntime {
     }
 
     await this.transaction(async (tx) => {
-      const orgId = payload.data.object.organisation_id;
-      if (orgId) {
-        if (eventType === "checkout.session.completed") {
-          const tier = payload.data.object.tier ?? "event_pass";
+      let orgId: string | null = null;
+
+      if (eventType === "checkout.session.completed") {
+        // metadata values are always strings in Stripe
+        orgId = payload.data.object.metadata?.organisation_id ?? payload.data.object.client_reference_id ?? null;
+        if (orgId) {
+          const tierRaw = payload.data.object.metadata?.tier ?? "event_pass";
+          const tier: SubscriptionTier = ["free", "event_pass", "organiser_pro"].includes(tierRaw)
+            ? (tierRaw as SubscriptionTier)
+            : "event_pass";
+          const topUpUnits = parseInt(payload.data.object.metadata?.top_up_units ?? "0", 10);
           await tx.unsafe(
             `INSERT INTO organisation_subscriptions (
                organisation_id, tier, status, provider_customer_id, provider_subscription_id, current_period_start, current_period_end, updated_at
@@ -240,16 +247,47 @@ export class EntitlementRuntime {
                updated_at=now()`,
             [orgId, tier, payload.data.object.customer ?? null, payload.data.object.subscription ?? null],
           );
-
-          if (payload.data.object.top_up_units && payload.data.object.top_up_units > 0) {
+          if (topUpUnits > 0) {
             await tx.unsafe(
               `INSERT INTO entitlement_grants (
                  organisation_id, tier, feature, source, quantity, idempotency_key
                ) VALUES ($1, $2, 'ai_actions', 'top_up', $3, $4)`,
-              [orgId, tier, payload.data.object.top_up_units, `webhook:${eventId}`],
+              [orgId, tier, topUpUnits, `webhook:${eventId}`],
             );
           }
-        } else if (eventType === "customer.subscription.deleted") {
+        }
+      } else if (eventType === "customer.subscription.updated") {
+        // Resolve org from subscription ID
+        const subId = payload.data.object.subscription ?? payload.data.object.id;
+        if (subId) {
+          const subRow = (
+            await tx.unsafe<{ organisation_id: string }>(
+              `SELECT organisation_id FROM organisation_subscriptions WHERE provider_subscription_id=$1`,
+              [subId],
+            )
+          )[0];
+          orgId = subRow?.organisation_id ?? null;
+        }
+        // Update period info if we found the org
+        if (orgId) {
+          await tx.unsafe(
+            `UPDATE organisation_subscriptions SET status='active', current_period_end=now() + interval '30 days', updated_at=now() WHERE organisation_id=$1`,
+            [orgId],
+          );
+        }
+      } else if (eventType === "customer.subscription.deleted") {
+        // Subscription deletion: resolve org from stored mapping
+        const subId = payload.data.object.subscription ?? payload.data.object.id;
+        if (subId) {
+          const subRow = (
+            await tx.unsafe<{ organisation_id: string }>(
+              `SELECT organisation_id FROM organisation_subscriptions WHERE provider_subscription_id=$1`,
+              [subId],
+            )
+          )[0];
+          orgId = subRow?.organisation_id ?? null;
+        }
+        if (orgId) {
           await tx.unsafe(
             `UPDATE organisation_subscriptions SET tier='free', status='canceled', updated_at=now() WHERE organisation_id=$1`,
             [orgId],

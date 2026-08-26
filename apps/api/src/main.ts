@@ -37,6 +37,12 @@ import { EntitlementRuntime } from "./entitlement-runtime.js";
 import { HttpStripeCheckoutClient } from "./stripe-checkout-client.js";
 import { ExportRuntime } from "./export-runtime.js";
 import { AdminRuntime } from "./admin-runtime.js";
+import {
+  NotificationService,
+  PostgresNotificationRepository,
+  NoopNotificationRateLimiter,
+  EmailTemplateRegistry,
+} from "@matchday/notifications";
 import { startApiTelemetry } from "./telemetry.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
@@ -136,6 +142,12 @@ const entitlementRuntime = new EntitlementRuntime(
 );
 const exportRuntime = new ExportRuntime(identitySql);
 const adminRuntime = new AdminRuntime(identitySql);
+const notificationRepo = new PostgresNotificationRepository(postgresClient);
+const notificationService = new NotificationService(notificationRepo, notificationRepo, new EmailTemplateRegistry(), {
+  createId: randomUUID,
+  now: () => new Date(),
+  rateLimiter: new NoopNotificationRateLimiter(),
+});
 
 // Gate C is part of the production API composition, not an evidence-only
 // harness. Reuse the canonical Phase 2 projection writer so repair publication
@@ -173,6 +185,7 @@ const app = await buildApp({
   entitlementRuntime,
   exportRuntime,
   adminRuntime,
+  notificationService,
   scoringAccessHmacKeySql: identitySql,
   scoringFallbackHmacKeySql: identitySql,
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,

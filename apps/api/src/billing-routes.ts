@@ -57,17 +57,27 @@ export async function registerBillingRoutes(
           id: Type.String(),
           type: Type.String(),
           data: Type.Object({
-            object: Type.Object({
-              customer: Type.Optional(Type.String()),
-              subscription: Type.Optional(Type.String()),
-              organisation_id: Type.Optional(Type.String()),
-              tier: Type.Optional(
-                Type.Union([Type.Literal("free"), Type.Literal("event_pass"), Type.Literal("organiser_pro")]),
-              ),
-              top_up_units: Type.Optional(Type.Integer()),
-              amount_total: Type.Optional(Type.Integer()),
-              currency: Type.Optional(Type.String()),
-            }),
+            object: Type.Object(
+              {
+                id: Type.Optional(Type.String()),
+                customer: Type.Optional(Type.String()),
+                subscription: Type.Optional(Type.String()),
+                client_reference_id: Type.Optional(Type.String()),
+                amount_total: Type.Optional(Type.Integer()),
+                currency: Type.Optional(Type.String()),
+                metadata: Type.Optional(
+                  Type.Object(
+                    {
+                      organisation_id: Type.Optional(Type.String()),
+                      tier: Type.Optional(Type.String()),
+                      top_up_units: Type.Optional(Type.String()),
+                    },
+                    { additionalProperties: true },
+                  ),
+                ),
+              },
+              { additionalProperties: true },
+            ),
           }),
         }),
         response: { 200: Json, ...MutationResponses },

@@ -185,7 +185,12 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
     expect(updated.version).toBe("3");
     expect(updated.status).toBe("active");
     expect(
-      executedQueries.some((q) => q.includes("UPDATE sport_pack_versions") && q.includes("SET status='superseded'")),
+      executedQueries.some(
+        (q) =>
+          q.includes("UPDATE sport_pack_versions") &&
+          q.includes("SET status='superseded'") &&
+          q.includes("revision=revision+1"),
+      ),
     ).toBe(true);
     expect(executedQueries.some((q) => q.includes("INSERT INTO sport_pack_versions") && q.includes("'active'"))).toBe(
       true,
