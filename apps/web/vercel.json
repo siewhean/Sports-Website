@@ -2,5 +2,5 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
   "buildCommand": "cd ../.. && pnpm turbo run build --filter=@matchday/web... --force",
-  "ignoreCommand": "if [ \"$VERCEL_GIT_COMMIT_REF\" = \"integration/gate-c-final\" ]; then exit 1; fi; previous=\"${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}\"; if ! git cat-file -e \"$previous^{commit}\" 2>/dev/null; then exit 1; fi; if git diff --quiet \"$previous\" HEAD -- . ../../packages ../../package.json ../../pnpm-lock.yaml ../../turbo.json; then exit 0; else exit 1; fi"
+  "ignoreCommand": "sh scripts/vercel-ignore-build.sh"
 }
