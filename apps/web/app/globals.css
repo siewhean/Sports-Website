@@ -1812,7 +1812,7 @@ body:has(.p2-score-receipt) {
 }
 
 .p2-goal-sheet > header .p2-eyebrow {
-  color: #9ca19c;
+  color: #c2c7c2;
 }
 
 .p2-goal-sheet > header h2 {
@@ -1826,7 +1826,7 @@ body:has(.p2-score-receipt) {
 .p2-goal-sheet > header > p:last-child {
   max-width: 520px;
   margin-top: 9px;
-  color: #a7aca7;
+  color: #c2c7c2;
   font-size: 0.75rem;
 }
 
@@ -1876,7 +1876,7 @@ body:has(.p2-score-receipt) {
 }
 
 .p2-goal-sheet dt {
-  color: #969b96;
+  color: #c8ccc7;
   font-size: 0.67rem;
 }
 
@@ -1911,7 +1911,7 @@ body:has(.p2-score-receipt) {
 }
 
 .p2-goal-sheet label small {
-  color: #969b96;
+  color: #c2c7c2;
   font-size: 0.68rem;
   font-weight: 430;
 }
