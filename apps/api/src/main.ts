@@ -35,7 +35,7 @@ import { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { EntitlementRuntime } from "./entitlement-runtime.js";
 import { HttpStripeCheckoutClient } from "./stripe-checkout-client.js";
-import { ExportRuntime } from "./export-runtime.js";
+import { PublishedExportRuntime } from "./published-export-runtime.js";
 import { AdminRuntime } from "./admin-runtime.js";
 import {
   NotificationService,
@@ -140,7 +140,7 @@ const entitlementRuntime = new EntitlementRuntime(
   identitySql,
   process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : undefined,
 );
-const exportRuntime = new ExportRuntime(identitySql);
+const exportRuntime = new PublishedExportRuntime(identitySql);
 const adminRuntime = new AdminRuntime(identitySql);
 const notificationRepo = new PostgresNotificationRepository(postgresClient);
 const notificationService = new NotificationService(notificationRepo, notificationRepo, new EmailTemplateRegistry(), {
