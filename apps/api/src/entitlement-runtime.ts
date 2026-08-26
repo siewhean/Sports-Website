@@ -24,9 +24,7 @@ export function verifyStripeWebhookSignature(
   toleranceSeconds: number = 300,
   nowSeconds: number = Math.floor(Date.now() / 1000),
 ): boolean {
-  if (!signatureHeader || typeof signatureHeader !== "string" || !secret || secret.trim() === "") {
-    return false;
-  }
+  if (!signatureHeader || typeof signatureHeader !== "string" || !secret || secret.trim() === "") return false;
   const elements = signatureHeader.split(",");
   let timestamp = 0;
   const signatures: string[] = [];
@@ -36,22 +34,12 @@ export function verifyStripeWebhookSignature(
     const value = parts.slice(1).join("=").trim();
     if (key === "t" && value) {
       const parsed = Number.parseInt(value, 10);
-      if (!Number.isNaN(parsed) && Number.isSafeInteger(parsed) && parsed > 0) {
-        timestamp = parsed;
-      }
+      if (!Number.isNaN(parsed) && Number.isSafeInteger(parsed) && parsed > 0) timestamp = parsed;
     }
-    if (key === "v1" && value) {
-      signatures.push(value);
-    }
+    if (key === "v1" && value) signatures.push(value);
   }
-  if (timestamp === 0 || signatures.length === 0) {
-    return false;
-  }
-  if (Math.abs(nowSeconds - timestamp) > toleranceSeconds) {
-    return false;
-  }
-  const signedPayload = `${timestamp}.${rawPayload}`;
-  const hmac = createHmac("sha256", secret).update(signedPayload).digest("hex");
+  if (timestamp === 0 || signatures.length === 0 || Math.abs(nowSeconds - timestamp) > toleranceSeconds) return false;
+  const hmac = createHmac("sha256", secret).update(`${timestamp}.${rawPayload}`).digest("hex");
   return signatures.some((sig) => {
     try {
       const sigBuf = Buffer.from(sig, "hex");
@@ -63,6 +51,25 @@ export function verifyStripeWebhookSignature(
   });
 }
 
+function providerSubscriptionStatus(value: string | null | undefined): "active" | "trialing" | "past_due" | "canceled" {
+  switch (value) {
+    case "active":
+      return "active";
+    case "trialing":
+      return "trialing";
+    case "canceled":
+    case "cancelled":
+    case "incomplete_expired":
+      return "canceled";
+    case "past_due":
+    case "unpaid":
+    case "paused":
+    case "incomplete":
+    default:
+      return "past_due";
+  }
+}
+
 export class EntitlementRuntime {
   constructor(
     private readonly sql: PostgresJsSql,
@@ -71,69 +78,58 @@ export class EntitlementRuntime {
 
   private async transaction<T>(callback: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     const sqlInstance = this.sql as unknown as { begin?: (cb: (tx: PostgresJsSql) => Promise<T>) => Promise<T> };
-    if (typeof sqlInstance.begin === "function") {
-      return sqlInstance.begin(callback);
-    }
-    return callback(this.sql);
+    return typeof sqlInstance.begin === "function" ? sqlInstance.begin(callback) : callback(this.sql);
   }
 
   async getSubscriptionTier(
     tx: PostgresJsSql,
     organisationId: string,
   ): Promise<{ tier: SubscriptionTier; status: string; currentPeriodEnd: Date | null }> {
-    const rows = await tx.unsafe<{
-      tier: string;
-      status: string;
-      current_period_end: Date | null;
-    }>(
-      `SELECT tier, status, current_period_end
-       FROM organisation_subscriptions
-       WHERE organisation_id=$1`,
-      [organisationId],
+    const record = (
+      await tx.unsafe<{ tier: string; status: string; current_period_end: Date | null }>(
+        `SELECT tier, status, current_period_end FROM organisation_subscriptions WHERE organisation_id=$1`,
+        [organisationId],
+      )
+    )[0];
+    const paidState = Boolean(
+      record &&
+        ["active", "trialing"].includes(record.status) &&
+        (!record.current_period_end || record.current_period_end.getTime() > Date.now()),
     );
-
-    const record = rows[0];
-    if (!record || record.status !== "active") {
-      return { tier: "free", status: record?.status ?? "active", currentPeriodEnd: null };
+    if (!record || !paidState) {
+      return { tier: "free", status: record?.status ?? "active", currentPeriodEnd: record?.current_period_end ?? null };
     }
-
-    return {
-      tier: record.tier as SubscriptionTier,
-      status: record.status,
-      currentPeriodEnd: record.current_period_end,
-    };
+    return { tier: record.tier as SubscriptionTier, status: record.status, currentPeriodEnd: record.current_period_end };
   }
 
   async getBillingSummary(organisationId: string): Promise<BillingSummary> {
     const sub = await this.getSubscriptionTier(this.sql, organisationId);
     const tierLimits = TIER_FEATURE_LIMITS[sub.tier];
-
     const grants = await this.sql.unsafe<{ feature: string; quantity: number }>(
-      `SELECT feature, COALESCE(sum(quantity), 0)::integer as quantity
+      `SELECT feature, COALESCE(sum(quantity), 0)::integer quantity
        FROM entitlement_grants
        WHERE organisation_id=$1 AND (expires_at IS NULL OR expires_at > now())
        GROUP BY feature`,
       [organisationId],
     );
-
     const topUpUnits = grants.find((g) => g.feature === "ai_actions")?.quantity ?? 0;
     const effectiveAiLimit = tierLimits.monthly_ai_actions + topUpUnits;
-
-    const usage = await this.sql.unsafe<{ used: number }>(
-      `SELECT count(*)::integer as used
-       FROM ai_action_ledger
-       WHERE organisation_id=$1 AND outcome='success' AND charged_units > 0
-         AND created_at >= date_trunc('month', now())`,
-      [organisationId],
-    );
-
-    const usedUnits = usage[0]?.used ?? 0;
-
+    const usedUnits =
+      (
+        await this.sql.unsafe<{ used: number }>(
+          `SELECT count(*)::integer used FROM ai_action_ledger
+           WHERE organisation_id=$1 AND outcome='success' AND charged_units > 0
+             AND created_at >= date_trunc('month', now())`,
+          [organisationId],
+        )
+      )[0]?.used ?? 0;
     return {
       organisation_id: organisationId,
       tier: sub.tier,
       status:
-        sub.status === "cancelled" || sub.status === "canceled" ? "cancelled" : (sub.status as "active" | "past_due"),
+        sub.status === "cancelled" || sub.status === "canceled"
+          ? "cancelled"
+          : (sub.status as "active" | "past_due" | "trialing"),
       features: tierLimits.features,
       custom_branding_allowed: tierLimits.features.includes("custom_branding"),
       sponsor_placements_allowed: tierLimits.features.includes("sponsor_placements"),
@@ -160,14 +156,9 @@ export class EntitlementRuntime {
       event_type: string;
       created_at: Date;
       payload: { data?: { object?: { amount_total?: number; currency?: string } } };
-    }>(
-      `SELECT id, event_type, created_at, payload
-       FROM billing_webhook_receipts
-       WHERE organisation_id=$1
-       ORDER BY created_at DESC`,
-      [organisationId],
-    );
-
+    }>(`SELECT id, event_type, created_at, payload FROM billing_webhook_receipts WHERE organisation_id=$1 ORDER BY created_at DESC`, [
+      organisationId,
+    ]);
     return receipts.map((r) => ({
       id: r.id,
       event_type: r.event_type,
@@ -205,120 +196,144 @@ export class EntitlementRuntime {
     payload: BillingWebhookPayload,
     secret: string | undefined = process.env.STRIPE_WEBHOOK_SECRET,
   ): Promise<{ processed: boolean; eventType: string }> {
-    const isValid = verifyStripeWebhookSignature(signature, rawPayload, secret);
-    if (!isValid) {
+    if (!verifyStripeWebhookSignature(signature, rawPayload, secret)) {
       throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Invalid Stripe webhook signature");
     }
-
     const eventId = payload.id;
     const eventType = payload.type;
-
-    const existing = (
-      await this.sql.unsafe<{ id: string }>(`SELECT id FROM billing_webhook_receipts WHERE provider_event_id=$1`, [
-        eventId,
-      ])
-    )[0];
-    if (existing) {
-      return { processed: false, eventType };
-    }
-
-    await this.transaction(async (tx) => {
-      let orgId: string | null = null;
-
-      if (eventType === "checkout.session.completed") {
-        // metadata values are always strings in Stripe
-        orgId = payload.data.object.metadata?.organisation_id ?? payload.data.object.client_reference_id ?? null;
-        if (orgId) {
-          const tierRaw = payload.data.object.metadata?.tier ?? "event_pass";
-          const tier: SubscriptionTier = ["free", "event_pass", "organiser_pro"].includes(tierRaw)
-            ? (tierRaw as SubscriptionTier)
-            : "event_pass";
-          const topUpUnits = parseInt(payload.data.object.metadata?.top_up_units ?? "0", 10);
-          await tx.unsafe(
-            `INSERT INTO organisation_subscriptions (
-               organisation_id, tier, status, provider_customer_id, provider_subscription_id, current_period_start, current_period_end, updated_at
-             ) VALUES ($1, $2, 'active', $3, $4, now(), now() + interval '30 days', now())
-             ON CONFLICT (organisation_id) DO UPDATE SET
-               tier=EXCLUDED.tier,
-               status='active',
-               provider_customer_id=COALESCE(EXCLUDED.provider_customer_id, organisation_subscriptions.provider_customer_id),
-               provider_subscription_id=COALESCE(EXCLUDED.provider_subscription_id, organisation_subscriptions.provider_subscription_id),
-               current_period_end=now() + interval '30 days',
-               updated_at=now()`,
-            [orgId, tier, payload.data.object.customer ?? null, payload.data.object.subscription ?? null],
-          );
-          if (topUpUnits > 0) {
-            await tx.unsafe(
-              `INSERT INTO entitlement_grants (
-                 organisation_id, tier, feature, source, quantity, idempotency_key
-               ) VALUES ($1, $2, 'ai_actions', 'top_up', $3, $4)`,
-              [orgId, tier, topUpUnits, `webhook:${eventId}`],
-            );
-          }
-        }
-      } else if (eventType === "customer.subscription.updated") {
-        // Resolve org from subscription ID
-        const subId = payload.data.object.subscription ?? payload.data.object.id;
+    const processed = await this.transaction(async (tx) => {
+      const object = payload.data.object;
+      let orgId = object.metadata?.organisation_id ?? object.client_reference_id ?? null;
+      if (!orgId && ["customer.subscription.updated", "customer.subscription.deleted"].includes(eventType)) {
+        const subId = object.subscription ?? object.id;
         if (subId) {
-          const subRow = (
-            await tx.unsafe<{ organisation_id: string }>(
-              `SELECT organisation_id FROM organisation_subscriptions WHERE provider_subscription_id=$1`,
-              [subId],
-            )
-          )[0];
-          orgId = subRow?.organisation_id ?? null;
-        }
-        // Update period info if we found the org
-        if (orgId) {
-          await tx.unsafe(
-            `UPDATE organisation_subscriptions SET status='active', current_period_end=now() + interval '30 days', updated_at=now() WHERE organisation_id=$1`,
-            [orgId],
-          );
-        }
-      } else if (eventType === "customer.subscription.deleted") {
-        // Subscription deletion: resolve org from stored mapping
-        const subId = payload.data.object.subscription ?? payload.data.object.id;
-        if (subId) {
-          const subRow = (
-            await tx.unsafe<{ organisation_id: string }>(
-              `SELECT organisation_id FROM organisation_subscriptions WHERE provider_subscription_id=$1`,
-              [subId],
-            )
-          )[0];
-          orgId = subRow?.organisation_id ?? null;
-        }
-        if (orgId) {
-          await tx.unsafe(
-            `UPDATE organisation_subscriptions SET tier='free', status='canceled', updated_at=now() WHERE organisation_id=$1`,
-            [orgId],
-          );
+          orgId =
+            (
+              await tx.unsafe<{ organisation_id: string }>(
+                `SELECT organisation_id FROM organisation_subscriptions WHERE provider_subscription_id=$1`,
+                [subId],
+              )
+            )[0]?.organisation_id ?? null;
         }
       }
 
-      await tx.unsafe(
-        `INSERT INTO billing_webhook_receipts (
-           organisation_id, provider_event_id, event_type, status, payload, created_at, processed_at
-         ) VALUES ($1, $2, $3, 'processed', $4::jsonb, now(), now())`,
-        [orgId ?? null, eventId, eventType, JSON.stringify(payload)],
+      const claim = await tx.unsafe<{ id: string }>(
+        `INSERT INTO billing_webhook_receipts
+           (organisation_id, provider_event_id, event_type, status, payload, created_at, processed_at)
+         VALUES ($1,$2,$3,'processed',$4::jsonb,now(),now())
+         ON CONFLICT (provider_event_id) DO NOTHING RETURNING id`,
+        [orgId, eventId, eventType, JSON.stringify(payload)],
       );
-    });
+      if (!claim[0]) {
+        const existing = (
+          await tx.unsafe<{ id: string }>(`SELECT id FROM billing_webhook_receipts WHERE provider_event_id=$1`, [eventId])
+        )[0];
+        if (existing) return false;
+        // Test doubles predating RETURNING support may return no row. In a real
+        // database an absent claim plus absent existing receipt cannot occur.
+      }
 
-    return { processed: true, eventType };
+      if (eventType === "checkout.session.completed" && orgId) {
+        const purchaseType = object.metadata?.purchase_type ?? (object.metadata?.tier ? "plan" : "ai_top_up");
+        const topUpUnits = Number.parseInt(object.metadata?.top_up_units ?? "0", 10);
+        if (purchaseType !== "ai_top_up") {
+          const tierRaw = object.metadata?.tier ?? "event_pass";
+          const tier: SubscriptionTier = ["event_pass", "organiser_pro"].includes(tierRaw)
+            ? (tierRaw as SubscriptionTier)
+            : "event_pass";
+          await tx.unsafe(
+            `INSERT INTO organisation_subscriptions
+               (organisation_id,tier,status,provider_customer_id,provider_subscription_id,current_period_start,current_period_end,updated_at)
+             VALUES ($1,$2,'active',$3,$4,
+               COALESCE(to_timestamp($5::double precision),now()),
+               COALESCE(to_timestamp($6::double precision),now()+interval '30 days'),now())
+             ON CONFLICT (organisation_id) DO UPDATE SET
+               tier=EXCLUDED.tier,status='active',
+               provider_customer_id=COALESCE(EXCLUDED.provider_customer_id,organisation_subscriptions.provider_customer_id),
+               provider_subscription_id=COALESCE(EXCLUDED.provider_subscription_id,organisation_subscriptions.provider_subscription_id),
+               current_period_start=EXCLUDED.current_period_start,current_period_end=EXCLUDED.current_period_end,updated_at=now()`,
+            [
+              orgId,
+              tier,
+              object.customer ?? null,
+              object.subscription ?? null,
+              object.current_period_start ?? null,
+              object.current_period_end ?? null,
+            ],
+          );
+        }
+        if (Number.isSafeInteger(topUpUnits) && topUpUnits > 0) {
+          const tier =
+            (
+              await tx.unsafe<{ tier: SubscriptionTier }>(
+                `SELECT tier FROM organisation_subscriptions
+                 WHERE organisation_id=$1 AND status IN ('active','trialing')
+                   AND (current_period_end IS NULL OR current_period_end>now())`,
+                [orgId],
+              )
+            )[0]?.tier ?? "free";
+          await tx.unsafe(
+            `INSERT INTO entitlement_grants (organisation_id,tier,feature,source,quantity,idempotency_key)
+             VALUES ($1,$2,'ai_actions','top_up',$3,$4) ON CONFLICT (idempotency_key) DO NOTHING`,
+            [orgId, tier, topUpUnits, `webhook:${eventId}`],
+          );
+        }
+      } else if (eventType === "customer.subscription.updated" && orgId) {
+        const status = providerSubscriptionStatus(object.status);
+        await tx.unsafe(
+          `UPDATE organisation_subscriptions SET status=$2,
+             current_period_start=COALESCE(to_timestamp($3::double precision),current_period_start),
+             current_period_end=COALESCE(to_timestamp($4::double precision),current_period_end),updated_at=now()
+           WHERE organisation_id=$1`,
+          [orgId, status, object.current_period_start ?? null, object.current_period_end ?? null],
+        );
+      } else if (eventType === "customer.subscription.deleted" && orgId) {
+        await tx.unsafe(
+          `UPDATE organisation_subscriptions SET tier='free',status='canceled',updated_at=now() WHERE organisation_id=$1`,
+          [orgId],
+        );
+      }
+      return true;
+    });
+    return { processed, eventType };
   }
 
   async createCheckoutSession(
     actor: Phase3Actor,
     organisationId: string,
-    input: { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string },
+    input:
+      | { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string }
+      | { purchaseType: "ai_top_up"; topUpUnits: number; successUrl: string; cancelUrl: string },
   ) {
     await this.assertOrganisationMember(this.sql, organisationId, actor);
-
     const client =
       this.stripeClient ??
       (process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : null);
+    if (!client) throw new ApiError(503, ErrorCode.SERVICE_UNAVAILABLE, "Stripe payment provider is not configured");
 
-    if (!client) {
-      throw new ApiError(503, ErrorCode.SERVICE_UNAVAILABLE, "Stripe payment provider is not configured");
+    if ("purchaseType" in input) {
+      if (!client.createTopUpSession) {
+        throw new ApiError(503, ErrorCode.SERVICE_UNAVAILABLE, "Stripe AI top-up checkout is not configured");
+      }
+      const session = await client.createTopUpSession({
+        organisationId,
+        topUpUnits: input.topUpUnits,
+        successUrl: input.successUrl,
+        cancelUrl: input.cancelUrl,
+      });
+      return {
+        session_id: session.sessionId,
+        checkout_url: session.checkoutUrl,
+        organisation_id: session.organisationId,
+        purchase_type: "ai_top_up" as const,
+        tier: null,
+        top_up_units: session.topUpUnits,
+        amount_total: session.amountTotal,
+        currency: session.currency,
+        expires_at: session.expiresAt,
+        success_url: session.successUrl,
+        cancel_url: session.cancelUrl,
+      };
     }
 
     const session = await client.createSession({
@@ -328,11 +343,11 @@ export class EntitlementRuntime {
       successUrl: input.successUrl,
       cancelUrl: input.cancelUrl,
     });
-
     return {
       session_id: session.sessionId,
       checkout_url: session.checkoutUrl,
       organisation_id: session.organisationId,
+      purchase_type: "plan" as const,
       tier: session.tier,
       top_up_units: session.topUpUnits,
       amount_total: session.amountTotal,
@@ -346,8 +361,7 @@ export class EntitlementRuntime {
   async getBranding(competitionId: string): Promise<CompetitionBranding | null> {
     const rows = await this.sql.unsafe<CompetitionBranding>(
       `SELECT competition_id, primary_color, secondary_color, logo_url, banner_url, hide_platform_badge
-       FROM competition_branding
-       WHERE competition_id=$1`,
+       FROM competition_branding WHERE competition_id=$1`,
       [competitionId],
     );
     return rows[0] ?? null;
@@ -362,27 +376,22 @@ export class EntitlementRuntime {
     return this.transaction(async (tx) => {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
       await this.assertOrganisationMember(tx, organisationId, actor);
-
       const hasCustomBranding = Boolean(
         input.primary_color || input.secondary_color || input.logo_url || input.banner_url || input.hide_platform_badge,
       );
-      if (hasCustomBranding) {
-        await this.assertFeatureAllowed(tx, organisationId, "custom_branding");
-      }
-
-      const updated = (
+      if (hasCustomBranding) await this.assertFeatureAllowed(tx, organisationId, "custom_branding");
+      return (
         await tx.unsafe<CompetitionBranding>(
-          `INSERT INTO competition_branding (
-             competition_id, primary_color, secondary_color, logo_url, banner_url, hide_platform_badge, updated_at
-           ) VALUES ($1, $2, $3, $4, $5, $6, now())
+          `INSERT INTO competition_branding
+             (competition_id,primary_color,secondary_color,logo_url,banner_url,hide_platform_badge,updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,now())
            ON CONFLICT (competition_id) DO UPDATE SET
-             primary_color=COALESCE(EXCLUDED.primary_color, competition_branding.primary_color),
-             secondary_color=COALESCE(EXCLUDED.secondary_color, competition_branding.secondary_color),
-             logo_url=COALESCE(EXCLUDED.logo_url, competition_branding.logo_url),
-             banner_url=COALESCE(EXCLUDED.banner_url, competition_branding.banner_url),
-             hide_platform_badge=COALESCE(EXCLUDED.hide_platform_badge, competition_branding.hide_platform_badge),
-             updated_at=now()
-           RETURNING competition_id, primary_color, secondary_color, logo_url, banner_url, hide_platform_badge`,
+             primary_color=COALESCE(EXCLUDED.primary_color,competition_branding.primary_color),
+             secondary_color=COALESCE(EXCLUDED.secondary_color,competition_branding.secondary_color),
+             logo_url=COALESCE(EXCLUDED.logo_url,competition_branding.logo_url),
+             banner_url=COALESCE(EXCLUDED.banner_url,competition_branding.banner_url),
+             hide_platform_badge=COALESCE(EXCLUDED.hide_platform_badge,competition_branding.hide_platform_badge),updated_at=now()
+           RETURNING competition_id,primary_color,secondary_color,logo_url,banner_url,hide_platform_badge`,
           [
             competitionId,
             input.primary_color ?? null,
@@ -393,19 +402,17 @@ export class EntitlementRuntime {
           ],
         )
       )[0]!;
-      return updated;
     });
   }
 
   async getSponsors(competitionId: string): Promise<CompetitionSponsor[]> {
-    const rows = await this.sql.unsafe<CompetitionSponsor>(
-      `SELECT id, competition_id, name, tier, logo_url, website_url, sort_order
-       FROM competition_sponsors
-       WHERE competition_id=$1
-       ORDER BY sort_order, created_at`,
-      [competitionId],
-    );
-    return [...rows];
+    return [
+      ...(await this.sql.unsafe<CompetitionSponsor>(
+        `SELECT id,competition_id,name,tier,logo_url,website_url,sort_order
+         FROM competition_sponsors WHERE competition_id=$1 ORDER BY sort_order,created_at`,
+        [competitionId],
+      )),
+    ];
   }
 
   async addSponsor(
@@ -424,13 +431,10 @@ export class EntitlementRuntime {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
       await this.assertOrganisationMember(tx, organisationId, actor);
       await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
-
-      const inserted = (
+      return (
         await tx.unsafe<CompetitionSponsor>(
-          `INSERT INTO competition_sponsors (
-             competition_id, name, tier, logo_url, website_url, sort_order
-           ) VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING id, competition_id, name, tier, logo_url, website_url, sort_order`,
+          `INSERT INTO competition_sponsors (competition_id,name,tier,logo_url,website_url,sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,competition_id,name,tier,logo_url,website_url,sort_order`,
           [
             competitionId,
             input.name.trim(),
@@ -441,7 +445,6 @@ export class EntitlementRuntime {
           ],
         )
       )[0]!;
-      return inserted;
     });
   }
 
@@ -461,21 +464,18 @@ export class EntitlementRuntime {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
       await this.assertOrganisationMember(tx, organisationId, actor);
       await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
-
       await tx.unsafe(`DELETE FROM competition_sponsors WHERE competition_id=$1`, [competitionId]);
-
       const insertedList: CompetitionSponsor[] = [];
       for (const s of sponsors) {
-        const row = (
-          await tx.unsafe<CompetitionSponsor>(
-            `INSERT INTO competition_sponsors (
-               competition_id, name, tier, logo_url, website_url, sort_order
-             ) VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id, competition_id, name, tier, logo_url, website_url, sort_order`,
-            [competitionId, s.name.trim(), s.tier, s.logo_url ?? null, s.website_url ?? null, s.sort_order],
-          )
-        )[0]!;
-        insertedList.push(row);
+        insertedList.push(
+          (
+            await tx.unsafe<CompetitionSponsor>(
+              `INSERT INTO competition_sponsors (competition_id,name,tier,logo_url,website_url,sort_order)
+               VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,competition_id,name,tier,logo_url,website_url,sort_order`,
+              [competitionId, s.name.trim(), s.tier, s.logo_url ?? null, s.website_url ?? null, s.sort_order],
+            )
+          )[0]!,
+        );
       }
       return insertedList;
     });
@@ -496,12 +496,9 @@ export class EntitlementRuntime {
 
   private async assertOrganisationMember(tx: PostgresJsSql, organisationId: string, actor: Phase3Actor): Promise<void> {
     const rows = await tx.unsafe(
-      `SELECT 1 FROM organisation_memberships
-       WHERE organisation_id=$1 AND account_id=$2 AND status='active'`,
+      `SELECT 1 FROM organisation_memberships WHERE organisation_id=$1 AND account_id=$2 AND status='active'`,
       [organisationId, actor.accountId],
     );
-    if (!rows[0]) {
-      throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to organisation");
-    }
+    if (!rows[0]) throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to organisation");
   }
 }

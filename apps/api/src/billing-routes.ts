@@ -25,30 +25,19 @@ const ReadResponses = { 401: ErrorResponse, 403: ErrorResponse, 404: ErrorRespon
 
 export async function registerBillingRoutes(
   app: FastifyInstance,
-  options: {
-    runtime: EntitlementRuntime;
-    identityRequests: IdentityRequestContext;
-  },
+  options: { runtime: EntitlementRuntime; identityRequests: IdentityRequestContext },
 ) {
   const readActor = async (request: FastifyRequest): Promise<Phase3Actor> => {
     const session = await options.identityRequests.authenticate(request);
-    return {
-      accountId: session.account.id,
-    };
+    return { accountId: session.account.id };
   };
-
   const mutationActor = async (request: FastifyRequest): Promise<Phase3Actor> => {
     const session = await options.identityRequests.authenticate(request);
     const csrfHeader = request.headers["x-csrf-token"];
-    if (!csrfHeader || csrfHeader !== session.csrfToken) {
-      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
-    }
-    return {
-      accountId: session.account.id,
-    };
+    if (!csrfHeader || csrfHeader !== session.csrfToken) throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
+    return { accountId: session.account.id };
   };
 
-  // Webhook endpoint (unauthenticated, validated via signature)
   app.post(
     "/api/v1/billing/webhook",
     {
@@ -59,21 +48,28 @@ export async function registerBillingRoutes(
           data: Type.Object({
             object: Type.Object(
               {
-                id: Type.Optional(Type.String()),
-                customer: Type.Optional(Type.String()),
-                subscription: Type.Optional(Type.String()),
-                client_reference_id: Type.Optional(Type.String()),
-                amount_total: Type.Optional(Type.Integer()),
-                currency: Type.Optional(Type.String()),
+                id: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+                customer: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+                subscription: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+                client_reference_id: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+                amount_total: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+                currency: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+                status: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+                current_period_start: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+                current_period_end: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
                 metadata: Type.Optional(
-                  Type.Object(
-                    {
-                      organisation_id: Type.Optional(Type.String()),
-                      tier: Type.Optional(Type.String()),
-                      top_up_units: Type.Optional(Type.String()),
-                    },
-                    { additionalProperties: true },
-                  ),
+                  Type.Union([
+                    Type.Object(
+                      {
+                        organisation_id: Type.Optional(Type.String()),
+                        tier: Type.Optional(Type.String()),
+                        purchase_type: Type.Optional(Type.String()),
+                        top_up_units: Type.Optional(Type.String()),
+                      },
+                      { additionalProperties: true },
+                    ),
+                    Type.Null(),
+                  ]),
                 ),
               },
               { additionalProperties: true },
@@ -91,87 +87,56 @@ export async function registerBillingRoutes(
     },
   );
 
-  // Current billing summary for organisation
   app.get<{ Params: { organisationId: string } }>(
     "/api/v1/organisations/:organisationId/billing/current",
-    {
-      schema: {
-        params: Type.Object({ organisationId: Id }),
-        response: { 200: Json, ...ReadResponses },
-        tags: ["billing"],
-      },
-    },
-    async (request) => {
-      const actor = await readActor(request);
-      return options.runtime.getBillingSummaryForActor(actor, request.params.organisationId);
-    },
+    { schema: { params: Type.Object({ organisationId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["billing"] } },
+    async (request) => options.runtime.getBillingSummaryForActor(await readActor(request), request.params.organisationId),
   );
 
-  // Billing history & invoices for organisation
   app.get<{ Params: { organisationId: string } }>(
     "/api/v1/organisations/:organisationId/billing/history",
-    {
-      schema: {
-        params: Type.Object({ organisationId: Id }),
-        response: { 200: Json, ...ReadResponses },
-        tags: ["billing"],
-      },
-    },
-    async (request) => {
-      const actor = await readActor(request);
-      return options.runtime.getBillingHistory(actor, request.params.organisationId);
-    },
+    { schema: { params: Type.Object({ organisationId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["billing"] } },
+    async (request) => options.runtime.getBillingHistory(await readActor(request), request.params.organisationId),
   );
 
-  // Initiate Stripe Checkout session
-  app.post<{
-    Params: { organisationId: string };
-    Body: { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string };
-  }>(
+  type CheckoutBody =
+    | { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string }
+    | { purchaseType: "ai_top_up"; topUpUnits: number; successUrl: string; cancelUrl: string };
+  app.post<{ Params: { organisationId: string }; Body: CheckoutBody }>(
     "/api/v1/organisations/:organisationId/billing/checkout",
     {
       schema: {
         params: Type.Object({ organisationId: Id }),
-        body: Type.Object({
-          tier: Type.Union([Type.Literal("event_pass"), Type.Literal("organiser_pro")]),
-          topUpUnits: Type.Optional(Type.Integer({ minimum: 1 })),
-          successUrl: Type.String({ minLength: 1 }),
-          cancelUrl: Type.String({ minLength: 1 }),
-        }),
+        body: Type.Union([
+          Type.Object({
+            tier: Type.Union([Type.Literal("event_pass"), Type.Literal("organiser_pro")]),
+            topUpUnits: Type.Optional(Type.Integer({ minimum: 1 })),
+            successUrl: Type.String({ minLength: 1 }),
+            cancelUrl: Type.String({ minLength: 1 }),
+          }),
+          Type.Object({
+            purchaseType: Type.Literal("ai_top_up"),
+            topUpUnits: Type.Integer({ minimum: 1 }),
+            successUrl: Type.String({ minLength: 1 }),
+            cancelUrl: Type.String({ minLength: 1 }),
+          }),
+        ]),
         response: { 200: Json, ...MutationResponses },
         tags: ["billing"],
       },
     },
-    async (request) => {
-      const actor = await mutationActor(request);
-      return options.runtime.createCheckoutSession(actor, request.params.organisationId, request.body);
-    },
+    async (request) => options.runtime.createCheckoutSession(await mutationActor(request), request.params.organisationId, request.body),
   );
 
-  // Competition custom branding
   app.get<{ Params: { competitionId: string } }>(
     "/api/v1/competitions/:competitionId/branding",
-    {
-      schema: {
-        params: Type.Object({ competitionId: Id }),
-        response: { 200: Json, ...ReadResponses },
-        tags: ["branding"],
-      },
-    },
-    async (request) => {
-      return options.runtime.getBranding(request.params.competitionId);
-    },
+    { schema: { params: Type.Object({ competitionId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["branding"] } },
+    async (request) => options.runtime.getBranding(request.params.competitionId),
   );
 
   app.put<{
     Params: { organisationId: string; competitionId: string };
-    Body: {
-      primary_color?: string;
-      secondary_color?: string;
-      logo_url?: string | null;
-      banner_url?: string | null;
-      hide_platform_badge?: boolean;
-    };
+    Body: { primary_color?: string; secondary_color?: string; logo_url?: string | null; banner_url?: string | null; hide_platform_badge?: boolean };
   }>(
     "/api/v1/organisations/:organisationId/competitions/:competitionId/branding",
     {
@@ -188,76 +153,36 @@ export async function registerBillingRoutes(
         tags: ["branding"],
       },
     },
-    async (request) => {
-      const actor = await mutationActor(request);
-      return options.runtime.setBranding(
-        actor,
-        request.params.organisationId,
-        request.params.competitionId,
-        request.body,
-      );
-    },
+    async (request) => options.runtime.setBranding(await mutationActor(request), request.params.organisationId, request.params.competitionId, request.body),
   );
 
-  // Tournament sponsors
   app.get<{ Params: { competitionId: string } }>(
     "/api/v1/competitions/:competitionId/sponsors",
-    {
-      schema: {
-        params: Type.Object({ competitionId: Id }),
-        response: { 200: Json, ...ReadResponses },
-        tags: ["sponsors"],
-      },
-    },
-    async (request) => {
-      return options.runtime.getSponsors(request.params.competitionId);
-    },
+    { schema: { params: Type.Object({ competitionId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["sponsors"] } },
+    async (request) => options.runtime.getSponsors(request.params.competitionId),
   );
 
   app.put<{
     Params: { organisationId: string; competitionId: string };
-    Body: {
-      sponsors: Array<{
-        name: string;
-        tier: "headline" | "tier1" | "tier2" | "community";
-        logo_url?: string;
-        website_url?: string;
-        sort_order: number;
-      }>;
-    };
+    Body: { sponsors: Array<{ name: string; tier: "headline" | "tier1" | "tier2" | "community"; logo_url?: string; website_url?: string; sort_order: number }> };
   }>(
     "/api/v1/organisations/:organisationId/competitions/:competitionId/sponsors",
     {
       schema: {
         params: Type.Object({ organisationId: Id, competitionId: Id }),
         body: Type.Object({
-          sponsors: Type.Array(
-            Type.Object({
-              name: Type.String({ minLength: 1, maxLength: 100 }),
-              tier: Type.Union([
-                Type.Literal("headline"),
-                Type.Literal("tier1"),
-                Type.Literal("tier2"),
-                Type.Literal("community"),
-              ]),
-              logo_url: Type.Optional(Type.String({ format: "uri" })),
-              website_url: Type.Optional(Type.String({ format: "uri" })),
-              sort_order: Type.Integer({ minimum: 0 }),
-            }),
-          ),
+          sponsors: Type.Array(Type.Object({
+            name: Type.String({ minLength: 1, maxLength: 100 }),
+            tier: Type.Union([Type.Literal("headline"), Type.Literal("tier1"), Type.Literal("tier2"), Type.Literal("community")]),
+            logo_url: Type.Optional(Type.String({ format: "uri" })),
+            website_url: Type.Optional(Type.String({ format: "uri" })),
+            sort_order: Type.Integer({ minimum: 0 }),
+          })),
         }),
         response: { 200: Json, ...MutationResponses },
         tags: ["sponsors"],
       },
     },
-    async (request) => {
-      const actor = await mutationActor(request);
-      return options.runtime.setSponsors(
-        actor,
-        request.params.organisationId,
-        request.params.competitionId,
-        request.body.sponsors,
-      );
-    },
+    async (request) => options.runtime.setSponsors(await mutationActor(request), request.params.organisationId, request.params.competitionId, request.body.sponsors),
   );
 }
