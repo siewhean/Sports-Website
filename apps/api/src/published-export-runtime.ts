@@ -108,7 +108,16 @@ export class PublishedExportRuntime extends ExportRuntime {
       [competitionId, context.scheduleRevisionId, context.formatRevisionId, context.resultsPublishedAt],
     );
 
-    const headers = ["Division", "Stage", "Match", "Home Team", "Away Team", "Status", "Court/Pitch", "Scheduled Start"];
+    const headers = [
+      "Division",
+      "Stage",
+      "Match",
+      "Home Team",
+      "Away Team",
+      "Status",
+      "Court/Pitch",
+      "Scheduled Start",
+    ];
     const body = rows.map((row) =>
       [
         row.division_name,
@@ -195,9 +204,33 @@ export class PublishedExportRuntime extends ExportRuntime {
       [competitionId, context.scheduleRevisionId, context.formatRevisionId, context.resultsPublishedAt],
     );
 
-    const headers = ["Division", "Rank", "Team", "Played", "Won", "Drawn", "Lost", "Goals For", "Goals Against", "Goal Difference", "Points"];
+    const headers = [
+      "Division",
+      "Rank",
+      "Team",
+      "Played",
+      "Won",
+      "Drawn",
+      "Lost",
+      "Goals For",
+      "Goals Against",
+      "Goal Difference",
+      "Points",
+    ];
     const body = rows.map((row) =>
-      [row.division_name,row.rank,row.team_name,row.played,row.won,row.drawn,row.lost,row.goals_for,row.goals_against,row.goal_diff,row.points]
+      [
+        row.division_name,
+        row.rank,
+        row.team_name,
+        row.played,
+        row.won,
+        row.drawn,
+        row.lost,
+        row.goals_for,
+        row.goals_against,
+        row.goal_diff,
+        row.points,
+      ]
         .map(escapeCsv)
         .join(","),
     );
@@ -235,7 +268,11 @@ export class PublishedExportRuntime extends ExportRuntime {
     const headers = ["Division", "Stage", "Match", "Home Team", "Away Team", "State"];
     return [
       headers.join(","),
-      ...rows.map((row) => [row.division_name,row.stage,row.match_id,row.home_name ?? "TBD",row.away_name ?? "TBD",row.state].map(escapeCsv).join(",")),
+      ...rows.map((row) =>
+        [row.division_name, row.stage, row.match_id, row.home_name ?? "TBD", row.away_name ?? "TBD", row.state]
+          .map(escapeCsv)
+          .join(","),
+      ),
     ].join("\n");
   }
 
@@ -243,14 +280,24 @@ export class PublishedExportRuntime extends ExportRuntime {
     if (actor) return super.generateCompetitionJson(competitionId, actor);
     const context = await this.publicContext(competitionId);
     const comp = (
-      await this.publishedSql.unsafe<{ id: string; name: string; sport_code: string; status: string; created_at: Date }>(
-        `SELECT id,name,sport_code,status,created_at FROM competitions WHERE id=$1`,
-        [competitionId],
-      )
+      await this.publishedSql.unsafe<{
+        id: string;
+        name: string;
+        sport_code: string;
+        status: string;
+        created_at: Date;
+      }>(`SELECT id,name,sport_code,status,created_at FROM competitions WHERE id=$1`, [competitionId])
     )[0]!;
     const matches = await this.publishedSql.unsafe<{
-      id: string; division_id: string; division_name: string; code: string; stage: string;
-      home_entry_id: string | null; away_entry_id: string | null; state: string; scheduled_start: Date;
+      id: string;
+      division_id: string;
+      division_name: string;
+      code: string;
+      stage: string;
+      home_entry_id: string | null;
+      away_entry_id: string | null;
+      state: string;
+      scheduled_start: Date;
     }>(
       `SELECT m.id,m.division_id,d.name division_name,m.code,m.stage,
               sm.home_entry_id,sm.away_entry_id,COALESCE(result.state,'ready') state,sm.starts_at scheduled_start
@@ -267,19 +314,26 @@ export class PublishedExportRuntime extends ExportRuntime {
        ORDER BY d.created_at,d.name,sm.starts_at,m.code`,
       [competitionId, context.scheduleRevisionId, context.formatRevisionId, context.resultsPublishedAt],
     );
-    const entryIds = [...new Set(matches.flatMap((match) => [match.home_entry_id,match.away_entry_id]).filter((id): id is string => Boolean(id)))];
+    const entryIds = [
+      ...new Set(
+        matches
+          .flatMap((match) => [match.home_entry_id, match.away_entry_id])
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
     const entries = entryIds.length
       ? await this.publishedSql.unsafe<{ id: string; division_id: string; name: string; seed: number | null }>(
           `SELECT id,division_id,name,seed FROM division_entries WHERE id=ANY($1::uuid[]) ORDER BY seed NULLS LAST,name`,
           [entryIds],
         )
       : [];
-    const branding = (
-      await this.publishedSql.unsafe<Record<string, unknown>>(
-        `SELECT primary_color,secondary_color,logo_url,banner_url,hide_platform_badge FROM competition_branding WHERE competition_id=$1`,
-        [competitionId],
-      )
-    )[0] ?? null;
+    const branding =
+      (
+        await this.publishedSql.unsafe<Record<string, unknown>>(
+          `SELECT primary_color,secondary_color,logo_url,banner_url,hide_platform_badge FROM competition_branding WHERE competition_id=$1`,
+          [competitionId],
+        )
+      )[0] ?? null;
     const sponsors = await this.publishedSql.unsafe<Record<string, unknown>>(
       `SELECT name,tier,logo_url,website_url,sort_order FROM competition_sponsors WHERE competition_id=$1 ORDER BY sort_order`,
       [competitionId],
@@ -288,17 +342,32 @@ export class PublishedExportRuntime extends ExportRuntime {
     return {
       schema_version: "1.0",
       exported_at: new Date().toISOString(),
-      competition: { id: comp.id, name: comp.name, sport_code: comp.sport_code, status: comp.status, created_at: comp.created_at.toISOString() },
+      competition: {
+        id: comp.id,
+        name: comp.name,
+        sport_code: comp.sport_code,
+        status: comp.status,
+        created_at: comp.created_at.toISOString(),
+      },
       branding,
       sponsors,
       divisions: divisionIds.map((divisionId) => ({
         id: divisionId,
         name: matches.find((match) => match.division_id === divisionId)!.division_name,
-        entries: entries.filter((entry) => entry.division_id === divisionId).map((entry) => ({ id: entry.id, name: entry.name, seed: entry.seed })),
-        matches: matches.filter((match) => match.division_id === divisionId).map((match) => ({
-          id: match.id, code: match.code, stage: match.stage, home_entry_id: match.home_entry_id,
-          away_entry_id: match.away_entry_id, state: match.state, scheduled_start: match.scheduled_start.toISOString(),
-        })),
+        entries: entries
+          .filter((entry) => entry.division_id === divisionId)
+          .map((entry) => ({ id: entry.id, name: entry.name, seed: entry.seed })),
+        matches: matches
+          .filter((match) => match.division_id === divisionId)
+          .map((match) => ({
+            id: match.id,
+            code: match.code,
+            stage: match.stage,
+            home_entry_id: match.home_entry_id,
+            away_entry_id: match.away_entry_id,
+            state: match.state,
+            scheduled_start: match.scheduled_start.toISOString(),
+          })),
       })),
     };
   }

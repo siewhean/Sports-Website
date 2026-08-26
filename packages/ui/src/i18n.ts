@@ -520,6 +520,7 @@ export const messages = {
     emptySubtitle: "You are all caught up!",
     loading: "Loading notifications\u2026",
     unreadCount: "{count} unread",
+    overflowCount: "99+",
     categories: {
       all: "All",
       match_reminder: "Match Reminders",

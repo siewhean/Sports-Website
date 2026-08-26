@@ -1,4 +1,32 @@
-export type NotificationCategory = "schedule_update" | "result_conflict" | "match_reminder" | "billing_receipt";
+export const notificationMachine = {
+  all: "all",
+  matchReminder: "match_reminder",
+  scheduleUpdate: "schedule_update",
+  resultConflict: "result_conflict",
+  billingReceipt: "billing_receipt",
+} as const;
+
+export type NotificationCategory =
+  | typeof notificationMachine.scheduleUpdate
+  | typeof notificationMachine.resultConflict
+  | typeof notificationMachine.matchReminder
+  | typeof notificationMachine.billingReceipt;
+
+export const preferenceTypes = [
+  notificationMachine.matchReminder,
+  notificationMachine.scheduleUpdate,
+  notificationMachine.resultConflict,
+  notificationMachine.billingReceipt,
+] as const;
+
+export type PreferenceType = (typeof preferenceTypes)[number];
+export type Preferences = Record<PreferenceType, boolean>;
+export const emptyPreferences: Preferences = {
+  [notificationMachine.matchReminder]: false,
+  [notificationMachine.scheduleUpdate]: false,
+  [notificationMachine.resultConflict]: false,
+  [notificationMachine.billingReceipt]: false,
+};
 
 export interface NotificationApiRecord {
   id: string;
@@ -18,10 +46,10 @@ export interface InAppNotification {
 }
 
 const categories = new Set<NotificationCategory>([
-  "schedule_update",
-  "result_conflict",
-  "match_reminder",
-  "billing_receipt",
+  notificationMachine.scheduleUpdate,
+  notificationMachine.resultConflict,
+  notificationMachine.matchReminder,
+  notificationMachine.billingReceipt,
 ]);
 
 export function isNotificationApiRecord(value: unknown): value is NotificationApiRecord {

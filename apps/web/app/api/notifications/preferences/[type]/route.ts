@@ -1,12 +1,13 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { gateCC4Http } from "@/lib/gate-c-c4-http";
 import { forwardPhase3Mutation, jsonBody, readPhase3Json } from "@/lib/phase3-settings-command.server";
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ type: string }> }) {
   const { type } = await params;
   const result = await readPhase3Json(request, `/api/v1/notifications/preferences/${encodeURIComponent(type)}`);
   if (!result.ok) return NextResponse.json({}, { status: result.status });
-  return NextResponse.json(result.payload, { headers: { "cache-control": "no-store" } });
+  return NextResponse.json(result.payload, { headers: { [gateCC4Http.cacheControlHeader]: gateCC4Http.cacheNoStore } });
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ type: string }> }) {
@@ -21,7 +22,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   }
   const { type } = await params;
   return forwardPhase3Mutation(request, {
-    method: "PUT",
+    method: gateCC4Http.methodPut,
     path: `/api/v1/notifications/preferences/${encodeURIComponent(type)}`,
     body,
     validate: () => true,

@@ -8,7 +8,7 @@ describe("PublishedExportRuntime", () => {
     const resultsPublishedAt = new Date("2026-08-25T12:00:00.000Z");
     const mockSql = {
       unsafe: (async (sql: string, params?: readonly unknown[]) => {
-        queries.push({ sql, params });
+        queries.push(params !== undefined ? { sql, params } : { sql });
         if (sql.includes("FROM competitions c")) {
           return [
             {

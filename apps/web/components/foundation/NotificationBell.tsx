@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Bell } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { messages } from "@matchday/ui";
+import { gateCC4Http } from "@/lib/gate-c-c4-http";
 
 export function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -11,7 +12,7 @@ export function NotificationBell() {
   useEffect(() => {
     let cancelled = false;
     const refresh = () => {
-      void fetch("/api/notifications", { cache: "no-store" })
+      void fetch("/api/notifications", { cache: gateCC4Http.cacheNoStore })
         .then((response) => (response.ok ? response.json() : null))
         .then((page: { unreadCount?: unknown } | null) => {
           if (!cancelled) {
@@ -43,7 +44,7 @@ export function NotificationBell() {
       <Bell size={20} aria-hidden="true" />
       {unreadCount > 0 ? (
         <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-indigo-600 px-1 text-center text-[11px] font-semibold leading-5 text-white">
-          {unreadCount > 99 ? "99+" : unreadCount}
+          {unreadCount > 99 ? messages.notifications.overflowCount : unreadCount}
         </span>
       ) : null}
     </Link>
