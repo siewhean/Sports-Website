@@ -111,6 +111,15 @@ const rawConfigSchema = z.object({
     .transform((value) => value === "true"),
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrlSchema,
   OTEL_METRIC_EXPORT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(10_000),
+  SMTP_HOST: z.string().min(1).default("127.0.0.1"),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(1025),
+  SMTP_SECURE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  SMTP_FROM: z.string().min(1).default("Matchday <no-reply@matchday.test>"),
+  SMTP_AUTH_USER: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(512).optional()),
+  SMTP_AUTH_PASS: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(4_096).optional()),
 });
 
 export type AppEnvironment = z.infer<typeof environmentSchema>;
@@ -165,6 +174,16 @@ export type AppConfig = {
     enabled: boolean;
     endpoint?: string;
     metricExportIntervalMs: number;
+  };
+  smtp: {
+    host: string;
+    port: number;
+    secure: boolean;
+    from: string;
+    auth?: {
+      username: string;
+      password: string;
+    };
   };
 };
 
@@ -546,6 +565,20 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     };
   }
 
+  if ((parsed.SMTP_AUTH_USER && !parsed.SMTP_AUTH_PASS) || (!parsed.SMTP_AUTH_USER && parsed.SMTP_AUTH_PASS)) {
+    throw new Error("SMTP authentication requires both SMTP_AUTH_USER and SMTP_AUTH_PASS when configured");
+  }
+
+  const smtp: AppConfig["smtp"] = {
+    host: parsed.SMTP_HOST,
+    port: parsed.SMTP_PORT,
+    secure: parsed.SMTP_SECURE,
+    from: parsed.SMTP_FROM,
+    ...(parsed.SMTP_AUTH_USER && parsed.SMTP_AUTH_PASS
+      ? { auth: { username: parsed.SMTP_AUTH_USER, password: parsed.SMTP_AUTH_PASS } }
+      : {}),
+  };
+
   return {
     environment: parsed.APP_ENV,
     api: {
@@ -587,6 +620,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       metricExportIntervalMs: parsed.OTEL_METRIC_EXPORT_INTERVAL_MS,
       ...(telemetryEndpoint ? { endpoint: telemetryEndpoint } : {}),
     },
+    smtp,
   };
 }
 
@@ -650,6 +684,13 @@ export function safeConfigSummary(config: AppConfig) {
       enabled: config.telemetry.enabled,
       endpoint: config.telemetry.endpoint,
       metricExportIntervalMs: config.telemetry.metricExportIntervalMs,
+    },
+    smtp: {
+      host: config.smtp.host,
+      port: config.smtp.port,
+      secure: config.smtp.secure,
+      from: config.smtp.from,
+      authConfigured: Boolean(config.smtp.auth),
     },
   };
 }

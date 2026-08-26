@@ -486,4 +486,46 @@ describe("configuration", () => {
     expect(config.edgeCache?.purgeEndpoint).toBe("https://edge-bridge.matchday.example/purge");
     expect(JSON.stringify(safeConfigSummary(config))).not.toContain(edgeCacheConfig.EDGE_CACHE_PURGE_BEARER_TOKEN);
   });
+
+  it("parses and validates SMTP configuration", () => {
+    const config = parseConfig({
+      SMTP_HOST: "smtp.mailprovider.test",
+      SMTP_PORT: "587",
+      SMTP_SECURE: "true",
+      SMTP_FROM: "Matchday Notifications <notify@matchday.test>",
+      SMTP_AUTH_USER: "mailuser",
+      SMTP_AUTH_PASS: "super-secret-mail-password",
+    });
+    expect(config.smtp).toEqual({
+      host: "smtp.mailprovider.test",
+      port: 587,
+      secure: true,
+      from: "Matchday Notifications <notify@matchday.test>",
+      auth: {
+        username: "mailuser",
+        password: "super-secret-mail-password",
+      },
+    });
+    const summary = safeConfigSummary(config);
+    expect(summary.smtp).toEqual({
+      host: "smtp.mailprovider.test",
+      port: 587,
+      secure: true,
+      from: "Matchday Notifications <notify@matchday.test>",
+      authConfigured: true,
+    });
+    expect(JSON.stringify(summary)).not.toContain("super-secret-mail-password");
+
+    // Rejects mismatched auth user/pass
+    expect(() =>
+      parseConfig({
+        SMTP_AUTH_USER: "user-only",
+      }),
+    ).toThrow("SMTP authentication requires both");
+    expect(() =>
+      parseConfig({
+        SMTP_AUTH_PASS: "pass-only",
+      }),
+    ).toThrow("SMTP authentication requires both");
+  });
 });

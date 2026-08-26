@@ -244,9 +244,15 @@ importers:
       '@matchday/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@matchday/notifications':
+        specifier: workspace:*
+        version: link:../../packages/notifications
       '@matchday/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      postgres:
+        specifier: 3.4.9
+        version: 3.4.9
 
   packages/ai:
     dependencies:
