@@ -1,307 +1,213 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatDateTime, interpolate, messages } from "@matchday/ui";
 import { gateCC4Http } from "@/lib/gate-c-c4-http";
+import { notificationPageItems, type InAppNotification, type NotificationCategory } from "@/lib/notifications";
 
-export interface InAppNotification {
-  id: string;
-  category: keyof typeof messages.notifications.categories;
-  heading: string;
-  content: string;
-  timestamp: string;
-  read: boolean;
-}
-
-function toInAppNotification(record: {
-  id: string;
-  type: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-  readAt: string | null;
-}): InAppNotification {
-  const validCategories = Object.keys(
-    messages.notifications.categories,
-  ) as (keyof typeof messages.notifications.categories)[];
-  const category: keyof typeof messages.notifications.categories = validCategories.includes(
-    record.type as keyof typeof messages.notifications.categories,
-  )
-    ? (record.type as keyof typeof messages.notifications.categories)
-    : messages.notifications.sampleAlerts[0].category;
-  return {
-    id: record.id,
-    category,
-    heading: typeof record.payload.heading === "string" ? record.payload.heading : record.type,
-    content: typeof record.payload.content === "string" ? record.payload.content : "",
-    timestamp: record.createdAt,
-    read: record.readAt !== null,
-  };
-}
-
-const INITIAL_NOTIFICATIONS: InAppNotification[] = messages.notifications.sampleAlerts.map((alert, index) => ({
-  id: alert.id,
-  category: alert.category,
-  heading: alert.heading,
-  content: alert.content,
-  timestamp: alert.timestamp,
-  read: index >= 2,
-}));
+const preferenceTypes = ["match_reminder", "schedule_update", "result_conflict", "billing_receipt"] as const;
+type PreferenceType = (typeof preferenceTypes)[number];
+type Preferences = Record<PreferenceType, boolean>;
+const emptyPreferences: Preferences = {
+  match_reminder: false,
+  schedule_update: false,
+  result_conflict: false,
+  billing_receipt: false,
+};
 
 export default function NotificationsPage() {
-  const [activeTab, setActiveTab] = useState<number>(0);
-  const [categoryIndex, setCategoryIndex] = useState<number>(0);
-  const [notifications, setNotifications] = useState<InAppNotification[]>(INITIAL_NOTIFICATIONS);
+  const [activeTab, setActiveTab] = useState(0);
+  const [categoryIndex, setCategoryIndex] = useState(0);
+  const [notifications, setNotifications] = useState<InAppNotification[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [preferences, setPreferences] = useState<Preferences>(emptyPreferences);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [preferences, setPreferences] = useState({
-    matchReminders: true,
-    scheduleUpdates: true,
-    resultConflicts: true,
-    billingReceipts: true,
-  });
 
   useEffect(() => {
-    fetch("/api/notifications")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((page: { items?: unknown[] } | null) => {
-        if (page?.items && Array.isArray(page.items)) {
-          setNotifications(
-            page.items
-              .filter(
-                (
-                  item,
-                ): item is {
-                  id: string;
-                  type: string;
-                  payload: Record<string, unknown>;
-                  createdAt: string;
-                  readAt: string | null;
-                } => Boolean(item && typeof item === "object"),
-              )
-              .map(toInAppNotification),
-          );
-        }
+    let cancelled = false;
+    void fetch("/api/notifications", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((page: unknown) => {
+        if (!cancelled) setNotifications(notificationPageItems(page));
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setNotifications([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(
+      preferenceTypes.map(async (type) => {
+        const response = await fetch(`/api/notifications/preferences/${encodeURIComponent(type)}`, { cache: "no-store" });
+        const payload = response.ok ? ((await response.json()) as { inAppEnabled?: unknown }) : null;
+        return [type, payload?.inAppEnabled === true] as const;
+      }),
+    )
+      .then((entries) => {
+        if (!cancelled) setPreferences(Object.fromEntries(entries) as Preferences);
+      })
+      .catch(() => {
+        if (!cancelled) setPreferences(emptyPreferences);
+      })
+      .finally(() => {
+        if (!cancelled) setPreferencesLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const categories = [
-    messages.notifications.categories.all,
-    messages.notifications.categories.schedule_update,
-    messages.notifications.categories.result_conflict,
-    messages.notifications.categories.match_reminder,
-    messages.notifications.categories.billing_receipt,
-  ];
-
-  const filteredNotifications = notifications.filter((n) => {
-    if (categoryIndex === 0) return true;
-    const categoryName = categories[categoryIndex];
-    return messages.notifications.categories[n.category] === categoryName;
-  });
+  const unreadCount = notifications.filter((notification) => !notification.read).length;
+  const categories: ReadonlyArray<{ key: NotificationCategory | "all"; label: string }> = useMemo(
+    () => [
+      { key: "all", label: messages.notifications.categories.all },
+      { key: "schedule_update", label: messages.notifications.categories.schedule_update },
+      { key: "result_conflict", label: messages.notifications.categories.result_conflict },
+      { key: "match_reminder", label: messages.notifications.categories.match_reminder },
+      { key: "billing_receipt", label: messages.notifications.categories.billing_receipt },
+    ],
+    [],
+  );
+  const selectedCategory = categories[categoryIndex]?.key ?? "all";
+  const filteredNotifications = notifications.filter(
+    (notification) => selectedCategory === "all" || notification.category === selectedCategory,
+  );
 
   const markAsRead = (id: string) => {
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-    fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: gateCC4Http.methodPost }).catch(() => {});
+    setNotifications((previous) => previous.map((notification) => (notification.id === id ? { ...notification, read: true } : notification)));
+    void fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: gateCC4Http.methodPost }).catch(() => {});
   };
 
   const markAllAsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    fetch("/api/notifications/read-all", { method: gateCC4Http.methodPost }).catch(() => {});
+    setNotifications((previous) => previous.map((notification) => ({ ...notification, read: true })));
+    void fetch("/api/notifications/read-all", { method: gateCC4Http.methodPost }).catch(() => {});
   };
 
-  const handleSubmitPreferences = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+  const savePreferences = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaved(false);
+    const responses = await Promise.all(
+      preferenceTypes.map((type) =>
+        fetch(`/api/notifications/preferences/${encodeURIComponent(type)}`, {
+          method: "PUT",
+          headers: { "content-type": gateCC4Http.jsonContentType },
+          body: JSON.stringify({ in_app_enabled: preferences[type], email_enabled: preferences[type] }),
+        }),
+      ),
+    ).catch(() => []);
+    if (responses.length === preferenceTypes.length && responses.every((response) => response.ok)) setSaved(true);
   };
+
+  const preferenceRows: ReadonlyArray<{ type: PreferenceType; label: string }> = [
+    { type: "match_reminder", label: messages.notifications.matchReminders },
+    { type: "schedule_update", label: messages.notifications.scheduleUpdates },
+    { type: "result_conflict", label: messages.notifications.resultConflicts },
+    { type: "billing_receipt", label: messages.notifications.billingReceipts },
+  ];
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-3xl mx-auto">
+    <div className="min-h-screen bg-neutral-950 px-4 py-12 text-neutral-100 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-3xl">
         <header className="mb-8">
           <div className="flex items-center justify-between">
             <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">{messages.notifications.title}</h1>
-            {unreadCount > 0 && (
-              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+            {unreadCount > 0 ? (
+              <span className="inline-flex items-center rounded-full border border-indigo-500/30 bg-indigo-500/20 px-3 py-1 text-xs font-semibold text-indigo-400">
                 {interpolate(messages.notifications.unreadCount, { count: unreadCount })}
               </span>
-            )}
+            ) : null}
           </div>
           <p className="mt-2 text-base text-neutral-400">{messages.notifications.subtitle}</p>
         </header>
 
-        {/* Tab Navigation */}
-        <div className="flex border-b border-neutral-800 mb-6 gap-2">
-          <button
-            type="button"
-            onClick={() => setActiveTab(0)}
-            className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 0
-                ? "border-indigo-500 text-white font-semibold"
-                : "border-transparent text-neutral-400 hover:text-neutral-200"
-            }`}
-          >
+        <div className="mb-6 flex gap-2 border-b border-neutral-800">
+          <button type="button" onClick={() => setActiveTab(0)} className={`border-b-2 px-4 pb-3 text-sm font-medium ${activeTab === 0 ? "border-indigo-500 text-white" : "border-transparent text-neutral-400"}`}>
             {messages.notifications.tabs.inbox}
-            {unreadCount > 0 && (
-              <span className="ml-2 px-1.5 py-0.5 rounded-full text-xs bg-indigo-600 text-white font-mono">
-                {unreadCount}
-              </span>
-            )}
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab(1)}
-            className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 1
-                ? "border-indigo-500 text-white font-semibold"
-                : "border-transparent text-neutral-400 hover:text-neutral-200"
-            }`}
-          >
+          <button type="button" onClick={() => setActiveTab(1)} className={`border-b-2 px-4 pb-3 text-sm font-medium ${activeTab === 1 ? "border-indigo-500 text-white" : "border-transparent text-neutral-400"}`}>
             {messages.notifications.tabs.preferences}
           </button>
         </div>
 
         {activeTab === 0 ? (
           <div className="space-y-6">
-            {/* Category Filter Pills & Mark All Read */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap gap-2">
-                {categories.map((label, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setCategoryIndex(idx)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      categoryIndex === idx
-                        ? "bg-indigo-600 text-white"
-                        : "bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800"
-                    }`}
-                  >
-                    {label}
+                {categories.map((category, index) => (
+                  <button key={category.key} type="button" onClick={() => setCategoryIndex(index)} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${categoryIndex === index ? "bg-indigo-600 text-white" : "border border-neutral-800 bg-neutral-900 text-neutral-400"}`}>
+                    {category.label}
                   </button>
                 ))}
               </div>
-
-              {unreadCount > 0 && (
-                <button
-                  type="button"
-                  onClick={markAllAsRead}
-                  className="text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
-                >
+              {unreadCount > 0 ? (
+                <button type="button" onClick={markAllAsRead} className="text-xs font-medium text-indigo-400 hover:text-indigo-300">
                   {messages.notifications.markAllRead}
                 </button>
-              )}
+              ) : null}
             </div>
 
-            {/* Notification List */}
             <div className="space-y-3">
-              {filteredNotifications.length === 0 ? (
-                <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-12 text-center">
+              {loading ? (
+                <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-8 text-center text-sm text-neutral-400">{messages.notifications.loading}</div>
+              ) : filteredNotifications.length === 0 ? (
+                <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-12 text-center">
                   <p className="text-base font-medium text-neutral-300">{messages.notifications.empty}</p>
-                  <p className="text-sm text-neutral-500 mt-1">{messages.notifications.emptySubtitle}</p>
+                  <p className="mt-1 text-sm text-neutral-500">{messages.notifications.emptySubtitle}</p>
                 </div>
               ) : (
-                filteredNotifications.map((notif) => (
-                  <div
-                    key={notif.id}
-                    className={`p-4 rounded-xl border transition-all ${
-                      notif.read
-                        ? "bg-neutral-900/50 border-neutral-800/60 opacity-80"
-                        : "bg-neutral-900 border-neutral-700/80 shadow-sm"
-                    }`}
-                  >
+                filteredNotifications.map((notification) => (
+                  <article key={notification.id} className={`rounded-xl border p-4 ${notification.read ? "border-neutral-800/60 bg-neutral-900/50" : "border-neutral-700/80 bg-neutral-900"}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                            {messages.notifications.categories[notif.category]}
-                          </span>
-                          {!notif.read && <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />}
-                          <span className="text-xs text-neutral-500 font-mono">{formatDateTime(notif.timestamp)}</span>
+                        <div className="mb-1 flex items-center gap-2">
+                          <span className="rounded border border-indigo-500/30 bg-indigo-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-300">{messages.notifications.categories[notification.category]}</span>
+                          {!notification.read ? <span className="h-2 w-2 rounded-full bg-indigo-500" /> : null}
+                          <span className="text-xs font-mono text-neutral-500">{formatDateTime(notification.timestamp)}</span>
                         </div>
-                        <h3 className="text-sm font-semibold text-white">{notif.heading}</h3>
-                        <p className="text-xs text-neutral-400 mt-1 leading-relaxed">{notif.content}</p>
+                        <h2 className="text-sm font-semibold text-white">{notification.heading}</h2>
+                        <p className="mt-1 text-xs leading-relaxed text-neutral-400">{notification.content}</p>
                       </div>
-
-                      {!notif.read && (
-                        <button
-                          type="button"
-                          onClick={() => markAsRead(notif.id)}
-                          className="text-xs text-neutral-400 hover:text-neutral-200 border border-neutral-800 hover:bg-neutral-800 px-2.5 py-1 rounded-md transition-colors whitespace-nowrap"
-                        >
+                      {!notification.read ? (
+                        <button type="button" onClick={() => markAsRead(notification.id)} className="whitespace-nowrap rounded-md border border-neutral-800 px-2.5 py-1 text-xs text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200">
                           {messages.notifications.markRead}
                         </button>
-                      )}
+                      ) : null}
                     </div>
-                  </div>
+                  </article>
                 ))
               )}
             </div>
           </div>
         ) : (
           <div>
-            {saved && (
-              <div className="mb-6 p-4 rounded-lg bg-emerald-950/60 border border-emerald-800 text-emerald-200 text-sm">
-                {messages.notifications.preferencesSaved}
-              </div>
+            {saved ? <div className="mb-6 rounded-lg border border-emerald-800 bg-emerald-950/60 p-4 text-sm text-emerald-200">{messages.notifications.preferencesSaved}</div> : null}
+            {!preferencesLoaded ? (
+              <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-8 text-center text-sm text-neutral-400">{messages.notifications.loading}</div>
+            ) : (
+              <form onSubmit={savePreferences} className="space-y-6 rounded-xl border border-neutral-800 bg-neutral-900 p-6 shadow-sm">
+                <div className="space-y-4">
+                  {preferenceRows.map((row) => (
+                    <label key={row.type} className="flex cursor-pointer items-start gap-3">
+                      <input type="checkbox" checked={preferences[row.type]} onChange={(event) => setPreferences((previous) => ({ ...previous, [row.type]: event.target.checked }))} className="mt-1 h-4 w-4 rounded border-neutral-700 bg-neutral-800 text-indigo-600 focus:ring-indigo-500" />
+                      <span className="text-sm font-medium text-neutral-200">{row.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="border-t border-neutral-800 pt-4">
+                  <button type="submit" className="inline-flex rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500">
+                    {messages.notifications.savePreferences}
+                  </button>
+                </div>
+              </form>
             )}
-
-            <form
-              onSubmit={handleSubmitPreferences}
-              className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-6 shadow-sm"
-            >
-              <div className="space-y-4">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={preferences.matchReminders}
-                    onChange={(e) => setPreferences((prev) => ({ ...prev, matchReminders: e.target.checked }))}
-                    className="mt-1 h-4 w-4 rounded border-neutral-700 text-indigo-600 focus:ring-indigo-500 bg-neutral-800"
-                  />
-                  <span className="text-sm font-medium text-neutral-200">{messages.notifications.matchReminders}</span>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={preferences.scheduleUpdates}
-                    onChange={(e) => setPreferences((prev) => ({ ...prev, scheduleUpdates: e.target.checked }))}
-                    className="mt-1 h-4 w-4 rounded border-neutral-700 text-indigo-600 focus:ring-indigo-500 bg-neutral-800"
-                  />
-                  <span className="text-sm font-medium text-neutral-200">{messages.notifications.scheduleUpdates}</span>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={preferences.resultConflicts}
-                    onChange={(e) => setPreferences((prev) => ({ ...prev, resultConflicts: e.target.checked }))}
-                    className="mt-1 h-4 w-4 rounded border-neutral-700 text-indigo-600 focus:ring-indigo-500 bg-neutral-800"
-                  />
-                  <span className="text-sm font-medium text-neutral-200">{messages.notifications.resultConflicts}</span>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={preferences.billingReceipts}
-                    onChange={(e) => setPreferences((prev) => ({ ...prev, billingReceipts: e.target.checked }))}
-                    className="mt-1 h-4 w-4 rounded border-neutral-700 text-indigo-600 focus:ring-indigo-500 bg-neutral-800"
-                  />
-                  <span className="text-sm font-medium text-neutral-200">{messages.notifications.billingReceipts}</span>
-                </label>
-              </div>
-
-              <div className="pt-4 border-t border-neutral-800">
-                <button
-                  type="submit"
-                  className="inline-flex justify-center py-2.5 px-5 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
-                >
-                  {messages.notifications.savePreferences}
-                </button>
-              </div>
-            </form>
           </div>
         )}
       </div>
