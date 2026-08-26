@@ -12,6 +12,8 @@ import robots from "../../app/robots.js";
 import sitemap from "../../app/sitemap.js";
 
 describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => {
+  const publicOrigin = "https://preview.matchday.test";
+
   it("renders terms of service page", () => {
     const html = renderToString(React.createElement(TermsPage));
     expect(html).toContain(messages.legal.termsTitle);
@@ -50,19 +52,27 @@ describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => 
   });
 
   it("generates correct robots.txt rules", () => {
+    process.env.MATCHDAY_PUBLIC_ORIGIN = publicOrigin;
     const robotRules = robots();
     expect(robotRules.rules).toBeDefined();
-    expect(robotRules.sitemap).toBe("https://matchday.example/sitemap.xml");
+    expect(robotRules.sitemap).toBe(`${publicOrigin}/sitemap.xml`);
   });
 
   it("generates valid sitemap entries with priority and change frequencies", () => {
+    process.env.MATCHDAY_PUBLIC_ORIGIN = publicOrigin;
     const siteMapEntries = sitemap();
     expect(siteMapEntries.length).toBeGreaterThanOrEqual(7);
     const urls = siteMapEntries.map((e) => e.url);
-    expect(urls).toContain("https://matchday.example");
-    expect(urls).toContain("https://matchday.example/competitions");
-    expect(urls).toContain("https://matchday.example/pricing");
-    expect(urls).toContain("https://matchday.example/support");
-    expect(urls).toContain("https://matchday.example/notifications");
+    expect(urls).toContain(publicOrigin);
+    expect(urls).toContain(`${publicOrigin}/competitions`);
+    expect(urls).toContain(`${publicOrigin}/pricing`);
+    expect(urls).toContain(`${publicOrigin}/support`);
+    expect(urls).toContain(`${publicOrigin}/notifications`);
+  });
+
+  it("does not emit placeholder SEO URLs without a configured public origin", () => {
+    delete process.env.MATCHDAY_PUBLIC_ORIGIN;
+    expect(sitemap()).toEqual([]);
+    expect(robots().sitemap).toBeUndefined();
   });
 });

@@ -1,7 +1,9 @@
 import type { MetadataRoute } from "next";
+import { configuredPublicOrigin } from "@/lib/phase3-origin";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = "https://matchday.example";
+  const baseUrl = configuredPublicOrigin(process.env.MATCHDAY_PUBLIC_ORIGIN);
+  if (!baseUrl) return [];
   const now = new Date();
 
   return [

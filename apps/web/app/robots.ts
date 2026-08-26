@@ -1,6 +1,8 @@
 import type { MetadataRoute } from "next";
+import { configuredPublicOrigin } from "@/lib/phase3-origin";
 
 export default function robots(): MetadataRoute.Robots {
+  const origin = configuredPublicOrigin(process.env.MATCHDAY_PUBLIC_ORIGIN);
   return {
     rules: [
       {
@@ -9,6 +11,6 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ["/api/", "/organiser/", "/score/", "/internal/"],
       },
     ],
-    sitemap: "https://matchday.example/sitemap.xml",
+    ...(origin ? { sitemap: `${origin}/sitemap.xml` } : {}),
   };
 }
