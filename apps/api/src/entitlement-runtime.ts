@@ -105,24 +105,37 @@ export class EntitlementRuntime {
   async getBillingSummary(organisationId: string): Promise<BillingSummary> {
     const sub = await this.getSubscriptionTier(this.sql, organisationId);
     const tierLimits = TIER_FEATURE_LIMITS[sub.tier];
-    const grants = await this.sql.unsafe<{ feature: string; quantity: number }>(
-      `SELECT feature, COALESCE(sum(quantity), 0)::integer quantity
-       FROM entitlement_grants
-       WHERE organisation_id=$1 AND (expires_at IS NULL OR expires_at > now())
-       GROUP BY feature`,
-      [organisationId],
-    );
-    const topUpUnits = grants.find((g) => g.feature === "ai_actions")?.quantity ?? 0;
-    const effectiveAiLimit = tierLimits.monthly_ai_actions + topUpUnits;
-    const usedUnits =
+    const credits =
+      (
+        await this.sql.unsafe<{ granted: number; consumed: number }>(
+          `SELECT
+             COALESCE(sum(g.quantity),0)::integer granted,
+             COALESCE(sum((
+               SELECT COALESCE(sum(c.quantity),0)
+               FROM ai_credit_consumptions c
+               WHERE c.grant_id=g.id
+             )),0)::integer consumed
+           FROM entitlement_grants g
+           WHERE g.organisation_id=$1 AND g.feature='ai_actions'
+             AND g.source IN ('top_up','admin_grant')
+             AND (g.expires_at IS NULL OR g.expires_at>now())`,
+          [organisationId],
+        )
+      )[0] ?? { granted: 0, consumed: 0 };
+    const baseUsed =
       (
         await this.sql.unsafe<{ used: number }>(
-          `SELECT count(*)::integer used FROM ai_action_ledger
-           WHERE organisation_id=$1 AND outcome='success' AND charged_units > 0
-             AND created_at >= date_trunc('month', now())`,
+          `SELECT count(*)::integer used
+           FROM ai_action_ledger l
+           WHERE l.organisation_id=$1 AND l.outcome='success' AND l.charged_units>0
+             AND l.created_at>=date_trunc('month',now())
+             AND NOT EXISTS (SELECT 1 FROM ai_credit_consumptions c WHERE c.ledger_id=l.id)`,
           [organisationId],
         )
       )[0]?.used ?? 0;
+    const baseLimit = tierLimits.monthly_ai_actions;
+    const topUpRemaining = Math.max(0, credits.granted - credits.consumed);
+    const baseRemaining = Math.max(0, baseLimit - baseUsed);
     return {
       organisation_id: organisationId,
       tier: sub.tier,
@@ -135,9 +148,9 @@ export class EntitlementRuntime {
       sponsor_placements_allowed: tierLimits.features.includes("sponsor_placements"),
       max_entries_per_division: tierLimits.max_entries_per_division,
       ai_quota: {
-        limit: effectiveAiLimit,
-        used: usedUnits,
-        remaining: Math.max(0, effectiveAiLimit - usedUnits),
+        limit: baseLimit + credits.granted,
+        used: Math.min(baseLimit, baseUsed) + credits.consumed,
+        remaining: baseRemaining + topUpRemaining,
         period_start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString(),
         period_end: sub.currentPeriodEnd ? sub.currentPeriodEnd.toISOString() : null,
       },
@@ -229,8 +242,6 @@ export class EntitlementRuntime {
           await tx.unsafe<{ id: string }>(`SELECT id FROM billing_webhook_receipts WHERE provider_event_id=$1`, [eventId])
         )[0];
         if (existing) return false;
-        // Test doubles predating RETURNING support may return no row. In a real
-        // database an absent claim plus absent existing receipt cannot occur.
       }
 
       if (eventType === "checkout.session.completed" && orgId) {
