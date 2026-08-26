@@ -32,13 +32,15 @@ export function isExpectedFrameworkWarning(text: string) {
   );
 }
 
+const standardCancellationFailures = ["cancelled", "Load request cancelled", "net::ERR_ABORTED", "NS_BINDING_ABORTED"];
+
 export function isExpectedTeardownFontCancellation(input: {
   failure: string;
   pageUrl: string;
   requestUrl: string;
   resourceType: string;
 }): boolean {
-  if (input.failure !== "cancelled" || input.resourceType !== "font") return false;
+  if (!standardCancellationFailures.includes(input.failure) || input.resourceType !== "font") return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -53,7 +55,7 @@ export function isExpectedTeardownServiceWorkerCancellation(input: {
   pageUrl: string;
   requestUrl: string;
 }): boolean {
-  if (input.failure !== "cancelled") return false;
+  if (!standardCancellationFailures.includes(input.failure)) return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);
@@ -69,10 +71,7 @@ export function isExpectedTeardownStaticAssetCancellation(input: {
   requestUrl: string;
   resourceType: string;
 }): boolean {
-  if (
-    !["cancelled", "net::ERR_ABORTED"].includes(input.failure) ||
-    !["script", "stylesheet"].includes(input.resourceType)
-  )
+  if (!standardCancellationFailures.includes(input.failure) || !["script", "stylesheet"].includes(input.resourceType))
     return false;
   try {
     const pageUrl = new URL(input.pageUrl);
