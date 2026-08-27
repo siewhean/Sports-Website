@@ -2512,9 +2512,10 @@ export class Phase4Runtime {
         idempotent_replay: begin.replay,
       };
     }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
     return {
-      status: failureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
-      ...(failureCode ? { reason: failureCode } : {}),
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
       preserved_text: normalizedText,
       charged_units: 0 as const,
       usage: await usage(),
@@ -2726,9 +2727,10 @@ export class Phase4Runtime {
         idempotent_replay: false,
       };
     }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
     return {
-      status: failureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
-      ...(failureCode ? { reason: failureCode } : {}),
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
       preserved_text: normalizedText,
       charged_units: 0 as const,
       usage: await usage(),
@@ -2926,9 +2928,10 @@ export class Phase4Runtime {
         idempotent_replay: false,
       };
     }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
     return {
-      status: failureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
-      ...(failureCode ? { reason: failureCode } : {}),
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
       preserved_text: normalizedText,
       charged_units: 0 as const,
       usage: await usage(),
@@ -3142,9 +3145,10 @@ export class Phase4Runtime {
         idempotent_replay: false,
       };
     }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
     return {
-      status: failureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
-      ...(failureCode ? { reason: failureCode } : {}),
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
       preserved_text: normalizedText,
       charged_units: 0 as const,
       usage: await usage(),

@@ -118,7 +118,7 @@ BEGIN
       base_limit:=COALESCE(base_limit,allowance.action_limit);
     END IF;
 
-    IF allowance.organisation_id IS NOT NULL AND allowance.used_units<base_limit THEN
+    IF allowance.organisation_id IS NOT NULL AND allowance.used_units<base_limit AND allowance.used_units<allowance.action_limit THEN
       UPDATE ai_usage_allowances SET used_units=used_units+1,revision=revision+1,updated_at=now()
       WHERE organisation_id=allowance.organisation_id AND actor_account_id=allowance.actor_account_id
         AND action=allowance.action AND period_start=allowance.period_start;
@@ -141,7 +141,7 @@ BEGIN
         INSERT INTO ai_credit_consumptions(organisation_id,grant_id,ledger_id)
         VALUES(ledger.organisation_id,shared_grant.id,ledger.id);
         charge:=1;
-        IF allowance.organisation_id IS NOT NULL THEN
+        IF allowance.organisation_id IS NOT NULL AND allowance.used_units<allowance.action_limit THEN
           UPDATE ai_usage_allowances SET used_units=used_units+1,revision=revision+1,updated_at=now()
           WHERE organisation_id=allowance.organisation_id AND actor_account_id=allowance.actor_account_id
             AND action=allowance.action AND period_start=allowance.period_start;

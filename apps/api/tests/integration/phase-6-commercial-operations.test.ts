@@ -187,13 +187,11 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
   });
 
   it("BIL-002: enforces entry limits on effective subscription tier across free, upgrade, and lapsed states", async () => {
-    const freeOrgRes = (
-      await client<
-        { id: string }[]
-      >`INSERT INTO organisations (name, slug) VALUES ('Free Org', ${`slug-${randomUUID()}`}) RETURNING id`
-    )[0]!;
-    const freeOrgId = freeOrgRes.id;
-    await client`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${freeOrgId}, ${ownerAccountId}, 'owner', 'active')`;
+    const freeOrgId = randomUUID();
+    await client.begin(async (tx) => {
+      await tx`INSERT INTO organisations (id, name, slug) VALUES (${freeOrgId}, 'Free Org', ${`slug-${randomUUID()}`})`;
+      await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${freeOrgId}, ${ownerAccountId}, 'owner', 'active')`;
+    });
 
     const compRes = (
       await client<
@@ -207,7 +205,7 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     const divRes = (
       await client<
         { id: string }[]
-      >`INSERT INTO divisions (competition_id, name, team_limit) VALUES (${compId}, 'Main Division', 32) RETURNING id`
+      >`INSERT INTO divisions (competition_id, name, team_limit) VALUES (${compId}, 'Main Division', 48) RETURNING id`
     )[0]!;
     const divId = divRes.id;
 

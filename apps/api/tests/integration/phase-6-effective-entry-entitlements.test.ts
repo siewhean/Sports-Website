@@ -38,12 +38,11 @@ describeInfrastructure("Phase 6 effective entry entitlements", () => {
         VALUES (${`owner-${randomUUID()}@example.com`}, 'Owner', now()) RETURNING id
       `
     )[0]!.id;
-    const organisationId = (
-      await client<{ id: string }[]>`
-        INSERT INTO organisations (name, slug)
-        VALUES ('Paid Org', ${`paid-org-${randomUUID()}`}) RETURNING id
-      `
-    )[0]!.id;
+    const organisationId = randomUUID();
+    await client.begin(async (tx) => {
+      await tx`INSERT INTO organisations (id, name, slug) VALUES (${organisationId}, 'Paid Org', ${`paid-org-${randomUUID()}`})`;
+      await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${organisationId}, ${accountId}, 'owner', 'active')`;
+    });
     const competitionId = (
       await client<{ id: string }[]>`
         INSERT INTO competitions

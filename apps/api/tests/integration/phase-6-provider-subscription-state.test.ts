@@ -37,12 +37,13 @@ describeInfrastructure("Phase 6 provider subscription lifecycle", () => {
   });
 
   it("preserves past_due status and provider period boundaries from subscription.updated", async () => {
-    const organisationId = (
-      await client<{ id: string }[]>`
-        INSERT INTO organisations (name, slug)
-        VALUES ('Lifecycle Org', ${`lifecycle-${randomUUID()}`}) RETURNING id
-      `
-    )[0]!.id;
+    const accountId = randomUUID();
+    const organisationId = randomUUID();
+    await client`INSERT INTO accounts (id, primary_email, display_name) VALUES (${accountId}, 'lifecycle@example.test', 'Lifecycle Owner')`;
+    await client.begin(async (tx) => {
+      await tx`INSERT INTO organisations (id, name, slug) VALUES (${organisationId}, 'Lifecycle Org', ${`lifecycle-${randomUUID()}`})`;
+      await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${organisationId}, ${accountId}, 'owner', 'active')`;
+    });
 
     await client`
       INSERT INTO organisation_subscriptions
