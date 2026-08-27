@@ -93,22 +93,25 @@ export class EntitlementRuntime {
     )[0];
     const paidState = Boolean(
       record &&
-        ["active", "trialing"].includes(record.status) &&
-        (!record.current_period_end || record.current_period_end.getTime() > Date.now()),
+      ["active", "trialing"].includes(record.status) &&
+      (!record.current_period_end || record.current_period_end.getTime() > Date.now()),
     );
     if (!record || !paidState) {
       return { tier: "free", status: record?.status ?? "active", currentPeriodEnd: record?.current_period_end ?? null };
     }
-    return { tier: record.tier as SubscriptionTier, status: record.status, currentPeriodEnd: record.current_period_end };
+    return {
+      tier: record.tier as SubscriptionTier,
+      status: record.status,
+      currentPeriodEnd: record.current_period_end,
+    };
   }
 
   async getBillingSummary(organisationId: string): Promise<BillingSummary> {
     const sub = await this.getSubscriptionTier(this.sql, organisationId);
     const tierLimits = TIER_FEATURE_LIMITS[sub.tier];
-    const credits =
-      (
-        await this.sql.unsafe<{ granted: number; consumed: number }>(
-          `SELECT
+    const credits = (
+      await this.sql.unsafe<{ granted: number; consumed: number }>(
+        `SELECT
              COALESCE(sum(g.quantity),0)::integer granted,
              COALESCE(sum((
                SELECT COALESCE(sum(c.quantity),0)
@@ -119,9 +122,9 @@ export class EntitlementRuntime {
            WHERE g.organisation_id=$1 AND g.feature='ai_actions'
              AND g.source IN ('top_up','admin_grant')
              AND (g.expires_at IS NULL OR g.expires_at>now())`,
-          [organisationId],
-        )
-      )[0] ?? { granted: 0, consumed: 0 };
+        [organisationId],
+      )
+    )[0] ?? { granted: 0, consumed: 0 };
     const baseUsed =
       (
         await this.sql.unsafe<{ used: number }>(
@@ -169,9 +172,10 @@ export class EntitlementRuntime {
       event_type: string;
       created_at: Date;
       payload: { data?: { object?: { amount_total?: number; currency?: string } } };
-    }>(`SELECT id, event_type, created_at, payload FROM billing_webhook_receipts WHERE organisation_id=$1 ORDER BY created_at DESC`, [
-      organisationId,
-    ]);
+    }>(
+      `SELECT id, event_type, created_at, payload FROM billing_webhook_receipts WHERE organisation_id=$1 ORDER BY created_at DESC`,
+      [organisationId],
+    );
     return receipts.map((r) => ({
       id: r.id,
       event_type: r.event_type,
@@ -239,7 +243,9 @@ export class EntitlementRuntime {
       );
       if (!claim[0]) {
         const existing = (
-          await tx.unsafe<{ id: string }>(`SELECT id FROM billing_webhook_receipts WHERE provider_event_id=$1`, [eventId])
+          await tx.unsafe<{ id: string }>(`SELECT id FROM billing_webhook_receipts WHERE provider_event_id=$1`, [
+            eventId,
+          ])
         )[0];
         if (existing) return false;
       }

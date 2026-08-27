@@ -234,6 +234,9 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0054_phase6_ai_provenance_and_accounting.sql",
           "0055_phase6_commercial_billing_entitlements.sql",
           "0056_phase6_double_elimination_completion_guard.sql",
+          "0057_phase6_effective_entry_entitlements.sql",
+          "0058_phase6_provider_subscription_state.sql",
+          "0059_phase6_shared_ai_credits.sql",
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,

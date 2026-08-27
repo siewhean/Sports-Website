@@ -34,7 +34,8 @@ export async function registerBillingRoutes(
   const mutationActor = async (request: FastifyRequest): Promise<Phase3Actor> => {
     const session = await options.identityRequests.authenticate(request);
     const csrfHeader = request.headers["x-csrf-token"];
-    if (!csrfHeader || csrfHeader !== session.csrfToken) throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
+    if (!csrfHeader || csrfHeader !== session.csrfToken)
+      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
     return { accountId: session.account.id };
   };
 
@@ -89,13 +90,26 @@ export async function registerBillingRoutes(
 
   app.get<{ Params: { organisationId: string } }>(
     "/api/v1/organisations/:organisationId/billing/current",
-    { schema: { params: Type.Object({ organisationId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["billing"] } },
-    async (request) => options.runtime.getBillingSummaryForActor(await readActor(request), request.params.organisationId),
+    {
+      schema: {
+        params: Type.Object({ organisationId: Id }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["billing"],
+      },
+    },
+    async (request) =>
+      options.runtime.getBillingSummaryForActor(await readActor(request), request.params.organisationId),
   );
 
   app.get<{ Params: { organisationId: string } }>(
     "/api/v1/organisations/:organisationId/billing/history",
-    { schema: { params: Type.Object({ organisationId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["billing"] } },
+    {
+      schema: {
+        params: Type.Object({ organisationId: Id }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["billing"],
+      },
+    },
     async (request) => options.runtime.getBillingHistory(await readActor(request), request.params.organisationId),
   );
 
@@ -125,18 +139,31 @@ export async function registerBillingRoutes(
         tags: ["billing"],
       },
     },
-    async (request) => options.runtime.createCheckoutSession(await mutationActor(request), request.params.organisationId, request.body),
+    async (request) =>
+      options.runtime.createCheckoutSession(await mutationActor(request), request.params.organisationId, request.body),
   );
 
   app.get<{ Params: { competitionId: string } }>(
     "/api/v1/competitions/:competitionId/branding",
-    { schema: { params: Type.Object({ competitionId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["branding"] } },
+    {
+      schema: {
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["branding"],
+      },
+    },
     async (request) => options.runtime.getBranding(request.params.competitionId),
   );
 
   app.put<{
     Params: { organisationId: string; competitionId: string };
-    Body: { primary_color?: string; secondary_color?: string; logo_url?: string | null; banner_url?: string | null; hide_platform_badge?: boolean };
+    Body: {
+      primary_color?: string;
+      secondary_color?: string;
+      logo_url?: string | null;
+      banner_url?: string | null;
+      hide_platform_badge?: boolean;
+    };
   }>(
     "/api/v1/organisations/:organisationId/competitions/:competitionId/branding",
     {
@@ -153,36 +180,69 @@ export async function registerBillingRoutes(
         tags: ["branding"],
       },
     },
-    async (request) => options.runtime.setBranding(await mutationActor(request), request.params.organisationId, request.params.competitionId, request.body),
+    async (request) =>
+      options.runtime.setBranding(
+        await mutationActor(request),
+        request.params.organisationId,
+        request.params.competitionId,
+        request.body,
+      ),
   );
 
   app.get<{ Params: { competitionId: string } }>(
     "/api/v1/competitions/:competitionId/sponsors",
-    { schema: { params: Type.Object({ competitionId: Id }), response: { 200: Json, ...ReadResponses }, tags: ["sponsors"] } },
+    {
+      schema: {
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["sponsors"],
+      },
+    },
     async (request) => options.runtime.getSponsors(request.params.competitionId),
   );
 
   app.put<{
     Params: { organisationId: string; competitionId: string };
-    Body: { sponsors: Array<{ name: string; tier: "headline" | "tier1" | "tier2" | "community"; logo_url?: string; website_url?: string; sort_order: number }> };
+    Body: {
+      sponsors: Array<{
+        name: string;
+        tier: "headline" | "tier1" | "tier2" | "community";
+        logo_url?: string;
+        website_url?: string;
+        sort_order: number;
+      }>;
+    };
   }>(
     "/api/v1/organisations/:organisationId/competitions/:competitionId/sponsors",
     {
       schema: {
         params: Type.Object({ organisationId: Id, competitionId: Id }),
         body: Type.Object({
-          sponsors: Type.Array(Type.Object({
-            name: Type.String({ minLength: 1, maxLength: 100 }),
-            tier: Type.Union([Type.Literal("headline"), Type.Literal("tier1"), Type.Literal("tier2"), Type.Literal("community")]),
-            logo_url: Type.Optional(Type.String({ format: "uri" })),
-            website_url: Type.Optional(Type.String({ format: "uri" })),
-            sort_order: Type.Integer({ minimum: 0 }),
-          })),
+          sponsors: Type.Array(
+            Type.Object({
+              name: Type.String({ minLength: 1, maxLength: 100 }),
+              tier: Type.Union([
+                Type.Literal("headline"),
+                Type.Literal("tier1"),
+                Type.Literal("tier2"),
+                Type.Literal("community"),
+              ]),
+              logo_url: Type.Optional(Type.String({ format: "uri" })),
+              website_url: Type.Optional(Type.String({ format: "uri" })),
+              sort_order: Type.Integer({ minimum: 0 }),
+            }),
+          ),
         }),
         response: { 200: Json, ...MutationResponses },
         tags: ["sponsors"],
       },
     },
-    async (request) => options.runtime.setSponsors(await mutationActor(request), request.params.organisationId, request.params.competitionId, request.body.sponsors),
+    async (request) =>
+      options.runtime.setSponsors(
+        await mutationActor(request),
+        request.params.organisationId,
+        request.params.competitionId,
+        request.body.sponsors,
+      ),
   );
 }

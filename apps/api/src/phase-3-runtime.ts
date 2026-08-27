@@ -1733,8 +1733,8 @@ export class Phase3Runtime {
         [divisionId, rows.map((row, index) => ({ row_number: index + 1, name: row.name, seed: row.seed ?? null }))],
       );
       const countRows = await tx.unsafe<{ active_count: number; plan_tier: string }>(
-        `SELECT count(e.id)::int AS active_count,c.plan_tier FROM competitions c JOIN divisions d ON d.competition_id=c.id
-         LEFT JOIN division_entries e ON e.division_id=d.id AND e.status IN ('confirmed','active') WHERE c.id=$1 GROUP BY c.plan_tier`,
+        `SELECT count(e.id)::int AS active_count, matchday_effective_plan_tier(c.id) AS plan_tier FROM competitions c JOIN divisions d ON d.competition_id=c.id
+         LEFT JOIN division_entries e ON e.division_id=d.id AND e.status IN ('confirmed','active') WHERE c.id=$1 GROUP BY c.id`,
         [competitionId],
       );
       if (

@@ -185,4 +185,71 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     expect(aiSummary).toHaveProperty("cache_hit_rate");
     expect(aiSummary).toHaveProperty("total_cost_usd");
   });
+
+  it("BIL-002: enforces entry limits on effective subscription tier across free, upgrade, and lapsed states", async () => {
+    const freeOrgRes = (
+      await client<
+        { id: string }[]
+      >`INSERT INTO organisations (name, slug) VALUES ('Free Org', ${`slug-${randomUUID()}`}) RETURNING id`
+    )[0]!;
+    const freeOrgId = freeOrgRes.id;
+    await client`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${freeOrgId}, ${ownerAccountId}, 'owner', 'active')`;
+
+    const compRes = (
+      await client<
+        { id: string }[]
+      >`INSERT INTO competitions (organisation_id, name, slug, sport_code, status, timezone, starts_on, ends_on, venue, created_by)
+         VALUES (${freeOrgId}, 'Entitlement Cup', ${`comp-${randomUUID()}`}, 'basketball', 'draft', 'Asia/Singapore', '2027-08-01', '2027-08-02', 'Arena', ${ownerAccountId})
+         RETURNING id`
+    )[0]!;
+    const compId = compRes.id;
+
+    const divRes = (
+      await client<
+        { id: string }[]
+      >`INSERT INTO divisions (competition_id, name, team_limit) VALUES (${compId}, 'Main Division', 32) RETURNING id`
+    )[0]!;
+    const divId = divRes.id;
+
+    // 1. Insert 16 entries on free tier -> all 16 succeed
+    for (let i = 1; i <= 16; i++) {
+      await client`INSERT INTO division_entries (division_id, name, seed, status) VALUES (${divId}, ${`Team ${i}`}, ${i}, 'confirmed')`;
+    }
+
+    // 2. 17th entry on free tier -> rejected by DB trigger
+    await expect(
+      client`INSERT INTO division_entries (division_id, name, seed, status) VALUES (${divId}, 'Team 17', 17, 'confirmed')`,
+    ).rejects.toThrow(/free plan permits at most 16 active entries/i);
+
+    // 3. Upgrade organisation to active paid tier
+    await client`INSERT INTO organisation_subscriptions (organisation_id, tier, status, current_period_start, current_period_end)
+                 VALUES (${freeOrgId}, 'event_pass', 'active', now(), now() + interval '30 days')
+                 ON CONFLICT (organisation_id) DO UPDATE SET tier='event_pass', status='active', current_period_end=now() + interval '30 days'`;
+
+    // 4. Now 17th and 18th entries succeed on paid tier
+    await client`INSERT INTO division_entries (division_id, name, seed, status) VALUES (${divId}, 'Team 17', 17, 'confirmed')`;
+    await client`INSERT INTO division_entries (division_id, name, seed, status) VALUES (${divId}, 'Team 18', 18, 'confirmed')`;
+
+    const countAfterPaid = (
+      await client<
+        { count: number }[]
+      >`SELECT count(*)::int as count FROM division_entries WHERE division_id=${divId} AND status='confirmed'`
+    )[0]!.count;
+    expect(countAfterPaid).toBe(18);
+
+    // 5. Subscription lapses / cancels -> existing entries remain intact, but new entries beyond 16 are rejected
+    await client`UPDATE organisation_subscriptions SET tier='free', status='canceled', updated_at=now() WHERE organisation_id=${freeOrgId}`;
+
+    const countAfterLapse = (
+      await client<
+        { count: number }[]
+      >`SELECT count(*)::int as count FROM division_entries WHERE division_id=${divId} AND status='confirmed'`
+    )[0]!.count;
+    expect(countAfterLapse).toBe(18); // Non-destructive: existing 18 entries preserved
+
+    // Attempting to add a 19th entry now that tier is free -> rejected
+    await expect(
+      client`INSERT INTO division_entries (division_id, name, seed, status) VALUES (${divId}, 'Team 19', 19, 'confirmed')`,
+    ).rejects.toThrow(/free plan permits at most 16 active entries/i);
+  });
 });

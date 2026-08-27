@@ -287,6 +287,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     const mockSql = {
       unsafe: (async (query: string, params?: unknown[]) => {
         if (query.includes("billing_webhook_receipts") && query.includes("SELECT")) return [];
+        if (query.includes("SELECT tier FROM organisation_subscriptions")) return [{ tier: "organiser_pro" }];
         if (query.includes("INSERT INTO entitlement_grants")) {
           insertedGrants.push(params ?? []);
           return [];

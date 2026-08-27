@@ -40,7 +40,8 @@ describe("Phase 6 billing source remediation", () => {
 
   it("creates standalone AI top-up checkout without a plan purchase", async () => {
     const sql = {
-      unsafe: (async (query: string) => (query.includes("organisation_memberships") ? [{ ok: 1 }] : [])) as PostgresJsSql["unsafe"],
+      unsafe: (async (query: string) =>
+        query.includes("organisation_memberships") ? [{ ok: 1 }] : []) as PostgresJsSql["unsafe"],
     } as unknown as PostgresJsSql;
     const stripe = {
       createSession: async () => {

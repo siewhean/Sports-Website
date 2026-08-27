@@ -25,15 +25,7 @@ export class ProductionAdminRuntime extends AdminRuntime {
       `INSERT INTO audit_events
          (request_id,actor_account_id,actor_type,organisation_id,action,target_type,target_id,metadata)
        VALUES ($1,$2,'platform_admin',$3,$4,$5,$6,$7::jsonb)`,
-      [
-        `admin:${action}:${randomUUID()}`,
-        actor.accountId,
-        organisationId,
-        action,
-        targetType,
-        targetId,
-        metadata,
-      ],
+      [`admin:${action}:${randomUUID()}`, actor.accountId, organisationId, action, targetType, targetId, metadata],
     );
   }
 

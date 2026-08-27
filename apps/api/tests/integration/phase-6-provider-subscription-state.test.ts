@@ -72,9 +72,7 @@ describeInfrastructure("Phase 6 provider subscription lifecycle", () => {
 
     await runtime.processBillingWebhook(`t=${timestamp},v1=${digest}`, rawPayload, payload, secret);
 
-    const [subscription] = await client<
-      { status: string; current_period_start: Date; current_period_end: Date }[]
-    >`
+    const [subscription] = await client<{ status: string; current_period_start: Date; current_period_end: Date }[]>`
       SELECT status, current_period_start, current_period_end
       FROM organisation_subscriptions
       WHERE organisation_id=${organisationId}

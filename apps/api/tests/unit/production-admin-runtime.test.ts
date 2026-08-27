@@ -91,7 +91,8 @@ describe("ProductionAdminRuntime", () => {
 
     expect(result.version).toBe("2");
     const audit = calls.find(
-      (call) => call.query.includes("INSERT INTO audit_events") && call.params?.includes("admin.sport_defaults.updated"),
+      (call) =>
+        call.query.includes("INSERT INTO audit_events") && call.params?.includes("admin.sport_defaults.updated"),
     );
     expect(audit?.params).toEqual(expect.arrayContaining(["admin-1", "admin.sport_defaults.updated", "basketball"]));
   });
