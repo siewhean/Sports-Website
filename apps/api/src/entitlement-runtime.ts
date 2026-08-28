@@ -278,6 +278,21 @@ export class EntitlementRuntime {
               object.current_period_end ?? null,
             ],
           );
+          const includedUnits = TIER_FEATURE_LIMITS[tier]?.monthly_ai_actions ?? 0;
+          if (includedUnits > 0) {
+            await tx.unsafe(
+              `INSERT INTO ai_usage_allowances (organisation_id, actor_account_id, action, period_start, action_limit)
+               SELECT $1, m.account_id, action_value, date_trunc('month', now())::date, $2
+               FROM organisation_memberships m
+               CROSS JOIN unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
+               WHERE m.organisation_id=$1 AND m.status='active'
+               ON CONFLICT (organisation_id, actor_account_id, action, period_start) DO UPDATE SET
+                 action_limit=GREATEST(ai_usage_allowances.action_limit, EXCLUDED.action_limit),
+                 updated_at=now()`,
+              [orgId, includedUnits],
+            );
+            await tx.unsafe(`SELECT phase6_refresh_ai_allowance_headroom($1)`, [orgId]);
+          }
         }
         if (Number.isSafeInteger(topUpUnits) && topUpUnits > 0) {
           const tier =
@@ -304,6 +319,31 @@ export class EntitlementRuntime {
            WHERE organisation_id=$1`,
           [orgId, status, object.current_period_start ?? null, object.current_period_end ?? null],
         );
+        if (["active", "trialing"].includes(status)) {
+          const subRecord = (
+            await tx.unsafe<{ tier: SubscriptionTier }>(
+              `SELECT tier FROM organisation_subscriptions WHERE organisation_id=$1`,
+              [orgId],
+            )
+          )[0];
+          if (subRecord) {
+            const includedUnits = TIER_FEATURE_LIMITS[subRecord.tier]?.monthly_ai_actions ?? 0;
+            if (includedUnits > 0) {
+              await tx.unsafe(
+                `INSERT INTO ai_usage_allowances (organisation_id, actor_account_id, action, period_start, action_limit)
+                 SELECT $1, m.account_id, action_value, date_trunc('month', now())::date, $2
+                 FROM organisation_memberships m
+                 CROSS JOIN unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
+                 WHERE m.organisation_id=$1 AND m.status='active'
+                 ON CONFLICT (organisation_id, actor_account_id, action, period_start) DO UPDATE SET
+                   action_limit=GREATEST(ai_usage_allowances.action_limit, EXCLUDED.action_limit),
+                   updated_at=now()`,
+                [orgId, includedUnits],
+              );
+              await tx.unsafe(`SELECT phase6_refresh_ai_allowance_headroom($1)`, [orgId]);
+            }
+          }
+        }
       } else if (eventType === "customer.subscription.deleted" && orgId) {
         await tx.unsafe(
           `UPDATE organisation_subscriptions SET tier='free',status='canceled',updated_at=now() WHERE organisation_id=$1`,

@@ -443,4 +443,50 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       /Invalid Stripe webhook signature/,
     );
   });
+
+  it("BIL-020: seeds included AI allowances when activating plan without top-up", async () => {
+    const secret = "whsec_test_bil020";
+    const now = Math.floor(Date.now() / 1000);
+    const seededAllowances: Array<{ orgId: string; units: number }> = [];
+
+    const mockSql = {
+      unsafe: (async (query: string, params?: unknown[]) => {
+        if (query.includes("billing_webhook_receipts") && query.includes("SELECT")) return [];
+        if (query.includes("INSERT INTO organisation_subscriptions")) return [{ id: "sub_1" }];
+        if (query.includes("INSERT INTO ai_usage_allowances")) {
+          seededAllowances.push({ orgId: (params as string[])[0]!, units: (params as number[])[1]! });
+          return [];
+        }
+        if (query.includes("phase6_refresh_ai_allowance_headroom")) return [];
+        if (query.includes("INSERT INTO billing_webhook_receipts")) return [{ id: "rec_1" }];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    const runtime = new EntitlementRuntime(mockSql);
+
+    const payload = {
+      id: "evt_bil020",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          customer: "cus_123",
+          subscription: "sub_123",
+          metadata: {
+            organisation_id: "org-included-ai",
+            tier: "organiser_pro",
+          },
+        },
+      },
+    };
+
+    const rawPayload = JSON.stringify(payload);
+    const ts = now.toString();
+    const sig = createHmac("sha256", secret).update(`${ts}.${rawPayload}`).digest("hex");
+    const header = `t=${ts},v1=${sig}`;
+
+    const result = await runtime.processBillingWebhook(header, rawPayload, payload, secret);
+    expect(result.processed).toBe(true);
+    expect(seededAllowances).toEqual([{ orgId: "org-included-ai", units: 100 }]);
+  });
 });

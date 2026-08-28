@@ -27,6 +27,7 @@ import type {
   ScheduleOptionView,
   ScheduleQuality,
   ScheduleRevisionView,
+  SubscriptionTier,
 } from "@matchday/contracts";
 import {
   deriveAssistedSetupProgress,
@@ -38,6 +39,7 @@ import {
   validateAssistedSetupStep,
   validateFormatBuilderDocument,
   validateSchedule,
+  TIER_FEATURE_LIMITS,
   type AssistedSetupStepValues,
   type FormatBuilderDocument,
   type FormatGraph,
@@ -2257,8 +2259,40 @@ export class Phase4Runtime {
     return this.formatDraftView(actor, inserted);
   }
 
+  private async ensureAiAllowance(tx: PostgresJsSql, organisationId: string, actorAccountId: string): Promise<void> {
+    const subTier =
+      (
+        await tx.unsafe<{ tier: SubscriptionTier }>(
+          `SELECT tier FROM organisation_subscriptions
+         WHERE organisation_id=$1 AND status IN ('active','trialing')
+           AND (current_period_end IS NULL OR current_period_end>now())`,
+          [organisationId],
+        )
+      )[0]?.tier ?? "free";
+    const includedUnits = TIER_FEATURE_LIMITS[subTier]?.monthly_ai_actions ?? 0;
+    const sharedRemaining =
+      (
+        await tx.unsafe<{ remaining: number }>(`SELECT phase6_shared_ai_credits_remaining($1) remaining`, [
+          organisationId,
+        ])
+      )[0]?.remaining ?? 0;
+    if (includedUnits > 0 || sharedRemaining > 0) {
+      await tx.unsafe(
+        `INSERT INTO ai_usage_allowances(organisation_id, actor_account_id, action, period_start, action_limit)
+         SELECT $1, $2, action_value, date_trunc('month', current_date)::date, $3
+         FROM unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
+         ON CONFLICT (organisation_id, actor_account_id, action, period_start) DO UPDATE SET
+           action_limit=GREATEST(ai_usage_allowances.action_limit, EXCLUDED.action_limit),
+           updated_at=now()`,
+        [organisationId, actorAccountId, includedUnits],
+      );
+      await tx.unsafe(`SELECT phase6_refresh_ai_allowance_headroom($1)`, [organisationId]);
+    }
+  }
+
   async readAiUsage(actor: Phase3Actor, organisationId: string) {
     await this.organisationAccess(this.sql, organisationId, actor);
+    await this.ensureAiAllowance(this.sql, organisationId, actor.accountId);
     const rows = await this.sql.unsafe<{
       action: string;
       period_start: string;
@@ -2327,6 +2361,7 @@ export class Phase4Runtime {
           )
         )[0],
       );
+      await this.ensureAiAllowance(tx, organisationId, actor.accountId);
       const allowance = (
         await tx.unsafe<{ action_limit: number; used_units: number }>(
           `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
@@ -2556,6 +2591,7 @@ export class Phase4Runtime {
       if (access.organisation_id !== organisationId)
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
 
+      await this.ensureAiAllowance(tx, organisationId, actor.accountId);
       const allowance = (
         await tx.unsafe<{ action_limit: number; used_units: number }>(
           `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
@@ -2770,6 +2806,7 @@ export class Phase4Runtime {
       if (access.organisation_id !== organisationId)
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
 
+      await this.ensureAiAllowance(tx, organisationId, actor.accountId);
       const allowance = (
         await tx.unsafe<{ action_limit: number; used_units: number }>(
           `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
@@ -2968,6 +3005,7 @@ export class Phase4Runtime {
       if (access.organisation_id !== organisationId)
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
 
+      await this.ensureAiAllowance(tx, organisationId, actor.accountId);
       const allowance = (
         await tx.unsafe<{ action_limit: number; used_units: number }>(
           `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
