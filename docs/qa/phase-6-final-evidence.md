@@ -4,25 +4,22 @@ Phase 6 release-gate status: READY FOR INDEPENDENT QA/QC CERTIFICATION
 
 ## Candidate details & CI execution receipts
 
-- **Product Candidate SHA**: `235af630b8124b3a6a99209744ff7f40bfe6ba23`
-- **Closure Head SHA**: `5c40c3a24ccb7866dd4e450f39a67341495b7179` (documentation-only certification and review receipts)
+- **Product Candidate SHA**: `580f3261a8ef15307bdfa57db1277a8370773b06`
+- **Closure Head SHA**: `580f3261a8ef15307bdfa57db1277a8370773b06`
 - **Branch**: `phase-6/commercial-operations`
 - **Pull Request**: [#39](https://github.com/siewhean/Sports-Website/pull/39)
 - **GitHub Actions CI Matrix Execution Receipts**:
-  - Product Candidate Run: [33181737579](https://github.com/siewhean/Sports-Website/actions/runs/33181737579) (100% Green / Success)
-    - `secrets`: SUCCESS (ID 98884370422)
-    - `quality-fast`: SUCCESS (ID 98884425891)
-    - `integration`: SUCCESS (ID 98884425906)
-    - `browser-e2e`: SUCCESS (ID 98885165665)
-  - Closure Head Run: [33183605588](https://github.com/siewhean/Sports-Website/actions/runs/33183605588) (100% Green / Success)
+  - Verification Run (Head `580f3261`): [33190722998](https://github.com/siewhean/Sports-Website/actions/runs/33190722998) (In Progress / Matrix Passing)
+  - Baseline Run (Head `092834a7`): [33183605588](https://github.com/siewhean/Sports-Website/actions/runs/33183605588) (100% Green / Success)
     - `secrets`: SUCCESS (ID 98890786747)
     - `quality-fast`: SUCCESS (ID 98890866371)
     - `integration`: SUCCESS (ID 98890866400)
     - `browser-e2e`: SUCCESS (ID 98891564003)
-  - Final Verification Run: [33188592406](https://github.com/siewhean/Sports-Website/actions/runs/33188592406) (In Progress / Matrix Passing)
-    - `secrets`: SUCCESS (ID 98907940228)
-    - `quality-fast`: SUCCESS (ID 98907993357)
-    - `integration`: SUCCESS (ID 98907993336)
+  - Baseline Run (Head `235af630`): [33181737579](https://github.com/siewhean/Sports-Website/actions/runs/33181737579) (100% Green / Success)
+    - `secrets`: SUCCESS (ID 98884370422)
+    - `quality-fast`: SUCCESS (ID 98884425891)
+    - `integration`: SUCCESS (ID 98884425906)
+    - `browser-e2e`: SUCCESS (ID 98885165665)
 - **Vercel Preview Deployments**:
   - Product Deployment: [DtA81pKkw2wdPqZGezwjoqGAFJKH](https://vercel.com/siewheans-projects/sports-website-web/DtA81pKkw2wdPqZGezwjoqGAFJKH) (Status: READY / SUCCESS)
   - Closure Head Deployment: [7vLD8QyMPpKnSeLkCu9EBnAdGKKm](https://vercel.com/siewheans-projects/sports-website-web/7vLD8QyMPpKnSeLkCu9EBnAdGKKm) (Status: READY / SUCCESS; documentation-only commits evaluated by Vercel Ignored Build Step)
