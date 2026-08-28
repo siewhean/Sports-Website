@@ -40,11 +40,16 @@ DECLARE shared_remaining integer;
 BEGIN
   shared_remaining:=phase6_shared_ai_credits_remaining(target_organisation);
   UPDATE ai_usage_allowances a
-  SET action_limit=GREATEST(a.used_units,b.base_limit+shared_remaining),updated_at=now()
-  FROM ai_allowance_base_limits b
-  WHERE a.organisation_id=target_organisation
-    AND b.organisation_id=a.organisation_id AND b.actor_account_id=a.actor_account_id
-    AND b.action=a.action AND b.period_start=a.period_start;
+  SET action_limit=GREATEST(
+    COALESCE((
+      SELECT b.base_limit FROM ai_allowance_base_limits b
+      WHERE b.organisation_id=a.organisation_id AND b.actor_account_id=a.actor_account_id
+        AND b.action=a.action AND b.period_start=a.period_start
+    ), a.action_limit),
+    a.used_units
+  )+shared_remaining,
+  updated_at=now()
+  WHERE a.organisation_id=target_organisation;
 END;
 $$ LANGUAGE plpgsql;
 

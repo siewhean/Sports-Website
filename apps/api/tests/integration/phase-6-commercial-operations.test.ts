@@ -8,6 +8,10 @@ import postgres, { type Sql } from "postgres";
 import { EntitlementRuntime } from "../../src/entitlement-runtime.js";
 import { ExportRuntime } from "../../src/export-runtime.js";
 import { AdminRuntime } from "../../src/admin-runtime.js";
+import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
+import { Phase3Runtime } from "../../src/phase-3-runtime.js";
+import { Phase4Runtime } from "../../src/phase-4-runtime.js";
+import { DeterministicPhase4AiStub } from "../../src/phase-4-ai-provider.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -21,6 +25,7 @@ let client!: Sql;
 let entitlementRuntime!: EntitlementRuntime;
 let exportRuntime!: ExportRuntime;
 let adminRuntime!: AdminRuntime;
+let phase4Runtime!: Phase4Runtime;
 
 let ownerAccountId = "";
 let platformAdminAccountId = "";
@@ -39,6 +44,19 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     entitlementRuntime = new EntitlementRuntime(client as unknown as PostgresJsSql);
     exportRuntime = new ExportRuntime(client as unknown as PostgresJsSql);
     adminRuntime = new AdminRuntime(client as unknown as PostgresJsSql);
+    const phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
+    phase4Runtime = new Phase4Runtime(
+      client as unknown as PostgresJsSql,
+      phase3Runtime,
+      { enqueueSchedule: async () => ({ id: "ignored", name: "schedule.optimize", duplicate: false }) },
+      {
+        mode: "stub",
+        provider: new DeterministicPhase4AiStub(),
+        timeoutMs: 2_000,
+        maximumAttempts: 1,
+        cacheTtlSeconds: 3_600,
+      },
+    );
 
     const ownerRes = (
       await client<
@@ -249,5 +267,132 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     await expect(
       client`INSERT INTO division_entries (division_id, name, seed, status) VALUES (${divId}, 'Team 19', 19, 'confirmed')`,
     ).rejects.toThrow(/free plan permits at most 16 active entries/i);
+  });
+
+  it("BIL-005 & AI-017: consumes all purchased AI credits sequentially and rejects request N+1", async () => {
+    const topUpOrgId = randomUUID();
+    const memberAccountId = (
+      await client<
+        { id: string }[]
+      >`INSERT INTO accounts (primary_email, display_name, email_verified_at) VALUES (${`member-${randomUUID()}@example.com`}, 'AI Member', now()) RETURNING id`
+    )[0]!.id;
+
+    await client.begin(async (tx) => {
+      await tx`INSERT INTO organisations (id, name, slug) VALUES (${topUpOrgId}, 'AI TopUp Org', ${`slug-${randomUUID()}`})`;
+      await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${topUpOrgId}, ${memberAccountId}, 'owner', 'active')`;
+    });
+
+    // Grant 10 top-up units to this organisation
+    await client`INSERT INTO entitlement_grants (organisation_id, tier, feature, source, quantity, idempotency_key)
+                 VALUES (${topUpOrgId}, 'event_pass', 'ai_actions', 'top_up', 10, ${`grant-${randomUUID()}`})`;
+
+    // Verify allowance is seeded with 10 top-up credits
+    const initialCredits = await client<
+      { remaining: number }[]
+    >`SELECT phase6_shared_ai_credits_remaining(${topUpOrgId}) as remaining`;
+    expect(initialCredits[0]!.remaining).toBe(10);
+
+    // Consume all 10 purchased credits sequentially
+    for (let i = 1; i <= 10; i++) {
+      const res = await phase4Runtime.textToBrief(
+        { accountId: memberAccountId },
+        topUpOrgId,
+        {
+          idempotency_key: `ai-topup-${i}-${randomUUID()}`,
+          text: `Tournament draft prompt number ${i} with 8 teams and 2 courts`,
+        },
+        randomUUID(),
+      );
+      expect(res.status).toBe("success");
+      expect(res.charged_units).toBe(1);
+    }
+
+    // Verify all 10 consumptions are recorded and remaining is 0
+    const consumptions = await client<
+      { count: number }[]
+    >`SELECT count(*)::int as count FROM ai_credit_consumptions WHERE organisation_id=${topUpOrgId}`;
+    expect(consumptions[0]!.count).toBe(10);
+
+    const postCredits = await client<
+      { remaining: number }[]
+    >`SELECT phase6_shared_ai_credits_remaining(${topUpOrgId}) as remaining`;
+    expect(postCredits[0]!.remaining).toBe(0);
+
+    // The 11th request MUST fail with quota_exhausted
+    const overflowRes = await phase4Runtime.textToBrief(
+      { accountId: memberAccountId },
+      topUpOrgId,
+      {
+        idempotency_key: `ai-topup-11-${randomUUID()}`,
+        text: "Tournament draft prompt number 11 overflow attempt",
+      },
+      randomUUID(),
+    );
+    expect(overflowRes.status).toBe("quota_exhausted");
+    expect(overflowRes.charged_units).toBe(0);
+  });
+
+  it("AI-017: handles concurrent organisation-wide shared credit consumption across multiple actors without overspending", async () => {
+    const concurrentOrgId = randomUUID();
+    const actor1 = (
+      await client<
+        { id: string }[]
+      >`INSERT INTO accounts (primary_email, display_name, email_verified_at) VALUES (${`actor1-${randomUUID()}@example.com`}, 'Actor One', now()) RETURNING id`
+    )[0]!.id;
+    const actor2 = (
+      await client<
+        { id: string }[]
+      >`INSERT INTO accounts (primary_email, display_name, email_verified_at) VALUES (${`actor2-${randomUUID()}@example.com`}, 'Actor Two', now()) RETURNING id`
+    )[0]!.id;
+    const actor3 = (
+      await client<
+        { id: string }[]
+      >`INSERT INTO accounts (primary_email, display_name, email_verified_at) VALUES (${`actor3-${randomUUID()}@example.com`}, 'Actor Three', now()) RETURNING id`
+    )[0]!.id;
+
+    await client.begin(async (tx) => {
+      await tx`INSERT INTO organisations (id, name, slug) VALUES (${concurrentOrgId}, 'Concurrent AI Org', ${`slug-${randomUUID()}`})`;
+      await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${concurrentOrgId}, ${actor1}, 'owner', 'active')`;
+      await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${concurrentOrgId}, ${actor2}, 'organiser', 'active')`;
+      await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${concurrentOrgId}, ${actor3}, 'organiser', 'active')`;
+    });
+
+    // Grant exactly 5 top-up units to this organisation
+    await client`INSERT INTO entitlement_grants (organisation_id, tier, feature, source, quantity, idempotency_key)
+                 VALUES (${concurrentOrgId}, 'event_pass', 'ai_actions', 'top_up', 5, ${`grant-${randomUUID()}`})`;
+
+    // Launch 12 concurrent requests across the 3 actors
+    const actors = [actor1, actor2, actor3];
+    const concurrentRequests = Array.from({ length: 12 }, (_, i) => {
+      const actorId = actors[i % actors.length]!;
+      return phase4Runtime.textToBrief(
+        { accountId: actorId },
+        concurrentOrgId,
+        {
+          idempotency_key: `ai-concurrent-${i}-${randomUUID()}`,
+          text: `Concurrent tournament prompt ${i} with 8 teams`,
+        },
+        randomUUID(),
+      );
+    });
+
+    const results = await Promise.all(concurrentRequests);
+    const successCount = results.filter((r) => r.status === "success").length;
+    const quotaExhaustedCount = results.filter((r) => r.status === "quota_exhausted").length;
+
+    // Exactly 5 succeeded, exactly 7 failed with quota_exhausted
+    expect(successCount).toBe(5);
+    expect(quotaExhaustedCount).toBe(7);
+
+    // Exactly 5 consumptions recorded
+    const consumptions = await client<
+      { count: number }[]
+    >`SELECT count(*)::int as count FROM ai_credit_consumptions WHERE organisation_id=${concurrentOrgId}`;
+    expect(consumptions[0]!.count).toBe(5);
+
+    const remainingCredits = await client<
+      { remaining: number }[]
+    >`SELECT phase6_shared_ai_credits_remaining(${concurrentOrgId}) as remaining`;
+    expect(remainingCredits[0]!.remaining).toBe(0);
   });
 });
