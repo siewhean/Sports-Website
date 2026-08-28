@@ -2,7 +2,19 @@
 
 Phase 6 release-gate status: READY FOR INDEPENDENT QA/QC CERTIFICATION
 
-## Requirements and verification summary
+## Candidate details & CI execution receipts
+
+- **Candidate SHA**: `235af630b8124b3a6a99209744ff7f40bfe6ba23`
+- **Branch**: `phase-6/commercial-operations`
+- **Pull Request**: [#39](https://github.com/siewhean/Sports-Website/pull/39)
+- **GitHub Actions Run**: [33181737579](https://github.com/siewhean/Sports-Website/actions/runs/33181737579)
+  - `secrets`: SUCCESS (ID 98884370422)
+  - `quality-fast`: SUCCESS (ID 98884425891)
+  - `integration`: SUCCESS (ID 98884425906)
+  - `browser-e2e`: SUCCESS (ID 98885165665)
+- **Vercel Preview Deployment**:
+  - Deployment URL: [https://vercel.com/siewheans-projects/sports-website-web/DtA81pKkw2wdPqZGezwjoqGAFJKH](https://vercel.com/siewheans-projects/sports-website-web/DtA81pKkw2wdPqZGezwjoqGAFJKH)
+  - Status: READY / SUCCESS
 
 ### 1. Format completeness (FMT-004)
 
