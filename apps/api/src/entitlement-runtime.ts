@@ -291,6 +291,16 @@ export class EntitlementRuntime {
                  updated_at=now()`,
               [orgId, includedUnits],
             );
+            await tx.unsafe(
+              `INSERT INTO ai_allowance_base_limits (organisation_id, actor_account_id, action, period_start, base_limit)
+               SELECT $1, m.account_id, action_value, date_trunc('month', now())::date, $2
+               FROM organisation_memberships m
+               CROSS JOIN unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
+               WHERE m.organisation_id=$1 AND m.status='active'
+               ON CONFLICT (organisation_id, actor_account_id, action, period_start) DO UPDATE SET
+                 base_limit=GREATEST(ai_allowance_base_limits.base_limit, EXCLUDED.base_limit)`,
+              [orgId, includedUnits],
+            );
             await tx.unsafe(`SELECT phase6_refresh_ai_allowance_headroom($1)`, [orgId]);
           }
         }
@@ -338,6 +348,16 @@ export class EntitlementRuntime {
                  ON CONFLICT (organisation_id, actor_account_id, action, period_start) DO UPDATE SET
                    action_limit=GREATEST(ai_usage_allowances.action_limit, EXCLUDED.action_limit),
                    updated_at=now()`,
+                [orgId, includedUnits],
+              );
+              await tx.unsafe(
+                `INSERT INTO ai_allowance_base_limits (organisation_id, actor_account_id, action, period_start, base_limit)
+                 SELECT $1, m.account_id, action_value, date_trunc('month', now())::date, $2
+                 FROM organisation_memberships m
+                 CROSS JOIN unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
+                 WHERE m.organisation_id=$1 AND m.status='active'
+                 ON CONFLICT (organisation_id, actor_account_id, action, period_start) DO UPDATE SET
+                   base_limit=GREATEST(ai_allowance_base_limits.base_limit, EXCLUDED.base_limit)`,
                 [orgId, includedUnits],
               );
               await tx.unsafe(`SELECT phase6_refresh_ai_allowance_headroom($1)`, [orgId]);

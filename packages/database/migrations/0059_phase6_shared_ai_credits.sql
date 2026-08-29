@@ -57,7 +57,8 @@ CREATE FUNCTION phase6_capture_ai_allowance_base() RETURNS trigger AS $$
 BEGIN
   INSERT INTO ai_allowance_base_limits(organisation_id,actor_account_id,action,period_start,base_limit)
   VALUES(NEW.organisation_id,NEW.actor_account_id,NEW.action,NEW.period_start,NEW.action_limit)
-  ON CONFLICT (organisation_id,actor_account_id,action,period_start) DO NOTHING;
+  ON CONFLICT (organisation_id,actor_account_id,action,period_start) DO UPDATE SET
+    base_limit=GREATEST(ai_allowance_base_limits.base_limit, EXCLUDED.base_limit);
   PERFORM phase6_refresh_ai_allowance_headroom(NEW.organisation_id);
   RETURN NEW;
 END;
@@ -70,7 +71,7 @@ CREATE FUNCTION phase6_seed_shared_ai_allowances() RETURNS trigger AS $$
 BEGIN
   IF NEW.feature<>'ai_actions' OR NEW.source NOT IN ('top_up','admin_grant') THEN RETURN NEW; END IF;
   INSERT INTO ai_usage_allowances(organisation_id,actor_account_id,action,period_start,action_limit)
-  SELECT NEW.organisation_id,m.account_id,action_value,current_date,0
+  SELECT NEW.organisation_id,m.account_id,action_value,date_trunc('month',current_date)::date,0
   FROM organisation_memberships m
   CROSS JOIN unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
   WHERE m.organisation_id=NEW.organisation_id AND m.status='active'
@@ -92,6 +93,7 @@ CREATE OR REPLACE FUNCTION phase4_finalize_ai_action(target_ledger uuid, final_o
   RETURNS ai_action_ledger AS $$
 DECLARE ledger ai_action_ledger%ROWTYPE; allowance ai_usage_allowances%ROWTYPE; base_limit integer:=0; charge smallint:=0;
 DECLARE cached ai_response_cache%ROWTYPE; shared_grant entitlement_grants%ROWTYPE;
+DECLARE org_base_used integer:=0; org_base_limit integer:=5;
 BEGIN
   SELECT * INTO ledger FROM ai_action_ledger WHERE id=target_ledger FOR UPDATE;
   IF ledger.id IS NULL THEN RAISE EXCEPTION 'AI action does not exist'; END IF;
@@ -123,7 +125,27 @@ BEGIN
       base_limit:=COALESCE(base_limit,allowance.action_limit);
     END IF;
 
-    IF allowance.organisation_id IS NOT NULL AND allowance.used_units<base_limit AND allowance.used_units<allowance.action_limit THEN
+    SELECT count(*)::integer INTO org_base_used
+    FROM ai_action_ledger l
+    WHERE l.organisation_id=ledger.organisation_id AND l.outcome='success' AND l.charged_units>0
+      AND l.created_at>=date_trunc('month',now())
+      AND NOT EXISTS (SELECT 1 FROM ai_credit_consumptions c WHERE c.ledger_id=l.id);
+
+    SELECT COALESCE(
+      (
+        SELECT CASE s.tier
+          WHEN 'organiser_pro' THEN 100
+          WHEN 'event_pass' THEN 25
+          ELSE 5
+        END
+        FROM organisation_subscriptions s
+        WHERE s.organisation_id=ledger.organisation_id AND s.status IN ('active','trialing')
+          AND (s.current_period_end IS NULL OR s.current_period_end>now())
+        LIMIT 1
+      ), 5
+    ) INTO org_base_limit;
+
+    IF allowance.organisation_id IS NOT NULL AND org_base_used<org_base_limit AND allowance.used_units<base_limit AND allowance.used_units<allowance.action_limit THEN
       UPDATE ai_usage_allowances SET used_units=used_units+1,revision=revision+1,updated_at=now()
       WHERE organisation_id=allowance.organisation_id AND actor_account_id=allowance.actor_account_id
         AND action=allowance.action AND period_start=allowance.period_start;
