@@ -200,6 +200,30 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     expect(session.currency).toBe("usd");
   });
 
+  it("rejects commercial write mutations from active viewers", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("role IN ('owner','organiser')")) return [];
+        if (query.includes("FROM organisation_memberships")) return [{ "?column?": 1 }];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+    const stripe = {
+      createSession: async () => {
+        throw new Error("must not create checkout for a viewer");
+      },
+    };
+    const runtime = new EntitlementRuntime(mockSql, stripe);
+
+    await expect(
+      runtime.createCheckoutSession({ accountId: "viewer-1" }, "org-1", {
+        tier: "event_pass",
+        successUrl: "https://example.com/success",
+        cancelUrl: "https://example.com/cancel",
+      }),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ORGANISATION_ACCESS_DENIED" });
+  });
+
   it("fails safely with 503 when Stripe payment configuration is missing", async () => {
     const mockSql = {
       unsafe: (async (query: string) => {

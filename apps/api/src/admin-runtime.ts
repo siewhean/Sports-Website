@@ -5,7 +5,18 @@ import { ApiError } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 
 export class AdminRuntime {
-  constructor(private readonly sql: PostgresJsSql) {}
+  constructor(protected readonly sql: PostgresJsSql) {}
+
+  protected async inTransaction<T>(callback: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
+    const sqlInstance = this.sql as unknown as {
+      begin?: <T>(cb: (tx: PostgresJsSql) => Promise<T>) => Promise<T>;
+    };
+    const beginFn =
+      typeof sqlInstance.begin === "function"
+        ? sqlInstance.begin.bind(sqlInstance)
+        : async <T>(cb: (tx: PostgresJsSql) => Promise<T>) => cb(this.sql);
+    return beginFn(callback);
+  }
 
   async assertPlatformAdmin(actor: Phase3Actor): Promise<void> {
     const rows = await this.sql.unsafe(
@@ -156,14 +167,7 @@ export class AdminRuntime {
     requestId: string,
   ) {
     await this.assertPlatformAdmin(actor);
-    const sqlInstance = this.sql as unknown as {
-      begin?: <T>(cb: (tx: PostgresJsSql) => Promise<T>) => Promise<T>;
-    };
-    const beginFn =
-      typeof sqlInstance.begin === "function"
-        ? sqlInstance.begin.bind(sqlInstance)
-        : async <T>(cb: (tx: PostgresJsSql) => Promise<T>) => cb(this.sql);
-    return beginFn(async (tx: PostgresJsSql) => {
+    return this.inTransaction(async (tx: PostgresJsSql) => {
       if (input.tier) {
         await tx.unsafe(
           `INSERT INTO organisation_subscriptions (organisation_id, tier, status, updated_at)
@@ -206,8 +210,17 @@ export class AdminRuntime {
 
   async revokeAccessPass(actor: Phase3Actor, passId: string, reason?: string) {
     await this.assertPlatformAdmin(actor);
+    return this.inTransaction((tx) => this.revokeAccessPassInTransaction(tx, actor, passId, reason));
+  }
+
+  protected async revokeAccessPassInTransaction(
+    tx: PostgresJsSql,
+    actor: Phase3Actor,
+    passId: string,
+    reason?: string,
+  ) {
     const pass = (
-      await this.sql.unsafe<{ id: string; competition_id: string; revoked_at: Date | null }>(
+      await tx.unsafe<{ id: string; competition_id: string; revoked_at: Date | null }>(
         `SELECT id, competition_id, revoked_at FROM scoring_access_passes WHERE id=$1`,
         [passId],
       )
@@ -220,7 +233,7 @@ export class AdminRuntime {
     const effectiveReason =
       trimmedReason && trimmedReason.length >= 3 && trimmedReason.length <= 500 ? trimmedReason : "Admin revoked";
 
-    await this.sql.unsafe(
+    await tx.unsafe(
       `UPDATE scoring_access_passes
        SET revoked_at=now(),
            revoked_by=$2,
@@ -234,8 +247,12 @@ export class AdminRuntime {
 
   async resetAccessPass(actor: Phase3Actor, passId: string) {
     await this.assertPlatformAdmin(actor);
+    return this.inTransaction((tx) => this.resetAccessPassInTransaction(tx, actor, passId));
+  }
+
+  protected async resetAccessPassInTransaction(tx: PostgresJsSql, actor: Phase3Actor, passId: string) {
     const pass = (
-      await this.sql.unsafe<{ id: string; competition_id: string }>(
+      await tx.unsafe<{ id: string; competition_id: string }>(
         `SELECT id, competition_id FROM scoring_access_passes WHERE id=$1`,
         [passId],
       )
@@ -244,7 +261,7 @@ export class AdminRuntime {
       throw new ApiError(404, ErrorCode.ACCESS_PASS_NOT_FOUND, "Scoring access pass not found");
     }
 
-    await this.sql.unsafe(
+    await tx.unsafe(
       `UPDATE scoring_access_passes
        SET revoked_at=NULL,
            revoked_by=NULL,
@@ -283,10 +300,19 @@ export class AdminRuntime {
 
   async updateSportDefaults(actor: Phase3Actor, sportCode: string, definition: Record<string, unknown>) {
     await this.assertPlatformAdmin(actor);
+    return this.inTransaction((tx) => this.updateSportDefaultsInTransaction(tx, actor, sportCode, definition));
+  }
+
+  protected async updateSportDefaultsInTransaction(
+    tx: PostgresJsSql,
+    actor: Phase3Actor,
+    sportCode: string,
+    definition: Record<string, unknown>,
+  ) {
     const definitionString = JSON.stringify(definition);
     const hash = createHash("sha256").update(definitionString).digest("hex");
 
-    const existingRows = await this.sql.unsafe<{ version: string }>(
+    const existingRows = await tx.unsafe<{ version: string }>(
       `SELECT version FROM sport_pack_versions WHERE sport_code=$1`,
       [sportCode],
     );
@@ -300,49 +326,39 @@ export class AdminRuntime {
     }
     const nextVersion = maxInt > 0 ? (maxInt + 1).toString() : `v${existingRows.length + 1}`;
 
-    const sqlInstance = this.sql as unknown as {
-      begin?: <T>(cb: (tx: PostgresJsSql) => Promise<T>) => Promise<T>;
-    };
-    const beginFn =
-      typeof sqlInstance.begin === "function"
-        ? sqlInstance.begin.bind(sqlInstance)
-        : async <T>(cb: (tx: PostgresJsSql) => Promise<T>) => cb(this.sql);
+    const currentActive = (
+      await tx.unsafe<{ version: string }>(
+        `SELECT version FROM sport_pack_versions WHERE sport_code=$1 AND status='active' FOR UPDATE`,
+        [sportCode],
+      )
+    )[0];
 
-    return beginFn(async (tx: PostgresJsSql) => {
-      const currentActive = (
-        await tx.unsafe<{ version: string }>(
-          `SELECT version FROM sport_pack_versions WHERE sport_code=$1 AND status='active' FOR UPDATE`,
-          [sportCode],
-        )
-      )[0];
-
-      if (currentActive) {
-        await tx.unsafe(
-          `UPDATE sport_pack_versions
-           SET status='superseded',
-               revision=revision+1,
-               superseded_at=now(),
-               superseded_by=$2,
-               superseded_by_version=$3
-           WHERE sport_code=$1 AND version=$4 AND status='active'`,
-          [sportCode, actor.accountId, nextVersion, currentActive.version],
-        );
-      }
-
+    if (currentActive) {
       await tx.unsafe(
-        `INSERT INTO sport_pack_versions (
-           sport_code, version, schema_version, definition, definition_hash, status, created_by, created_at, activated_at, activated_by
-         ) VALUES ($1, $2, 1, $3::jsonb, $4, 'active', $5, now(), now(), $5)`,
-        [sportCode, nextVersion, definitionString, hash, actor.accountId],
+        `UPDATE sport_pack_versions
+         SET status='superseded',
+             revision=revision+1,
+             superseded_at=now(),
+             superseded_by=$2,
+             superseded_by_version=$3
+         WHERE sport_code=$1 AND version=$4 AND status='active'`,
+        [sportCode, actor.accountId, nextVersion, currentActive.version],
       );
+    }
 
-      return {
-        sport_code: sportCode,
-        version: nextVersion,
-        definition_hash: hash,
-        status: "active",
-      };
-    });
+    await tx.unsafe(
+      `INSERT INTO sport_pack_versions (
+         sport_code, version, schema_version, definition, definition_hash, status, created_by, created_at, activated_at, activated_by
+       ) VALUES ($1, $2, 1, $3::jsonb, $4, 'active', $5, now(), now(), $5)`,
+      [sportCode, nextVersion, definitionString, hash, actor.accountId],
+    );
+
+    return {
+      sport_code: sportCode,
+      version: nextVersion,
+      definition_hash: hash,
+      status: "active",
+    };
   }
 
   async getAiAccountingSummary(actor: Phase3Actor) {

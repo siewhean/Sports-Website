@@ -335,7 +335,9 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
     const mockSql = {
       unsafe: (async (query: string) => {
         if (query.includes("FROM organisation_memberships")) {
-          return []; // non-member!
+          // This actor is an active viewer. The runtime must include the editor-role predicate,
+          // otherwise this mock would incorrectly authorize the import.
+          return query.includes("role IN ('owner','organiser')") ? [] : [{ role: "viewer" }];
         }
         if (query.includes("FROM account_platform_roles")) {
           return []; // non-admin!

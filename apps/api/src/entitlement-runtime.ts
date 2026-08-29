@@ -382,7 +382,7 @@ export class EntitlementRuntime {
       | { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string }
       | { purchaseType: "ai_top_up"; topUpUnits: number; successUrl: string; cancelUrl: string },
   ) {
-    await this.assertOrganisationMember(this.sql, organisationId, actor);
+    await this.assertOrganisationEditor(this.sql, organisationId, actor);
     const client =
       this.stripeClient ??
       (process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : null);
@@ -452,7 +452,7 @@ export class EntitlementRuntime {
   ): Promise<CompetitionBranding> {
     return this.transaction(async (tx) => {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
-      await this.assertOrganisationMember(tx, organisationId, actor);
+      await this.assertOrganisationEditor(tx, organisationId, actor);
       const hasCustomBranding = Boolean(
         input.primary_color || input.secondary_color || input.logo_url || input.banner_url || input.hide_platform_badge,
       );
@@ -506,7 +506,7 @@ export class EntitlementRuntime {
   ): Promise<CompetitionSponsor> {
     return this.transaction(async (tx) => {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
-      await this.assertOrganisationMember(tx, organisationId, actor);
+      await this.assertOrganisationEditor(tx, organisationId, actor);
       await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
       return (
         await tx.unsafe<CompetitionSponsor>(
@@ -539,7 +539,7 @@ export class EntitlementRuntime {
   ): Promise<CompetitionSponsor[]> {
     return this.transaction(async (tx) => {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
-      await this.assertOrganisationMember(tx, organisationId, actor);
+      await this.assertOrganisationEditor(tx, organisationId, actor);
       await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
       await tx.unsafe(`DELETE FROM competition_sponsors WHERE competition_id=$1`, [competitionId]);
       const insertedList: CompetitionSponsor[] = [];
@@ -577,5 +577,15 @@ export class EntitlementRuntime {
       [organisationId, actor.accountId],
     );
     if (!rows[0]) throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to organisation");
+  }
+
+  private async assertOrganisationEditor(tx: PostgresJsSql, organisationId: string, actor: Phase3Actor): Promise<void> {
+    const rows = await tx.unsafe(
+      `SELECT 1 FROM organisation_memberships
+       WHERE organisation_id=$1 AND account_id=$2 AND status='active' AND role IN ('owner','organiser')`,
+      [organisationId, actor.accountId],
+    );
+    if (!rows[0])
+      throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Write access to organisation required");
   }
 }

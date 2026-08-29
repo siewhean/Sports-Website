@@ -96,4 +96,45 @@ describe("ProductionAdminRuntime", () => {
     );
     expect(audit?.params).toEqual(expect.arrayContaining(["admin-1", "admin.sport_defaults.updated", "basketball"]));
   });
+
+  it("uses one transaction for an access-pass mutation and its audit event", async () => {
+    const rootCalls: QueryCall[] = [];
+    const transactionCalls: QueryCall[] = [];
+    let beginCalls = 0;
+    const tx = {
+      unsafe: (async (query: string, params?: readonly unknown[]) => {
+        transactionCalls.push({ query, params });
+        if (query.includes("SELECT c.organisation_id")) return [{ organisation_id: "organisation-1" }];
+        if (query.includes("SELECT id, competition_id, revoked_at FROM scoring_access_passes")) {
+          return [{ id: "pass-1", competition_id: "competition-1", revoked_at: null }];
+        }
+        if (query.includes("INSERT INTO audit_events")) throw new Error("audit write failed");
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+    const sql = {
+      unsafe: (async (query: string, params?: readonly unknown[]) => {
+        rootCalls.push({ query, params });
+        if (query.includes("account_platform_roles")) return [{ ok: 1 }];
+        throw new Error(`unexpected root query: ${query}`);
+      }) as PostgresJsSql["unsafe"],
+      begin: async <T>(callback: (transaction: PostgresJsSql) => Promise<T>) => {
+        beginCalls += 1;
+        return callback(tx);
+      },
+    } as unknown as PostgresJsSql;
+
+    await expect(new ProductionAdminRuntime(sql).revokeAccessPass({ accountId: "admin-1" }, "pass-1")).rejects.toThrow(
+      "audit write failed",
+    );
+
+    expect(beginCalls).toBe(1);
+    expect(rootCalls).toHaveLength(1);
+    expect(transactionCalls.map((call) => call.query)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("UPDATE scoring_access_passes"),
+        expect.stringContaining("INSERT INTO audit_events"),
+      ]),
+    );
+  });
 });

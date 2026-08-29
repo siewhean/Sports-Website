@@ -569,7 +569,8 @@ export class ExportRuntime {
     return beginFn(async (tx: PostgresJsSql) => {
       const member = (
         await tx.unsafe<{ role: string }>(
-          `SELECT role FROM organisation_memberships WHERE organisation_id=$1 AND account_id=$2 AND status='active'`,
+          `SELECT role FROM organisation_memberships
+           WHERE organisation_id=$1 AND account_id=$2 AND status='active' AND role IN ('owner','organiser')`,
           [organisationId, actor.accountId],
         )
       )[0];
