@@ -84,56 +84,6 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER entitlement_grants_phase6_ai_headroom
 AFTER INSERT ON entitlement_grants FOR EACH ROW EXECUTE FUNCTION phase6_seed_shared_ai_allowances();
 
-CREATE FUNCTION phase6_seed_member_ai_allowance() RETURNS trigger AS $$
-DECLARE sub_tier text; tier_limit integer:=5;
-BEGIN
-  IF NEW.status<>'active' THEN RETURN NEW; END IF;
-  SELECT COALESCE(s.tier, 'free') INTO sub_tier
-  FROM organisation_subscriptions s
-  WHERE s.organisation_id=NEW.organisation_id AND s.status IN ('active','trialing')
-    AND (s.current_period_end IS NULL OR s.current_period_end>now())
-  LIMIT 1;
-  sub_tier:=COALESCE(sub_tier, 'free');
-  tier_limit:=CASE sub_tier WHEN 'organiser_pro' THEN 100 WHEN 'event_pass' THEN 25 ELSE 5 END;
-  INSERT INTO ai_usage_allowances(organisation_id,actor_account_id,action,period_start,action_limit)
-  SELECT NEW.organisation_id,NEW.account_id,action_value,date_trunc('month',current_date)::date,tier_limit
-  FROM unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
-  ON CONFLICT (organisation_id,actor_account_id,action,period_start) DO UPDATE SET
-    action_limit=GREATEST(ai_usage_allowances.action_limit, EXCLUDED.action_limit);
-  INSERT INTO ai_allowance_base_limits(organisation_id,actor_account_id,action,period_start,base_limit)
-  SELECT NEW.organisation_id,NEW.account_id,action_value,date_trunc('month',current_date)::date,tier_limit
-  FROM unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
-  ON CONFLICT (organisation_id,actor_account_id,action,period_start) DO UPDATE SET
-    base_limit=GREATEST(ai_allowance_base_limits.base_limit, EXCLUDED.base_limit);
-  PERFORM phase6_refresh_ai_allowance_headroom(NEW.organisation_id);
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER organisation_memberships_phase6_ai_allowance
-AFTER INSERT OR UPDATE OF status ON organisation_memberships
-FOR EACH ROW EXECUTE FUNCTION phase6_seed_member_ai_allowance();
-
-INSERT INTO ai_usage_allowances(organisation_id,actor_account_id,action,period_start,action_limit)
-SELECT m.organisation_id,m.account_id,action_value,date_trunc('month',current_date)::date,
-  CASE COALESCE(s.tier, 'free') WHEN 'organiser_pro' THEN 100 WHEN 'event_pass' THEN 25 ELSE 5 END
-FROM organisation_memberships m
-LEFT JOIN organisation_subscriptions s ON s.organisation_id=m.organisation_id AND s.status IN ('active','trialing') AND (s.current_period_end IS NULL OR s.current_period_end>now())
-CROSS JOIN unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
-WHERE m.status='active'
-ON CONFLICT (organisation_id,actor_account_id,action,period_start) DO UPDATE SET
-  action_limit=GREATEST(ai_usage_allowances.action_limit, EXCLUDED.action_limit);
-
-INSERT INTO ai_allowance_base_limits(organisation_id,actor_account_id,action,period_start,base_limit)
-SELECT m.organisation_id,m.account_id,action_value,date_trunc('month',current_date)::date,
-  CASE COALESCE(s.tier, 'free') WHEN 'organiser_pro' THEN 100 WHEN 'event_pass' THEN 25 ELSE 5 END
-FROM organisation_memberships m
-LEFT JOIN organisation_subscriptions s ON s.organisation_id=m.organisation_id AND s.status IN ('active','trialing') AND (s.current_period_end IS NULL OR s.current_period_end>now())
-CROSS JOIN unnest(ARRAY['text_to_brief','format_recommendations','format_modification','schedule_preferences','repair_recommendations']) action_value
-WHERE m.status='active'
-ON CONFLICT (organisation_id,actor_account_id,action,period_start) DO UPDATE SET
-  base_limit=GREATEST(ai_allowance_base_limits.base_limit, EXCLUDED.base_limit);
-
 SELECT phase6_refresh_ai_allowance_headroom(organisation_id)
 FROM (SELECT DISTINCT organisation_id FROM entitlement_grants WHERE feature='ai_actions') organisations;
 

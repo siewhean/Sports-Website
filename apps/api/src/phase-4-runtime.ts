@@ -2367,7 +2367,7 @@ export class Phase4Runtime {
         cached: beginValue.cache_result,
         replay,
         finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
-        quotaAvailable: Boolean(allowance && allowance.used_units < allowance.action_limit),
+        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
       };
     });
     const usage = async () => this.readAiUsage(actor, organisationId);
