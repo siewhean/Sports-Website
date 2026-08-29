@@ -5,11 +5,12 @@ Phase 6 release-gate status: READY FOR INDEPENDENT QA/QC CERTIFICATION
 ## Candidate details & CI execution receipts
 
 - **Product Candidate SHA**: `2fe603c425ebe36e7377676374ef7caa815b508a`
-- **Closure Head SHA**: `2fe603c425ebe36e7377676374ef7caa815b508a`
+- **Closure Head SHA**: `352a731efc0a76f2f9c3ea3f60f643e24df279b9`
 - **Branch**: `phase-6/commercial-operations`
 - **Pull Request**: [#39](https://github.com/siewhean/Sports-Website/pull/39)
 - **GitHub Actions CI Matrix Execution Receipts**:
-  - Verification Run (Head `0feda345` / `33455414`): [33241858855](https://github.com/siewhean/Sports-Website/actions/runs/33241858855) (100% Green / Success)
+  - Verification Run (Candidate `2fe603c4` / `52fc9848`): [33243023795](https://github.com/siewhean/Sports-Website/actions/runs/33243023795) (In Progress / Matrix Passing)
+  - Prior Verification Run (Head `0feda345` / `33455414`): [33241858855](https://github.com/siewhean/Sports-Website/actions/runs/33241858855) (100% Green / Success)
     - `secrets`: SUCCESS (ID 99072464729)
     - `quality-fast`: SUCCESS (ID 99072494444)
     - `integration`: SUCCESS (ID 99072494433)
@@ -25,8 +26,8 @@ Phase 6 release-gate status: READY FOR INDEPENDENT QA/QC CERTIFICATION
     - `integration`: SUCCESS (ID 98884425906)
     - `browser-e2e`: SUCCESS (ID 98885165665)
 - **Vercel Preview Deployments**:
-  - Product Deployment: [DtA81pKkw2wdPqZGezwjoqGAFJKH](https://vercel.com/siewheans-projects/sports-website-web/DtA81pKkw2wdPqZGezwjoqGAFJKH) (Status: READY / SUCCESS)
-  - Closure Head Deployment: [7vLD8QyMPpKnSeLkCu9EBnAdGKKm](https://vercel.com/siewheans-projects/sports-website-web/7vLD8QyMPpKnSeLkCu9EBnAdGKKm) (Status: READY / SUCCESS; documentation-only commits evaluated by Vercel Ignored Build Step)
+  - Product Deployment: [XQcFahLfkFABfVhFizonqQHwUsTz](https://vercel.com/siewheans-projects/sports-website-web/XQcFahLfkFABfVhFizonqQHwUsTz) (Status: READY / SUCCESS)
+  - Closure Head Deployment: [DtA81pKkw2wdPqZGezwjoqGAFJKH](https://vercel.com/siewheans-projects/sports-website-web/DtA81pKkw2wdPqZGezwjoqGAFJKH) (Status: READY / SUCCESS; documentation-only commits evaluated by Vercel Ignored Build Step)
 
 ---
 
