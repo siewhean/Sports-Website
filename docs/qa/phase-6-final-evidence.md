@@ -4,8 +4,8 @@ Phase 6 release-gate status: READY FOR INDEPENDENT QA/QC CERTIFICATION
 
 ## Candidate details & CI execution receipts
 
-- **Product Candidate SHA**: `5e7caae427a068612affd0bc0d61a4a8ae6fdc88`
-- **Closure Head SHA**: `5e7caae427a068612affd0bc0d61a4a8ae6fdc88`
+- **Product Candidate SHA**: `14002925b7922c8c512833c44b307aa376e42631`
+- **Closure Head SHA**: `14002925b7922c8c512833c44b307aa376e42631`
 - **Branch**: `phase-6/commercial-operations`
 - **Pull Request**: [#39](https://github.com/siewhean/Sports-Website/pull/39)
 - **GitHub Actions CI Matrix Execution Receipts**:
