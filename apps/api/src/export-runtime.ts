@@ -72,7 +72,11 @@ export class ExportRuntime {
 
     const platformAdmin = (
       await this.sql.unsafe<{ role: string }>(
-        `SELECT role FROM account_platform_roles WHERE account_id=$1 AND role='platform_admin'`,
+        `SELECT role FROM account_platform_roles
+         WHERE account_id=$1
+           AND role='platform_admin'
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > now())`,
         [actor.accountId],
       )
     )[0];
@@ -576,7 +580,11 @@ export class ExportRuntime {
       )[0];
       const platformAdmin = (
         await tx.unsafe<{ role: string }>(
-          `SELECT role FROM account_platform_roles WHERE account_id=$1 AND role='platform_admin'`,
+          `SELECT role FROM account_platform_roles
+           WHERE account_id=$1
+             AND role='platform_admin'
+             AND revoked_at IS NULL
+             AND (expires_at IS NULL OR expires_at > now())`,
           [actor.accountId],
         )
       )[0];

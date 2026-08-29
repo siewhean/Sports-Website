@@ -192,6 +192,57 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     expect(json.competition).toMatchObject({ id: compId, name: "Export Open" });
   });
 
+  it("EXP-006: permits only active platform administrators to export unpublished competitions and import archives", async () => {
+    const draftCompetitionId = (
+      await client<{ id: string }[]>`
+        INSERT INTO competitions (organisation_id, name, slug, sport_code, status, timezone, starts_on, ends_on, venue, created_by)
+        VALUES (${organisationId}, 'Admin Export Draft', ${`comp-${randomUUID()}`}, 'basketball', 'draft', 'Asia/Singapore', '2027-08-01', '2027-08-02', 'Arena', ${ownerAccountId})
+        RETURNING id
+      `
+    )[0]!.id;
+    const revokedAccountId = randomUUID();
+    const expiredAccountId = randomUUID();
+    await client`
+      INSERT INTO accounts (id, primary_email, display_name) VALUES
+        (${revokedAccountId}, ${`${revokedAccountId}@example.test`}, 'Revoked export admin'),
+        (${expiredAccountId}, ${`${expiredAccountId}@example.test`}, 'Expired export admin')
+    `;
+    await client`
+      INSERT INTO account_platform_roles (account_id, role, granted_at, revoked_at, reason) VALUES
+        (${revokedAccountId}, 'platform_admin', now() - interval '2 days', now() - interval '1 day', 'Revoked export test')
+    `;
+    await client`
+      INSERT INTO account_platform_roles (account_id, role, granted_at, expires_at, reason) VALUES
+        (${expiredAccountId}, 'platform_admin', now() - interval '2 days', now() - interval '1 day', 'Expired export test')
+    `;
+    const archive = {
+      schema_version: "1.0",
+      competition: { id: "archived-source", name: "Admin Import", sport_code: "basketball" },
+      divisions: [],
+    };
+
+    await expect(
+      exportRuntime.generateCompetitionCsv(draftCompetitionId, { accountId: platformAdminAccountId }),
+    ).resolves.toContain("Division,Stage");
+    await expect(
+      exportRuntime.importCompetitionArchive({ accountId: platformAdminAccountId }, organisationId, archive),
+    ).resolves.toMatchObject({
+      divisions_count: 0,
+      entries_count: 0,
+      matches_count: 0,
+    });
+    for (const accountId of [revokedAccountId, expiredAccountId]) {
+      await expect(exportRuntime.generateCompetitionCsv(draftCompetitionId, { accountId })).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      await expect(
+        exportRuntime.importCompetitionArchive({ accountId }, organisationId, archive),
+      ).rejects.toMatchObject({
+        statusCode: 403,
+      });
+    }
+  });
+
   it("ADM-001 & ADM-002: lists organisations and AI summary for platform_admin", async () => {
     const adminActor = { accountId: platformAdminAccountId };
     const orgs = await adminRuntime.listOrganisations(adminActor);

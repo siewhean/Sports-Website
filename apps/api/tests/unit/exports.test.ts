@@ -181,6 +181,37 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
     );
   });
 
+  it("allows an active platform administrator, but rejects revoked and expired grants, for unpublished exports", async () => {
+    const platformActor = { accountId: "platform-admin" };
+    const createRuntime = (grant: "active" | "revoked" | "expired") => {
+      const mockSql = {
+        unsafe: (async (query: string) => {
+          if (query.includes("FROM competitions")) return [{ id: "c1", organisation_id: "org-1", status: "draft" }];
+          if (query.includes("FROM competition_publications")) return [];
+          if (query.includes("FROM organisation_memberships")) return [];
+          if (query.includes("FROM account_platform_roles")) {
+            const activeGrantPredicate =
+              query.includes("revoked_at IS NULL") && query.includes("expires_at IS NULL OR expires_at > now()");
+            return grant === "active" && activeGrantPredicate ? [{ role: "platform_admin" }] : [];
+          }
+          if (query.includes("FROM matches")) return [];
+          return [];
+        }) as PostgresJsSql["unsafe"],
+      } as unknown as PostgresJsSql;
+      return new ExportRuntime(mockSql);
+    };
+
+    await expect(createRuntime("active").generateCompetitionCsv("c1", platformActor)).resolves.toContain(
+      "Division,Stage",
+    );
+    await expect(createRuntime("revoked").generateCompetitionCsv("c1", platformActor)).rejects.toThrow(
+      /Access denied to unpublished competition/,
+    );
+    await expect(createRuntime("expired").generateCompetitionCsv("c1", platformActor)).rejects.toThrow(
+      /Access denied to unpublished competition/,
+    );
+  });
+
   it("EXP-006: generates full competition JSON archive and validates round-trip equivalence", async () => {
     const mockSql = {
       unsafe: (async (query: string) => {
@@ -363,6 +394,42 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
       divisions: [],
     };
     await expect(runtime.importCompetitionArchive(adminActor, "org-1", validArchive)).rejects.toThrow(
+      /Access denied to target organisation/,
+    );
+  });
+
+  it("permits only active platform-admin grants to import an archive", async () => {
+    const archive = {
+      schema_version: "1.0",
+      competition: { id: "c1", name: "Valid", sport_code: "basketball" },
+      divisions: [],
+    };
+    const createRuntime = (grant: "active" | "revoked" | "expired") => {
+      const mockSql = {
+        unsafe: (async (query: string) => {
+          if (query.includes("FROM organisation_memberships")) return [];
+          if (query.includes("FROM account_platform_roles")) {
+            const activeGrantPredicate =
+              query.includes("revoked_at IS NULL") && query.includes("expires_at IS NULL OR expires_at > now()");
+            return grant === "active" && activeGrantPredicate ? [{ role: "platform_admin" }] : [];
+          }
+          return [];
+        }) as PostgresJsSql["unsafe"],
+      } as unknown as PostgresJsSql;
+      return new ExportRuntime(mockSql);
+    };
+
+    await expect(createRuntime("active").importCompetitionArchive(adminActor, "org-1", archive)).resolves.toMatchObject(
+      {
+        divisions_count: 0,
+        entries_count: 0,
+        matches_count: 0,
+      },
+    );
+    await expect(createRuntime("revoked").importCompetitionArchive(adminActor, "org-1", archive)).rejects.toThrow(
+      /Access denied to target organisation/,
+    );
+    await expect(createRuntime("expired").importCompetitionArchive(adminActor, "org-1", archive)).rejects.toThrow(
       /Access denied to target organisation/,
     );
   });
