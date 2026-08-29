@@ -4,12 +4,16 @@ Phase 6 release-gate status: READY FOR INDEPENDENT QA/QC CERTIFICATION
 
 ## Candidate details & CI execution receipts
 
-- **Product Candidate SHA**: `2fe603c425ebe36e7377676374ef7caa815b508a`
-- **Closure Head SHA**: `352a731efc0a76f2f9c3ea3f60f643e24df279b9`
+- **Product Candidate SHA**: `5e7caae427a068612affd0bc0d61a4a8ae6fdc88`
+- **Closure Head SHA**: `5e7caae427a068612affd0bc0d61a4a8ae6fdc88`
 - **Branch**: `phase-6/commercial-operations`
 - **Pull Request**: [#39](https://github.com/siewhean/Sports-Website/pull/39)
 - **GitHub Actions CI Matrix Execution Receipts**:
-  - Verification Run (Candidate `2fe603c4` / `52fc9848`): [33243023795](https://github.com/siewhean/Sports-Website/actions/runs/33243023795) (In Progress / Matrix Passing)
+  - Verification Run (Head `e274a722`): [33243058642](https://github.com/siewhean/Sports-Website/actions/runs/33243058642) (100% Green / Success)
+    - `secrets`: SUCCESS (ID 99075615799)
+    - `quality-fast`: SUCCESS (ID 99075634990)
+    - `integration`: SUCCESS (ID 99075635010)
+    - `browser-e2e`: SUCCESS (ID 99075905007)
   - Prior Verification Run (Head `0feda345` / `33455414`): [33241858855](https://github.com/siewhean/Sports-Website/actions/runs/33241858855) (100% Green / Success)
     - `secrets`: SUCCESS (ID 99072464729)
     - `quality-fast`: SUCCESS (ID 99072494444)
