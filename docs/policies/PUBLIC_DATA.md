@@ -1,6 +1,6 @@
 # Public-data and retention policy
 
-Status: **Provisional product baseline — privacy/legal approval required before launch**
+Status: **Provisional product baseline — formal privacy/legal approval required before Gate F public paid release**
 
 This is the local decision draft for `VAL-006`. Public pages use an allow-list. Fields not listed as public are private by default.
 
@@ -65,7 +65,7 @@ An archived competition past retention returns HTTP 410. A deleted or unpublishe
 
 ## Approval checklist
 
-- [ ] Privacy/legal reviewer approves fields, consent wording, retention, deletion, backups, and export-right handling.
+- [ ] Privacy/legal reviewer approves fields, consent wording, retention, deletion, backups, and export-right handling before Gate F public paid release, as required by [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md).
 - [ ] Youth/federation partner approves the minors default.
 - [ ] Product owner approves the first-release referee visibility default and consent wording.
 - [ ] Infrastructure owner states the backup-rotation maximum and validates deletion propagation.

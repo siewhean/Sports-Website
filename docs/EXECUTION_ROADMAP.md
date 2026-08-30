@@ -242,7 +242,7 @@ Event-day control room meets modern sports editorial: calm graphite and warm neu
 **Exit evidence**
 
 - Entitlement bypass, webhook replay, reconciliation, refund/support adjustment, AI exhaustion, and export/re-import tests pass.
-- Legal, privacy, SEO, email-deliverability, and accessibility reviews pass.
+- Substantive public policies, privacy and consent controls, privacy/consent and SEO tests, email-deliverability, accessibility review, and zero unresolved privacy implementation P0/P1 defects pass. Formal authorised legal/privacy approval is deferred to Gate F by [ADR 0003](./decisions/0003-phase6-legal-privacy-approval-gate.md).
 - Independent QA/QC verdict: `PASS`.
 
 ### Phase 7 — Pilots, security, and release hardening; Gates D and E
@@ -273,6 +273,7 @@ Event-day control room meets modern sports editorial: calm graphite and warm neu
 - Staging production simulation proves deploy, automatic rollback, restore, failover, cache purge, alert routing, and disaster recovery.
 - SLO dashboards hold baseline measurements and synthetic probes are live.
 - Security, legal, accessibility, SEO, email, and operations evidence is current.
+- Formal authorised legal/privacy approval is retained for the exact launch candidate before public paid-release PASS, as required by [ADR 0003](./decisions/0003-phase6-legal-privacy-approval-gate.md).
 - Gate F and the full deployment checklist receive an independent QA/QC `PASS`.
 
 ## 6. Source task ownership and gate mapping

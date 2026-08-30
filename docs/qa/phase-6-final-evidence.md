@@ -44,12 +44,12 @@ review, because a commit cannot truthfully contain its own final SHA.
 
 ## Certification blockers and required external receipts
 
-| Gate                                            | Status  | Closure requirement                                                                                    |
-| ----------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------ |
-| Independent Phase 6 QA/QC                       | BLOCKED | Review the product candidate and this wrapper; return `PASS — zero unresolved P0/P1 release blockers`. |
-| Legal and privacy review                        | BLOCKED | Dated authorised approval tied to the published candidate and policy revision.                         |
-| Controlled SMTP delivery                        | BLOCKED | Deployed-worker SMTP receipt proving single delivery, safe retry, and no secret logging.               |
-| Physical-device and controlled-staging evidence | BLOCKED | Independently captured device and staging receipts under the Gate C requirements.                      |
-| Post-merge CI and integration preview           | BLOCKED | Target-branch CI and a non-production integration deployment receipt for the merge SHA.                |
+| Gate                                            | Status                 | Closure requirement                                                                                                                                                                                                                                                      |
+| ----------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Independent Phase 6 QA/QC                       | BLOCKED                | Review the product candidate and this wrapper; return `PASS — zero unresolved P0/P1 release blockers`.                                                                                                                                                                   |
+| Legal and privacy review                        | SUPERSEDED FOR PHASE 6 | Formal authorised approval is deferred to Gate F by [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md); substantive policies, privacy/consent controls and tests, and zero unresolved privacy implementation P0/P1 defects remain Phase 6 requirements. |
+| Controlled SMTP delivery                        | BLOCKED                | Deployed-worker SMTP receipt proving single delivery, safe retry, and no secret logging.                                                                                                                                                                                 |
+| Physical-device and controlled-staging evidence | BLOCKED                | Independently captured device and staging receipts under the Gate C requirements.                                                                                                                                                                                        |
+| Post-merge CI and integration preview           | BLOCKED                | Target-branch CI and a non-production integration deployment receipt for the merge SHA.                                                                                                                                                                                  |
 
 No PASS verdict, production promotion, or Gate D unlock is asserted by this document.

@@ -171,7 +171,7 @@ accounting, retry, audit, cache, and manual-fallback infrastructure.
 Close `RES-021`, then privacy and visibility, SEO and resilient error states,
 onboarding, marketing, legal/consent, and notifications.
 
-Implementation does not substitute for the required legal and privacy review.
+Implementation does not itself establish legal compliance. Under [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md), formal authorised legal/privacy approval is deferred to Gate F; Phase 6 still requires substantive policies, privacy/consent implementation and tests, independent technical QA/QC, and zero unresolved privacy implementation P0/P1 defects.
 
 ### P6-5 — Exports
 
@@ -200,7 +200,7 @@ Freeze one candidate SHA and require:
 - full JSON export/re-import equivalence;
 - privacy, consent, and SEO tests;
 - email infrastructure and deliverability evidence;
-- legal, privacy, and accessibility review receipts;
+- accessibility review, plus substantive policy, privacy/consent implementation, and privacy/consent test evidence; formal authorised legal/privacy approval remains mandatory at Gate F under [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md);
 - independent QA/QC review.
 
 ## 6. Phase 6 exit gate
@@ -215,7 +215,7 @@ Phase 6 is complete only when all of these are true:
 - [x] Billing bypass, replay, reconciliation, and support-adjustment evidence passes.
 - [x] AI exhaustion, degradation, and manual fallback evidence passes.
 - [x] Full competition JSON export/re-import equivalence passes.
-- [ ] Legal, privacy, SEO, email-deliverability, and accessibility reviews pass.
+- [ ] Substantive public policies, privacy/consent controls and tests, SEO, email-deliverability, and accessibility reviews pass; formal authorised legal/privacy approval is deferred to Gate F by [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md).
 - [x] Exact source SHA and retained evidence artifacts are recorded in [`docs/qa/phase-6-final-evidence.md`](./phase-6-final-evidence.md).
 - [ ] Independent QA/QC verdict is exactly `PASS`.
 - [ ] PR #39 is review-ready, has no unresolved required review threads, and is
