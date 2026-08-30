@@ -12,7 +12,11 @@ import {
 } from "@/lib/organiser-competition-library";
 import styles from "./OrganiserCompetitionLibrary.module.css";
 
-export function OrganiserCompetitionLibrary({ competitions }: { competitions: readonly OrganiserCompetitionLibraryItem[] }) {
+export function OrganiserCompetitionLibrary({
+  competitions,
+}: {
+  competitions: readonly OrganiserCompetitionLibraryItem[];
+}) {
   if (competitions.length === 0) {
     return (
       <section className={styles.empty} aria-labelledby="competition-library-empty-title">
@@ -87,7 +91,10 @@ export function OrganiserCompetitionLibrary({ competitions }: { competitions: re
                         {primary.label}
                       </Link>
                       {competition.published ? (
-                        <Link className={styles.secondaryAction} href={`/competitions/${encodeURIComponent(competition.slug)}`}>
+                        <Link
+                          className={styles.secondaryAction}
+                          href={`/competitions/${encodeURIComponent(competition.slug)}`}
+                        >
                           {organiserCompetitionLibraryCopy.viewPublicPage}
                         </Link>
                       ) : null}

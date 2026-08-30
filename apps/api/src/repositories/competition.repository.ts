@@ -51,7 +51,9 @@ export class CompetitionRepository {
     accountId: string,
     executor: SqlExecutor = this.sql,
   ): Promise<readonly OrganiserCompetitionLibraryRecord[]> {
-    const rows = await executor.unsafe<Omit<OrganiserCompetitionLibraryRecord, "updated_at"> & { updated_at: Date | string }>(
+    const rows = await executor.unsafe<
+      Omit<OrganiserCompetitionLibraryRecord, "updated_at"> & { updated_at: Date | string }
+    >(
       `SELECT competition.id,
               competition.organisation_id,
               organisation.name AS organisation_name,
@@ -87,7 +89,8 @@ export class CompetitionRepository {
     );
     return rows.map((row) => ({
       ...row,
-      updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : new Date(row.updated_at).toISOString(),
+      updated_at:
+        row.updated_at instanceof Date ? row.updated_at.toISOString() : new Date(row.updated_at).toISOString(),
     }));
   }
 

@@ -163,14 +163,20 @@ export function organiserCompetitionGroups(items: readonly OrganiserCompetitionL
 export function organiserCompetitionPhaseCopy(phase: OrganiserCompetitionPhase) {
   switch (phase) {
     case "draft":
-      return { title: organiserCompetitionLibraryCopy.draftTitle, description: organiserCompetitionLibraryCopy.draftDescription };
+      return {
+        title: organiserCompetitionLibraryCopy.draftTitle,
+        description: organiserCompetitionLibraryCopy.draftDescription,
+      };
     case "upcoming":
       return {
         title: organiserCompetitionLibraryCopy.upcomingTitle,
         description: organiserCompetitionLibraryCopy.upcomingDescription,
       };
     case "live":
-      return { title: organiserCompetitionLibraryCopy.liveTitle, description: organiserCompetitionLibraryCopy.liveDescription };
+      return {
+        title: organiserCompetitionLibraryCopy.liveTitle,
+        description: organiserCompetitionLibraryCopy.liveDescription,
+      };
     case "completed":
       return {
         title: organiserCompetitionLibraryCopy.completedTitle,
@@ -210,8 +216,12 @@ export function organiserCompetitionDateRange(item: OrganiserCompetitionLibraryI
   const formatter = new Intl.DateTimeFormat("en-SG", { day: "numeric", month: "short", year: "numeric" });
   const start = new Date(`${item.startsOn}T00:00:00Z`);
   const end = new Date(`${item.endsOn}T00:00:00Z`);
-  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return `${item.startsOn} – ${item.endsOn}`;
-  return item.startsOn === item.endsOn ? formatter.format(start) : `${formatter.format(start)} – ${formatter.format(end)}`;
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+    return `${item.startsOn} – ${item.endsOn}`;
+  }
+  return item.startsOn === item.endsOn
+    ? formatter.format(start)
+    : `${formatter.format(start)} – ${formatter.format(end)}`;
 }
 
 export function organiserCompetitionUpdatedLabel(item: OrganiserCompetitionLibraryItem): string {

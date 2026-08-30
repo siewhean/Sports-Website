@@ -29,7 +29,11 @@ function apiBaseUrl(): URL | null {
 
 async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
   const requestHeaders = await headers();
-  if (!requestCanForwardSessionCookie(requestHeaders, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN)) return null;
+  if (
+    !requestCanForwardSessionCookie(requestHeaders, apiUrl.hostname, process.env.MATCHDAY_PUBLIC_ORIGIN)
+  ) {
+    return null;
+  }
 
   const cookieStore = await cookies();
   for (const name of sessionCookieNames) {
