@@ -8,25 +8,27 @@ review, because a commit cannot truthfully contain its own final SHA.
 
 ## Product candidate and observed CI receipts
 
-- **Product candidate SHA:** `526811e941c79618ea888de52644fb1f3421b1b1`
+- **Product candidate SHA:** `cdcc6919494486e66322083de9ad88d378b46e29`
 - **Branch:** `phase-6/commercial-operations`
 - **Pull request:** [#39](https://github.com/siewhean/Sports-Website/pull/39)
-- **GitHub Actions run:** [33251868187](https://github.com/siewhean/Sports-Website/actions/runs/33251868187) — SUCCESS
-  - `secrets`: SUCCESS (job `99098811622`)
-  - `quality-fast`: SUCCESS (job `99098840370`)
-  - `integration`: SUCCESS (job `99098840369`)
-  - `browser-e2e`: SUCCESS (job `99099097100`)
+- **GitHub Actions run:** [33305647118](https://github.com/siewhean/Sports-Website/actions/runs/33305647118) — SUCCESS
+  - `secrets`: SUCCESS (job `99241608569`)
+  - `quality-fast`: SUCCESS (job `99241637458`)
+  - `integration`: SUCCESS (job `99241637497`)
+  - `browser-e2e`: SUCCESS (job `99241948417`)
     - `pnpm test:e2e`, `pnpm test:a11y`, and `pnpm test:visual` each executed and succeeded.
 
 ## Deployment evidence
 
 - **Exact-SHA Vercel record:**
-  [GitHub Vercel context](https://vercel.com/siewheans-projects/sports-website-web/DCLKTb2HvD42RhNZ9gmJ6Jq3fUye)
-  — check SUCCESS with **Skipped — Not affected**. No web deployment was created for
-  this API/test-only candidate, so this is not a READY deployment receipt.
+  [`dpl_DyUsqVAedxrihiw5WrLwHGUKzN5P`](https://vercel.com/siewheans-projects/sports-website-web/UgiUUKsZVH7f1kGSopGbGPUTFVyi)
+  — GitHub's exact-SHA Vercel context reports SUCCESS, `Deployment has completed`.
+  The public provider page exposes this deployment ID, but no authenticated Vercel API
+  credential is available to verify a stronger provider ready-state; this document does
+  not claim READY.
 - **Historical reference only:**
   [`dpl_3Aab7Ktag7HQHdj98QD3waT1eZVc`](https://vercel.com/siewheans-projects/sports-website-web/3Aab7Ktag7HQHdj98QD3waT1eZVc)
-  was READY for an earlier SHA. It is not evidence of deployment for `526811e9…`.
+  was READY for an earlier SHA. It is not evidence of deployment for `cdcc6919…`.
 
 ## Verified implementation scope
 
@@ -37,6 +39,8 @@ review, because a commit cannot truthfully contain its own final SHA.
   lifecycle check applies to unpublished exports.
 - Support access-pass and sport-default mutations append their audit events in the
   same database transaction.
+- Mobile schedule slot disclosure renders explicit collapsed and expanded states so
+  the phone WebKit flow exposes all valid times after the organiser expands it.
 
 ## Certification blockers and required external receipts
 
