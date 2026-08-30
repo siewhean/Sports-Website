@@ -83,11 +83,7 @@ export class ExportRuntime {
     )[0];
 
     if (!member && !platformAdmin && (requirePrivateAccess || !isPublished)) {
-      throw new ApiError(
-        403,
-        ErrorCode.ORGANISATION_ACCESS_DENIED,
-        requirePrivateAccess ? "Access denied to private competition export" : "Access denied to unpublished competition",
-      );
+      throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to competition export");
     }
 
     return {
