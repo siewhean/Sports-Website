@@ -19,13 +19,7 @@ const createRuntime = ({
   const mockSql = {
     unsafe: (async (query: string) => {
       if (query.includes("FROM competitions")) {
-        return [
-          {
-            id: "c1",
-            organisation_id: "org-1",
-            status: published ? "published" : "draft",
-          },
-        ];
+        return [{ id: "c1", organisation_id: "org-1", status: published ? "published" : "draft" }];
       }
       if (query.includes("FROM competition_publications")) {
         return published
@@ -60,17 +54,10 @@ describe("audit export access boundary", () => {
 
   it("allows members and active admins", async () => {
     const memberRuntime = createRuntime({ published: true, member: true });
-    await expect(
-      memberRuntime.generateAuditHistoryExport(actor, "c1"),
-    ).resolves.toContain(auditHeader);
+    await expect(memberRuntime.generateAuditHistoryExport(actor, "c1")).resolves.toContain(auditHeader);
 
-    const adminRuntime = createRuntime({
-      published: false,
-      platformGrant: "active",
-    });
-    await expect(
-      adminRuntime.generateAuditHistoryExport(actor, "c1"),
-    ).resolves.toContain(auditHeader);
+    const adminRuntime = createRuntime({ published: false, platformGrant: "active" });
+    await expect(adminRuntime.generateAuditHistoryExport(actor, "c1")).resolves.toContain(auditHeader);
   });
 
   it("rejects unrelated authenticated users", async () => {
@@ -84,22 +71,14 @@ describe("audit export access boundary", () => {
 
   it("rejects inactive admin grants", async () => {
     await expect(
-      createRuntime({
-        published: true,
-        platformGrant: "revoked",
-      }).generateAuditHistoryExport(actor, "c1"),
+      createRuntime({ published: true, platformGrant: "revoked" }).generateAuditHistoryExport(actor, "c1"),
     ).rejects.toMatchObject({ statusCode: 403 });
     await expect(
-      createRuntime({
-        published: true,
-        platformGrant: "expired",
-      }).generateAuditHistoryExport(actor, "c1"),
+      createRuntime({ published: true, platformGrant: "expired" }).generateAuditHistoryExport(actor, "c1"),
     ).rejects.toMatchObject({ statusCode: 403 });
   });
 
   it("keeps published fixture exports public", async () => {
-    await expect(
-      createRuntime({ published: true }).generateCompetitionCsv("c1"),
-    ).resolves.toContain(publicHeader);
+    await expect(createRuntime({ published: true }).generateCompetitionCsv("c1")).resolves.toContain(publicHeader);
   });
 });
