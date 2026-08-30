@@ -10,9 +10,7 @@ import {
 } from "@/lib/organiser-competition-library";
 
 export type OrganiserCompetitionLibraryReadResult =
-  | { state: "ready"; competitions: OrganiserCompetitionLibraryItem[] }
-  | { state: "permission" }
-  | { state: "error" };
+  { state: "ready"; competitions: OrganiserCompetitionLibraryItem[] } | { state: "permission" } | { state: "error" };
 
 const sessionCookieNames = ["__Host-matchday_session", "matchday_session"] as const;
 
