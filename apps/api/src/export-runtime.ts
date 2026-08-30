@@ -18,6 +18,7 @@ export class ExportRuntime {
   private async assertExportAccess(
     competitionId: string,
     actor?: Phase3Actor,
+    requirePrivateAccess = false,
   ): Promise<{ organisationId: string; isPublished: boolean; publishedRevisionId: string | null }> {
     const comp = (
       await this.sql.unsafe<{ id: string; organisation_id: string; status: string }>(
@@ -81,8 +82,12 @@ export class ExportRuntime {
       )
     )[0];
 
-    if (!member && !platformAdmin && !isPublished) {
-      throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Access denied to unpublished competition");
+    if (!member && !platformAdmin && (requirePrivateAccess || !isPublished)) {
+      throw new ApiError(
+        403,
+        ErrorCode.ORGANISATION_ACCESS_DENIED,
+        requirePrivateAccess ? "Access denied to private competition export" : "Access denied to unpublished competition",
+      );
     }
 
     return {
@@ -309,7 +314,7 @@ export class ExportRuntime {
   }
 
   async generateAuditHistoryExport(actor: Phase3Actor, competitionId: string): Promise<string> {
-    const { organisationId } = await this.assertExportAccess(competitionId, actor);
+    const { organisationId } = await this.assertExportAccess(competitionId, actor, true);
 
     const events = await this.sql.unsafe<{
       id: string;
