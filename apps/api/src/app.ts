@@ -28,6 +28,7 @@ import { registerPhase2Routes } from "./phase-2-routes.js";
 import type { Phase2Runtime } from "./phase-2-runtime.js";
 import { registerPhase3Routes } from "./phase-3-routes.js";
 import type { Phase3Runtime } from "./phase-3-runtime.js";
+import { registerOrganiserCompetitionLibraryRoutes } from "./organiser-competition-library-routes.js";
 import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import { registerPhase4Routes } from "./phase-4-routes.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
@@ -552,6 +553,10 @@ export async function buildApp(options: BuildAppOptions) {
         identityRequests,
         allowedOrigins: options.config.api.allowedOrigins,
         ...(!options.phase2Runtime ? { registerCanonicalMutations: true } : {}),
+      });
+      await registerOrganiserCompetitionLibraryRoutes(app as unknown as FastifyInstance, {
+        runtime: options.phase3Runtime,
+        identityRequests,
       });
     }
     if (options.phase4Runtime) {
