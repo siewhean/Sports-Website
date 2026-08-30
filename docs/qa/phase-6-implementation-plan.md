@@ -207,15 +207,15 @@ Freeze one candidate SHA and require:
 
 Phase 6 is complete only when all of these are true:
 
-- [x] Every Phase 6 requirement is Closed or explicitly superseded by an approved
+- [ ] Every Phase 6 requirement is Closed or explicitly superseded by an approved
       decision record that preserves the roadmap contract.
-- [x] No unresolved P0 or P1 defect remains.
+- [ ] No unresolved P0 or P1 defect remains.
 - [x] Standard CI is fully green with no required browser, accessibility, or visual skip.
 - [x] Gate C seal and evidence checks remain green.
 - [x] Billing bypass, replay, reconciliation, and support-adjustment evidence passes.
 - [x] AI exhaustion, degradation, and manual fallback evidence passes.
 - [x] Full competition JSON export/re-import equivalence passes.
-- [x] Legal, privacy, SEO, email-deliverability, and accessibility reviews pass.
+- [ ] Legal, privacy, SEO, email-deliverability, and accessibility reviews pass.
 - [x] Exact source SHA and retained evidence artifacts are recorded in [`docs/qa/phase-6-final-evidence.md`](./phase-6-final-evidence.md).
 - [ ] Independent QA/QC verdict is exactly `PASS`.
 - [ ] PR #39 is review-ready, has no unresolved required review threads, and is

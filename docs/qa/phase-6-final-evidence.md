@@ -8,32 +8,33 @@ review, because a commit cannot truthfully contain its own final SHA.
 
 ## Product candidate and observed CI receipts
 
-- **Product candidate SHA:** `a0b7d9fffd954951891d53b841f2f12a550c20ed`
+- **Product candidate SHA:** `526811e941c79618ea888de52644fb1f3421b1b1`
 - **Branch:** `phase-6/commercial-operations`
 - **Pull request:** [#39](https://github.com/siewhean/Sports-Website/pull/39)
-- **GitHub Actions run:** [33247770045](https://github.com/siewhean/Sports-Website/actions/runs/33247770045) — SUCCESS
-  - `secrets`: SUCCESS (job `99088118825`)
-  - `quality-fast`: SUCCESS (job `99088139928`)
-  - `integration`: SUCCESS (job `99088139961`)
-  - `browser-e2e`: SUCCESS (job `99088352622`)
+- **GitHub Actions run:** [33251868187](https://github.com/siewhean/Sports-Website/actions/runs/33251868187) — SUCCESS
+  - `secrets`: SUCCESS (job `99098811622`)
+  - `quality-fast`: SUCCESS (job `99098840370`)
+  - `integration`: SUCCESS (job `99098840369`)
+  - `browser-e2e`: SUCCESS (job `99099097100`)
     - `pnpm test:e2e`, `pnpm test:a11y`, and `pnpm test:visual` each executed and succeeded.
 
 ## Deployment evidence
 
 - **Exact-SHA Vercel record:**
-  [`dpl_PPCyRi57HnVa6qCThHb58BYbBM3x`](https://vercel.com/siewheans-projects/sports-website-web/PPCyRi57HnVa6qCThHb58BYbBM3x)
-  — GitHub check SUCCESS; Vercel deployment **CANCELED / unaffected** because this
-  candidate changes no web-project inputs. This is not a READY deployment receipt.
+  [GitHub Vercel context](https://vercel.com/siewheans-projects/sports-website-web/DCLKTb2HvD42RhNZ9gmJ6Jq3fUye)
+  — check SUCCESS with **Skipped — Not affected**. No web deployment was created for
+  this API/test-only candidate, so this is not a READY deployment receipt.
 - **Historical reference only:**
   [`dpl_3Aab7Ktag7HQHdj98QD3waT1eZVc`](https://vercel.com/siewheans-projects/sports-website-web/3Aab7Ktag7HQHdj98QD3waT1eZVc)
-  was READY for an earlier SHA. It is not evidence of deployment for `a0b7d9ff…`.
+  was READY for an earlier SHA. It is not evidence of deployment for `526811e9…`.
 
 ## Verified implementation scope
 
 - Commercial write mutations require an active `owner` or `organiser`; read-only
   billing access remains available to active members.
 - Competition archive import requires an active `owner` or `organiser`, unless the
-  actor is a platform administrator.
+  actor has a non-revoked, non-expired platform-administrator grant. The same active
+  lifecycle check applies to unpublished exports.
 - Support access-pass and sport-default mutations append their audit events in the
   same database transaction.
 
