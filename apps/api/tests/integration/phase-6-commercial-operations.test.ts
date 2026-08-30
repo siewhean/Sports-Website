@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
+import { createDefaultFormatTemplates } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { EntitlementRuntime } from "../../src/entitlement-runtime.js";
@@ -241,6 +242,89 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
         statusCode: 403,
       });
     }
+  });
+
+  it("EXP-005: keeps audit history private while published fixture exports remain public", async () => {
+    const publishedCompetitionId = randomUUID();
+    const publishedDivisionId = randomUUID();
+    const formatRevisionId = randomUUID();
+    const scheduleRevisionId = randomUUID();
+    const graph = structuredClone(createDefaultFormatTemplates(8)[0]!.graph);
+
+    await client`
+      INSERT INTO competitions (id, organisation_id, name, slug, sport_code, status, timezone, starts_on, ends_on, venue, created_by)
+      VALUES (${publishedCompetitionId}, ${organisationId}, 'Published Audit Export', ${`published-audit-${randomUUID()}`}, 'basketball', 'published', 'Asia/Singapore', '2027-08-01', '2027-08-02', 'Arena', ${ownerAccountId})
+    `;
+    await client`INSERT INTO divisions (id, competition_id, name, team_limit) VALUES (${publishedDivisionId}, ${publishedCompetitionId}, 'Open', 8)`;
+    await client`
+      INSERT INTO division_entries (division_id, name, seed, status, entry_type)
+      SELECT ${publishedDivisionId}, 'Team ' || seed, seed, 'active', 'team'
+      FROM generate_series(1, 8) seed
+    `;
+    await client`
+      INSERT INTO format_revisions (id, competition_id, division_id, revision, definition, definition_hash, created_by, validation_contract)
+      VALUES (${formatRevisionId}, ${publishedCompetitionId}, ${publishedDivisionId}, 1, ${client.json(graph)}, phase4_sha256_json(${client.json(graph)}::jsonb), ${ownerAccountId}, 'phase3')
+    `;
+    await client`
+      INSERT INTO schedule_revisions (id, competition_id, format_revision_id, revision, input_hash, status, created_by, quality)
+      VALUES (${scheduleRevisionId}, ${publishedCompetitionId}, ${formatRevisionId}, 1, phase4_sha256_json(jsonb_build_object('audit_export', ${scheduleRevisionId}::uuid)), 'draft', ${ownerAccountId}, '{}'::jsonb)
+    `;
+    await client`
+      INSERT INTO competition_publications (competition_id, published_schedule_revision_id, schedule_version, schedule_published_at)
+      VALUES (${publishedCompetitionId}, ${scheduleRevisionId}, 1, now())
+    `;
+    await client`
+      INSERT INTO audit_events (request_id, actor_account_id, actor_type, organisation_id, action, target_type, target_id)
+      VALUES (${`audit-export-${randomUUID()}`}, ${ownerAccountId}, 'account', ${organisationId}, 'competition.updated', 'competition', ${publishedCompetitionId})
+    `;
+
+    const organiserAccountId = randomUUID();
+    const unrelatedAccountId = randomUUID();
+    const revokedAccountId = randomUUID();
+    const expiredAccountId = randomUUID();
+    await client`
+      INSERT INTO accounts (id, primary_email, display_name) VALUES
+        (${organiserAccountId}, ${`${organiserAccountId}@example.test`}, 'Audit organiser'),
+        (${unrelatedAccountId}, ${`${unrelatedAccountId}@example.test`}, 'Audit unrelated'),
+        (${revokedAccountId}, ${`${revokedAccountId}@example.test`}, 'Audit revoked admin'),
+        (${expiredAccountId}, ${`${expiredAccountId}@example.test`}, 'Audit expired admin')
+    `;
+    await client`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${organisationId}, ${organiserAccountId}, 'organiser', 'active')`;
+    await client`
+      INSERT INTO account_platform_roles (account_id, role, granted_at, revoked_at, reason) VALUES
+        (${revokedAccountId}, 'platform_admin', now() - interval '2 days', now() - interval '1 day', 'Revoked audit export test')
+    `;
+    await client`
+      INSERT INTO account_platform_roles (account_id, role, granted_at, expires_at, reason) VALUES
+        (${expiredAccountId}, 'platform_admin', now() - interval '2 days', now() - interval '1 day', 'Expired audit export test')
+    `;
+
+    await expect(
+      exportRuntime.generateAuditHistoryExport({ accountId: organiserAccountId }, publishedCompetitionId),
+    ).resolves.toContain("competition.updated");
+    await expect(
+      exportRuntime.generateAuditHistoryExport({ accountId: platformAdminAccountId }, publishedCompetitionId),
+    ).resolves.toContain("competition.updated");
+    await expect(exportRuntime.generateCompetitionCsv(publishedCompetitionId)).resolves.toContain(
+      "Division,Stage,Match",
+    );
+
+    for (const accountId of [unrelatedAccountId, revokedAccountId, expiredAccountId]) {
+      await expect(
+        exportRuntime.generateAuditHistoryExport({ accountId }, publishedCompetitionId),
+      ).rejects.toMatchObject({ statusCode: 403, code: "ORGANISATION_ACCESS_DENIED" });
+    }
+
+    const draftCompetitionId = (
+      await client<{ id: string }[]>`
+        INSERT INTO competitions (organisation_id, name, slug, sport_code, status, timezone, starts_on, ends_on, venue, created_by)
+        VALUES (${organisationId}, 'Draft Audit Export', ${`draft-audit-${randomUUID()}`}, 'basketball', 'draft', 'Asia/Singapore', '2027-08-01', '2027-08-02', 'Arena', ${ownerAccountId})
+        RETURNING id
+      `
+    )[0]!.id;
+    await expect(
+      exportRuntime.generateAuditHistoryExport({ accountId: unrelatedAccountId }, draftCompetitionId),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ORGANISATION_ACCESS_DENIED" });
   });
 
   it("ADM-001 & ADM-002: lists organisations and AI summary for platform_admin", async () => {
