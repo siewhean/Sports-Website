@@ -54,6 +54,11 @@ export async function registerPhase3Routes(app: FastifyInstance, options: Phase3
         tags: ["phase3-competitions"],
       },
     },
-    async (request) => options.runtime.repositories.competition.listByAccountId(await readAccountId(request)),
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store, private");
+      reply.header("Pragma", "no-cache");
+      reply.header("Vary", "Cookie");
+      return options.runtime.repositories.competition.listByAccountId(await readAccountId(request));
+    },
   );
 }
