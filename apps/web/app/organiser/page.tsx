@@ -4,6 +4,7 @@ import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
 import { ActionLink, InlineNotice, StatusLine } from "@/components/foundation/Primitives";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+import { organiserCompetitionLibraryCopy } from "@/lib/organiser-competition-library";
 
 export const metadata: Metadata = {
   title: messages.organiser.title,
@@ -21,6 +22,7 @@ export default function OrganiserPage() {
       <section className="operational-heading" aria-labelledby="organiser-summary">
         <p>{messages.organiser.summaryBody}</p>
         <h2 id="organiser-summary">{messages.organiser.summaryTitle}</h2>
+        <ActionLink href="/organiser/competitions">{organiserCompetitionLibraryCopy.openLibrary}</ActionLink>
         <ActionLink href="/organiser/competitions/new">{messages.organiser.createCompetition}</ActionLink>
         {demoFixturesEnabled() ? <ActionLink href="/format">{messages.organiser.nextAction}</ActionLink> : null}
       </section>
