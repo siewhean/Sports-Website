@@ -130,18 +130,18 @@ See [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md). This is
 
 ## Pre-merge gate summary
 
-| Gate | Status | Evidence |
-| --- | --- | --- |
-| Event Pass competition scope | PASS | Product SHA `1f569707...`; migrations `0060`/`0061`; exact-SHA CI |
-| Event Pass checkout UI/BFF | PASS | Product SHA `1f569707...`; exact-SHA CI |
-| Product CI | PASS | Run `33393688186`, all four jobs green; E2E/a11y/visual executed |
-| Controlled staging | PASS | Vercel `dpl_5g1r2azWDCVrWZuHxnVTPkeK7oep`, READY, exact `1f569707...` |
-| Controlled SMTP | PASS | Run `33397679768`; artifact `9760009718`; digest above |
-| Independent Event Pass QA | PASS | Passed after migration-order and i18n remediation |
-| Physical-device retained receipt | NOT RECORDED | Omitted from retained PR evidence by release-owner instruction |
-| Legal/privacy | DEFERRED TO GATE F | ADR 0003; not an approval receipt |
-| Final docs-only wrapper CI | PENDING | Record in PR metadata after this commit exists |
-| Post-merge target CI/integration deployment | PENDING | Requires the eventual merge SHA |
+| Gate                                        | Status             | Evidence                                                              |
+| ------------------------------------------- | ------------------ | --------------------------------------------------------------------- |
+| Event Pass competition scope                | PASS               | Product SHA `1f569707...`; migrations `0060`/`0061`; exact-SHA CI     |
+| Event Pass checkout UI/BFF                  | PASS               | Product SHA `1f569707...`; exact-SHA CI                               |
+| Product CI                                  | PASS               | Run `33393688186`, all four jobs green; E2E/a11y/visual executed      |
+| Controlled staging                          | PASS               | Vercel `dpl_5g1r2azWDCVrWZuHxnVTPkeK7oep`, READY, exact `1f569707...` |
+| Controlled SMTP                             | PASS               | Run `33397679768`; artifact `9760009718`; digest above                |
+| Independent Event Pass QA                   | PASS               | Passed after migration-order and i18n remediation                     |
+| Physical-device retained receipt            | NOT RECORDED       | Omitted from retained PR evidence by release-owner instruction        |
+| Legal/privacy                               | DEFERRED TO GATE F | ADR 0003; not an approval receipt                                     |
+| Final docs-only wrapper CI                  | PENDING            | Record in PR metadata after this commit exists                        |
+| Post-merge target CI/integration deployment | PENDING            | Requires the eventual merge SHA                                       |
 
 ## Release decision
 
