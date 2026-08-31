@@ -72,6 +72,8 @@ jobs:
       - name: Install the pinned pnpm version
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
+      - name: Build configuration for migration tooling
+        run: pnpm --filter @matchday/config build
       - name: Apply the real database migrations
         run: pnpm db:migrate
       - name: Build the production worker and its workspace dependencies
