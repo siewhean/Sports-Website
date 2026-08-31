@@ -92,7 +92,7 @@ export class EntitlementRuntime {
       )
     )[0];
     const paidState = Boolean(
-      record &&
+      record?.tier === "organiser_pro" &&
       ["active", "trialing"].includes(record.status) &&
       (!record.current_period_end || record.current_period_end.getTime() > Date.now()),
     );
@@ -100,7 +100,7 @@ export class EntitlementRuntime {
       return { tier: "free", status: record?.status ?? "active", currentPeriodEnd: record?.current_period_end ?? null };
     }
     return {
-      tier: record.tier as SubscriptionTier,
+      tier: "organiser_pro",
       status: record.status,
       currentPeriodEnd: record.current_period_end,
     };
@@ -204,9 +204,8 @@ export class EntitlementRuntime {
     feature: Parameters<typeof assertFeatureEntitled>[1],
   ): Promise<void> {
     const tier =
-      (
-        await tx.unsafe<{ tier: SubscriptionTier }>(`SELECT matchday_effective_plan_tier($1) tier`, [competitionId])
-      )[0]?.tier ?? "free";
+      (await tx.unsafe<{ tier: SubscriptionTier }>(`SELECT matchday_effective_plan_tier($1) tier`, [competitionId]))[0]
+        ?.tier ?? "free";
     try {
       assertFeatureEntitled(tier, feature);
     } catch (err: unknown) {
@@ -275,29 +274,12 @@ export class EntitlementRuntime {
             ? (tierRaw as SubscriptionTier)
             : "event_pass";
           const competitionId = tier === "event_pass" ? (object.metadata?.competition_id ?? null) : null;
+          if (tier === "event_pass" && !competitionId) {
+            throw new ApiError(422, ErrorCode.VALIDATION_ERROR, "Event Pass webhook requires a competition");
+          }
           if (competitionId) {
             await this.assertCompetitionBelongsToOrganisation(tx, competitionId, orgId);
           }
-          await tx.unsafe(
-            `INSERT INTO organisation_subscriptions
-               (organisation_id,tier,status,provider_customer_id,provider_subscription_id,current_period_start,current_period_end,updated_at)
-             VALUES ($1,$2,'active',$3,$4,
-               COALESCE(to_timestamp($5::double precision),now()),
-               COALESCE(to_timestamp($6::double precision),now()+interval '30 days'),now())
-             ON CONFLICT (organisation_id) DO UPDATE SET
-               tier=EXCLUDED.tier,status='active',
-               provider_customer_id=COALESCE(EXCLUDED.provider_customer_id,organisation_subscriptions.provider_customer_id),
-               provider_subscription_id=COALESCE(EXCLUDED.provider_subscription_id,organisation_subscriptions.provider_subscription_id),
-               current_period_start=EXCLUDED.current_period_start,current_period_end=EXCLUDED.current_period_end,updated_at=now()`,
-            [
-              orgId,
-              tier,
-              object.customer ?? null,
-              object.subscription ?? null,
-              object.current_period_start ?? null,
-              object.current_period_end ?? null,
-            ],
-          );
           if (tier === "event_pass" && competitionId) {
             await tx.unsafe(
               `INSERT INTO entitlement_grants
@@ -309,9 +291,27 @@ export class EntitlementRuntime {
                ON CONFLICT (idempotency_key) DO NOTHING`,
               [competitionId, orgId, `stripe:event-pass:${eventId}:${competitionId}`],
             );
-          }
-          const includedUnits = TIER_FEATURE_LIMITS[tier]?.monthly_ai_actions ?? 0;
-          if (includedUnits > 0) {
+          } else if (tier === "organiser_pro") {
+            await tx.unsafe(
+              `INSERT INTO organisation_subscriptions
+                 (organisation_id,tier,status,provider_customer_id,provider_subscription_id,current_period_start,current_period_end,updated_at)
+               VALUES ($1,'organiser_pro','active',$2,$3,
+                 COALESCE(to_timestamp($4::double precision),now()),
+                 COALESCE(to_timestamp($5::double precision),now()+interval '30 days'),now())
+               ON CONFLICT (organisation_id) DO UPDATE SET
+                 tier='organiser_pro',status='active',
+                 provider_customer_id=COALESCE(EXCLUDED.provider_customer_id,organisation_subscriptions.provider_customer_id),
+                 provider_subscription_id=COALESCE(EXCLUDED.provider_subscription_id,organisation_subscriptions.provider_subscription_id),
+                 current_period_start=EXCLUDED.current_period_start,current_period_end=EXCLUDED.current_period_end,updated_at=now()`,
+              [
+                orgId,
+                object.customer ?? null,
+                object.subscription ?? null,
+                object.current_period_start ?? null,
+                object.current_period_end ?? null,
+              ],
+            );
+            const includedUnits = TIER_FEATURE_LIMITS.organiser_pro.monthly_ai_actions;
             await tx.unsafe(
               `INSERT INTO ai_usage_allowances (organisation_id, actor_account_id, action, period_start, action_limit)
                SELECT $1, m.account_id, action_value, date_trunc('month', now())::date, $2

@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { messages } from "@matchday/ui";
 import { parseEventPassCheckoutUrl } from "@/lib/event-pass-checkout";
 import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "@/lib/phase3-settings-command.server";
 import { requestPublicOrigin } from "@/lib/phase3-origin";
@@ -10,7 +11,12 @@ export async function POST(request: NextRequest) {
   const body = await jsonBody(request);
   if (!body || !hasExactKeys(body, ["organisationId", "competitionId"])) {
     return NextResponse.json(
-      { error: { code: "VALIDATION_ERROR", message: "Select one competition for the Event Pass" } },
+      {
+        error: {
+          code: messages.eventPassCheckout.validationErrorCode,
+          message: messages.eventPassCheckout.invalidRequest,
+        },
+      },
       { status: 400 },
     );
   }
@@ -22,7 +28,12 @@ export async function POST(request: NextRequest) {
     !uuidPattern.test(competitionId)
   ) {
     return NextResponse.json(
-      { error: { code: "VALIDATION_ERROR", message: "Select a valid competition for the Event Pass" } },
+      {
+        error: {
+          code: messages.eventPassCheckout.validationErrorCode,
+          message: messages.eventPassCheckout.invalidCompetition,
+        },
+      },
       { status: 400 },
     );
   }
@@ -30,7 +41,12 @@ export async function POST(request: NextRequest) {
   const publicOrigin = requestPublicOrigin(request.headers, process.env.MATCHDAY_PUBLIC_ORIGIN);
   if (!publicOrigin) {
     return NextResponse.json(
-      { error: { code: "PUBLIC_ORIGIN_UNAVAILABLE", message: "Checkout is unavailable in this environment" } },
+      {
+        error: {
+          code: messages.eventPassCheckout.publicOriginUnavailableCode,
+          message: messages.eventPassCheckout.unavailableInEnvironment,
+        },
+      },
       { status: 503 },
     );
   }

@@ -78,10 +78,7 @@ describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => 
   });
 
   it("generates SportsEvent JSON-LD for public competition pages", () => {
-    const jsonLd = publicCompetitionJsonLd(
-      { slug: "summer-cup", name: "Summer Cup", sport: "Football" },
-      publicOrigin,
-    );
+    const jsonLd = publicCompetitionJsonLd({ slug: "summer-cup", name: "Summer Cup", sport: "Football" }, publicOrigin);
 
     expect(jsonLd).toEqual({
       "@context": "https://schema.org",

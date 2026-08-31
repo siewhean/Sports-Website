@@ -1193,9 +1193,10 @@ export class Phase3Runtime {
       if (input.action === "create") await this.assertEntriesEditable(tx, competitionId, divisionId);
       const current = await this.domainCompetition(tx, competitionId);
       const plan = required(
-        await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(`SELECT plan_tier FROM competitions WHERE id=$1`, [
-          competitionId,
-        ]),
+        await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(
+          `SELECT matchday_effective_plan_tier($1) AS plan_tier`,
+          [competitionId],
+        ),
         "Competition not found",
       ).plan_tier;
       const context = this.context(actor);
@@ -1678,9 +1679,10 @@ export class Phase3Runtime {
       await this.assertEntriesEditable(tx, competitionId, divisionId);
       let candidate = await this.domainCompetition(tx, competitionId);
       const plan = required(
-        await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(`SELECT plan_tier FROM competitions WHERE id=$1`, [
-          competitionId,
-        ]),
+        await tx.unsafe<{ plan_tier: competitionDomain.PlanTier }>(
+          `SELECT matchday_effective_plan_tier($1) AS plan_tier`,
+          [competitionId],
+        ),
         "Competition not found",
       ).plan_tier;
       for (const [index, item] of prepared.entries()) {

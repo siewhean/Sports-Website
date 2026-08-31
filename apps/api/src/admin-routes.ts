@@ -81,7 +81,12 @@ export async function registerAdminRoutes(
   // Update organisation entitlements (fixed payload mapping for top_up_ai_units)
   app.post<{
     Params: { organisationId: string };
-    Body: { tier?: "free" | "event_pass" | "organiser_pro"; top_up_ai_units?: number; reason?: string };
+    Body: {
+      tier?: "free" | "event_pass" | "organiser_pro";
+      competition_id?: string;
+      top_up_ai_units?: number;
+      reason?: string;
+    };
   }>(
     "/api/v1/admin/organisations/:organisationId/entitlements",
     {
@@ -91,6 +96,7 @@ export async function registerAdminRoutes(
           tier: Type.Optional(
             Type.Union([Type.Literal("free"), Type.Literal("event_pass"), Type.Literal("organiser_pro")]),
           ),
+          competition_id: Type.Optional(Id),
           top_up_ai_units: Type.Optional(Type.Integer({ minimum: 1 })),
           reason: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
         }),
@@ -100,8 +106,14 @@ export async function registerAdminRoutes(
     },
     async (request) => {
       const actor = await mutationActor(request);
-      const input: { tier?: "free" | "event_pass" | "organiser_pro"; topUpAiUnits?: number; reason?: string } = {};
+      const input: {
+        tier?: "free" | "event_pass" | "organiser_pro";
+        competitionId?: string;
+        topUpAiUnits?: number;
+        reason?: string;
+      } = {};
       if (request.body.tier !== undefined) input.tier = request.body.tier;
+      if (request.body.competition_id !== undefined) input.competitionId = request.body.competition_id;
       if (request.body.top_up_ai_units !== undefined) input.topUpAiUnits = request.body.top_up_ai_units;
       if (request.body.reason !== undefined) input.reason = request.body.reason;
       return options.runtime.updateEntitlements(actor, request.params.organisationId, input, request.id);

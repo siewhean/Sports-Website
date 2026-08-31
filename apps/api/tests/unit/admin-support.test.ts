@@ -79,6 +79,44 @@ describe("Admin & Support Tooling (ADM-001 through ADM-007)", () => {
     expect(executedQueries.some((q) => q.includes("INSERT INTO entitlement_grants"))).toBe(true);
   });
 
+  it("ADM-003: grants an Event Pass only to the named competition", async () => {
+    const executedQueries: string[] = [];
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        executedQueries.push(query);
+        if (query.includes("account_platform_roles")) return [{ role: "platform_admin" }];
+        if (query.includes("SELECT id FROM competitions")) return [{ id: "comp-1" }];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    await expect(
+      new AdminRuntime(mockSql).updateEntitlements(
+        adminActor,
+        "org-1",
+        { tier: "event_pass", competitionId: "comp-1", reason: "Competition support grant" },
+        "req-event-pass",
+      ),
+    ).resolves.toMatchObject({ tier: "event_pass" });
+    expect(executedQueries.some((query) => query.includes("INSERT INTO organisation_subscriptions"))).toBe(false);
+    expect(executedQueries.some((query) => query.includes("competition_id") && query.includes("event_pass"))).toBe(
+      true,
+    );
+  });
+
+  it("ADM-003: rejects an organisation-wide Event Pass grant", async () => {
+    const mockSql = {
+      unsafe: (async (query: string) => {
+        if (query.includes("account_platform_roles")) return [{ role: "platform_admin" }];
+        return [];
+      }) as PostgresJsSql["unsafe"],
+    } as unknown as PostgresJsSql;
+
+    await expect(
+      new AdminRuntime(mockSql).updateEntitlements(adminActor, "org-1", { tier: "event_pass" }, "req-event-pass"),
+    ).rejects.toMatchObject({ statusCode: 422, code: "VALIDATION_ERROR" });
+  });
+
   it("ADM-004: manages scoring access passes (revoke and reset) with exact schema columns", async () => {
     const executedQueries: string[] = [];
     const mockSql = {

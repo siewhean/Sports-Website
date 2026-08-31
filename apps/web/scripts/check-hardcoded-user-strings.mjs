@@ -246,6 +246,14 @@ function isMachineLiteral(node, source) {
   if (!/[\p{L}\p{N}]/u.test(value) || /^\s*$/.test(value)) return true;
   if (value === "use client" || value === "use server") return true;
   if (isNextDynamicRouteConfig(node)) return true;
+  if (
+    ts.isArrayLiteralExpression(node.parent) &&
+    ts.isCallExpression(node.parent.parent) &&
+    node.parent.parent.expression.getText(source) === "hasExactKeys" &&
+    node.parent.parent.arguments[1] === node.parent
+  ) {
+    return true;
+  }
   if (ts.isPropertyAssignment(node.parent) && node.parent.name === node) return true;
   if (
     ts.isPropertyAssignment(node.parent) &&
@@ -264,6 +272,7 @@ function isMachineLiteral(node, source) {
     return true;
   }
   if (/^(?:https?:|mailto:|tel:|\/|\.\/|\.\.\/|@\/|matchday[-_])/.test(value)) return true;
+  if (value === "application/json") return true;
   if (/^(?:\.?[#[]|[.#][A-Za-z_-])/.test(value)) return true;
   if (/^(?:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}T.*|[A-Z][A-Z0-9_-]*-\d+)$/.test(value)) return true;
   if (ts.isImportDeclaration(node.parent) || ts.isExportDeclaration(node.parent) || ts.isLiteralTypeNode(node.parent)) {
@@ -317,6 +326,7 @@ function isMachineLiteral(node, source) {
   if (nonUserCallNames.has(parentCall) || machineCallNames.has(parentCall)) return true;
   if (ts.isPropertyAssignment(node.parent)) {
     const name = propertyName(node, source);
+    if (name === "method" && httpMethods.has(value)) return true;
     if (
       [
         "dateStyle",
@@ -564,8 +574,10 @@ function runSelfTest(catalogue) {
       true,
     ],
     ["HTTP mutation method", 'sendMutation("PATCH", body)', false],
+    ["JSON content type", 'fetch("/api", {method:"POST", headers:{"content-type":"application/json"}})', false],
     ["Next dynamic route config", 'export const dynamic="force-dynamic"', false],
     ["visible HTTP-looking text", "export const A=()=> <button>PUT</button>", true],
+    ["slash-delimited visible text", "export const A=()=> <p>A/B testing</p>", true],
   ];
 
   const failures = cases.filter(([name, sourceText, shouldFail]) => {

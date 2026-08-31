@@ -218,6 +218,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     await expect(
       runtime.createCheckoutSession({ accountId: "viewer-1" }, "org-1", {
         tier: "event_pass",
+        competitionId: "comp-1",
         successUrl: "https://example.com/success",
         cancelUrl: "https://example.com/cancel",
       }),
@@ -244,6 +245,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       await expect(
         runtimeWithoutStripe.createCheckoutSession(actor, "org-1", {
           tier: "event_pass",
+          competitionId: "comp-1",
           successUrl: "https://example.com/success",
           cancelUrl: "https://example.com/cancel",
         }),
@@ -267,7 +269,8 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
         calls.push(query.trim().split("\n")[0]!);
         if (query.includes("billing_webhook_receipts") && query.includes("SELECT")) return [];
         if (query.includes("INSERT INTO billing_webhook_receipts")) return [];
-        if (query.includes("INSERT INTO organisation_subscriptions")) return [];
+        if (query.includes("SELECT organisation_id FROM competitions"))
+          return [{ organisation_id: "org-from-metadata" }];
         return [];
       }) as PostgresJsSql["unsafe"],
     } as unknown as PostgresJsSql;
@@ -284,6 +287,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
           subscription: null,
           metadata: {
             organisation_id: "org-from-metadata",
+            competition_id: "competition-from-metadata",
             tier: "event_pass",
             top_up_units: "0",
           },
@@ -299,8 +303,8 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     const result = await runtime.processBillingWebhook(header, rawPayload, payload, secret);
     expect(result.processed).toBe(true);
     expect(result.eventType).toBe("checkout.session.completed");
-    // Should have issued an INSERT into organisation_subscriptions
-    expect(calls.some((c) => c.includes("INSERT INTO organisation_subscriptions"))).toBe(true);
+    expect(calls.some((c) => c.includes("INSERT INTO organisation_subscriptions"))).toBe(false);
+    expect(calls.some((c) => c.includes("INSERT INTO entitlement_grants"))).toBe(true);
   });
 
   it("BIL-016: reads tier from metadata.tier and parses top_up_units from string", async () => {
@@ -383,7 +387,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
         object: {
           metadata: {
             organisation_id: "org-bil017",
-            tier: "event_pass",
+            tier: "organiser_pro",
             top_up_units: "0",
           },
         },

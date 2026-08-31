@@ -36,6 +36,8 @@ const gateSubsequentMigrationNames = [
   "0057_phase6_effective_entry_entitlements.sql",
   "0058_phase6_provider_subscription_state.sql",
   "0059_phase6_shared_ai_credits.sql",
+  "0060_phase6_event_pass_competition_scope.sql",
+  "0061_phase6_reject_organisation_event_pass.sql",
 ] as const;
 
 beforeAll(async () => dropTestSchema(config.databaseUrl, schema));

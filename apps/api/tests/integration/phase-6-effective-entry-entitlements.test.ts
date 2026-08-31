@@ -31,7 +31,7 @@ describeInfrastructure("Phase 6 effective entry entitlements", () => {
     await dropTestSchema(databaseUrl, schema);
   });
 
-  it("applies a purchased tier to existing competitions and blocks new over-limit entries after lapse", async () => {
+  it("scopes Event Pass entry capacity to the purchased competition and never to a sibling", async () => {
     const accountId = (
       await client<{ id: string }[]>`
         INSERT INTO accounts (primary_email, display_name, email_verified_at)
@@ -43,7 +43,7 @@ describeInfrastructure("Phase 6 effective entry entitlements", () => {
       await tx`INSERT INTO organisations (id, name, slug) VALUES (${organisationId}, 'Paid Org', ${`paid-org-${randomUUID()}`})`;
       await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status) VALUES (${organisationId}, ${accountId}, 'owner', 'active')`;
     });
-    const competitionId = (
+    const competitionA = (
       await client<{ id: string }[]>`
         INSERT INTO competitions
           (organisation_id, created_by, name, slug, sport_code, status, timezone, starts_on, ends_on, venue, plan_tier)
@@ -53,47 +53,71 @@ describeInfrastructure("Phase 6 effective entry entitlements", () => {
         RETURNING id
       `
     )[0]!.id;
-    const divisionId = (
+    const competitionB = (
+      await client<{ id: string }[]>`
+        INSERT INTO competitions
+          (organisation_id, created_by, name, slug, sport_code, status, timezone, starts_on, ends_on, venue, plan_tier)
+        VALUES
+          (${organisationId}, ${accountId}, 'Sibling Competition', ${`sibling-comp-${randomUUID()}`},
+           'basketball', 'draft', 'Asia/Singapore', '2027-08-01', '2027-08-02', 'Arena', 'free')
+        RETURNING id
+      `
+    )[0]!.id;
+    const divisionA = (
       await client<{ id: string }[]>`
         INSERT INTO divisions (competition_id, name, team_limit)
-        VALUES (${competitionId}, 'Open', 48) RETURNING id
+        VALUES (${competitionA}, 'Open', 48) RETURNING id
+      `
+    )[0]!.id;
+    const divisionB = (
+      await client<{ id: string }[]>`
+        INSERT INTO divisions (competition_id, name, team_limit)
+        VALUES (${competitionB}, 'Open', 48) RETURNING id
       `
     )[0]!.id;
 
+    await expect(
+      client`
+        INSERT INTO organisation_subscriptions
+          (organisation_id, tier, status, current_period_start, current_period_end)
+        VALUES (${organisationId}, 'event_pass', 'active', now(), now() + interval '30 days')
+      `,
+    ).rejects.toThrow(/Event Pass entitlement must be scoped to a competition/i);
     await client`
-      INSERT INTO organisation_subscriptions
-        (organisation_id, tier, status, current_period_start, current_period_end)
-      VALUES (${organisationId}, 'event_pass', 'active', now(), now() + interval '30 days')
+      INSERT INTO entitlement_grants
+        (organisation_id, competition_id, tier, feature, source, quantity, idempotency_key, expires_at)
+      VALUES
+        (${organisationId}, ${competitionA}, 'event_pass', 'unlimited_entries', 'purchase', 1, ${`pass-${randomUUID()}`}, now() + interval '30 days')
     `;
 
-    const [upgraded] = await client<{ plan_tier: string }[]>`
-      SELECT plan_tier FROM competitions WHERE id=${competitionId}
+    const tiers = await client<{ id: string; tier: string }[]>`
+      SELECT id, matchday_effective_plan_tier(id) AS tier
+      FROM competitions
+      WHERE id IN (${competitionA}, ${competitionB})
     `;
-    expect(upgraded?.plan_tier).toBe("event_pass");
+    expect(Object.fromEntries(tiers.map((tier) => [tier.id, tier.tier]))).toEqual({
+      [competitionA]: "event_pass",
+      [competitionB]: "free",
+    });
 
     for (let index = 1; index <= 17; index += 1) {
       await client`
         INSERT INTO division_entries (division_id, name, entry_type, status)
-        VALUES (${divisionId}, ${`Team ${index}`}, 'team', 'active')
+        VALUES (${divisionA}, ${`Pass Team ${index}`}, 'team', 'active')
       `;
     }
-
-    await client`
-      UPDATE organisation_subscriptions
-      SET status='past_due', updated_at=now()
-      WHERE organisation_id=${organisationId}
-    `;
+    for (let index = 1; index <= 16; index += 1) {
+      await client`
+        INSERT INTO division_entries (division_id, name, entry_type, status)
+        VALUES (${divisionB}, ${`Sibling Team ${index}`}, 'team', 'active')
+      `;
+    }
 
     await expect(
       client`
         INSERT INTO division_entries (division_id, name, entry_type, status)
-        VALUES (${divisionId}, 'Team 18', 'team', 'active')
+        VALUES (${divisionB}, 'Sibling Team 17', 'team', 'active')
       `,
     ).rejects.toThrow(/free plan permits at most 16 active entries/i);
-
-    const [retained] = await client<{ plan_tier: string }[]>`
-      SELECT plan_tier FROM competitions WHERE id=${competitionId}
-    `;
-    expect(retained?.plan_tier).toBe("event_pass");
   });
 });

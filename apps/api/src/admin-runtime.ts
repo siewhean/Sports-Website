@@ -163,12 +163,32 @@ export class AdminRuntime {
   async updateEntitlements(
     actor: Phase3Actor,
     orgId: string,
-    input: { tier?: SubscriptionTier; topUpAiUnits?: number; reason?: string },
+    input: { tier?: SubscriptionTier; competitionId?: string; topUpAiUnits?: number; reason?: string },
     requestId: string,
   ) {
     await this.assertPlatformAdmin(actor);
     return this.inTransaction(async (tx: PostgresJsSql) => {
-      if (input.tier) {
+      if (input.tier === "event_pass") {
+        if (!input.competitionId) {
+          throw new ApiError(422, ErrorCode.VALIDATION_ERROR, "Event Pass entitlement requires a competition");
+        }
+        const competitionRows = await tx.unsafe<{ id: string }>(
+          `SELECT id FROM competitions WHERE id=$1 AND organisation_id=$2`,
+          [input.competitionId, orgId],
+        );
+        if (!competitionRows[0]) {
+          throw new ApiError(404, ErrorCode.COMPETITION_NOT_FOUND, "Competition not found in organisation");
+        }
+        await tx.unsafe(
+          `INSERT INTO entitlement_grants
+             (organisation_id,competition_id,tier,feature,source,quantity,idempotency_key,expires_at)
+           SELECT c.organisation_id,c.id,'event_pass','unlimited_entries','admin_grant',1,$3,
+                  ((c.ends_on + 1)::timestamp AT TIME ZONE c.timezone)
+           FROM competitions c
+           WHERE c.id=$1 AND c.organisation_id=$2`,
+          [input.competitionId, orgId, `admin:event-pass:${randomUUID()}`],
+        );
+      } else if (input.tier) {
         await tx.unsafe(
           `INSERT INTO organisation_subscriptions (organisation_id, tier, status, updated_at)
            VALUES ($1, $2, 'active', now())
@@ -180,7 +200,12 @@ export class AdminRuntime {
         await tx.unsafe(
           `INSERT INTO entitlement_grants (organisation_id, tier, feature, source, quantity, idempotency_key)
            VALUES ($1, $2, 'ai_actions', 'admin_grant', $3, $4)`,
-          [orgId, input.tier ?? "free", input.topUpAiUnits, `admin:${randomUUID()}`],
+          [
+            orgId,
+            input.tier === "event_pass" ? "free" : (input.tier ?? "free"),
+            input.topUpAiUnits,
+            `admin:${randomUUID()}`,
+          ],
         );
       }
 
@@ -193,6 +218,7 @@ export class AdminRuntime {
           orgId,
           JSON.stringify({
             tier: input.tier,
+            competition_id: input.competitionId,
             top_up_ai_units: input.topUpAiUnits,
             reason: input.reason ?? "Administrative override",
           }),

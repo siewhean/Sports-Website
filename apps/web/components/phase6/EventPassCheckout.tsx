@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { interpolate, messages } from "@matchday/ui";
 import type { OrganiserCompetitionLibraryItem } from "@/lib/organiser-competition-library";
 import { parseEventPassCheckoutUrl } from "@/lib/event-pass-checkout";
 import styles from "./EventPassCheckout.module.css";
@@ -27,14 +28,14 @@ export function EventPassCheckout({ competitions }: Props) {
   if (competitions.length === 0) {
     return (
       <div className={styles.empty}>
-        <h2>Create a competition first</h2>
-        <p>An Event Pass is tied to one named competition, so there needs to be a competition to attach it to.</p>
+        <h2>{messages.eventPassCheckout.createCompetitionTitle}</h2>
+        <p>{messages.eventPassCheckout.createCompetitionBody}</p>
         <div className={styles.actions}>
           <Link className={styles.primaryAction} href="/organiser/competitions/new">
-            Create competition
+            {messages.eventPassCheckout.createCompetition}
           </Link>
           <Link className={styles.secondaryAction} href="/organiser/competitions">
-            Back to my competitions
+            {messages.eventPassCheckout.backToCompetitions}
           </Link>
         </div>
       </div>
@@ -46,7 +47,7 @@ export function EventPassCheckout({ competitions }: Props) {
     if (!selected || submitting) return;
     setSubmitting(true);
     setFailed(false);
-    setStatus("Opening secure checkout…");
+    setStatus(messages.eventPassCheckout.openingSecureCheckout);
     try {
       const response = await fetch("/api/billing/event-pass", {
         method: "POST",
@@ -56,7 +57,7 @@ export function EventPassCheckout({ competitions }: Props) {
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         setFailed(true);
-        setStatus(errorMessage(payload) ?? "Checkout could not be started. No charge was made.");
+        setStatus(errorMessage(payload) ?? messages.eventPassCheckout.checkoutStartFailed);
         return;
       }
       const checkoutUrl = parseEventPassCheckoutUrl(payload, {
@@ -65,13 +66,13 @@ export function EventPassCheckout({ competitions }: Props) {
       });
       if (!checkoutUrl) {
         setFailed(true);
-        setStatus("Checkout returned an invalid destination. No charge was made.");
+        setStatus(messages.eventPassCheckout.invalidCheckoutDestination);
         return;
       }
       window.location.assign(checkoutUrl);
     } catch {
       setFailed(true);
-      setStatus("Checkout is temporarily unavailable. No charge was made.");
+      setStatus(messages.eventPassCheckout.checkoutUnavailable);
     } finally {
       setSubmitting(false);
     }
@@ -80,13 +81,10 @@ export function EventPassCheckout({ competitions }: Props) {
   return (
     <div className={styles.checkout}>
       <section className={styles.panel} aria-labelledby="event-pass-checkout-title">
-        <h2 id="event-pass-checkout-title">Choose the competition</h2>
-        <p>
-          The $49 Event Pass unlocks paid competition features for the selected event only. Other competitions in the same
-          organisation keep their own entitlement level.
-        </p>
+        <h2 id="event-pass-checkout-title">{messages.eventPassCheckout.chooseCompetition}</h2>
+        <p>{messages.eventPassCheckout.scopeDescription}</p>
         <div className={styles.field}>
-          <label htmlFor="event-pass-competition">Competition</label>
+          <label htmlFor="event-pass-competition">{messages.eventPassCheckout.competitionLabel}</label>
           <select
             className={styles.select}
             id="event-pass-competition"
@@ -96,18 +94,25 @@ export function EventPassCheckout({ competitions }: Props) {
           >
             {competitions.map((competition) => (
               <option key={competition.id} value={competition.id}>
-                {competition.name} — {competition.organisationName} ({competition.startsOn} to {competition.endsOn})
+                {interpolate(messages.eventPassCheckout.competitionOption, {
+                  competition: competition.name,
+                  organisation: competition.organisationName,
+                  startsOn: competition.startsOn,
+                  endsOn: competition.endsOn,
+                })}
               </option>
             ))}
           </select>
-          <span className={styles.help}>You can review the charge and payment details on Stripe before paying.</span>
+          <span className={styles.help}>{messages.eventPassCheckout.paymentReview}</span>
         </div>
         <div className={styles.actions}>
           <button className={styles.primaryAction} type="button" onClick={startCheckout} disabled={submitting}>
-            {submitting ? "Opening checkout…" : "Continue to secure checkout"}
+            {submitting
+              ? messages.eventPassCheckout.openingCheckout
+              : messages.eventPassCheckout.continueToSecureCheckout}
           </button>
           <Link className={styles.secondaryAction} href="/pricing">
-            Back to pricing
+            {messages.eventPassCheckout.backToPricing}
           </Link>
         </div>
         <div className={styles.status} data-error={failed ? "true" : "false"} aria-live="polite">
