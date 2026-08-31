@@ -2,6 +2,7 @@ import { ApiError, ErrorCode } from "./errors.js";
 
 export interface StripeCheckoutSessionParams {
   organisationId: string;
+  competitionId?: string | undefined;
   tier: "event_pass" | "organiser_pro";
   topUpUnits?: number | undefined;
   successUrl: string;
@@ -21,6 +22,7 @@ export interface StripeCheckoutSessionResult {
   sessionId: string;
   checkoutUrl: string;
   organisationId: string;
+  competitionId?: string | undefined;
   tier: "event_pass" | "organiser_pro";
   topUpUnits: number;
   amountTotal: number;
@@ -87,6 +89,9 @@ export class HttpStripeCheckoutClient implements StripeCheckoutClientPort {
 
   async createSession(params: StripeCheckoutSessionParams): Promise<StripeCheckoutSessionResult> {
     this.assertConfigured();
+    if (params.tier === "event_pass" && !params.competitionId) {
+      throw new ApiError(422, ErrorCode.VALIDATION_ERROR, "Event Pass checkout requires a competition");
+    }
     const isSubscription = params.tier === "organiser_pro";
     const body = new URLSearchParams();
     body.set("mode", isSubscription ? "subscription" : "payment");
@@ -96,6 +101,9 @@ export class HttpStripeCheckoutClient implements StripeCheckoutClientPort {
     body.set("metadata[organisation_id]", params.organisationId);
     body.set("metadata[purchase_type]", "plan");
     body.set("metadata[tier]", params.tier);
+    if (params.tier === "event_pass" && params.competitionId) {
+      body.set("metadata[competition_id]", params.competitionId);
+    }
     if (params.topUpUnits !== undefined && params.topUpUnits > 0) {
       body.set("metadata[top_up_units]", params.topUpUnits.toString());
     }
@@ -137,6 +145,7 @@ export class HttpStripeCheckoutClient implements StripeCheckoutClientPort {
       sessionId: data.id,
       checkoutUrl: data.url,
       organisationId: params.organisationId,
+      ...(params.competitionId ? { competitionId: params.competitionId } : {}),
       tier: params.tier,
       topUpUnits: params.topUpUnits ?? 0,
       amountTotal: data.amount_total ?? (params.tier === "organiser_pro" ? 9900 : 4900),
