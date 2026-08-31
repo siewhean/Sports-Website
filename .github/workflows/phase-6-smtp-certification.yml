@@ -1,0 +1,88 @@
+name: Phase 6 SMTP Certification
+
+on:
+  push:
+    branches: [phase-6/commercial-operations]
+    paths:
+      - .github/workflows/phase-6-smtp-certification.yml
+      - scripts/run-phase-6-smtp-certification.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase-6-smtp-certification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smtp-certification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: phase6-smtp-db-secret-20260831
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:phase6-smtp-db-secret-20260831@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      SMTP_CERT_PRODUCT_SHA: d225e5a4d3a7de1bdbdb208bff233abc2520a03f
+      SMTP_CERT_SECRET_SENTINEL: phase6-smtp-db-secret-20260831
+      RUN_INFRA_TESTS: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify certification wrapper preserves the product tree
+        run: |
+          git merge-base --is-ancestor "$SMTP_CERT_PRODUCT_SHA" "$GITHUB_SHA"
+          git diff --exit-code "$SMTP_CERT_PRODUCT_SHA" "$GITHUB_SHA" -- \
+            apps/api \
+            apps/worker \
+            packages/config \
+            packages/database \
+            packages/edge-cache \
+            packages/jobs \
+            packages/notifications \
+            packages/observability
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
+      - run: pnpm install --frozen-lockfile
+      - name: Apply the real database migrations
+        run: pnpm db:migrate
+      - name: Build the production worker and its workspace dependencies
+        run: pnpm --filter @matchday/worker... build
+      - name: Run controlled SMTP failure, retry, delivery, and idempotency certification
+        run: pnpm --filter @matchday/worker exec tsx ../../scripts/run-phase-6-smtp-certification.ts
+      - name: Retain SMTP certification receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase-6-smtp-certification-${{ github.run_id }}
+          path: artifacts/phase-6-smtp-certification
+          if-no-files-found: warn
+          retention-days: 30
