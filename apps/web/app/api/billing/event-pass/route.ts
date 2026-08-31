@@ -1,32 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { parseEventPassCheckoutUrl } from "@/lib/event-pass-checkout";
 import { forwardPhase3Mutation, hasExactKeys, jsonBody } from "@/lib/phase3-settings-command.server";
 import { requestPublicOrigin } from "@/lib/phase3-origin";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function isEventPassCheckoutResponse(value: unknown, organisationId: string, competitionId: string): boolean {
-  if (!isRecord(value)) return false;
-  if (
-    value.organisation_id !== organisationId ||
-    value.competition_id !== competitionId ||
-    value.tier !== "event_pass" ||
-    value.purchase_type !== "plan" ||
-    typeof value.checkout_url !== "string"
-  ) {
-    return false;
-  }
-  try {
-    const checkout = new URL(value.checkout_url);
-    return checkout.protocol === "https:" && checkout.hostname === "checkout.stripe.com";
-  } catch {
-    return false;
-  }
-}
 
 export async function POST(request: NextRequest) {
   const body = await jsonBody(request);
@@ -57,6 +35,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const target = { organisationId, competitionId };
   return forwardPhase3Mutation(request, {
     method: "POST",
     path: `/api/v1/organisations/${encodeURIComponent(organisationId)}/billing/checkout`,
@@ -66,6 +45,6 @@ export async function POST(request: NextRequest) {
       successUrl: `${publicOrigin}/organiser/competitions?billing=event-pass-success`,
       cancelUrl: `${publicOrigin}/organiser/checkout/event-pass?billing=cancelled`,
     },
-    validate: (value) => isEventPassCheckoutResponse(value, organisationId, competitionId),
+    validate: (value) => parseEventPassCheckoutUrl(value, target) !== null,
   });
 }
