@@ -30,8 +30,7 @@ AS $$
         AND (g.expires_at IS NULL OR g.expires_at > now())
     ) THEN 'event_pass'
     WHEN c.plan_tier = 'organiser_pro' THEN 'organiser_pro'
-    WHEN c.plan_tier = 'event_pass'
-      AND c.ends_on >= current_date
+    WHEN c.ends_on >= current_date
       AND EXISTS (
         SELECT 1
         FROM organisation_subscriptions legacy
