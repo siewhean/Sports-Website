@@ -46,7 +46,7 @@ jobs:
       APP_ENV: test
       DATABASE_URL: postgres://matchday:phase6-smtp-db-secret-20260831@127.0.0.1:5432/matchday
       REDIS_URL: redis://127.0.0.1:6379
-      SMTP_CERT_PRODUCT_SHA: d225e5a4d3a7de1bdbdb208bff233abc2520a03f
+      SMTP_CERT_PRODUCT_SHA: 1f5697071e973f05e18068bfe70284f4ff365374
       SMTP_CERT_SECRET_SENTINEL: phase6-smtp-db-secret-20260831
       RUN_INFRA_TESTS: "1"
     steps:
