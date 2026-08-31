@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { messages, type ShellKind } from "@matchday/ui";
 import { BrandLink } from "./Primitives";
+import { NotificationBell } from "./NotificationBell";
 
 const organiserLinks = messages.organiser.sections.map((label, index) => ({
   label,
@@ -27,6 +28,7 @@ export function ProductionShell({
         ? messages.official.navLabel
         : messages.public.navLabel;
   const links = kind === "organiser" ? organiserLinks : [{ href: "/official", label: messages.official.title }];
+  const showNotifications = kind === "organiser" || kind === "official";
 
   return (
     <div className={`production-shell production-shell--${kind}`}>
@@ -39,7 +41,10 @@ export function ProductionShell({
           <p>{subtitle}</p>
           <h1>{title}</h1>
         </div>
-        {utility}
+        <div className="flex items-center gap-2">
+          {showNotifications ? <NotificationBell /> : null}
+          {utility}
+        </div>
       </header>
       <div className="production-shell__body">
         <nav className="production-shell__rail" aria-label={navLabel}>

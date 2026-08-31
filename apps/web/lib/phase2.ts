@@ -48,7 +48,14 @@ export type PublicDivisionView = {
   areas: string[];
   matches: MatchView[];
   standings: StandingView[];
-  bracket: Array<{ id?: string; round: string; fixture: string; score: string; state: string }>;
+  bracket: Array<{
+    id?: string;
+    round: string;
+    fixture: string;
+    score: string;
+    state: string;
+    stageKind?: "upper" | "lower" | "grand_final" | "reset_final" | undefined;
+  }>;
 };
 
 export type CompetitionView = {
@@ -75,7 +82,14 @@ export type CompetitionView = {
   areas: string[];
   matches: MatchView[];
   standings: StandingView[];
-  bracket: Array<{ id?: string; round: string; fixture: string; score: string; state: string }>;
+  bracket: Array<{
+    id?: string;
+    round: string;
+    fixture: string;
+    score: string;
+    state: string;
+    stageKind?: "upper" | "lower" | "grand_final" | "reset_final" | undefined;
+  }>;
   audit: Array<{ time: string; actor: string; action: string; detail: string }>;
   scheduleRows?: ReadonlyArray<{ id: string; time: string; cells: readonly string[] }>;
   accessPasses?: ReadonlyArray<{

@@ -218,7 +218,8 @@ export function safeFallbackFilename(value: string, extension: "pdf" | "json" = 
 
 function verificationUrl(value: string): string {
   const parsed = new URL(value);
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) {
+  const isLocal = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+  if ((parsed.protocol !== "https:" && !isLocal) || parsed.username || parsed.password || parsed.hash) {
     throw new Error("Public verification URL must be credential-free HTTPS without a fragment");
   }
   return parsed.toString();

@@ -195,14 +195,14 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
   // ---------------------------------------------------------------------------
   // Scenario 1: Empty DB
   // ---------------------------------------------------------------------------
-  it("Scenario 1: Empty DB - applies all 52 migrations idempotently from clean state", async () => {
+  it("Scenario 1: Empty DB - applies all 61 migrations idempotently from clean state", async () => {
     const schema = await createIsolatedSchema("s1_empty");
     const allExpectedMigrations = (await readdir(migrationsDirectory))
       .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
       .sort();
-    expect(allExpectedMigrations).toHaveLength(52);
+    expect(allExpectedMigrations).toHaveLength(61);
 
-    // 1st run: all 52 migrations apply
+    // 1st run: all 61 migrations apply
     const firstRun = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
     expect(firstRun.applied).toEqual(allExpectedMigrations);
     expect(firstRun.current).toEqual(allExpectedMigrations);
@@ -223,11 +223,11 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       `;
       expect(extension).toEqual({ namespace: "public" });
 
-      // Verify schema_migrations table has all 52 migrations with valid SHA256 checksums
+      // Verify schema_migrations table has all 61 migrations with valid SHA256 checksums
       const recordedMigrations = await sql<{ name: string; checksum: string }[]>`
         SELECT name, checksum FROM schema_migrations ORDER BY name
       `;
-      expect(recordedMigrations).toHaveLength(52);
+      expect(recordedMigrations).toHaveLength(61);
       expect(recordedMigrations.map((r) => r.name)).toEqual(allExpectedMigrations);
       expect(recordedMigrations.every((r) => /^[0-9a-f]{64}$/u.test(r.checksum))).toBe(true);
 
@@ -580,9 +580,9 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       `;
       expect(assuranceRows).toHaveLength(3);
 
-      // 4. Now copy and apply forward Gate C migrations 0036..0052
+      // 4. Now copy and apply forward Gate C and Phase 6 migrations 0036..0061
       const forwardGateCMigrations = allMigrations.filter((name) => name >= "0036_gate_c_offline_replay.sql");
-      expect(forwardGateCMigrations).toHaveLength(17);
+      expect(forwardGateCMigrations).toHaveLength(26);
       await copyMigrationFiles(copiedDir, forwardGateCMigrations);
 
       const upgradeResult = await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });

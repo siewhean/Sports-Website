@@ -1,7 +1,10 @@
 export const gateCC4Http = {
+  methodGet: "GET",
   methodPost: "POST",
+  methodPut: "PUT",
   jsonContentType: "application/json",
   cacheNoStore: "no-store",
+  cacheControlHeader: "cache-control",
   contentDispositionHeader: "content-disposition",
   contentSha256Header: "x-matchday-content-sha256",
   anchorTag: "a",

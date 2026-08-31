@@ -1,5 +1,6 @@
 import type { AiProviderPort, CompetitionBriefProviderRequest } from "@matchday/ai";
 import type { Phase4AiMissingField, Phase4CompetitionBrief } from "@matchday/contracts";
+import { buildDoubleEliminationFormatTemplate } from "@matchday/domain";
 
 const sports = ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const;
 
@@ -69,7 +70,95 @@ export class DeterministicPhase4AiStub implements AiProviderPort {
       organiser_priority: null,
       missing_fields: [...new Set(missing)],
     };
-    return { data: brief, providerRequestId: "phase4-deterministic-stub-v1" };
+    return {
+      data: brief,
+      providerRequestId: "phase4-deterministic-stub-v1",
+      promptTemplateVersion: "1.0.0",
+      modelIdentifier: "deterministic-stub-v1",
+      promptTokens: Math.ceil(text.length / 4),
+      completionTokens: 64,
+      latencyMs: 5,
+      estimatedCostUsd: 0.00001,
+    };
+  }
+
+  async modifyFormat(request: { organiserText: string; currentDocument: unknown }) {
+    const text = request.organiserText.normalize("NFC");
+    const currentDoc = request.currentDocument as
+      { graph?: { entryCount?: number }; schemaVersion?: number } | undefined;
+    const entryCount = currentDoc?.graph?.entryCount ?? 8;
+    let proposedDocument: unknown = request.currentDocument;
+
+    if (/double\s*(?:elim|elimination)/i.test(text)) {
+      const template = buildDoubleEliminationFormatTemplate(entryCount >= 2 && entryCount <= 32 ? entryCount : 8);
+      proposedDocument = {
+        schemaVersion: 1,
+        graph: template.graph,
+        layout: {
+          schemaVersion: 1,
+          stagePositions: template.graph.stages.map((stage, i) => ({
+            stageId: stage.id,
+            x: 100 + i * 250,
+            y: 100,
+          })),
+        },
+      };
+    }
+
+    return {
+      proposedDocument,
+      explanation: `Format updated according to instructions: ${text}`,
+      providerRequestId: "phase4-deterministic-stub-v1",
+      promptTemplateVersion: "1.0.0",
+      modelIdentifier: "deterministic-stub-v1",
+      promptTokens: Math.ceil(text.length / 4),
+      completionTokens: 64,
+      latencyMs: 5,
+      estimatedCostUsd: 0.00001,
+    };
+  }
+
+  async suggestSchedulePreferences(request: { organiserText: string }) {
+    const text = request.organiserText.normalize("NFC");
+    const preferences: Record<string, unknown> = {};
+    if (/rest/i.test(text)) {
+      preferences.minimum_rest_minutes = 30;
+    }
+    if (/evening|late/i.test(text)) {
+      preferences.prefer_evening = true;
+    }
+    return {
+      proposedPreferences: preferences,
+      explanation: `Schedule preferences extracted: ${text}`,
+      providerRequestId: "phase4-deterministic-stub-v1",
+      promptTemplateVersion: "1.0.0",
+      modelIdentifier: "deterministic-stub-v1",
+      promptTokens: Math.ceil(text.length / 4),
+      completionTokens: 32,
+      latencyMs: 4,
+      estimatedCostUsd: 0.00001,
+    };
+  }
+
+  async recommendRepairActions(request: { organiserText?: string; caseDetails?: unknown }) {
+    const text = (request.organiserText ?? "").normalize("NFC");
+    return {
+      recommendedActions: [
+        {
+          action_type: "shift_match",
+          shift_minutes: 15,
+          reason: "Recommended 15-minute shift to resolve downstream overlap",
+        },
+      ],
+      explanation: `Repair recommendation generated based on case analysis${text ? `: ${text}` : ""}`,
+      providerRequestId: "phase4-deterministic-stub-v1",
+      promptTemplateVersion: "1.0.0",
+      modelIdentifier: "deterministic-stub-v1",
+      promptTokens: Math.ceil((text.length + 50) / 4),
+      completionTokens: 48,
+      latencyMs: 6,
+      estimatedCostUsd: 0.00001,
+    };
   }
 }
 

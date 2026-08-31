@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   MATCHDAY_GATE_C_BRANCH,
   MATCHDAY_VERCEL_PROJECT_ID,
@@ -36,6 +37,33 @@ describe("verifyVercelDeployment", () => {
 
   afterEach(() => {
     if (fs.existsSync(artifactPath)) fs.unlinkSync(artifactPath);
+  });
+
+  it("keeps the Vercel ignore guard schema-safe and fails open to a build", () => {
+    const webRoot = path.join(rootDir, "apps", "web");
+    const config = JSON.parse(fs.readFileSync(path.join(webRoot, "vercel.json"), "utf8"));
+    expect(config.ignoreCommand).toBe("sh scripts/vercel-ignore-build.sh");
+    expect(config.ignoreCommand.length).toBeLessThanOrEqual(256);
+
+    const missingPreviousSha = spawnSync("sh", ["scripts/vercel-ignore-build.sh"], {
+      cwd: webRoot,
+      env: {
+        ...process.env,
+        VERCEL_GIT_COMMIT_REF: "phase-6/commercial-operations",
+        VERCEL_GIT_PREVIOUS_SHA: "0000000000000000000000000000000000000000",
+      },
+    });
+    expect(missingPreviousSha.status).toBe(1);
+
+    const unchangedHead = spawnSync("sh", ["scripts/vercel-ignore-build.sh"], {
+      cwd: webRoot,
+      env: {
+        ...process.env,
+        VERCEL_GIT_COMMIT_REF: "phase-6/commercial-operations",
+        VERCEL_GIT_PREVIOUS_SHA: "HEAD",
+      },
+    });
+    expect(unchangedHead.status).toBe(0);
   });
 
   it("fails when no deployment artifact exists and no token is supplied", async () => {
@@ -206,6 +234,7 @@ describe("verifyVercelDeployment", () => {
       fetchImpl: request,
     });
     expect(result.deployment.deployment_id).toBe("dpl_ready33333333333333333333333");
+    expect(result.deployment.state).toBe("READY");
     await expect(
       verifyVercelDeployment({
         candidateSha: dummySha,

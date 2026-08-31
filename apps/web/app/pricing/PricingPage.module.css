@@ -1,0 +1,155 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: var(--color-background, #f8fafc);
+  color: var(--color-foreground, #0f172a);
+}
+
+.container {
+  flex: 1;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 5rem;
+  width: 100%;
+}
+
+.header {
+  text-align: center;
+  max-width: 760px;
+  margin: 0 auto 3.5rem;
+}
+
+.title {
+  font-size: 2.5rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: var(--color-navy, #0f172a);
+  margin-bottom: 1rem;
+}
+
+.subtitle {
+  font-size: 1.15rem;
+  color: var(--color-slate-600, #475569);
+  line-height: 1.6;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 2rem;
+  align-items: stretch;
+}
+
+.card {
+  position: relative;
+  background: white;
+  border-radius: 1rem;
+  border: 1px solid var(--color-slate-200, #e2e8f0);
+  padding: 2.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+}
+
+.featured {
+  border-color: var(--color-teal, #0d9488);
+  box-shadow: 0 10px 25px -5px rgba(13, 148, 136, 0.15);
+}
+
+.cardBadge {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-teal, #0d9488);
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tierName {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+}
+
+.pricing {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.amount {
+  font-size: 2.75rem;
+  font-weight: 800;
+  color: var(--color-navy, #0f172a);
+}
+
+.period {
+  font-size: 1rem;
+  color: var(--color-slate-500, #64748b);
+}
+
+.description {
+  font-size: 0.95rem;
+  color: var(--color-slate-600, #475569);
+  margin-bottom: 2rem;
+  min-height: 2.8rem;
+}
+
+.features {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 2.5rem 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.featureItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  font-size: 0.925rem;
+  color: var(--color-slate-700, #334155);
+}
+
+.checkIcon {
+  color: var(--color-teal, #0d9488);
+  font-weight: 800;
+}
+
+.ctaButton {
+  display: block;
+  text-align: center;
+  padding: 0.85rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  text-decoration: none;
+  background: var(--color-navy, #0f172a);
+  color: white;
+  transition: background-color 0.2s;
+}
+
+.featured .ctaButton {
+  background: var(--color-teal, #0d9488);
+}
+
+.ctaButton:hover {
+  opacity: 0.92;
+}

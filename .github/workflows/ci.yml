@@ -108,7 +108,7 @@ jobs:
 
   browser-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: [quality-fast]
     services:
       postgres:
@@ -166,7 +166,7 @@ jobs:
             apps/api/openapi.generated.json
             artifacts/deployment-manifest.json
           if-no-files-found: error
-      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit firefox
       - run: pnpm test:e2e
       - run: pnpm test:a11y
       - run: pnpm test:visual

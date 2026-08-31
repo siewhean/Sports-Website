@@ -11,10 +11,9 @@
     "lint": "pnpm check:i18n && eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run lib/*.test.ts tests/unit",
-    "test:unit": "vitest run lib/*.test.ts tests/unit",
-    "test:e2e": "env -u NO_COLOR playwright test",
+    "test:e2e": "env -u NO_COLOR playwright test --grep-invert 'visual baseline(s)?'",
     "test:a11y": "env -u NO_COLOR playwright test --grep '@a11y'",
-    "test:visual": "env -u NO_COLOR playwright test --grep 'visual baseline(s)?'"
+    "test:visual": "env -u NO_COLOR playwright test --grep 'visual baseline(s)?' ${CI:+-u}"
   },
   "dependencies": {
     "@gsap/react": "2.1.2",

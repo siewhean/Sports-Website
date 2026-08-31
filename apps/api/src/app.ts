@@ -28,6 +28,7 @@ import { registerPhase2Routes } from "./phase-2-routes.js";
 import type { Phase2Runtime } from "./phase-2-runtime.js";
 import { registerPhase3Routes } from "./phase-3-routes.js";
 import type { Phase3Runtime } from "./phase-3-runtime.js";
+import { registerOrganiserCompetitionLibraryRoutes } from "./organiser-competition-library-routes.js";
 import { GateBPhase4Runtime } from "./phase-4-gate-b-runtime.js";
 import { registerPhase4Routes } from "./phase-4-routes.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
@@ -39,6 +40,14 @@ import type { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { registerGateCC4PublicTruthRoutes, type GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
 import { registerScoringAccessHmacKeyringRoutes } from "./scoring-access-hmac-keyring-routes.js";
 import { registerScoringFallbackHmacKeyringRoutes } from "./scoring-fallback-hmac-keyring-routes.js";
+import { registerBillingRoutes } from "./billing-routes.js";
+import type { EntitlementRuntime } from "./entitlement-runtime.js";
+import { registerExportRoutes } from "./export-routes.js";
+import type { ExportRuntime } from "./export-runtime.js";
+import { registerAdminRoutes } from "./admin-routes.js";
+import type { AdminRuntime } from "./admin-runtime.js";
+import { registerNotificationRoutes } from "./notification-routes.js";
+import type { NotificationService } from "@matchday/notifications";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 import type { PostgresJsSql } from "@matchday/identity";
 
@@ -128,6 +137,10 @@ export type BuildAppOptions = {
   scoringAccessHmacKeySql?: PostgresJsSql;
   scoringFallbackHmacKeySql?: PostgresJsSql;
   scoringFallbackHmacKeyring?: ScoringFallbackHmacKeyring;
+  entitlementRuntime?: EntitlementRuntime;
+  exportRuntime?: ExportRuntime;
+  adminRuntime?: AdminRuntime;
+  notificationService?: NotificationService;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -163,6 +176,20 @@ export async function buildApp(options: BuildAppOptions) {
 
   const requestRoute = (request: FastifyRequest): string =>
     request.routeOptions.url || request.url.split("?", 1)[0] || "unknown";
+
+  app.addHook("preParsing", async (request, _reply, payload) => {
+    if (request.url.startsWith("/api/v1/billing/webhook")) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of payload) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
+      }
+      const rawBuffer = Buffer.concat(chunks);
+      (request as unknown as { rawBody: string }).rawBody = rawBuffer.toString("utf8");
+      const { Readable } = await import("node:stream");
+      return Readable.from([rawBuffer]);
+    }
+    return payload;
+  });
 
   app.addHook("onRequest", (request, _reply, done) => {
     const traceparent = request.raw.headers.traceparent;
@@ -527,6 +554,10 @@ export async function buildApp(options: BuildAppOptions) {
         allowedOrigins: options.config.api.allowedOrigins,
         ...(!options.phase2Runtime ? { registerCanonicalMutations: true } : {}),
       });
+      await registerOrganiserCompetitionLibraryRoutes(app as unknown as FastifyInstance, {
+        runtime: options.phase3Runtime,
+        identityRequests,
+      });
     }
     if (options.phase4Runtime) {
       await registerPhase4Routes(app as unknown as FastifyInstance, {
@@ -572,11 +603,36 @@ export async function buildApp(options: BuildAppOptions) {
         allowedOrigins: options.config.api.allowedOrigins,
       });
     }
+    if (options.entitlementRuntime) {
+      await registerBillingRoutes(app as unknown as FastifyInstance, {
+        runtime: options.entitlementRuntime,
+        identityRequests,
+      });
+    }
+    if (options.adminRuntime) {
+      await registerAdminRoutes(app as unknown as FastifyInstance, {
+        runtime: options.adminRuntime,
+        identityRequests,
+      });
+    }
+    if (options.notificationService) {
+      await registerNotificationRoutes(app as unknown as FastifyInstance, {
+        notificationService: options.notificationService,
+        identityRequests,
+      });
+    }
   }
 
   if (options.gateCC4PublicTruthRuntime) {
     await registerGateCC4PublicTruthRoutes(app as unknown as FastifyInstance, {
       runtime: options.gateCC4PublicTruthRuntime,
+    });
+  }
+
+  if (options.exportRuntime) {
+    await registerExportRoutes(app as unknown as FastifyInstance, {
+      runtime: options.exportRuntime,
+      identityRequests,
     });
   }
 

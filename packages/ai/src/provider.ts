@@ -12,6 +12,77 @@ export type CompetitionBriefProviderRequest = {
 export type CompetitionBriefProviderResponse = {
   data: unknown;
   providerRequestId?: string;
+  promptTemplateVersion?: string;
+  modelIdentifier?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  latencyMs?: number;
+  estimatedCostUsd?: number;
+};
+
+export type FormatModifyProviderRequest = {
+  action: "format_modification";
+  schemaVersion: "1.0";
+  locale: string;
+  organiserText: string;
+  currentDocument: unknown;
+};
+
+export type FormatModifyProviderResponse = {
+  proposedDocument: unknown;
+  explanation: string;
+  providerRequestId?: string;
+  promptTemplateVersion?: string;
+  modelIdentifier?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  latencyMs?: number;
+  estimatedCostUsd?: number;
+};
+
+export type SchedulePreferencesProviderRequest = {
+  action: "schedule_preferences";
+  schemaVersion: "1.0";
+  locale: string;
+  organiserText: string;
+};
+
+export type SchedulePreferencesProviderResponse = {
+  proposedPreferences: Record<string, unknown>;
+  explanation: string;
+  providerRequestId?: string;
+  promptTemplateVersion?: string;
+  modelIdentifier?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  latencyMs?: number;
+  estimatedCostUsd?: number;
+};
+
+export type RepairRecommendationsProviderRequest = {
+  action: "repair_recommendations";
+  schemaVersion: "1.0";
+  locale: string;
+  organiserText?: string;
+  caseDetails?: unknown;
+};
+
+export type RepairRecommendationsProviderResponse = {
+  recommendedActions: Array<{
+    action_type: string;
+    target_match_id?: string;
+    target_area_id?: string;
+    shift_minutes?: number;
+    reason: string;
+  }>;
+  explanation: string;
+  providerRequestId?: string;
+  promptTemplateVersion?: string;
+  modelIdentifier?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  latencyMs?: number;
+  estimatedCostUsd?: number;
 };
 
 export interface AiProviderPort {
@@ -19,6 +90,18 @@ export interface AiProviderPort {
     request: CompetitionBriefProviderRequest,
     context: { signal: AbortSignal },
   ): Promise<CompetitionBriefProviderResponse>;
+  modifyFormat?(
+    request: FormatModifyProviderRequest,
+    context: { signal: AbortSignal },
+  ): Promise<FormatModifyProviderResponse>;
+  suggestSchedulePreferences?(
+    request: SchedulePreferencesProviderRequest,
+    context: { signal: AbortSignal },
+  ): Promise<SchedulePreferencesProviderResponse>;
+  recommendRepairActions?(
+    request: RepairRecommendationsProviderRequest,
+    context: { signal: AbortSignal },
+  ): Promise<RepairRecommendationsProviderResponse>;
 }
 
 export class AiProviderFailure extends Error {
@@ -71,6 +154,12 @@ export type ProviderExecutionResult =
       attempts: number;
       durationMs: number;
       providerRequestId?: string;
+      promptTemplateVersion?: string;
+      modelIdentifier?: string;
+      promptTokens?: number;
+      completionTokens?: number;
+      latencyMs?: number;
+      estimatedCostUsd?: number;
     }
   | {
       ok: false;
@@ -183,6 +272,14 @@ export async function executeCompetitionBriefProvider(
         attempts: attempt,
         durationMs: Math.max(0, now() - started),
         ...(providerRequestId === undefined ? {} : { providerRequestId }),
+        ...(response.promptTemplateVersion === undefined
+          ? {}
+          : { promptTemplateVersion: response.promptTemplateVersion }),
+        ...(response.modelIdentifier === undefined ? {} : { modelIdentifier: response.modelIdentifier }),
+        ...(response.promptTokens === undefined ? {} : { promptTokens: response.promptTokens }),
+        ...(response.completionTokens === undefined ? {} : { completionTokens: response.completionTokens }),
+        ...(response.latencyMs === undefined ? {} : { latencyMs: response.latencyMs }),
+        ...(response.estimatedCostUsd === undefined ? {} : { estimatedCostUsd: response.estimatedCostUsd }),
       };
     } catch (error: unknown) {
       lastFailure = classifyProviderError(error, false, options.signal?.aborted === true);

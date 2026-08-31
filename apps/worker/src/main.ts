@@ -2,6 +2,7 @@ import { loadConfig } from "@matchday/config";
 import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
+import { createProductionEmailOutboxWorker } from "./email-outbox-worker.js";
 import { resolveWorkerQueuePrefix } from "./queue-configuration.js";
 import { WorkerRuntime, type WorkerMetrics } from "./runtime.js";
 import { workerServiceName } from "./service.js";
@@ -34,7 +35,21 @@ const runtime = new WorkerRuntime({
   },
 });
 
+const emailWorkerHandle = createProductionEmailOutboxWorker({
+  databaseUrl: config.databaseUrl,
+  smtp: config.smtp,
+  onProcessed: (result) => {
+    if (result.claimed > 0) {
+      logger.info({ result }, "processed email outbox batch");
+    }
+  },
+  onError: (error) => {
+    logger.error({ error }, "email outbox processing error");
+  },
+});
+
 await runtime.start();
+await emailWorkerHandle.worker.start();
 
 let shuttingDown = false;
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
@@ -44,6 +59,7 @@ const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   let forceExit = false;
   try {
     await runtime.stop();
+    await emailWorkerHandle.close();
     logger.info("worker stopped");
   } catch (error: unknown) {
     logger.error({ error }, "worker shutdown failed");

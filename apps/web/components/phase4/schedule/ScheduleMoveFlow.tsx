@@ -325,7 +325,7 @@ export function ScheduleMoveFlow({ document, match }: { document: ScheduleDocume
             <div
               id="move-slot-options"
               className={styles.choices}
-              data-expanded={showAllSlots || undefined}
+              data-expanded={showAllSlots ? "true" : "false"}
               data-testid="move-slot-choices"
             >
               {eligibleSlots.map((slot) => (

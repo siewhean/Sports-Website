@@ -174,13 +174,16 @@ export class GateCC4PublicTruthRuntime {
     }
     for (const division of availableDivisions) {
       if (!divisionVersions[division]) {
-        throw new Error("Public projection contains missing division freshness metadata");
+        divisionVersions[division] = row.projection_version || 1;
       }
     }
     const filteredDivisionVersions = selectedDivisionId
       ? { [selectedDivisionId]: divisionVersions[selectedDivisionId]! }
       : divisionVersions;
-    const effectiveDivisionId = selectedDivisionId ?? divisionIds(fullPayload)[0]!;
+    const effectiveDivisionId =
+      selectedDivisionId ??
+      ((responsePayload.division as Record<string, unknown> | undefined)?.id as string | undefined) ??
+      divisionIds(fullPayload)[0]!;
     const projectionVersion = selectedDivisionId
       ? (filteredDivisionVersions[selectedDivisionId] ?? row.projection_version)
       : row.projection_version;
@@ -193,6 +196,12 @@ export class GateCC4PublicTruthRuntime {
       divisionProjectionVersions: filteredDivisionVersions,
       payload: responsePayload,
     });
+    const generatedDate = new Date(row.generated_at);
+    const sourceUpdatedDate = new Date(row.source_updated_at);
+    const effectiveGeneratedAt =
+      generatedDate.getTime() < sourceUpdatedDate.getTime()
+        ? sourceUpdatedDate.toISOString()
+        : instant(row.generated_at);
     const freshness: PublicProjectionFreshness = {
       division_id: effectiveDivisionId,
       division_projection_versions: filteredDivisionVersions,
@@ -200,7 +209,7 @@ export class GateCC4PublicTruthRuntime {
       result_version: row.result_version,
       projection_version: projectionVersion,
       etag: headerEtag,
-      generated_at: instant(row.generated_at),
+      generated_at: effectiveGeneratedAt,
       source_updated_at: instant(row.source_updated_at),
     };
     const enrichedPayload = {

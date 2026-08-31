@@ -417,7 +417,10 @@ describe("Phase 3 capacity-first recommendations", () => {
       availableMatchSlots: 100,
       crossGroupAllowed: false,
     });
-    expect(compactOnly.recommendations.map((item) => item.strategy)).toEqual(["compact_knockout"]);
+    expect(compactOnly.recommendations.map((item) => item.strategy)).toEqual([
+      "compact_knockout",
+      "double_elimination",
+    ]);
     const ranked = recommendCompetitionFormats({
       sportCode: "volleyball",
       divisions: [{ id: "open", entryCount: 16 }],

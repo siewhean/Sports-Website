@@ -13,16 +13,25 @@ const config = parseConfig(process.env);
 const schema = `test_migrations_${randomUUID().replaceAll("-", "")}`;
 const concurrentSchema = `test_migrations_concurrent_${randomUUID().replaceAll("-", "")}`;
 const populatedSchema = `test_migrations_populated_${randomUUID().replaceAll("-", "")}`;
+const legacyEventPassSchema = `test_migrations_event_pass_${randomUUID().replaceAll("-", "")}`;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 // Full-suite integration runs intentionally contend for the same local PostgreSQL instance.
 // Keep this larger ceiling scoped to the empty-schema tests that apply the complete chain.
 const fullMigrationChainTimeoutMs = 15_000;
 
 beforeAll(async () =>
-  Promise.all([schema, concurrentSchema, populatedSchema].map((name) => dropTestSchema(config.databaseUrl, name))),
+  Promise.all(
+    [schema, concurrentSchema, populatedSchema, legacyEventPassSchema].map((name) =>
+      dropTestSchema(config.databaseUrl, name),
+    ),
+  ),
 );
 afterAll(async () =>
-  Promise.all([schema, concurrentSchema, populatedSchema].map((name) => dropTestSchema(config.databaseUrl, name))),
+  Promise.all(
+    [schema, concurrentSchema, populatedSchema, legacyEventPassSchema].map((name) =>
+      dropTestSchema(config.databaseUrl, name),
+    ),
+  ),
 );
 
 describe("foundation migrations", () => {
@@ -106,6 +115,80 @@ describe("foundation migrations", () => {
   );
 
   it(
+    "upgrades a legacy Event Pass organisation with more than 16 entries without rewriting its entries",
+    async () => {
+      const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-event-pass-migrations-"));
+      const legacyEventPassMigration = "0061_phase6_reject_organisation_event_pass.sql";
+      await cp(migrationsDirectory, copiedDirectory, { recursive: true });
+      await rm(path.join(copiedDirectory, legacyEventPassMigration));
+
+      try {
+        await migrateDatabase({
+          databaseUrl: config.databaseUrl,
+          migrationsDirectory: copiedDirectory,
+          schema: legacyEventPassSchema,
+        });
+        const sql = postgres(config.databaseUrl, { max: 1, connection: { search_path: legacyEventPassSchema } });
+        try {
+          const accountId = randomUUID();
+          const organisationId = randomUUID();
+          const competitionId = randomUUID();
+          const divisionId = randomUUID();
+          await sql`INSERT INTO accounts (id,primary_email,display_name) VALUES (${accountId},${`${accountId}@example.test`},'Owner')`;
+          await sql.begin(async (tx) => {
+            await tx`INSERT INTO organisations (id,name,slug) VALUES (${organisationId},'Legacy Event Pass',${`legacy-pass-${organisationId}`})`;
+            await tx`INSERT INTO organisation_memberships (organisation_id,account_id,role,status)
+            VALUES (${organisationId},${accountId},'owner','active')`;
+          });
+          await sql`INSERT INTO competitions (id,organisation_id,created_by,name,slug,sport_code,status,timezone,starts_on,ends_on,venue)
+          VALUES (${competitionId},${organisationId},${accountId},'Legacy Cup',${`legacy-cup-${competitionId}`},'basketball','draft','Asia/Singapore','2027-08-01','2027-08-02','Arena')`;
+          await sql`INSERT INTO divisions (id,competition_id,name,team_limit) VALUES (${divisionId},${competitionId},'Open',48)`;
+          await sql`INSERT INTO organisation_subscriptions (organisation_id,tier,status,current_period_start,current_period_end)
+          VALUES (${organisationId},'event_pass','active',now(),now()+interval '30 days')`;
+          for (let seed = 1; seed <= 17; seed += 1) {
+            await sql`INSERT INTO division_entries (division_id,name,seed,status)
+            VALUES (${divisionId},${`Team ${seed}`},${seed},'confirmed')`;
+          }
+        } finally {
+          await sql.end({ timeout: 2 });
+        }
+
+        await cp(
+          path.join(migrationsDirectory, legacyEventPassMigration),
+          path.join(copiedDirectory, legacyEventPassMigration),
+        );
+        await expect(
+          migrateDatabase({
+            databaseUrl: config.databaseUrl,
+            migrationsDirectory: copiedDirectory,
+            schema: legacyEventPassSchema,
+          }),
+        ).resolves.toMatchObject({ applied: [legacyEventPassMigration] });
+
+        const verification = postgres(config.databaseUrl, {
+          max: 1,
+          connection: { search_path: legacyEventPassSchema },
+        });
+        try {
+          const [subscription] = await verification<{ tier: string; status: string }[]>`
+          SELECT tier,status FROM organisation_subscriptions
+        `;
+          const [entryCount] = await verification<{ count: number }[]>`
+          SELECT count(*)::int AS count FROM division_entries WHERE status='confirmed'
+        `;
+          expect(subscription).toEqual({ tier: "free", status: "canceled" });
+          expect(entryCount?.count).toBe(17);
+        } finally {
+          await verification.end({ timeout: 2 });
+        }
+      } finally {
+        await rm(copiedDirectory, { recursive: true, force: true });
+      }
+    },
+    fullMigrationChainTimeoutMs,
+  );
+
+  it(
     populatedUpgradeTestName,
     async () => {
       const copiedDirectory = await mkdtemp(path.join(os.tmpdir(), "matchday-populated-migrations-"));
@@ -144,6 +227,15 @@ describe("foundation migrations", () => {
         "0050_phase3_sport_pack_hash_scope_fence.sql",
         "0051_gate_c_fallback_code_history_uniqueness.sql",
         "0052_gate_c_fallback_code_hmac_key_versions.sql",
+        "0053_phase6_double_elimination_recommendations.sql",
+        "0054_phase6_ai_provenance_and_accounting.sql",
+        "0055_phase6_commercial_billing_entitlements.sql",
+        "0056_phase6_double_elimination_completion_guard.sql",
+        "0057_phase6_effective_entry_entitlements.sql",
+        "0058_phase6_provider_subscription_state.sql",
+        "0059_phase6_shared_ai_credits.sql",
+        "0060_phase6_event_pass_competition_scope.sql",
+        "0061_phase6_reject_organisation_event_pass.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
@@ -733,7 +825,7 @@ describe("foundation migrations", () => {
           (
             await sql<
               { expiry: string }[]
-            >`SELECT phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz)::text expiry`
+            >`SELECT (phase4_schedule_expiry('2027-01-31T10:15:00Z'::timestamptz) AT TIME ZONE 'UTC')::text expiry`
           )[0]?.expiry,
         ).toContain("2027-02-28 10:15:00");
       } finally {

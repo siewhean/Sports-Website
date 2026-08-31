@@ -487,7 +487,7 @@
     align-items: flex-start;
   }
 
-  .choices:not([data-expanded="true"]) label:nth-child(n + 7) {
+  .choices[data-expanded="false"] label:nth-child(n + 7) {
     display: none;
   }
 

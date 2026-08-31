@@ -2367,7 +2367,7 @@ export class Phase4Runtime {
         cached: beginValue.cache_result,
         replay,
         finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
-        quotaAvailable: Boolean(allowance && allowance.used_units < allowance.action_limit),
+        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
       };
     });
     const usage = async () => this.readAiUsage(actor, organisationId);
@@ -2406,6 +2406,11 @@ export class Phase4Runtime {
     let durationMs = 0;
     let failureCode: Phase4AiFailureCode | null = null;
     let providerRequestId: string | undefined;
+    let promptTemplateVersion: string | undefined;
+    let modelIdentifier: string | undefined;
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+    let estimatedCostUsd: number | undefined;
     if (begin.cached) {
       outcome = "success";
     } else if (!begin.quotaAvailable) {
@@ -2435,6 +2440,11 @@ export class Phase4Runtime {
         cacheStatus = "miss";
         result = execution.brief;
         providerRequestId = execution.providerRequestId;
+        promptTemplateVersion = execution.promptTemplateVersion;
+        modelIdentifier = execution.modelIdentifier;
+        promptTokens = execution.promptTokens;
+        completionTokens = execution.completionTokens;
+        estimatedCostUsd = execution.estimatedCostUsd;
       } else {
         failureCode = execution.failure.code;
       }
@@ -2444,6 +2454,15 @@ export class Phase4Runtime {
       finalCache: "hit" | "miss" | "not_checked",
     ) => {
       if (!this.sql.begin) throw new Error("Phase 4 AI finalization requires transactions");
+      const aiMetadata = {
+        provider_mode: this.ai.mode,
+        ...(promptTemplateVersion ? { prompt_template_version: promptTemplateVersion } : {}),
+        ...(modelIdentifier ? { model_identifier: modelIdentifier } : {}),
+        ...(promptTokens !== undefined ? { prompt_tokens: promptTokens } : {}),
+        ...(completionTokens !== undefined ? { completion_tokens: completionTokens } : {}),
+        ...(durationMs ? { latency_ms: durationMs } : {}),
+        ...(estimatedCostUsd !== undefined ? { estimated_cost_usd: estimatedCostUsd } : {}),
+      };
       return this.sql.begin(async (tx) => {
         return first(
           await tx.unsafe<{ outcome: string; cache_status: string; charged_units: 0 | 1 }>(
@@ -2458,7 +2477,7 @@ export class Phase4Runtime {
               durationMs,
               failureCode,
               providerRequestId ?? null,
-              { provider_mode: this.ai.mode },
+              aiMetadata,
             ],
           ),
           "AI_FINALIZE_FAILED",
@@ -2493,13 +2512,647 @@ export class Phase4Runtime {
         idempotent_replay: begin.replay,
       };
     }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
     return {
-      status: failureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
-      ...(failureCode ? { reason: failureCode } : {}),
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
       preserved_text: normalizedText,
       charged_units: 0 as const,
       usage: await usage(),
       idempotent_replay: begin.replay,
+    };
+  }
+
+  async formatModify(
+    actor: Phase3Actor,
+    organisationId: string,
+    competitionId: string,
+    divisionId: string,
+    input: {
+      idempotency_key: string;
+      text: string;
+      current_document: Phase4FormatBuilderDocument;
+      locale?: string;
+    },
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    await this.organisationAccess(this.sql, organisationId, actor);
+    const normalizedText = input.text.normalize("NFC").trim();
+    if (normalizedText.length < 1 || normalizedText.length > 10_000) {
+      throw new ApiError(400, ErrorCode.REQUEST_INVALID, "Text must be between 1 and 10000 characters");
+    }
+    const locale = (input.locale ?? "en").trim();
+    const fingerprint = createAiRequestFingerprint({
+      action: "format_modification",
+      schemaVersion: "1.0",
+      locale,
+      text: normalizedText,
+    });
+
+    const begin = await this.transaction(async (tx) => {
+      await this.organisationAccess(tx, organisationId, actor);
+      const access = await this.competitionAccess(tx, competitionId, actor, false);
+      if (access.organisation_id !== organisationId)
+        throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
+
+      const allowance = (
+        await tx.unsafe<{ action_limit: number; used_units: number }>(
+          `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
+           AND action='format_modification' AND period_start<=current_date ORDER BY period_start DESC LIMIT 1`,
+          [organisationId, actor.accountId],
+        )
+      )[0];
+
+      const requestedLedgerId = randomUUID();
+      const began = first(
+        await tx.unsafe<{ value: JsonObject | string }>(
+          `SELECT phase4_begin_ai_action($1,$2,$3,$4,'format_modification',$5,$5,$6,$7,'1.0',$8) value`,
+          [
+            requestedLedgerId,
+            organisationId,
+            actor.accountId,
+            competitionId,
+            requestId,
+            input.idempotency_key,
+            fingerprint,
+            normalizedText.length,
+          ],
+        ),
+        ErrorCode.AI_BEGIN_FAILED,
+        "AI action could not be started",
+      );
+      const beginValue = decoded<{
+        ledger: {
+          id: string;
+          outcome: string;
+          cache_status: string;
+          charged_units: 0 | 1;
+          failure_code: Phase4AiFailureCode | null;
+        };
+        cache_result: { proposedDocument: Phase4FormatBuilderDocument; explanation: string } | null;
+      }>(began.value);
+      return {
+        ledgerId: beginValue.ledger.id,
+        cached: beginValue.cache_result,
+        finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
+        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
+      };
+    });
+
+    const usage = async () => this.readAiUsage(actor, organisationId);
+    if (begin.finalized?.outcome === "success" && begin.cached) {
+      return {
+        status: "success" as const,
+        source: "cache" as const,
+        proposed_document: begin.cached.proposedDocument,
+        explanation: begin.cached.explanation,
+        charged_units: 0 as const,
+        usage: await usage(),
+        idempotent_replay: true,
+      };
+    }
+
+    let outcome: "success" | "manual_fallback" = "manual_fallback";
+    let cacheStatus: "hit" | "miss" | "not_checked" = begin.cached ? "hit" : "not_checked";
+    let result: { proposedDocument: unknown; explanation: string } = begin.cached ?? {
+      proposedDocument: input.current_document,
+      explanation: "",
+    };
+    let attempts = 0;
+    let durationMs = 0;
+    let failureCode: Phase4AiFailureCode | null = null;
+    let providerRequestId: string | undefined;
+    let promptTemplateVersion: string | undefined;
+    let modelIdentifier: string | undefined;
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+    let estimatedCostUsd: number | undefined;
+
+    if (begin.cached) {
+      outcome = "success";
+    } else if (!begin.quotaAvailable) {
+      failureCode = "quota_exhausted";
+    } else if (this.ai.provider === null || !this.ai.provider.modifyFormat) {
+      failureCode = "provider_unavailable";
+    } else {
+      const started = Date.now();
+      try {
+        const response = await this.ai.provider.modifyFormat(
+          {
+            action: "format_modification",
+            schemaVersion: "1.0",
+            locale,
+            organiserText: normalizedText,
+            currentDocument: input.current_document,
+          },
+          { signal: signal ?? new AbortController().signal },
+        );
+        attempts = 1;
+        durationMs = Date.now() - started;
+        const validation = validateFormatBuilderDocument(
+          wireDocumentToDomain(response.proposedDocument as Phase4FormatBuilderDocument),
+        );
+        if (!validation.valid) {
+          outcome = "manual_fallback";
+          failureCode = "unknown";
+          result = {
+            proposedDocument: input.current_document,
+            explanation: "AI proposed format failed domain validation rules",
+          };
+        } else {
+          outcome = "success";
+          cacheStatus = "miss";
+          result = { proposedDocument: response.proposedDocument, explanation: response.explanation };
+        }
+        providerRequestId = response.providerRequestId;
+        promptTemplateVersion = response.promptTemplateVersion;
+        modelIdentifier = response.modelIdentifier;
+        promptTokens = response.promptTokens;
+        completionTokens = response.completionTokens;
+        estimatedCostUsd = response.estimatedCostUsd;
+      } catch {
+        attempts = 1;
+        durationMs = Date.now() - started;
+        failureCode = "unknown";
+      }
+    }
+
+    const finalize = async (
+      finalOutcome: "success" | "manual_fallback",
+      finalCache: "hit" | "miss" | "not_checked",
+    ) => {
+      const aiMetadata = {
+        provider_mode: this.ai.mode,
+        ...(promptTemplateVersion ? { prompt_template_version: promptTemplateVersion } : {}),
+        ...(modelIdentifier ? { model_identifier: modelIdentifier } : {}),
+        ...(promptTokens !== undefined ? { prompt_tokens: promptTokens } : {}),
+        ...(completionTokens !== undefined ? { completion_tokens: completionTokens } : {}),
+        ...(durationMs ? { latency_ms: durationMs } : {}),
+        ...(estimatedCostUsd !== undefined ? { estimated_cost_usd: estimatedCostUsd } : {}),
+      };
+      if (!this.sql.begin) throw new Error("Phase 4 AI finalization requires transactions");
+      return this.sql.begin(async (tx) => {
+        return first(
+          await tx.unsafe<{ outcome: string; cache_status: string; charged_units: 0 | 1 }>(
+            `SELECT (phase4_finalize_ai_action($1,$2,$3,$4::jsonb,now()+($5::text||' seconds')::interval,$6,$7,$8,$9,$10::jsonb)).*`,
+            [
+              begin.ledgerId,
+              finalOutcome,
+              finalCache,
+              result,
+              this.ai.cacheTtlSeconds,
+              attempts,
+              durationMs,
+              failureCode,
+              providerRequestId ?? null,
+              aiMetadata,
+            ],
+          ),
+          "AI_FINALIZE_FAILED",
+          "AI action could not be finalized",
+        );
+      });
+    };
+
+    const ledger = await finalize(outcome, cacheStatus);
+    if (ledger.outcome === "success") {
+      return {
+        status: "success" as const,
+        source: ledger.cache_status === "hit" ? ("cache" as const) : ("provider" as const),
+        proposed_document: result.proposedDocument as Phase4FormatBuilderDocument,
+        explanation: result.explanation,
+        charged_units: ledger.charged_units,
+        usage: await usage(),
+        idempotent_replay: false,
+      };
+    }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
+    return {
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
+      preserved_text: normalizedText,
+      charged_units: 0 as const,
+      usage: await usage(),
+      idempotent_replay: false,
+    };
+  }
+
+  async schedulePreferences(
+    actor: Phase3Actor,
+    organisationId: string,
+    competitionId: string,
+    divisionId: string,
+    input: {
+      idempotency_key: string;
+      text: string;
+      locale?: string;
+    },
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    await this.organisationAccess(this.sql, organisationId, actor);
+    const normalizedText = input.text.normalize("NFC").trim();
+    if (normalizedText.length < 1 || normalizedText.length > 10_000) {
+      throw new ApiError(400, ErrorCode.REQUEST_INVALID, "Text must be between 1 and 10000 characters");
+    }
+    const locale = (input.locale ?? "en").trim();
+    const fingerprint = createAiRequestFingerprint({
+      action: "schedule_preferences",
+      schemaVersion: "1.0",
+      locale,
+      text: normalizedText,
+    });
+
+    const begin = await this.transaction(async (tx) => {
+      await this.organisationAccess(tx, organisationId, actor);
+      const access = await this.competitionAccess(tx, competitionId, actor, false);
+      if (access.organisation_id !== organisationId)
+        throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
+
+      const allowance = (
+        await tx.unsafe<{ action_limit: number; used_units: number }>(
+          `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
+           AND action='schedule_preferences' AND period_start<=current_date ORDER BY period_start DESC LIMIT 1`,
+          [organisationId, actor.accountId],
+        )
+      )[0];
+
+      const requestedLedgerId = randomUUID();
+      const began = first(
+        await tx.unsafe<{ value: JsonObject | string }>(
+          `SELECT phase4_begin_ai_action($1,$2,$3,$4,'schedule_preferences',$5,$5,$6,$7,'1.0',$8) value`,
+          [
+            requestedLedgerId,
+            organisationId,
+            actor.accountId,
+            competitionId,
+            requestId,
+            input.idempotency_key,
+            fingerprint,
+            normalizedText.length,
+          ],
+        ),
+        ErrorCode.AI_BEGIN_FAILED,
+        "AI action could not be started",
+      );
+      const beginValue = decoded<{
+        ledger: {
+          id: string;
+          outcome: string;
+          cache_status: string;
+          charged_units: 0 | 1;
+          failure_code: Phase4AiFailureCode | null;
+        };
+        cache_result: { proposedPreferences: Record<string, unknown>; explanation: string } | null;
+      }>(began.value);
+      return {
+        ledgerId: beginValue.ledger.id,
+        cached: beginValue.cache_result,
+        finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
+        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
+      };
+    });
+
+    const usage = async () => this.readAiUsage(actor, organisationId);
+    if (begin.finalized?.outcome === "success" && begin.cached) {
+      return {
+        status: "success" as const,
+        source: "cache" as const,
+        proposed_preferences: begin.cached.proposedPreferences,
+        explanation: begin.cached.explanation,
+        charged_units: 0 as const,
+        usage: await usage(),
+        idempotent_replay: true,
+      };
+    }
+
+    let outcome: "success" | "manual_fallback" = "manual_fallback";
+    let cacheStatus: "hit" | "miss" | "not_checked" = begin.cached ? "hit" : "not_checked";
+    let result: { proposedPreferences: Record<string, unknown>; explanation: string } = begin.cached ?? {
+      proposedPreferences: {},
+      explanation: "",
+    };
+    let attempts = 0;
+    let durationMs = 0;
+    let failureCode: Phase4AiFailureCode | null = null;
+    let providerRequestId: string | undefined;
+    let promptTemplateVersion: string | undefined;
+    let modelIdentifier: string | undefined;
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+    let estimatedCostUsd: number | undefined;
+
+    if (begin.cached) {
+      outcome = "success";
+    } else if (!begin.quotaAvailable) {
+      failureCode = "quota_exhausted";
+    } else if (this.ai.provider === null || !this.ai.provider.suggestSchedulePreferences) {
+      failureCode = "provider_unavailable";
+    } else {
+      const started = Date.now();
+      try {
+        const response = await this.ai.provider.suggestSchedulePreferences(
+          {
+            action: "schedule_preferences",
+            schemaVersion: "1.0",
+            locale,
+            organiserText: normalizedText,
+          },
+          { signal: signal ?? new AbortController().signal },
+        );
+        attempts = 1;
+        durationMs = Date.now() - started;
+        outcome = "success";
+        cacheStatus = "miss";
+        result = { proposedPreferences: response.proposedPreferences, explanation: response.explanation };
+        providerRequestId = response.providerRequestId;
+        promptTemplateVersion = response.promptTemplateVersion;
+        modelIdentifier = response.modelIdentifier;
+        promptTokens = response.promptTokens;
+        completionTokens = response.completionTokens;
+        estimatedCostUsd = response.estimatedCostUsd;
+      } catch {
+        attempts = 1;
+        durationMs = Date.now() - started;
+        failureCode = "unknown";
+      }
+    }
+
+    const finalize = async (
+      finalOutcome: "success" | "manual_fallback",
+      finalCache: "hit" | "miss" | "not_checked",
+    ) => {
+      const aiMetadata = {
+        provider_mode: this.ai.mode,
+        ...(promptTemplateVersion ? { prompt_template_version: promptTemplateVersion } : {}),
+        ...(modelIdentifier ? { model_identifier: modelIdentifier } : {}),
+        ...(promptTokens !== undefined ? { prompt_tokens: promptTokens } : {}),
+        ...(completionTokens !== undefined ? { completion_tokens: completionTokens } : {}),
+        ...(durationMs ? { latency_ms: durationMs } : {}),
+        ...(estimatedCostUsd !== undefined ? { estimated_cost_usd: estimatedCostUsd } : {}),
+      };
+      if (!this.sql.begin) throw new Error("Phase 4 AI finalization requires transactions");
+      return this.sql.begin(async (tx) => {
+        return first(
+          await tx.unsafe<{ outcome: string; cache_status: string; charged_units: 0 | 1 }>(
+            `SELECT (phase4_finalize_ai_action($1,$2,$3,$4::jsonb,now()+($5::text||' seconds')::interval,$6,$7,$8,$9,$10::jsonb)).*`,
+            [
+              begin.ledgerId,
+              finalOutcome,
+              finalCache,
+              result,
+              this.ai.cacheTtlSeconds,
+              attempts,
+              durationMs,
+              failureCode,
+              providerRequestId ?? null,
+              aiMetadata,
+            ],
+          ),
+          "AI_FINALIZE_FAILED",
+          "AI action could not be finalized",
+        );
+      });
+    };
+
+    const ledger = await finalize(outcome, cacheStatus);
+    if (ledger.outcome === "success") {
+      return {
+        status: "success" as const,
+        source: ledger.cache_status === "hit" ? ("cache" as const) : ("provider" as const),
+        proposed_preferences: result.proposedPreferences,
+        explanation: result.explanation,
+        charged_units: ledger.charged_units,
+        usage: await usage(),
+        idempotent_replay: false,
+      };
+    }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
+    return {
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
+      preserved_text: normalizedText,
+      charged_units: 0 as const,
+      usage: await usage(),
+      idempotent_replay: false,
+    };
+  }
+
+  async repairRecommendations(
+    actor: Phase3Actor,
+    organisationId: string,
+    competitionId: string,
+    caseId: string,
+    input: {
+      idempotency_key: string;
+      text?: string;
+      locale?: string;
+    },
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    await this.organisationAccess(this.sql, organisationId, actor);
+    const normalizedText = (input.text ?? "").normalize("NFC").trim();
+    const locale = (input.locale ?? "en").trim();
+    const fingerprint = createAiRequestFingerprint({
+      action: "repair_recommendations",
+      schemaVersion: "1.0",
+      locale,
+      text: normalizedText || caseId,
+    });
+
+    const begin = await this.transaction(async (tx) => {
+      await this.organisationAccess(tx, organisationId, actor);
+      const access = await this.competitionAccess(tx, competitionId, actor, false);
+      if (access.organisation_id !== organisationId)
+        throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
+
+      const allowance = (
+        await tx.unsafe<{ action_limit: number; used_units: number }>(
+          `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
+           AND action='repair_recommendations' AND period_start<=current_date ORDER BY period_start DESC LIMIT 1`,
+          [organisationId, actor.accountId],
+        )
+      )[0];
+
+      const requestedLedgerId = randomUUID();
+      const began = first(
+        await tx.unsafe<{ value: JsonObject | string }>(
+          `SELECT phase4_begin_ai_action($1,$2,$3,$4,'repair_recommendations',$5,$5,$6,$7,'1.0',$8) value`,
+          [
+            requestedLedgerId,
+            organisationId,
+            actor.accountId,
+            competitionId,
+            requestId,
+            input.idempotency_key,
+            fingerprint,
+            normalizedText.length,
+          ],
+        ),
+        ErrorCode.AI_BEGIN_FAILED,
+        "AI action could not be started",
+      );
+      const beginValue = decoded<{
+        ledger: {
+          id: string;
+          outcome: string;
+          cache_status: string;
+          charged_units: 0 | 1;
+          failure_code: Phase4AiFailureCode | null;
+        };
+        cache_result: {
+          recommendedActions: Array<{
+            action_type: string;
+            target_match_id?: string;
+            target_area_id?: string;
+            shift_minutes?: number;
+            reason: string;
+          }>;
+          explanation: string;
+        } | null;
+      }>(began.value);
+      return {
+        ledgerId: beginValue.ledger.id,
+        cached: beginValue.cache_result,
+        finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
+        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
+      };
+    });
+
+    const usage = async () => this.readAiUsage(actor, organisationId);
+    if (begin.finalized?.outcome === "success" && begin.cached) {
+      return {
+        status: "success" as const,
+        source: "cache" as const,
+        recommended_actions: begin.cached.recommendedActions,
+        explanation: begin.cached.explanation,
+        charged_units: 0 as const,
+        usage: await usage(),
+        idempotent_replay: true,
+      };
+    }
+
+    let outcome: "success" | "manual_fallback" = "manual_fallback";
+    let cacheStatus: "hit" | "miss" | "not_checked" = begin.cached ? "hit" : "not_checked";
+    let result: {
+      recommendedActions: Array<{
+        action_type: string;
+        target_match_id?: string;
+        target_area_id?: string;
+        shift_minutes?: number;
+        reason: string;
+      }>;
+      explanation: string;
+    } = begin.cached ?? {
+      recommendedActions: [],
+      explanation: "",
+    };
+    let attempts = 0;
+    let durationMs = 0;
+    let failureCode: Phase4AiFailureCode | null = null;
+    let providerRequestId: string | undefined;
+    let promptTemplateVersion: string | undefined;
+    let modelIdentifier: string | undefined;
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+    let estimatedCostUsd: number | undefined;
+
+    if (begin.cached) {
+      outcome = "success";
+    } else if (!begin.quotaAvailable) {
+      failureCode = "quota_exhausted";
+    } else if (this.ai.provider === null || !this.ai.provider.recommendRepairActions) {
+      failureCode = "provider_unavailable";
+    } else {
+      const started = Date.now();
+      try {
+        const response = await this.ai.provider.recommendRepairActions(
+          {
+            action: "repair_recommendations",
+            schemaVersion: "1.0",
+            locale,
+            organiserText: normalizedText,
+            caseDetails: { caseId },
+          },
+          { signal: signal ?? new AbortController().signal },
+        );
+        attempts = 1;
+        durationMs = Date.now() - started;
+        outcome = "success";
+        cacheStatus = "miss";
+        result = { recommendedActions: response.recommendedActions, explanation: response.explanation };
+        providerRequestId = response.providerRequestId;
+        promptTemplateVersion = response.promptTemplateVersion;
+        modelIdentifier = response.modelIdentifier;
+        promptTokens = response.promptTokens;
+        completionTokens = response.completionTokens;
+        estimatedCostUsd = response.estimatedCostUsd;
+      } catch {
+        attempts = 1;
+        durationMs = Date.now() - started;
+        failureCode = "unknown";
+      }
+    }
+
+    const finalize = async (
+      finalOutcome: "success" | "manual_fallback",
+      finalCache: "hit" | "miss" | "not_checked",
+    ) => {
+      const aiMetadata = {
+        provider_mode: this.ai.mode,
+        ...(promptTemplateVersion ? { prompt_template_version: promptTemplateVersion } : {}),
+        ...(modelIdentifier ? { model_identifier: modelIdentifier } : {}),
+        ...(promptTokens !== undefined ? { prompt_tokens: promptTokens } : {}),
+        ...(completionTokens !== undefined ? { completion_tokens: completionTokens } : {}),
+        ...(durationMs ? { latency_ms: durationMs } : {}),
+        ...(estimatedCostUsd !== undefined ? { estimated_cost_usd: estimatedCostUsd } : {}),
+      };
+      if (!this.sql.begin) throw new Error("Phase 4 AI finalization requires transactions");
+      return this.sql.begin(async (tx) => {
+        return first(
+          await tx.unsafe<{ outcome: string; cache_status: string; charged_units: 0 | 1 }>(
+            `SELECT (phase4_finalize_ai_action($1,$2,$3,$4::jsonb,now()+($5::text||' seconds')::interval,$6,$7,$8,$9,$10::jsonb)).*`,
+            [
+              begin.ledgerId,
+              finalOutcome,
+              finalCache,
+              result,
+              this.ai.cacheTtlSeconds,
+              attempts,
+              durationMs,
+              failureCode,
+              providerRequestId ?? null,
+              aiMetadata,
+            ],
+          ),
+          "AI_FINALIZE_FAILED",
+          "AI action could not be finalized",
+        );
+      });
+    };
+
+    const ledger = await finalize(outcome, cacheStatus);
+    if (ledger.outcome === "success") {
+      return {
+        status: "success" as const,
+        source: ledger.cache_status === "hit" ? ("cache" as const) : ("provider" as const),
+        recommended_actions: result.recommendedActions,
+        explanation: result.explanation,
+        charged_units: ledger.charged_units,
+        usage: await usage(),
+        idempotent_replay: false,
+      };
+    }
+    const effectiveFailureCode = (ledger as { failure_code?: Phase4AiFailureCode | null }).failure_code ?? failureCode;
+    return {
+      status: effectiveFailureCode === "quota_exhausted" ? ("quota_exhausted" as const) : ("manual_fallback" as const),
+      ...(effectiveFailureCode ? { reason: effectiveFailureCode } : {}),
+      preserved_text: normalizedText,
+      charged_units: 0 as const,
+      usage: await usage(),
+      idempotent_replay: false,
     };
   }
 
@@ -3823,6 +4476,31 @@ export class Phase4Runtime {
         if (receipt.operation !== "schedule.lock" || receipt.request_hash !== requestHash)
           throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
+        const targetMatch = (
+          await tx.unsafe<{ id: string; graph_match_id: string | null; code: string }>(
+            `SELECT id, graph_match_id, code FROM matches WHERE id=$1`,
+            [input.match_id],
+          )
+        )[0];
+        if (
+          targetMatch &&
+          (targetMatch.graph_match_id === "grand-final-reset" || targetMatch.code === "grand-final-reset")
+        ) {
+          const grandFinal1 = (
+            await tx.unsafe<{ state: string; home_entry_id: string | null; away_entry_id: string | null }>(
+              `SELECT m.state, m.home_entry_id, m.away_entry_id FROM matches m
+               WHERE m.competition_id=$1 AND (m.graph_match_id='grand-final-1' OR m.code='grand-final-1')`,
+              [revision.competition_id],
+            )
+          )[0];
+          if (!grandFinal1 || !["final", "corrected"].includes(grandFinal1.state)) {
+            throw new ApiError(
+              422,
+              ErrorCode.PREMATURE_RESET_FINAL_SCHEDULE,
+              "Reset final cannot be scheduled until Grand Final 1 has completed",
+            );
+          }
+        }
         await this.lockScheduleMutation(tx, revision.competition_id);
         await tx.unsafe(
           `SELECT phase4_set_schedule_assignment_lock($1,$2,$3,$4,to_timestamp($5::double precision/1000),to_timestamp($6::double precision/1000),$7,$8)`,

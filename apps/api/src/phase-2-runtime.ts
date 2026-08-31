@@ -25,6 +25,7 @@ import {
   type StandingsMatchResult,
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
+import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import {
   NoopScoringAccessRateLimiter,
@@ -373,6 +374,7 @@ export type PersistedResult = {
 type CompetitionRow = {
   id: string;
   organisation_id: string;
+  name: string;
   status: string;
   division_id?: string;
   membership_role?: "owner" | "organiser" | "viewer";
@@ -655,6 +657,7 @@ export class Phase2Runtime {
     private readonly fallbackCodeGenerator: () => string = randomFallbackCode,
     private readonly takeoverRequestTtlMs = 5 * 60_000,
     protected readonly fallbackCodeHmacKeyVersion = "v1",
+    private readonly competitionPublicationNotifier?: CompetitionPublicationNotifier,
   ) {
     if (!fallbackCodeHmacSecret || Buffer.byteLength(fallbackCodeHmacSecret, "utf8") < 32) {
       throw new Error("Scoring fallback-code HMAC secret must contain at least 32 bytes.");
@@ -741,7 +744,7 @@ export class Phase2Runtime {
   ): Promise<CompetitionRow> {
     const roles = mutable ? ["owner", "organiser"] : ["owner", "organiser", "viewer"];
     const rows = await tx.unsafe<CompetitionRow>(
-      `SELECT c.id, c.organisation_id, c.status, om.role AS membership_role
+      `SELECT c.id, c.organisation_id, c.name, c.status, om.role AS membership_role
        FROM competitions c
        JOIN organisation_memberships om ON om.organisation_id = c.organisation_id
        WHERE c.id = $1 AND om.account_id = $2 AND om.status = 'active' AND om.role = ANY($3::text[])
@@ -1539,6 +1542,14 @@ export class Phase2Runtime {
         [competitionId, occurredAt],
       );
       await this.writePublicProjection(tx, competitionId, version, publication.result_version);
+      await this.competitionPublicationNotifier?.publish({
+        transaction: tx,
+        actorAccountId: actor.accountId,
+        competitionId,
+        competitionName: competition.name,
+        scheduleRevisionId,
+        scheduleVersion: version,
+      });
       await this.evidence(tx, {
         requestId,
         actorAccountId: actor.accountId,
@@ -5062,6 +5073,95 @@ export class Phase2Runtime {
           ],
         );
       }
+    }
+    const grandFinal1 = (
+      await tx.unsafe<{
+        id: string;
+        format_revision_id: string;
+        competition_id: string;
+        division_id: string;
+        ordinal: number;
+        home_entry_id: string | null;
+        away_entry_id: string | null;
+        state: string;
+      }>(
+        `SELECT id,format_revision_id,competition_id,division_id,ordinal,home_entry_id,away_entry_id,state
+         FROM matches
+         WHERE division_id=$1 AND (graph_match_id='grand-final-1' OR code='grand-final-1')`,
+        [divisionId],
+      )
+    )[0];
+    if (grandFinal1 && ["final", "corrected"].includes(grandFinal1.state)) {
+      const gf1Result = (
+        await tx.unsafe<{ home_score: number; away_score: number }>(
+          `SELECT home_score, away_score FROM match_result_snapshots
+           WHERE match_id=$1 AND result_version<=$2 ORDER BY result_version DESC LIMIT 1`,
+          [grandFinal1.id, resultVersion],
+        )
+      )[0];
+      if (gf1Result && gf1Result.away_score > gf1Result.home_score) {
+        // Lower bracket champion won GF1 -> Activate Grand Final Reset (GF2)
+        const existingReset = (
+          await tx.unsafe<{ id: string; state: string }>(
+            `SELECT id, state FROM matches WHERE division_id=$1 AND (graph_match_id='grand-final-reset' OR code='grand-final-reset')`,
+            [divisionId],
+          )
+        )[0];
+        if (!existingReset) {
+          const resetMatchId = randomUUID();
+          await tx.unsafe(
+            `INSERT INTO matches (
+               id, competition_id, division_id, format_revision_id, code, stage,
+               round_number, ordinal, graph_match_id, graph_stage_id, graph_purpose,
+               home_entry_id, away_entry_id, state
+             ) VALUES ($1,$2,$3,$4,'grand-final-reset','final',2,$5,'grand-final-reset','grand-final','championship',$6,$7,'ready')`,
+            [
+              resetMatchId,
+              competitionId,
+              divisionId,
+              grandFinal1.format_revision_id,
+              grandFinal1.ordinal + 1,
+              grandFinal1.home_entry_id,
+              grandFinal1.away_entry_id,
+            ],
+          );
+          await tx.unsafe(
+            `INSERT INTO match_dependencies (match_id, format_revision_id, slot, source_match_id, outcome)
+             VALUES ($1,$2,'home',$3,'winner'), ($1,$2,'away',$3,'loser')
+             ON CONFLICT DO NOTHING`,
+            [resetMatchId, grandFinal1.format_revision_id, grandFinal1.id],
+          );
+        } else if (["pending", "draft", "scheduled"].includes(existingReset.state)) {
+          await tx.unsafe(
+            `UPDATE matches SET home_entry_id=$2, away_entry_id=$3, state='ready'
+             WHERE id=$1`,
+            [existingReset.id, grandFinal1.home_entry_id, grandFinal1.away_entry_id],
+          );
+        }
+      } else if (gf1Result && gf1Result.home_score >= gf1Result.away_score) {
+        // Upper bracket champion won GF1 -> GF2 is not required; complete competition directly.
+        // We do NOT set state='cancelled' on GF2 — that value violates the matches.state CHECK constraint.
+        await tx.unsafe(`UPDATE competitions SET status='completed', updated_at=$2 WHERE id=$1 AND status='active'`, [
+          competitionId,
+          this.now(),
+        ]);
+      }
+    }
+
+    // General completion check: all matches in terminal states, excluding any un-played optional
+    // grand-final-reset match (GF2) that remains 'ready' when upper bracket won GF1.
+    const pendingMatches = await tx.unsafe<{ count: number }>(
+      `SELECT count(*)::integer as count FROM matches
+       WHERE competition_id=$1
+         AND state NOT IN ('final', 'corrected')
+         AND NOT (state = 'ready' AND (graph_match_id='grand-final-reset' OR code='grand-final-reset'))`,
+      [competitionId],
+    );
+    if (pendingMatches[0]?.count === 0) {
+      await tx.unsafe(`UPDATE competitions SET status='completed', updated_at=$2 WHERE id=$1 AND status='active'`, [
+        competitionId,
+        this.now(),
+      ]);
     }
     await tx.unsafe(
       `INSERT INTO bracket_snapshots (

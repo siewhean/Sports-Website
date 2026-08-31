@@ -74,7 +74,7 @@ test("V1 Publish page performs the real schedule publication mutation", async ({
 
   await expect.poll(() => expectedRevision).toBe(4);
   expect(typeof idempotencyKey).toBe("string");
-  await expect(page.getByRole("status")).toContainText("Schedule revision 4 is now public.");
+  await expect(page.getByRole("status").filter({ hasText: "Schedule revision 4 is now public." })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open public competition" })).toBeVisible();
 });
 

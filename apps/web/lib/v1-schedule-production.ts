@@ -40,6 +40,8 @@ export const v1ScheduleProductionCopy = {
   generateSchedule: "Generate schedule",
   publishedSchedule: "Published schedule",
   publicationReview: "Publication review",
+  publicationVersion: "Publication version",
+  publishedRevision: "Published revision {revision}",
   revisionStatus: "Revision status",
   scheduledFixtures: "Scheduled fixtures",
   blockingConflicts: "Blocking conflicts",

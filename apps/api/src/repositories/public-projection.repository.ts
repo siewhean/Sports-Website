@@ -147,7 +147,7 @@ export class PublicProjectionRepository {
         input.projectionVersion,
         input.scheduleRevisionId,
         input.sourceRepairRevisionId,
-        typeof input.projection === "string" ? input.projection : JSON.stringify(input.projection),
+        typeof input.projection === "string" ? JSON.parse(input.projection) : input.projection,
         input.projectionFingerprint,
         input.etag,
         input.generatedAt,
@@ -210,14 +210,14 @@ export class PublicProjectionRepository {
     },
     executor: SqlExecutor = this.sql,
   ): Promise<PublicProjectionRecord> {
-    const payloadStr = typeof input.payload === "string" ? input.payload : JSON.stringify(input.payload);
+    const payloadVal = typeof input.payload === "string" ? JSON.parse(input.payload) : input.payload;
     const rows = await executor.unsafe<PublicProjectionRecord>(
       `INSERT INTO public_projection_versions (
          competition_id, division_id, projection_version, schedule_version, result_version,
          projection, projection_fingerprint, etag, generated_at, source_updated_at
        ) VALUES ($1, $2, $3, 1, 1, $4::jsonb, repeat('0', 64), 'compat', now(), now())
        RETURNING id, competition_id, division_id, projection_version, projection AS payload, generated_at AS created_at`,
-      [input.competitionId, input.divisionId, input.projectionVersion, payloadStr],
+      [input.competitionId, input.divisionId, input.projectionVersion, payloadVal],
     );
     const row = rows[0];
     if (!row) throw new Error("Failed to upsert public division projection");

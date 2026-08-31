@@ -33,6 +33,17 @@ import { GateCC4PostgresPublisher } from "./gate-c-c4-postgres-publisher.js";
 import { GateCC4Operations } from "./gate-c-c4-operations.js";
 import { GateCC4LifecycleOperations } from "./gate-c-c4-lifecycle.js";
 import { GateCC4PublicTruthRuntime } from "./gate-c-c4-public-truth.js";
+import { EntitlementRuntime } from "./entitlement-runtime.js";
+import { HttpStripeCheckoutClient } from "./stripe-checkout-client.js";
+import { PublishedExportRuntime } from "./published-export-runtime.js";
+import { ProductionAdminRuntime } from "./production-admin-runtime.js";
+import { TransactionalCompetitionPublicationNotifier } from "./competition-publication-notifier.js";
+import {
+  NotificationService,
+  PostgresNotificationRepository,
+  NoopNotificationRateLimiter,
+  EmailTemplateRegistry,
+} from "@matchday/notifications";
 import { startApiTelemetry } from "./telemetry.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
@@ -91,6 +102,12 @@ const identityRuntime = new IdentityAssuranceRuntime(
 );
 await reconcileScoringAccessHmacKeyring(identitySql, config.scoringAccess.rateLimitHmacKeyring);
 await reconcileScoringFallbackHmacKeyring(identitySql, config.scoringAccess.fallbackCodeHmacKeyring);
+const notificationRepo = new PostgresNotificationRepository(postgresClient);
+const notificationService = new NotificationService(notificationRepo, notificationRepo, new EmailTemplateRegistry(), {
+  createId: randomUUID,
+  now: () => new Date(),
+  rateLimiter: new NoopNotificationRateLimiter(),
+});
 const phase2Runtime = new FallbackKeyringPhase2Runtime(
   identitySql,
   phase2DomainAdapter,
@@ -100,6 +117,11 @@ const phase2Runtime = new FallbackKeyringPhase2Runtime(
     rateLimitRedis,
     config.scoringAccess.rateLimitHmacKeyring,
     `matchday:${config.environment}:scoring-access:`,
+  ),
+  undefined,
+  undefined,
+  new TransactionalCompetitionPublicationNotifier(
+    config.publicOrigin ?? config.api.allowedOrigins[0] ?? "http://127.0.0.1:3000",
   ),
 );
 const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
@@ -126,6 +148,12 @@ const phase4Runtime = new V1Phase4Runtime(
   undefined,
   phase2Runtime,
 );
+const entitlementRuntime = new EntitlementRuntime(
+  identitySql,
+  process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : undefined,
+);
+const exportRuntime = new PublishedExportRuntime(identitySql);
+const adminRuntime = new ProductionAdminRuntime(identitySql);
 
 // Gate C is part of the production API composition, not an evidence-only
 // harness. Reuse the canonical Phase 2 projection writer so repair publication
@@ -160,6 +188,10 @@ const app = await buildApp({
   gateCC4Operations,
   gateCC4Lifecycle,
   gateCC4PublicTruthRuntime,
+  entitlementRuntime,
+  exportRuntime,
+  adminRuntime,
+  notificationService,
   scoringAccessHmacKeySql: identitySql,
   scoringFallbackHmacKeySql: identitySql,
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,

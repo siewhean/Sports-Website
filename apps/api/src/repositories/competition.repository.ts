@@ -2,6 +2,22 @@ import type { SqlExecutor, CompetitionRecord, LockMode } from "./types.js";
 
 const COMPETITION_COLUMNS = `id, organisation_id, created_by, name, slug, sport_code, status, venue, address, locality, country_code, starts_on, ends_on, timezone, locale, plan_tier, sport_pack_version, capacity_revision, revision, created_at, updated_at`;
 
+export type OrganiserCompetitionLibraryRecord = {
+  id: string;
+  organisation_id: string;
+  organisation_name: string;
+  membership_role: "owner" | "organiser";
+  name: string;
+  slug: string;
+  sport_code: string;
+  status: string;
+  starts_on: string;
+  ends_on: string;
+  timezone: string;
+  updated_at: string;
+  published: boolean;
+};
+
 export class CompetitionRepository {
   constructor(private readonly sql: SqlExecutor) {}
 
@@ -29,6 +45,53 @@ export class CompetitionRepository {
       [slug],
     );
     return rows[0] ?? null;
+  }
+
+  async listByAccountId(
+    accountId: string,
+    executor: SqlExecutor = this.sql,
+  ): Promise<readonly OrganiserCompetitionLibraryRecord[]> {
+    const rows = await executor.unsafe<
+      Omit<OrganiserCompetitionLibraryRecord, "updated_at"> & { updated_at: Date | string }
+    >(
+      `SELECT competition.id,
+              competition.organisation_id,
+              organisation.name AS organisation_name,
+              membership.role AS membership_role,
+              competition.name,
+              competition.slug,
+              competition.sport_code,
+              competition.status,
+              competition.starts_on::text,
+              competition.ends_on::text,
+              competition.timezone,
+              competition.updated_at,
+              (publication.published_schedule_revision_id IS NOT NULL) AS published
+       FROM organisation_memberships membership
+       JOIN organisations organisation ON organisation.id = membership.organisation_id
+       JOIN competitions competition ON competition.organisation_id = organisation.id
+       LEFT JOIN competition_publications publication ON publication.competition_id = competition.id
+       WHERE membership.account_id = $1
+         AND membership.status = 'active'
+         AND membership.role IN ('owner', 'organiser')
+       ORDER BY
+         CASE competition.status
+           WHEN 'draft' THEN 0
+           WHEN 'active' THEN 1
+           WHEN 'completed' THEN 2
+           WHEN 'archived' THEN 3
+           ELSE 4
+         END,
+         competition.starts_on,
+         lower(competition.name),
+         competition.id`,
+      [accountId],
+    );
+    return rows.map((row) => ({
+      ...row,
+      updated_at:
+        row.updated_at instanceof Date ? row.updated_at.toISOString() : new Date(row.updated_at).toISOString(),
+    }));
   }
 
   async existsBySlug(slug: string, excludeId?: string, executor: SqlExecutor = this.sql): Promise<boolean> {

@@ -37,6 +37,11 @@ import type { C5WorkloadExecutor } from "@matchday/observability";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
+import { GateCC4PostgresPublisher } from "../src/gate-c-c4-postgres-publisher.js";
+import { GateCC4Runtime } from "../src/gate-c-c4-runtime.js";
+import { GateCC4Operations } from "../src/gate-c-c4-operations.js";
+import { GateCC4LifecycleOperations } from "../src/gate-c-c4-lifecycle.js";
+import { GateCC4PublicTruthRuntime } from "../src/gate-c-c4-public-truth.js";
 
 const apiPort = 4101;
 const webPort = 3103;
@@ -1070,6 +1075,11 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
         return false;
       }
     };
+    const gateCC4Publisher = new GateCC4PostgresPublisher(phase2);
+    const gateCC4Runtime = new GateCC4Runtime(identitySql, gateCC4Publisher);
+    const gateCC4Operations = new GateCC4Operations(identitySql, webOrigin);
+    const gateCC4Lifecycle = new GateCC4LifecycleOperations(identitySql);
+    const gateCC4PublicTruthRuntime = new GateCC4PublicTruthRuntime(identitySql);
     app = await buildApp({
       config,
       probes: {
@@ -1083,6 +1093,10 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       phase2Runtime: phase2,
       phase3Runtime: phase3,
       phase4Runtime: phase4,
+      gateCC4Runtime,
+      gateCC4Operations,
+      gateCC4Lifecycle,
+      gateCC4PublicTruthRuntime,
     });
     await app.listen({ host: "127.0.0.1", port: apiPort });
     await waitFor(`${apiOrigin}/health/ready`, "Phase 4 API");

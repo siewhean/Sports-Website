@@ -230,6 +230,15 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0050_phase3_sport_pack_hash_scope_fence.sql",
           "0051_gate_c_fallback_code_history_uniqueness.sql",
           "0052_gate_c_fallback_code_hmac_key_versions.sql",
+          "0053_phase6_double_elimination_recommendations.sql",
+          "0054_phase6_ai_provenance_and_accounting.sql",
+          "0055_phase6_commercial_billing_entitlements.sql",
+          "0056_phase6_double_elimination_completion_guard.sql",
+          "0057_phase6_effective_entry_entitlements.sql",
+          "0058_phase6_provider_subscription_state.sql",
+          "0059_phase6_shared_ai_credits.sql",
+          "0060_phase6_event_pass_competition_scope.sql",
+          "0061_phase6_reject_organisation_event_pass.sql",
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,

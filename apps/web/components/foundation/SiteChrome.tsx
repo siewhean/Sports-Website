@@ -29,9 +29,15 @@ export function SiteHeader({
           </Link>
         ))}
       </nav>
-      <Link className="site-header__access" href="/organiser">
-        {viewer?.displayName ?? messages.navigation.signIn}
-      </Link>
+      {viewer ? (
+        <Link className="site-header__access" href="/organiser">
+          {viewer.displayName}
+        </Link>
+      ) : (
+        <a className="site-header__access" href="/api/v1/identity/authorize">
+          {messages.navigation.signIn}
+        </a>
+      )}
     </header>
   );
 }
@@ -42,7 +48,9 @@ export function SiteFooter({ inverse = false }: { inverse?: boolean }) {
       <BrandLink inverse={inverse} />
       <p>{messages.footer.product}</p>
       <nav aria-label={messages.navigation.legalAndService}>
+        <Link href="/pricing">{messages.footer.pricing}</Link>
         <Link href="/privacy">{messages.footer.privacy}</Link>
+        <Link href="/terms">{messages.footer.terms}</Link>
         <Link href="/cookies">{messages.footer.cookies}</Link>
         <Link href="/maintenance">{messages.footer.status}</Link>
       </nav>

@@ -4,17 +4,25 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { ConsentManager } from "@/components/foundation/ConsentManager";
 import { ServiceWorkerRegistration } from "@/components/foundation/ServiceWorkerRegistration";
+import { configuredPublicOrigin } from "@/lib/phase3-origin";
 import { messages } from "@matchday/ui";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://matchday.example"),
+  ...(configuredPublicOrigin(process.env.MATCHDAY_PUBLIC_ORIGIN)
+    ? { metadataBase: new URL(configuredPublicOrigin(process.env.MATCHDAY_PUBLIC_ORIGIN)!) }
+    : {}),
   title: {
     default: messages.metadata.defaultTitle,
     template: messages.metadata.titleTemplate,
   },
   description: messages.metadata.description,
   manifest: "/manifest.webmanifest",
+  openGraph: {
+    title: messages.metadata.defaultTitle,
+    description: messages.metadata.homeOpenGraphDescription,
+    siteName: messages.brand.name,
+  },
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

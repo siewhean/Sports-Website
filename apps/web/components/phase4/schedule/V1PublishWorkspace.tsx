@@ -17,6 +17,7 @@ import {
   v1SchedulePublishedMessage,
   v1ScheduleRevisionLabel,
 } from "@/lib/v1-schedule-production";
+import { interpolate } from "@matchday/ui";
 
 export function V1PublishWorkspace({
   document,
@@ -108,12 +109,16 @@ export function V1PublishWorkspace({
         <span className="p2-published-mark" aria-hidden="true">
           {published ? <CheckCircle weight="fill" /> : <ShieldWarning />}
         </span>
-        <p>{published ? v1ScheduleProductionCopy.publishedSchedule : v1ScheduleProductionCopy.publicationReview}</p>
+        <p>{published ? `Published revision ${revision.revision}` : v1ScheduleProductionCopy.publicationReview}</p>
         <h2>{v1ScheduleRevisionLabel(revision.revision)}</h2>
         <dl>
           <div>
             <dt>{v1ScheduleProductionCopy.revisionStatus}</dt>
             <dd>{revision.status.replaceAll("_", " ")}</dd>
+          </div>
+          <div>
+            <dt>{v1ScheduleProductionCopy.publicationVersion}</dt>
+            <dd>{interpolate(v1ScheduleProductionCopy.publishedRevision, { revision: String(revision.revision) })}</dd>
           </div>
           <div>
             <dt>{v1ScheduleProductionCopy.scheduledFixtures}</dt>

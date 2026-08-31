@@ -66,13 +66,20 @@ const nonUserCallNames = new Set([
   "console.warn",
   "document.querySelector",
   "document.querySelectorAll",
+  "endsWith",
   "gsap.fromTo",
   "gsap.set",
   "gsap.to",
   "gsap.utils.toArray",
+  "includes",
+  "indexOf",
+  "lastIndexOf",
   "matchMedia",
   "opaqueId",
+  "replace",
+  "replaceAll",
   "split",
+  "startsWith",
   "window.matchMedia",
 ]);
 const machineCallNames = new Set([
@@ -81,8 +88,15 @@ const machineCallNames = new Set([
   "addStage",
   "addCorrection",
   "document.documentElement.setAttribute",
+  "getItem",
+  "localStorage.getItem",
+  "localStorage.setItem",
   "removeEventListener",
+  "removeItem",
   "resolveStaleEvent",
+  "sessionStorage.getItem",
+  "sessionStorage.setItem",
+  "setItem",
   "setMode",
   "setFinalState",
   "setPhase",
@@ -125,7 +139,12 @@ function collectFiles(directory) {
     .flatMap((entry) => {
       const fullPath = path.join(directory, entry.name);
       if (entry.isDirectory()) return collectFiles(fullPath);
-      if (!/\.[cm]?[jt]sx?$/.test(entry.name) || /(?:\.test\.|\.spec\.)/.test(entry.name)) return [];
+      if (
+        !/\.[cm]?[jt]sx?$/.test(entry.name) ||
+        /(?:\.test\.|\.spec\.)/.test(entry.name) ||
+        /(?:robots|sitemap)\.ts$/.test(entry.name)
+      )
+        return [];
       return [fullPath];
     })
     .sort();
@@ -172,11 +191,10 @@ function propertyName(node, source) {
 function isMachineCall(expression, source) {
   const name = expression.getText(source);
   if (nonUserCallNames.has(name) || machineCallNames.has(name)) return true;
-  if (
-    ts.isPropertyAccessExpression(expression) &&
-    (expression.name.text === "querySelector" || expression.name.text === "querySelectorAll")
-  ) {
-    return true;
+  if (ts.isPropertyAccessExpression(expression)) {
+    const prop = expression.name.text;
+    if (nonUserCallNames.has(prop) || machineCallNames.has(prop)) return true;
+    if (prop === "querySelector" || prop === "querySelectorAll") return true;
   }
   return /(?:^|\.)(?:addEventListener|removeEventListener|setAttribute)$/.test(name);
 }
@@ -228,6 +246,14 @@ function isMachineLiteral(node, source) {
   if (!/[\p{L}\p{N}]/u.test(value) || /^\s*$/.test(value)) return true;
   if (value === "use client" || value === "use server") return true;
   if (isNextDynamicRouteConfig(node)) return true;
+  if (
+    ts.isArrayLiteralExpression(node.parent) &&
+    ts.isCallExpression(node.parent.parent) &&
+    node.parent.parent.expression.getText(source) === "hasExactKeys" &&
+    node.parent.parent.arguments[1] === node.parent
+  ) {
+    return true;
+  }
   if (ts.isPropertyAssignment(node.parent) && node.parent.name === node) return true;
   if (
     ts.isPropertyAssignment(node.parent) &&
@@ -245,7 +271,8 @@ function isMachineLiteral(node, source) {
   ) {
     return true;
   }
-  if (/^(?:https?:|mailto:|tel:|\/|\.\/|\.\.\/|@\/)/.test(value)) return true;
+  if (/^(?:https?:|mailto:|tel:|\/|\.\/|\.\.\/|@\/|matchday[-_])/.test(value)) return true;
+  if (value === "application/json") return true;
   if (/^(?:\.?[#[]|[.#][A-Za-z_-])/.test(value)) return true;
   if (/^(?:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}T.*|[A-Z][A-Z0-9_-]*-\d+)$/.test(value)) return true;
   if (ts.isImportDeclaration(node.parent) || ts.isExportDeclaration(node.parent) || ts.isLiteralTypeNode(node.parent)) {
@@ -271,7 +298,24 @@ function isMachineLiteral(node, source) {
     }
     if (ts.isPropertyAssignment(ancestor)) {
       const name = ancestor.name.getText(source).replace(/^['"]|['"]$/g, "");
-      if (["id", "kind", "type", "team", "sync", "resolution", "value", "clearProps"].includes(name)) return true;
+      if (
+        [
+          "id",
+          "kind",
+          "type",
+          "tier",
+          "section",
+          "choice",
+          "all",
+          "essential",
+          "team",
+          "sync",
+          "resolution",
+          "value",
+          "clearProps",
+        ].includes(name)
+      )
+        return true;
     }
     if (ts.isCallExpression(ancestor)) {
       if (isMachineCall(ancestor.expression, source)) return true;
@@ -282,6 +326,7 @@ function isMachineLiteral(node, source) {
   if (nonUserCallNames.has(parentCall) || machineCallNames.has(parentCall)) return true;
   if (ts.isPropertyAssignment(node.parent)) {
     const name = propertyName(node, source);
+    if (name === "method" && httpMethods.has(value)) return true;
     if (
       [
         "dateStyle",
@@ -289,6 +334,11 @@ function isMachineLiteral(node, source) {
         "id",
         "kind",
         "type",
+        "tier",
+        "section",
+        "choice",
+        "all",
+        "essential",
         "team",
         "sync",
         "resolution",
@@ -524,8 +574,10 @@ function runSelfTest(catalogue) {
       true,
     ],
     ["HTTP mutation method", 'sendMutation("PATCH", body)', false],
+    ["JSON content type", 'fetch("/api", {method:"POST", headers:{"content-type":"application/json"}})', false],
     ["Next dynamic route config", 'export const dynamic="force-dynamic"', false],
     ["visible HTTP-looking text", "export const A=()=> <button>PUT</button>", true],
+    ["slash-delimited visible text", "export const A=()=> <p>A/B testing</p>", true],
   ];
 
   const failures = cases.filter(([name, sourceText, shouldFail]) => {

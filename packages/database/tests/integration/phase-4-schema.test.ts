@@ -301,7 +301,11 @@ async function completeScheduleJob(
 beforeAll(async () => {
   await dropTestSchema(databaseUrl, schema);
   await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
-  sql = postgres(databaseUrl, { max: 8, onnotice: () => undefined, connection: { search_path: schema } });
+  sql = postgres(databaseUrl, {
+    max: 8,
+    onnotice: () => undefined,
+    connection: { search_path: schema, timezone: "UTC" },
+  });
   const definition = { recommendedSlotMinutes: 20, recommendedSettings: { slotMinutes: 20 } };
   await sql`INSERT INTO sport_pack_versions(
     sport_code,version,schema_version,definition,definition_hash,status,activated_at
@@ -1053,7 +1057,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     const warningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
       VALUES(${warningRevision},${value.competition},${formatA},1,${"1".repeat(64)},'draft',${value.account},
-        current_date+interval '7 days'-interval '1 month')`;
+        timezone('UTC', current_date)+interval '7 days'-interval '1 month')`;
     await sql`INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id) VALUES
       (${warningRevision},${value.competition},${value.divisionA},${formatA}),
       (${warningRevision},${value.competition},${value.divisionB},${formatB})`;
@@ -1079,7 +1083,7 @@ describeInfrastructure("Phase 4 organiser-alpha PostgreSQL guardrails", () => {
     const urgentWarningRevision = randomUUID();
     await sql`INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,updated_at)
       VALUES(${urgentWarningRevision},${value.competition},${formatA},2,${"3".repeat(64)},'draft',${value.account},
-        current_date+interval '1 day'-interval '1 month')`;
+        timezone('UTC', current_date)+interval '1 day'-interval '1 month')`;
     await sql`SELECT phase4_emit_schedule_expiry_warning(${urgentWarningRevision},1,${value.account},'warning-1')`;
     expect(
       await sql`SELECT id FROM schedule_revision_warnings WHERE schedule_revision_id=${urgentWarningRevision} AND warning_days=1`,

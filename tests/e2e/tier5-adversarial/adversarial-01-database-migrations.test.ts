@@ -13,16 +13,16 @@ function computeSha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-describe("Tier 5 Adversarial - Subsystem 1: Database Migrations (0001–0051)", () => {
-  it("ADV-MIG-01: migration sequence format and forward-porting numbering (0001–0051) have zero gaps or collisions", async () => {
+describe("Tier 5 Adversarial - Subsystem 1: Database Migrations (0001–0055)", () => {
+  it("ADV-MIG-01: migration sequence format and forward-porting numbering (0001–0055) have zero gaps or collisions", async () => {
     const files = await readdir(migrationsDir);
     const migrationPattern = /^\d{4}_[a-z0-9_]+\.sql$/;
     const migrationFiles = files.filter((f) => migrationPattern.test(f)).sort();
 
-    // Exactly 51 sequential forward-only migrations
-    expect(migrationFiles).toHaveLength(51);
+    // Exactly 55 sequential forward-only migrations
+    expect(migrationFiles).toHaveLength(55);
 
-    // Verify continuous numbering from 0001 to 0051
+    // Verify continuous numbering from 0001 to 0055
     migrationFiles.forEach((file, index) => {
       const expectedNumber = (index + 1).toString().padStart(4, "0");
       expect(file.startsWith(`${expectedNumber}_`)).toBe(true);
@@ -34,9 +34,10 @@ describe("Tier 5 Adversarial - Subsystem 1: Database Migrations (0001–0051)", 
     expect(migrationFiles[34]).toBe("0035_identity_authentication_assurance.sql");
     expect(migrationFiles[35]).toBe("0036_gate_c_offline_replay.sql");
     expect(migrationFiles[50]).toBe("0051_gate_c_fallback_code_history_uniqueness.sql");
+    expect(migrationFiles[54]).toBe("0055_phase6_commercial_billing_entitlements.sql");
   });
 
-  it("ADV-MIG-02: SHA256 checksum invariance computes authentic 64-char digests for all 51 migration files", async () => {
+  it("ADV-MIG-02: SHA256 checksum invariance computes authentic 64-char digests for all 55 migration files", async () => {
     const files = (await readdir(migrationsDir)).filter((f) => /^\d{4}_[a-z0-9_]+\.sql$/.test(f)).sort();
 
     const checksumMap = new Map<string, string>();
@@ -48,7 +49,7 @@ describe("Tier 5 Adversarial - Subsystem 1: Database Migrations (0001–0051)", 
       checksumMap.set(file, digest);
     }
 
-    expect(checksumMap.size).toBe(51);
+    expect(checksumMap.size).toBe(55);
 
     // Assert that altering a single byte in any migration alters the checksum
     const testFile = files[0]!;

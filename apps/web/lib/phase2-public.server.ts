@@ -164,20 +164,59 @@ function toDivisionView(
     areas,
     matches,
     standings: standingsView(divisionProjection.standings),
-    bracket: bracketMatches.map((row) => {
-      const matchId = typeof row.matchId === "string" ? row.matchId : undefined;
-      const match = matchId ? matchesById.get(matchId) : undefined;
-      return {
-        ...(matchId ? { id: matchId } : {}),
-        round: typeof row.stage === "string" ? titleCase(row.stage) : (match?.stage ?? "Knockout"),
-        fixture: match ? `${match.home} · ${match.away}` : "TBD · TBD",
-        score:
-          match?.homeScore !== undefined && match.awayScore !== undefined
-            ? `${match.homeScore}–${match.awayScore}`
-            : "–",
-        state: match ? (match.status === "final" ? "Final" : `${match.time} · ${match.area}`) : "TBD",
-      };
-    }),
+    bracket:
+      bracketMatches.length > 0
+        ? bracketMatches.map((row) => {
+            const matchId = typeof row.matchId === "string" ? row.matchId : undefined;
+            const match = matchId ? matchesById.get(matchId) : undefined;
+            const code = match?.label ?? (typeof row.code === "string" ? row.code : "");
+            const stageKind =
+              code.includes("upper") || row.stage === "upper-bracket"
+                ? "upper"
+                : code.includes("lower") || row.stage === "lower-bracket"
+                  ? "lower"
+                  : code.includes("reset")
+                    ? "reset_final"
+                    : code.includes("final")
+                      ? "grand_final"
+                      : undefined;
+            return {
+              ...(matchId ? { id: matchId } : {}),
+              round: typeof row.stage === "string" ? titleCase(row.stage) : (match?.stage ?? "Knockout"),
+              fixture: match ? `${match.home} · ${match.away}` : "TBD · TBD",
+              score:
+                match?.homeScore !== undefined && match.awayScore !== undefined
+                  ? `${match.homeScore}–${match.awayScore}`
+                  : "–",
+              state: match ? (match.status === "final" ? "Final" : `${match.time} · ${match.area}`) : "TBD",
+              stageKind,
+            };
+          })
+        : matches
+            .filter((match) => match.stage !== "group")
+            .map((match) => {
+              const code = match.label ?? "";
+              const stageKind = code.includes("upper")
+                ? "upper"
+                : code.includes("lower")
+                  ? "lower"
+                  : code.includes("reset")
+                    ? "reset_final"
+                    : code.includes("final")
+                      ? "grand_final"
+                      : undefined;
+              return {
+                id: match.id,
+                round: match.stage ?? "Knockout",
+                fixture: `${match.home} · ${match.away}`,
+                score:
+                  match.homeScore !== undefined && match.awayScore !== undefined
+                    ? `${match.homeScore}–${match.awayScore}`
+                    : "–",
+                state: match.status === "final" ? "Final" : `${match.time} · ${match.area}`,
+                stageKind,
+              };
+            }),
   };
 }
 

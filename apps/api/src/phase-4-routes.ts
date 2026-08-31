@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { IdentityApiRuntime } from "./identity-runtime.js";
+import type { Phase4FormatBuilderDocument } from "@matchday/contracts";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
 
@@ -759,6 +760,98 @@ export async function registerPhase4Routes(
       options.runtime.textToBrief(
         await mutationActor(request),
         request.params.organisationId,
+        request.body,
+        request.id,
+      ),
+  );
+  app.post<{
+    Params: { organisationId: string; competitionId: string; divisionId: string };
+    Body: {
+      idempotency_key: string;
+      text: string;
+      current_document: Phase4FormatBuilderDocument;
+      locale?: string;
+    };
+  }>(
+    "/api/v1/organisations/:organisationId/competitions/:competitionId/divisions/:divisionId/ai/format-modify",
+    {
+      schema: {
+        ...mutation,
+        params: strict({ organisationId: Id, competitionId: Id, divisionId: Id }),
+        body: strict({
+          idempotency_key: IdempotencyKey,
+          text: Type.String({ minLength: 1, maxLength: 10_000 }),
+          current_document: Json,
+          locale: Type.Optional(Type.String({ pattern: "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$" })),
+        }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["phase4-ai"],
+      },
+    },
+    async (request) =>
+      options.runtime.formatModify(
+        await mutationActor(request),
+        request.params.organisationId,
+        request.params.competitionId,
+        request.params.divisionId,
+        request.body,
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Params: { organisationId: string; competitionId: string; divisionId: string };
+    Body: { idempotency_key: string; text: string; locale?: string };
+  }>(
+    "/api/v1/organisations/:organisationId/competitions/:competitionId/divisions/:divisionId/ai/schedule-preferences",
+    {
+      schema: {
+        ...mutation,
+        params: strict({ organisationId: Id, competitionId: Id, divisionId: Id }),
+        body: strict({
+          idempotency_key: IdempotencyKey,
+          text: Type.String({ minLength: 1, maxLength: 10_000 }),
+          locale: Type.Optional(Type.String({ pattern: "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$" })),
+        }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["phase4-ai"],
+      },
+    },
+    async (request) =>
+      options.runtime.schedulePreferences(
+        await mutationActor(request),
+        request.params.organisationId,
+        request.params.competitionId,
+        request.params.divisionId,
+        request.body,
+        request.id,
+      ),
+  );
+
+  app.post<{
+    Params: { organisationId: string; competitionId: string; caseId: string };
+    Body: { idempotency_key: string; text?: string; locale?: string };
+  }>(
+    "/api/v1/organisations/:organisationId/competitions/:competitionId/repairs/:caseId/ai-recommendations",
+    {
+      schema: {
+        ...mutation,
+        params: strict({ organisationId: Id, competitionId: Id, caseId: Id }),
+        body: strict({
+          idempotency_key: IdempotencyKey,
+          text: Type.Optional(Type.String({ minLength: 1, maxLength: 10_000 })),
+          locale: Type.Optional(Type.String({ pattern: "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$" })),
+        }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["phase4-ai"],
+      },
+    },
+    async (request) =>
+      options.runtime.repairRecommendations(
+        await mutationActor(request),
+        request.params.organisationId,
+        request.params.competitionId,
+        request.params.caseId,
         request.body,
         request.id,
       ),

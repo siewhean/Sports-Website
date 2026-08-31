@@ -206,7 +206,7 @@ export class RepairRepository {
          source_result_version, source_schedule_version, source_projection_version,
          analysis_fingerprint, analysis_fingerprint_input, created_by_account_id
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (correction_transaction_id) DO UPDATE SET competition_id = EXCLUDED.competition_id
+       ON CONFLICT (competition_id, corrected_match_id, source_result_version) DO UPDATE SET competition_id = EXCLUDED.competition_id
        RETURNING *`,
       [
         input.competitionId,
@@ -328,7 +328,7 @@ export class RepairRepository {
         input.sourceAction,
         input.currentEntryId,
         input.proposedEntryId,
-        typeof input.dependencyPath === "string" ? input.dependencyPath : JSON.stringify(input.dependencyPath),
+        typeof input.dependencyPath === "string" ? JSON.parse(input.dependencyPath) : input.dependencyPath,
         input.reason,
       ],
     );
@@ -676,7 +676,7 @@ export class RepairRepository {
         input.scheduleVersion,
         input.resultVersion,
         input.analysisFingerprint,
-        typeof input.response === "string" ? input.response : JSON.stringify(input.response),
+        typeof input.response === "string" ? JSON.parse(input.response) : input.response,
         input.publishedByAccountId,
         input.publishedAt,
       ],
@@ -818,10 +818,10 @@ export class RepairRepository {
         input.reason ?? null,
         input.afterState
           ? typeof input.afterState === "string"
-            ? input.afterState
-            : JSON.stringify(input.afterState)
+            ? JSON.parse(input.afterState)
+            : input.afterState
           : null,
-        input.metadata ? (typeof input.metadata === "string" ? input.metadata : JSON.stringify(input.metadata)) : null,
+        input.metadata ? (typeof input.metadata === "string" ? JSON.parse(input.metadata) : input.metadata) : null,
       ],
     );
   }
@@ -847,7 +847,7 @@ export class RepairRepository {
         input.aggregateType,
         input.aggregateId,
         input.eventType,
-        typeof input.payload === "string" ? input.payload : JSON.stringify(input.payload),
+        typeof input.payload === "string" ? JSON.parse(input.payload) : input.payload,
         input.idempotencyKey,
         input.createdAt,
         input.availableAt ?? input.createdAt,
