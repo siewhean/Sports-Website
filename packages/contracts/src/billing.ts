@@ -82,6 +82,7 @@ export type BillingWebhookPayload = {
       current_period_end?: number | null;
       metadata?: {
         organisation_id?: string;
+        competition_id?: string;
         tier?: string;
         purchase_type?: "plan" | "ai_top_up" | string;
         top_up_units?: string;
