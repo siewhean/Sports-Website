@@ -161,7 +161,7 @@ async function main() {
       githubRunId: runId,
       githubRunUrl: runUrl,
       environment: "GitHub Actions controlled non-production runner",
-      workerEntrypoint: "apps/worker/dist/main.js via pnpm --filter @matchday/worker start",
+      workerEntrypoint: "node apps/worker/dist/main.js",
       database: "PostgreSQL 18.4 service container",
       redis: "Redis 8.2 service container",
       smtp: "Mailpit v1.27.4 container started only after the first worker delivery attempt",
@@ -189,6 +189,10 @@ async function main() {
     if (worker !== null && worker.exitCode === null) {
       worker.kill("SIGTERM");
       await Promise.race([once(worker, "exit"), sleep(10_000)]).catch(() => undefined);
+      if (worker.exitCode === null) {
+        worker.kill("SIGKILL");
+        await Promise.race([once(worker, "exit"), sleep(2_000)]).catch(() => undefined);
+      }
     }
     if (workerLog !== "") await writeFile(workerLogPath, workerLog).catch(() => undefined);
     if (mailpitStarted) {
@@ -215,7 +219,7 @@ function captureWorkerLog(chunk) {
 }
 
 function startWorker() {
-  return spawn("pnpm", ["--filter", "@matchday/worker", "start"], {
+  return spawn("node", ["apps/worker/dist/main.js"], {
     env: {
       ...process.env,
       APP_ENV: "test",
