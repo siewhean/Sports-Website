@@ -198,6 +198,22 @@ export class EntitlementRuntime {
     }
   }
 
+  private async assertCompetitionFeatureAllowed(
+    tx: PostgresJsSql,
+    competitionId: string,
+    feature: Parameters<typeof assertFeatureEntitled>[1],
+  ): Promise<void> {
+    const tier =
+      (
+        await tx.unsafe<{ tier: SubscriptionTier }>(`SELECT matchday_effective_plan_tier($1) tier`, [competitionId])
+      )[0]?.tier ?? "free";
+    try {
+      assertFeatureEntitled(tier, feature);
+    } catch (err: unknown) {
+      throw new ApiError(403, ErrorCode.ENTITLEMENT_REQUIRED, (err as Error).message);
+    }
+  }
+
   async assertEntryLimit(tx: PostgresJsSql, organisationId: string, requestedEntries: number): Promise<void> {
     const sub = await this.getSubscriptionTier(tx, organisationId);
     try {
@@ -258,6 +274,10 @@ export class EntitlementRuntime {
           const tier: SubscriptionTier = ["event_pass", "organiser_pro"].includes(tierRaw)
             ? (tierRaw as SubscriptionTier)
             : "event_pass";
+          const competitionId = tier === "event_pass" ? (object.metadata?.competition_id ?? null) : null;
+          if (competitionId) {
+            await this.assertCompetitionBelongsToOrganisation(tx, competitionId, orgId);
+          }
           await tx.unsafe(
             `INSERT INTO organisation_subscriptions
                (organisation_id,tier,status,provider_customer_id,provider_subscription_id,current_period_start,current_period_end,updated_at)
@@ -278,6 +298,18 @@ export class EntitlementRuntime {
               object.current_period_end ?? null,
             ],
           );
+          if (tier === "event_pass" && competitionId) {
+            await tx.unsafe(
+              `INSERT INTO entitlement_grants
+                 (organisation_id,competition_id,tier,feature,source,quantity,idempotency_key,expires_at)
+               SELECT c.organisation_id,c.id,'event_pass','unlimited_entries','purchase',1,$3,
+                      ((c.ends_on + 1)::timestamp AT TIME ZONE c.timezone)
+               FROM competitions c
+               WHERE c.id=$1 AND c.organisation_id=$2
+               ON CONFLICT (idempotency_key) DO NOTHING`,
+              [competitionId, orgId, `stripe:event-pass:${eventId}:${competitionId}`],
+            );
+          }
           const includedUnits = TIER_FEATURE_LIMITS[tier]?.monthly_ai_actions ?? 0;
           if (includedUnits > 0) {
             await tx.unsafe(
@@ -379,7 +411,8 @@ export class EntitlementRuntime {
     actor: Phase3Actor,
     organisationId: string,
     input:
-      | { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string }
+      | { tier: "event_pass"; competitionId: string; topUpUnits?: number; successUrl: string; cancelUrl: string }
+      | { tier: "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string }
       | { purchaseType: "ai_top_up"; topUpUnits: number; successUrl: string; cancelUrl: string },
   ) {
     await this.assertOrganisationEditor(this.sql, organisationId, actor);
@@ -402,6 +435,7 @@ export class EntitlementRuntime {
         session_id: session.sessionId,
         checkout_url: session.checkoutUrl,
         organisation_id: session.organisationId,
+        competition_id: null,
         purchase_type: "ai_top_up" as const,
         tier: null,
         top_up_units: session.topUpUnits,
@@ -413,8 +447,13 @@ export class EntitlementRuntime {
       };
     }
 
+    if (input.tier === "event_pass") {
+      await this.assertCompetitionBelongsToOrganisation(this.sql, input.competitionId, organisationId);
+    }
+    const competitionId = input.tier === "event_pass" ? input.competitionId : undefined;
     const session = await client.createSession({
       organisationId,
+      ...(competitionId ? { competitionId } : {}),
       tier: input.tier,
       topUpUnits: input.topUpUnits,
       successUrl: input.successUrl,
@@ -424,6 +463,7 @@ export class EntitlementRuntime {
       session_id: session.sessionId,
       checkout_url: session.checkoutUrl,
       organisation_id: session.organisationId,
+      competition_id: session.competitionId ?? null,
       purchase_type: "plan" as const,
       tier: session.tier,
       top_up_units: session.topUpUnits,
@@ -456,7 +496,7 @@ export class EntitlementRuntime {
       const hasCustomBranding = Boolean(
         input.primary_color || input.secondary_color || input.logo_url || input.banner_url || input.hide_platform_badge,
       );
-      if (hasCustomBranding) await this.assertFeatureAllowed(tx, organisationId, "custom_branding");
+      if (hasCustomBranding) await this.assertCompetitionFeatureAllowed(tx, competitionId, "custom_branding");
       return (
         await tx.unsafe<CompetitionBranding>(
           `INSERT INTO competition_branding
@@ -507,7 +547,7 @@ export class EntitlementRuntime {
     return this.transaction(async (tx) => {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
       await this.assertOrganisationEditor(tx, organisationId, actor);
-      await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
+      await this.assertCompetitionFeatureAllowed(tx, competitionId, "sponsor_placements");
       return (
         await tx.unsafe<CompetitionSponsor>(
           `INSERT INTO competition_sponsors (competition_id,name,tier,logo_url,website_url,sort_order)
@@ -540,7 +580,7 @@ export class EntitlementRuntime {
     return this.transaction(async (tx) => {
       await this.assertCompetitionBelongsToOrganisation(tx, competitionId, organisationId);
       await this.assertOrganisationEditor(tx, organisationId, actor);
-      await this.assertFeatureAllowed(tx, organisationId, "sponsor_placements");
+      await this.assertCompetitionFeatureAllowed(tx, competitionId, "sponsor_placements");
       await tx.unsafe(`DELETE FROM competition_sponsors WHERE competition_id=$1`, [competitionId]);
       const insertedList: CompetitionSponsor[] = [];
       for (const s of sponsors) {
