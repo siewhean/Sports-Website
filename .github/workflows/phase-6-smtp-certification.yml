@@ -5,8 +5,7 @@ on:
     branches: [phase-6/commercial-operations]
     paths:
       - .github/workflows/phase-6-smtp-certification.yml
-      - scripts/package.json
-      - scripts/run-phase-6-smtp-certification.ts
+      - scripts/run-phase-6-smtp-certification.mjs
   workflow_dispatch:
 
 permissions:
@@ -79,8 +78,10 @@ jobs:
         run: pnpm db:migrate
       - name: Build the production worker and its workspace dependencies
         run: pnpm --filter @matchday/worker... build
+      - name: Pre-pull controlled SMTP catcher without opening SMTP port
+        run: docker pull axllent/mailpit:v1.27.4
       - name: Run controlled SMTP failure, retry, delivery, and idempotency certification
-        run: pnpm --filter @matchday/worker exec tsx ../../scripts/run-phase-6-smtp-certification.ts
+        run: node scripts/run-phase-6-smtp-certification.mjs
       - name: Retain SMTP certification receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
