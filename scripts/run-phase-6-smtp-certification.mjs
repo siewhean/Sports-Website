@@ -140,8 +140,14 @@ async function main() {
     await sleep(10_000);
     const stable = await readOutbox(sql, emailIdempotencyKey);
     const stableMessages = await fetchMailpitMessages();
-    assert(stable.status === "delivered" && stable.attempts === 2, "worker reprocessed an already delivered outbox item");
-    assert(stableMessages.messages.length === 1, "SMTP catcher received a duplicate message after subsequent worker polls");
+    assert(
+      stable.status === "delivered" && stable.attempts === 2,
+      "worker reprocessed an already delivered outbox item",
+    );
+    assert(
+      stableMessages.messages.length === 1,
+      "SMTP catcher received a duplicate message after subsequent worker polls",
+    );
     snapshots.stableAfterAdditionalPolls = stable;
 
     const secretMatches = [secretSentinel, databaseUrl]
