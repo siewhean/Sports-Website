@@ -27,7 +27,7 @@ const TIERS = [
     description: messages.pricing.eventPassDescription,
     features: messages.pricing.eventPassFeatures,
     cta: messages.pricing.getEventPass,
-    href: "/organiser",
+    href: "/organiser/checkout/event-pass",
   },
   {
     name: messages.pricing.proName,
