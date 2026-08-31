@@ -63,6 +63,7 @@ export async function registerBillingRoutes(
                     Type.Object(
                       {
                         organisation_id: Type.Optional(Type.String()),
+                        competition_id: Type.Optional(Type.String()),
                         tier: Type.Optional(Type.String()),
                         purchase_type: Type.Optional(Type.String()),
                         top_up_units: Type.Optional(Type.String()),
@@ -114,7 +115,8 @@ export async function registerBillingRoutes(
   );
 
   type CheckoutBody =
-    | { tier: "event_pass" | "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string }
+    | { tier: "event_pass"; competitionId: string; topUpUnits?: number; successUrl: string; cancelUrl: string }
+    | { tier: "organiser_pro"; topUpUnits?: number; successUrl: string; cancelUrl: string }
     | { purchaseType: "ai_top_up"; topUpUnits: number; successUrl: string; cancelUrl: string };
   app.post<{ Params: { organisationId: string }; Body: CheckoutBody }>(
     "/api/v1/organisations/:organisationId/billing/checkout",
@@ -123,7 +125,14 @@ export async function registerBillingRoutes(
         params: Type.Object({ organisationId: Id }),
         body: Type.Union([
           Type.Object({
-            tier: Type.Union([Type.Literal("event_pass"), Type.Literal("organiser_pro")]),
+            tier: Type.Literal("event_pass"),
+            competitionId: Id,
+            topUpUnits: Type.Optional(Type.Integer({ minimum: 1 })),
+            successUrl: Type.String({ minLength: 1 }),
+            cancelUrl: Type.String({ minLength: 1 }),
+          }),
+          Type.Object({
+            tier: Type.Literal("organiser_pro"),
             topUpUnits: Type.Optional(Type.Integer({ minimum: 1 })),
             successUrl: Type.String({ minLength: 1 }),
             cancelUrl: Type.String({ minLength: 1 }),
