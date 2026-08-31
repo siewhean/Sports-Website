@@ -80,16 +80,16 @@ This establishes controlled **web staging infrastructure equivalence** for the c
 
 ## Governance and review receipts
 
-| Gate | Status | Retained evidence / closure requirement |
-| --- | --- | --- |
-| Legal and privacy | SUPERSEDED FOR PHASE 6 | Formal authorised approval is deferred to Gate F by [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md). This is a governance deferral, not a legal approval receipt. |
-| Exact product CI | PASS | Run `33370509134` on `d225e5a4...`, all four jobs green including executed E2E/a11y/visual. |
-| Certification-tooling CI | PASS | Run `33377931510` on `4546c713...`, all four jobs green. |
-| Controlled SMTP delivery | PASS | Run `33377926903`, retained artifact id `9752626855`, digest above. |
-| Controlled web staging provenance | PASS WITH PROVIDER EQUIVALENCE | Exact-product Vercel record `dpl_7FV...` classified the web project as unaffected; unchanged parent web deployment `dpl_FQJ...` remains READY. |
-| Physical-device signed-in evidence | **BLOCKED / OPEN** | Physical iPhone/Safari and physical Android/Chrome organiser, official and spectator critical-flow receipts are still required. |
-| Independent pre-merge QA/QC | BLOCKED | Can issue the required merge PASS only after all mandatory pre-merge evidence, including physical-device receipts, is present. |
-| Post-merge CI and integration preview | BLOCKED | Requires the eventual merge SHA on the target branch; cannot exist pre-merge. |
+| Gate                                  | Status                         | Retained evidence / closure requirement                                                                                                                                               |
+| ------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Legal and privacy                     | SUPERSEDED FOR PHASE 6         | Formal authorised approval is deferred to Gate F by [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md). This is a governance deferral, not a legal approval receipt. |
+| Exact product CI                      | PASS                           | Run `33370509134` on `d225e5a4...`, all four jobs green including executed E2E/a11y/visual.                                                                                           |
+| Certification-tooling CI              | PASS                           | Run `33377931510` on `4546c713...`, all four jobs green.                                                                                                                              |
+| Controlled SMTP delivery              | PASS                           | Run `33377926903`, retained artifact id `9752626855`, digest above.                                                                                                                   |
+| Controlled web staging provenance     | PASS WITH PROVIDER EQUIVALENCE | Exact-product Vercel record `dpl_7FV...` classified the web project as unaffected; unchanged parent web deployment `dpl_FQJ...` remains READY.                                        |
+| Physical-device signed-in evidence    | **BLOCKED / OPEN**             | Physical iPhone/Safari and physical Android/Chrome organiser, official and spectator critical-flow receipts are still required.                                                       |
+| Independent pre-merge QA/QC           | BLOCKED                        | Can issue the required merge PASS only after all mandatory pre-merge evidence, including physical-device receipts, is present.                                                        |
+| Post-merge CI and integration preview | BLOCKED                        | Requires the eventual merge SHA on the target branch; cannot exist pre-merge.                                                                                                         |
 
 ## Release decision
 
