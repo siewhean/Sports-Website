@@ -5,6 +5,7 @@ on:
     branches: [phase-6/commercial-operations]
     paths:
       - .github/workflows/phase-6-smtp-certification.yml
+      - scripts/package.json
       - scripts/run-phase-6-smtp-certification.ts
   workflow_dispatch:
 
