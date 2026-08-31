@@ -63,10 +63,11 @@ BEGIN
      AND NEW.status IN ('active', 'trialing')
      AND (NEW.current_period_end IS NULL OR NEW.current_period_end > now()) THEN
     UPDATE competitions
-    SET plan_tier = 'organiser_pro'
+    SET plan_tier = 'organiser_pro', updated_at = now()
     WHERE organisation_id = NEW.organisation_id
       AND plan_tier IS DISTINCT FROM 'organiser_pro';
-  ELSIF OLD.tier = 'organiser_pro'
+  ELSIF TG_OP = 'UPDATE'
+        AND OLD.tier = 'organiser_pro'
         AND OLD.status IN ('active', 'trialing')
         AND NOT (
           NEW.tier = 'organiser_pro'
@@ -74,7 +75,7 @@ BEGIN
           AND (NEW.current_period_end IS NULL OR NEW.current_period_end > now())
         ) THEN
     UPDATE competitions
-    SET plan_tier = 'free'
+    SET plan_tier = 'free', updated_at = now()
     WHERE organisation_id = NEW.organisation_id
       AND plan_tier = 'organiser_pro';
   END IF;
@@ -86,7 +87,7 @@ $$;
 -- Scoped grants now provide the paid competition tier. A one-competition legacy purchase
 -- remains readable through matchday_effective_plan_tier() without leaking to future siblings.
 UPDATE competitions c
-SET plan_tier = 'free'
+SET plan_tier = 'free', updated_at = now()
 WHERE c.plan_tier = 'event_pass'
   AND EXISTS (
     SELECT 1
@@ -97,7 +98,7 @@ WHERE c.plan_tier = 'event_pass'
 
 -- Re-assert Organiser Pro materialisation after the cleanup above.
 UPDATE competitions c
-SET plan_tier = 'organiser_pro'
+SET plan_tier = 'organiser_pro', updated_at = now()
 FROM organisation_subscriptions s
 WHERE c.organisation_id = s.organisation_id
   AND s.tier = 'organiser_pro'
