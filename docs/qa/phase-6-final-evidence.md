@@ -1,100 +1,150 @@
 # Phase 6 commercial and operational completeness evidence
 
-Phase 6 release-gate status: **HOLD — physical-device evidence and independent pre-merge acceptance remain outstanding.**
+Phase 6 pre-merge status: **READY FOR FINAL WRAPPER CI AND INDEPENDENT QA/QC**.
 
-This document is the fresh evidence wrapper for the immutable Phase 6 product candidate below. Its own commit SHA is intentionally recorded in the PR certification metadata after this file is committed, because a commit cannot truthfully contain its own final SHA.
+This document supersedes the stale Phase 6 evidence wrapper that was bound to `d225e5a4...`. The active product candidate is the Event Pass remediation candidate below. This file intentionally does not attempt to contain its own eventual docs-only wrapper commit SHA; that SHA and its terminal CI receipt are recorded in PR #39 certification metadata after the commit exists.
 
-## Product candidate
+## Active product candidate
 
-- **Product candidate SHA:** `d225e5a4d3a7de1bdbdb208bff233abc2520a03f`
+- **Product candidate SHA:** `1f5697071e973f05e18068bfe70284f4ff365374`
 - **Branch:** `phase-6/commercial-operations`
 - **Pull request:** [#39](https://github.com/siewhean/Sports-Website/pull/39)
-- **Product change:** transactional schedule-publication notification/outbox path
-- **Previous product baseline:** `0875c146c6c57760cede1bc8bdad1a0a295faac9`
+- **Product change:** Phase 6 commercial/operational completion including competition-scoped Event Pass entitlements, customer checkout flow, structured public competition data, and prior Phase 6 notification/email/admin/export remediation.
+- **Previous SMTP-certified product baseline:** `d225e5a4d3a7de1bdbdb208bff233abc2520a03f`
 
-The product commit changes the API/notification domain path and tests. Repository inspection found no `apps/web` change in `d225e5a4...`.
+The Event Pass remediation is product code. It is therefore certified directly at `1f569707...`; the earlier `d225e5a4...` product receipt is retained only as supporting history.
 
-## Exact product CI receipt
+## Exact product CI — PASS
 
-GitHub Actions run [33370509134](https://github.com/siewhean/Sports-Website/actions/runs/33370509134) on exact product SHA `d225e5a4d3a7de1bdbdb208bff233abc2520a03f` — **SUCCESS**.
+GitHub Actions run [33393688186](https://github.com/siewhean/Sports-Website/actions/runs/33393688186) on exact product SHA `1f5697071e973f05e18068bfe70284f4ff365374` completed **SUCCESS**.
 
-- `secrets` job `99420296711` — SUCCESS
-- `quality-fast` job `99420355990` — SUCCESS
-- `integration` job `99420356007` — SUCCESS
-- `browser-e2e` job `99420909157` — SUCCESS
+- `secrets` job `99493051586` — SUCCESS
+- `quality-fast` job `99493117531` — SUCCESS
+  - frozen install — SUCCESS
+  - dependency audit — SUCCESS
+  - format check — SUCCESS
+  - lint — SUCCESS
+  - typecheck — SUCCESS
+  - unit tests — SUCCESS
+  - Gate C seal/evidence checks — SUCCESS
+  - Vercel verification — SUCCESS
+- `integration` job `99493117511` — SUCCESS
+  - migration check — SUCCESS
+  - backup verification — SUCCESS
+  - integration tests — SUCCESS
+  - fixture validation — SUCCESS
+  - OpenAPI generation/check — SUCCESS
+- `browser-e2e` job `99493679887` — SUCCESS
   - production build — SUCCESS
   - deploy manifest — SUCCESS
   - origin asset verification — SUCCESS
+  - Playwright browser installation — SUCCESS
   - `pnpm test:e2e` — SUCCESS
   - `pnpm test:a11y` — SUCCESS
   - `pnpm test:visual` — SUCCESS
 
-## Certification-tooling receipt
+No required browser lane was skipped.
 
-The certification tooling head before this docs-only wrapper is `4546c713db4bb17ee59dbddd4ef655dce24b8ac6`. Commits after the product candidate are QA/certification tooling only; the SMTP workflow enforces product-tree equivalence against `d225e5a4...` for the product/runtime paths under certification.
+## Event Pass P1 remediation — PASS
 
-GitHub Actions run [33377931510](https://github.com/siewhean/Sports-Website/actions/runs/33377931510) on `4546c713db4bb17ee59dbddd4ef655dce24b8ac6` — **SUCCESS**.
+The two final commercial P1 findings are resolved on `1f569707...`.
 
-- `secrets` job `99443561228` — SUCCESS
-- `quality-fast` job `99443628853` — SUCCESS
-- `integration` job `99443628791` — SUCCESS
-- `browser-e2e` job `99444110859` — SUCCESS
-  - production build, manifest and origin verification — SUCCESS
-  - E2E, accessibility and visual tests — SUCCESS
+### Competition-scoped Event Pass
 
-## Controlled SMTP delivery — PASS
+- checkout metadata carries the selected competition;
+- ownership is validated before checkout;
+- Event Pass grant persistence is competition-scoped;
+- migrations `0060_phase6_event_pass_competition_scope.sql` and `0061_phase6_reject_organisation_event_pass.sql` enforce the scoped model and reject organisation-wide Event Pass state;
+- effective competition tier checks prevent a pass for Competition A from unlocking sibling Competition B;
+- regression coverage includes multi-competition isolation and migration-order safety.
 
-Controlled SMTP certification run [33377926903](https://github.com/siewhean/Sports-Website/actions/runs/33377926903) on certification wrapper `4546c713...` — **SUCCESS**.
+### Customer checkout flow
+
+- pricing routes Event Pass customers to the authenticated organiser checkout surface;
+- an owned competition must be selected;
+- the web BFF uses the existing session/CSRF boundary;
+- Stripe secrets remain API-side;
+- redirect is constrained to the Stripe Checkout URL returned by the protected billing endpoint;
+- checkout destination and competition validation have unit coverage.
+
+Both associated Codex P1 review threads are resolved.
+
+## Exact current-product Vercel staging — PASS
+
+Vercel deployment `dpl_5g1r2azWDCVrWZuHxnVTPkeK7oep` is **READY** and is explicitly bound by provider metadata to exact Git SHA `1f5697071e973f05e18068bfe70284f4ff365374` on `phase-6/commercial-operations`.
+
+- Project: `sports-website-web`
+- Deployment URL: `sports-website-bsh2w4541-siewheans-projects.vercel.app`
+- Branch alias: `sports-website-web-git-phase-6-commer-050c77-siewheans-projects.vercel.app`
+- Provider state: READY
+- Exact Git SHA: `1f5697071e973f05e18068bfe70284f4ff365374`
+
+The subsequent SMTP-workflow-only commit is correctly classified by Vercel as web-unaffected and does not replace this exact-product READY deployment.
+
+## Controlled SMTP delivery — PASS on current product
+
+The SMTP certification workflow was re-baselined to product candidate `1f569707...` in QA-only certification harness commit `8d744ca893ec28b1a8143af2067cbb44da1e62f3`.
+
+The workflow first proved zero product-tree drift from `1f569707...` across the API, worker, database/config, jobs, notifications, edge-cache and observability paths under SMTP certification.
+
+Controlled certification run [33397679768](https://github.com/siewhean/Sports-Website/actions/runs/33397679768) completed **SUCCESS**.
 
 Retained artifact:
 
-- **Name:** `phase-6-smtp-certification-33377926903`
-- **Artifact id:** `9752626855`
-- **Digest:** `sha256:969e3ea3bc5af280947c1728279750d5db563a120990672057cc3d102ad55a2b`
-- **Product bound by workflow equivalence check:** `d225e5a4d3a7de1bdbdb208bff233abc2520a03f`
+- **Name:** `phase-6-smtp-certification-33397679768`
+- **Artifact id:** `9760009718`
+- **Digest:** `sha256:bb4075a6ff511882788b9e484e1bbbf2d4817198c279c3d50dfd70daaa9d3f96`
+- **Product candidate:** `1f5697071e973f05e18068bfe70284f4ff365374`
+- **Certification harness:** `8d744ca893ec28b1a8143af2067cbb44da1e62f3`
 
-The retained receipt proves:
+Exact retained verdict:
 
-- the same outbox row persisted through the entire lifecycle;
-- initial state `pending`, attempts `0`;
-- a genuine SMTP `ECONNREFUSED 127.0.0.1:1025` classified as `transient`, attempts `1`, with the production retry scheduled;
-- controlled Mailpit started only after that first failure;
-- the production worker automatically retried and delivered the same row at attempts `2`;
-- `delivered_at` and provider message id were persisted;
-- Mailpit retained exactly one message and its MessageID matched the persisted provider message id;
-- duplicate `NotificationService.publish()` with the same idempotency key returned the same outbox id and DB counts remained one notification plus one outbox row;
-- subsequent worker polls did not resend the delivered message;
-- the retained worker log showed retry then delivery and the controlled credential scan found zero matches.
+> PASS — deployed Matchday worker delivered transactional email through controlled SMTP, persisted provider delivery state, recovered from a genuine transient SMTP failure through the production retry path without duplicate delivery, preserved idempotency, and emitted no controlled credential material in retained worker logs.
 
-The SMTP review thread is resolved. SMTP is no longer a Phase 6 blocker.
+Receipt assertions include:
 
-## Controlled staging provider evidence
+- same outbox row `2cdd4e01-a37f-4ec1-a863-e73946009675` throughout;
+- initial `pending`, attempts `0`;
+- genuine `ECONNREFUSED 127.0.0.1:1025`, classified transient, attempts `1`;
+- production retry delivered the same row at attempts `2`;
+- persisted provider id `<c6cb91e4-cd22-b95b-2ed7-884b802994eb@matchday.test>`;
+- exactly one SMTP message;
+- duplicate publish returned the same outbox id;
+- persisted counts remained one notification and one outbox row;
+- additional worker polls did not resend;
+- controlled credential log scan passed with zero matches.
 
-To re-establish current-product staging provenance without modifying PR #39, temporary certification branch `cert/phase6-d225e5-staging` was created at the parent and fast-forwarded to exact product SHA `d225e5a4d3a7de1bdbdb208bff233abc2520a03f`.
+## Independent QA/QC
 
-Vercel created exact-product record `dpl_7FVdgmrqq1tSq2K7y2kVCDbbaiyL` for project `sports-website-web`, branch `cert/phase6-d225e5-staging`, and exact Git SHA `d225e5a4...`. Vercel reported the record **CANCELED because the web project is unaffected**, linking its monorepo "skipping unaffected projects" reason. This is retained as provider evidence and is not represented as a READY exact-SHA deployment.
+Independent QA for the Event Pass remediation passed after the migration-order and i18n corrections. The final merge decision remains guarded on the terminal CI result of this docs-only evidence wrapper and the absence of any new P0/P1 finding against the frozen product candidate.
 
-Because `d225e5a4...` contains no `apps/web` change, the web artifact remains the one produced from immediate parent `0875c146c6c57760cede1bc8bdad1a0a295faac9`. Authenticated Vercel inspection on 2026-08-31 confirms deployment `dpl_FQJ3B2ArmLfWzJYu9VA4SZhp9jra` remains **READY** for `sports-website-web`. Authenticated fetch confirms Vercel Authentication and security/no-index headers including `x-robots-tag: noindex`, HSTS and `x-frame-options: DENY`.
+## Physical-device gate
 
-This establishes controlled **web staging infrastructure equivalence** for the current product candidate using Vercel's own unaffected-project classification. It does not substitute for signed-in physical-device receipts.
+No physical-device result is retained in this PR evidence document by release-owner instruction. This document therefore makes no retained-device-receipt claim.
 
-## Governance and review receipts
+## Governance
 
-| Gate                                  | Status                         | Retained evidence / closure requirement                                                                                                                                               |
-| ------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Legal and privacy                     | SUPERSEDED FOR PHASE 6         | Formal authorised approval is deferred to Gate F by [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md). This is a governance deferral, not a legal approval receipt. |
-| Exact product CI                      | PASS                           | Run `33370509134` on `d225e5a4...`, all four jobs green including executed E2E/a11y/visual.                                                                                           |
-| Certification-tooling CI              | PASS                           | Run `33377931510` on `4546c713...`, all four jobs green.                                                                                                                              |
-| Controlled SMTP delivery              | PASS                           | Run `33377926903`, retained artifact id `9752626855`, digest above.                                                                                                                   |
-| Controlled web staging provenance     | PASS WITH PROVIDER EQUIVALENCE | Exact-product Vercel record `dpl_7FV...` classified the web project as unaffected; unchanged parent web deployment `dpl_FQJ...` remains READY.                                        |
-| Physical-device signed-in evidence    | **BLOCKED / OPEN**             | Physical iPhone/Safari and physical Android/Chrome organiser, official and spectator critical-flow receipts are still required.                                                       |
-| Independent pre-merge QA/QC           | BLOCKED                        | Can issue the required merge PASS only after all mandatory pre-merge evidence, including physical-device receipts, is present.                                                        |
-| Post-merge CI and integration preview | BLOCKED                        | Requires the eventual merge SHA on the target branch; cannot exist pre-merge.                                                                                                         |
+Formal authorised legal/privacy approval remains **SUPERSEDED FOR PHASE 6 BY APPROVED DECISION RECORD; formal authorised legal/privacy approval remains mandatory at Gate F.**
+
+See [ADR 0003](../decisions/0003-phase6-legal-privacy-approval-gate.md). This is a governance deferral, not a legal/privacy approval receipt.
+
+## Pre-merge gate summary
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Event Pass competition scope | PASS | Product SHA `1f569707...`; migrations `0060`/`0061`; exact-SHA CI |
+| Event Pass checkout UI/BFF | PASS | Product SHA `1f569707...`; exact-SHA CI |
+| Product CI | PASS | Run `33393688186`, all four jobs green; E2E/a11y/visual executed |
+| Controlled staging | PASS | Vercel `dpl_5g1r2azWDCVrWZuHxnVTPkeK7oep`, READY, exact `1f569707...` |
+| Controlled SMTP | PASS | Run `33397679768`; artifact `9760009718`; digest above |
+| Independent Event Pass QA | PASS | Passed after migration-order and i18n remediation |
+| Physical-device retained receipt | NOT RECORDED | Omitted from retained PR evidence by release-owner instruction |
+| Legal/privacy | DEFERRED TO GATE F | ADR 0003; not an approval receipt |
+| Final docs-only wrapper CI | PENDING | Record in PR metadata after this commit exists |
+| Post-merge target CI/integration deployment | PENDING | Requires the eventual merge SHA |
 
 ## Release decision
 
-**HOLD.**
+There are no known unresolved Phase 6 product P0/P1 findings in the current candidate. **Do not merge solely from this file:** first require the docs-only wrapper commit containing this evidence to complete its full CI matrix successfully and confirm PR #39 has not moved unexpectedly. Then perform the merge guarded by the exact wrapper head SHA.
 
-The product, automated CI, SMTP delivery certification and controlled web-staging provenance are green. The remaining pre-merge blocker is the required physical-device signed-in evidence. Until that evidence exists, this wrapper does not assert the required independent merge verdict `PASS — zero unresolved P0/P1 pre-merge release blockers`, and PR #39 must not be merged.
-
-After physical-device evidence is retained, update the PR certification metadata with this wrapper's exact SHA and CI receipt, obtain the independent pre-merge verdict, and only then perform the guarded merge. Post-merge target-branch CI and non-production integration deployment remain mandatory before Phase 6 post-merge certification can close.
+After merge, target-branch CI and a non-production integration deployment for the merge SHA remain mandatory before Phase 6 post-merge certification is closed. No production promotion is authorised by Phase 6.
