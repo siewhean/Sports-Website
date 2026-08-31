@@ -37,6 +37,7 @@ import { EntitlementRuntime } from "./entitlement-runtime.js";
 import { HttpStripeCheckoutClient } from "./stripe-checkout-client.js";
 import { PublishedExportRuntime } from "./published-export-runtime.js";
 import { ProductionAdminRuntime } from "./production-admin-runtime.js";
+import { TransactionalCompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import {
   NotificationService,
   PostgresNotificationRepository,
@@ -101,6 +102,12 @@ const identityRuntime = new IdentityAssuranceRuntime(
 );
 await reconcileScoringAccessHmacKeyring(identitySql, config.scoringAccess.rateLimitHmacKeyring);
 await reconcileScoringFallbackHmacKeyring(identitySql, config.scoringAccess.fallbackCodeHmacKeyring);
+const notificationRepo = new PostgresNotificationRepository(postgresClient);
+const notificationService = new NotificationService(notificationRepo, notificationRepo, new EmailTemplateRegistry(), {
+  createId: randomUUID,
+  now: () => new Date(),
+  rateLimiter: new NoopNotificationRateLimiter(),
+});
 const phase2Runtime = new FallbackKeyringPhase2Runtime(
   identitySql,
   phase2DomainAdapter,
@@ -110,6 +117,11 @@ const phase2Runtime = new FallbackKeyringPhase2Runtime(
     rateLimitRedis,
     config.scoringAccess.rateLimitHmacKeyring,
     `matchday:${config.environment}:scoring-access:`,
+  ),
+  undefined,
+  undefined,
+  new TransactionalCompetitionPublicationNotifier(
+    config.publicOrigin ?? config.api.allowedOrigins[0] ?? "http://127.0.0.1:3000",
   ),
 );
 const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
@@ -142,12 +154,6 @@ const entitlementRuntime = new EntitlementRuntime(
 );
 const exportRuntime = new PublishedExportRuntime(identitySql);
 const adminRuntime = new ProductionAdminRuntime(identitySql);
-const notificationRepo = new PostgresNotificationRepository(postgresClient);
-const notificationService = new NotificationService(notificationRepo, notificationRepo, new EmailTemplateRegistry(), {
-  createId: randomUUID,
-  now: () => new Date(),
-  rateLimiter: new NoopNotificationRateLimiter(),
-});
 
 // Gate C is part of the production API composition, not an evidence-only
 // harness. Reuse the canonical Phase 2 projection writer so repair publication

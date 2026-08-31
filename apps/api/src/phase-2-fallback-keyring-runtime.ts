@@ -11,6 +11,7 @@ import {
   type ScoringAccessRateLimiter,
 } from "./scoring-access-rate-limit.js";
 import { ApiError, ErrorCode } from "./errors.js";
+import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import { Phase2Runtime, type Phase2DomainAdapter } from "./phase-2-runtime.js";
 
 export type FallbackExchangeInput = {
@@ -147,6 +148,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
     scoringAccessRateLimiter: ScoringAccessRateLimiter = new NoopScoringAccessRateLimiter(),
     fallbackCodeGenerator?: () => string,
     takeoverRequestTtlMs?: number,
+    competitionPublicationNotifier?: CompetitionPublicationNotifier,
   ) {
     super(
       keySql,
@@ -157,6 +159,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
       fallbackCodeGenerator,
       takeoverRequestTtlMs,
       fallbackKeyring.primary.version,
+      competitionPublicationNotifier,
     );
     parseScoringFallbackHmacKeyring(fallbackKeyring);
     for (const key of fallbackKeyring.verificationOnly) {

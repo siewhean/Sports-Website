@@ -25,6 +25,7 @@ import {
   type StandingsMatchResult,
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
+import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import {
   NoopScoringAccessRateLimiter,
@@ -373,6 +374,7 @@ export type PersistedResult = {
 type CompetitionRow = {
   id: string;
   organisation_id: string;
+  name: string;
   status: string;
   division_id?: string;
   membership_role?: "owner" | "organiser" | "viewer";
@@ -655,6 +657,7 @@ export class Phase2Runtime {
     private readonly fallbackCodeGenerator: () => string = randomFallbackCode,
     private readonly takeoverRequestTtlMs = 5 * 60_000,
     protected readonly fallbackCodeHmacKeyVersion = "v1",
+    private readonly competitionPublicationNotifier?: CompetitionPublicationNotifier,
   ) {
     if (!fallbackCodeHmacSecret || Buffer.byteLength(fallbackCodeHmacSecret, "utf8") < 32) {
       throw new Error("Scoring fallback-code HMAC secret must contain at least 32 bytes.");
@@ -741,7 +744,7 @@ export class Phase2Runtime {
   ): Promise<CompetitionRow> {
     const roles = mutable ? ["owner", "organiser"] : ["owner", "organiser", "viewer"];
     const rows = await tx.unsafe<CompetitionRow>(
-      `SELECT c.id, c.organisation_id, c.status, om.role AS membership_role
+      `SELECT c.id, c.organisation_id, c.name, c.status, om.role AS membership_role
        FROM competitions c
        JOIN organisation_memberships om ON om.organisation_id = c.organisation_id
        WHERE c.id = $1 AND om.account_id = $2 AND om.status = 'active' AND om.role = ANY($3::text[])
@@ -1539,6 +1542,14 @@ export class Phase2Runtime {
         [competitionId, occurredAt],
       );
       await this.writePublicProjection(tx, competitionId, version, publication.result_version);
+      await this.competitionPublicationNotifier?.publish({
+        transaction: tx,
+        actorAccountId: actor.accountId,
+        competitionId,
+        competitionName: competition.name,
+        scheduleRevisionId,
+        scheduleVersion: version,
+      });
       await this.evidence(tx, {
         requestId,
         actorAccountId: actor.accountId,

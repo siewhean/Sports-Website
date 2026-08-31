@@ -148,16 +148,19 @@ async function upsertOutbox(
   return mapEmailOutbox(row);
 }
 
+type PostgresNotificationSql = Sql | TransactionSql;
+
 export class PostgresNotificationRepository implements NotificationStore, NotificationUnitOfWork, EmailOutboxStore {
-  constructor(private readonly sql: Sql) {}
+  constructor(private readonly sql: PostgresNotificationSql) {}
 
   async persist(input: PersistNotificationDeliveryInput): Promise<PersistNotificationDeliveryResult> {
-    return this.sql.begin(async (transaction) => {
+    const persist = async (transaction: PostgresNotificationSql): Promise<PersistNotificationDeliveryResult> => {
       const notification = await upsertNotification(transaction, input.notification);
       const emailOutbox =
         input.emailOutbox === null ? null : await upsertOutbox(transaction, input.emailOutbox, notification.id);
       return { notification, emailOutbox };
-    });
+    };
+    return typeof (this.sql as Sql).begin === "function" ? (this.sql as Sql).begin(persist) : persist(this.sql);
   }
 
   async create(input: CreateNotificationInput): Promise<NotificationRecord> {

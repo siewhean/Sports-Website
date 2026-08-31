@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import { SPORT_PACKS } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
+import { TransactionalCompetitionPublicationNotifier } from "../../src/competition-publication-notifier.js";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../../src/app.js";
 import { ApiError } from "../../src/errors.js";
@@ -165,6 +166,10 @@ beforeAll(async () => {
     undefined,
     undefined,
     fallbackCodeHmacSecret,
+    undefined,
+    undefined,
+    undefined,
+    new TransactionalCompetitionPublicationNotifier("https://matchday.test"),
   );
 });
 
@@ -219,6 +224,30 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
     expect(schedule.matches).toHaveLength(16);
     const publishedSchedule = await runtime.publishSchedule(actor, competition.id, schedule.id, randomUUID());
     expect(publishedSchedule.schedule_version).toBe(1);
+    const publicationNotifications = await client<
+      {
+        account_id: string;
+        idempotency_key: string;
+        template_id: string;
+        attempts: number;
+        status: string;
+      }[]
+    >`
+      SELECT notification.account_id,notification.idempotency_key,outbox.template_id,outbox.attempts,outbox.status
+      FROM notifications notification
+      JOIN notification_email_outbox outbox ON outbox.notification_id=notification.id
+      WHERE notification.account_id=${accountId}
+        AND notification.idempotency_key=${`competition-schedule-published:${competition.id}:${schedule.id}`}
+    `;
+    expect(publicationNotifications).toEqual([
+      {
+        account_id: accountId,
+        idempotency_key: `competition-schedule-published:${competition.id}:${schedule.id}`,
+        template_id: "competition-published",
+        attempts: 0,
+        status: "pending",
+      },
+    ]);
     const publishedCompetition = await client<{ status: string }[]>`
       SELECT status FROM competitions WHERE id=${competition.id}
     `;
