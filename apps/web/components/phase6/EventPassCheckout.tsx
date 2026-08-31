@@ -30,7 +30,7 @@ export function EventPassCheckout({ competitions }: Props) {
         <h2>Create a competition first</h2>
         <p>An Event Pass is tied to one named competition, so there needs to be a competition to attach it to.</p>
         <div className={styles.actions}>
-          <Link className={styles.primaryAction} href="/organiser/new">
+          <Link className={styles.primaryAction} href="/organiser/competitions/new">
             Create competition
           </Link>
           <Link className={styles.secondaryAction} href="/organiser/competitions">
