@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: phase-6-smtp-certification-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   smtp-certification:
