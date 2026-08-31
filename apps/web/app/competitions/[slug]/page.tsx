@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { PublicCompetition } from "@/components/phase2/PublicCompetition";
 import { phase2Copy } from "@/lib/phase2";
 import { getCompetitionView } from "@/lib/phase2-public.server";
+import { publicCompetitionJsonLd, serializeJsonLd } from "@/lib/public-competition-json-ld";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -19,5 +20,14 @@ export default async function CompetitionPage({ params }: { params: Promise<{ sl
   const { slug } = await params;
   const competition = await getCompetitionView(slug);
   if (!competition) notFound();
-  return <PublicCompetition competition={competition} />;
+  const jsonLd = publicCompetitionJsonLd(competition, process.env.MATCHDAY_PUBLIC_ORIGIN);
+
+  return (
+    <>
+      {jsonLd ? (
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }} />
+      ) : null}
+      <PublicCompetition competition={competition} />
+    </>
+  );
 }
