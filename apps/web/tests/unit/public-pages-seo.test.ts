@@ -10,6 +10,7 @@ import PricingPage from "../../app/pricing/page.js";
 import ScorekeeperOnboardingPage from "../../app/onboarding/scorekeeper/page.js";
 import robots from "../../app/robots.js";
 import sitemap from "../../app/sitemap.js";
+import { publicCompetitionJsonLd, serializeJsonLd } from "../../lib/public-competition-json-ld.js";
 
 describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => {
   const publicOrigin = "https://preview.matchday.test";
@@ -74,5 +75,37 @@ describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => 
     delete process.env.MATCHDAY_PUBLIC_ORIGIN;
     expect(sitemap()).toEqual([]);
     expect(robots().sitemap).toBeUndefined();
+  });
+
+  it("generates SportsEvent JSON-LD for public competition pages", () => {
+    const jsonLd = publicCompetitionJsonLd(
+      { slug: "summer-cup", name: "Summer Cup", sport: "Football" },
+      publicOrigin,
+    );
+
+    expect(jsonLd).toEqual({
+      "@context": "https://schema.org",
+      "@type": "SportsEvent",
+      name: "Summer Cup",
+      description: "Summer Cup — Football competition.",
+      url: `${publicOrigin}/competitions/summer-cup`,
+      sport: "Football",
+    });
+    expect(JSON.parse(serializeJsonLd(jsonLd!))).toEqual(jsonLd);
+  });
+
+  it("does not emit competition JSON-LD for an invalid origin and safely serializes public text", () => {
+    expect(
+      publicCompetitionJsonLd({ slug: "summer-cup", name: "Summer Cup", sport: "Football" }, "http://example.com"),
+    ).toBeNull();
+
+    const jsonLd = publicCompetitionJsonLd(
+      { slug: "summer-cup", name: "</script><script>alert(1)</script>", sport: "Football" },
+      publicOrigin,
+    );
+    expect(jsonLd).not.toBeNull();
+    const serialized = serializeJsonLd(jsonLd!);
+    expect(serialized).not.toContain("<");
+    expect(JSON.parse(serialized).name).toBe("</script><script>alert(1)</script>");
   });
 });
