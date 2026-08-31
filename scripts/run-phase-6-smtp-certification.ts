@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
 import { once } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
 
 import {
   EmailTemplateRegistry,
@@ -24,173 +24,176 @@ const productCandidateSha = requiredEnvironment("SMTP_CERT_PRODUCT_SHA");
 const secretSentinel = requiredEnvironment("SMTP_CERT_SECRET_SENTINEL");
 const harnessSha = process.env.GITHUB_SHA ?? "local";
 const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
-const runUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY
-  ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}`
-  : null;
+const runUrl =
+  process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY
+    ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}`
+    : null;
 
-await mkdir(outputDirectory, { recursive: true });
-
-const accountId = randomUUID();
-const notificationIdempotencyKey = `phase6-smtp-cert:${productCandidateSha}:${runId}`;
-const emailIdempotencyKey = `notification-email:${accountId}:${notificationIdempotencyKey}`;
-const recipient = "phase6-smtp-certification@matchday.test";
-const sql = postgres(databaseUrl, { max: 2, idle_timeout: 10 });
 let worker: ChildProcessWithoutNullStreams | null = null;
 let workerLog = "";
 let mailpitStarted = false;
 
-const snapshots: Record<string, unknown> = {};
+async function main(): Promise<void> {
+  await mkdir(outputDirectory, { recursive: true });
 
-try {
-  await sql`
-    INSERT INTO accounts (id, primary_email, display_name, status, email_verified_at)
-    VALUES (${accountId}, ${recipient}, 'Phase 6 SMTP Certification', 'active', now())
-  `;
+  const accountId = randomUUID();
+  const notificationIdempotencyKey = `phase6-smtp-cert:${productCandidateSha}:${runId}`;
+  const emailIdempotencyKey = `notification-email:${accountId}:${notificationIdempotencyKey}`;
+  const recipient = "phase6-smtp-certification@matchday.test";
+  const sql = postgres(databaseUrl, { max: 2, idle_timeout: 10 });
+  const snapshots: Record<string, unknown> = {};
 
-  const repository = new PostgresNotificationRepository(sql);
-  const notificationService = new NotificationService(repository, repository, new EmailTemplateRegistry(), {
-    createId: randomUUID,
-    now: () => new Date(),
-    rateLimiter: new NoopNotificationRateLimiter(),
-  });
-  const input = {
-    accountId,
-    type: "competition-published",
-    payload: {
-      certification: true,
-      product_candidate_sha: productCandidateSha,
-    },
-    idempotencyKey: notificationIdempotencyKey,
-    channels: ["in_app", "email"] as const,
-    essential: false,
-    email: {
-      to: recipient,
-      template: { id: "competition-published", version: 1 },
-      variables: {
-        competitionName: "Phase 6 SMTP Certification",
-        actionUrl: "https://staging.matchday.test/organiser/competitions/smtp-certification/schedule",
+  try {
+    await sql`
+      INSERT INTO accounts (id, primary_email, display_name, status, email_verified_at)
+      VALUES (${accountId}, ${recipient}, 'Phase 6 SMTP Certification', 'active', now())
+    `;
+
+    const repository = new PostgresNotificationRepository(sql);
+    const notificationService = new NotificationService(repository, repository, new EmailTemplateRegistry(), {
+      createId: randomUUID,
+      now: () => new Date(),
+      rateLimiter: new NoopNotificationRateLimiter(),
+    });
+    const input = {
+      accountId,
+      type: "competition-published",
+      payload: {
+        certification: true,
+        product_candidate_sha: productCandidateSha,
       },
-    },
-  };
+      idempotencyKey: notificationIdempotencyKey,
+      channels: ["in_app", "email"] as const,
+      essential: false,
+      email: {
+        to: recipient,
+        template: { id: "competition-published", version: 1 },
+        variables: {
+          competitionName: "Phase 6 SMTP Certification",
+          actionUrl: "https://staging.matchday.test/organiser/competitions/smtp-certification/schedule",
+        },
+      },
+    };
 
-  const firstPublish = await notificationService.publish(input);
-  const duplicatePublish = await notificationService.publish(input);
-  assert(firstPublish.emailOutboxId !== null, "first publish did not create an email outbox item");
-  assert(
-    duplicatePublish.emailOutboxId === firstPublish.emailOutboxId,
-    "duplicate publish did not resolve to the existing email outbox item",
-  );
+    const firstPublish = await notificationService.publish(input);
+    const duplicatePublish = await notificationService.publish(input);
+    assert(firstPublish.emailOutboxId !== null, "first publish did not create an email outbox item");
+    assert(
+      duplicatePublish.emailOutboxId === firstPublish.emailOutboxId,
+      "duplicate publish did not resolve to the existing email outbox item",
+    );
 
-  const persistedCounts = await sql<{ notifications: number; outbox: number }[]>`
-    SELECT
-      (SELECT count(*)::int FROM notifications
-       WHERE account_id = ${accountId} AND idempotency_key = ${notificationIdempotencyKey}) AS notifications,
-      (SELECT count(*)::int FROM notification_email_outbox
-       WHERE idempotency_key = ${emailIdempotencyKey}) AS outbox
-  `;
-  assert(persistedCounts[0]?.notifications === 1, "notification idempotency created more than one row");
-  assert(persistedCounts[0]?.outbox === 1, "email idempotency created more than one outbox row");
+    const persistedCounts = await sql<{ notifications: number; outbox: number }[]>`
+      SELECT
+        (SELECT count(*)::int FROM notifications
+         WHERE account_id = ${accountId} AND idempotency_key = ${notificationIdempotencyKey}) AS notifications,
+        (SELECT count(*)::int FROM notification_email_outbox
+         WHERE idempotency_key = ${emailIdempotencyKey}) AS outbox
+    `;
+    assert(persistedCounts[0]?.notifications === 1, "notification idempotency created more than one row");
+    assert(persistedCounts[0]?.outbox === 1, "email idempotency created more than one outbox row");
 
-  const pending = await readOutbox(sql, emailIdempotencyKey);
-  assert(pending.status === "pending" && pending.attempts === 0, "outbox did not begin pending with zero attempts");
-  snapshots.pending = pending;
+    const pending = await readOutbox(sql, emailIdempotencyKey);
+    assert(pending.status === "pending" && pending.attempts === 0, "outbox did not begin pending with zero attempts");
+    snapshots.pending = pending;
 
-  assertPortIsClosed();
-  worker = startWorker();
-  worker.stdout.on("data", captureWorkerLog);
-  worker.stderr.on("data", captureWorkerLog);
+    assertPortIsClosed();
+    worker = startWorker();
+    worker.stdout.on("data", captureWorkerLog);
+    worker.stderr.on("data", captureWorkerLog);
 
-  const firstFailure = await waitForOutbox(
-    sql,
-    emailIdempotencyKey,
-    (row) => row.status === "pending" && row.attempts === 1 && row.last_failure_classification === "transient",
-    25_000,
-    "transient SMTP failure",
-  );
-  snapshots.transientFailure = firstFailure;
-  assert(firstFailure.last_error?.includes("ECONNREFUSED") ?? false, "first failure was not a refused SMTP connection");
+    const firstFailure = await waitForOutbox(
+      sql,
+      emailIdempotencyKey,
+      (row) => row.status === "pending" && row.attempts === 1 && row.last_failure_classification === "transient",
+      25_000,
+      "transient SMTP failure",
+    );
+    snapshots.transientFailure = firstFailure;
+    assert(firstFailure.last_error?.includes("ECONNREFUSED") ?? false, "first failure was not a refused SMTP connection");
 
-  startMailpit();
-  mailpitStarted = true;
-  await waitForMailpit(15_000);
+    startMailpit();
+    mailpitStarted = true;
+    await waitForMailpit(15_000);
 
-  const delivered = await waitForOutbox(
-    sql,
-    emailIdempotencyKey,
-    (row) => row.status === "delivered" && row.attempts === 2 && row.provider_message_id !== null,
-    55_000,
-    "successful retry delivery",
-  );
-  snapshots.delivered = delivered;
+    const delivered = await waitForOutbox(
+      sql,
+      emailIdempotencyKey,
+      (row) => row.status === "delivered" && row.attempts === 2 && row.provider_message_id !== null,
+      55_000,
+      "successful retry delivery",
+    );
+    snapshots.delivered = delivered;
 
-  const messageList = await fetchMailpitMessages();
-  await writeFile(mailpitMessagesPath, `${JSON.stringify(messageList.raw, null, 2)}\n`);
-  assert(messageList.messages.length === 1, `expected exactly one SMTP message, got ${messageList.messages.length}`);
-  assert(
-    JSON.stringify(messageList.messages[0]).includes("Phase 6 SMTP Certification"),
-    "SMTP catcher did not retain the expected certification message",
-  );
+    const messageList = await fetchMailpitMessages();
+    await writeFile(mailpitMessagesPath, `${JSON.stringify(messageList.raw, null, 2)}\n`);
+    assert(messageList.messages.length === 1, `expected exactly one SMTP message, got ${messageList.messages.length}`);
+    assert(
+      JSON.stringify(messageList.messages[0]).includes("Phase 6 SMTP Certification"),
+      "SMTP catcher did not retain the expected certification message",
+    );
 
-  await sleep(10_000);
-  const stable = await readOutbox(sql, emailIdempotencyKey);
-  const stableMessages = await fetchMailpitMessages();
-  assert(stable.status === "delivered" && stable.attempts === 2, "worker reprocessed an already delivered outbox item");
-  assert(stableMessages.messages.length === 1, "SMTP catcher received a duplicate message after subsequent worker polls");
-  snapshots.stableAfterAdditionalPolls = stable;
+    await sleep(10_000);
+    const stable = await readOutbox(sql, emailIdempotencyKey);
+    const stableMessages = await fetchMailpitMessages();
+    assert(stable.status === "delivered" && stable.attempts === 2, "worker reprocessed an already delivered outbox item");
+    assert(stableMessages.messages.length === 1, "SMTP catcher received a duplicate message after subsequent worker polls");
+    snapshots.stableAfterAdditionalPolls = stable;
 
-  const secretMatches = [secretSentinel, databaseUrl]
-    .filter((value) => value.length > 0)
-    .filter((value) => workerLog.includes(value));
-  assert(secretMatches.length === 0, "worker logs contain controlled credential material");
+    const secretMatches = [secretSentinel, databaseUrl]
+      .filter((value) => value.length > 0)
+      .filter((value) => workerLog.includes(value));
+    assert(secretMatches.length === 0, "worker logs contain controlled credential material");
 
-  const mailpitLog = execFileSync("docker", ["logs", mailpitContainer], { encoding: "utf8" });
-  await writeFile(workerLogPath, workerLog);
-  await writeFile(mailpitLogPath, mailpitLog);
+    const mailpitLog = execFileSync("docker", ["logs", mailpitContainer], { encoding: "utf8" });
+    await writeFile(workerLogPath, workerLog);
+    await writeFile(mailpitLogPath, mailpitLog);
 
-  const receipt = {
-    verdict:
-      "PASS — deployed Matchday worker delivered transactional email through controlled SMTP, persisted provider delivery state, recovered from a genuine transient SMTP failure through the production retry path without duplicate delivery, preserved idempotency, and emitted no controlled credential material in retained worker logs.",
-    productCandidateSha,
-    certificationHarnessSha: harnessSha,
-    githubRunId: runId,
-    githubRunUrl: runUrl,
-    environment: "GitHub Actions controlled non-production runner",
-    workerEntrypoint: "apps/worker/dist/main.js via pnpm --filter @matchday/worker start",
-    database: "PostgreSQL 18.4 service container",
-    redis: "Redis 8.2 service container",
-    smtp: "Mailpit v1.27.4 container started only after the first worker delivery attempt",
-    notificationType: "competition-published",
-    notificationIdempotencyKey,
-    emailIdempotencyKey,
-    accountId,
-    recipient,
-    firstPublishEmailOutboxId: firstPublish.emailOutboxId,
-    duplicatePublishEmailOutboxId: duplicatePublish.emailOutboxId,
-    persistedCounts: persistedCounts[0],
-    snapshots,
-    smtpMessageCount: stableMessages.messages.length,
-    providerMessageId: delivered.provider_message_id,
-    secretLogScan: {
-      passed: true,
-      scannedControlledDatabaseCredential: true,
-      matches: 0,
-    },
-    completedAt: new Date().toISOString(),
-  };
-  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-  console.log(JSON.stringify(receipt, null, 2));
-} finally {
-  if (worker !== null && worker.exitCode === null) {
-    worker.kill("SIGTERM");
-    await Promise.race([once(worker, "exit"), sleep(10_000)]).catch(() => undefined);
+    const receipt = {
+      verdict:
+        "PASS — deployed Matchday worker delivered transactional email through controlled SMTP, persisted provider delivery state, recovered from a genuine transient SMTP failure through the production retry path without duplicate delivery, preserved idempotency, and emitted no controlled credential material in retained worker logs.",
+      productCandidateSha,
+      certificationHarnessSha: harnessSha,
+      githubRunId: runId,
+      githubRunUrl: runUrl,
+      environment: "GitHub Actions controlled non-production runner",
+      workerEntrypoint: "apps/worker/dist/main.js via pnpm --filter @matchday/worker start",
+      database: "PostgreSQL 18.4 service container",
+      redis: "Redis 8.2 service container",
+      smtp: "Mailpit v1.27.4 container started only after the first worker delivery attempt",
+      notificationType: "competition-published",
+      notificationIdempotencyKey,
+      emailIdempotencyKey,
+      accountId,
+      recipient,
+      firstPublishEmailOutboxId: firstPublish.emailOutboxId,
+      duplicatePublishEmailOutboxId: duplicatePublish.emailOutboxId,
+      persistedCounts: persistedCounts[0],
+      snapshots,
+      smtpMessageCount: stableMessages.messages.length,
+      providerMessageId: delivered.provider_message_id,
+      secretLogScan: {
+        passed: true,
+        scannedControlledDatabaseCredential: true,
+        matches: 0,
+      },
+      completedAt: new Date().toISOString(),
+    };
+    await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+    console.log(JSON.stringify(receipt, null, 2));
+  } finally {
+    if (worker !== null && worker.exitCode === null) {
+      worker.kill("SIGTERM");
+      await Promise.race([once(worker, "exit"), sleep(10_000)]).catch(() => undefined);
+    }
+    if (workerLog !== "") await writeFile(workerLogPath, workerLog).catch(() => undefined);
+    if (mailpitStarted) {
+      const mailpitLog = safeDockerLogs();
+      if (mailpitLog !== "") await writeFile(mailpitLogPath, mailpitLog).catch(() => undefined);
+      execFileSync("docker", ["rm", "--force", mailpitContainer], { stdio: "ignore" });
+    }
+    await sql.end({ timeout: 5 });
   }
-  if (workerLog !== "") await writeFile(workerLogPath, workerLog).catch(() => undefined);
-  if (mailpitStarted) {
-    const mailpitLog = safeDockerLogs();
-    if (mailpitLog !== "") await writeFile(mailpitLogPath, mailpitLog).catch(() => undefined);
-    execFileSync("docker", ["rm", "--force", mailpitContainer], { stdio: "ignore" });
-  }
-  await sql.end({ timeout: 5 });
 }
 
 function requiredEnvironment(name: string): string {
@@ -335,3 +338,8 @@ function safeDockerLogs(): string {
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+
+void main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});
