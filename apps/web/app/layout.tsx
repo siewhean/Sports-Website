@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
+import { Analytics } from "@vercel/analytics/next";
 import { ConsentManager } from "@/components/foundation/ConsentManager";
 import { ServiceWorkerRegistration } from "@/components/foundation/ServiceWorkerRegistration";
 import { messages } from "@matchday/ui";
@@ -28,6 +29,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         {children}
         <ConsentManager />
         <ServiceWorkerRegistration />
+        <Analytics />
       </body>
     </html>
   );
