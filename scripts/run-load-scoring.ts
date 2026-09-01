@@ -4,6 +4,12 @@
  * Gate D evidence is produced only in staging mode. Staging mode always uses
  * the deployed Matchday HTTP API, authentic access exchange/session headers,
  * exact deployed-SHA attestation, and exactly one sequential writer per match.
+ *
+ * The measured Volleyball workload deliberately alternates a canonical point
+ * with a reversal of that exact event. This keeps the aggregate score bounded
+ * while still exercising real mutation, reducer, persistence, fencing and
+ * projection work for arbitrarily long endurance runs. Finalisation belongs to
+ * QA-006 and is intentionally not mixed into this latency benchmark.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -27,6 +33,7 @@ type ActiveScoringSession = {
   sessionToken: string;
   generation: number | null;
   sequence: number;
+  pendingReversalEventId: string | null;
 };
 
 type Target = {
@@ -118,21 +125,9 @@ async function buildMockScoringServer() {
     if (body.expected_sequence !== current) {
       return reply.status(409).send({ error: { code: "SEQUENCE_CONFLICT" } });
     }
+    const eventId = randomUUID();
     sequences.set(session.matchId, current + 1);
-    return reply.status(200).send({ sequence: current + 1, duplicate: false });
-  });
-
-  app.post("/api/v1/scoring/finalise", async (request, reply) => {
-    const token = request.headers["x-scoring-session-token"] as string | undefined;
-    const session = token ? sessions.get(token) : undefined;
-    if (!session) return reply.status(401).send({ error: { code: "UNAUTHORIZED" } });
-    const body = request.body as { expected_sequence?: number };
-    const current = sequences.get(session.matchId) ?? 0;
-    if (body.expected_sequence !== current) {
-      return reply.status(409).send({ error: { code: "SEQUENCE_CONFLICT" } });
-    }
-    sequences.set(session.matchId, current + 1);
-    return reply.status(200).send({ sequence: current + 1, status: "final" });
+    return reply.status(200).send({ event_id: eventId, sequence: current + 1, duplicate: false });
   });
 
   return app;
@@ -155,7 +150,7 @@ async function requestJson(
     try {
       data = (await response.json()) as Record<string, unknown>;
     } catch {
-      // Error handling below is based on status; response JSON is best effort.
+      // Error handling below is status based; JSON is best effort.
     }
     return { status: response.status, data };
   }
@@ -176,21 +171,38 @@ function operationsForStream(totalOperations: number, streamIndex: number, strea
   return base + (streamIndex < totalOperations % streamCount ? 1 : 0);
 }
 
-async function appendEvent(target: Target, session: ActiveScoringSession, step: number): Promise<WorkloadSample> {
+async function appendMeasuredMutation(
+  target: Target,
+  session: ActiveScoringSession,
+  step: number,
+): Promise<WorkloadSample> {
   const started = performance.now();
-  const eventType = session.sequence === 0 ? "match_started" : "point";
-  const body = {
-    client_event_id: randomUUID(),
-    expected_sequence: session.sequence,
-    type: eventType,
-    occurred_at: new Date().toISOString(),
-    ...(eventType === "point"
+  const startingMatch = session.sequence === 0;
+  const reversing = !startingMatch && session.pendingReversalEventId !== null;
+  const body = startingMatch
+    ? {
+        client_event_id: randomUUID(),
+        expected_sequence: session.sequence,
+        type: "match_started",
+        occurred_at: new Date().toISOString(),
+      }
+    : reversing
       ? {
+          client_event_id: randomUUID(),
+          expected_sequence: session.sequence,
+          type: "reversal",
+          reversal_target_event_id: session.pendingReversalEventId,
+          reason: "QA-011 bounded endurance reversal",
+          occurred_at: new Date().toISOString(),
+        }
+      : {
+          client_event_id: randomUUID(),
+          expected_sequence: session.sequence,
+          type: "point",
           team_slot: step % 2 === 0 ? "home" : "away",
           segment_number: 1,
-        }
-      : {}),
-  };
+          occurred_at: new Date().toISOString(),
+        };
 
   try {
     const response = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), body);
@@ -198,9 +210,19 @@ async function appendEvent(target: Target, session: ActiveScoringSession, step: 
     if (response.status < 200 || response.status >= 300) {
       return { durationMs, outcome: "unexpected_failure" };
     }
-    // Advance only after the server accepted this exact sequence. A failed write
-    // must never create a client-side sequence gap for subsequent commands.
+
     session.sequence += 1;
+    if (startingMatch) {
+      session.pendingReversalEventId = null;
+    } else if (reversing) {
+      session.pendingReversalEventId = null;
+    } else {
+      const eventId = response.data.event_id;
+      if (typeof eventId !== "string" || !eventId) {
+        return { durationMs, outcome: "unexpected_failure" };
+      }
+      session.pendingReversalEventId = eventId;
+    }
     return { durationMs, outcome: "success" };
   } catch {
     return { durationMs: performance.now() - started, outcome: "unexpected_failure" };
@@ -211,19 +233,14 @@ async function runTier(target: Target, tier: (typeof TIERS)[number]) {
   if (target.sessions.length === 0) throw new Error("QA-011 requires at least one independent scoring session");
   const samples: WorkloadSample[] = [];
 
-  // One async worker == one match/session. This is the critical fencing rule:
-  // streams run concurrently with one another, but a single authoritative match
-  // never has two load-runner writers racing its expected_sequence.
+  // One async worker == one match/session. Streams run in parallel, while an
+  // authoritative match never has two load-runner writers racing sequence/fence.
   const streams = target.sessions.map(async (session, streamIndex) => {
     const count = operationsForStream(tier.operations, streamIndex, target.sessions.length);
     for (let step = 0; step < count; step++) {
-      const sample = await appendEvent(target, session, step);
+      const sample = await appendMeasuredMutation(target, session, step);
       samples.push(sample);
-      if (sample.outcome !== "success") {
-        // Stop this stream immediately; continuing after a failed sequence would
-        // measure manufactured conflicts rather than normal scoring latency.
-        break;
-      }
+      if (sample.outcome !== "success") break;
     }
   });
 
@@ -247,19 +264,28 @@ async function recoverSessionState(target: Target, session: ActiveScoringSession
     throw new Error(`Scoring session ${session.sessionId} returned an invalid through_sequence`);
   }
   session.sequence = Number(throughSequence);
+  // Staging fixtures are required to be unscored before QA-011. Recovering a
+  // non-zero stream is allowed only when the same runner has continued it; the
+  // seed validation must keep initial scoring state clean.
+  session.pendingReversalEventId = null;
 }
 
-async function finaliseSessions(target: Target): Promise<void> {
+async function closeOpenReversals(target: Target): Promise<void> {
   for (const session of target.sessions) {
-    const response = await requestJson(target, "POST", "/api/v1/scoring/finalise", scoringHeaders(session), {
+    if (!session.pendingReversalEventId) continue;
+    const response = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), {
       client_event_id: randomUUID(),
       expected_sequence: session.sequence,
+      type: "reversal",
+      reversal_target_event_id: session.pendingReversalEventId,
+      reason: "QA-011 end-of-run bounded-state cleanup",
       occurred_at: new Date().toISOString(),
     });
     if (response.status < 200 || response.status >= 300) {
-      throw new Error(`Failed to finalise match ${session.matchId} after QA-011 workload (HTTP ${response.status})`);
+      throw new Error(`Failed to close bounded score state for match ${session.matchId} (HTTP ${response.status})`);
     }
     session.sequence += 1;
+    session.pendingReversalEventId = null;
   }
 }
 
@@ -268,7 +294,7 @@ async function main() {
   let app: Awaited<ReturnType<typeof buildMockScoringServer>> | undefined;
   let baseUrl = targetUrlArg?.replace(/\/$/, "");
   let competitionId: string | undefined;
-  let candidateSha = candidateShaArg;
+  const candidateSha = candidateShaArg;
   let deployedSha: string | undefined;
   const activeSessions: ActiveScoringSession[] = [];
 
@@ -329,33 +355,40 @@ async function main() {
         sessionToken: data.session_token,
         generation: data.writer_generation ?? null,
         sequence: 0,
+        pendingReversalEventId: null,
       });
     }
   } else {
     app = await buildMockScoringServer();
     if (mode === "socket-component") baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
     for (let index = 0; index < 8; index++) {
-      const response = mode === "component"
-        ? await app.inject({
-            method: "POST",
-            url: "/api/v1/scoring/access/exchange",
-            payload: { expected_match_id: `mock-match-${index}`, device_id: `mock-${index}` },
-          })
-        : await fetch(`${baseUrl}/api/v1/scoring/access/exchange`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ expected_match_id: `mock-match-${index}`, device_id: `mock-${index}` }),
-          });
-      const status = "statusCode" in response ? response.statusCode : response.status;
-      const data = "json" in response ? response.json() : await response.json();
-      if (status !== 200) throw new Error("Mock access exchange failed");
-      const typed = data as { session_id: string; session_token: string; writer_generation: number };
+      let status: number;
+      let data: { session_id?: string; session_token?: string; writer_generation?: number };
+      if (mode === "component") {
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/v1/scoring/access/exchange",
+          payload: { expected_match_id: `mock-match-${index}`, device_id: `mock-${index}` },
+        });
+        status = response.statusCode;
+        data = response.json() as typeof data;
+      } else {
+        const response = await fetch(`${baseUrl}/api/v1/scoring/access/exchange`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expected_match_id: `mock-match-${index}`, device_id: `mock-${index}` }),
+        });
+        status = response.status;
+        data = (await response.json()) as typeof data;
+      }
+      if (status !== 200 || !data.session_id || !data.session_token) throw new Error("Mock access exchange failed");
       activeSessions.push({
         matchId: `mock-match-${index}`,
-        sessionId: typed.session_id,
-        sessionToken: typed.session_token,
-        generation: typed.writer_generation,
+        sessionId: data.session_id,
+        sessionToken: data.session_token,
+        generation: data.writer_generation ?? 1,
         sequence: 0,
+        pendingReversalEventId: null,
       });
     }
   }
@@ -365,9 +398,7 @@ async function main() {
 
   const results = [];
   for (const tier of TIERS) {
-    console.log(
-      `  ${tier.name}: ${tier.operations} writes across ${activeSessions.length} independent match streams`,
-    );
+    console.log(`  ${tier.name}: ${tier.operations} writes across ${activeSessions.length} independent match streams`);
     const result = await runTier(target, tier);
     results.push(result);
     console.log(
@@ -383,9 +414,9 @@ async function main() {
     maxUnexpectedErrorRate: 0.001,
   });
 
-  // Finalisation is deliberately outside the latency sample and occurs exactly
-  // once per match after all write tiers. A finalisation failure fails QA-011.
-  await finaliseSessions(target);
+  // Keep the seeded competition score-neutral for any later Gate D drills.
+  // These cleanup reversals are correctness operations, not latency samples.
+  await closeOpenReversals(target);
 
   const artifactDir = path.join(root, "artifacts");
   await mkdir(artifactDir, { recursive: true });
@@ -407,6 +438,7 @@ async function main() {
     competition_id: competitionId ?? null,
     target_url: baseUrl ?? null,
     title: "Scoring Mutation Writes Workload Summary",
+    workload_profile: "volleyball_bounded_point_reversal",
     target_p95_budget_ms: TARGET_P95_MS,
     independent_scoring_streams: activeSessions.length,
     tiers: results.map((result) => ({
