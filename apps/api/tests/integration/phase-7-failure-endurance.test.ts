@@ -87,7 +87,7 @@ describeInfrastructure(
       await dropTestSchema(databaseUrl, schema);
     });
 
-    async function createRealScoringWorld(sportId: SportId = "volleyball") {
+    async function createRealScoringWorld(sportId: SportId = "basketball") {
       const actor: Phase2Actor = { accountId };
       const competition = await runtime.createCompetition(
         actor,
@@ -174,7 +174,7 @@ describeInfrastructure(
 
     describe("QA-007: Extended 2,000-Command Offline Ingestion Pipeline", () => {
       it("ingests and sequences a high-capacity 2,000 command batch with monotonic order and idempotent replay resilience", async () => {
-        const world = await createRealScoringWorld("volleyball");
+        const world = await createRealScoringWorld("basketball");
         let aggregateVersion = 0;
 
         // 1. Initial event: match_started
@@ -190,20 +190,21 @@ describeInfrastructure(
         );
         aggregateVersion = startReceipt.aggregate_version;
 
-        // 2. Generate and append 2,000 sequential score commands
+        // 2. Generate and append 2,000 sequential score commands in basketball
         const totalCommands = 2000;
         const recordedEvents: { client_event_id: string; expectedVersion: number; payload: Record<string, unknown> }[] =
           [];
 
         for (let i = 0; i < totalCommands; i++) {
           const clientEventId = randomUUID();
-          const segmentNumber = (Math.floor(i / 100) % 5) + 1;
           const teamSlot = i % 2 === 0 ? "home" : "away";
           const payload = {
             client_event_id: clientEventId,
-            type: "point",
+            type: "three_point_score",
             team_slot: teamSlot,
-            segment_number: segmentNumber,
+            participant_id: `Player ${(i % 5) + 1}`,
+            segment_number: 1,
+            manual_time_seconds: (i % 600) + 1,
             occurred_at: new Date(Date.now() + i * 1000).toISOString(),
           };
 
@@ -235,7 +236,23 @@ describeInfrastructure(
         `;
         expect(events[0]!.count).toBe(totalCommands + 1);
 
-        // 5. Finalise match
+        // 5. Advance periods and finalise match
+        for (const segment of [2, 3, 4]) {
+          const periodReceipt = await runtime.appendCanonicalScoreEvent(
+            world.auth,
+            {
+              client_event_id: randomUUID(),
+              type: "period_change",
+              segment_number: segment,
+              manual_time_seconds: 0,
+              occurred_at: new Date().toISOString(),
+            },
+            aggregateVersion,
+            randomUUID(),
+          );
+          aggregateVersion = periodReceipt.aggregate_version;
+        }
+
         const finalResult = await runtime.finalise(world.auth, randomUUID(), randomUUID(), aggregateVersion);
         expect(finalResult.home_score).toBeGreaterThan(0);
 
@@ -248,7 +265,7 @@ describeInfrastructure(
 
     describe("QA-008: Multi-Device Write Arbitration & Stale Sequence Fencing", () => {
       it("rejects stale generation writes after takeover and enforces monotonic version sequencing", async () => {
-        const world = await createRealScoringWorld("volleyball");
+        const world = await createRealScoringWorld("basketball");
         let version = 0;
 
         // Device 1 starts match
@@ -260,14 +277,16 @@ describeInfrastructure(
         );
         version = startReceipt.aggregate_version;
 
-        // Device 1 scores 1 point
+        // Device 1 scores 1 basket
         const ptReceipt = await runtime.appendCanonicalScoreEvent(
           world.auth,
           {
             client_event_id: randomUUID(),
-            type: "point",
+            type: "three_point_score",
             team_slot: "home",
+            participant_id: "Player 1",
             segment_number: 1,
+            manual_time_seconds: 10,
             occurred_at: new Date().toISOString(),
           },
           version,
@@ -275,28 +294,54 @@ describeInfrastructure(
         );
         version = ptReceipt.aggregate_version;
 
-        // Device 2 exchanges the access pass to take over the writer lease
+        // Device 2 exchanges the access pass -> receives candidate session
         const device2 = await runtime.exchangeAccess(
           { token: world.pass.token!, deviceId: "dev-takeover-2", ipAddress: "192.168.1.102" },
           randomUUID(),
         );
-        expect(device2.generation).toBeGreaterThan(world.auth.generation);
+        expect(device2.session_id).toBeDefined();
+
+        const dev2CandidateAuth = {
+          sessionId: device2.session_id,
+          sessionToken: device2.session_token,
+          generation: 0,
+        };
+
+        // Device 2 requests takeover
+        const takeover = await runtime.requestTakeover(
+          dev2CandidateAuth,
+          { pendingEventCount: 0, pendingThroughSequence: 0 },
+          randomUUID(),
+        );
+        expect(takeover.id).toBeDefined();
+
+        // Organiser approves takeover
+        const resolution = await runtime.resolveTakeover(
+          { accountId },
+          world.competition.id,
+          takeover.id,
+          { decision: "approve", overrideAcknowledged: true, reason: "Device 1 battery died" },
+          randomUUID(),
+        );
+        expect(resolution.status).toBe("approved");
 
         const dev2Auth = {
           sessionId: device2.session_id,
           sessionToken: device2.session_token,
-          generation: device2.generation!,
+          generation: resolution.generation!,
         };
 
-        // Device 1 (stale generation) tries to append event -> must be rejected
+        // Device 1 (stale generation) tries to append event -> must be rejected with 409
         await expect(
           runtime.appendCanonicalScoreEvent(
             world.auth, // stale generation
             {
               client_event_id: randomUUID(),
-              type: "point",
+              type: "three_point_score",
               team_slot: "away",
+              participant_id: "Player 2",
               segment_number: 1,
+              manual_time_seconds: 12,
               occurred_at: new Date().toISOString(),
             },
             version,
@@ -309,9 +354,11 @@ describeInfrastructure(
           dev2Auth,
           {
             client_event_id: randomUUID(),
-            type: "point",
+            type: "three_point_score",
             team_slot: "away",
+            participant_id: "Player 2",
             segment_number: 1,
+            manual_time_seconds: 15,
             occurred_at: new Date().toISOString(),
           },
           version,
@@ -325,9 +372,11 @@ describeInfrastructure(
             dev2Auth,
             {
               client_event_id: randomUUID(),
-              type: "point",
+              type: "three_point_score",
               team_slot: "home",
+              participant_id: "Player 1",
               segment_number: 1,
+              manual_time_seconds: 20,
               occurred_at: new Date().toISOString(),
             },
             99, // mismatched expected aggregate version
@@ -339,11 +388,11 @@ describeInfrastructure(
 
     describe("QA-009: Result Correction & Standings Convergence", () => {
       it("records score corrections, updates audit ledger, and recalculates division standings", async () => {
-        const world = await createRealScoringWorld("volleyball");
+        const world = await createRealScoringWorld("basketball");
         const actor: Phase2Actor = { accountId };
         let version = 0;
 
-        // Score 2 sets to 0 for Home team
+        // Score baskets in period 1
         const start = await runtime.appendCanonicalScoreEvent(
           world.auth,
           { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString() },
@@ -352,43 +401,44 @@ describeInfrastructure(
         );
         version = start.aggregate_version;
 
-        for (const seg of [1, 2]) {
-          for (let p = 0; p < 25; p++) {
-            const pt = await runtime.appendCanonicalScoreEvent(
-              world.auth,
-              {
-                client_event_id: randomUUID(),
-                type: "point",
-                team_slot: "home",
-                segment_number: seg,
-                occurred_at: new Date().toISOString(),
-              },
-              version,
-              randomUUID(),
-            );
-            version = pt.aggregate_version;
-          }
-          const setComp = await runtime.appendCanonicalScoreEvent(
+        const homePt = await runtime.appendCanonicalScoreEvent(
+          world.auth,
+          {
+            client_event_id: randomUUID(),
+            type: "three_point_score",
+            team_slot: "home",
+            participant_id: "Player 1",
+            segment_number: 1,
+            manual_time_seconds: 10,
+            occurred_at: new Date().toISOString(),
+          },
+          version,
+          randomUUID(),
+        );
+        version = homePt.aggregate_version;
+
+        for (const segment of [2, 3, 4]) {
+          const periodReceipt = await runtime.appendCanonicalScoreEvent(
             world.auth,
             {
               client_event_id: randomUUID(),
-              type: "set_completion",
-              team_slot: "home",
-              segment_number: seg,
+              type: "period_change",
+              segment_number: segment,
+              manual_time_seconds: 0,
               occurred_at: new Date().toISOString(),
             },
             version,
             randomUUID(),
           );
-          version = setComp.aggregate_version;
+          version = periodReceipt.aggregate_version;
         }
 
-        // Finalise match (2-0)
+        // Finalise match
         const initialFinal = await runtime.finalise(world.auth, randomUUID(), randomUUID(), version);
-        expect(initialFinal.home_score).toBe(2);
+        expect(initialFinal.home_score).toBe(3);
         expect(initialFinal.away_score).toBe(0);
 
-        // Organiser issues a score correction
+        // Organiser issues a score correction on finalized match
         const correctionEventId = randomUUID();
         const correction = await runtime.correctCanonicalMatch(
           actor,
@@ -397,13 +447,15 @@ describeInfrastructure(
           {
             clientEventId: correctionEventId,
             reason: "Clerical adjustment for court review",
-            expectedAggregateVersion: version,
+            expectedAggregateVersion: initialFinal.aggregate_version,
             events: [
               {
                 client_event_id: randomUUID(),
-                type: "point",
+                type: "three_point_score",
                 team_slot: "away",
-                segment_number: 2,
+                participant_id: "Player 2",
+                segment_number: 1,
+                manual_time_seconds: 12,
                 occurred_at: new Date().toISOString(),
               },
             ],
