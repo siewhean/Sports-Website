@@ -16,10 +16,15 @@ test.describe("QA-014 Browser Stored XSS & DOM Sanitization", () => {
     await page.goto(`/c/v1-preview?title=${encodedPayload}`);
     await dismissConsent(page);
 
-    // Verify page rendered safely
+    // 1. Verify page rendered safely and displays the sanitized title text
     await expect(page.locator("body")).toBeVisible();
+    await expect(page.getByText(/Malicious Tournament/)).toBeVisible();
 
-    // Verify window.__xss_injected_flag remained false (no script execution occurred)
+    // 2. Assert no executable script element matching the payload exists in the DOM
+    const unescapedScriptTags = page.locator("script").filter({ hasText: "window.__xss_injected_flag" });
+    await expect(unescapedScriptTags).toHaveCount(0);
+
+    // 3. Verify window.__xss_injected_flag remained false (no script execution occurred)
     const injected = await page.evaluate(() => {
       return (window as unknown as { __xss_injected_flag?: boolean }).__xss_injected_flag;
     });

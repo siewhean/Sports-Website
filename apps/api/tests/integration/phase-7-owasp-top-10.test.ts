@@ -26,6 +26,7 @@ const migrationsDirectory = path.resolve(
 );
 
 let client!: Sql;
+let identityProvider!: DeterministicIdentityProvider;
 let identityRuntime!: IdentityApiRuntime;
 let entitlementRuntime!: EntitlementRuntime;
 let phase2Runtime!: Phase2Runtime;
@@ -75,6 +76,13 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
         (${tenantB_userId}, 'bob@tenant-b.com', 'Bob Tenant B', now());
     `;
 
+    await client`
+      INSERT INTO provider_identities (account_id, issuer, subject)
+      VALUES
+        (${tenantA_userId}, 'https://identity.example.test', 'tenant-a-subject'),
+        (${tenantB_userId}, 'https://identity.example.test', 'tenant-b-subject');
+    `;
+
     await client.begin(async (tx) => {
       await tx`
         INSERT INTO organisations (id, name, slug)
@@ -90,9 +98,9 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       `;
     });
 
-    const identityProvider = new DeterministicIdentityProvider({
+    identityProvider = new DeterministicIdentityProvider({
       issuer: "https://identity.example.test",
-      subject: "test-subject",
+      subject: "tenant-a-subject",
       email: "alice@tenant-a.com",
       displayName: "Alice Tenant A",
       providerSessionId: "session-123",
@@ -118,6 +126,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
 
     const config = testConfig({
       STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      API_ALLOWED_ORIGINS: "https://app.matchday.example",
     });
 
     app = await buildApp({
@@ -140,7 +149,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
     await dropTestSchema(databaseUrl, schema);
   });
 
-  describe("A01: Broken Access Control (IDOR & Route Authorization)", () => {
+  describe("A01: Broken Access Control (IDOR & Authenticated Route Authorization)", () => {
     it("strictly blocks unauthenticated access to protected management endpoints", async () => {
       const response = await app.inject({
         method: "GET",
@@ -150,7 +159,8 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       expect([401, 403]).toContain(response.statusCode);
     });
 
-    it("prevents Tenant A actor from mutating Tenant B competition via HTTP and runtime", async () => {
+    it("prevents authenticated Tenant A session with valid CSRF from mutating Tenant B competition via HTTP", async () => {
+      // 1. Create Tenant B's competition
       const compB = await phase3Runtime.createCompetition(
         { accountId: tenantB_userId },
         {
@@ -169,36 +179,46 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
         randomUUID(),
       );
 
-      expect(compB.id).toBeDefined();
+      // 2. Sign in as Tenant A to obtain authentic session cookie and CSRF token
+      identityProvider.claims = {
+        issuer: "https://identity.example.test",
+        subject: "tenant-a-subject",
+        email: "alice@tenant-a.com",
+        displayName: "Alice Tenant A",
+        emailVerified: true,
+        providerSessionId: `prov-sess-${randomUUID()}`,
+      };
 
-      const unauthenticatedResponse = await app.inject({
+      const sessionA = await identityRuntime.signIn(
+        {
+          authorizationCode: "auth-code-a",
+          expectedState: "state-a",
+          expectedNonce: "nonce-a",
+          pkceVerifier: "verifier-a",
+          redirectUri: "https://app.matchday.example/callback",
+        },
+        "req-signin-a",
+      );
+
+      // 3. Attempt cross-tenant mutation with Tenant A's authenticated session + valid CSRF
+      const idorResponse = await app.inject({
         method: "POST",
-        url: `/api/v1/organisations/competitions/${compB.id}/mutations`,
+        url: `/api/v1/competitions/${compB.id}/lifecycle/archive`,
         headers: {
+          cookie: `matchday_session=${sessionA.sessionToken}`,
+          "x-csrf-token": sessionA.csrfToken,
+          origin: "https://app.matchday.example",
           "content-type": "application/json",
         },
         payload: {
-          action: "update",
           revision: 1,
-          patch: { name: "Malicious Hijack" },
+          action: "archive",
         },
       });
 
-      expect([401, 403, 404]).toContain(unauthenticatedResponse.statusCode);
-
-      // Direct runtime assertion for cross-tenant rejection
-      await expect(
-        phase3Runtime.mutateCompetition(
-          { accountId: tenantA_userId },
-          compB.id,
-          {
-            action: "update",
-            revision: 1,
-            patch: { name: "Malicious Hijack" },
-          },
-          randomUUID(),
-        ),
-      ).rejects.toThrow();
+      // Must be rejected specifically due to tenant authorization boundary
+      expect([403, 404]).toContain(idorResponse.statusCode);
+      expect(idorResponse.statusCode).not.toBe(200);
     });
   });
 
@@ -291,7 +311,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
     });
   });
 
-  describe("A05: Security Misconfiguration & Response Headers", () => {
+  describe("A05: Security Misconfiguration & CSRF Protection Matrix", () => {
     it("includes vital security headers on HTTP responses", async () => {
       const response = await app.inject({
         method: "GET",
@@ -300,6 +320,89 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
 
       expect(response.statusCode).toBe(200);
       expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    });
+
+    it("strictly enforces CSRF protection matrix on authenticated mutating HTTP routes", async () => {
+      // 1. Create Tenant A's competition
+      const compA = await phase3Runtime.createCompetition(
+        { accountId: tenantA_userId },
+        {
+          organisationId: tenantA_orgId,
+          name: "Tenant A CSRF Test Competition",
+          slug: `tenant-a-csrf-${randomUUID()}`,
+          sportCode: "volleyball",
+          timezone: "UTC",
+          startsOn: "2026-09-01",
+          endsOn: "2026-09-02",
+          venue: "Hall 1",
+          address: "1 Sports Rd",
+          countryCode: "SG",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+
+      // 2. Sign in as Tenant A
+      identityProvider.claims = {
+        issuer: "https://identity.example.test",
+        subject: "tenant-a-subject",
+        email: "alice@tenant-a.com",
+        displayName: "Alice Tenant A",
+        emailVerified: true,
+        providerSessionId: `prov-sess-${randomUUID()}`,
+      };
+
+      const session = await identityRuntime.signIn(
+        {
+          authorizationCode: "auth-code-csrf",
+          expectedState: "state-csrf",
+          expectedNonce: "nonce-csrf",
+          pkceVerifier: "verifier-csrf",
+          redirectUri: "https://app.matchday.example/callback",
+        },
+        "req-signin-csrf",
+      );
+
+      // 3. Case A: Missing CSRF token -> Rejected 403
+      const missingCsrfRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${compA.id}/lifecycle/archive`,
+        headers: {
+          cookie: `matchday_session=${session.sessionToken}`,
+          origin: "https://app.matchday.example",
+          "content-type": "application/json",
+        },
+        payload: { revision: 1, action: "archive" },
+      });
+      expect(missingCsrfRes.statusCode).toBe(403);
+
+      // 4. Case B: Invalid / Forged CSRF token -> Rejected 403
+      const invalidCsrfRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${compA.id}/lifecycle/archive`,
+        headers: {
+          cookie: `matchday_session=${session.sessionToken}`,
+          "x-csrf-token": "completely-invalid-csrf-token-string",
+          origin: "https://app.matchday.example",
+          "content-type": "application/json",
+        },
+        payload: { revision: 1, action: "archive" },
+      });
+      expect(invalidCsrfRes.statusCode).toBe(403);
+
+      // 5. Case C: Valid CSRF token -> Accepted 200
+      const validCsrfRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${compA.id}/lifecycle/archive`,
+        headers: {
+          cookie: `matchday_session=${session.sessionToken}`,
+          "x-csrf-token": session.csrfToken,
+          origin: "https://app.matchday.example",
+          "content-type": "application/json",
+        },
+        payload: { revision: 1, action: "archive" },
+      });
+      expect([200, 201]).toContain(validCsrfRes.statusCode);
     });
   });
 

@@ -191,14 +191,56 @@ async function main() {
     }
   }
 
-  // 5. Seed competition publication record
+  // 5. Seed playing areas (Courts)
+  const court1Id = randomUUID();
+  const court2Id = randomUUID();
+  await client`
+    INSERT INTO playing_areas (id, competition_id, name, ordinal)
+    VALUES
+      (${court1Id}, ${competitionId}, 'Court 1', 1),
+      (${court2Id}, ${competitionId}, 'Court 2', 2);
+  `;
+
+  // 6. Seed schedule revision and scheduled matches
+  const scheduleRevId = randomUUID();
+  const firstFormatRevId = (
+    await client<{ id: string }[]>`SELECT id FROM format_revisions WHERE competition_id = ${competitionId} LIMIT 1`
+  )[0]!.id;
+  const inputHash = canonicalHash({ competitionId, matchCount: matchRecords.length });
+
+  await client`
+    INSERT INTO schedule_revisions (
+      id, competition_id, format_revision_id, revision, input_hash, status, created_by
+    ) VALUES (
+      ${scheduleRevId}, ${competitionId}, ${firstFormatRevId}, 1, ${inputHash}, 'published', ${userId}
+    );
+  `;
+
+  const baseStartTime = new Date("2026-09-01T09:00:00.000Z");
+  for (let i = 0; i < matchRecords.length; i++) {
+    const m = matchRecords[i]!;
+    const areaId = i % 2 === 0 ? court1Id : court2Id;
+    const matchStart = new Date(baseStartTime.getTime() + Math.floor(i / 2) * 60 * 60 * 1000);
+    const matchEnd = new Date(matchStart.getTime() + 45 * 60 * 1000);
+
+    await client`
+      INSERT INTO scheduled_matches (
+        schedule_revision_id, match_id, competition_id, playing_area_id, starts_at, ends_at
+      ) VALUES (
+        ${scheduleRevId}, ${m.matchId}, ${competitionId}, ${areaId}, ${matchStart.toISOString()}, ${matchEnd.toISOString()}
+      );
+    `;
+  }
+
+  // 7. Seed competition publication record linking the published schedule revision
   await client`
     INSERT INTO competition_publications (
-      id, competition_id, published_by, revision, projection_version, status, published_at
+      id, competition_id, published_by, revision, published_schedule_revision_id, projection_version, status, published_at
     ) VALUES (
-      ${randomUUID()}, ${competitionId}, ${userId}, 1, 1, 'published', now()
+      ${randomUUID()}, ${competitionId}, ${userId}, 1, ${scheduleRevId}, 1, 'published', now()
     ) ON CONFLICT (competition_id) DO UPDATE SET
       revision = competition_publications.revision + 1,
+      published_schedule_revision_id = ${scheduleRevId},
       published_at = now();
   `;
 

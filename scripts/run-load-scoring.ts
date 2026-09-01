@@ -135,90 +135,77 @@ async function runTier(
   tier: (typeof TIERS)[number],
 ) {
   const samples: WorkloadSample[] = [];
+  const writesPerWorker = Math.max(1, Math.floor(tier.operations / tier.concurrency));
 
-  const runWrite = async (index: number) => {
-    const session = target.sessions[index % target.sessions.length]!;
-    const isFinal = index > 0 && index % 100 === 0;
-    const currentSeq = session.sequence;
-    session.sequence += 1;
+  const workers = Array.from({ length: tier.concurrency }, async (_, workerIdx) => {
+    const session = target.sessions[workerIdx % target.sessions.length]!;
 
-    const start = performance.now();
+    for (let step = 0; step < writesPerWorker; step++) {
+      const currentSeq = session.sequence;
+      session.sequence += 1;
+      const start = performance.now();
 
-    try {
-      if (target.baseUrl) {
-        const url = isFinal ? `${target.baseUrl}/api/v1/scoring/finalise` : `${target.baseUrl}/api/v1/scoring/events`;
+      try {
+        if (target.baseUrl) {
+          const url = `${target.baseUrl}/api/v1/scoring/events`;
+          const body = {
+            client_event_id: randomUUID(),
+            expected_sequence: currentSeq,
+            type: "point",
+            team_slot: step % 2 === 0 ? "home" : "away",
+            occurred_at: new Date().toISOString(),
+          };
 
-        const body = isFinal
-          ? { client_event_id: randomUUID(), expected_sequence: currentSeq }
-          : {
-              client_event_id: randomUUID(),
-              expected_sequence: currentSeq,
-              type: "point",
-              team_slot: index % 2 === 0 ? "home" : "away",
-              occurred_at: new Date().toISOString(),
-            };
-
-        const headers: Record<string, string> = {
-          "content-type": "application/json",
-          "x-scoring-session-id": session.sessionId,
-          "x-scoring-session-token": session.sessionToken,
-          "user-agent": "qa-011-load-benchmark/1.0",
-        };
-        if (session.generation !== null) {
-          headers["x-writer-generation"] = String(session.generation);
-        }
-
-        const res = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        });
-
-        const duration = performance.now() - start;
-        if (res.status >= 200 && res.status < 400) {
-          samples.push({ durationMs: duration, outcome: "success" });
-        } else {
-          samples.push({ durationMs: duration, outcome: "unexpected_failure" });
-        }
-      } else if (target.app) {
-        const response = await target.app.inject({
-          method: "POST",
-          url: isFinal ? "/api/v1/scoring/finalise" : "/api/v1/scoring/events",
-          headers: {
+          const headers: Record<string, string> = {
             "content-type": "application/json",
             "x-scoring-session-id": session.sessionId,
             "x-scoring-session-token": session.sessionToken,
-            ...(session.generation ? { "x-writer-generation": String(session.generation) } : {}),
-          },
-          payload: isFinal
-            ? { client_event_id: randomUUID(), expected_sequence: currentSeq }
-            : {
-                client_event_id: randomUUID(),
-                expected_sequence: currentSeq,
-                type: "point",
-                team_slot: index % 2 === 0 ? "home" : "away",
-                occurred_at: new Date().toISOString(),
-              },
-        });
+            "user-agent": "qa-011-load-benchmark/1.0",
+          };
+          if (session.generation !== null) {
+            headers["x-writer-generation"] = String(session.generation);
+          }
 
-        const duration = performance.now() - start;
-        if (response.statusCode >= 200 && response.statusCode < 400) {
-          samples.push({ durationMs: duration, outcome: "success" });
-        } else {
-          samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+          const res = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+
+          const duration = performance.now() - start;
+          if (res.status >= 200 && res.status < 400) {
+            samples.push({ durationMs: duration, outcome: "success" });
+          } else {
+            samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+          }
+        } else if (target.app) {
+          const response = await target.app.inject({
+            method: "POST",
+            url: "/api/v1/scoring/events",
+            headers: {
+              "content-type": "application/json",
+              "x-scoring-session-id": session.sessionId,
+              "x-scoring-session-token": session.sessionToken,
+              ...(session.generation ? { "x-writer-generation": String(session.generation) } : {}),
+            },
+            payload: {
+              client_event_id: randomUUID(),
+              expected_sequence: currentSeq,
+              type: "point",
+              team_slot: step % 2 === 0 ? "home" : "away",
+              occurred_at: new Date().toISOString(),
+            },
+          });
+
+          const duration = performance.now() - start;
+          if (response.statusCode >= 200 && response.statusCode < 400) {
+            samples.push({ durationMs: duration, outcome: "success" });
+          } else {
+            samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+          }
         }
-      }
-    } catch {
-      samples.push({ durationMs: performance.now() - start, outcome: "unexpected_failure" });
-    }
-  };
-
-  const pool = Array.from({ length: tier.operations }, (_, i) => i);
-  const workers = Array.from({ length: tier.concurrency }, async () => {
-    while (pool.length > 0) {
-      const op = pool.shift();
-      if (op !== undefined) {
-        await runWrite(op);
+      } catch {
+        samples.push({ durationMs: performance.now() - start, outcome: "unexpected_failure" });
       }
     }
   });
@@ -384,6 +371,27 @@ async function main() {
     maxP95Ms: TARGET_P95_MS,
     maxUnexpectedErrorRate: 0.001,
   });
+
+  // Finalise matches cleanly after the load workload completes
+  if (baseUrl) {
+    for (const session of activeSessions) {
+      try {
+        await fetch(`${baseUrl}/api/v1/scoring/finalise`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-scoring-session-id": session.sessionId,
+            "x-scoring-session-token": session.sessionToken,
+            ...(session.generation !== null ? { "x-writer-generation": String(session.generation) } : {}),
+          },
+          body: JSON.stringify({
+            client_event_id: randomUUID(),
+            expected_sequence: session.sequence,
+          }),
+        });
+      } catch {}
+    }
+  }
 
   const artifactDir = path.join(root, "artifacts");
   await mkdir(artifactDir, { recursive: true });
