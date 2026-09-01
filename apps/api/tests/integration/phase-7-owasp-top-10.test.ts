@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -37,22 +37,19 @@ let tenantA_userId = "";
 let tenantB_orgId = "";
 let tenantB_userId = "";
 
+const WEBHOOK_SECRET = "whsec_test_secret_for_owasp_qualification_123456";
+
 describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Security Suite", () => {
   beforeAll(async () => {
     await dropTestSchema(databaseUrl, schema);
     await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+
     client = postgres(databaseUrl, {
-      max: 8,
-      onnotice: () => undefined,
+      max: 10,
       connection: { search_path: schema },
+      onnotice: () => undefined,
     });
 
-    tenantA_orgId = randomUUID();
-    tenantA_userId = randomUUID();
-    tenantB_orgId = randomUUID();
-    tenantB_userId = randomUUID();
-
-    // Insert active sport packs
     for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
       const hash = phase3DomainAdapter.hash(pack);
       await client`
@@ -66,41 +63,38 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       `;
     }
 
+    tenantA_orgId = randomUUID();
+    tenantA_userId = randomUUID();
+    tenantB_orgId = randomUUID();
+    tenantB_userId = randomUUID();
+
     await client`
       INSERT INTO accounts (id, primary_email, display_name, email_verified_at)
       VALUES
-        (${tenantA_userId}, 'alice@org-a.com', 'Alice A', now()),
-        (${tenantB_userId}, 'bob@org-b.com', 'Bob B', now());
+        (${tenantA_userId}, 'alice@tenant-a.com', 'Alice Tenant A', now()),
+        (${tenantB_userId}, 'bob@tenant-b.com', 'Bob Tenant B', now());
     `;
 
-    // Satisfy PostgreSQL deferred owner check by creating org and owner membership inside transaction
     await client.begin(async (tx) => {
       await tx`
         INSERT INTO organisations (id, name, slug)
-        VALUES (${tenantA_orgId}, 'Org Alpha', 'org-alpha');
+        VALUES
+          (${tenantA_orgId}, 'Tenant A Org', ${`tenant-a-${randomUUID().slice(0, 8)}`}),
+          (${tenantB_orgId}, 'Tenant B Org', ${`tenant-b-${randomUUID().slice(0, 8)}`});
       `;
       await tx`
         INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
-        VALUES (${tenantA_orgId}, ${tenantA_userId}, 'owner', 'active');
-      `;
-    });
-
-    await client.begin(async (tx) => {
-      await tx`
-        INSERT INTO organisations (id, name, slug)
-        VALUES (${tenantB_orgId}, 'Org Beta', 'org-beta');
-      `;
-      await tx`
-        INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
-        VALUES (${tenantB_orgId}, ${tenantB_userId}, 'owner', 'active');
+        VALUES
+          (${tenantA_orgId}, ${tenantA_userId}, 'owner', 'active'),
+          (${tenantB_orgId}, ${tenantB_userId}, 'owner', 'active');
       `;
     });
 
     const identityProvider = new DeterministicIdentityProvider({
       issuer: "https://identity.example.test",
       subject: "test-subject",
-      email: "alice@org-a.com",
-      displayName: "Alice A",
+      email: "alice@tenant-a.com",
+      displayName: "Alice Tenant A",
       providerSessionId: "session-123",
       emailVerified: true,
     });
@@ -122,8 +116,12 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
     );
     phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
 
+    const config = testConfig({
+      STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    });
+
     app = await buildApp({
-      config: testConfig(),
+      config,
       probes: healthyProbes,
       identityRuntime,
       phase2Runtime,
@@ -188,6 +186,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
 
       expect([401, 403, 404]).toContain(unauthenticatedResponse.statusCode);
 
+      // Direct runtime assertion for cross-tenant rejection
       await expect(
         phase3Runtime.mutateCompetition(
           { accountId: tenantA_userId },
@@ -204,8 +203,8 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
   });
 
   describe("A02: Cryptographic Failures & Webhook Tampering", () => {
-    it("rejects forged, unsigned, or replayed billing webhook HTTP requests with 401", async () => {
-      const forgedPayload = {
+    it("rejects forged, missing, or replayed billing webhook HTTP requests with 401", async () => {
+      const payload = {
         id: `evt_${randomUUID()}`,
         type: "checkout.session.completed",
         data: {
@@ -216,37 +215,44 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
         },
       };
 
-      const responseBadSig = await app.inject({
+      // 1. Missing signature
+      const resMissing = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing/webhook",
+        headers: { "content-type": "application/json" },
+        payload,
+      });
+      expect(resMissing.statusCode).toBe(401);
+
+      // 2. Bad forged signature
+      const resBadSig = await app.inject({
         method: "POST",
         url: "/api/v1/billing/webhook",
         headers: {
           "stripe-signature": "t=12345,v1=bad_forged_hmac_signature",
           "content-type": "application/json",
         },
-        payload: forgedPayload,
+        payload,
       });
+      expect(resBadSig.statusCode).toBe(401);
 
-      expect(responseBadSig.statusCode).toBe(401);
-
-      // Replay attack with expired timestamp (t=10000)
-      const secret = "whsec_test_secret";
-      const expiredTimestamp = 10000;
-      const replayPayloadString = JSON.stringify(forgedPayload);
-      const replayHmac = createHmac("sha256", secret)
-        .update(`${expiredTimestamp}.${replayPayloadString}`)
+      // 3. Stale timestamp replay attack signed with the real test secret
+      const expiredTimestamp = 10000; // > 5 min old
+      const payloadString = JSON.stringify(payload);
+      const replayHmac = createHmac("sha256", WEBHOOK_SECRET)
+        .update(`${expiredTimestamp}.${payloadString}`)
         .digest("hex");
 
-      const responseReplay = await app.inject({
+      const resReplay = await app.inject({
         method: "POST",
         url: "/api/v1/billing/webhook",
         headers: {
           "stripe-signature": `t=${expiredTimestamp},v1=${replayHmac}`,
           "content-type": "application/json",
         },
-        payload: forgedPayload,
+        payload,
       });
-
-      expect(responseReplay.statusCode).toBe(401);
+      expect(resReplay.statusCode).toBe(401);
     });
   });
 
@@ -276,9 +282,9 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
 
       const sqliRouteResponse = await app.inject({
         method: "GET",
-        url: `/api/v1/public/competitions/'%20OR%201=1--`,
+        url: `/api/v1/public/search?q=${encodeURIComponent(sqliPayload)}`,
       });
-      expect([400, 404]).toContain(sqliRouteResponse.statusCode);
+      expect([200, 400, 404]).toContain(sqliRouteResponse.statusCode);
 
       const checkTable = await client`SELECT count(*)::int as count FROM competitions WHERE id = ${comp.id};`;
       expect(checkTable[0]!.count).toBe(1);
@@ -298,13 +304,13 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
   });
 
   describe("A07: Identification and Authentication Failures (Rate Limiting & Revocation)", () => {
-    it("rejects access attempts when an access pass is revoked via HTTP scoring route", async () => {
+    it("accepts valid access pass and rejects revoked access pass via HTTP scoring exchange", async () => {
       const comp = await phase3Runtime.createCompetition(
         { accountId: tenantA_userId },
         {
           organisationId: tenantA_orgId,
-          name: "Revocation Test Tournament",
-          slug: `revocation-test-${randomUUID()}`,
+          name: "Scoring Security Tournament",
+          slug: `scoring-sec-${randomUUID()}`,
           sportCode: "volleyball",
           timezone: "UTC",
           startsOn: "2026-09-01",
@@ -364,30 +370,54 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
         VALUES (${matchId}, ${comp.id}, ${divisionId}, ${formatRevId}, 'M1', 'final', 1, 1, 'ready');
       `;
 
-      const revokedPassId = randomUUID();
+      // 1. Positive Control: Create valid unrevoked pass and exchange it
+      const validPassId = randomUUID();
+      const validSecret = randomBytes(24).toString("hex");
+      const validSecretHash = createHash("sha256").update(validSecret).digest();
+
       await client`
         INSERT INTO scoring_access_passes (
-          id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope, revoked_at, revocation_reason
+          id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope
         ) VALUES (
-          ${revokedPassId}, ${comp.id}, ${matchId}, ${Buffer.alloc(32, 1)}, now() + interval '1 hour',
-          ${tenantA_userId}, 'scorekeeper', '["score:read","score:write","score:reverse","score:finalise"]'::jsonb, now(), 'Security drill revocation'
+          ${validPassId}, ${comp.id}, ${matchId}, ${validSecretHash}, now() + interval '1 hour',
+          ${tenantA_userId}, 'scorekeeper', '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
         );
       `;
 
-      const scoringResponse = await app.inject({
+      const validExchange = await app.inject({
         method: "POST",
-        url: `/api/v1/scoring/access/exchange`,
-        headers: {
-          "content-type": "application/json",
-          origin: "https://app.matchday.test",
-        },
+        url: "/api/v1/scoring/access/exchange",
+        headers: { "content-type": "application/json", origin: "https://app.matchday.test" },
         payload: {
-          access_token: `revoked-pass-token-${revokedPassId}`,
-          device_id: randomUUID(),
+          token: validSecret,
+          expected_match_id: matchId,
+          device_id: `valid-device-${randomUUID()}`,
         },
       });
 
-      expect([400, 401, 403, 404]).toContain(scoringResponse.statusCode);
+      expect(validExchange.statusCode).toBe(200);
+      const sessionData = validExchange.json() as { session_id?: string };
+      expect(sessionData.session_id).toBeDefined();
+
+      // 2. Revocation Test: Revoke the pass and assert exchange fails
+      await client`
+        UPDATE scoring_access_passes
+        SET revoked_at = now(), revocation_reason = 'Security Drill Revocation'
+        WHERE id = ${validPassId};
+      `;
+
+      const revokedExchange = await app.inject({
+        method: "POST",
+        url: "/api/v1/scoring/access/exchange",
+        headers: { "content-type": "application/json", origin: "https://app.matchday.test" },
+        payload: {
+          token: validSecret,
+          expected_match_id: matchId,
+          device_id: `valid-device-${randomUUID()}`,
+        },
+      });
+
+      expect([401, 403, 404]).toContain(revokedExchange.statusCode);
     });
   });
 

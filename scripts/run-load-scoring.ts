@@ -5,14 +5,16 @@
  *
  * Modes:
  *  - component: Fast in-process mock (developer diagnostic only, NOT Gate D evidence)
- *  - local-integration: In-process listening Fastify app on 127.0.0.1:0 backed by local Postgres+Redis
+ *  - socket-component: In-process listening Fastify app on 127.0.0.1:0 backed by local mock state
  *  - staging: Mandatory Gate D mode. Runs real network HTTP sockets against TARGET_URL
- *             and requires CANDIDATE_SHA and artifacts/staging-pilot-seed.json.
+ *             using authentic scoring exchange (/api/v1/scoring/access/exchange),
+ *             monotonic expected_sequence writes (/api/v1/scoring/events),
+ *             and verifies deployed Git SHA against CANDIDATE_SHA.
  *
  * SLA Target: p95 < 500ms, error rate < 0.1%
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -26,17 +28,17 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-type Mode = "component" | "local-integration" | "staging";
+type Mode = "component" | "socket-component" | "staging";
 
 function parseMode(): Mode {
   if (process.argv.includes("--mode=staging") || process.env.LOAD_MODE === "staging") return "staging";
   if (
+    process.argv.includes("--mode=socket-component") ||
     process.argv.includes("--mode=local-integration") ||
     process.argv.includes("--mode=integration") ||
-    process.env.LOAD_MODE === "local-integration" ||
-    process.env.LOAD_MODE === "integration"
+    process.env.LOAD_MODE === "socket-component"
   ) {
-    return "local-integration";
+    return "socket-component";
   }
   return "component";
 }
@@ -56,44 +58,68 @@ const TIERS = [
 
 const TARGET_P95_MS = Number(process.env.TARGET_P95_MS ?? 500);
 
-async function buildScoringServer() {
+type ActiveScoringSession = {
+  matchId: string;
+  sessionId: string;
+  sessionToken: string;
+  generation: number | null;
+  sequence: number;
+};
+
+async function buildMockScoringServer() {
   const app = Fastify({ logger: false });
 
+  const sessions = new Map<string, { matchId: string; generation: number }>();
   const scoreStates = new Map<string, { home: number; away: number; sequence: number }>();
 
-  app.post("/api/v1/scoring/matches/:id/events", async (req, reply) => {
-    const authHeader = req.headers["authorization"] ?? "";
-    if (!authHeader.startsWith("Bearer ") && !req.headers["x-scoring-session-token"]) {
-      return reply.status(401).send({ error: { code: "UNAUTHORIZED", message: "Missing scoring token" } });
-    }
+  app.get("/api/v1/meta/build", async () => ({
+    git_sha: process.env.CANDIDATE_SHA || "0123456789abcdef0123456789abcdef01234567",
+    build_timestamp: new Date().toISOString(),
+    app_version: "0.1.0",
+    environment: "socket-component",
+  }));
 
-    const { id } = req.params as { id: string };
-    const body = req.body as { type: string; team_slot: "home" | "away"; delta?: number; client_event_id: string };
+  app.post("/api/v1/scoring/access/exchange", async (req, reply) => {
+    const body = req.body as { token?: string; expected_match_id?: string; device_id: string };
+    const sessionId = `mock-session-${randomUUID()}`;
+    const sessionToken = `mock-token-${randomUUID()}`;
+    const matchId = body.expected_match_id ?? "match-court-1";
 
-    const state = scoreStates.get(id) ?? { home: 0, away: 0, sequence: 0 };
-    const delta = body.delta ?? 1;
-    if (body.team_slot === "home") state.home += delta;
-    else state.away += delta;
-    state.sequence += 1;
-    scoreStates.set(id, state);
-
+    sessions.set(sessionToken, { matchId, generation: 1 });
     return reply.status(200).send({
-      success: true,
-      match_id: id,
-      sequence: state.sequence,
-      score: { home: state.home, away: state.away },
-      recorded_at: new Date().toISOString(),
+      session_id: sessionId,
+      session_token: sessionToken,
+      writer_generation: 1,
+      match_id: matchId,
     });
   });
 
-  app.post("/api/v1/scoring/matches/:id/finalize", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const state = scoreStates.get(id) ?? { home: 3, away: 1, sequence: 10 };
+  app.post("/api/v1/scoring/events", async (req, reply) => {
+    const sessionToken = req.headers["x-scoring-session-token"] as string;
+    const sessionId = req.headers["x-scoring-session-id"] as string;
+
+    if (!sessionToken || !sessionId) {
+      return reply.status(401).send({ error: { code: "UNAUTHORIZED", message: "Missing session headers" } });
+    }
+
+    const session = sessions.get(sessionToken);
+    const matchId = session?.matchId ?? "match-court-1";
+    const state = scoreStates.get(matchId) ?? { home: 0, away: 0, sequence: 0 };
+
+    state.home += 1;
+    state.sequence += 1;
+    scoreStates.set(matchId, state);
+
     return reply.status(200).send({
       success: true,
-      match_id: id,
+      sequence: state.sequence,
+    });
+  });
+
+  app.post("/api/v1/scoring/finalise", async (req, reply) => {
+    return reply.status(200).send({
       status: "final",
-      final_score: { home: state.home, away: state.away },
+      finalised_at: new Date().toISOString(),
     });
   });
 
@@ -102,48 +128,49 @@ async function buildScoringServer() {
 
 async function runTier(
   target: {
-    app?: Awaited<ReturnType<typeof buildScoringServer>>;
+    app?: Awaited<ReturnType<typeof buildMockScoringServer>>;
     baseUrl?: string;
-    matches?: { matchId: string; scoringToken: string }[];
+    sessions: ActiveScoringSession[];
   },
   tier: (typeof TIERS)[number],
 ) {
-  const matches =
-    target.matches && target.matches.length > 0
-      ? target.matches
-      : Array.from({ length: 8 }, (_, i) => ({
-          matchId: `match-court-${i + 1}`,
-          scoringToken: "Bearer valid-scoring-lease-token-12345",
-        }));
-
   const samples: WorkloadSample[] = [];
 
   const runWrite = async (index: number) => {
-    const match = matches[index % matches.length]!;
-    const isFinal = index > 0 && index % 50 === 0;
+    const session = target.sessions[index % target.sessions.length]!;
+    const isFinal = index > 0 && index % 100 === 0;
+    const currentSeq = session.sequence;
+    session.sequence += 1;
+
     const start = performance.now();
 
     try {
       if (target.baseUrl) {
-        const path = isFinal
-          ? `/api/v1/scoring/matches/${match.matchId}/finalize`
-          : `/api/v1/scoring/matches/${match.matchId}/events`;
+        const url = isFinal ? `${target.baseUrl}/api/v1/scoring/finalise` : `${target.baseUrl}/api/v1/scoring/events`;
+
         const body = isFinal
-          ? { client_event_id: `fin-${index}` }
+          ? { client_event_id: randomUUID(), expected_sequence: currentSeq }
           : {
+              client_event_id: randomUUID(),
+              expected_sequence: currentSeq,
               type: "point",
               team_slot: index % 2 === 0 ? "home" : "away",
-              delta: 1,
-              client_event_id: `evt-${index}`,
+              occurred_at: new Date().toISOString(),
             };
 
-        const res = await fetch(`${target.baseUrl}${path}`, {
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+          "x-scoring-session-id": session.sessionId,
+          "x-scoring-session-token": session.sessionToken,
+          "user-agent": "qa-011-load-benchmark/1.0",
+        };
+        if (session.generation !== null) {
+          headers["x-writer-generation"] = String(session.generation);
+        }
+
+        const res = await fetch(url, {
           method: "POST",
-          headers: {
-            authorization: match.scoringToken,
-            "content-type": "application/json",
-            "user-agent": "qa-011-load-benchmark/1.0",
-          },
+          headers,
           body: JSON.stringify(body),
         });
 
@@ -154,30 +181,25 @@ async function runTier(
           samples.push({ durationMs: duration, outcome: "unexpected_failure" });
         }
       } else if (target.app) {
-        const response = isFinal
-          ? await target.app.inject({
-              method: "POST",
-              url: `/api/v1/scoring/matches/${match.matchId}/finalize`,
-              headers: {
-                authorization: match.scoringToken,
-                "content-type": "application/json",
-              },
-              payload: { client_event_id: `fin-${index}` },
-            })
-          : await target.app.inject({
-              method: "POST",
-              url: `/api/v1/scoring/matches/${match.matchId}/events`,
-              headers: {
-                authorization: match.scoringToken,
-                "content-type": "application/json",
-              },
-              payload: {
+        const response = await target.app.inject({
+          method: "POST",
+          url: isFinal ? "/api/v1/scoring/finalise" : "/api/v1/scoring/events",
+          headers: {
+            "content-type": "application/json",
+            "x-scoring-session-id": session.sessionId,
+            "x-scoring-session-token": session.sessionToken,
+            ...(session.generation ? { "x-writer-generation": String(session.generation) } : {}),
+          },
+          payload: isFinal
+            ? { client_event_id: randomUUID(), expected_sequence: currentSeq }
+            : {
+                client_event_id: randomUUID(),
+                expected_sequence: currentSeq,
                 type: "point",
                 team_slot: index % 2 === 0 ? "home" : "away",
-                delta: 1,
-                client_event_id: `evt-${index}`,
+                occurred_at: new Date().toISOString(),
               },
-            });
+        });
 
         const duration = performance.now() - start;
         if (response.statusCode >= 200 && response.statusCode < 400) {
@@ -211,11 +233,12 @@ async function main() {
   console.log(`[QA-011] Starting Fastify Scoring Writes Load & Concurrency Benchmark (Mode: ${mode.toUpperCase()})`);
   console.log(`  Target p95 budget: < ${TARGET_P95_MS} ms\n`);
 
-  let app: Awaited<ReturnType<typeof buildScoringServer>> | undefined;
+  let app: Awaited<ReturnType<typeof buildMockScoringServer>> | undefined;
   let baseUrl = targetUrlArg;
   let competitionId: string | undefined;
-  let seededMatches: { matchId: string; scoringToken: string }[] | undefined;
   let candidateSha = candidateShaArg;
+  let deployedSha: string | undefined;
+  const activeSessions: ActiveScoringSession[] = [];
 
   if (mode === "staging") {
     if (!baseUrl) {
@@ -230,15 +253,31 @@ async function main() {
       );
     }
 
+    // 1. Verify Deployment Provenance
+    try {
+      const metaRes = await fetch(`${baseUrl}/api/v1/meta/build`);
+      if (!metaRes.ok) throw new Error(`Status ${metaRes.status}`);
+      const meta = (await metaRes.json()) as { git_sha?: string };
+      deployedSha = meta.git_sha;
+    } catch (err) {
+      throw new Error(`Failed to retrieve deployment build metadata from ${baseUrl}/api/v1/meta/build: ${err}`);
+    }
+
+    if (!deployedSha || deployedSha.toLowerCase() !== candidateSha.toLowerCase()) {
+      throw new Error(
+        `Deployment SHA mismatch: Server is serving SHA "${deployedSha}", but test expected CANDIDATE_SHA "${candidateSha}". ` +
+          "Please deploy the candidate commit to staging before running Gate D qualification.",
+      );
+    }
+
+    // 2. Read Seed Fixture
     const seedFile = path.join(root, "artifacts/staging-pilot-seed.json");
+    let seedMatches: { matchId: string; rawToken: string }[] = [];
     try {
       const rawSeed = await readFile(seedFile, "utf-8");
       const seed = JSON.parse(rawSeed);
       competitionId = seed.competition_id;
-      seededMatches = seed.matches?.map((m: { matchId: string; scoringToken: string }) => ({
-        matchId: m.matchId,
-        scoringToken: m.scoringToken,
-      }));
+      seedMatches = seed.matches || [];
     } catch {
       throw new Error(
         `QA-011 staging mode requires a valid seed fixture at ${seedFile}. ` +
@@ -246,22 +285,69 @@ async function main() {
       );
     }
 
-    console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}`);
-    console.log(`  ✓ Target Competition ID: ${competitionId}`);
-    console.log(`  ✓ Active Scoring Matches: ${seededMatches?.length}`);
-    console.log(`  ✓ Bound Candidate SHA:    ${candidateSha}\n`);
-  } else if (mode === "local-integration") {
-    if (!baseUrl) {
-      app = await buildScoringServer();
-      const address = await app.listen({ port: 0, host: "127.0.0.1" });
-      baseUrl = address;
-      console.log(`  ✓ Booted listening Matchday HTTP local-integration server at: ${baseUrl}\n`);
-    } else {
-      console.log(`  ✓ Targeting local Matchday API at: ${baseUrl}\n`);
+    console.log(`  ✓ Verified remote deployment Git SHA: ${deployedSha}`);
+    console.log(`  ✓ Target Competition ID:             ${competitionId}`);
+    console.log(`  ✓ Exchanging access tokens for ${seedMatches.length} matches...`);
+
+    // 3. Exchange real access passes for active sessions
+    for (const m of seedMatches) {
+      const deviceId = `load-device-${randomUUID()}`;
+      const exchangeRes = await fetch(`${baseUrl}/api/v1/scoring/access/exchange`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token: m.rawToken,
+          expected_match_id: m.matchId,
+          device_id: deviceId,
+        }),
+      });
+
+      if (!exchangeRes.ok) {
+        throw new Error(`Failed to exchange scoring access pass for match ${m.matchId} (HTTP ${exchangeRes.status})`);
+      }
+
+      const exchangeData = (await exchangeRes.json()) as {
+        session_id: string;
+        session_token: string;
+        writer_generation?: number;
+      };
+
+      activeSessions.push({
+        matchId: m.matchId,
+        sessionId: exchangeData.session_id,
+        sessionToken: exchangeData.session_token,
+        generation: exchangeData.writer_generation ?? null,
+        sequence: 0,
+      });
+    }
+
+    console.log(`  ✓ Successfully established ${activeSessions.length} authentic scoring sessions\n`);
+  } else if (mode === "socket-component") {
+    app = await buildMockScoringServer();
+    const address = await app.listen({ port: 0, host: "127.0.0.1" });
+    baseUrl = address;
+    console.log(`  ✓ Booted listening mock socket-component server at: ${baseUrl}\n`);
+    for (let i = 1; i <= 8; i++) {
+      activeSessions.push({
+        matchId: `match-${i}`,
+        sessionId: `mock-sess-${i}`,
+        sessionToken: `mock-tok-${i}`,
+        generation: 1,
+        sequence: 0,
+      });
     }
   } else {
-    app = await buildScoringServer();
+    app = await buildMockScoringServer();
     console.log("  ℹ Running in fast in-process component diagnostic mode (NOT Gate D evidence)\n");
+    for (let i = 1; i <= 8; i++) {
+      activeSessions.push({
+        matchId: `match-${i}`,
+        sessionId: `mock-sess-${i}`,
+        sessionToken: `mock-tok-${i}`,
+        generation: 1,
+        sequence: 0,
+      });
+    }
   }
 
   const results = [];
@@ -270,7 +356,7 @@ async function main() {
     process.stdout.write(
       `Executing Tier: ${tier.name} (${tier.concurrency} concurrent devices, ${tier.operations} writes)...\n`,
     );
-    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl, matches: seededMatches }, tier);
+    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl, sessions: activeSessions }, tier);
     results.push(result);
     console.log(
       `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} writes | ` +
@@ -306,17 +392,18 @@ async function main() {
   const evidenceClass =
     mode === "staging"
       ? "gate_d_staging"
-      : mode === "local-integration"
-        ? "local_integration_test"
+      : mode === "socket-component"
+        ? "socket_component_diagnostic_only"
         : "developer_component_diagnostic_only";
 
-  const verdict = mode === "component" ? "COMPONENT_PASS_NOT_GATE_D_EVIDENCE" : "PASS";
+  const verdict = mode === "component" || mode === "socket-component" ? "COMPONENT_PASS_NOT_GATE_D_EVIDENCE" : "PASS";
 
   const receiptData = {
     qa_item: "QA-011",
     mode,
     evidence_class: evidenceClass,
     candidate_sha: candidateSha ?? null,
+    deployed_sha: deployedSha ?? null,
     competition_id: competitionId ?? null,
     target_url: baseUrl ?? null,
     title: "Scoring Mutation Writes Workload Summary",

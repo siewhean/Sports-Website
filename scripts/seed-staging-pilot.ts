@@ -7,7 +7,7 @@
  * Generates: artifacts/staging-pilot-seed.json
  */
 
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,7 +101,7 @@ async function main() {
     { id: randomUUID(), name: "Women Open", teamLimit: 8 },
   ];
 
-  const matchRecords: { matchId: string; divisionId: string; code: string; scoringToken: string }[] = [];
+  const matchRecords: { matchId: string; divisionId: string; code: string; rawToken: string }[] = [];
 
   for (const div of divisions) {
     await client`
@@ -170,8 +170,8 @@ async function main() {
       `;
 
       const passId = randomUUID();
-      const rawSecret = `scoring-pass-secret-${randomUUID()}`;
-      const secretHash = createHash("sha256").update(rawSecret).digest("hex");
+      const rawSecret = randomBytes(24).toString("hex"); // 48-char raw secret
+      const secretHash = createHash("sha256").update(rawSecret).digest();
 
       await client`
         INSERT INTO scoring_access_passes (
@@ -186,7 +186,7 @@ async function main() {
         matchId: m.id,
         divisionId: div.id,
         code: m.code,
-        scoringToken: `Bearer valid-scoring-token-${passId}`,
+        rawToken: rawSecret,
       });
     }
   }

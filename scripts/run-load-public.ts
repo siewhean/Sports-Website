@@ -5,9 +5,9 @@
  *
  * Modes:
  *  - component: Fast in-process mock (developer diagnostic only, NOT Gate D evidence)
- *  - local-integration: In-process listening Fastify app on 127.0.0.1:0 backed by local Postgres+Redis
+ *  - socket-component: In-process listening Fastify app on 127.0.0.1:0 backed by local mock state
  *  - staging: Mandatory Gate D mode. Runs real network HTTP sockets against TARGET_URL
- *             and requires CANDIDATE_SHA and artifacts/staging-pilot-seed.json.
+ *             and verifies deployed Git SHA against CANDIDATE_SHA.
  *
  * SLA Target: p95 < 2,500ms, error rate < 0.1%
  */
@@ -27,17 +27,17 @@ import { gateCC4PublicHeaders } from "../apps/api/src/gate-c-public-http.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-type Mode = "component" | "local-integration" | "staging";
+type Mode = "component" | "socket-component" | "staging";
 
 function parseMode(): Mode {
   if (process.argv.includes("--mode=staging") || process.env.LOAD_MODE === "staging") return "staging";
   if (
+    process.argv.includes("--mode=socket-component") ||
     process.argv.includes("--mode=local-integration") ||
     process.argv.includes("--mode=integration") ||
-    process.env.LOAD_MODE === "local-integration" ||
-    process.env.LOAD_MODE === "integration"
+    process.env.LOAD_MODE === "socket-component"
   ) {
-    return "local-integration";
+    return "socket-component";
   }
   return "component";
 }
@@ -59,6 +59,13 @@ const TARGET_P95_MS = Number(process.env.TARGET_P95_MS ?? 2500);
 
 async function buildPublicServer() {
   const app = Fastify({ logger: false });
+
+  app.get("/api/v1/meta/build", async () => ({
+    git_sha: process.env.CANDIDATE_SHA || "0123456789abcdef0123456789abcdef01234567",
+    build_timestamp: new Date().toISOString(),
+    app_version: "0.1.0",
+    environment: "socket-component",
+  }));
 
   const freshnessMock = {
     division_id: "div-vball-01",
@@ -211,6 +218,7 @@ async function main() {
   let baseUrl = targetUrlArg;
   let competitionId: string | undefined;
   let candidateSha = candidateShaArg;
+  let deployedSha: string | undefined;
 
   if (mode === "staging") {
     if (!baseUrl) {
@@ -225,6 +233,24 @@ async function main() {
       );
     }
 
+    // 1. Verify Deployment Provenance
+    try {
+      const metaRes = await fetch(`${baseUrl}/api/v1/meta/build`);
+      if (!metaRes.ok) throw new Error(`Status ${metaRes.status}`);
+      const meta = (await metaRes.json()) as { git_sha?: string };
+      deployedSha = meta.git_sha;
+    } catch (err) {
+      throw new Error(`Failed to retrieve deployment build metadata from ${baseUrl}/api/v1/meta/build: ${err}`);
+    }
+
+    if (!deployedSha || deployedSha.toLowerCase() !== candidateSha.toLowerCase()) {
+      throw new Error(
+        `Deployment SHA mismatch: Server is serving SHA "${deployedSha}", but test expected CANDIDATE_SHA "${candidateSha}". ` +
+          "Please deploy the candidate commit to staging before running Gate D qualification.",
+      );
+    }
+
+    // 2. Read Seed Fixture
     const seedFile = path.join(root, "artifacts/staging-pilot-seed.json");
     try {
       const rawSeed = await readFile(seedFile, "utf-8");
@@ -237,18 +263,13 @@ async function main() {
       );
     }
 
-    console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}`);
-    console.log(`  ✓ Target Competition ID: ${competitionId}`);
-    console.log(`  ✓ Bound Candidate SHA:    ${candidateSha}\n`);
-  } else if (mode === "local-integration") {
-    if (!baseUrl) {
-      app = await buildPublicServer();
-      const address = await app.listen({ port: 0, host: "127.0.0.1" });
-      baseUrl = address;
-      console.log(`  ✓ Booted listening Matchday HTTP local-integration server at: ${baseUrl}\n`);
-    } else {
-      console.log(`  ✓ Targeting local Matchday API at: ${baseUrl}\n`);
-    }
+    console.log(`  ✓ Verified remote deployment Git SHA: ${deployedSha}`);
+    console.log(`  ✓ Target Competition ID:             ${competitionId}\n`);
+  } else if (mode === "socket-component") {
+    app = await buildPublicServer();
+    const address = await app.listen({ port: 0, host: "127.0.0.1" });
+    baseUrl = address;
+    console.log(`  ✓ Booted listening mock socket-component server at: ${baseUrl}\n`);
   } else {
     app = await buildPublicServer();
     console.log("  ℹ Running in fast in-process component diagnostic mode (NOT Gate D evidence)\n");
@@ -296,17 +317,18 @@ async function main() {
   const evidenceClass =
     mode === "staging"
       ? "gate_d_staging"
-      : mode === "local-integration"
-        ? "local_integration_test"
+      : mode === "socket-component"
+        ? "socket_component_diagnostic_only"
         : "developer_component_diagnostic_only";
 
-  const verdict = mode === "component" ? "COMPONENT_PASS_NOT_GATE_D_EVIDENCE" : "PASS";
+  const verdict = mode === "component" || mode === "socket-component" ? "COMPONENT_PASS_NOT_GATE_D_EVIDENCE" : "PASS";
 
   const receiptData = {
     qa_item: "QA-010",
     mode,
     evidence_class: evidenceClass,
     candidate_sha: candidateSha ?? null,
+    deployed_sha: deployedSha ?? null,
     competition_id: competitionId ?? null,
     target_url: baseUrl ?? null,
     title: "Public Pages Read Workload Summary",
