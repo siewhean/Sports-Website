@@ -1,11 +1,12 @@
 /**
  * pilot-telemetry.ts
  *
- * Structured pilot event telemetry collector and verification ledger (QA-022 / QA-023).
+ * Structured pilot event telemetry collector and verification ledger (QA-022 / QA-024).
  * Captures live physical and staging pilot observations bound to candidate SHA and competition ID:
- * - score-write latency distributions
- * - public propagation latency
- * - API errors and status codes
+ * - score-write latency distributions (SLA: p95 <= 500ms)
+ * - public page read latency distributions (SLA: p95 <= 2500ms)
+ * - result convergence & public projection propagation latency (SLA: p95 <= 2000ms)
+ * - API requests and error rates (SLA: errorRate <= 0.1%)
  * - Redis queue and lease events
  * - Reconnect and conflict resolution events
  * - Match result corrections and standings recalculations
@@ -13,18 +14,23 @@
 
 import { summarizeWorkload, type WorkloadSample, type WorkloadSummary } from "./workload.js";
 
+const SHA_REGEX = /^[a-f0-9]{40}$/i;
+export const CURRENT_SLO_DEFINITION_VERSION = "2026.09.gate-d";
+
 export interface PilotTelemetryConfig {
   readonly candidateSha: string;
   readonly competitionId: string;
   readonly pilotId: string; // e.g. "local-pilot-01" | "national-pilot-01"
+  readonly minSamplesRequired?: number; // default: 10
 }
 
-export interface ApiErrorObservation {
+export interface ApiRequestObservation {
   readonly route: string;
   readonly method: string;
+  readonly durationMs: number;
   readonly statusCode: number;
+  readonly isError: boolean;
   readonly errorCode?: string;
-  readonly message: string;
   readonly timestamp: string;
 }
 
@@ -55,35 +61,46 @@ export interface CorrectionObservation {
 }
 
 export interface PilotTelemetrySummary {
+  readonly sloDefinitionVersion: string;
   readonly candidateSha: string;
   readonly competitionId: string;
   readonly pilotId: string;
-  readonly scoreWriteSummary: WorkloadSummary;
-  readonly publicPropagationSummary: WorkloadSummary;
+  readonly minSamplesThreshold: number;
+  readonly scoreWriteSummary: WorkloadSummary | null;
+  readonly publicPageSummary: WorkloadSummary | null;
+  readonly resultPropagationSummary: WorkloadSummary | null;
+  readonly totalApiRequests: number;
   readonly totalApiErrors: number;
-  readonly apiErrors: readonly ApiErrorObservation[];
+  readonly apiErrorRate: number;
+  readonly apiRequests: readonly ApiRequestObservation[];
   readonly redisEvents: readonly RedisLeaseObservation[];
   readonly reconnectEvents: readonly ReconnectObservation[];
   readonly correctionEvents: readonly CorrectionObservation[];
   readonly slaVerdict: "PASS" | "FAIL";
+  readonly failureReasons: readonly string[];
   readonly generatedAt: string;
 }
 
 export class PilotTelemetryCollector {
   private readonly scoreWriteSamples: WorkloadSample[] = [];
-  private readonly publicPropagationSamples: WorkloadSample[] = [];
-  private readonly apiErrors: ApiErrorObservation[] = [];
+  private readonly publicPageSamples: WorkloadSample[] = [];
+  private readonly resultPropagationSamples: WorkloadSample[] = [];
+  private readonly apiRequests: ApiRequestObservation[] = [];
   private readonly redisEvents: RedisLeaseObservation[] = [];
   private readonly reconnectEvents: ReconnectObservation[] = [];
   private readonly correctionEvents: CorrectionObservation[] = [];
+  private readonly minSamples: number;
 
   constructor(private readonly config: PilotTelemetryConfig) {
-    if (!config.candidateSha || config.candidateSha.length < 7) {
-      throw new Error("Pilot telemetry requires a valid candidate SHA.");
+    if (!config.candidateSha || !SHA_REGEX.test(config.candidateSha)) {
+      throw new Error(
+        `Pilot telemetry requires a strict 40-character hex candidate SHA. Received: '${config.candidateSha}'`,
+      );
     }
-    if (!config.competitionId) {
-      throw new Error("Pilot telemetry requires a competition ID.");
+    if (!config.competitionId || config.competitionId.trim().length === 0) {
+      throw new Error("Pilot telemetry requires a non-empty competition ID.");
     }
+    this.minSamples = config.minSamplesRequired ?? 10;
   }
 
   recordScoreWrite(durationMs: number, success = true): void {
@@ -93,16 +110,23 @@ export class PilotTelemetryCollector {
     });
   }
 
-  recordPublicPropagation(durationMs: number, success = true): void {
-    this.publicPropagationSamples.push({
+  recordPublicPageRead(durationMs: number, success = true): void {
+    this.publicPageSamples.push({
       durationMs,
       outcome: success ? "success" : "unexpected_failure",
     });
   }
 
-  recordApiError(error: Omit<ApiErrorObservation, "timestamp">): void {
-    this.apiErrors.push({
-      ...error,
+  recordResultPropagation(durationMs: number, success = true): void {
+    this.resultPropagationSamples.push({
+      durationMs,
+      outcome: success ? "success" : "unexpected_failure",
+    });
+  }
+
+  recordApiRequest(request: Omit<ApiRequestObservation, "timestamp">): void {
+    this.apiRequests.push({
+      ...request,
       timestamp: new Date().toISOString(),
     });
   }
@@ -129,31 +153,93 @@ export class PilotTelemetryCollector {
   }
 
   summarize(): PilotTelemetrySummary {
-    const defaultSample: WorkloadSample = { durationMs: 1, outcome: "success" };
-    const scoreWriteSummary = summarizeWorkload(
-      this.scoreWriteSamples.length > 0 ? this.scoreWriteSamples : [defaultSample],
-    );
-    const publicPropagationSummary = summarizeWorkload(
-      this.publicPropagationSamples.length > 0 ? this.publicPropagationSamples : [defaultSample],
-    );
+    const failureReasons: string[] = [];
 
-    // SLA targets: Score write p95 < 500ms, Public propagation p95 < 2500ms, Error rate < 0.1%
-    const writeSlaPass = scoreWriteSummary.p95Ms <= 500 && scoreWriteSummary.errorRate <= 0.001;
-    const propSlaPass = publicPropagationSummary.p95Ms <= 2500 && publicPropagationSummary.errorRate <= 0.001;
-    const slaVerdict = writeSlaPass && propSlaPass ? "PASS" : "FAIL";
+    // 1. Check minimum sample thresholds (fail closed if samples are insufficient)
+    if (this.scoreWriteSamples.length < this.minSamples) {
+      failureReasons.push(`Insufficient score write samples: ${this.scoreWriteSamples.length} < ${this.minSamples}`);
+    }
+    if (this.publicPageSamples.length < this.minSamples) {
+      failureReasons.push(`Insufficient public page samples: ${this.publicPageSamples.length} < ${this.minSamples}`);
+    }
+    if (this.resultPropagationSamples.length < this.minSamples) {
+      failureReasons.push(
+        `Insufficient result propagation samples: ${this.resultPropagationSamples.length} < ${this.minSamples}`,
+      );
+    }
+
+    const scoreWriteSummary = this.scoreWriteSamples.length > 0 ? summarizeWorkload(this.scoreWriteSamples) : null;
+    const publicPageSummary = this.publicPageSamples.length > 0 ? summarizeWorkload(this.publicPageSamples) : null;
+    const resultPropagationSummary =
+      this.resultPropagationSamples.length > 0 ? summarizeWorkload(this.resultPropagationSamples) : null;
+
+    // 2. Evaluate Score Write SLA: p95 <= 500ms, errorRate <= 0.1%
+    if (scoreWriteSummary) {
+      if (scoreWriteSummary.p95Ms > 500) {
+        failureReasons.push(`Score write latency p95 breached: ${scoreWriteSummary.p95Ms.toFixed(2)}ms > 500ms`);
+      }
+      if (scoreWriteSummary.errorRate > 0.001) {
+        failureReasons.push(
+          `Score write error rate breached: ${(scoreWriteSummary.errorRate * 100).toFixed(2)}% > 0.1%`,
+        );
+      }
+    }
+
+    // 3. Evaluate Public Page Read SLA: p95 <= 2500ms, errorRate <= 0.1%
+    if (publicPageSummary) {
+      if (publicPageSummary.p95Ms > 2500) {
+        failureReasons.push(`Public page latency p95 breached: ${publicPageSummary.p95Ms.toFixed(2)}ms > 2500ms`);
+      }
+      if (publicPageSummary.errorRate > 0.001) {
+        failureReasons.push(
+          `Public page error rate breached: ${(publicPageSummary.errorRate * 100).toFixed(2)}% > 0.1%`,
+        );
+      }
+    }
+
+    // 4. Evaluate Result Propagation SLA: p95 <= 2000ms, errorRate <= 0.1%
+    if (resultPropagationSummary) {
+      if (resultPropagationSummary.p95Ms > 2000) {
+        failureReasons.push(
+          `Result propagation latency p95 breached: ${resultPropagationSummary.p95Ms.toFixed(2)}ms > 2000ms`,
+        );
+      }
+      if (resultPropagationSummary.errorRate > 0.001) {
+        failureReasons.push(
+          `Result propagation error rate breached: ${(resultPropagationSummary.errorRate * 100).toFixed(2)}% > 0.1%`,
+        );
+      }
+    }
+
+    // 5. Evaluate API request error rate
+    const totalApiRequests = this.apiRequests.length;
+    const totalApiErrors = this.apiRequests.filter((r) => r.isError || r.statusCode >= 500).length;
+    const apiErrorRate = totalApiRequests > 0 ? totalApiErrors / totalApiRequests : 0;
+
+    if (totalApiRequests > 0 && apiErrorRate > 0.001) {
+      failureReasons.push(`Overall API error rate breached: ${(apiErrorRate * 100).toFixed(2)}% > 0.1%`);
+    }
+
+    const slaVerdict = failureReasons.length === 0 ? "PASS" : "FAIL";
 
     return {
+      sloDefinitionVersion: CURRENT_SLO_DEFINITION_VERSION,
       candidateSha: this.config.candidateSha,
       competitionId: this.config.competitionId,
       pilotId: this.config.pilotId,
+      minSamplesThreshold: this.minSamples,
       scoreWriteSummary,
-      publicPropagationSummary,
-      totalApiErrors: this.apiErrors.length,
-      apiErrors: [...this.apiErrors],
+      publicPageSummary,
+      resultPropagationSummary,
+      totalApiRequests,
+      totalApiErrors,
+      apiErrorRate,
+      apiRequests: [...this.apiRequests],
       redisEvents: [...this.redisEvents],
       reconnectEvents: [...this.reconnectEvents],
       correctionEvents: [...this.correctionEvents],
       slaVerdict,
+      failureReasons,
       generatedAt: new Date().toISOString(),
     };
   }

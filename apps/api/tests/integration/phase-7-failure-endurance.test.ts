@@ -3,10 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
+import { SPORT_PACKS, type SportId } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
-import { SPORT_PACKS } from "@matchday/domain";
 import postgres, { type Sql } from "postgres";
-import { Phase3Runtime, type Phase3Actor } from "../../src/phase-3-runtime.js";
+import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
+import { Phase2Runtime, type Phase2Actor } from "../../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
@@ -16,9 +17,10 @@ const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../packages/database/migrations",
 );
+const fallbackCodeHmacSecret = "phase-7-endurance-fallback-hmac-secret-32-chars-long";
 
 let client!: Sql;
-let phase3Runtime!: Phase3Runtime;
+let runtime!: Phase2Runtime;
 let organisationId = "";
 let accountId = "";
 
@@ -34,6 +36,7 @@ describeInfrastructure(
         connection: { search_path: schema },
       });
 
+      // Seed all 5 active sport packs with valid definition hashes
       for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
         const hash = phase3DomainAdapter.hash(pack);
         await client`
@@ -48,27 +51,33 @@ describeInfrastructure(
       }
 
       const accounts = await client<{ id: string }[]>`
-      INSERT INTO accounts (primary_email, display_name, email_verified_at)
-      VALUES ('organiser-endurance@matchday.com', 'Endurance Organiser', now())
-      RETURNING id;
-    `;
+        INSERT INTO accounts (primary_email, display_name, email_verified_at)
+        VALUES ('organiser-endurance@matchday.com', 'Endurance Organiser', now())
+        RETURNING id;
+      `;
       accountId = accounts[0]!.id;
 
       await client.begin(async (tx) => {
         const orgs = await tx<{ id: string }[]>`
-        INSERT INTO organisations (name, slug)
-        VALUES ('Endurance Sports Org', 'endurance-org')
-        RETURNING id;
-      `;
+          INSERT INTO organisations (name, slug)
+          VALUES ('Endurance Sports Org', ${`endurance-org-${randomUUID()}`})
+          RETURNING id;
+        `;
         organisationId = orgs[0]!.id;
 
         await tx`
-        INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
-        VALUES (${organisationId}, ${accountId}, 'owner', 'active');
-      `;
+          INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
+          VALUES (${organisationId}, ${accountId}, 'owner', 'active');
+        `;
       });
 
-      phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
+      runtime = new Phase2Runtime(
+        client as unknown as PostgresJsSql,
+        phase2DomainAdapter,
+        undefined,
+        undefined,
+        fallbackCodeHmacSecret,
+      );
     });
 
     afterAll(async () => {
@@ -78,93 +87,344 @@ describeInfrastructure(
       await dropTestSchema(databaseUrl, schema);
     });
 
-    describe("QA-007: Extended 2,000-Command Offline Ingestion Pipeline", () => {
-      it("ingests and sequences a high-capacity 2,000 command batch with monotonic order", async () => {
-        const actor: Phase3Actor = { accountId };
-        const competition = await phase3Runtime.createCompetition(
-          actor,
+    async function createRealScoringWorld(sportId: SportId = "volleyball") {
+      const actor: Phase2Actor = { accountId };
+      const competition = await runtime.createCompetition(
+        actor,
+        {
+          organisationId,
+          name: `${SPORT_PACKS[sportId].displayName} Endurance Cup`,
+          slug: `${sportId.replaceAll("_", "-")}-${randomUUID()}`,
+          timezone: "Asia/Singapore",
+          startsOn: "2027-03-01",
+          endsOn: "2027-03-01",
+        },
+        randomUUID(),
+      );
+
+      await client`UPDATE competitions SET sport_code=${sportId} WHERE id=${competition.id}`;
+      await client`UPDATE competition_sport_settings SET
+        sport_code=${sportId}, pack_version=${SPORT_PACKS[sportId].version},
+        recommended_snapshot=${client.json(SPORT_PACKS[sportId].recommendedSettings)}, settings_override='{}'::jsonb
+        WHERE competition_id=${competition.id}`;
+
+      const division = await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Division 1", teamLimit: 8 },
+        randomUUID(),
+      );
+      await runtime.replaceEntries(
+        actor,
+        competition.id,
+        division.id,
+        Array.from({ length: 8 }, (_, index) => ({ name: `Team ${index + 1}`, seed: index + 1 })),
+        randomUUID(),
+      );
+
+      await runtime.replaceCapacity(
+        actor,
+        competition.id,
+        [
           {
-            organisationId,
-            name: "Endurance Cup 2000",
-            slug: `endurance-cup-${randomUUID()}`,
-            sportCode: "volleyball",
-            timezone: "UTC",
-            startsOn: "2026-09-01",
-            endsOn: "2026-09-02",
-            venue: "Arena 1",
-            address: "1 Central Rd",
-            countryCode: "SG",
-            locale: "en-SG",
+            name: "Court 1",
+            windows: [{ startsAt: "2027-03-01T00:00:00.000Z", endsAt: "2027-03-01T12:00:00.000Z" }],
           },
+        ],
+        randomUUID(),
+      );
+
+      const format = await runtime.generateFormat(actor, competition.id, division.id, randomUUID());
+      const schedule = await runtime.generateSchedule(actor, competition.id, format.id, randomUUID());
+      await runtime.publishSchedule(actor, competition.id, schedule.id, randomUUID());
+      const match = format.matches[0]!;
+
+      const pass = await runtime.createAccessPass(
+        actor,
+        competition.id,
+        match.id,
+        {
+          expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+          role: "scorekeeper",
+          idempotencyKey: `pass-${sportId}-${randomUUID()}`,
+        },
+        randomUUID(),
+      );
+
+      if (!pass.token) throw new Error("Expected access pass token");
+      const writer = await runtime.exchangeAccess(
+        { token: pass.token, deviceId: `dev-0-${randomUUID()}`, ipAddress: "127.0.0.1" },
+        randomUUID(),
+      );
+
+      if (!writer.generation) throw new Error("Expected writer generation");
+
+      return {
+        competition,
+        division,
+        match,
+        pass,
+        auth: {
+          sessionId: writer.session_id,
+          sessionToken: writer.session_token,
+          generation: writer.generation,
+        },
+      };
+    }
+
+    describe("QA-007: Extended 2,000-Command Offline Ingestion Pipeline", () => {
+      it("ingests and sequences a high-capacity 2,000 command batch with monotonic order and idempotent replay resilience", async () => {
+        const world = await createRealScoringWorld("volleyball");
+        let aggregateVersion = 0;
+
+        // 1. Initial event: match_started
+        const startReceipt = await runtime.appendCanonicalScoreEvent(
+          world.auth,
+          {
+            client_event_id: randomUUID(),
+            type: "match_started",
+            occurred_at: new Date().toISOString(),
+          },
+          aggregateVersion,
           randomUUID(),
         );
+        aggregateVersion = startReceipt.aggregate_version;
 
-        expect(competition.id).toBeDefined();
+        // 2. Generate and append 2,000 sequential score commands
+        const totalCommands = 2000;
+        const recordedEvents: { client_event_id: string; expectedVersion: number; payload: Record<string, unknown> }[] =
+          [];
 
-        const batchCount = 2000;
-        const commands = Array.from({ length: batchCount }, (_, index) => ({
-          id: randomUUID(),
-          entity_id: competition.id,
-          sequence: index + 1,
-          type: index % 2 === 0 ? "point_home" : "point_away",
-          timestamp: new Date(Date.now() + index * 1000).toISOString(),
-        }));
+        for (let i = 0; i < totalCommands; i++) {
+          const clientEventId = randomUUID();
+          const segmentNumber = (Math.floor(i / 100) % 5) + 1;
+          const teamSlot = i % 2 === 0 ? "home" : "away";
+          const payload = {
+            client_event_id: clientEventId,
+            type: "point",
+            team_slot: teamSlot,
+            segment_number: segmentNumber,
+            occurred_at: new Date(Date.now() + i * 1000).toISOString(),
+          };
 
-        // Simulate transactional offline queue batch drain
-        await client.begin(async (tx) => {
-          for (let chunkStart = 0; chunkStart < batchCount; chunkStart += 500) {
-            const chunk = commands.slice(chunkStart, chunkStart + 500);
-            await tx`
-            INSERT INTO audit_events (id, entity_type, entity_id, action, actor_id, metadata, created_at)
-            SELECT
-              id, 'competition', entity_id::uuid, 'score_event_synced', ${accountId}::uuid,
-              jsonb_build_object('sequence', sequence, 'type', type), timestamp::timestamptz
-            FROM jsonb_to_recordset(${JSON.stringify(chunk)}::jsonb)
-            AS x(id uuid, entity_id text, sequence int, type text, timestamp text);
-          `;
-          }
-        });
+          recordedEvents.push({ client_event_id: clientEventId, expectedVersion: aggregateVersion, payload });
 
-        const rows = await client<{ count: number }[]>`
-        SELECT count(*)::int as count FROM audit_events
-        WHERE entity_id = ${competition.id}::uuid AND action = 'score_event_synced';
-      `;
-        expect(rows[0]!.count).toBe(batchCount);
+          const receipt = await runtime.appendCanonicalScoreEvent(world.auth, payload, aggregateVersion, randomUUID());
+          aggregateVersion = receipt.aggregate_version;
+        }
+
+        expect(aggregateVersion).toBe(totalCommands + 1);
+
+        // 3. Verify idempotent replay resilience for 50 previously sent events
+        for (let j = 0; j < 50; j++) {
+          const sample = recordedEvents[j]!;
+          const replayReceipt = await runtime.appendCanonicalScoreEvent(
+            world.auth,
+            sample.payload,
+            sample.expectedVersion,
+            randomUUID(),
+          );
+          expect(replayReceipt.aggregate_version).toBeDefined();
+        }
+
+        // 4. Verify canonical events persisted in PostgreSQL
+        const events = await client<{ count: number }[]>`
+          SELECT count(*)::int as count
+          FROM canonical_score_events
+          WHERE match_id = ${world.match.id};
+        `;
+        expect(events[0]!.count).toBe(totalCommands + 1);
+
+        // 5. Finalise match
+        const finalResult = await runtime.finalise(world.auth, randomUUID(), randomUUID(), aggregateVersion);
+        expect(finalResult.home_score).toBeGreaterThan(0);
+
+        const matchRow = await client<{ state: string }[]>`
+          SELECT state FROM matches WHERE id = ${world.match.id};
+        `;
+        expect(matchRow[0]!.state).toBe("final");
       });
     });
 
     describe("QA-008: Multi-Device Write Arbitration & Stale Sequence Fencing", () => {
-      it("rejects stale sequence mutations and accepts strictly monotonic score writes", async () => {
-        const matchUuid = randomUUID();
-        const deviceResults: { deviceId: string; accepted: boolean }[] = [];
+      it("rejects stale generation writes after takeover and enforces monotonic version sequencing", async () => {
+        const world = await createRealScoringWorld("volleyball");
+        let version = 0;
 
-        // Monotonic sequence write emulation across 5 devices
-        for (let i = 0; i < 5; i++) {
-          const deviceId = `dev-score-${i}`;
-          const seq = i + 1;
+        // Device 1 starts match
+        const startReceipt = await runtime.appendCanonicalScoreEvent(
+          world.auth,
+          { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString() },
+          version,
+          randomUUID(),
+        );
+        version = startReceipt.aggregate_version;
 
-          await client`
-          INSERT INTO audit_events (id, request_id, actor_account_id, actor_type, organisation_id, action, target_type, target_id, metadata)
-          VALUES (
-            ${randomUUID()}, ${`req-${seq}`}, ${accountId}::uuid, 'account', ${organisationId}::uuid,
-            'score_increment', 'match', ${matchUuid},
-            ${JSON.stringify({ device: deviceId, sequence: seq })}::jsonb
+        // Device 1 scores 1 point
+        const ptReceipt = await runtime.appendCanonicalScoreEvent(
+          world.auth,
+          {
+            client_event_id: randomUUID(),
+            type: "point",
+            team_slot: "home",
+            segment_number: 1,
+            occurred_at: new Date().toISOString(),
+          },
+          version,
+          randomUUID(),
+        );
+        version = ptReceipt.aggregate_version;
+
+        // Device 2 exchanges the access pass to take over the writer lease
+        const device2 = await runtime.exchangeAccess(
+          { token: world.pass.token!, deviceId: "dev-takeover-2", ipAddress: "192.168.1.102" },
+          randomUUID(),
+        );
+        expect(device2.generation).toBeGreaterThan(world.auth.generation);
+
+        const dev2Auth = {
+          sessionId: device2.session_id,
+          sessionToken: device2.session_token,
+          generation: device2.generation!,
+        };
+
+        // Device 1 (stale generation) tries to append event -> must be rejected
+        await expect(
+          runtime.appendCanonicalScoreEvent(
+            world.auth, // stale generation
+            {
+              client_event_id: randomUUID(),
+              type: "point",
+              team_slot: "away",
+              segment_number: 1,
+              occurred_at: new Date().toISOString(),
+            },
+            version,
+            randomUUID(),
+          ),
+        ).rejects.toThrow();
+
+        // Device 2 (active generation) appends next score -> succeeds
+        const dev2Receipt = await runtime.appendCanonicalScoreEvent(
+          dev2Auth,
+          {
+            client_event_id: randomUUID(),
+            type: "point",
+            team_slot: "away",
+            segment_number: 1,
+            occurred_at: new Date().toISOString(),
+          },
+          version,
+          randomUUID(),
+        );
+        expect(dev2Receipt.aggregate_version).toBe(version + 1);
+
+        // Out of order version sequence attempt (e.g. sequence 99 when expected is 3) -> must be rejected
+        await expect(
+          runtime.appendCanonicalScoreEvent(
+            dev2Auth,
+            {
+              client_event_id: randomUUID(),
+              type: "point",
+              team_slot: "home",
+              segment_number: 1,
+              occurred_at: new Date().toISOString(),
+            },
+            99, // mismatched expected aggregate version
+            randomUUID(),
+          ),
+        ).rejects.toThrow();
+      });
+    });
+
+    describe("QA-009: Result Correction & Standings Convergence", () => {
+      it("records score corrections, updates audit ledger, and recalculates division standings", async () => {
+        const world = await createRealScoringWorld("volleyball");
+        const actor: Phase2Actor = { accountId };
+        let version = 0;
+
+        // Score 2 sets to 0 for Home team
+        const start = await runtime.appendCanonicalScoreEvent(
+          world.auth,
+          { client_event_id: randomUUID(), type: "match_started", occurred_at: new Date().toISOString() },
+          version,
+          randomUUID(),
+        );
+        version = start.aggregate_version;
+
+        for (const seg of [1, 2]) {
+          for (let p = 0; p < 25; p++) {
+            const pt = await runtime.appendCanonicalScoreEvent(
+              world.auth,
+              {
+                client_event_id: randomUUID(),
+                type: "point",
+                team_slot: "home",
+                segment_number: seg,
+                occurred_at: new Date().toISOString(),
+              },
+              version,
+              randomUUID(),
+            );
+            version = pt.aggregate_version;
+          }
+          const setComp = await runtime.appendCanonicalScoreEvent(
+            world.auth,
+            {
+              client_event_id: randomUUID(),
+              type: "set_completion",
+              team_slot: "home",
+              segment_number: seg,
+              occurred_at: new Date().toISOString(),
+            },
+            version,
+            randomUUID(),
           );
-        `;
-          deviceResults.push({ deviceId, accepted: true });
+          version = setComp.aggregate_version;
         }
 
-        expect(deviceResults.filter((d) => d.accepted).length).toBe(5);
+        // Finalise match (2-0)
+        const initialFinal = await runtime.finalise(world.auth, randomUUID(), randomUUID(), version);
+        expect(initialFinal.home_score).toBe(2);
+        expect(initialFinal.away_score).toBe(0);
 
-        const events = await client<{ metadata: { sequence: number; device: string } }[]>`
-        SELECT metadata FROM audit_events
-        WHERE target_id = ${matchUuid}
-        ORDER BY occurred_at ASC;
-      `;
+        // Organiser issues a score correction
+        const correctionEventId = randomUUID();
+        const correction = await runtime.correctCanonicalMatch(
+          actor,
+          world.competition.id,
+          world.match.id,
+          {
+            clientEventId: correctionEventId,
+            reason: "Clerical adjustment for court review",
+            expectedAggregateVersion: version,
+            events: [
+              {
+                client_event_id: randomUUID(),
+                type: "point",
+                team_slot: "away",
+                segment_number: 2,
+                occurred_at: new Date().toISOString(),
+              },
+            ],
+          },
+          randomUUID(),
+        );
 
-        expect(events.length).toBe(5);
-        const sequences = events.map((e) => e.metadata.sequence);
-        expect(sequences).toEqual([1, 2, 3, 4, 5]);
+        expect(correction.result_version).toBeGreaterThan(0);
+
+        const correctedMatchRow = await client<{ state: string }[]>`
+          SELECT state FROM matches WHERE id = ${world.match.id};
+        `;
+        expect(correctedMatchRow[0]!.state).toBe("corrected");
+
+        // Verify correction transaction in database
+        const correctionTx = await client<{ count: number }[]>`
+          SELECT count(*)::int as count
+          FROM score_correction_transactions
+          WHERE match_id = ${world.match.id};
+        `;
+        expect(correctionTx[0]!.count).toBeGreaterThanOrEqual(1);
       });
     });
   },
