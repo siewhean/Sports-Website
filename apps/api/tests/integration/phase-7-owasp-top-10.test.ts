@@ -265,13 +265,24 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
         randomUUID(),
       );
 
+      const divisionId = randomUUID();
+      const matchId = randomUUID();
+      await client`
+        INSERT INTO divisions (id, competition_id, name, sport_code, sort_order)
+        VALUES (${divisionId}, ${comp.id}, 'Division 1', 'volleyball', 1);
+      `;
+      await client`
+        INSERT INTO matches (id, competition_id, division_id, state)
+        VALUES (${matchId}, ${comp.id}, ${divisionId}, 'ready');
+      `;
+
       const revokedPassId = randomUUID();
       await client`
         INSERT INTO scoring_access_passes (
-          id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope, revoked_at
+          id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope, revoked_at, revocation_reason
         ) VALUES (
-          ${revokedPassId}, ${comp.id}, ${randomUUID()}, 'fake-secret-hash', now() + interval '1 hour',
-          ${tenantA_userId}, 'scorekeeper', '["score:write"]'::jsonb, now()
+          ${revokedPassId}, ${comp.id}, ${matchId}, 'fake-secret-hash', now() + interval '1 hour',
+          ${tenantA_userId}, 'scorekeeper', '["score:read","score:write","score:reverse","score:finalise"]'::jsonb, now(), 'Security drill revocation'
         );
       `;
 
