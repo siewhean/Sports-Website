@@ -5,7 +5,7 @@
  * Phase 7 canonical release suite (pnpm test:release).
  *
  * Runs every required check in order and aborts at the first failure.
- * Also enforces that no required suite silently reports zero tests.
+ * Also enforces that no required test suite silently reports zero executed tests.
  *
  * This script is the single source of truth for what "release-ready" means.
  * Every Phase 7 Gate D / Gate E evidence set must show this script exiting 0
@@ -13,84 +13,158 @@
  *
  * Suites are grouped into three phases that mirror CI:
  *   Phase A — static analysis (no infrastructure)
- *   Phase B — integration + migration (requires postgres + redis)
+ *   Phase B — integration + migration (requires postgres + redis + mailpit)
  *   Phase C — browser E2E + a11y + visual (requires full stack)
  *
- * Running all three phases locally requires the same docker-compose services
- * used by CI.  Phases can be run individually:
- *   RELEASE_PHASE=A pnpm test:release
- *   RELEASE_PHASE=B pnpm test:release
- *   RELEASE_PHASE=C pnpm test:release
- *
  * Exit codes:
- *   0   all required suites passed
- *   1   a suite failed or reported zero executed tests
+ *   0   all required suites passed with verified test counts
+ *   1   a suite failed, was unreachable, or reported zero executed tests
  *   2   configuration error (unknown RELEASE_PHASE)
  */
 
-import { execSync } from "node:child_process";
-import { createRequire } from "node:module";
+import { execSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(import.meta.url);
 
-const PHASE = process.env.RELEASE_PHASE ?? "ALL";
-const VALID_PHASES = new Set(["ALL", "A", "B", "C"]);
-if (!VALID_PHASES.has(PHASE)) {
-  console.error(`[release-suite] Unknown RELEASE_PHASE="${PHASE}". Use A, B, C, or ALL.`);
-  process.exit(2);
+export const VALID_PHASES = new Set(["ALL", "A", "B", "C"]);
+
+export function parseNonzeroTestCount(output) {
+  if (!output || typeof output !== "string") return 0;
+
+  // Vitest: "Tests  251 passed (251)" or "✓  (25 tests)"
+  const vitestMatch = output.match(/Tests\s+(\d+)\s+passed/i) || output.match(/(\d+)\s+passed\s+\(\d+\)/i);
+  if (vitestMatch && vitestMatch[1]) {
+    return parseInt(vitestMatch[1], 10);
+  }
+
+  // Node.js --test: "ℹ pass 19" or "✔ ... (19)"
+  const nodeTestMatch = output.match(/ℹ\s+pass\s+(\d+)/i) || output.match(/✔[^\n]+\((\d+)\s+tests?\)/i);
+  if (nodeTestMatch && nodeTestMatch[1]) {
+    return parseInt(nodeTestMatch[1], 10);
+  }
+
+  // Playwright: "12 passed (1.2s)"
+  const playwrightMatch = output.match(/(\d+)\s+passed\b/i);
+  if (playwrightMatch && playwrightMatch[1]) {
+    return parseInt(playwrightMatch[1], 10);
+  }
+
+  // Fixture / OpenAPI / Load benchmark validation custom scripts
+  if (
+    output.includes("Validated") ||
+    output.includes("current and valid JSON") ||
+    output.includes("no leaks found") ||
+    output.includes("benchmark PASS")
+  ) {
+    return 1;
+  }
+
+  return 0;
 }
 
-/** Run a shell command, streaming output, throwing on non-zero exit. */
-function run(label, cmd) {
+/** Run a shell command, streaming output, verifying non-zero exit and test counts. */
+export function runCommand(label, cmd, options = {}) {
+  const { isInfra = false, expectTests = false } = options;
+
   console.log(`\n${"─".repeat(72)}`);
   console.log(`[release-suite] ${label}`);
   console.log(`  > ${cmd}`);
+  if (isInfra) {
+    console.log(`  [env] RUN_INFRA_TESTS=1`);
+  }
   console.log(`${"─".repeat(72)}\n`);
-  execSync(cmd, { cwd: root, stdio: "inherit", shell: true });
+
+  const env = {
+    ...process.env,
+    ...(isInfra ? { RUN_INFRA_TESTS: "1" } : {}),
+  };
+
+  const result = spawnSync(cmd, {
+    cwd: root,
+    stdio: ["inherit", "pipe", "pipe"],
+    shell: true,
+    env,
+    encoding: "utf8",
+  });
+
+  const stdout = result.stdout || "";
+  const stderr = result.stderr || "";
+
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+
+  if (result.status !== 0) {
+    console.error(`\n[release-suite] ❌ ${label} failed with exit code ${result.status}`);
+    const error = new Error(`Command failed with exit code ${result.status}: ${cmd}`);
+    error.status = result.status;
+    throw error;
+  }
+
+  if (expectTests) {
+    const combinedOutput = stdout + "\n" + stderr;
+    const testCount = parseNonzeroTestCount(combinedOutput);
+    if (testCount <= 0) {
+      console.error(`\n[release-suite] ❌ ${label} reported 0 executed tests (silent skip detected).`);
+      const error = new Error(`Zero executed tests detected for: ${cmd}`);
+      error.status = 1;
+      throw error;
+    }
+    console.log(`[release-suite] ✓ Non-zero test assertion passed (${testCount} test(s) executed)`);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Phase A — static analysis (format, lint, typecheck, unit, fixture validation)
+// Execution Guard CLI
 // ---------------------------------------------------------------------------
-if (PHASE === "ALL" || PHASE === "A") {
-  run("1/13  Secret scan", "pnpm secrets:scan");
-  run("2/13  Dependency audit", "pnpm dependencies:audit");
-  run("3/13  Format check", "pnpm format:check");
-  run("4/13  Lint", "pnpm lint");
-  run("5/13  Type-check", "pnpm typecheck");
-  run("6/13  Unit tests (all packages)", "pnpm test:unit");
-  run("7/13  Gate C evidence seals", "pnpm test:seal:gate-c && pnpm test:evidence:gate-c");
-  run(
-    "8/13  Fixture validation",
-    "pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4",
-  );
-  run("9/13  OpenAPI contract", "pnpm openapi:check");
-  run("10/13 Vercel deployment verification", "pnpm test:vercel:verify");
-  run("10b/13 Load benchmarks (QA-010, QA-011)", "pnpm test:load");
-}
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const PHASE = process.env.RELEASE_PHASE ?? "ALL";
+  if (!VALID_PHASES.has(PHASE)) {
+    console.error(`[release-suite] Unknown RELEASE_PHASE="${PHASE}". Use A, B, C, or ALL.`);
+    process.exit(2);
+  }
 
-// ---------------------------------------------------------------------------
-// Phase B — integration + migration (requires postgres + redis + mailpit)
-// ---------------------------------------------------------------------------
-if (PHASE === "ALL" || PHASE === "B") {
-  run("11/13 Build (all packages)", "pnpm build");
-  run("11/13 Migration check", "pnpm db:migrate:check");
-  run("11/13 Backup restoration verification", "pnpm backup:verify");
-  run("12/13 Integration tests", "pnpm test:integration");
-}
+  try {
+    // Phase A — static analysis (no infrastructure)
+    if (PHASE === "ALL" || PHASE === "A") {
+      runCommand("1/13  Secret scan", "pnpm secrets:scan");
+      runCommand("2/13  Dependency audit", "pnpm dependencies:audit");
+      runCommand("3/13  Format check", "pnpm format:check");
+      runCommand("4/13  Lint", "pnpm lint");
+      runCommand("5/13  Type-check", "pnpm typecheck");
+      runCommand("6/13  Unit tests (all packages)", "pnpm test:unit", { expectTests: true });
+      runCommand("7/13  Gate C evidence seals", "pnpm test:seal:gate-c && pnpm test:evidence:gate-c", {
+        expectTests: true,
+      });
+      runCommand(
+        "8/13  Fixture validation",
+        "pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4",
+      );
+      runCommand("9/13  OpenAPI contract", "pnpm openapi:check");
+      runCommand("10/13 Vercel deployment verification", "pnpm test:vercel:verify", { expectTests: true });
+      runCommand("10b/13 Load benchmarks (QA-010, QA-011)", "pnpm test:load", { expectTests: true });
+    }
 
-// ---------------------------------------------------------------------------
-// Phase C — browser E2E, accessibility, visual regression
-// ---------------------------------------------------------------------------
-if (PHASE === "ALL" || PHASE === "C") {
-  run("13/13 Browser E2E", "pnpm test:e2e");
-  run("13/13 Accessibility (Playwright a11y)", "pnpm test:a11y");
-  run("13/13 Visual regression", "pnpm test:visual");
-}
+    // Phase B — integration + migration (requires postgres + redis + mailpit)
+    if (PHASE === "ALL" || PHASE === "B") {
+      runCommand("11/13 Build (all packages)", "pnpm build");
+      runCommand("11/13 Migration check", "pnpm db:migrate:check");
+      runCommand("11/13 Backup restoration verification", "pnpm backup:verify", { isInfra: true });
+      runCommand("12/13 Integration tests", "pnpm test:integration", { isInfra: true, expectTests: true });
+    }
 
-console.log("\n" + "═".repeat(72));
-console.log(`[release-suite] ✓ All required suites passed (phase=${PHASE})`);
-console.log("═".repeat(72) + "\n");
+    // Phase C — browser E2E + a11y + visual (requires full stack)
+    if (PHASE === "ALL" || PHASE === "C") {
+      runCommand("13/13 Browser E2E", "pnpm test:e2e", { isInfra: true, expectTests: true });
+      runCommand("13/13 Accessibility (Playwright a11y)", "pnpm test:a11y", { isInfra: true, expectTests: true });
+      runCommand("13/13 Visual regression", "pnpm test:visual", { isInfra: true, expectTests: true });
+    }
+
+    console.log("\n" + "═".repeat(72));
+    console.log(`[release-suite] ✓ All required suites passed (phase=${PHASE})`);
+    console.log("═".repeat(72) + "\n");
+  } catch (error) {
+    process.exit(error.status || 1);
+  }
+}

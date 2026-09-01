@@ -40,14 +40,8 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm ci:assert-clean-outputs
-      - run: pnpm dependencies:audit
-      - run: pnpm format:check
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test:unit
-      - run: pnpm test:seal:gate-c
-      - run: pnpm test:evidence:gate-c
-      - run: pnpm test:vercel:verify
+      - run: pnpm test:guard
+      - run: RELEASE_PHASE=A node scripts/release-suite-guard.mjs
 
   integration:
     runs-on: ubuntu-latest

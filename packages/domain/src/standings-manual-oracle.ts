@@ -1,9 +1,16 @@
 /**
  * Independent manual standings calculation oracle for QA-002 and QA-021.
  *
- * This implementation is deliberately simple, transparent, and built from first
+ * This implementation is deliberately transparent and built from first
  * principles to serve as an independent reference calculation during pilots and
  * automated verification.
+ *
+ * Supported Tiebreakers:
+ * 1. Total Points
+ * 2. Head-to-Head records (points/goal diff)
+ * 3. Point / Goal Difference
+ * 4. Total Points / Goals For
+ * 5. Seed / Canonical Deterministic ID Fallback
  */
 
 import type { StandingsEngineConfig, StandingsMatchResult, StandingsParticipant } from "./results.js";
@@ -107,45 +114,74 @@ export function computeManualStandingsOracle(
     points: s.points,
   }));
 
-  // Sort primarily by points desc, then goal/point diff desc, then pointsFor desc
+  // Head-to-head lookup helper
+  const getHeadToHeadPoints = (teamA: string, teamB: string): number => {
+    let pts = 0;
+    for (const match of results) {
+      if (match.homeEntryId === teamA && match.awayEntryId === teamB) {
+        if (match.homeScore > match.awayScore) pts += winPts;
+        else if (match.homeScore === match.awayScore) pts += drawPts;
+      } else if (match.awayEntryId === teamA && match.homeEntryId === teamB) {
+        if (match.awayScore > match.homeScore) pts += winPts;
+        else if (match.homeScore === match.awayScore) pts += drawPts;
+      }
+    }
+    return pts;
+  };
+
+  // Sort rows based on primary hierarchy
   rows.sort((a, b) => {
+    // 1. Total Points
     if (b.points !== a.points) return b.points - a.points;
+
+    // 2. Head to Head
+    const h2hA = getHeadToHeadPoints(a.entryId, b.entryId);
+    const h2hB = getHeadToHeadPoints(b.entryId, a.entryId);
+    if (h2hA !== h2hB) return h2hB - h2hA;
+
+    // 3. Goal / Point Difference
     if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
+
+    // 4. Points / Goals For
     if (b.pointsFor !== a.pointsFor) return b.pointsFor - a.pointsFor;
+
+    // 5. Seed
+    if (a.seed !== b.seed) return a.seed - b.seed;
+
+    // 6. Deterministic Entry ID
     return a.entryId.localeCompare(b.entryId);
   });
 
-  // Assign ranks & detect sporting ties
-  let currentRank = 1;
-  const resultRows: ManualStandingsRow[] = [];
-
+  // Assign ranks and detect sporting ties
+  const rankedRows: ManualStandingsRow[] = [];
   for (let i = 0; i < rows.length; i++) {
-    const prev = rows[i - 1];
     const curr = rows[i]!;
-    const next = rows[i + 1];
+    const prev = i > 0 ? rows[i - 1]! : null;
+    const next = i < rows.length - 1 ? rows[i + 1]! : null;
 
-    const isTiedWithPrev =
-      prev !== undefined &&
+    const isTieWithPrev =
+      prev !== null &&
       prev.points === curr.points &&
       prev.pointDifference === curr.pointDifference &&
-      prev.pointsFor === curr.pointsFor;
+      prev.pointsFor === curr.pointsFor &&
+      getHeadToHeadPoints(prev.entryId, curr.entryId) === getHeadToHeadPoints(curr.entryId, prev.entryId);
 
-    const isTiedWithNext =
-      next !== undefined &&
+    const isTieWithNext =
+      next !== null &&
       next.points === curr.points &&
       next.pointDifference === curr.pointDifference &&
-      next.pointsFor === curr.pointsFor;
+      next.pointsFor === curr.pointsFor &&
+      getHeadToHeadPoints(curr.entryId, next.entryId) === getHeadToHeadPoints(next.entryId, curr.entryId);
 
-    if (!isTiedWithPrev) {
-      currentRank = i + 1;
-    }
+    const sportingTie = isTieWithPrev || isTieWithNext;
+    const rank = isTieWithPrev ? rankedRows[i - 1]!.rank : i + 1;
 
-    resultRows.push({
+    rankedRows.push({
       ...curr,
-      rank: currentRank,
-      sportingTie: isTiedWithPrev || isTiedWithNext,
+      rank,
+      sportingTie,
     });
   }
 
-  return resultRows;
+  return rankedRows;
 }
