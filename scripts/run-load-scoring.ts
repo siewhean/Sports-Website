@@ -2,14 +2,18 @@
  * run-load-scoring.ts
  *
  * QA-011 Scoring Writes Load & Concurrency Benchmark.
- * Supports:
- *  - --mode=component (Fast Fastify in-process component harness)
- *  - --mode=integration (Real listening HTTP server / deployed staging target)
+ *
+ * Modes:
+ *  - component: Fast in-process mock (developer diagnostic only, NOT Gate D evidence)
+ *  - local-integration: In-process listening Fastify app on 127.0.0.1:0 backed by local Postgres+Redis
+ *  - staging: Mandatory Gate D mode. Runs real network HTTP sockets against TARGET_URL
+ *             and requires CANDIDATE_SHA and artifacts/staging-pilot-seed.json.
  *
  * SLA Target: p95 < 500ms, error rate < 0.1%
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -22,10 +26,27 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const mode =
-  process.argv.includes("--mode=integration") || process.env.LOAD_MODE === "integration" ? "integration" : "component";
+type Mode = "component" | "local-integration" | "staging";
+
+function parseMode(): Mode {
+  if (process.argv.includes("--mode=staging") || process.env.LOAD_MODE === "staging") return "staging";
+  if (
+    process.argv.includes("--mode=local-integration") ||
+    process.argv.includes("--mode=integration") ||
+    process.env.LOAD_MODE === "local-integration" ||
+    process.env.LOAD_MODE === "integration"
+  ) {
+    return "local-integration";
+  }
+  return "component";
+}
+
+const mode = parseMode();
 
 const targetUrlArg = process.argv.find((a) => a.startsWith("--target-url="))?.split("=")[1] ?? process.env.TARGET_URL;
+
+const candidateShaArg =
+  process.argv.find((a) => a.startsWith("--candidate-sha="))?.split("=")[1] ?? process.env.CANDIDATE_SHA;
 
 const TIERS = [
   { name: "1x (Normal Matchday Field Load)", concurrency: 12, operations: 120 },
@@ -80,23 +101,33 @@ async function buildScoringServer() {
 }
 
 async function runTier(
-  target: { app?: Awaited<ReturnType<typeof buildScoringServer>>; baseUrl?: string },
+  target: {
+    app?: Awaited<ReturnType<typeof buildScoringServer>>;
+    baseUrl?: string;
+    matches?: { matchId: string; scoringToken: string }[];
+  },
   tier: (typeof TIERS)[number],
 ) {
-  const matchIds = Array.from({ length: 8 }, (_, i) => `match-court-${i + 1}`);
+  const matches =
+    target.matches && target.matches.length > 0
+      ? target.matches
+      : Array.from({ length: 8 }, (_, i) => ({
+          matchId: `match-court-${i + 1}`,
+          scoringToken: "Bearer valid-scoring-lease-token-12345",
+        }));
+
   const samples: WorkloadSample[] = [];
 
   const runWrite = async (index: number) => {
-    const matchId = matchIds[index % matchIds.length]!;
+    const match = matches[index % matches.length]!;
     const isFinal = index > 0 && index % 50 === 0;
     const start = performance.now();
 
     try {
       if (target.baseUrl) {
-        // Real HTTP socket request over network
         const path = isFinal
-          ? `/api/v1/scoring/matches/${matchId}/finalize`
-          : `/api/v1/scoring/matches/${matchId}/events`;
+          ? `/api/v1/scoring/matches/${match.matchId}/finalize`
+          : `/api/v1/scoring/matches/${match.matchId}/events`;
         const body = isFinal
           ? { client_event_id: `fin-${index}` }
           : {
@@ -109,7 +140,7 @@ async function runTier(
         const res = await fetch(`${target.baseUrl}${path}`, {
           method: "POST",
           headers: {
-            authorization: "Bearer valid-scoring-lease-token-12345",
+            authorization: match.scoringToken,
             "content-type": "application/json",
             "user-agent": "qa-011-load-benchmark/1.0",
           },
@@ -126,18 +157,18 @@ async function runTier(
         const response = isFinal
           ? await target.app.inject({
               method: "POST",
-              url: `/api/v1/scoring/matches/${matchId}/finalize`,
+              url: `/api/v1/scoring/matches/${match.matchId}/finalize`,
               headers: {
-                authorization: "Bearer valid-scoring-lease-token-12345",
+                authorization: match.scoringToken,
                 "content-type": "application/json",
               },
               payload: { client_event_id: `fin-${index}` },
             })
           : await target.app.inject({
               method: "POST",
-              url: `/api/v1/scoring/matches/${matchId}/events`,
+              url: `/api/v1/scoring/matches/${match.matchId}/events`,
               headers: {
-                authorization: "Bearer valid-scoring-lease-token-12345",
+                authorization: match.scoringToken,
                 "content-type": "application/json",
               },
               payload: {
@@ -182,18 +213,55 @@ async function main() {
 
   let app: Awaited<ReturnType<typeof buildScoringServer>> | undefined;
   let baseUrl = targetUrlArg;
+  let competitionId: string | undefined;
+  let seededMatches: { matchId: string; scoringToken: string }[] | undefined;
+  let candidateSha = candidateShaArg;
 
-  if (mode === "integration") {
+  if (mode === "staging") {
+    if (!baseUrl) {
+      throw new Error(
+        "QA-011 staging mode requires TARGET_URL (e.g. https://matchday-gate-d-api.onrender.com). " +
+          "Mock in-process execution is prohibited for Gate D evidence.",
+      );
+    }
+    if (!candidateSha || !/^[0-9a-f]{40}$/i.test(candidateSha)) {
+      throw new Error(
+        "QA-011 staging mode requires a valid 40-character CANDIDATE_SHA. " + `Received: "${candidateSha}"`,
+      );
+    }
+
+    const seedFile = path.join(root, "artifacts/staging-pilot-seed.json");
+    try {
+      const rawSeed = await readFile(seedFile, "utf-8");
+      const seed = JSON.parse(rawSeed);
+      competitionId = seed.competition_id;
+      seededMatches = seed.matches?.map((m: { matchId: string; scoringToken: string }) => ({
+        matchId: m.matchId,
+        scoringToken: m.scoringToken,
+      }));
+    } catch {
+      throw new Error(
+        `QA-011 staging mode requires a valid seed fixture at ${seedFile}. ` +
+          "Please run 'pnpm tsx scripts/seed-staging-pilot.ts' first.",
+      );
+    }
+
+    console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}`);
+    console.log(`  ✓ Target Competition ID: ${competitionId}`);
+    console.log(`  ✓ Active Scoring Matches: ${seededMatches?.length}`);
+    console.log(`  ✓ Bound Candidate SHA:    ${candidateSha}\n`);
+  } else if (mode === "local-integration") {
     if (!baseUrl) {
       app = await buildScoringServer();
       const address = await app.listen({ port: 0, host: "127.0.0.1" });
       baseUrl = address;
-      console.log(`  ✓ Booted listening Matchday HTTP scoring integration server at: ${baseUrl}\n`);
+      console.log(`  ✓ Booted listening Matchday HTTP local-integration server at: ${baseUrl}\n`);
     } else {
-      console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}\n`);
+      console.log(`  ✓ Targeting local Matchday API at: ${baseUrl}\n`);
     }
   } else {
     app = await buildScoringServer();
+    console.log("  ℹ Running in fast in-process component diagnostic mode (NOT Gate D evidence)\n");
   }
 
   const results = [];
@@ -202,7 +270,7 @@ async function main() {
     process.stdout.write(
       `Executing Tier: ${tier.name} (${tier.concurrency} concurrent devices, ${tier.operations} writes)...\n`,
     );
-    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl }, tier);
+    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl, matches: seededMatches }, tier);
     results.push(result);
     console.log(
       `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} writes | ` +
@@ -234,27 +302,38 @@ async function main() {
   const artifactDir = path.join(root, "artifacts");
   await mkdir(artifactDir, { recursive: true });
   const summaryPath = path.join(artifactDir, "qa-011-load-scoring-summary.json");
-  await writeFile(
-    summaryPath,
-    JSON.stringify(
-      {
-        qa_item: "QA-011",
-        mode,
-        title: "Scoring Mutation Writes Workload Summary",
-        target_p95_budget_ms: TARGET_P95_MS,
-        tiers: results.map((r) => ({
-          tier: r.tier,
-          metrics: r.summary,
-        })),
-        evidence_class: mode === "integration" ? "gate_d_integration_benchmark" : "developer_component_diagnostic_only",
-        verdict: "PASS",
-        generated_at: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+
+  const evidenceClass =
+    mode === "staging"
+      ? "gate_d_staging"
+      : mode === "local-integration"
+        ? "local_integration_test"
+        : "developer_component_diagnostic_only";
+
+  const verdict = mode === "component" ? "COMPONENT_PASS_NOT_GATE_D_EVIDENCE" : "PASS";
+
+  const receiptData = {
+    qa_item: "QA-011",
+    mode,
+    evidence_class: evidenceClass,
+    candidate_sha: candidateSha ?? null,
+    competition_id: competitionId ?? null,
+    target_url: baseUrl ?? null,
+    title: "Scoring Mutation Writes Workload Summary",
+    target_p95_budget_ms: TARGET_P95_MS,
+    tiers: results.map((r) => ({
+      tier: r.tier,
+      metrics: r.summary,
+    })),
+    peak_summary: peakResult.summary,
+    verdict,
+    generated_at: new Date().toISOString(),
+  };
+
+  const receiptSha256 = createHash("sha256").update(JSON.stringify(receiptData)).digest("hex");
+  const finalReceipt = { ...receiptData, receipt_sha256: receiptSha256 };
+
+  await writeFile(summaryPath, JSON.stringify(finalReceipt, null, 2), "utf-8");
 
   console.log(`[QA-011] ✓ ${mode.toUpperCase()} scoring benchmark PASS (${summaryPath})\n`);
   if (app) await app.close();

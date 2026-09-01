@@ -3,15 +3,21 @@ import assert from "node:assert/strict";
 import { validateGateDEvidence } from "./validate-gate-d-evidence.mjs";
 
 describe("Gate D Evidence Ledger Validation", () => {
-  it("validates existing QA-010 and QA-011 workload receipts", async () => {
-    const summary = await validateGateDEvidence();
-    assert.equal(summary.valid, true, "Expected Gate D evidence receipts to be valid");
-    assert.ok(summary.passed >= 2, "Expected at least 2 valid receipts");
+  it("fails closed when expected candidate SHA is missing or malformed", async () => {
+    await assert.rejects(async () => {
+      await validateGateDEvidence(undefined);
+    }, /requires a valid 40-character candidate SHA/);
+
+    await assert.rejects(async () => {
+      await validateGateDEvidence("short-sha");
+    }, /requires a valid 40-character candidate SHA/);
   });
 
-  it("fails closed on invalid SHA pattern", async () => {
-    await assert.rejects(async () => {
-      await validateGateDEvidence("invalid-sha-123");
-    }, /Invalid expected candidate SHA/);
+  it("fails closed on component diagnostic evidence or SHA mismatch", async () => {
+    const dummySha = "0123456789abcdef0123456789abcdef01234567";
+    const summary = await validateGateDEvidence(dummySha);
+    // If receipts are currently component receipts or mismatch SHA, summary must report valid: false
+    assert.equal(summary.valid, false);
+    assert.ok(summary.failed.length > 0);
   });
 });

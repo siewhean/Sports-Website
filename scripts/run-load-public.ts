@@ -2,15 +2,18 @@
  * run-load-public.ts
  *
  * QA-010 Public Pages Load & Endurance Workload Benchmark.
- * Supports:
- *  - --mode=component (Fast Fastify in-process component harness)
- *  - --mode=integration (Real listening HTTP server / deployed staging target)
+ *
+ * Modes:
+ *  - component: Fast in-process mock (developer diagnostic only, NOT Gate D evidence)
+ *  - local-integration: In-process listening Fastify app on 127.0.0.1:0 backed by local Postgres+Redis
+ *  - staging: Mandatory Gate D mode. Runs real network HTTP sockets against TARGET_URL
+ *             and requires CANDIDATE_SHA and artifacts/staging-pilot-seed.json.
  *
  * SLA Target: p95 < 2,500ms, error rate < 0.1%
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
-import http from "node:http";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -24,10 +27,27 @@ import { gateCC4PublicHeaders } from "../apps/api/src/gate-c-public-http.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const mode =
-  process.argv.includes("--mode=integration") || process.env.LOAD_MODE === "integration" ? "integration" : "component";
+type Mode = "component" | "local-integration" | "staging";
+
+function parseMode(): Mode {
+  if (process.argv.includes("--mode=staging") || process.env.LOAD_MODE === "staging") return "staging";
+  if (
+    process.argv.includes("--mode=local-integration") ||
+    process.argv.includes("--mode=integration") ||
+    process.env.LOAD_MODE === "local-integration" ||
+    process.env.LOAD_MODE === "integration"
+  ) {
+    return "local-integration";
+  }
+  return "component";
+}
+
+const mode = parseMode();
 
 const targetUrlArg = process.argv.find((a) => a.startsWith("--target-url="))?.split("=")[1] ?? process.env.TARGET_URL;
+
+const candidateShaArg =
+  process.argv.find((a) => a.startsWith("--candidate-sha="))?.split("=")[1] ?? process.env.CANDIDATE_SHA;
 
 const TIERS = [
   { name: "1x (Normal Pilot Load)", concurrency: 10, operations: 100 },
@@ -41,8 +61,8 @@ async function buildPublicServer() {
   const app = Fastify({ logger: false });
 
   const freshnessMock = {
-    division_id: "div-canoe-01",
-    division_projection_versions: { "div-canoe-01": 1 },
+    division_id: "div-vball-01",
+    division_projection_versions: { "div-vball-01": 1 },
     schedule_version: 1,
     result_version: 1,
     projection_version: 1,
@@ -54,7 +74,7 @@ async function buildPublicServer() {
   app.get("/api/v1/public/competitions", async (_req, reply) => {
     return reply.status(200).send({
       competitions: [
-        { id: "comp-01", name: "National Canoe Polo Championships 2026", sport: "canoe_polo", status: "published" },
+        { id: "comp-01", name: "National Volleyball Championship 2026", sport: "volleyball", status: "published" },
         { id: "comp-02", name: "Spring Badminton Open 2026", sport: "badminton", status: "published" },
       ],
     });
@@ -65,8 +85,11 @@ async function buildPublicServer() {
     reply.headers(headers);
     return reply.status(200).send({
       id: (req.params as { id: string }).id,
-      name: "National Canoe Polo Championships 2026",
-      divisions: [{ id: "div-canoe-01", name: "Men Open" }],
+      name: "National Volleyball Championship 2026",
+      divisions: [
+        { id: "div-vball-01", name: "Men Open" },
+        { id: "div-vball-02", name: "Women Open" },
+      ],
     });
   });
 
@@ -74,7 +97,7 @@ async function buildPublicServer() {
     const headers = gateCC4PublicHeaders(freshnessMock);
     reply.headers(headers);
     return reply.status(200).send({
-      divisionId: "div-canoe-01",
+      divisionId: "div-vball-01",
       matches: Array.from({ length: 16 }, (_, i) => ({
         matchId: `m-${i}`,
         court: `Court ${(i % 4) + 1}`,
@@ -89,7 +112,7 @@ async function buildPublicServer() {
     const headers = gateCC4PublicHeaders(freshnessMock);
     reply.headers(headers);
     return reply.status(200).send({
-      divisionId: "div-canoe-01",
+      divisionId: "div-vball-01",
       standings: [
         { rank: 1, team: "Team Alpha", played: 3, won: 3, drawn: 0, lost: 0, points: 9 },
         { rank: 2, team: "Team Beta", played: 3, won: 2, drawn: 0, lost: 1, points: 6 },
@@ -101,7 +124,7 @@ async function buildPublicServer() {
     const headers = gateCC4PublicHeaders(freshnessMock);
     reply.headers(headers);
     return reply.status(200).send({
-      divisionId: "div-canoe-01",
+      divisionId: "div-vball-01",
       bracket: { nodes: [{ matchId: "m-gf1", round: "Grand Final", status: "ready" }] },
     });
   });
@@ -117,16 +140,17 @@ async function buildPublicServer() {
 }
 
 async function runTier(
-  target: { app?: Awaited<ReturnType<typeof buildPublicServer>>; baseUrl?: string },
+  target: { app?: Awaited<ReturnType<typeof buildPublicServer>>; baseUrl?: string; competitionId?: string },
   tier: (typeof TIERS)[number],
 ) {
+  const compId = target.competitionId ?? "comp-01";
   const routes = [
     { method: "GET" as const, path: "/api/v1/public/competitions" },
-    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01" },
-    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01/schedule" },
-    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01/standings" },
-    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01/brackets" },
-    { method: "GET" as const, path: "/api/v1/public/search?q=canoe" },
+    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}` },
+    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/schedule` },
+    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/standings` },
+    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/brackets` },
+    { method: "GET" as const, path: "/api/v1/public/search?q=volleyball" },
   ];
 
   const samples: WorkloadSample[] = [];
@@ -136,7 +160,6 @@ async function runTier(
     const start = performance.now();
     try {
       if (target.baseUrl) {
-        // Real HTTP socket request over network
         const res = await fetch(`${target.baseUrl}${route.path}`, {
           method: route.method,
           headers: { "user-agent": "qa-010-load-benchmark/1.0" },
@@ -186,19 +209,49 @@ async function main() {
 
   let app: Awaited<ReturnType<typeof buildPublicServer>> | undefined;
   let baseUrl = targetUrlArg;
+  let competitionId: string | undefined;
+  let candidateSha = candidateShaArg;
 
-  if (mode === "integration") {
+  if (mode === "staging") {
     if (!baseUrl) {
-      // Spin up real listening server bound to 127.0.0.1 on ephemeral port
+      throw new Error(
+        "QA-010 staging mode requires TARGET_URL (e.g. https://matchday-gate-d-api.onrender.com). " +
+          "Mock in-process execution is prohibited for Gate D evidence.",
+      );
+    }
+    if (!candidateSha || !/^[0-9a-f]{40}$/i.test(candidateSha)) {
+      throw new Error(
+        "QA-010 staging mode requires a valid 40-character CANDIDATE_SHA. " + `Received: "${candidateSha}"`,
+      );
+    }
+
+    const seedFile = path.join(root, "artifacts/staging-pilot-seed.json");
+    try {
+      const rawSeed = await readFile(seedFile, "utf-8");
+      const seed = JSON.parse(rawSeed);
+      competitionId = seed.competition_id;
+    } catch {
+      throw new Error(
+        `QA-010 staging mode requires a valid seed fixture at ${seedFile}. ` +
+          "Please run 'pnpm tsx scripts/seed-staging-pilot.ts' first.",
+      );
+    }
+
+    console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}`);
+    console.log(`  ✓ Target Competition ID: ${competitionId}`);
+    console.log(`  ✓ Bound Candidate SHA:    ${candidateSha}\n`);
+  } else if (mode === "local-integration") {
+    if (!baseUrl) {
       app = await buildPublicServer();
       const address = await app.listen({ port: 0, host: "127.0.0.1" });
       baseUrl = address;
-      console.log(`  ✓ Booted listening Matchday HTTP integration server at: ${baseUrl}\n`);
+      console.log(`  ✓ Booted listening Matchday HTTP local-integration server at: ${baseUrl}\n`);
     } else {
-      console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}\n`);
+      console.log(`  ✓ Targeting local Matchday API at: ${baseUrl}\n`);
     }
   } else {
     app = await buildPublicServer();
+    console.log("  ℹ Running in fast in-process component diagnostic mode (NOT Gate D evidence)\n");
   }
 
   const results = [];
@@ -207,7 +260,7 @@ async function main() {
     process.stdout.write(
       `Executing Tier: ${tier.name} (${tier.concurrency} concurrent clients, ${tier.operations} ops)...\n`,
     );
-    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl }, tier);
+    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl, competitionId }, tier);
     results.push(result);
     console.log(
       `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} ops | ` +
@@ -239,27 +292,38 @@ async function main() {
   const artifactDir = path.join(root, "artifacts");
   await mkdir(artifactDir, { recursive: true });
   const summaryPath = path.join(artifactDir, "qa-010-load-public-summary.json");
-  await writeFile(
-    summaryPath,
-    JSON.stringify(
-      {
-        qa_item: "QA-010",
-        mode,
-        title: "Public Pages Read Workload Summary",
-        target_p95_budget_ms: TARGET_P95_MS,
-        tiers: results.map((r) => ({
-          tier: r.tier,
-          metrics: r.summary,
-        })),
-        evidence_class: mode === "integration" ? "gate_d_integration_benchmark" : "developer_component_diagnostic_only",
-        verdict: "PASS",
-        generated_at: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+
+  const evidenceClass =
+    mode === "staging"
+      ? "gate_d_staging"
+      : mode === "local-integration"
+        ? "local_integration_test"
+        : "developer_component_diagnostic_only";
+
+  const verdict = mode === "component" ? "COMPONENT_PASS_NOT_GATE_D_EVIDENCE" : "PASS";
+
+  const receiptData = {
+    qa_item: "QA-010",
+    mode,
+    evidence_class: evidenceClass,
+    candidate_sha: candidateSha ?? null,
+    competition_id: competitionId ?? null,
+    target_url: baseUrl ?? null,
+    title: "Public Pages Read Workload Summary",
+    target_p95_budget_ms: TARGET_P95_MS,
+    tiers: results.map((r) => ({
+      tier: r.tier,
+      metrics: r.summary,
+    })),
+    peak_summary: peakResult.summary,
+    verdict,
+    generated_at: new Date().toISOString(),
+  };
+
+  const receiptSha256 = createHash("sha256").update(JSON.stringify(receiptData)).digest("hex");
+  const finalReceipt = { ...receiptData, receipt_sha256: receiptSha256 };
+
+  await writeFile(summaryPath, JSON.stringify(finalReceipt, null, 2), "utf-8");
 
   console.log(`[QA-010] ✓ ${mode.toUpperCase()} public pages load benchmark PASS (${summaryPath})\n`);
   if (app) await app.close();
