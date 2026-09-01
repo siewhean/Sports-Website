@@ -1,52 +1,36 @@
 /**
- * seed-staging-pilot.ts
+ * Gate D staging fixture seeder.
  *
- * Provisions a complete multi-division competition fixture onto the target
- * database / staging environment for Gate D qualification and load benchmarking.
- *
- * Generates: artifacts/staging-pilot-seed.json
+ * Core competition/scoring state is created through the existing Phase 3 / Phase 2
+ * runtimes so the fixture inherits the current sport-settings, entry, format,
+ * materialisation, publication, and scoring-access contracts. Direct SQL is kept
+ * to bootstrap identity/organisation rows and to combine two runtime-generated
+ * draft schedules into the multi-division schedule that Phase 7 needs to qualify.
  */
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SPORT_PACKS } from "@matchday/domain";
+import type { PostgresJsSql } from "@matchday/identity";
 import postgres from "postgres";
-import { SPORT_PACKS } from "../packages/domain/src/index.js";
+import { phase2DomainAdapter } from "../apps/api/src/phase-2-domain-adapter.js";
+import { Phase2Runtime } from "../apps/api/src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../apps/api/src/phase-3-domain-adapter.js";
+import { Phase3Runtime } from "../apps/api/src/phase-3-runtime.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
-const targetUrl = process.env.TARGET_URL ?? "http://127.0.0.1:4101";
-const normalizedTargetUrl = targetUrl.replace(/\/$/, "");
-
-function canonicalHash(value: unknown): string {
-  const canonical = (item: unknown): string => {
-    if (Array.isArray(item)) return `[${item.map(canonical).join(",")}]`;
-    if (item && typeof item === "object") {
-      const record = item as Record<string, unknown>;
-      return `{${Object.keys(record)
-        .sort()
-        .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-        .join(",")}}`;
-    }
-    return JSON.stringify(item);
-  };
-  return createHash("sha256").update(canonical(value)).digest("hex");
-}
+const targetUrl = (process.env.TARGET_URL ?? "http://127.0.0.1:4101").replace(/\/$/, "");
+const scoringPassTtlMs = 7 * 24 * 60 * 60_000;
 
 async function requireApiResponse(url: string, init: RequestInit | undefined, label: string): Promise<Response> {
   let response: Response;
   try {
-    response = await fetch(url, {
-      ...init,
-      signal: AbortSignal.timeout(15_000),
-    });
+    response = await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
   } catch (error) {
-    throw new Error(`Post-seed API verification failed for ${label}: request could not reach ${url}`, {
-      cause: error,
-    });
+    throw new Error(`Post-seed API verification failed for ${label}: ${url} was unreachable`, { cause: error });
   }
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -58,395 +42,309 @@ async function requireApiResponse(url: string, init: RequestInit | undefined, la
 }
 
 async function main() {
-  console.log("════════════════════════════════════════════════════════════");
-  console.log(" Seeding Staging Pilot Fixture for Gate D Load Benchmarking");
-  console.log(` Target Database: ${databaseUrl.replace(/:[^:@]+@/, ":***@")}`);
-  console.log(` Target API URL:  ${normalizedTargetUrl}`);
-  console.log("════════════════════════════════════════════════════════════\n");
+  const sql = postgres(databaseUrl, { max: 8, onnotice: () => undefined });
+  const db = sql as unknown as PostgresJsSql;
+  const accountId = randomUUID();
+  const organisationId = randomUUID();
+  const competitionSlug = `pilot-vball-${Date.now()}`;
+  const actor = { accountId };
 
-  const client = postgres(databaseUrl, {
-    max: 5,
-    onnotice: () => undefined,
-  });
+  try {
+    console.log("════════════════════════════════════════════════════════════");
+    console.log(" Gate D staging pilot seeder — runtime-backed fixture");
+    console.log(` Database: ${databaseUrl.replace(/:[^:@]+@/, ":***@")}`);
+    console.log(` API:      ${targetUrl}`);
+    console.log("════════════════════════════════════════════════════════════\n");
 
-  const orgId = randomUUID();
-  const userId = randomUUID();
-  const competitionId = randomUUID();
-  const compSlug = `pilot-vball-${Date.now()}`;
-
-  // 1. Seed active sport packs
-  for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
-    const hash = phase3DomainAdapter.hash(pack);
-    await client`
-      INSERT INTO sport_pack_versions (
-        sport_code, version, schema_version, definition, definition_hash, status, revision, activated_at
-      ) VALUES (
-        ${sportId}, ${pack.version}, 1, ${client.json(pack)}, ${hash}, 'active', 1, now()
-      ) ON CONFLICT (sport_code, version) DO UPDATE SET
-        status = 'active',
-        activated_at = now();
-    `;
-  }
-
-  // 2. Seed account, organisation & owner
-  await client`
-    INSERT INTO accounts (id, primary_email, display_name, email_verified_at)
-    VALUES (${userId}, 'pilot-organiser@matchday.test', 'Pilot Organiser', now())
-    ON CONFLICT (id) DO NOTHING;
-  `;
-
-  await client.begin(async (tx) => {
-    await tx`
-      INSERT INTO organisations (id, name, slug)
-      VALUES (${orgId}, 'National Volleyball League', ${`nvl-${randomUUID().slice(0, 8)}`});
-    `;
-    await tx`
-      INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
-      VALUES (${orgId}, ${userId}, 'owner', 'active');
-    `;
-  });
-
-  // 3. Seed competition
-  await client`
-    INSERT INTO competitions (
-      id, organisation_id, created_by, name, slug, sport_code, timezone, starts_on, ends_on, venue, address, country_code, locale
-    ) VALUES (
-      ${competitionId}, ${orgId}, ${userId}, 'National Volleyball Championship 2026',
-      ${compSlug}, 'volleyball', 'Asia/Singapore', '2026-09-01', '2026-09-02',
-      'Singapore Indoor Stadium', '2 Stadium Walk', 'SG', 'en-SG'
-    );
-  `;
-
-  // 4. Seed playing areas (Courts) with valid sort_order and slot_minutes
-  const court1Id = randomUUID();
-  const court2Id = randomUUID();
-  await client`
-    INSERT INTO playing_areas (id, competition_id, name, sort_order, slot_minutes, fixed_reserve_slots)
-    VALUES
-      (${court1Id}, ${competitionId}, 'Court 1', 1, 45, 0),
-      (${court2Id}, ${competitionId}, 'Court 2', 2, 45, 0);
-  `;
-
-  // 5. Seed 2 divisions (Men Open & Women Open, 8 teams each)
-  const divisions = [
-    { id: randomUUID(), name: "Men Open", teamLimit: 8 },
-    { id: randomUUID(), name: "Women Open", teamLimit: 8 },
-  ];
-
-  const matchRecords: { matchId: string; divisionId: string; passToken: string }[] = [];
-  const formatRevisionIds: string[] = [];
-
-  for (let divIdx = 0; divIdx < divisions.length; divIdx++) {
-    const div = divisions[divIdx]!;
-
-    await client`
-      INSERT INTO divisions (id, competition_id, name, team_limit)
-      VALUES (${div.id}, ${competitionId}, ${div.name}, ${div.teamLimit});
-    `;
-
-    await client`
-      INSERT INTO division_sport_settings (
-        id, competition_id, division_id, sport_code, settings, schema_version
-      ) VALUES (
-        ${randomUUID()}, ${competitionId}, ${div.id}, 'volleyball',
-        ${client.json({ setsToWin: 3, pointsPerSet: 25, finalSetPoints: 15, deuceMargin: 2 })},
-        1
-      );
-    `;
-
-    for (let t = 1; t <= 8; t++) {
-      await client`
-        INSERT INTO division_entries (id, competition_id, division_id, name, seed, status)
-        VALUES (${randomUUID()}, ${competitionId}, ${div.id}, ${`${div.name} Team ${t}`}, ${t}, 'active');
+    for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
+      const hash = phase3DomainAdapter.hash(pack);
+      await sql`
+        INSERT INTO sport_pack_versions(
+          sport_code,version,schema_version,definition,definition_hash,status,revision,activated_at
+        ) VALUES(
+          ${sportId},${pack.version},${pack.schemaVersion},${sql.json(pack)},${hash},'active',1,now()
+        )
+        ON CONFLICT (sport_code,version) DO UPDATE SET
+          definition=EXCLUDED.definition,
+          definition_hash=EXCLUDED.definition_hash,
+          schema_version=EXCLUDED.schema_version,
+          status='active',
+          activated_at=now();
       `;
     }
 
-    const formatRevId = randomUUID();
-    formatRevisionIds.push(formatRevId);
-    const divMatchIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
-    const formatDef = {
-      id: formatRevId,
-      schemaVersion: 1,
-      entryCount: 8,
-      stages: [
-        {
-          id: "semi-finals",
-          label: "Semi-Finals",
-          kind: "single_elimination",
-          order: 1,
-          groupIds: [],
-          groupSize: null,
-          outputRanks: 4,
-          matchIds: [divMatchIds[0], divMatchIds[1]],
-        },
-        {
-          id: "finals",
-          label: "Finals",
-          kind: "single_elimination",
-          order: 2,
-          groupIds: [],
-          groupSize: null,
-          outputRanks: 2,
-          matchIds: [divMatchIds[2], divMatchIds[3]],
-        },
-      ],
-      matches: [
-        {
-          id: divMatchIds[0],
-          stageId: "semi-finals",
-          round: 1,
-          order: 1,
-          purpose: "semifinal",
-          home: { type: "entry_seed", seed: 1 },
-          away: { type: "entry_seed", seed: 4 },
-        },
-        {
-          id: divMatchIds[1],
-          stageId: "semi-finals",
-          round: 1,
-          order: 2,
-          purpose: "semifinal",
-          home: { type: "entry_seed", seed: 2 },
-          away: { type: "entry_seed", seed: 3 },
-        },
-        {
-          id: divMatchIds[2],
-          stageId: "finals",
-          round: 2,
-          order: 1,
-          purpose: "championship",
-          home: { type: "match_winner", matchId: divMatchIds[0] },
-          away: { type: "match_winner", matchId: divMatchIds[1] },
-        },
-        {
-          id: divMatchIds[3],
-          stageId: "finals",
-          round: 2,
-          order: 2,
-          purpose: "third_place",
-          home: { type: "match_loser", matchId: divMatchIds[0] },
-          away: { type: "match_loser", matchId: divMatchIds[1] },
-        },
-      ],
-      terminalMatchIds: [divMatchIds[2]],
+    await sql`
+      INSERT INTO accounts(id,primary_email,display_name,email_verified_at)
+      VALUES(${accountId},${`pilot-${accountId}@matchday.test`},'Gate D Pilot Organiser',now());
+    `;
+    await sql.begin(async (tx) => {
+      await tx`
+        INSERT INTO organisations(id,name,slug)
+        VALUES(${organisationId},'Gate D National Volleyball League',${`gate-d-nvl-${randomUUID().slice(0, 8)}`});
+      `;
+      await tx`
+        INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+        VALUES(${organisationId},${accountId},'owner','active');
+      `;
+    });
+
+    const phase3 = new Phase3Runtime(db, phase3DomainAdapter);
+    const phase2 = new Phase2Runtime(
+      db,
+      phase2DomainAdapter,
+      () => new Date(),
+      undefined,
+      "gate-d-staging-fallback-hmac-secret-at-least-32-chars",
+    );
+
+    const competition = await phase3.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "National Volleyball Championship 2026",
+        slug: competitionSlug,
+        sportCode: "volleyball",
+        venue: "Singapore Indoor Stadium",
+        address: "2 Stadium Walk",
+        countryCode: "SG",
+        startsOn: "2026-09-01",
+        endsOn: "2026-09-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+      },
+      randomUUID(),
+      `gate-d-competition-${randomUUID()}`,
+    );
+    const competitionId = String(competition.id);
+
+    await sql`
+      INSERT INTO competition_publications(competition_id)
+      VALUES(${competitionId}) ON CONFLICT (competition_id) DO NOTHING;
+    `;
+
+    const divisionDefinitions = [
+      { name: "Men Open", code: "MEN" },
+      { name: "Women Open", code: "WOMEN" },
+    ] as const;
+    const divisions: Array<{ id: string; name: string; code: string }> = [];
+
+    for (const definition of divisionDefinitions) {
+      const created = await phase3.createDivision(
+        actor,
+        competitionId,
+        { name: definition.name, code: definition.code, entryLimit: 8 },
+        randomUUID(),
+        `gate-d-division-${definition.code.toLowerCase()}-${randomUUID()}`,
+      );
+      const divisionId = String((created as Record<string, unknown>).id);
+      divisions.push({ id: divisionId, ...definition });
+
+      await phase2.replaceEntries(
+        actor,
+        competitionId,
+        divisionId,
+        Array.from({ length: 8 }, (_, index) => ({
+          name: `${definition.name} Team ${index + 1}`,
+          seed: index + 1,
+        })),
+        randomUUID(),
+      );
+    }
+
+    const gateDVolleyballSettings = {
+      bestOf: 1,
+      regularTargetPoints: 1,
+      decidingTargetPoints: 1,
+      winBy: 1,
+      pointCap: 1,
     };
-
-    const defHash = phase3DomainAdapter.hash(formatDef);
-    await client`
-      INSERT INTO format_revisions (
-        id, competition_id, division_id, revision, definition, definition_hash, status, created_by
-      ) VALUES (
-        ${formatRevId}, ${competitionId}, ${div.id}, 1, ${client.json(formatDef)}, ${defHash}, 'draft', ${userId}
-      );
+    await sql`
+      UPDATE division_sport_settings
+      SET settings_override=${sql.json(gateDVolleyballSettings)},revision=revision+1,
+          updated_by=${accountId},updated_at=now()
+      WHERE competition_id=${competitionId};
     `;
 
-    await client`
-      INSERT INTO format_validation_evidence (
-        id, format_revision_id, definition_hash, valid, graph_acyclic, graph_reachable,
-        slots_unambiguous, deterministic_match_count, available_match_slots, required_match_slots,
-        recommendation_fits_capacity, issues, validated_at, validated_by
-      ) VALUES (
-        ${randomUUID()}, ${formatRevId}, ${defHash}, true, true, true,
-        true, 4, 10, 4, true, '[]'::jsonb, now(), ${userId}
-      );
-    `;
+    await phase2.replaceCapacity(
+      actor,
+      competitionId,
+      [
+        {
+          name: "Court 1",
+          windows: [{ startsAt: "2026-09-01T00:00:00.000Z", endsAt: "2026-09-02T10:00:00.000Z" }],
+        },
+        {
+          name: "Court 2",
+          windows: [{ startsAt: "2026-09-01T00:00:00.000Z", endsAt: "2026-09-02T10:00:00.000Z" }],
+        },
+      ],
+      randomUUID(),
+    );
 
-    for (let mIdx = 0; mIdx < divMatchIds.length; mIdx++) {
-      const mId = divMatchIds[mIdx]!;
-      await client`
-        INSERT INTO matches (
-          id, competition_id, division_id, format_revision_id, code, stage, round_number, ordinal, state
-        ) VALUES (
-          ${mId}, ${competitionId}, ${div.id}, ${formatRevId},
-          ${`D${divIdx + 1}-M${mIdx + 1}`},
-          ${mIdx < 2 ? "semi-finals" : "finals"},
-          ${mIdx < 2 ? 1 : 2},
-          ${mIdx + 1},
-          'ready'
-        );
-      `;
-
-      const rawSecret = randomBytes(24).toString("hex");
-      const secretHash = createHash("sha256").update(rawSecret).digest();
-      await client`
-        INSERT INTO scoring_access_passes (
-          id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope
-        ) VALUES (
-          ${randomUUID()}, ${competitionId}, ${mId}, ${secretHash},
-          now() + interval '7 days', ${userId}, 'scorekeeper',
-          '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
-        );
-      `;
-
-      matchRecords.push({ matchId: mId, divisionId: div.id, passToken: rawSecret });
+    const formats: Array<{ id: string; divisionId: string }> = [];
+    const schedules: Array<{ id: string; divisionId: string; formatId: string }> = [];
+    for (const division of divisions) {
+      const format = await phase2.generateFormat(actor, competitionId, division.id, randomUUID());
+      formats.push({ id: format.id, divisionId: division.id });
+      const schedule = await phase2.generateSchedule(actor, competitionId, format.id, randomUUID());
+      schedules.push({ id: schedule.id, divisionId: division.id, formatId: format.id });
     }
-  }
 
-  // 6. Seed schedule revision containing both divisions
-  const scheduleRevId = randomUUID();
-  const inputHash = canonicalHash({ competitionId, matchCount: matchRecords.length });
-  await client`
-    INSERT INTO schedule_revisions (
-      id, competition_id, format_revision_id, revision, input_hash, status, created_by
-    ) VALUES (
-      ${scheduleRevId}, ${competitionId}, ${formatRevisionIds[0]!}, 1, ${inputHash}, 'published', ${userId}
-    );
-  `;
+    const aggregate = schedules[0];
+    const secondary = schedules[1];
+    if (!aggregate || !secondary) throw new Error("Gate D fixture requires two generated schedules");
 
-  // 7. Seed schedule_revision_formats for both divisions
-  for (let divIdx = 0; divIdx < divisions.length; divIdx++) {
-    await client`
-      INSERT INTO schedule_revision_formats (
-        schedule_revision_id, competition_id, division_id, format_revision_id
-      ) VALUES (
-        ${scheduleRevId}, ${competitionId}, ${divisions[divIdx]!.id}, ${formatRevisionIds[divIdx]!}
-      );
+    await sql.begin(async (tx) => {
+      for (const format of formats) {
+        await tx`
+          INSERT INTO schedule_revision_formats(
+            schedule_revision_id,competition_id,division_id,format_revision_id
+          ) VALUES(${aggregate.id},${competitionId},${format.divisionId},${format.id})
+          ON CONFLICT DO NOTHING;
+        `;
+      }
+      await tx`
+        INSERT INTO scheduled_matches(
+          schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at
+        )
+        SELECT ${aggregate.id},match_id,competition_id,playing_area_id,
+               starts_at + interval '8 hours',ends_at + interval '8 hours'
+        FROM scheduled_matches WHERE schedule_revision_id=${secondary.id};
+      `;
+    });
+
+    const publication = await phase2.publishSchedule(actor, competitionId, aggregate.id, randomUUID());
+
+    await sql`
+      UPDATE format_revisions
+      SET status='published',published_at=COALESCE(published_at,now())
+      WHERE id=${secondary.formatId} AND status='draft';
     `;
-  }
 
-  // 8. Seed scheduled matches with court assignments and time slots
-  const baseStartTime = new Date("2026-09-01T09:00:00.000Z");
-  for (let i = 0; i < matchRecords.length; i++) {
-    const m = matchRecords[i]!;
-    const areaId = i % 2 === 0 ? court1Id : court2Id;
-    const matchStart = new Date(baseStartTime.getTime() + Math.floor(i / 2) * 60 * 60 * 1000);
-    const matchEnd = new Date(matchStart.getTime() + 45 * 60 * 1000);
-    await client`
-      INSERT INTO scheduled_matches (
-        schedule_revision_id, match_id, competition_id, playing_area_id, starts_at, ends_at
-      ) VALUES (
-        ${scheduleRevId}, ${m.matchId}, ${competitionId}, ${areaId}, ${matchStart.toISOString()}, ${matchEnd.toISOString()}
-      );
+    const scoreableRows = await sql<{ match_id: string; division_id: string }[]>`
+      SELECT DISTINCT m.id AS match_id,m.division_id
+      FROM matches m
+      JOIN scheduled_matches sm ON sm.match_id=m.id AND sm.schedule_revision_id=${aggregate.id}
+      WHERE m.competition_id=${competitionId}
+        AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
+      ORDER BY m.division_id,m.id;
     `;
-  }
+    if (scoreableRows.length < 2) throw new Error("Gate D fixture did not produce enough scoreable matches");
 
-  // 9. Seed competition publication record linking the published schedule revision
-  await client`
-    INSERT INTO competition_publications (
-      competition_id, published_schedule_revision_id, schedule_version, schedule_published_at, updated_at
-    ) VALUES (
-      ${competitionId}, ${scheduleRevId}, 1, now(), now()
-    ) ON CONFLICT (competition_id) DO UPDATE SET
-      schedule_version = competition_publications.schedule_version + 1,
-      published_schedule_revision_id = ${scheduleRevId},
-      schedule_published_at = now(),
-      updated_at = now();
-  `;
+    const scoreableMatches: Array<{ matchId: string; divisionId: string; rawToken: string }> = [];
+    for (const row of scoreableRows) {
+      const pass = await phase2.createAccessPass(
+        actor,
+        competitionId,
+        row.match_id,
+        {
+          expiresAt: new Date(Date.now() + scoringPassTtlMs).toISOString(),
+          role: "scorekeeper",
+          idempotencyKey: `gate-d-pass-${row.match_id}-${randomUUID()}`,
+        },
+        randomUUID(),
+      );
+      if (!pass.token) throw new Error(`Scoring access pass for ${row.match_id} did not return its one-time token`);
+      scoreableMatches.push({ matchId: row.match_id, divisionId: row.division_id, rawToken: pass.token });
+    }
 
-  console.log(`✓ Competition seeded: ${competitionId} (Slug: ${compSlug})`);
-  console.log(`✓ Divisions seeded:    ${divisions.length} (8 teams each)`);
-  console.log(`✓ Matches seeded:      ${matchRecords.length} with scheduled courts & timeslots`);
-  console.log(`✓ Scoring passes:      ${matchRecords.length} active scorekeeper passes`);
+    const [counts] = await sql<
+      {
+        divisions: number;
+        entries: number;
+        scheduled_matches: number;
+        linked_formats: number;
+        published_schedule: string | null;
+      }[]
+    >`
+      SELECT
+        (SELECT count(*)::int FROM divisions WHERE competition_id=${competitionId}) AS divisions,
+        (SELECT count(*)::int FROM division_entries e JOIN divisions d ON d.id=e.division_id
+          WHERE d.competition_id=${competitionId} AND e.status IN ('confirmed','active')) AS entries,
+        (SELECT count(*)::int FROM scheduled_matches WHERE schedule_revision_id=${aggregate.id}) AS scheduled_matches,
+        (SELECT count(*)::int FROM schedule_revision_formats WHERE schedule_revision_id=${aggregate.id}) AS linked_formats,
+        (SELECT published_schedule_revision_id::text FROM competition_publications
+          WHERE competition_id=${competitionId}) AS published_schedule;
+    `;
+    if (
+      !counts ||
+      counts.divisions !== 2 ||
+      counts.entries !== 16 ||
+      counts.scheduled_matches < 2 ||
+      counts.linked_formats !== 2 ||
+      counts.published_schedule !== aggregate.id
+    ) {
+      throw new Error(`Post-seed database verification failed: ${JSON.stringify(counts)}`);
+    }
 
-  // 10. Post-seed database verification
-  console.log("\nExecuting post-seed verification checks...");
-  const divCheck = await client`SELECT count(*)::int as count FROM divisions WHERE competition_id = ${competitionId};`;
-  if (divCheck[0]!.count !== 2) {
-    throw new Error(`Post-seed validation failed: Expected 2 divisions, found ${divCheck[0]!.count}`);
-  }
-
-  const entryCheck =
-    await client`SELECT count(*)::int as count FROM division_entries WHERE competition_id = ${competitionId} AND status = 'active';`;
-  if (entryCheck[0]!.count !== 16) {
-    throw new Error(`Post-seed validation failed: Expected 16 active entries, found ${entryCheck[0]!.count}`);
-  }
-
-  const formatCheck = await client`
-    SELECT count(*)::int as count
-    FROM format_validation_evidence e
-    JOIN format_revisions f ON f.id = e.format_revision_id
-    WHERE f.competition_id = ${competitionId} AND e.valid = true;
-  `;
-  if (formatCheck[0]!.count !== 2) {
-    throw new Error(`Post-seed validation failed: Expected 2 valid format revisions, found ${formatCheck[0]!.count}`);
-  }
-
-  const matchCheck =
-    await client`SELECT count(*)::int as count FROM scheduled_matches WHERE schedule_revision_id = ${scheduleRevId};`;
-  if (matchCheck[0]!.count !== matchRecords.length) {
-    throw new Error(
-      `Post-seed validation failed: Expected ${matchRecords.length} scheduled matches, found ${matchCheck[0]!.count}`,
+    await requireApiResponse(`${targetUrl}/api/v1/public/competitions/${competitionId}`, undefined, "public competition");
+    await requireApiResponse(
+      `${targetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
+      undefined,
+      "public multi-division schedule",
     );
-  }
 
-  const pubCheck =
-    await client`SELECT published_schedule_revision_id FROM competition_publications WHERE competition_id = ${competitionId};`;
-  if (pubCheck[0]?.published_schedule_revision_id !== scheduleRevId) {
-    throw new Error(
-      `Post-seed validation failed: Competition publication does not point to schedule revision ${scheduleRevId}`,
+    const exchangeCandidate = scoreableMatches[0]!;
+    const exchangeResponse = await requireApiResponse(
+      `${targetUrl}/api/v1/scoring/access/exchange`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token: exchangeCandidate.rawToken,
+          expected_match_id: exchangeCandidate.matchId,
+          device_id: `seed-verification-${randomUUID()}`,
+          device_label: "Gate D staging seed verification",
+        }),
+      },
+      "scoring access exchange",
     );
+    const exchange = (await exchangeResponse.json()) as {
+      match_id?: string;
+      session_id?: string;
+      session_token?: string;
+    };
+    if (
+      exchange.match_id !== exchangeCandidate.matchId ||
+      typeof exchange.session_id !== "string" ||
+      typeof exchange.session_token !== "string"
+    ) {
+      throw new Error(`Post-seed scoring exchange verification returned invalid state: ${JSON.stringify(exchange)}`);
+    }
+
+    const artifactDir = path.join(root, "artifacts");
+    await mkdir(artifactDir, { recursive: true });
+    const artifactPath = path.join(artifactDir, "staging-pilot-seed.json");
+    const output = {
+      generated_at_utc: new Date().toISOString(),
+      target_url: targetUrl,
+      organisation_id: organisationId,
+      competition_id: competitionId,
+      competition_slug: competitionSlug,
+      schedule_revision_id: aggregate.id,
+      schedule_version: publication.schedule_version,
+      divisions,
+      matches: scoreableMatches.map(({ matchId, rawToken }) => ({ matchId, rawToken })),
+      scoreable_matches: scoreableMatches.map(({ matchId, divisionId, rawToken }) => ({
+        match_id: matchId,
+        division_id: divisionId,
+        pass_token: rawToken,
+      })),
+    };
+    await writeFile(artifactPath, JSON.stringify(output, null, 2), "utf8");
+
+    console.log(`✓ Runtime-backed competition: ${competitionId}`);
+    console.log(`✓ Published schedule:          ${aggregate.id}`);
+    console.log("✓ Divisions / entries:        2 / 16");
+    console.log(`✓ Scoreable matches:          ${scoreableMatches.length}`);
+    console.log("✓ Deployed API verification:  PASS");
+    console.log(`✓ Artifact:                    ${artifactPath}`);
+  } finally {
+    await sql.end({ timeout: 2 });
   }
-  console.log("✓ Database verification passed.");
-
-  // 11. Verify the seeded rows through the deployed production HTTP surface before
-  // writing an artifact that downstream Gate D runners are allowed to consume.
-  await requireApiResponse(
-    `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}`,
-    undefined,
-    "public competition projection",
-  );
-  await requireApiResponse(
-    `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
-    undefined,
-    "public schedule projection",
-  );
-
-  const firstScoreableMatch = matchRecords[0];
-  if (!firstScoreableMatch) throw new Error("Post-seed validation failed: no scoreable match exists");
-  const exchangeResponse = await requireApiResponse(
-    `${normalizedTargetUrl}/api/v1/scoring/access/exchange`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        token: firstScoreableMatch.passToken,
-        expected_match_id: firstScoreableMatch.matchId,
-        device_id: `seed-verification-${randomUUID()}`,
-        device_label: "Gate D staging seed verification",
-      }),
-    },
-    "scoring access exchange",
-  );
-  const exchange = (await exchangeResponse.json()) as { match_id?: string; session_id?: string; session_token?: string };
-  if (
-    exchange.match_id !== firstScoreableMatch.matchId ||
-    typeof exchange.session_id !== "string" ||
-    typeof exchange.session_token !== "string"
-  ) {
-    throw new Error("Post-seed API verification failed: scoring exchange returned invalid session state");
-  }
-  console.log("✓ Deployed API verification passed.");
-
-  // Output JSON artifact. `matches` is the canonical QA-011 runner contract;
-  // `scoreable_matches` is retained as a human-readable compatibility view.
-  const outputData = {
-    generated_at_utc: new Date().toISOString(),
-    target_url: normalizedTargetUrl,
-    database_url: databaseUrl.replace(/:[^:@]+@/, ":***@"),
-    organisation_id: orgId,
-    competition_id: competitionId,
-    competition_slug: compSlug,
-    public_competition_url: `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}`,
-    public_schedule_url: `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
-    divisions: divisions.map((d) => ({ id: d.id, name: d.name })),
-    matches: matchRecords.map((m) => ({ matchId: m.matchId, rawToken: m.passToken })),
-    scoreable_matches: matchRecords.map((m) => ({
-      match_id: m.matchId,
-      division_id: m.divisionId,
-      pass_token: m.passToken,
-    })),
-  };
-
-  const artifactDir = path.join(root, "artifacts");
-  await mkdir(artifactDir, { recursive: true });
-  const seedFile = path.join(artifactDir, "staging-pilot-seed.json");
-  await writeFile(seedFile, JSON.stringify(outputData, null, 2), "utf8");
-
-  console.log(`✓ Exported staging seed state to: ${seedFile}\n`);
-  await client.end({ timeout: 2 });
 }
 
-main().catch((err) => {
-  console.error("❌ Staging Pilot Seeder failed:", err);
-  process.exit(1);
+main().catch((error) => {
+  console.error("❌ Gate D staging pilot seeder failed:", error);
+  process.exitCode = 1;
 });
