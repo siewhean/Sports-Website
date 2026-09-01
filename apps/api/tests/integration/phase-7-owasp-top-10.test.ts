@@ -6,6 +6,7 @@ import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import { SPORT_PACKS } from "@matchday/domain";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
 import { DeterministicIdentityProvider } from "@matchday/identity/testing";
+import { Redis } from "ioredis";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../../src/app.js";
 import { healthyProbes, testConfig } from "../helpers.js";
@@ -16,16 +17,21 @@ import { Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
+import { RedisScoringAccessRateLimiter } from "../../src/scoring-access-rate-limit.js";
+import { ErrorCode } from "../../src/errors.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
+const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
 const schema = `test_phase7_owasp_${randomUUID().replaceAll("-", "")}`;
+const namespace = `matchday:test:owasp-rate-limit:${randomUUID()}:`;
 const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../packages/database/migrations",
 );
 
 let client!: Sql;
+let redis!: Redis;
 let identityProvider!: DeterministicIdentityProvider;
 let identityRuntime!: IdentityApiRuntime;
 let entitlementRuntime!: EntitlementRuntime;
@@ -50,6 +56,8 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       connection: { search_path: schema },
       onnotice: () => undefined,
     });
+
+    redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
 
     for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
       const hash = phase3DomainAdapter.hash(pack);
@@ -114,12 +122,18 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       systemClock,
     );
 
+    const rateLimiter = new RedisScoringAccessRateLimiter(
+      redis,
+      "gate-c-scoring-access-test-hmac-secret-32-bytes",
+      namespace,
+    );
+
     entitlementRuntime = new EntitlementRuntime(client as unknown as PostgresJsSql);
     phase2Runtime = new Phase2Runtime(
       client as unknown as PostgresJsSql,
       phase2DomainAdapter,
       () => new Date(),
-      undefined,
+      rateLimiter,
       "test-fallback-hmac-secret-at-least-32-chars-long",
     );
     phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
@@ -142,6 +156,17 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
   afterAll(async () => {
     if (app) {
       await app.close();
+    }
+    if (redis) {
+      const keys: string[] = [];
+      let cursor = "0";
+      do {
+        const [next, batch] = await redis.scan(cursor, "MATCH", `${namespace}*`, "COUNT", 100);
+        cursor = next;
+        keys.push(...batch);
+      } while (cursor !== "0");
+      if (keys.length > 0) await redis.unlink(...keys);
+      await redis.quit();
     }
     if (client) {
       await client.end({ timeout: 2 });
@@ -216,9 +241,10 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
         },
       });
 
-      // Must be rejected specifically due to tenant authorization boundary
-      expect([403, 404]).toContain(idorResponse.statusCode);
-      expect(idorResponse.statusCode).not.toBe(200);
+      // Must be rejected with exact 403 COMPETITION_ACCESS_DENIED
+      expect(idorResponse.statusCode).toBe(403);
+      const body = idorResponse.json() as { error?: { code?: string } };
+      expect([ErrorCode.COMPETITION_ACCESS_DENIED, ErrorCode.ORGANISATION_ACCESS_DENIED]).toContain(body.error?.code);
     });
   });
 
@@ -407,7 +433,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
   });
 
   describe("A07: Identification and Authentication Failures (Rate Limiting & Revocation)", () => {
-    it("accepts valid access pass and rejects revoked access pass via HTTP scoring exchange", async () => {
+    it("accepts valid access pass, rejects revoked pass, and enforces 429 rate limiting on brute force abuse", async () => {
       const comp = await phase3Runtime.createCompetition(
         { accountId: tenantA_userId },
         {
@@ -521,6 +547,50 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       });
 
       expect([401, 403, 404]).toContain(revokedExchange.statusCode);
+
+      // 3. Redis-backed 429 Rate Limiting Brute Force Drill
+      const targetAttackerIp = "198.51.100.42";
+      const forgedCredential = "bad-credential-brute-force-attack";
+
+      // Make 5 consecutive invalid exchange attempts from the attacker IP
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        const attemptRes = await app.inject({
+          method: "POST",
+          url: "/api/v1/scoring/access/exchange",
+          headers: {
+            "content-type": "application/json",
+            "x-forwarded-for": targetAttackerIp,
+            origin: "https://app.matchday.test",
+          },
+          payload: {
+            token: forgedCredential,
+            expected_match_id: matchId,
+            device_id: "attacker-device-id-at-least-32-chars-long",
+          },
+        });
+        expect([401, 403, 404]).toContain(attemptRes.statusCode);
+      }
+
+      // The 5th attempt hits rate limit threshold -> HTTP 429
+      const limitedRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/scoring/access/exchange",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": targetAttackerIp,
+          origin: "https://app.matchday.test",
+        },
+        payload: {
+          token: forgedCredential,
+          expected_match_id: matchId,
+          device_id: "attacker-device-id-at-least-32-chars-long",
+        },
+      });
+
+      expect(limitedRes.statusCode).toBe(429);
+      const limitedBody = limitedRes.json() as { error?: { code?: string } };
+      expect(limitedBody.error?.code).toBe(ErrorCode.ACCESS_RATE_LIMITED);
+      expect(limitedRes.headers["retry-after"]).toBeDefined();
     });
   });
 

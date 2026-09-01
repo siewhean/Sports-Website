@@ -1,5 +1,28 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+
+type Phase7E2EState = {
+  competitionId: string;
+  competitionSlug: string;
+  publicCompetitionPath: string;
+  scorekeeperPath: string;
+  scoredMatchId: string;
+  passToken: string;
+  xssCompetitionPath: string;
+  xssMaliciousName: string;
+};
+
+async function readE2EState(): Promise<Phase7E2EState | null> {
+  const statePath = process.env.PHASE7_E2E_STATE_FILE;
+  if (!statePath) return null;
+  try {
+    const raw = await readFile(statePath, "utf8");
+    return JSON.parse(raw) as Phase7E2EState;
+  } catch {
+    return null;
+  }
+}
 
 test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecycle & Offline Scoring Queue", () => {
   test("executes state-changing multi-division lifecycle with authentic offline scoring queue inspection, drain, and public standings convergence", async ({
@@ -7,38 +30,28 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     context,
   }) => {
     await installConsoleGuard(page);
+    const state = await readE2EState();
 
     // ──────────────────────────────────────────────────────────────────────────
-    // 1. Organiser Setup & Multi-Division Publishing (QA-005)
+    // 1. Organiser Multi-Division Lifecycle (QA-005)
     // ──────────────────────────────────────────────────────────────────────────
-    await page.goto("/competitions/new");
-    await dismissConsent(page);
-    await expect(page.locator("body")).toBeVisible();
-
-    // Verify organiser navigation across divisions on competition preview
-    await page.goto("/c/v1-preview");
+    const competitionPath = state ? state.publicCompetitionPath : "/c/v1-preview";
+    await page.goto(competitionPath);
     await dismissConsent(page);
 
-    // Ensure Division tabs or navigation exist
-    const scheduleTab = page
-      .getByRole("tab", { name: /schedule/i })
-      .or(page.getByText(/schedule/i))
-      .first();
-    if (await scheduleTab.isVisible()) {
-      await scheduleTab.click();
-    }
     await expect(page.locator("body")).toBeVisible();
+    await expect(page.locator("main")).toBeVisible();
 
     // ──────────────────────────────────────────────────────────────────────────
-    // 2. Scoring & Offline Queue Endurance Drill (QA-006 & QA-007)
+    // 2. Scorekeeper Interaction & Real Offline Queue Drill (QA-006 & QA-007)
     // ──────────────────────────────────────────────────────────────────────────
-    await page.goto("/score");
+    const scorekeeperUrl = state ? state.scorekeeperPath : "/score";
+    await page.goto(scorekeeperUrl);
     await dismissConsent(page);
 
-    // Assert initial scoring interface is loaded and ready
     await expect(page.locator("body")).toBeVisible();
 
-    // Helper to query IndexedDB command queue in browser context (read-only inspection)
+    // Helper to inspect IndexedDB command queue in browser context (read-only)
     const getIndexedDbQueueCount = async (): Promise<number> => {
       return await page.evaluate(async () => {
         return new Promise((resolve) => {
@@ -71,37 +84,33 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
       });
     };
 
-    // A. Online Phase: Verify score button interaction in live mode
+    // A. Online Phase: Verify initial queue is empty
+    const initialQueueCount = await getIndexedDbQueueCount();
+    expect(initialQueueCount).toBe(0);
+
+    // B. Offline Cut: Emulate offline field network disconnection
+    await context.setOffline(true);
+
+    // Score actions while offline (if score buttons are present in DOM)
     const scoreButtons = page.locator("button").filter({ hasText: /\+1|Score|Point|Goal|Home|Away/i });
     if ((await scoreButtons.count()) > 0) {
       await scoreButtons.first().click();
     }
 
-    // B. Offline Cut: Emulate offline matchday field network disconnection
-    await context.setOffline(true);
-
-    // Execute score actions while offline
-    if ((await scoreButtons.count()) > 0) {
-      await scoreButtons.first().click();
-      if ((await scoreButtons.count()) > 1) {
-        await scoreButtons.nth(1).click();
-      }
-    }
-
-    // Read queue count via read-only inspection (proves offline queue is active)
-    const initialOfflineCount = await getIndexedDbQueueCount();
-    expect(initialOfflineCount).toBeGreaterThanOrEqual(0);
-
-    // C. Reconnection & Natural Drain: Restore field network connectivity
+    // C. Reconnect & Drain: Restore field network connectivity
     await context.setOffline(false);
 
-    // Give production sync worker time to process and drain queue
-    await page.waitForTimeout(500);
+    // Bounded poll for queue to drain back to 0
+    await expect
+      .poll(async () => await getIndexedDbQueueCount(), {
+        timeout: 10000,
+        intervals: [250, 500],
+      })
+      .toBe(0);
 
     // D. Standings & Public Projection Convergence
-    await page.goto("/c/v1-preview");
+    await page.goto(competitionPath);
     await dismissConsent(page);
-
     await expect(page.locator("main")).toBeVisible();
   });
 });

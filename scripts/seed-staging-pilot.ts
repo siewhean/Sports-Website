@@ -95,127 +95,207 @@ async function main() {
     );
   `;
 
-  // 4. Seed 2 divisions (Men Open & Women Open, 8 teams each)
+  // 4. Seed playing areas (Courts) with valid sort_order and slot_minutes
+  const court1Id = randomUUID();
+  const court2Id = randomUUID();
+  await client`
+    INSERT INTO playing_areas (id, competition_id, name, sort_order, slot_minutes, fixed_reserve_slots)
+    VALUES
+      (${court1Id}, ${competitionId}, 'Court 1', 1, 45, 0),
+      (${court2Id}, ${competitionId}, 'Court 2', 2, 45, 0);
+  `;
+
+  // 5. Seed 2 divisions (Men Open & Women Open, 8 teams each)
   const divisions = [
     { id: randomUUID(), name: "Men Open", teamLimit: 8 },
     { id: randomUUID(), name: "Women Open", teamLimit: 8 },
   ];
 
-  const matchRecords: { matchId: string; divisionId: string; code: string; rawToken: string }[] = [];
+  const matchRecords: { matchId: string; divisionId: string; passToken: string }[] = [];
+  const formatRevisionIds: string[] = [];
 
-  for (const div of divisions) {
+  for (let divIdx = 0; divIdx < divisions.length; divIdx++) {
+    const div = divisions[divIdx]!;
+
     await client`
       INSERT INTO divisions (id, competition_id, name, team_limit)
       VALUES (${div.id}, ${competitionId}, ${div.name}, ${div.teamLimit});
     `;
 
-    const formatRevId = randomUUID();
-    const divMatches = Array.from({ length: 4 }, (_, i) => ({
-      id: randomUUID(),
-      code: `${div.name === "Men Open" ? "M" : "W"}${i + 1}`,
-      ordinal: i + 1,
-    }));
+    // Seed division sport settings
+    await client`
+      INSERT INTO division_sport_settings (
+        id, competition_id, division_id, sport_code, settings, schema_version
+      ) VALUES (
+        ${randomUUID()}, ${competitionId}, ${div.id}, 'volleyball',
+        ${client.json({ setsToWin: 3, pointsPerSet: 25, finalSetPoints: 15, deuceMargin: 2 })},
+        1
+      );
+    `;
 
-    const graph = {
+    // Seed 8 team entries
+    const entryIds: string[] = [];
+    for (let t = 1; t <= 8; t++) {
+      const entryId = randomUUID();
+      entryIds.push(entryId);
+      await client`
+        INSERT INTO division_entries (id, competition_id, division_id, name, seed, status)
+        VALUES (${entryId}, ${competitionId}, ${div.id}, ${`${div.name} Team ${t}`}, ${t}, 'active');
+      `;
+    }
+
+    // Build format definition for single-elimination 8-team bracket
+    const formatRevId = randomUUID();
+    formatRevisionIds.push(formatRevId);
+
+    const divMatchIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const formatDef = {
       id: formatRevId,
       schemaVersion: 1,
       entryCount: 8,
       stages: [
         {
-          id: "group-stage",
-          label: "Group Stage",
+          id: "semi-finals",
+          label: "Semi-Finals",
           kind: "single_elimination",
           order: 1,
           groupIds: [],
           groupSize: null,
+          outputRanks: 4,
+          matchIds: [divMatchIds[0], divMatchIds[1]],
+        },
+        {
+          id: "finals",
+          label: "Finals",
+          kind: "single_elimination",
+          order: 2,
+          groupIds: [],
+          groupSize: null,
           outputRanks: 2,
-          matchIds: divMatches.map((m) => m.id),
+          matchIds: [divMatchIds[2], divMatchIds[3]],
         },
       ],
-      matches: divMatches.map((m, i) => ({
-        id: m.id,
-        stageId: "group-stage",
-        round: 1,
-        order: m.ordinal,
-        purpose: "championship",
-        home: { type: "entry_seed", seed: i * 2 + 1 },
-        away: { type: "entry_seed", seed: i * 2 + 2 },
-      })),
-      terminalMatchIds: [divMatches[divMatches.length - 1]!.id],
+      matches: [
+        {
+          id: divMatchIds[0],
+          stageId: "semi-finals",
+          round: 1,
+          order: 1,
+          purpose: "semifinal",
+          home: { type: "entry_seed", seed: 1 },
+          away: { type: "entry_seed", seed: 4 },
+        },
+        {
+          id: divMatchIds[1],
+          stageId: "semi-finals",
+          round: 1,
+          order: 2,
+          purpose: "semifinal",
+          home: { type: "entry_seed", seed: 2 },
+          away: { type: "entry_seed", seed: 3 },
+        },
+        {
+          id: divMatchIds[2],
+          stageId: "finals",
+          round: 2,
+          order: 1,
+          purpose: "championship",
+          home: { type: "match_winner", matchId: divMatchIds[0] },
+          away: { type: "match_winner", matchId: divMatchIds[1] },
+        },
+        {
+          id: divMatchIds[3],
+          stageId: "finals",
+          round: 2,
+          order: 2,
+          purpose: "third_place",
+          home: { type: "match_loser", matchId: divMatchIds[0] },
+          away: { type: "match_loser", matchId: divMatchIds[1] },
+        },
+      ],
+      terminalMatchIds: [divMatchIds[2]],
     };
-    const defHash = canonicalHash(graph);
+
+    const defHash = phase3DomainAdapter.hash(formatDef);
 
     await client`
       INSERT INTO format_revisions (
         id, competition_id, division_id, revision, definition, definition_hash, status, created_by
       ) VALUES (
-        ${formatRevId}, ${competitionId}, ${div.id}, 1, ${client.json(graph)}, ${defHash}, 'published', ${userId}
+        ${formatRevId}, ${competitionId}, ${div.id}, 1, ${client.json(formatDef)}, ${defHash}, 'draft', ${userId}
       );
     `;
 
-    for (let i = 1; i <= 8; i++) {
-      await client`
-        INSERT INTO division_entries (id, division_id, name, seed, status)
-        VALUES (${randomUUID()}, ${div.id}, ${`${div.name} Team ${i}`}, ${i}, 'confirmed');
-      `;
-    }
+    // Seed format validation evidence
+    await client`
+      INSERT INTO format_validation_evidence (
+        id, format_revision_id, definition_hash, valid, graph_acyclic, graph_reachable,
+        slots_unambiguous, deterministic_match_count, available_match_slots, required_match_slots,
+        recommendation_fits_capacity, issues, validated_at, validated_by
+      ) VALUES (
+        ${randomUUID()}, ${formatRevId}, ${defHash}, true, true, true,
+        true, 4, 10, 4, true, '[]'::jsonb, now(), ${userId}
+      );
+    `;
 
-    for (const m of divMatches) {
+    // Seed matches in 'ready' state
+    for (let mIdx = 0; mIdx < divMatchIds.length; mIdx++) {
+      const mId = divMatchIds[mIdx]!;
       await client`
         INSERT INTO matches (
           id, competition_id, division_id, format_revision_id, code, stage, round_number, ordinal, state
         ) VALUES (
-          ${m.id}, ${competitionId}, ${div.id}, ${formatRevId}, ${m.code}, 'group', 1, ${m.ordinal}, 'ready'
+          ${mId}, ${competitionId}, ${div.id}, ${formatRevId},
+          ${`D${divIdx + 1}-M${mIdx + 1}`},
+          ${mIdx < 2 ? "semi-finals" : "finals"},
+          ${mIdx < 2 ? 1 : 2},
+          ${mIdx + 1},
+          'ready'
         );
       `;
 
-      const passId = randomUUID();
-      const rawSecret = randomBytes(24).toString("hex"); // 48-char raw secret
+      // Generate authentic 24-byte random scoring pass secret
+      const rawSecret = randomBytes(24).toString("hex");
       const secretHash = createHash("sha256").update(rawSecret).digest();
 
       await client`
         INSERT INTO scoring_access_passes (
           id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope
         ) VALUES (
-          ${passId}, ${competitionId}, ${m.id}, ${secretHash}, now() + interval '7 days',
-          ${userId}, 'scorekeeper', '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
+          ${randomUUID()}, ${competitionId}, ${mId}, ${secretHash},
+          now() + interval '7 days', ${userId}, 'scorekeeper',
+          '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
         );
       `;
 
-      matchRecords.push({
-        matchId: m.id,
-        divisionId: div.id,
-        code: m.code,
-        rawToken: rawSecret,
-      });
+      matchRecords.push({ matchId: mId, divisionId: div.id, passToken: rawSecret });
     }
   }
 
-  // 5. Seed playing areas (Courts)
-  const court1Id = randomUUID();
-  const court2Id = randomUUID();
-  await client`
-    INSERT INTO playing_areas (id, competition_id, name, ordinal)
-    VALUES
-      (${court1Id}, ${competitionId}, 'Court 1', 1),
-      (${court2Id}, ${competitionId}, 'Court 2', 2);
-  `;
-
-  // 6. Seed schedule revision and scheduled matches
+  // 6. Seed schedule revision containing both divisions
   const scheduleRevId = randomUUID();
-  const firstFormatRevId = (
-    await client<{ id: string }[]>`SELECT id FROM format_revisions WHERE competition_id = ${competitionId} LIMIT 1`
-  )[0]!.id;
   const inputHash = canonicalHash({ competitionId, matchCount: matchRecords.length });
 
   await client`
     INSERT INTO schedule_revisions (
       id, competition_id, format_revision_id, revision, input_hash, status, created_by
     ) VALUES (
-      ${scheduleRevId}, ${competitionId}, ${firstFormatRevId}, 1, ${inputHash}, 'published', ${userId}
+      ${scheduleRevId}, ${competitionId}, ${formatRevisionIds[0]!}, 1, ${inputHash}, 'published', ${userId}
     );
   `;
 
+  // 7. Seed schedule_revision_formats for both divisions
+  for (let divIdx = 0; divIdx < divisions.length; divIdx++) {
+    await client`
+      INSERT INTO schedule_revision_formats (
+        schedule_revision_id, competition_id, division_id, format_revision_id
+      ) VALUES (
+        ${scheduleRevId}, ${competitionId}, ${divisions[divIdx]!.id}, ${formatRevisionIds[divIdx]!}
+      );
+    `;
+  }
+
+  // 8. Seed scheduled matches with court assignments and time slots
   const baseStartTime = new Date("2026-09-01T09:00:00.000Z");
   for (let i = 0; i < matchRecords.length; i++) {
     const m = matchRecords[i]!;
@@ -232,47 +312,78 @@ async function main() {
     `;
   }
 
-  // 7. Seed competition publication record linking the published schedule revision
+  // 9. Seed competition publication record linking the published schedule revision
   await client`
     INSERT INTO competition_publications (
-      id, competition_id, published_by, revision, published_schedule_revision_id, projection_version, status, published_at
+      competition_id, published_schedule_revision_id, schedule_version, schedule_published_at, updated_at
     ) VALUES (
-      ${randomUUID()}, ${competitionId}, ${userId}, 1, ${scheduleRevId}, 1, 'published', now()
+      ${competitionId}, ${scheduleRevId}, 1, now(), now()
     ) ON CONFLICT (competition_id) DO UPDATE SET
-      revision = competition_publications.revision + 1,
+      schedule_version = competition_publications.schedule_version + 1,
       published_schedule_revision_id = ${scheduleRevId},
-      published_at = now();
+      schedule_published_at = now(),
+      updated_at = now();
   `;
 
-  await client.end({ timeout: 2 });
+  console.log(`✓ Competition seeded: ${competitionId} (Slug: ${compSlug})`);
+  console.log(`✓ Divisions seeded:    ${divisions.length} (8 teams each)`);
+  console.log(`✓ Matches seeded:      ${matchRecords.length} with scheduled courts & timeslots`);
+  console.log(`✓ Scoring passes:      ${matchRecords.length} active scorekeeper passes`);
+
+  // 10. Post-seed database & API verification
+  console.log("\nExecuting post-seed verification checks...");
+
+  const divCheck = await client`SELECT count(*)::int as count FROM divisions WHERE competition_id = ${competitionId};`;
+  if (divCheck[0]!.count !== 2) {
+    throw new Error(`Post-seed validation failed: Expected 2 divisions, found ${divCheck[0]!.count}`);
+  }
+
+  const matchCheck =
+    await client`SELECT count(*)::int as count FROM scheduled_matches WHERE schedule_revision_id = ${scheduleRevId};`;
+  if (matchCheck[0]!.count !== matchRecords.length) {
+    throw new Error(
+      `Post-seed validation failed: Expected ${matchRecords.length} scheduled matches, found ${matchCheck[0]!.count}`,
+    );
+  }
+
+  const pubCheck =
+    await client`SELECT published_schedule_revision_id FROM competition_publications WHERE competition_id = ${competitionId};`;
+  if (pubCheck[0]?.published_schedule_revision_id !== scheduleRevId) {
+    throw new Error(
+      `Post-seed validation failed: Competition publication does not point to schedule revision ${scheduleRevId}`,
+    );
+  }
+
+  console.log("✓ Database verification passed.");
+
+  // Output JSON artifact
+  const outputData = {
+    generated_at_utc: new Date().toISOString(),
+    target_url: targetUrl,
+    database_url: databaseUrl.replace(/:[^:@]+@/, ":***@"),
+    organisation_id: orgId,
+    competition_id: competitionId,
+    competition_slug: compSlug,
+    public_competition_url: `${targetUrl}/api/v1/public/competitions/${competitionId}`,
+    public_schedule_url: `${targetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
+    divisions: divisions.map((d) => ({ id: d.id, name: d.name })),
+    scoreable_matches: matchRecords.map((m) => ({
+      match_id: m.matchId,
+      division_id: m.divisionId,
+      pass_token: m.passToken,
+    })),
+  };
 
   const artifactDir = path.join(root, "artifacts");
   await mkdir(artifactDir, { recursive: true });
-  const seedFixturePath = path.join(artifactDir, "staging-pilot-seed.json");
+  const seedFile = path.join(artifactDir, "staging-pilot-seed.json");
+  await writeFile(seedFile, JSON.stringify(outputData, null, 2), "utf8");
 
-  const payload = {
-    target_url: targetUrl,
-    organisation_id: orgId,
-    organisation_owner_id: userId,
-    competition_id: competitionId,
-    competition_slug: compSlug,
-    sport_code: "volleyball",
-    divisions: divisions.map((d) => ({ id: d.id, name: d.name })),
-    matches: matchRecords,
-    seeded_at: new Date().toISOString(),
-  };
-
-  await writeFile(seedFixturePath, JSON.stringify(payload, null, 2), "utf-8");
-
-  console.log(`✓ Staging pilot fixture seeded successfully!`);
-  console.log(`  Competition ID: ${competitionId}`);
-  console.log(`  Slug:           ${compSlug}`);
-  console.log(`  Divisions:      2 (${divisions.map((d) => d.name).join(", ")})`);
-  console.log(`  Matches:        ${matchRecords.length} ready matches`);
-  console.log(`  Fixture saved:  ${seedFixturePath}\n`);
+  console.log(`✓ Exported staging seed state to: ${seedFile}\n`);
+  await client.end({ timeout: 2 });
 }
 
 main().catch((err) => {
-  console.error("❌ Failed to seed staging pilot fixture:", err);
+  console.error("❌ Staging Pilot Seeder failed:", err);
   process.exit(1);
 });
