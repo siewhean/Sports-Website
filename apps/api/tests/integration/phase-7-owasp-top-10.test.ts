@@ -266,14 +266,50 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       );
 
       const divisionId = randomUUID();
+      const formatRevId = randomUUID();
       const matchId = randomUUID();
+      const graph = {
+        id: formatRevId,
+        schemaVersion: 1,
+        entryCount: 2,
+        stages: [
+          {
+            id: "final-stage",
+            label: "Final",
+            kind: "single_elimination",
+            order: 1,
+            groupIds: [],
+            groupSize: null,
+            outputRanks: 2,
+            matchIds: [matchId],
+          },
+        ],
+        matches: [
+          {
+            id: matchId,
+            stageId: "final-stage",
+            round: 1,
+            order: 1,
+            purpose: "championship",
+            home: { type: "entry_seed", seed: 1 },
+            away: { type: "entry_seed", seed: 2 },
+          },
+        ],
+        terminalMatchIds: [matchId],
+      };
+      const defHash = phase3DomainAdapter.hash(graph);
+
       await client`
-        INSERT INTO divisions (id, competition_id, name, sport_code, sort_order)
-        VALUES (${divisionId}, ${comp.id}, 'Division 1', 'volleyball', 1);
+        INSERT INTO divisions (id, competition_id, name, team_limit)
+        VALUES (${divisionId}, ${comp.id}, 'Division 1', 8);
       `;
       await client`
-        INSERT INTO matches (id, competition_id, division_id, state)
-        VALUES (${matchId}, ${comp.id}, ${divisionId}, 'ready');
+        INSERT INTO format_revisions (id, competition_id, division_id, revision, definition, definition_hash, status, created_by)
+        VALUES (${formatRevId}, ${comp.id}, ${divisionId}, 1, ${client.json(graph)}, ${defHash}, 'draft', ${tenantA_userId});
+      `;
+      await client`
+        INSERT INTO matches (id, competition_id, division_id, format_revision_id, code, stage, round_number, ordinal, state)
+        VALUES (${matchId}, ${comp.id}, ${divisionId}, ${formatRevId}, 'M1', 'final', 1, 1, 'ready');
       `;
 
       const revokedPassId = randomUUID();
@@ -281,7 +317,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
         INSERT INTO scoring_access_passes (
           id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope, revoked_at, revocation_reason
         ) VALUES (
-          ${revokedPassId}, ${comp.id}, ${matchId}, 'fake-secret-hash', now() + interval '1 hour',
+          ${revokedPassId}, ${comp.id}, ${matchId}, ${Buffer.alloc(32, 1)}, now() + interval '1 hour',
           ${tenantA_userId}, 'scorekeeper', '["score:read","score:write","score:reverse","score:finalise"]'::jsonb, now(), 'Security drill revocation'
         );
       `;
