@@ -19,6 +19,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 const targetUrl = process.env.TARGET_URL ?? "http://127.0.0.1:4101";
+const normalizedTargetUrl = targetUrl.replace(/\/$/, "");
 
 function canonicalHash(value: unknown): string {
   const canonical = (item: unknown): string => {
@@ -35,11 +36,32 @@ function canonicalHash(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
 
+async function requireApiResponse(url: string, init: RequestInit | undefined, label: string): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    throw new Error(`Post-seed API verification failed for ${label}: request could not reach ${url}`, {
+      cause: error,
+    });
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Post-seed API verification failed for ${label}: HTTP ${response.status}${body ? ` ${body.slice(0, 300)}` : ""}`,
+    );
+  }
+  return response;
+}
+
 async function main() {
   console.log("════════════════════════════════════════════════════════════");
   console.log(" Seeding Staging Pilot Fixture for Gate D Load Benchmarking");
   console.log(` Target Database: ${databaseUrl.replace(/:[^:@]+@/, ":***@")}`);
-  console.log(` Target API URL:  ${targetUrl}`);
+  console.log(` Target API URL:  ${normalizedTargetUrl}`);
   console.log("════════════════════════════════════════════════════════════\n");
 
   const client = postgres(databaseUrl, {
@@ -122,7 +144,6 @@ async function main() {
       VALUES (${div.id}, ${competitionId}, ${div.name}, ${div.teamLimit});
     `;
 
-    // Seed division sport settings
     await client`
       INSERT INTO division_sport_settings (
         id, competition_id, division_id, sport_code, settings, schema_version
@@ -133,21 +154,15 @@ async function main() {
       );
     `;
 
-    // Seed 8 team entries
-    const entryIds: string[] = [];
     for (let t = 1; t <= 8; t++) {
-      const entryId = randomUUID();
-      entryIds.push(entryId);
       await client`
         INSERT INTO division_entries (id, competition_id, division_id, name, seed, status)
-        VALUES (${entryId}, ${competitionId}, ${div.id}, ${`${div.name} Team ${t}`}, ${t}, 'active');
+        VALUES (${randomUUID()}, ${competitionId}, ${div.id}, ${`${div.name} Team ${t}`}, ${t}, 'active');
       `;
     }
 
-    // Build format definition for single-elimination 8-team bracket
     const formatRevId = randomUUID();
     formatRevisionIds.push(formatRevId);
-
     const divMatchIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     const formatDef = {
       id: formatRevId,
@@ -217,7 +232,6 @@ async function main() {
     };
 
     const defHash = phase3DomainAdapter.hash(formatDef);
-
     await client`
       INSERT INTO format_revisions (
         id, competition_id, division_id, revision, definition, definition_hash, status, created_by
@@ -226,7 +240,6 @@ async function main() {
       );
     `;
 
-    // Seed format validation evidence
     await client`
       INSERT INTO format_validation_evidence (
         id, format_revision_id, definition_hash, valid, graph_acyclic, graph_reachable,
@@ -238,7 +251,6 @@ async function main() {
       );
     `;
 
-    // Seed matches in 'ready' state
     for (let mIdx = 0; mIdx < divMatchIds.length; mIdx++) {
       const mId = divMatchIds[mIdx]!;
       await client`
@@ -254,10 +266,8 @@ async function main() {
         );
       `;
 
-      // Generate authentic 24-byte random scoring pass secret
       const rawSecret = randomBytes(24).toString("hex");
       const secretHash = createHash("sha256").update(rawSecret).digest();
-
       await client`
         INSERT INTO scoring_access_passes (
           id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope
@@ -275,7 +285,6 @@ async function main() {
   // 6. Seed schedule revision containing both divisions
   const scheduleRevId = randomUUID();
   const inputHash = canonicalHash({ competitionId, matchCount: matchRecords.length });
-
   await client`
     INSERT INTO schedule_revisions (
       id, competition_id, format_revision_id, revision, input_hash, status, created_by
@@ -302,7 +311,6 @@ async function main() {
     const areaId = i % 2 === 0 ? court1Id : court2Id;
     const matchStart = new Date(baseStartTime.getTime() + Math.floor(i / 2) * 60 * 60 * 1000);
     const matchEnd = new Date(matchStart.getTime() + 45 * 60 * 1000);
-
     await client`
       INSERT INTO scheduled_matches (
         schedule_revision_id, match_id, competition_id, playing_area_id, starts_at, ends_at
@@ -330,12 +338,27 @@ async function main() {
   console.log(`✓ Matches seeded:      ${matchRecords.length} with scheduled courts & timeslots`);
   console.log(`✓ Scoring passes:      ${matchRecords.length} active scorekeeper passes`);
 
-  // 10. Post-seed database & API verification
+  // 10. Post-seed database verification
   console.log("\nExecuting post-seed verification checks...");
-
   const divCheck = await client`SELECT count(*)::int as count FROM divisions WHERE competition_id = ${competitionId};`;
   if (divCheck[0]!.count !== 2) {
     throw new Error(`Post-seed validation failed: Expected 2 divisions, found ${divCheck[0]!.count}`);
+  }
+
+  const entryCheck =
+    await client`SELECT count(*)::int as count FROM division_entries WHERE competition_id = ${competitionId} AND status = 'active';`;
+  if (entryCheck[0]!.count !== 16) {
+    throw new Error(`Post-seed validation failed: Expected 16 active entries, found ${entryCheck[0]!.count}`);
+  }
+
+  const formatCheck = await client`
+    SELECT count(*)::int as count
+    FROM format_validation_evidence e
+    JOIN format_revisions f ON f.id = e.format_revision_id
+    WHERE f.competition_id = ${competitionId} AND e.valid = true;
+  `;
+  if (formatCheck[0]!.count !== 2) {
+    throw new Error(`Post-seed validation failed: Expected 2 valid format revisions, found ${formatCheck[0]!.count}`);
   }
 
   const matchCheck =
@@ -353,20 +376,60 @@ async function main() {
       `Post-seed validation failed: Competition publication does not point to schedule revision ${scheduleRevId}`,
     );
   }
-
   console.log("✓ Database verification passed.");
 
-  // Output JSON artifact
+  // 11. Verify the seeded rows through the deployed production HTTP surface before
+  // writing an artifact that downstream Gate D runners are allowed to consume.
+  await requireApiResponse(
+    `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}`,
+    undefined,
+    "public competition projection",
+  );
+  await requireApiResponse(
+    `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
+    undefined,
+    "public schedule projection",
+  );
+
+  const firstScoreableMatch = matchRecords[0];
+  if (!firstScoreableMatch) throw new Error("Post-seed validation failed: no scoreable match exists");
+  const exchangeResponse = await requireApiResponse(
+    `${normalizedTargetUrl}/api/v1/scoring/access/exchange`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token: firstScoreableMatch.passToken,
+        expected_match_id: firstScoreableMatch.matchId,
+        device_id: `seed-verification-${randomUUID()}`,
+        device_label: "Gate D staging seed verification",
+      }),
+    },
+    "scoring access exchange",
+  );
+  const exchange = (await exchangeResponse.json()) as { match_id?: string; session_id?: string; session_token?: string };
+  if (
+    exchange.match_id !== firstScoreableMatch.matchId ||
+    typeof exchange.session_id !== "string" ||
+    typeof exchange.session_token !== "string"
+  ) {
+    throw new Error("Post-seed API verification failed: scoring exchange returned invalid session state");
+  }
+  console.log("✓ Deployed API verification passed.");
+
+  // Output JSON artifact. `matches` is the canonical QA-011 runner contract;
+  // `scoreable_matches` is retained as a human-readable compatibility view.
   const outputData = {
     generated_at_utc: new Date().toISOString(),
-    target_url: targetUrl,
+    target_url: normalizedTargetUrl,
     database_url: databaseUrl.replace(/:[^:@]+@/, ":***@"),
     organisation_id: orgId,
     competition_id: competitionId,
     competition_slug: compSlug,
-    public_competition_url: `${targetUrl}/api/v1/public/competitions/${competitionId}`,
-    public_schedule_url: `${targetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
+    public_competition_url: `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}`,
+    public_schedule_url: `${normalizedTargetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
     divisions: divisions.map((d) => ({ id: d.id, name: d.name })),
+    matches: matchRecords.map((m) => ({ matchId: m.matchId, rawToken: m.passToken })),
     scoreable_matches: matchRecords.map((m) => ({
       match_id: m.matchId,
       division_id: m.divisionId,
