@@ -42,7 +42,7 @@
     "test:vercel:verify": "vitest run scripts/verify-vercel-deployment.test.mjs",
     "test:vercel:build": "node scripts/verify-vercel-equivalent-build.mjs",
     "test:e2e:phase4:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
-    "test:e2e:phase7:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-7-real-e2e.ts",
+    "test:e2e:phase7:real": "pnpm --filter @matchday/api exec tsx scripts/run-phase-7-real-e2e-v2.ts",
     "test:e2e:v1:real": "PHASE4_E2E_JOURNEY=v1 PHASE4_E2E_PLAYWRIGHT_CONFIG=playwright.v1-real.config.ts pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
     "test:e2e:v1:competition:real": "PHASE4_E2E_JOURNEY=v1-competition PHASE4_E2E_PLAYWRIGHT_CONFIG=playwright.v1-competition-real.config.ts pnpm --filter @matchday/api exec tsx scripts/run-phase-4-real-e2e.ts",
     "test:a11y": "pnpm --filter @matchday/web test:a11y",
