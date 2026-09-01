@@ -9,6 +9,7 @@ type Phase7E2EState = {
   scorekeeperPath: string;
   scoredMatchId: string;
   passToken: string;
+  divisionNames: string[];
   xssCompetitionPath: string;
   xssMaliciousName: string;
 };
@@ -56,6 +57,9 @@ async function readE2EState(): Promise<Phase7E2EState> {
       throw new Error(`Phase 7 E2E state is missing required field ${key}`);
     }
   }
+  if (!Array.isArray(state.divisionNames) || state.divisionNames.length !== 2 || state.divisionNames.some((name) => !name)) {
+    throw new Error("Phase 7 E2E state must contain exactly two division names");
+  }
 
   return state as Phase7E2EState;
 }
@@ -70,18 +74,23 @@ async function scoringSession(request: APIRequestContext, origin: string): Promi
 }
 
 test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecycle & Offline Scoring Queue", () => {
-  test("executes a real scorekeeper session and proves offline queue replay exactly once", async ({ page, context }) => {
-    test.setTimeout(120_000);
+  test("proves a two-division public schedule, offline replay exactly once, and real finalisation", async ({
+    page,
+    context,
+  }) => {
+    test.setTimeout(150_000);
     await installConsoleGuard(page);
     const state = await readE2EState();
 
-    // QA-005 fixture must be a real API-backed public competition, never demo fallback state.
+    // QA-005: the real public projection must expose both seeded divisions.
     await page.goto(state.publicCompetitionPath);
     await dismissConsent(page);
     await expect(page.locator("main")).toBeVisible();
+    for (const divisionName of state.divisionNames) {
+      await expect(page.getByText(divisionName, { exact: true }).first()).toBeVisible();
+    }
 
     // The production scorekeeper consumes the raw access credential from the URL fragment.
-    // Query-string credentials do not initialise a scoring session and therefore are forbidden here.
     await page.goto(`/score#access=${encodeURIComponent(state.passToken)}`);
     await dismissConsent(page);
     await expect(page.locator('#score-main[data-scoring-phase="confirm"]')).toBeVisible();
@@ -95,13 +104,9 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     const homeName = started.match.home.name;
     if (!homeName) throw new Error("Gate D scoreable match must have a materialised home entry");
 
-    // Offline recording is an explicit production capability. Prepare its authoritative
-    // package while online before simulating device connectivity loss.
     await page.getByRole("button", { name: "Prepare offline scoring" }).click();
     await expect(page.locator('#score-main[data-offline-state="offline-ready"]')).toBeVisible({ timeout: 15_000 });
 
-    // Read-only inspection of the production IndexedDB command queue. First verify the
-    // database already exists so this evidence helper cannot accidentally create it.
     const getIndexedDbQueueCount = async (): Promise<number> => {
       return await page.evaluate(async () => {
         try {
@@ -143,20 +148,15 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     const baselineHomePoints = started.score.total_points.home;
     const baselineAwayPoints = started.score.total_points.away;
 
-    // Cut only the browser transport. BrowserContext.request shares the scorekeeper
-    // cookies but is not governed by page offline emulation, making it a server oracle.
     await context.setOffline(true);
     await page.getByRole("button", { name: `Point ${homeName}` }).click();
-    const dialog = page.getByRole("dialog", { name: "Record event: Point" });
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "Record event" }).click();
-    await expect(dialog).toBeHidden();
+    const pointDialog = page.getByRole("dialog", { name: "Record event: Point" });
+    await expect(pointDialog).toBeVisible();
+    await pointDialog.getByRole("button", { name: "Record event" }).click();
+    await expect(pointDialog).toBeHidden();
 
-    // The command must genuinely reside in the application's IndexedDB queue.
     await expect.poll(getIndexedDbQueueCount, { timeout: 10_000, intervals: [100, 250, 500] }).toBeGreaterThan(0);
 
-    // While the browser remains offline, the canonical server sequence and score must
-    // remain unchanged: local acceptance is not server acknowledgement.
     const whileOffline = await scoringSession(context.request, webOrigin);
     expect(whileOffline.through_sequence).toBe(baselineSequence);
     expect(whileOffline.score.total_points.home).toBe(baselineHomePoints);
@@ -165,10 +165,8 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
       baselinePointActions,
     );
 
-    // Reconnect and prove the application's own single-flight replay drains the queue.
     await context.setOffline(false);
     await expect.poll(getIndexedDbQueueCount, { timeout: 20_000, intervals: [250, 500, 1_000] }).toBe(0);
-
     await expect
       .poll(async () => (await scoringSession(context.request, webOrigin)).through_sequence, {
         timeout: 20_000,
@@ -183,9 +181,35 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
       baselinePointActions + 1,
     );
 
-    // The public projection must remain reachable after the real offline/reconnect cycle.
+    // QA-006: complete the real Volleyball segment and finalise through the scorer UI.
+    const completionResponsePromise = page.waitForResponse(
+      (response) => response.url().endsWith("/api/scoring/events") && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: `Set completion ${homeName}` }).click();
+    const completionDialog = page.getByRole("dialog", { name: "Record event: Set completion" });
+    await completionDialog.getByRole("button", { name: "Record event" }).click();
+    const completionResponse = await completionResponsePromise;
+    const completionText = await completionResponse.text();
+    expect(completionResponse.status(), `set completion\n${completionText}`).toBe(200);
+    await expect(completionDialog).toBeHidden();
+
+    const finaliseResponsePromise = page.waitForResponse(
+      (response) => response.url().endsWith("/api/scoring/finalise") && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Review final score" }).click();
+    await page.getByRole("button", { name: "Confirm final result" }).click();
+    const finaliseResponse = await finaliseResponsePromise;
+    const finaliseText = await finaliseResponse.text();
+    expect(finaliseResponse.status(), `finalise\n${finaliseText}`).toBeGreaterThanOrEqual(200);
+    expect(finaliseResponse.status(), `finalise\n${finaliseText}`).toBeLessThan(300);
+    const finalised = JSON.parse(finaliseText) as { result_version?: number };
+    expect(finalised.result_version).toBeGreaterThanOrEqual(1);
+
     await page.goto(state.publicCompetitionPath);
     await dismissConsent(page);
     await expect(page.locator("main")).toBeVisible();
+    for (const divisionName of state.divisionNames) {
+      await expect(page.getByText(divisionName, { exact: true }).first()).toBeVisible();
+    }
   });
 });
