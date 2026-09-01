@@ -4,12 +4,13 @@
  * QA-010 Public Pages Load & Endurance Workload Benchmark.
  * Supports:
  *  - --mode=component (Fast Fastify in-process component harness)
- *  - --mode=integration (Real Fastify production route integration harness)
+ *  - --mode=integration (Real listening HTTP server / deployed staging target)
  *
  * SLA Target: p95 < 2,500ms, error rate < 0.1%
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const mode =
   process.argv.includes("--mode=integration") || process.env.LOAD_MODE === "integration" ? "integration" : "component";
+
+const targetUrlArg = process.argv.find((a) => a.startsWith("--target-url="))?.split("=")[1] ?? process.env.TARGET_URL;
 
 const TIERS = [
   { name: "1x (Normal Pilot Load)", concurrency: 10, operations: 100 },
@@ -113,14 +116,17 @@ async function buildPublicServer() {
   return app;
 }
 
-async function runTier(app: Awaited<ReturnType<typeof buildPublicServer>>, tier: (typeof TIERS)[number]) {
+async function runTier(
+  target: { app?: Awaited<ReturnType<typeof buildPublicServer>>; baseUrl?: string },
+  tier: (typeof TIERS)[number],
+) {
   const routes = [
-    { method: "GET" as const, url: "/api/v1/public/competitions" },
-    { method: "GET" as const, url: "/api/v1/public/competitions/comp-01" },
-    { method: "GET" as const, url: "/api/v1/public/competitions/comp-01/schedule" },
-    { method: "GET" as const, url: "/api/v1/public/competitions/comp-01/standings" },
-    { method: "GET" as const, url: "/api/v1/public/competitions/comp-01/brackets" },
-    { method: "GET" as const, url: "/api/v1/public/search?q=canoe" },
+    { method: "GET" as const, path: "/api/v1/public/competitions" },
+    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01" },
+    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01/schedule" },
+    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01/standings" },
+    { method: "GET" as const, path: "/api/v1/public/competitions/comp-01/brackets" },
+    { method: "GET" as const, path: "/api/v1/public/search?q=canoe" },
   ];
 
   const samples: WorkloadSample[] = [];
@@ -129,15 +135,29 @@ async function runTier(app: Awaited<ReturnType<typeof buildPublicServer>>, tier:
     const route = routes[index % routes.length]!;
     const start = performance.now();
     try {
-      const response = await app.inject({
-        method: route.method,
-        url: route.url,
-      });
-      const duration = performance.now() - start;
-      if (response.statusCode >= 200 && response.statusCode < 400) {
-        samples.push({ durationMs: duration, outcome: "success" });
-      } else {
-        samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+      if (target.baseUrl) {
+        // Real HTTP socket request over network
+        const res = await fetch(`${target.baseUrl}${route.path}`, {
+          method: route.method,
+          headers: { "user-agent": "qa-010-load-benchmark/1.0" },
+        });
+        const duration = performance.now() - start;
+        if (res.status >= 200 && res.status < 400) {
+          samples.push({ durationMs: duration, outcome: "success" });
+        } else {
+          samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+        }
+      } else if (target.app) {
+        const response = await target.app.inject({
+          method: route.method,
+          url: route.path,
+        });
+        const duration = performance.now() - start;
+        if (response.statusCode >= 200 && response.statusCode < 400) {
+          samples.push({ durationMs: duration, outcome: "success" });
+        } else {
+          samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+        }
       }
     } catch {
       samples.push({ durationMs: performance.now() - start, outcome: "unexpected_failure" });
@@ -164,14 +184,30 @@ async function main() {
   console.log(`[QA-010] Starting Fastify Public Pages Load Workload Benchmark (Mode: ${mode.toUpperCase()})`);
   console.log(`  Target p95 budget: < ${TARGET_P95_MS} ms\n`);
 
-  const app = await buildPublicServer();
+  let app: Awaited<ReturnType<typeof buildPublicServer>> | undefined;
+  let baseUrl = targetUrlArg;
+
+  if (mode === "integration") {
+    if (!baseUrl) {
+      // Spin up real listening server bound to 127.0.0.1 on ephemeral port
+      app = await buildPublicServer();
+      const address = await app.listen({ port: 0, host: "127.0.0.1" });
+      baseUrl = address;
+      console.log(`  ✓ Booted listening Matchday HTTP integration server at: ${baseUrl}\n`);
+    } else {
+      console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}\n`);
+    }
+  } else {
+    app = await buildPublicServer();
+  }
+
   const results = [];
 
   for (const tier of TIERS) {
     process.stdout.write(
       `Executing Tier: ${tier.name} (${tier.concurrency} concurrent clients, ${tier.operations} ops)...\n`,
     );
-    const result = await runTier(app, tier);
+    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl }, tier);
     results.push(result);
     console.log(
       `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} ops | ` +
@@ -215,6 +251,7 @@ async function main() {
           tier: r.tier,
           metrics: r.summary,
         })),
+        evidence_class: mode === "integration" ? "gate_d_integration_benchmark" : "developer_component_diagnostic_only",
         verdict: "PASS",
         generated_at: new Date().toISOString(),
       },
@@ -224,8 +261,8 @@ async function main() {
     "utf-8",
   );
 
-  console.log(`[QA-010] ✓ Real HTTP Public pages load benchmark PASS (receipt written to ${summaryPath})\n`);
-  await app.close();
+  console.log(`[QA-010] ✓ ${mode.toUpperCase()} public pages load benchmark PASS (${summaryPath})\n`);
+  if (app) await app.close();
 }
 
 main().catch((err) => {

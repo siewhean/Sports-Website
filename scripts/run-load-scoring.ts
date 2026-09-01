@@ -4,7 +4,7 @@
  * QA-011 Scoring Writes Load & Concurrency Benchmark.
  * Supports:
  *  - --mode=component (Fast Fastify in-process component harness)
- *  - --mode=integration (Real Fastify production route integration harness)
+ *  - --mode=integration (Real listening HTTP server / deployed staging target)
  *
  * SLA Target: p95 < 500ms, error rate < 0.1%
  */
@@ -24,6 +24,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const mode =
   process.argv.includes("--mode=integration") || process.env.LOAD_MODE === "integration" ? "integration" : "component";
+
+const targetUrlArg = process.argv.find((a) => a.startsWith("--target-url="))?.split("=")[1] ?? process.env.TARGET_URL;
 
 const TIERS = [
   { name: "1x (Normal Matchday Field Load)", concurrency: 12, operations: 120 },
@@ -77,9 +79,11 @@ async function buildScoringServer() {
   return app;
 }
 
-async function runTier(app: Awaited<ReturnType<typeof buildScoringServer>>, tier: (typeof TIERS)[number]) {
+async function runTier(
+  target: { app?: Awaited<ReturnType<typeof buildScoringServer>>; baseUrl?: string },
+  tier: (typeof TIERS)[number],
+) {
   const matchIds = Array.from({ length: 8 }, (_, i) => `match-court-${i + 1}`);
-
   const samples: WorkloadSample[] = [];
 
   const runWrite = async (index: number) => {
@@ -88,36 +92,68 @@ async function runTier(app: Awaited<ReturnType<typeof buildScoringServer>>, tier
     const start = performance.now();
 
     try {
-      const response = isFinal
-        ? await app.inject({
-            method: "POST",
-            url: `/api/v1/scoring/matches/${matchId}/finalize`,
-            headers: {
-              authorization: "Bearer valid-scoring-lease-token-12345",
-              "content-type": "application/json",
-            },
-            payload: { client_event_id: `fin-${index}` },
-          })
-        : await app.inject({
-            method: "POST",
-            url: `/api/v1/scoring/matches/${matchId}/events`,
-            headers: {
-              authorization: "Bearer valid-scoring-lease-token-12345",
-              "content-type": "application/json",
-            },
-            payload: {
+      if (target.baseUrl) {
+        // Real HTTP socket request over network
+        const path = isFinal
+          ? `/api/v1/scoring/matches/${matchId}/finalize`
+          : `/api/v1/scoring/matches/${matchId}/events`;
+        const body = isFinal
+          ? { client_event_id: `fin-${index}` }
+          : {
               type: "point",
               team_slot: index % 2 === 0 ? "home" : "away",
               delta: 1,
               client_event_id: `evt-${index}`,
-            },
-          });
+            };
 
-      const duration = performance.now() - start;
-      if (response.statusCode >= 200 && response.statusCode < 400) {
-        samples.push({ durationMs: duration, outcome: "success" });
-      } else {
-        samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+        const res = await fetch(`${target.baseUrl}${path}`, {
+          method: "POST",
+          headers: {
+            authorization: "Bearer valid-scoring-lease-token-12345",
+            "content-type": "application/json",
+            "user-agent": "qa-011-load-benchmark/1.0",
+          },
+          body: JSON.stringify(body),
+        });
+
+        const duration = performance.now() - start;
+        if (res.status >= 200 && res.status < 400) {
+          samples.push({ durationMs: duration, outcome: "success" });
+        } else {
+          samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+        }
+      } else if (target.app) {
+        const response = isFinal
+          ? await target.app.inject({
+              method: "POST",
+              url: `/api/v1/scoring/matches/${matchId}/finalize`,
+              headers: {
+                authorization: "Bearer valid-scoring-lease-token-12345",
+                "content-type": "application/json",
+              },
+              payload: { client_event_id: `fin-${index}` },
+            })
+          : await target.app.inject({
+              method: "POST",
+              url: `/api/v1/scoring/matches/${matchId}/events`,
+              headers: {
+                authorization: "Bearer valid-scoring-lease-token-12345",
+                "content-type": "application/json",
+              },
+              payload: {
+                type: "point",
+                team_slot: index % 2 === 0 ? "home" : "away",
+                delta: 1,
+                client_event_id: `evt-${index}`,
+              },
+            });
+
+        const duration = performance.now() - start;
+        if (response.statusCode >= 200 && response.statusCode < 400) {
+          samples.push({ durationMs: duration, outcome: "success" });
+        } else {
+          samples.push({ durationMs: duration, outcome: "unexpected_failure" });
+        }
       }
     } catch {
       samples.push({ durationMs: performance.now() - start, outcome: "unexpected_failure" });
@@ -144,14 +180,29 @@ async function main() {
   console.log(`[QA-011] Starting Fastify Scoring Writes Load & Concurrency Benchmark (Mode: ${mode.toUpperCase()})`);
   console.log(`  Target p95 budget: < ${TARGET_P95_MS} ms\n`);
 
-  const app = await buildScoringServer();
+  let app: Awaited<ReturnType<typeof buildScoringServer>> | undefined;
+  let baseUrl = targetUrlArg;
+
+  if (mode === "integration") {
+    if (!baseUrl) {
+      app = await buildScoringServer();
+      const address = await app.listen({ port: 0, host: "127.0.0.1" });
+      baseUrl = address;
+      console.log(`  ✓ Booted listening Matchday HTTP scoring integration server at: ${baseUrl}\n`);
+    } else {
+      console.log(`  ✓ Targeting remote staging Matchday API at: ${baseUrl}\n`);
+    }
+  } else {
+    app = await buildScoringServer();
+  }
+
   const results = [];
 
   for (const tier of TIERS) {
     process.stdout.write(
       `Executing Tier: ${tier.name} (${tier.concurrency} concurrent devices, ${tier.operations} writes)...\n`,
     );
-    const result = await runTier(app, tier);
+    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl }, tier);
     results.push(result);
     console.log(
       `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} writes | ` +
@@ -195,6 +246,7 @@ async function main() {
           tier: r.tier,
           metrics: r.summary,
         })),
+        evidence_class: mode === "integration" ? "gate_d_integration_benchmark" : "developer_component_diagnostic_only",
         verdict: "PASS",
         generated_at: new Date().toISOString(),
       },
@@ -204,8 +256,8 @@ async function main() {
     "utf-8",
   );
 
-  console.log(`[QA-011] ✓ Real HTTP Scoring writes load benchmark PASS (receipt written to ${summaryPath})\n`);
-  await app.close();
+  console.log(`[QA-011] ✓ ${mode.toUpperCase()} scoring benchmark PASS (${summaryPath})\n`);
+  if (app) await app.close();
 }
 
 main().catch((err) => {

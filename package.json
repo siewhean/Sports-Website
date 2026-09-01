@@ -35,6 +35,8 @@
     "evidence:gate-c-c5:run": "pnpm --filter @matchday/api exec tsx scripts/run-gate-c-c5-certification.ts",
     "test:evidence:gate-c": "node --test scripts/validate-exact-sha-certification.test.mjs",
     "test:seal:gate-c": "node --test scripts/seal-gate-c-certification.test.mjs",
+    "evidence:gate-d:verify": "node scripts/validate-gate-d-evidence.mjs",
+    "test:evidence:gate-d": "node --test scripts/validate-gate-d-evidence.test.mjs",
     "test:guard": "vitest run scripts/release-suite-guard.test.mjs",
     "test:check:source": "node --test scripts/check-source-contract.test.mjs",
     "test:vercel:verify": "vitest run scripts/verify-vercel-deployment.test.mjs",

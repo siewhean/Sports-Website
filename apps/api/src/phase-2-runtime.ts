@@ -888,6 +888,11 @@ export class Phase2Runtime {
     },
   ): Promise<void> {
     const fingerprints = this.scoringAccessRateLimiter.fingerprints(input.credential, input.ipAddress);
+    // A fresh Redis window can report a zero-second TTL. Capture one timestamp
+    // for the durable receipt and never persist an expiry that precedes it.
+    const attemptedAt = this.now();
+    const rateLimitStateExpiresAt =
+      input.rateLimitStateExpiresAt.getTime() < attemptedAt.getTime() ? attemptedAt : input.rateLimitStateExpiresAt;
     try {
       await tx.unsafe(
         `INSERT INTO scoring_access_attempts (
@@ -904,9 +909,9 @@ export class Phase2Runtime {
           fingerprints.ip,
           fingerprints.keyVersion,
           input.requestId,
-          this.now(),
+          attemptedAt,
           input.cooldownUntil ?? null,
-          input.rateLimitStateExpiresAt,
+          rateLimitStateExpiresAt,
         ],
       );
     } catch (error) {

@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { PilotTelemetryCollector, CURRENT_SLO_DEFINITION_VERSION } from "./pilot-telemetry.js";
 
 const VALID_40_CHAR_SHA = "c084b640e72545678d79652bc2a6d2cc048a7ad8";
+const observationWindow = {
+  startsAt: new Date(Date.now() - 60_000).toISOString(),
+  endsAt: new Date(Date.now() + 60_000).toISOString(),
+};
 
 describe("QA-022 / QA-024 — Structured Pilot Event Telemetry Collector", () => {
   it("rejects non-40-character or malformed candidate SHAs", () => {
@@ -10,6 +14,7 @@ describe("QA-022 / QA-024 — Structured Pilot Event Telemetry Collector", () =>
         candidateSha: "c084b64", // short SHA
         competitionId: "comp-123",
         pilotId: "local-pilot-01",
+        ...observationWindow,
       });
     }).toThrow(/strict 40-character hex candidate SHA/);
 
@@ -18,6 +23,7 @@ describe("QA-022 / QA-024 — Structured Pilot Event Telemetry Collector", () =>
         candidateSha: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", // non-hex
         competitionId: "comp-123",
         pilotId: "local-pilot-01",
+        ...observationWindow,
       });
     }).toThrow(/strict 40-character hex candidate SHA/);
   });
@@ -28,6 +34,7 @@ describe("QA-022 / QA-024 — Structured Pilot Event Telemetry Collector", () =>
       competitionId: "comp-123",
       pilotId: "local-pilot-01",
       minSamplesRequired: 10,
+      ...observationWindow,
     });
 
     // Only record 2 samples each (below threshold of 10)
@@ -48,9 +55,11 @@ describe("QA-022 / QA-024 — Structured Pilot Event Telemetry Collector", () =>
       competitionId: "comp-123",
       pilotId: "local-pilot-01",
       minSamplesRequired: 5,
+      ...observationWindow,
     });
 
     // Score writes (SLA <= 500ms)
+    collector.recordSession("test-session-1");
     for (let i = 0; i < 10; i++) {
       collector.recordScoreWrite(1.5 + i * 0.1);
     }
@@ -111,5 +120,39 @@ describe("QA-022 / QA-024 — Structured Pilot Event Telemetry Collector", () =>
     expect(summary.redisEvents).toHaveLength(1);
     expect(summary.reconnectEvents).toHaveLength(1);
     expect(summary.correctionEvents).toHaveLength(1);
+    expect(summary.redisEvents[0]?.deviceId).not.toBe("dev-1");
+    expect(summary.reconnectEvents[0]?.deviceId).not.toBe("dev-1");
+    expect(summary.correctionEvents[0]?.actorId).not.toBe("actor-1");
+    expect(Object.isFrozen(summary)).toBe(true);
+    expect(Object.isFrozen(summary.redisEvents)).toBe(true);
+  });
+
+  it("fails the strict public and propagation p95 boundaries", () => {
+    const collector = new PilotTelemetryCollector({
+      candidateSha: VALID_40_CHAR_SHA,
+      competitionId: "comp-123",
+      pilotId: "boundary-pilot",
+      minSamplesRequired: 1,
+      ...observationWindow,
+    });
+    collector.recordSession("boundary-session");
+    collector.recordScoreWrite(1);
+    collector.recordPublicPageRead(2500);
+    collector.recordResultPropagation(2000);
+    collector.recordApiRequest({
+      route: "/health/live",
+      method: "GET",
+      durationMs: 1,
+      statusCode: 200,
+      isError: false,
+    });
+
+    expect(collector.summarize()).toMatchObject({
+      slaVerdict: "FAIL",
+      failureReasons: expect.arrayContaining([
+        expect.stringContaining(">= 2500ms"),
+        expect.stringContaining(">= 2000ms"),
+      ]),
+    });
   });
 });

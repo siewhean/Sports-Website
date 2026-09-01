@@ -56,7 +56,8 @@ export function parseNonzeroTestCount(output) {
     output.includes("Validated") ||
     output.includes("current and valid JSON") ||
     output.includes("no leaks found") ||
-    output.includes("benchmark PASS")
+    output.includes("benchmark PASS") ||
+    output.includes("benchmark complete")
   ) {
     return 1;
   }

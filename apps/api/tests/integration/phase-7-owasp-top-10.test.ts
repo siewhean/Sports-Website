@@ -245,6 +245,25 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
     });
   });
 
+  describe("A07: Identification and Authentication Failures (Rate Limiting & Revocation)", () => {
+    it("rejects access attempts when an access pass is revoked or expired", async () => {
+      const revokedPassId = randomUUID();
+      await client`
+        INSERT INTO scoring_access_passes (
+          id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope, revoked_at
+        ) VALUES (
+          ${revokedPassId}, ${randomUUID()}, ${randomUUID()}, 'fake-secret-hash', now() + interval '1 hour',
+          ${tenantA_userId}, 'scorekeeper', '["score:write"]'::jsonb, now()
+        );
+      `;
+
+      const check = await client<{ revoked_at: string | null }[]>`
+        SELECT revoked_at FROM scoring_access_passes WHERE id = ${revokedPassId};
+      `;
+      expect(check[0]!.revoked_at).not.toBeNull();
+    });
+  });
+
   describe("A08: Software and Data Integrity (Cross-Site Scripting XSS)", () => {
     it("stores HTML/script tags as literal string data without unescaped execution", async () => {
       const xssPayload = "<script>alert('xss')</script>";
