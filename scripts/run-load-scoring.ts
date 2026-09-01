@@ -1,17 +1,9 @@
 /**
- * run-load-scoring.ts
+ * QA-011 scoring writes load benchmark.
  *
- * QA-011 Scoring Writes Load & Concurrency Benchmark.
- *
- * Modes:
- *  - component: Fast in-process mock (developer diagnostic only, NOT Gate D evidence)
- *  - socket-component: In-process listening Fastify app on 127.0.0.1:0 backed by local mock state
- *  - staging: Mandatory Gate D mode. Runs real network HTTP sockets against TARGET_URL
- *             using authentic scoring exchange (/api/v1/scoring/access/exchange),
- *             monotonic expected_sequence writes (/api/v1/scoring/events),
- *             and verifies deployed Git SHA against CANDIDATE_SHA.
- *
- * SLA Target: p95 < 500ms, error rate < 0.1%
+ * Gate D evidence is produced only in staging mode. Staging mode always uses
+ * the deployed Matchday HTTP API, authentic access exchange/session headers,
+ * exact deployed-SHA attestation, and exactly one sequential writer per match.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -21,14 +13,35 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import {
-  summarizeWorkload,
   assertWorkloadBudget,
+  summarizeWorkload,
   type WorkloadSample,
 } from "../packages/observability/src/workload.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 type Mode = "component" | "socket-component" | "staging";
+type ActiveScoringSession = {
+  matchId: string;
+  sessionId: string;
+  sessionToken: string;
+  generation: number | null;
+  sequence: number;
+};
+
+type Target = {
+  app?: Awaited<ReturnType<typeof buildMockScoringServer>>;
+  baseUrl?: string;
+  sessions: ActiveScoringSession[];
+};
+
+const TIERS = [
+  { name: "1x (Normal Matchday Field Load)", operations: 120 },
+  { name: "2x (Concurrent Tournament Peak)", operations: 240 },
+  { name: "5x (Multi-Court Stress Surge)", operations: 360 },
+] as const;
+
+const TARGET_P95_MS = Number(process.env.TARGET_P95_MS ?? 500);
 
 function parseMode(): Mode {
   if (process.argv.includes("--mode=staging") || process.env.LOAD_MODE === "staging") return "staging";
@@ -44,33 +57,24 @@ function parseMode(): Mode {
 }
 
 const mode = parseMode();
-
-const targetUrlArg = process.argv.find((a) => a.startsWith("--target-url="))?.split("=")[1] ?? process.env.TARGET_URL;
-
+const targetUrlArg =
+  process.argv.find((value) => value.startsWith("--target-url="))?.split("=")[1] ?? process.env.TARGET_URL;
 const candidateShaArg =
-  process.argv.find((a) => a.startsWith("--candidate-sha="))?.split("=")[1] ?? process.env.CANDIDATE_SHA;
+  process.argv.find((value) => value.startsWith("--candidate-sha="))?.split("=")[1] ?? process.env.CANDIDATE_SHA;
 
-const TIERS = [
-  { name: "1x (Normal Matchday Field Load)", concurrency: 12, operations: 120 },
-  { name: "2x (Concurrent Tournament Peak)", concurrency: 24, operations: 240 },
-  { name: "5x (Multi-Court Stress Surge)", concurrency: 60, operations: 360 },
-];
-
-const TARGET_P95_MS = Number(process.env.TARGET_P95_MS ?? 500);
-
-type ActiveScoringSession = {
-  matchId: string;
-  sessionId: string;
-  sessionToken: string;
-  generation: number | null;
-  sequence: number;
-};
+function scoringHeaders(session: ActiveScoringSession): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    "x-scoring-session-id": session.sessionId,
+    "x-scoring-session-token": session.sessionToken,
+    ...(session.generation !== null ? { "x-writer-generation": String(session.generation) } : {}),
+  };
+}
 
 async function buildMockScoringServer() {
   const app = Fastify({ logger: false });
-
   const sessions = new Map<string, { matchId: string; generation: number }>();
-  const scoreStates = new Map<string, { home: number; away: number; sequence: number }>();
+  const sequences = new Map<string, number>();
 
   app.get("/api/v1/meta/build", async () => ({
     git_sha: process.env.CANDIDATE_SHA || "0123456789abcdef0123456789abcdef01234567",
@@ -79,13 +83,13 @@ async function buildMockScoringServer() {
     environment: "socket-component",
   }));
 
-  app.post("/api/v1/scoring/access/exchange", async (req, reply) => {
-    const body = req.body as { token?: string; expected_match_id?: string; device_id: string };
-    const sessionId = `mock-session-${randomUUID()}`;
-    const sessionToken = `mock-token-${randomUUID()}`;
-    const matchId = body.expected_match_id ?? "match-court-1";
-
+  app.post("/api/v1/scoring/access/exchange", async (request, reply) => {
+    const body = request.body as { expected_match_id?: string };
+    const matchId = body.expected_match_id ?? `match-${randomUUID()}`;
+    const sessionId = randomUUID();
+    const sessionToken = `${randomUUID()}${randomUUID()}`;
     sessions.set(sessionToken, { matchId, generation: 1 });
+    sequences.set(matchId, 0);
     return reply.status(200).send({
       session_id: sessionId,
       session_token: sessionToken,
@@ -94,317 +98,305 @@ async function buildMockScoringServer() {
     });
   });
 
-  app.post("/api/v1/scoring/events", async (req, reply) => {
-    const sessionToken = req.headers["x-scoring-session-token"] as string;
-    const sessionId = req.headers["x-scoring-session-id"] as string;
-
-    if (!sessionToken || !sessionId) {
-      return reply.status(401).send({ error: { code: "UNAUTHORIZED", message: "Missing session headers" } });
-    }
-
-    const session = sessions.get(sessionToken);
-    const matchId = session?.matchId ?? "match-court-1";
-    const state = scoreStates.get(matchId) ?? { home: 0, away: 0, sequence: 0 };
-
-    state.home += 1;
-    state.sequence += 1;
-    scoreStates.set(matchId, state);
-
+  app.get("/api/v1/scoring/session", async (request, reply) => {
+    const token = request.headers["x-scoring-session-token"] as string | undefined;
+    const session = token ? sessions.get(token) : undefined;
+    if (!session) return reply.status(401).send({ error: { code: "UNAUTHORIZED" } });
     return reply.status(200).send({
-      success: true,
-      sequence: state.sequence,
+      match: { id: session.matchId, state: "ready" },
+      writer: { generation: session.generation, read_only: false },
+      through_sequence: sequences.get(session.matchId) ?? 0,
     });
   });
 
-  app.post("/api/v1/scoring/finalise", async (req, reply) => {
-    return reply.status(200).send({
-      status: "final",
-      finalised_at: new Date().toISOString(),
-    });
+  app.post("/api/v1/scoring/events", async (request, reply) => {
+    const token = request.headers["x-scoring-session-token"] as string | undefined;
+    const session = token ? sessions.get(token) : undefined;
+    if (!session) return reply.status(401).send({ error: { code: "UNAUTHORIZED" } });
+    const body = request.body as { expected_sequence?: number };
+    const current = sequences.get(session.matchId) ?? 0;
+    if (body.expected_sequence !== current) {
+      return reply.status(409).send({ error: { code: "SEQUENCE_CONFLICT" } });
+    }
+    sequences.set(session.matchId, current + 1);
+    return reply.status(200).send({ sequence: current + 1, duplicate: false });
+  });
+
+  app.post("/api/v1/scoring/finalise", async (request, reply) => {
+    const token = request.headers["x-scoring-session-token"] as string | undefined;
+    const session = token ? sessions.get(token) : undefined;
+    if (!session) return reply.status(401).send({ error: { code: "UNAUTHORIZED" } });
+    const body = request.body as { expected_sequence?: number };
+    const current = sequences.get(session.matchId) ?? 0;
+    if (body.expected_sequence !== current) {
+      return reply.status(409).send({ error: { code: "SEQUENCE_CONFLICT" } });
+    }
+    sequences.set(session.matchId, current + 1);
+    return reply.status(200).send({ sequence: current + 1, status: "final" });
   });
 
   return app;
 }
 
-async function runTier(
-  target: {
-    app?: Awaited<ReturnType<typeof buildMockScoringServer>>;
-    baseUrl?: string;
-    sessions: ActiveScoringSession[];
-  },
-  tier: (typeof TIERS)[number],
-) {
-  const samples: WorkloadSample[] = [];
-  const writesPerWorker = Math.max(1, Math.floor(tier.operations / tier.concurrency));
+async function requestJson(
+  target: Target,
+  method: "GET" | "POST",
+  url: string,
+  headers: Record<string, string>,
+  body?: unknown,
+): Promise<{ status: number; data: Record<string, unknown> }> {
+  if (target.baseUrl) {
+    const response = await fetch(`${target.baseUrl}${url}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    let data: Record<string, unknown> = {};
+    try {
+      data = (await response.json()) as Record<string, unknown>;
+    } catch {
+      // Error handling below is based on status; response JSON is best effort.
+    }
+    return { status: response.status, data };
+  }
 
-  const workers = Array.from({ length: tier.concurrency }, async (_, workerIdx) => {
-    const session = target.sessions[workerIdx % target.sessions.length]!;
+  if (!target.app) throw new Error("Scoring workload target is not configured");
+  const response = await target.app.inject({ method, url, headers, ...(body === undefined ? {} : { payload: body }) });
+  let data: Record<string, unknown> = {};
+  try {
+    data = response.json() as Record<string, unknown>;
+  } catch {
+    // Same best-effort behavior as network mode.
+  }
+  return { status: response.statusCode, data };
+}
 
-    for (let step = 0; step < writesPerWorker; step++) {
-      const currentSeq = session.sequence;
-      session.sequence += 1;
-      const start = performance.now();
+function operationsForStream(totalOperations: number, streamIndex: number, streamCount: number): number {
+  const base = Math.floor(totalOperations / streamCount);
+  return base + (streamIndex < totalOperations % streamCount ? 1 : 0);
+}
 
-      try {
-        if (target.baseUrl) {
-          const url = `${target.baseUrl}/api/v1/scoring/events`;
-          const body = {
-            client_event_id: randomUUID(),
-            expected_sequence: currentSeq,
-            type: "point",
-            team_slot: step % 2 === 0 ? "home" : "away",
-            occurred_at: new Date().toISOString(),
-          };
-
-          const headers: Record<string, string> = {
-            "content-type": "application/json",
-            "x-scoring-session-id": session.sessionId,
-            "x-scoring-session-token": session.sessionToken,
-            "user-agent": "qa-011-load-benchmark/1.0",
-          };
-          if (session.generation !== null) {
-            headers["x-writer-generation"] = String(session.generation);
-          }
-
-          const res = await fetch(url, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(body),
-          });
-
-          const duration = performance.now() - start;
-          if (res.status >= 200 && res.status < 400) {
-            samples.push({ durationMs: duration, outcome: "success" });
-          } else {
-            samples.push({ durationMs: duration, outcome: "unexpected_failure" });
-          }
-        } else if (target.app) {
-          const response = await target.app.inject({
-            method: "POST",
-            url: "/api/v1/scoring/events",
-            headers: {
-              "content-type": "application/json",
-              "x-scoring-session-id": session.sessionId,
-              "x-scoring-session-token": session.sessionToken,
-              ...(session.generation ? { "x-writer-generation": String(session.generation) } : {}),
-            },
-            payload: {
-              client_event_id: randomUUID(),
-              expected_sequence: currentSeq,
-              type: "point",
-              team_slot: step % 2 === 0 ? "home" : "away",
-              occurred_at: new Date().toISOString(),
-            },
-          });
-
-          const duration = performance.now() - start;
-          if (response.statusCode >= 200 && response.statusCode < 400) {
-            samples.push({ durationMs: duration, outcome: "success" });
-          } else {
-            samples.push({ durationMs: duration, outcome: "unexpected_failure" });
-          }
+async function appendEvent(target: Target, session: ActiveScoringSession, step: number): Promise<WorkloadSample> {
+  const started = performance.now();
+  const eventType = session.sequence === 0 ? "match_started" : "point";
+  const body = {
+    client_event_id: randomUUID(),
+    expected_sequence: session.sequence,
+    type: eventType,
+    occurred_at: new Date().toISOString(),
+    ...(eventType === "point"
+      ? {
+          team_slot: step % 2 === 0 ? "home" : "away",
+          segment_number: 1,
         }
-      } catch {
-        samples.push({ durationMs: performance.now() - start, outcome: "unexpected_failure" });
+      : {}),
+  };
+
+  try {
+    const response = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), body);
+    const durationMs = performance.now() - started;
+    if (response.status < 200 || response.status >= 300) {
+      return { durationMs, outcome: "unexpected_failure" };
+    }
+    // Advance only after the server accepted this exact sequence. A failed write
+    // must never create a client-side sequence gap for subsequent commands.
+    session.sequence += 1;
+    return { durationMs, outcome: "success" };
+  } catch {
+    return { durationMs: performance.now() - started, outcome: "unexpected_failure" };
+  }
+}
+
+async function runTier(target: Target, tier: (typeof TIERS)[number]) {
+  if (target.sessions.length === 0) throw new Error("QA-011 requires at least one independent scoring session");
+  const samples: WorkloadSample[] = [];
+
+  // One async worker == one match/session. This is the critical fencing rule:
+  // streams run concurrently with one another, but a single authoritative match
+  // never has two load-runner writers racing its expected_sequence.
+  const streams = target.sessions.map(async (session, streamIndex) => {
+    const count = operationsForStream(tier.operations, streamIndex, target.sessions.length);
+    for (let step = 0; step < count; step++) {
+      const sample = await appendEvent(target, session, step);
+      samples.push(sample);
+      if (sample.outcome !== "success") {
+        // Stop this stream immediately; continuing after a failed sequence would
+        // measure manufactured conflicts rather than normal scoring latency.
+        break;
       }
     }
   });
 
-  await Promise.all(workers);
-
+  await Promise.all(streams);
   const summary = summarizeWorkload(samples);
-  return { tier: tier.name, summary, samples };
+  return {
+    tier: tier.name,
+    requestedOperations: tier.operations,
+    independentStreams: target.sessions.length,
+    summary,
+  };
+}
+
+async function recoverSessionState(target: Target, session: ActiveScoringSession) {
+  const response = await requestJson(target, "GET", "/api/v1/scoring/session", scoringHeaders(session));
+  if (response.status !== 200) {
+    throw new Error(`Failed to recover scoring session state for match ${session.matchId} (HTTP ${response.status})`);
+  }
+  const throughSequence = response.data.through_sequence;
+  if (!Number.isInteger(throughSequence) || Number(throughSequence) < 0) {
+    throw new Error(`Scoring session ${session.sessionId} returned an invalid through_sequence`);
+  }
+  session.sequence = Number(throughSequence);
+}
+
+async function finaliseSessions(target: Target): Promise<void> {
+  for (const session of target.sessions) {
+    const response = await requestJson(target, "POST", "/api/v1/scoring/finalise", scoringHeaders(session), {
+      client_event_id: randomUUID(),
+      expected_sequence: session.sequence,
+      occurred_at: new Date().toISOString(),
+    });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Failed to finalise match ${session.matchId} after QA-011 workload (HTTP ${response.status})`);
+    }
+    session.sequence += 1;
+  }
 }
 
 async function main() {
-  console.log(`[QA-011] Starting Fastify Scoring Writes Load & Concurrency Benchmark (Mode: ${mode.toUpperCase()})`);
-  console.log(`  Target p95 budget: < ${TARGET_P95_MS} ms\n`);
-
+  console.log(`[QA-011] Starting scoring writes benchmark (${mode})`);
   let app: Awaited<ReturnType<typeof buildMockScoringServer>> | undefined;
-  let baseUrl = targetUrlArg;
+  let baseUrl = targetUrlArg?.replace(/\/$/, "");
   let competitionId: string | undefined;
   let candidateSha = candidateShaArg;
   let deployedSha: string | undefined;
   const activeSessions: ActiveScoringSession[] = [];
 
   if (mode === "staging") {
-    if (!baseUrl) {
-      throw new Error(
-        "QA-011 staging mode requires TARGET_URL (e.g. https://matchday-gate-d-api.onrender.com). " +
-          "Mock in-process execution is prohibited for Gate D evidence.",
-      );
-    }
+    if (!baseUrl) throw new Error("QA-011 staging mode requires TARGET_URL; in-process fallback is prohibited");
     if (!candidateSha || !/^[0-9a-f]{40}$/i.test(candidateSha)) {
-      throw new Error(
-        "QA-011 staging mode requires a valid 40-character CANDIDATE_SHA. " + `Received: "${candidateSha}"`,
-      );
+      throw new Error(`QA-011 staging mode requires a strict 40-character CANDIDATE_SHA; received ${candidateSha}`);
     }
 
-    // 1. Verify Deployment Provenance
-    try {
-      const metaRes = await fetch(`${baseUrl}/api/v1/meta/build`);
-      if (!metaRes.ok) throw new Error(`Status ${metaRes.status}`);
-      const meta = (await metaRes.json()) as { git_sha?: string };
-      deployedSha = meta.git_sha;
-    } catch (err) {
-      throw new Error(`Failed to retrieve deployment build metadata from ${baseUrl}/api/v1/meta/build: ${err}`);
-    }
-
+    const metaResponse = await fetch(`${baseUrl}/api/v1/meta/build`);
+    if (!metaResponse.ok) throw new Error(`Unable to attest deployed build SHA (HTTP ${metaResponse.status})`);
+    const meta = (await metaResponse.json()) as { git_sha?: string };
+    deployedSha = meta.git_sha;
     if (!deployedSha || deployedSha.toLowerCase() !== candidateSha.toLowerCase()) {
-      throw new Error(
-        `Deployment SHA mismatch: Server is serving SHA "${deployedSha}", but test expected CANDIDATE_SHA "${candidateSha}". ` +
-          "Please deploy the candidate commit to staging before running Gate D qualification.",
-      );
+      throw new Error(`Deployment SHA mismatch: deployed=${deployedSha} expected=${candidateSha}`);
     }
 
-    // 2. Read Seed Fixture
-    const seedFile = path.join(root, "artifacts/staging-pilot-seed.json");
-    let seedMatches: { matchId: string; rawToken: string }[] = [];
-    try {
-      const rawSeed = await readFile(seedFile, "utf-8");
-      const seed = JSON.parse(rawSeed);
-      competitionId = seed.competition_id;
-      seedMatches = seed.matches || [];
-    } catch {
-      throw new Error(
-        `QA-011 staging mode requires a valid seed fixture at ${seedFile}. ` +
-          "Please run 'pnpm tsx scripts/seed-staging-pilot.ts' first.",
-      );
+    const seedPath = path.join(root, "artifacts/staging-pilot-seed.json");
+    const seed = JSON.parse(await readFile(seedPath, "utf8")) as {
+      target_url?: string;
+      competition_id?: string;
+      matches?: Array<{ matchId: string; rawToken: string }>;
+    };
+    if (!seed.competition_id || !Array.isArray(seed.matches) || seed.matches.length === 0) {
+      throw new Error("Staging seed artifact is missing competition_id or scoreable matches");
     }
+    if (seed.target_url && seed.target_url.replace(/\/$/, "") !== baseUrl) {
+      throw new Error(`Seed TARGET_URL mismatch: seed=${seed.target_url} runner=${baseUrl}`);
+    }
+    competitionId = seed.competition_id;
 
-    console.log(`  ✓ Verified remote deployment Git SHA: ${deployedSha}`);
-    console.log(`  ✓ Target Competition ID:             ${competitionId}`);
-    console.log(`  ✓ Exchanging access tokens for ${seedMatches.length} matches...`);
-
-    // 3. Exchange real access passes for active sessions
-    for (const m of seedMatches) {
-      const deviceId = `load-device-${randomUUID()}`;
-      const exchangeRes = await fetch(`${baseUrl}/api/v1/scoring/access/exchange`, {
+    for (const match of seed.matches) {
+      if (!match.matchId || !match.rawToken) throw new Error("Seed match is missing matchId/rawToken");
+      const exchange = await fetch(`${baseUrl}/api/v1/scoring/access/exchange`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          token: m.rawToken,
-          expected_match_id: m.matchId,
-          device_id: deviceId,
+          token: match.rawToken,
+          expected_match_id: match.matchId,
+          device_id: `qa011-${randomUUID()}`,
+          device_label: "QA-011 load stream",
         }),
       });
-
-      if (!exchangeRes.ok) {
-        throw new Error(`Failed to exchange scoring access pass for match ${m.matchId} (HTTP ${exchangeRes.status})`);
+      if (!exchange.ok) {
+        throw new Error(`Access exchange failed for ${match.matchId} (HTTP ${exchange.status})`);
       }
-
-      const exchangeData = (await exchangeRes.json()) as {
-        session_id: string;
-        session_token: string;
+      const data = (await exchange.json()) as {
+        session_id?: string;
+        session_token?: string;
         writer_generation?: number;
       };
-
+      if (!data.session_id || !data.session_token) {
+        throw new Error(`Access exchange for ${match.matchId} did not return session credentials`);
+      }
       activeSessions.push({
-        matchId: m.matchId,
-        sessionId: exchangeData.session_id,
-        sessionToken: exchangeData.session_token,
-        generation: exchangeData.writer_generation ?? null,
-        sequence: 0,
-      });
-    }
-
-    console.log(`  ✓ Successfully established ${activeSessions.length} authentic scoring sessions\n`);
-  } else if (mode === "socket-component") {
-    app = await buildMockScoringServer();
-    const address = await app.listen({ port: 0, host: "127.0.0.1" });
-    baseUrl = address;
-    console.log(`  ✓ Booted listening mock socket-component server at: ${baseUrl}\n`);
-    for (let i = 1; i <= 8; i++) {
-      activeSessions.push({
-        matchId: `match-${i}`,
-        sessionId: `mock-sess-${i}`,
-        sessionToken: `mock-tok-${i}`,
-        generation: 1,
+        matchId: match.matchId,
+        sessionId: data.session_id,
+        sessionToken: data.session_token,
+        generation: data.writer_generation ?? null,
         sequence: 0,
       });
     }
   } else {
     app = await buildMockScoringServer();
-    console.log("  ℹ Running in fast in-process component diagnostic mode (NOT Gate D evidence)\n");
-    for (let i = 1; i <= 8; i++) {
+    if (mode === "socket-component") baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
+    for (let index = 0; index < 8; index++) {
+      const response = mode === "component"
+        ? await app.inject({
+            method: "POST",
+            url: "/api/v1/scoring/access/exchange",
+            payload: { expected_match_id: `mock-match-${index}`, device_id: `mock-${index}` },
+          })
+        : await fetch(`${baseUrl}/api/v1/scoring/access/exchange`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ expected_match_id: `mock-match-${index}`, device_id: `mock-${index}` }),
+          });
+      const status = "statusCode" in response ? response.statusCode : response.status;
+      const data = "json" in response ? response.json() : await response.json();
+      if (status !== 200) throw new Error("Mock access exchange failed");
+      const typed = data as { session_id: string; session_token: string; writer_generation: number };
       activeSessions.push({
-        matchId: `match-${i}`,
-        sessionId: `mock-sess-${i}`,
-        sessionToken: `mock-tok-${i}`,
-        generation: 1,
+        matchId: `mock-match-${index}`,
+        sessionId: typed.session_id,
+        sessionToken: typed.session_token,
+        generation: typed.writer_generation,
         sequence: 0,
       });
     }
   }
 
-  const results = [];
+  const target: Target = { app: baseUrl ? undefined : app, baseUrl, sessions: activeSessions };
+  for (const session of activeSessions) await recoverSessionState(target, session);
 
+  const results = [];
   for (const tier of TIERS) {
-    process.stdout.write(
-      `Executing Tier: ${tier.name} (${tier.concurrency} concurrent devices, ${tier.operations} writes)...\n`,
+    console.log(
+      `  ${tier.name}: ${tier.operations} writes across ${activeSessions.length} independent match streams`,
     );
-    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl, sessions: activeSessions }, tier);
+    const result = await runTier(target, tier);
     results.push(result);
     console.log(
-      `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} writes | ` +
-        `p50: ${result.summary.p50Ms.toFixed(2)}ms | ` +
-        `p95: ${result.summary.p95Ms.toFixed(2)}ms | ` +
-        `error: ${(result.summary.errorRate * 100).toFixed(2)}%\n`,
+      `    samples=${result.summary.sampleCount} p95=${result.summary.p95Ms.toFixed(2)}ms error=${(
+        result.summary.errorRate * 100
+      ).toFixed(2)}%`,
     );
   }
 
-  const peakResult = results.find((r) => r.tier.includes("2x")) ?? results[0]!;
-  console.log("═".repeat(60));
-  console.log(`[QA-011] Scoring Writes Workload Summary (2x Peak) [${mode.toUpperCase()}]`);
-  console.log("═".repeat(60));
-  console.log(`  Total Samples:        ${peakResult.summary.sampleCount}`);
-  console.log(`  Successful:           ${peakResult.summary.successfulCount}`);
-  console.log(`  Unexpected Failures:  ${peakResult.summary.unexpectedFailureCount}`);
-  console.log(`  Error Rate:           ${(peakResult.summary.errorRate * 100).toFixed(2)}%`);
-  console.log(`  Latency p50:          ${peakResult.summary.p50Ms.toFixed(2)} ms`);
-  console.log(`  Latency p95:          ${peakResult.summary.p95Ms.toFixed(2)} ms (budget < ${TARGET_P95_MS} ms)`);
-  console.log(`  Latency p99:          ${peakResult.summary.p99Ms.toFixed(2)} ms`);
-  console.log(`  Max Latency:          ${peakResult.summary.maxMs.toFixed(2)} ms`);
-  console.log("═".repeat(60) + "\n");
-
+  const peakResult = results.find((result) => result.tier.includes("2x")) ?? results[0]!;
   assertWorkloadBudget(peakResult.summary, {
     maxP95Ms: TARGET_P95_MS,
     maxUnexpectedErrorRate: 0.001,
   });
 
-  // Finalise matches cleanly after the load workload completes
-  if (baseUrl) {
-    for (const session of activeSessions) {
-      try {
-        await fetch(`${baseUrl}/api/v1/scoring/finalise`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-scoring-session-id": session.sessionId,
-            "x-scoring-session-token": session.sessionToken,
-            ...(session.generation !== null ? { "x-writer-generation": String(session.generation) } : {}),
-          },
-          body: JSON.stringify({
-            client_event_id: randomUUID(),
-            expected_sequence: session.sequence,
-          }),
-        });
-      } catch {}
-    }
-  }
+  // Finalisation is deliberately outside the latency sample and occurs exactly
+  // once per match after all write tiers. A finalisation failure fails QA-011.
+  await finaliseSessions(target);
 
   const artifactDir = path.join(root, "artifacts");
   await mkdir(artifactDir, { recursive: true });
   const summaryPath = path.join(artifactDir, "qa-011-load-scoring-summary.json");
-
   const evidenceClass =
     mode === "staging"
       ? "gate_d_staging"
       : mode === "socket-component"
         ? "socket_component_diagnostic_only"
         : "developer_component_diagnostic_only";
-
-  const verdict = mode === "component" || mode === "socket-component" ? "COMPONENT_PASS_NOT_GATE_D_EVIDENCE" : "PASS";
+  const verdict = mode === "staging" ? "PASS" : "COMPONENT_PASS_NOT_GATE_D_EVIDENCE";
 
   const receiptData = {
     qa_item: "QA-011",
@@ -416,25 +408,25 @@ async function main() {
     target_url: baseUrl ?? null,
     title: "Scoring Mutation Writes Workload Summary",
     target_p95_budget_ms: TARGET_P95_MS,
-    tiers: results.map((r) => ({
-      tier: r.tier,
-      metrics: r.summary,
+    independent_scoring_streams: activeSessions.length,
+    tiers: results.map((result) => ({
+      tier: result.tier,
+      requested_operations: result.requestedOperations,
+      independent_streams: result.independentStreams,
+      metrics: result.summary,
     })),
     peak_summary: peakResult.summary,
     verdict,
     generated_at: new Date().toISOString(),
   };
-
   const receiptSha256 = createHash("sha256").update(JSON.stringify(receiptData)).digest("hex");
-  const finalReceipt = { ...receiptData, receipt_sha256: receiptSha256 };
+  await writeFile(summaryPath, JSON.stringify({ ...receiptData, receipt_sha256: receiptSha256 }, null, 2), "utf8");
+  console.log(`[QA-011] ${verdict}: ${summaryPath}`);
 
-  await writeFile(summaryPath, JSON.stringify(finalReceipt, null, 2), "utf-8");
-
-  console.log(`[QA-011] ✓ ${mode.toUpperCase()} scoring benchmark PASS (${summaryPath})\n`);
   if (app) await app.close();
 }
 
-main().catch((err) => {
-  console.error("[QA-011] ❌ Load benchmark failed:", err);
+main().catch((error) => {
+  console.error("[QA-011] FAILED", error);
   process.exit(1);
 });
