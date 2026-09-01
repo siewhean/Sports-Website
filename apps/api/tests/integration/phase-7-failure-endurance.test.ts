@@ -34,27 +34,18 @@ describeInfrastructure(
         connection: { search_path: schema },
       });
 
-      const volleyballDef = SPORT_PACKS.volleyball;
-      await client`
-      INSERT INTO sport_pack_versions(
-        sport_code, version, schema_version, definition, definition_hash, created_at
-      ) VALUES (
-        'volleyball', ${volleyballDef.version}, 1, ${client.json(volleyballDef)},
-        encode(public.digest(phase3_canonical_jsonb(${client.json(volleyballDef)}::jsonb), 'sha256'), 'hex'),
-        now()
-      ) ON CONFLICT (sport_code, version) DO NOTHING;
-    `;
-
-      const canoeDef = SPORT_PACKS.canoe_polo;
-      await client`
-      INSERT INTO sport_pack_versions(
-        sport_code, version, schema_version, definition, definition_hash, created_at
-      ) VALUES (
-        'canoe_polo', ${canoeDef.version}, 1, ${client.json(canoeDef)},
-        encode(public.digest(phase3_canonical_jsonb(${client.json(canoeDef)}::jsonb), 'sha256'), 'hex'),
-        now()
-      ) ON CONFLICT (sport_code, version) DO NOTHING;
-    `;
+      for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
+        const hash = phase3DomainAdapter.hash(pack);
+        await client`
+          INSERT INTO sport_pack_versions (
+            sport_code, version, schema_version, definition, definition_hash, status, revision, activated_at
+          ) VALUES (
+            ${sportId}, ${pack.version}, 1, ${client.json(pack)}, ${hash}, 'active', 1, now()
+          ) ON CONFLICT (sport_code, version) DO UPDATE SET
+            status = 'active',
+            activated_at = now();
+        `;
+      }
 
       const accounts = await client<{ id: string }[]>`
       INSERT INTO accounts (primary_email, display_name, email_verified_at)
@@ -153,9 +144,10 @@ describeInfrastructure(
           const seq = i + 1;
 
           await client`
-          INSERT INTO audit_events (id, entity_type, entity_id, action, actor_id, metadata)
+          INSERT INTO audit_events (id, request_id, actor_account_id, actor_type, organisation_id, action, target_type, target_id, metadata)
           VALUES (
-            ${randomUUID()}, 'competition', ${matchUuid}::uuid, 'score_increment', ${accountId}::uuid,
+            ${randomUUID()}, ${`req-${seq}`}, ${accountId}::uuid, 'account', ${organisationId}::uuid,
+            'score_increment', 'match', ${matchUuid},
             ${JSON.stringify({ device: deviceId, sequence: seq })}::jsonb
           );
         `;
@@ -166,8 +158,8 @@ describeInfrastructure(
 
         const events = await client<{ metadata: { sequence: number; device: string } }[]>`
         SELECT metadata FROM audit_events
-        WHERE entity_id = ${matchUuid}::uuid
-        ORDER BY created_at ASC;
+        WHERE target_id = ${matchUuid}
+        ORDER BY occurred_at ASC;
       `;
 
         expect(events.length).toBe(5);

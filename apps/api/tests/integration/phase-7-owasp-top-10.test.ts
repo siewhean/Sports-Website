@@ -3,10 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
-import type { PostgresJsSql } from "@matchday/identity";
+import { SPORT_PACKS } from "@matchday/domain";
+import { systemClock, type PostgresJsSql } from "@matchday/identity";
+import { DeterministicIdentityProvider } from "@matchday/identity/testing";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../../src/app.js";
 import { healthyProbes, testConfig } from "../helpers.js";
+import { PostgresIdentityUnitOfWork } from "../../src/identity-postgres.js";
+import { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { EntitlementRuntime } from "../../src/entitlement-runtime.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
@@ -20,6 +24,7 @@ const migrationsDirectory = path.resolve(
 );
 
 let client!: Sql;
+let identityRuntime!: IdentityApiRuntime;
 let entitlementRuntime!: EntitlementRuntime;
 let phase3Runtime!: Phase3Runtime;
 let app!: Awaited<ReturnType<typeof buildApp>>;
@@ -43,6 +48,20 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
     tenantA_userId = randomUUID();
     tenantB_orgId = randomUUID();
     tenantB_userId = randomUUID();
+
+    // Insert active sport packs
+    for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
+      const hash = phase3DomainAdapter.hash(pack);
+      await client`
+        INSERT INTO sport_pack_versions (
+          sport_code, version, schema_version, definition, definition_hash, status, revision, activated_at
+        ) VALUES (
+          ${sportId}, ${pack.version}, 1, ${client.json(pack)}, ${hash}, 'active', 1, now()
+        ) ON CONFLICT (sport_code, version) DO UPDATE SET
+          status = 'active',
+          activated_at = now();
+      `;
+    }
 
     await client`
       INSERT INTO accounts (id, primary_email, display_name, email_verified_at)
@@ -74,12 +93,29 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
       `;
     });
 
+    const identityProvider = new DeterministicIdentityProvider({
+      issuer: "https://identity.example.test",
+      subject: "test-subject",
+      email: "alice@org-a.com",
+      displayName: "Alice A",
+      providerSessionId: "session-123",
+      emailVerified: true,
+    });
+
+    identityRuntime = new IdentityApiRuntime(
+      identityProvider,
+      new PostgresIdentityUnitOfWork(client as unknown as PostgresJsSql),
+      "owasp-test-csrf-secret-at-least-32-chars-long",
+      systemClock,
+    );
+
     entitlementRuntime = new EntitlementRuntime(client as unknown as PostgresJsSql);
     phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
 
     app = await buildApp({
       config: testConfig(),
       probes: healthyProbes,
+      identityRuntime,
       phase3Runtime,
       entitlementRuntime,
     });
@@ -99,7 +135,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
     it("strictly blocks unauthenticated access to protected management endpoints", async () => {
       const response = await app.inject({
         method: "GET",
-        url: `/api/v1/organisations/${tenantA_orgId}/competitions`,
+        url: "/api/v1/organisations/competition-options",
       });
 
       expect([401, 403]).toContain(response.statusCode);
@@ -201,7 +237,7 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
     it("includes vital security headers on HTTP responses", async () => {
       const response = await app.inject({
         method: "GET",
-        url: "/api/v1/health",
+        url: "/health/live",
       });
 
       expect(response.statusCode).toBe(200);
@@ -223,16 +259,21 @@ describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Sec
           timezone: "UTC",
           startsOn: "2026-09-01",
           endsOn: "2026-09-02",
-          venue: "Hall B",
-          address: "2 Rd",
+          venue: "Hall A",
+          address: "1 Rd",
           countryCode: "SG",
           locale: "en-SG",
         },
         randomUUID(),
       );
 
-      const row = await client`SELECT name FROM competitions WHERE id = ${comp.id};`;
-      expect(row[0]!.name).toBe(xssPayload);
+      expect(comp.id).toBeDefined();
+
+      const stored = await client<{ name: string }[]>`
+        SELECT name FROM competitions WHERE id = ${comp.id};
+      `;
+
+      expect(stored[0]!.name).toBe(xssPayload);
     });
   });
 });
