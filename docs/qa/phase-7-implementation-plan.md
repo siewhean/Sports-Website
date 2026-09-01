@@ -1,10 +1,10 @@
 # Phase 7 — Pilots, Security, and Release Hardening: Implementation Plan
 
-**Status:** IN PREPARATION — Phase 6 closure is a prerequisite for the formal Phase 7 branch
+**Status:** IN PROGRESS (Phase 6 formally certified and merged)
 
-**Phase 6 certified baseline:** _TBD — record merge SHA from `integration/gate-c-final` after PR #39 lands_
+**Phase 6 certified baseline:** `f5045d11ddadaa1cc1d08657857f573599e7ec62` (CI run [33401194920](https://github.com/siewhean/Sports-Website/actions/runs/33401194920) 100% Green on `integration/gate-c-final`)
 
-**Phase 7 branch:** `phase-7/release-hardening` (create from Phase 6 merge SHA)
+**Phase 7 branch:** `phase-7/release-hardening` (branched from `f5045d11ddadaa1cc1d08657857f573599e7ec62`)
 
 **Gates:** D (local pilot) and E (national parallel pilot)
 
