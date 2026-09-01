@@ -62,6 +62,7 @@
     "secrets:scan": "bash scripts/scan-secrets.sh",
     "check:source": "pnpm ci:assert-clean-outputs && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:check:source && pnpm test:evidence:phase4 && pnpm test:evidence:gate-c-access && pnpm test:evidence:gate-c-c2 && pnpm test:seal:gate-c && pnpm test:evidence:gate-c && pnpm test:vercel:verify && pnpm test:vercel:build && pnpm test:unit && pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4 && pnpm openapi:check && pnpm secrets:scan && pnpm build && git diff --check",
     "check": "pnpm check:source && pnpm evidence:gate-c:verify",
+    "test:release": "node scripts/release-suite-guard.mjs",
     "setup:workspace": "node scripts/setup-workspace.mjs"
   },
   "pnpm": {
