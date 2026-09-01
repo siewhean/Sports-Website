@@ -69,6 +69,7 @@ if (PHASE === "ALL" || PHASE === "A") {
   );
   run("9/13  OpenAPI contract", "pnpm openapi:check");
   run("10/13 Vercel deployment verification", "pnpm test:vercel:verify");
+  run("10b/13 Load benchmarks (QA-010, QA-011)", "pnpm test:load");
 }
 
 // ---------------------------------------------------------------------------
