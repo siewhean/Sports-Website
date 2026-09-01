@@ -7,47 +7,60 @@ type Phase7E2EState = {
   xssMaliciousName: string;
 };
 
-async function readE2EState(): Promise<Phase7E2EState | null> {
+async function readE2EState(): Promise<Phase7E2EState> {
   const statePath = process.env.PHASE7_E2E_STATE_FILE;
-  if (!statePath) return null;
-  try {
-    const raw = await readFile(statePath, "utf8");
-    return JSON.parse(raw) as Phase7E2EState;
-  } catch {
-    return null;
+  if (!statePath) {
+    throw new Error("PHASE7_E2E_STATE_FILE is required for Gate D stored-XSS qualification");
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(statePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Unable to read Phase 7 E2E state from ${statePath}`, { cause: error });
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Phase 7 E2E state must be a JSON object");
+  }
+
+  const state = parsed as Partial<Phase7E2EState>;
+  if (typeof state.xssCompetitionPath !== "string" || state.xssCompetitionPath.length === 0) {
+    throw new Error("Phase 7 E2E state is missing xssCompetitionPath");
+  }
+  if (typeof state.xssMaliciousName !== "string" || !state.xssMaliciousName.includes("<script>")) {
+    throw new Error("Phase 7 E2E state is missing the persisted malicious XSS value");
+  }
+
+  return state as Phase7E2EState;
 }
 
 test.describe("QA-014 Browser Stored XSS & DOM Sanitization", () => {
-  test("renders malicious script tags inertly without executing arbitrary JavaScript", async ({ page }) => {
+  test("renders the persisted malicious value as inert text without executing JavaScript", async ({ page }) => {
     await installConsoleGuard(page);
     const state = await readE2EState();
 
-    // Track if any window-level injected payload executes
     await page.addInitScript(() => {
       (window as unknown as { __xss_injected_flag?: boolean }).__xss_injected_flag = false;
     });
 
-    const targetUrl = state
-      ? state.xssCompetitionPath
-      : "/c/v1-preview?title=" + encodeURIComponent("Gate D <script>window.__xss_injected_flag=true</script>");
-
-    await page.goto(targetUrl);
+    // No query-string/demo fallback is allowed: this route must resolve the database-backed fixture.
+    await page.goto(state.xssCompetitionPath);
     await dismissConsent(page);
 
-    // 1. Verify page rendered safely and displays sanitized title text
     await expect(page.locator("body")).toBeVisible();
-    await expect(page.getByText(/Gate D/)).toBeVisible();
 
-    // 2. Assert no executable script element matching the payload exists in DOM
+    // The exact persisted payload must be present as text. This prevents the test from
+    // passing merely because the page ignores the malicious database value.
+    await expect(page.getByText(state.xssMaliciousName, { exact: true })).toBeVisible();
+
+    // No executable script node containing the persisted payload may reach the DOM.
     const unescapedScriptTags = page.locator("script").filter({ hasText: "window.__xss_injected_flag" });
     await expect(unescapedScriptTags).toHaveCount(0);
 
-    // 3. Verify window.__xss_injected_flag remained false (no script execution occurred)
     const injected = await page.evaluate(() => {
       return (window as unknown as { __xss_injected_flag?: boolean }).__xss_injected_flag;
     });
-
     expect(injected).toBe(false);
   });
 });
