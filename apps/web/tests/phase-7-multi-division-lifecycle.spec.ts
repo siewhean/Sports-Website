@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
@@ -11,6 +11,19 @@ type Phase7E2EState = {
   passToken: string;
   xssCompetitionPath: string;
   xssMaliciousName: string;
+};
+
+type ScoringSessionOracle = {
+  through_sequence: number;
+  match: {
+    id: string;
+    home: { name: string | null };
+    away: { name: string | null };
+  };
+  score: {
+    total_points: { home: number; away: number };
+    actions: Array<{ event_type: string; side: "home" | "away" | null; reversed: boolean }>;
+  };
 };
 
 async function readE2EState(): Promise<Phase7E2EState> {
@@ -37,6 +50,7 @@ async function readE2EState(): Promise<Phase7E2EState> {
     "publicCompetitionPath",
     "scorekeeperPath",
     "scoredMatchId",
+    "passToken",
   ] as const) {
     if (typeof state[key] !== "string" || state[key]!.length === 0) {
       throw new Error(`Phase 7 E2E state is missing required field ${key}`);
@@ -46,31 +60,54 @@ async function readE2EState(): Promise<Phase7E2EState> {
   return state as Phase7E2EState;
 }
 
+async function scoringSession(request: APIRequestContext, origin: string): Promise<ScoringSessionOracle> {
+  const response = await request.get(`${origin}/api/scoring/session`, { failOnStatusCode: false });
+  const text = await response.text();
+  expect(response.status(), `/api/scoring/session\n${text}`).toBe(200);
+  const value = JSON.parse(text) as ScoringSessionOracle;
+  expect(Number.isSafeInteger(value.through_sequence)).toBe(true);
+  return value;
+}
+
 test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecycle & Offline Scoring Queue", () => {
-  test("executes state-changing multi-division lifecycle with authentic offline scoring queue inspection and drain", async ({
-    page,
-    context,
-  }) => {
+  test("executes a real scorekeeper session and proves offline queue replay exactly once", async ({ page, context }) => {
+    test.setTimeout(120_000);
     await installConsoleGuard(page);
     const state = await readE2EState();
 
     // QA-005 fixture must be a real API-backed public competition, never demo fallback state.
     await page.goto(state.publicCompetitionPath);
     await dismissConsent(page);
-    await expect(page.locator("body")).toBeVisible();
     await expect(page.locator("main")).toBeVisible();
 
-    // QA-006 / QA-007 must use the real scorekeeper route provisioned by the harness.
-    await page.goto(state.scorekeeperPath);
+    // The production scorekeeper consumes the raw access credential from the URL fragment.
+    // Query-string credentials do not initialise a scoring session and therefore are forbidden here.
+    await page.goto(`/score#access=${encodeURIComponent(state.passToken)}`);
     await dismissConsent(page);
-    await expect(page.locator("body")).toBeVisible();
+    await expect(page.locator('#score-main[data-scoring-phase="confirm"]')).toBeVisible();
+    await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
+    await page.getByRole("button", { name: "Start scoring" }).click();
+    await expect(page.locator('#score-main[data-scoring-phase="live"]')).toBeVisible();
 
-    // Read-only inspection of the production IndexedDB command queue. A missing DB/store
-    // is evidence failure (-1), not an empty queue.
+    const webOrigin = new URL(page.url()).origin;
+    const started = await scoringSession(context.request, webOrigin);
+    expect(started.match.id).toBe(state.scoredMatchId);
+    const homeName = started.match.home.name;
+    if (!homeName) throw new Error("Gate D scoreable match must have a materialised home entry");
+
+    // Offline recording is an explicit production capability. Prepare its authoritative
+    // package while online before simulating device connectivity loss.
+    await page.getByRole("button", { name: "Prepare offline scoring" }).click();
+    await expect(page.locator('#score-main[data-offline-state="offline-ready"]')).toBeVisible({ timeout: 15_000 });
+
+    // Read-only inspection of the production IndexedDB command queue. First verify the
+    // database already exists so this evidence helper cannot accidentally create it.
     const getIndexedDbQueueCount = async (): Promise<number> => {
       return await page.evaluate(async () => {
-        return await new Promise<number>((resolve) => {
-          try {
+        try {
+          const databases = await indexedDB.databases();
+          if (!databases.some((database) => database.name === "matchday-offline-scoring")) return -1;
+          return await new Promise<number>((resolve) => {
             const req = indexedDB.open("matchday-offline-scoring", 1);
             req.onerror = () => resolve(-1);
             req.onsuccess = () => {
@@ -80,7 +117,6 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
                 resolve(-1);
                 return;
               }
-
               const tx = db.transaction("commands", "readonly");
               const countReq = tx.objectStore("commands").count();
               countReq.onsuccess = () => {
@@ -93,31 +129,61 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
                 resolve(-1);
               };
             };
-          } catch {
-            resolve(-1);
-          }
-        });
+          });
+        } catch {
+          return -1;
+        }
       });
     };
 
-    // Online baseline: the real queue must exist and be empty before the network cut.
     await expect.poll(getIndexedDbQueueCount, { timeout: 5_000, intervals: [100, 250, 500] }).toBe(0);
 
-    // The scoring UI itself is required. Optional score controls are not Gate D evidence.
-    const scoreButton = page.locator("button").filter({ hasText: /\+1|Score|Point|Goal|Home|Away/i }).first();
-    await expect(scoreButton).toBeVisible();
+    const baselineSequence = started.through_sequence;
+    const baselinePointActions = started.score.actions.filter((action) => action.event_type === "point").length;
+    const baselineHomePoints = started.score.total_points.home;
+    const baselineAwayPoints = started.score.total_points.away;
 
-    // Cut the browser network, submit a real scoring action, and prove the application
-    // persisted at least one command to its production offline queue before reconnecting.
+    // Cut only the browser transport. BrowserContext.request shares the scorekeeper
+    // cookies but is not governed by page offline emulation, making it a server oracle.
     await context.setOffline(true);
-    await scoreButton.click();
+    await page.getByRole("button", { name: `Point ${homeName}` }).click();
+    const dialog = page.getByRole("dialog", { name: "Record event: Point" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Record event" }).click();
+    await expect(dialog).toBeHidden();
+
+    // The command must genuinely reside in the application's IndexedDB queue.
     await expect.poll(getIndexedDbQueueCount, { timeout: 10_000, intervals: [100, 250, 500] }).toBeGreaterThan(0);
 
-    // Reconnect and prove the application's own sync path drains the real queue.
-    await context.setOffline(false);
-    await expect.poll(getIndexedDbQueueCount, { timeout: 15_000, intervals: [250, 500, 1_000] }).toBe(0);
+    // While the browser remains offline, the canonical server sequence and score must
+    // remain unchanged: local acceptance is not server acknowledgement.
+    const whileOffline = await scoringSession(context.request, webOrigin);
+    expect(whileOffline.through_sequence).toBe(baselineSequence);
+    expect(whileOffline.score.total_points.home).toBe(baselineHomePoints);
+    expect(whileOffline.score.total_points.away).toBe(baselineAwayPoints);
+    expect(whileOffline.score.actions.filter((action) => action.event_type === "point")).toHaveLength(
+      baselinePointActions,
+    );
 
-    // Public projection must remain reachable after the real offline/reconnect cycle.
+    // Reconnect and prove the application's own single-flight replay drains the queue.
+    await context.setOffline(false);
+    await expect.poll(getIndexedDbQueueCount, { timeout: 20_000, intervals: [250, 500, 1_000] }).toBe(0);
+
+    await expect
+      .poll(async () => (await scoringSession(context.request, webOrigin)).through_sequence, {
+        timeout: 20_000,
+        intervals: [250, 500, 1_000],
+      })
+      .toBe(baselineSequence + 1);
+
+    const replayed = await scoringSession(context.request, webOrigin);
+    expect(replayed.score.total_points.home).toBe(baselineHomePoints + 1);
+    expect(replayed.score.total_points.away).toBe(baselineAwayPoints);
+    expect(replayed.score.actions.filter((action) => action.event_type === "point")).toHaveLength(
+      baselinePointActions + 1,
+    );
+
+    // The public projection must remain reachable after the real offline/reconnect cycle.
     await page.goto(state.publicCompetitionPath);
     await dismissConsent(page);
     await expect(page.locator("main")).toBeVisible();
