@@ -82,6 +82,18 @@ test("release readiness runs Gate D source tests and the real browser journey wi
   assert.doesNotMatch(source, /pnpm evidence:gate-d:verify/u);
 });
 
+test("QA-011 propagation reuses already-started benchmark matches", async () => {
+  const source = await readFile(path.join(root, "apps/api/scripts/run-load-scoring.ts"), "utf8");
+  const start = source.indexOf("async function prepareResultPropagationMatch");
+  const end = source.indexOf("\nfunction validWriterHeartbeat", start);
+  assert.ok(start >= 0 && end > start, "QA-011 propagation preparation function must remain inspectable");
+  const preparation = source.slice(start, end);
+  assert.doesNotMatch(preparation, /type:\s*"match_started"/u);
+  assert.match(preparation, /session\.sequence\s*<\s*1/u);
+  assert.match(preparation, /type:\s*"point"/u);
+  assert.match(preparation, /type:\s*"set_completion"/u);
+});
+
 test("C5 staging fault manifest expands to exactly 72 safe command variables", () => {
   const parsed = parseGateCC5FaultCommandManifest(JSON.stringify(validFaultManifest()));
   const expanded = expandGateCC5FaultCommandEnvironment(parsed);
