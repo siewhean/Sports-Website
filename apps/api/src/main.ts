@@ -172,6 +172,7 @@ const app = await buildApp({
   config,
   probes: createDependencyProbes(config),
   rateLimitRedis,
+  anonymousRateLimitMax: config.api.anonymousRateLimitMax,
   resolveVerifiedScoringRateLimitSessionId: async (request) => {
     const sessionId = request.headers["x-scoring-session-id"];
     const sessionToken = request.headers["x-scoring-session-token"];

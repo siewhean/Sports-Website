@@ -169,19 +169,52 @@ async function main() {
 
     for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
       const hash = phase3DomainAdapter.hash(pack);
-      await sql`
-        INSERT INTO sport_pack_versions(
-          sport_code,version,schema_version,definition,definition_hash,status,revision,activated_at
-        ) VALUES(
-          ${sportId},${pack.version},${pack.schemaVersion},${sql.json(pack)},${hash},'active',1,now()
-        )
-        ON CONFLICT (sport_code,version) DO UPDATE SET
-          definition=EXCLUDED.definition,
-          definition_hash=EXCLUDED.definition_hash,
-          schema_version=EXCLUDED.schema_version,
-          status='active',
-          activated_at=now();
+      const active = await sql<
+        { version: string; schema_version: number; definition_hash: string; status: "active" }[]
+      >`
+        SELECT version,schema_version,definition_hash,status
+        FROM sport_pack_versions
+        WHERE sport_code=${sportId} AND status='active'
+        ORDER BY activated_at DESC NULLS LAST,created_at DESC,version DESC;
       `;
+      if (active.length > 1) {
+        throw new Error(`Sport pack ${sportId} has multiple active versions and cannot be seeded safely`);
+      }
+      if (active.length === 0) {
+        await sql`
+          INSERT INTO sport_pack_versions(
+            sport_code,version,schema_version,definition,definition_hash,status,revision,activated_at
+          ) VALUES(
+            ${sportId},${pack.version},${pack.schemaVersion},${sql.json(pack)},${hash},'active',1,now()
+          )
+          ON CONFLICT (sport_code,version) DO NOTHING;
+        `;
+      }
+      const verifiedRows = await sql<
+        { version: string; schema_version: number; definition_hash: string; status: "active" }[]
+      >`
+        SELECT version,schema_version,definition_hash,status
+        FROM sport_pack_versions
+        WHERE sport_code=${sportId} AND status='active'
+        ORDER BY activated_at DESC NULLS LAST,created_at DESC,version DESC;
+      `;
+      if (verifiedRows.length !== 1) {
+        throw new Error(`Sport pack ${sportId} must have exactly one active version after seed validation`);
+      }
+      const [verified] = verifiedRows;
+      if (
+        !verified ||
+        verified.version !== pack.version ||
+        verified.schema_version !== pack.schemaVersion ||
+        verified.definition_hash !== hash
+      ) {
+        throw new Error(
+          `Active sport pack ${sportId} is not compatible with the seeded canonical pack: ${JSON.stringify({
+            expected: { version: pack.version, schema_version: pack.schemaVersion, definition_hash: hash },
+            actual: verified ?? null,
+          })}`,
+        );
+      }
     }
 
     await sql`
@@ -383,21 +416,43 @@ async function main() {
     }
     for (const format of formats) {
       if (!format.format_revision_id) throw new Error("Gate D canonical setup produced an unresolved format revision");
+      const builder = await phase4.readFormatBuilder(actor, competitionId, format.division_id);
+      if (!builder.draft || builder.draft.draft_id !== format.format_revision_id) {
+        throw new Error("Gate D canonical recommendation format provenance is unavailable");
+      }
+      const validation = await phase4.validateFormat(actor, competitionId, format.division_id, builder.draft.document);
+      if (!validation.valid) throw new Error("Gate D canonical recommendation format is invalid");
+      const saved = await phase4.saveFormatRevision(
+        actor,
+        competitionId,
+        format.division_id,
+        {
+          draft_id: builder.draft.draft_id,
+          expected_revision: builder.draft.revision,
+          parent_revision_id: builder.draft.draft_id,
+          document: {
+            ...builder.draft.document,
+            graph: {
+              ...builder.draft.document.graph,
+              stages: builder.draft.document.graph.stages.map((stage, index) =>
+                index === 0 ? { ...stage, label: `${stage.label} — Gate D staging publication` } : stage,
+              ),
+            },
+          },
+          idempotency_key: `gate-d-save-format-${format.division_id}-${randomUUID()}`,
+        },
+        randomUUID(),
+      );
       const materialised = await phase4.materialiseFormat(
         actor,
-        format.format_revision_id,
+        saved.draft_id,
         `gate-d-materialise-format-${randomUUID()}`,
         randomUUID(),
       );
       if (!materialised.match_count || materialised.match_count <= 0) {
         throw new Error("Gate D canonical setup materialised an empty format");
       }
-      await phase4.publishFormat(
-        actor,
-        format.format_revision_id,
-        `gate-d-publish-format-${randomUUID()}`,
-        randomUUID(),
-      );
+      await phase4.publishFormat(actor, saved.draft_id, `gate-d-publish-format-${randomUUID()}`, randomUUID());
     }
 
     const [area] = await sql<{ id: string }[]>`
@@ -405,7 +460,7 @@ async function main() {
     `;
     if (!area) throw new Error("Gate D fixture has no playable area for canonical Phase 4 scheduling");
     const [competitionState] = await sql<{ revision: number; capacity_revision: number }[]>`
-      SELECT revision,capacity_revision FROM competitions WHERE id=${competitionId};
+      SELECT revision::integer,capacity_revision::integer FROM competitions WHERE id=${competitionId};
     `;
     if (!competitionState) throw new Error("Gate D fixture competition disappeared before scheduling");
     const generated = await phase4.generateSchedule(

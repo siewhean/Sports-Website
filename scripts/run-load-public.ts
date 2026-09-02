@@ -147,18 +147,30 @@ async function buildPublicServer() {
 }
 
 async function runTier(
-  target: { app?: Awaited<ReturnType<typeof buildPublicServer>>; baseUrl?: string; competitionId?: string },
+  target: {
+    app?: Awaited<ReturnType<typeof buildPublicServer>>;
+    baseUrl?: string;
+    competitionId?: string;
+    publicCompetitionSlug?: string;
+  },
   tier: (typeof TIERS)[number],
 ) {
   const compId = target.competitionId ?? "comp-01";
-  const routes = [
-    { method: "GET" as const, path: "/api/v1/public/competitions" },
-    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}` },
-    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/schedule` },
-    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/standings` },
-    { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/brackets` },
-    { method: "GET" as const, path: "/api/v1/public/search?q=volleyball" },
-  ];
+  const routes = target.publicCompetitionSlug
+    ? [
+        {
+          method: "GET" as const,
+          path: `/api/v1/public/competitions/${encodeURIComponent(target.publicCompetitionSlug)}/current`,
+        },
+      ]
+    : [
+        { method: "GET" as const, path: "/api/v1/public/competitions" },
+        { method: "GET" as const, path: `/api/v1/public/competitions/${compId}` },
+        { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/schedule` },
+        { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/standings` },
+        { method: "GET" as const, path: `/api/v1/public/competitions/${compId}/brackets` },
+        { method: "GET" as const, path: "/api/v1/public/search?q=volleyball" },
+      ];
 
   const samples: WorkloadSample[] = [];
 
@@ -217,7 +229,8 @@ async function main() {
   let app: Awaited<ReturnType<typeof buildPublicServer>> | undefined;
   let baseUrl = targetUrlArg;
   let competitionId: string | undefined;
-  let candidateSha = candidateShaArg;
+  let publicCompetitionSlug: string | undefined;
+  const candidateSha = candidateShaArg;
   let deployedSha: string | undefined;
 
   if (mode === "staging") {
@@ -256,6 +269,14 @@ async function main() {
       const rawSeed = await readFile(seedFile, "utf-8");
       const seed = JSON.parse(rawSeed);
       competitionId = seed.competition_id;
+      publicCompetitionSlug = seed.competition_slug;
+      if (
+        typeof competitionId !== "string" ||
+        typeof publicCompetitionSlug !== "string" ||
+        publicCompetitionSlug.length < 1
+      ) {
+        throw new Error("Seed fixture is missing competition_id or competition_slug");
+      }
     } catch {
       throw new Error(
         `QA-010 staging mode requires a valid seed fixture at ${seedFile}. ` +
@@ -264,7 +285,8 @@ async function main() {
     }
 
     console.log(`  ✓ Verified remote deployment Git SHA: ${deployedSha}`);
-    console.log(`  ✓ Target Competition ID:             ${competitionId}\n`);
+    console.log(`  ✓ Target Competition ID:             ${competitionId}`);
+    console.log(`  ✓ Target Competition Slug:           ${publicCompetitionSlug}\n`);
   } else if (mode === "socket-component") {
     app = await buildPublicServer();
     const address = await app.listen({ port: 0, host: "127.0.0.1" });
@@ -281,7 +303,10 @@ async function main() {
     process.stdout.write(
       `Executing Tier: ${tier.name} (${tier.concurrency} concurrent clients, ${tier.operations} ops)...\n`,
     );
-    const result = await runTier({ app: baseUrl ? undefined : app, baseUrl, competitionId }, tier);
+    const result = await runTier(
+      { app: baseUrl ? undefined : app, baseUrl, competitionId, publicCompetitionSlug },
+      tier,
+    );
     results.push(result);
     console.log(
       `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} ops | ` +
@@ -330,6 +355,7 @@ async function main() {
     candidate_sha: candidateSha ?? null,
     deployed_sha: deployedSha ?? null,
     competition_id: competitionId ?? null,
+    competition_slug: publicCompetitionSlug ?? null,
     target_url: baseUrl ?? null,
     title: "Public Pages Read Workload Summary",
     target_p95_budget_ms: TARGET_P95_MS,
