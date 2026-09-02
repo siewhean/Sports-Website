@@ -6,6 +6,7 @@
     "run_id": 33653457048,
     "head_sha": "06f1acd6a90775f92d5b5c260c5545fc81c2470d",
     "conclusion": "PASS",
+    "evidence_ref": "artifacts/gate-d-hosted-ci.json",
     "jobs": {
       "secrets": "PASS",
       "quality-fast": "PASS",
@@ -13,6 +14,19 @@
       "browser-e2e": "PASS",
       "gate-d-real-e2e": "PASS"
     }
+  },
+  "web_deployment": {
+    "status": "PASS",
+    "evidence_ref": "artifacts/gate-d-web-deployment.json"
+  },
+  "controlled_staging": {
+    "status": "PENDING",
+    "evidence_refs": [
+      "artifacts/qa-010-load-public-summary.json",
+      "artifacts/qa-011-load-scoring-summary.json",
+      "artifacts/qa-011-result-propagation-summary.json",
+      "artifacts/gate-d-staging-run.json"
+    ]
   },
   "human_evidence": {
     "accessibility_human_audit": {
