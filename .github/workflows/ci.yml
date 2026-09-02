@@ -25,6 +25,36 @@ jobs:
       - name: Scan the repository for secrets
         run: bash scripts/scan-secrets.sh
 
+  lockfile-update:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'phase-7/release-hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: phase-7/release-hardening
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
+      - name: Commit pnpm-generated Fastify lockfile
+        run: |
+          pnpm install --lockfile-only --no-frozen-lockfile
+          if git diff --quiet -- pnpm-lock.yaml; then
+            echo "Lockfile already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml
+          git commit -m "chore(deps): refresh lockfile for Fastify 5.12.1"
+          git push origin HEAD:phase-7/release-hardening
+
   quality-fast:
     runs-on: ubuntu-latest
     timeout-minutes: 15
