@@ -23,7 +23,7 @@ permissions:
 
 concurrency:
   group: gate-d-controlled-staging
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 defaults:
   run:
