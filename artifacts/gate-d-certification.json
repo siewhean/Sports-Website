@@ -1,0 +1,83 @@
+{
+  "schema_version": "2026.09.gate-d-freeze",
+  "gate": "D",
+  "candidate_sha": "06f1acd6a90775f92d5b5c260c5545fc81c2470d",
+  "hosted_ci": {
+    "run_id": 33653457048,
+    "head_sha": "06f1acd6a90775f92d5b5c260c5545fc81c2470d",
+    "conclusion": "PASS",
+    "jobs": {
+      "secrets": "PASS",
+      "quality-fast": "PASS",
+      "integration": "PASS",
+      "browser-e2e": "PASS",
+      "gate-d-real-e2e": "PASS"
+    }
+  },
+  "human_evidence": {
+    "accessibility_human_audit": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "browser_device_matrix": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "budget_android": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "incident_tabletop": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "event_day_tabletop": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "restore_drill": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "deployed_seo_crawl": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "local_pilot": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "standings_oracle": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "organiser_intervention_log": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING"
+    },
+    "critical_high_defects": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING",
+      "critical_open": 0,
+      "high_open": 0
+    },
+    "independent_review": {
+      "status": "PENDING",
+      "completed_at": "PENDING",
+      "evidence_ref": "PENDING",
+      "verdict": "PENDING",
+      "reviewer": "PENDING"
+    }
+  }
+}
