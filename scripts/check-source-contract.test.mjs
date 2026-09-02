@@ -55,6 +55,25 @@ test("final verification requires source verification followed by exact-SHA evid
   assert.equal(scripts.check, "pnpm check:source && pnpm evidence:gate-c:verify");
 });
 
+test("Gate D staging runners execute from the API workspace that owns their dependencies", async () => {
+  const scripts = await packageScripts();
+  for (const script of [
+    "seed:staging:pilot",
+    "test:load:public",
+    "test:load:scoring",
+    "test:load:component",
+    "test:load:socket-component",
+    "test:load:staging",
+  ]) {
+    assert.match(
+      scripts[script],
+      /pnpm --filter @matchday\/api exec tsx scripts\//u,
+      `${script} must use API workspace`,
+    );
+    assert.doesNotMatch(scripts[script], /\.\.\/\.\.\/scripts\//u, `${script} must not execute root-owned TypeScript`);
+  }
+});
+
 test("C5 staging fault manifest expands to exactly 72 safe command variables", () => {
   const parsed = parseGateCC5FaultCommandManifest(JSON.stringify(validFaultManifest()));
   const expanded = expandGateCC5FaultCommandEnvironment(parsed);

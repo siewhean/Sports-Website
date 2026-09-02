@@ -168,6 +168,16 @@ describe("Gate D Evidence Ledger Validation Suite", () => {
     assert.strictEqual(result.valid, false);
     assert.ok(result.failed.some((failure) => /candidate SHA mismatch/.test(failure.error)));
     assert.ok(result.failed.some((failure) => /not staging Gate D evidence/.test(failure.error)));
+  });
+
+  it("rejects cross-receipt target mismatch", async () => {
+    await writeValidStagingReceipts();
+    await mutate("qa-011-result-propagation-summary.json", (data) => ({
+      ...data,
+      target_url: "https://other.example.test/",
+    }));
+    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
+    assert.strictEqual(result.valid, false);
     assert.ok(result.failed.some((failure) => /Target URL mismatch/.test(failure.error)));
   });
 
@@ -203,7 +213,7 @@ describe("Gate D Evidence Ledger Validation Suite", () => {
     await writeValidStagingReceipts();
     const file = path.join(tmpDir, "artifacts/qa-010-load-public-summary.json");
     const data = JSON.parse(await readFile(file, "utf8"));
-    data.peak_summary.p95Ms = 1;
+    data.generated_at = "2026-09-02T08:20:02.000Z";
     await writeFile(file, JSON.stringify(data, null, 2));
     const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
     assert.strictEqual(result.valid, false);

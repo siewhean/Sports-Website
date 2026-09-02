@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 
 // Keep this in lockstep with packages/observability/src/pilot-telemetry.ts.
 // The validator is plain Node so it can run without loading the TypeScript
@@ -186,7 +187,7 @@ function validateReceipt(data, item, expectedCandidateSha) {
   const observationWindow = validateObservationWindow(data, item);
   const metrics = validateMetrics(data, item);
 
-  if (!SHA_PATTERN.test(data.receipt_sha256 ?? "")) {
+  if (!SHA256_PATTERN.test(data.receipt_sha256 ?? "")) {
     throw new Error(`Receipt ${item.file} is missing a valid receipt_sha256 digest`);
   }
   const { receipt_sha256, ...dataToHash } = data;

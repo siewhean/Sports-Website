@@ -23,10 +23,10 @@ import {
   assertWorkloadBudget,
   summarizeWorkload,
   type WorkloadSample,
-} from "../packages/observability/src/workload.js";
-import { requireWriterAccessExchange, type AccessExchange } from "./lib/qa011-access-contract.ts";
+} from "../../../packages/observability/src/workload.js";
+import { requireWriterAccessExchange, type AccessExchange } from "./lib/qa011-access-contract.js";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 type Mode = "component" | "socket-component" | "staging";
 type ActiveScoringSession = {
@@ -51,6 +51,10 @@ const TIERS = [
 ] as const;
 
 const TARGET_P95_MS = Number(process.env.TARGET_P95_MS ?? 500);
+const RESULT_PROPAGATION_P95_MS = Number(process.env.RESULT_PROPAGATION_P95_MS ?? 2000);
+const CURRENT_SLO_DEFINITION_VERSION = "2026.09.gate-d";
+const MINIMUM_SAMPLES_THRESHOLD = Number(process.env.GATE_D_MINIMUM_SAMPLES ?? 10);
+const MINIMUM_SESSIONS_THRESHOLD = Number(process.env.GATE_D_MINIMUM_SESSIONS ?? 1);
 
 function parseMode(): Mode {
   if (process.argv.includes("--mode=staging") || process.env.LOAD_MODE === "staging") return "staging";
@@ -173,7 +177,10 @@ async function requestJson(
   }
 
   if (!target.app) throw new Error("Scoring workload target is not configured");
-  const response = await target.app.inject({ method, url, headers, ...(body === undefined ? {} : { payload: body }) });
+  const response =
+    body === undefined
+      ? await target.app.inject({ method, url, headers })
+      : await target.app.inject({ method, url, headers, payload: JSON.stringify(body) });
   let data: Record<string, unknown> = {};
   try {
     data = response.json() as Record<string, unknown>;
@@ -306,11 +313,76 @@ async function closeOpenReversals(target: Target): Promise<void> {
   }
 }
 
+async function measureResultPropagation(
+  target: Target,
+  competitionSlug: string | undefined,
+  sessions: readonly ActiveScoringSession[],
+): Promise<ReturnType<typeof summarizeWorkload>> {
+  if (!target.baseUrl || !competitionSlug) {
+    throw new Error("QA-011 staging result propagation requires the seeded public competition slug");
+  }
+  const samples: WorkloadSample[] = [];
+  for (const session of sessions) {
+    const acceptedAt = performance.now();
+    try {
+      const finalise = await requestJson(target, "POST", "/api/v1/scoring/finalise", scoringHeaders(session), {
+        client_event_id: randomUUID(),
+        expected_sequence: session.sequence,
+        occurred_at: new Date().toISOString(),
+      });
+      const resultVersion = finalise.data.result_version;
+      if (
+        finalise.status !== 200 ||
+        finalise.data.match_id !== session.matchId ||
+        finalise.data.outcome !== "accepted" ||
+        !Number.isSafeInteger(resultVersion) ||
+        Number(resultVersion) < 1
+      ) {
+        samples.push({ durationMs: performance.now() - acceptedAt, outcome: "unexpected_failure" });
+        continue;
+      }
+      session.sequence = Number(finalise.data.aggregate_version);
+      const deadline = performance.now() + RESULT_PROPAGATION_P95_MS;
+      let visible = false;
+      while (performance.now() <= deadline) {
+        const response = await fetch(
+          `${target.baseUrl}/api/v1/public/competitions/${encodeURIComponent(competitionSlug)}/current`,
+          { headers: { "user-agent": "qa-011-result-propagation/1.0" } },
+        );
+        const body = response.ok
+          ? ((await response.json()) as { publication?: { result_version?: unknown } })
+          : undefined;
+        const publicResultVersion = body?.publication?.result_version;
+        if (
+          response.ok &&
+          Number.isSafeInteger(publicResultVersion) &&
+          Number(publicResultVersion) >= Number(resultVersion)
+        ) {
+          visible = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      samples.push({ durationMs: performance.now() - acceptedAt, outcome: visible ? "success" : "unexpected_failure" });
+    } catch {
+      samples.push({ durationMs: performance.now() - acceptedAt, outcome: "unexpected_failure" });
+    }
+  }
+  return summarizeWorkload(samples);
+}
+
+function observationWindow(startedAt: Date, endedAt: Date) {
+  if (startedAt >= endedAt) throw new Error("QA-011 observation window must be increasing");
+  return { starts_at: startedAt.toISOString(), ends_at: endedAt.toISOString() };
+}
+
 async function main() {
+  const startedAt = new Date();
   console.log(`[QA-011] Starting scoring writes benchmark (${mode})`);
   let app: Awaited<ReturnType<typeof buildMockScoringServer>> | undefined;
   let baseUrl = targetUrlArg?.replace(/\/$/, "");
   let competitionId: string | undefined;
+  let competitionSlug: string | undefined;
   const candidateSha = candidateShaArg;
   let deployedSha: string | undefined;
   const activeSessions: ActiveScoringSession[] = [];
@@ -333,6 +405,7 @@ async function main() {
     const seed = JSON.parse(await readFile(seedPath, "utf8")) as {
       target_url?: string;
       competition_id?: string;
+      competition_slug?: string;
       scoreable_matches?: Array<{ match_id: string }>;
     };
     if (!seed.competition_id || !Array.isArray(seed.scoreable_matches) || seed.scoreable_matches.length === 0) {
@@ -342,6 +415,8 @@ async function main() {
       throw new Error(`Seed TARGET_URL mismatch: seed=${seed.target_url} runner=${baseUrl}`);
     }
     competitionId = seed.competition_id;
+    competitionSlug = seed.competition_slug;
+    if (!competitionSlug) throw new Error("Staging seed artifact is missing competition_slug for result propagation");
     const secretFile = process.env.GATE_D_SCORING_SECRET_FILE;
     if (!secretFile) {
       throw new Error("QA-011 staging mode requires the single-use GATE_D_SCORING_SECRET_FILE from seed:staging:pilot");
@@ -432,30 +507,56 @@ async function main() {
     }
   }
 
-  const target: Target = { app: baseUrl ? undefined : app, baseUrl, sessions: activeSessions };
+  let target: Target;
+  if (baseUrl) {
+    target = { baseUrl, sessions: activeSessions };
+  } else {
+    if (!app) throw new Error("QA-011 component target did not initialise");
+    target = { app, sessions: activeSessions };
+  }
   for (const session of activeSessions) await recoverSessionState(target, session);
 
   const results = [];
-  for (const tier of TIERS) {
-    console.log(`  ${tier.name}: ${tier.operations} writes across ${activeSessions.length} independent match streams`);
-    const result = await runTier(target, tier);
-    results.push(result);
-    console.log(
-      `    samples=${result.summary.sampleCount} p95=${result.summary.p95Ms.toFixed(2)}ms error=${(
-        result.summary.errorRate * 100
-      ).toFixed(2)}%`,
-    );
+  let peakResult: Awaited<ReturnType<typeof runTier>> | undefined;
+  let propagationSummary: ReturnType<typeof summarizeWorkload> | undefined;
+  try {
+    for (const tier of TIERS) {
+      console.log(
+        `  ${tier.name}: ${tier.operations} writes across ${activeSessions.length} independent match streams`,
+      );
+      const result = await runTier(target, tier);
+      results.push(result);
+      console.log(
+        `    samples=${result.summary.sampleCount} p95=${result.summary.p95Ms.toFixed(2)}ms error=${(
+          result.summary.errorRate * 100
+        ).toFixed(2)}%`,
+      );
+    }
+    peakResult = results.find((result) => result.tier.includes("2x")) ?? results[0]!;
+    assertWorkloadBudget(peakResult.summary, {
+      maxP95Ms: TARGET_P95_MS,
+      maxUnexpectedErrorRate: 0.001,
+    });
+    if (mode === "staging") {
+      await closeOpenReversals(target);
+      const requiredSessions = Math.max(MINIMUM_SAMPLES_THRESHOLD, 10);
+      if (activeSessions.length < requiredSessions) {
+        throw new Error(`QA-011 result propagation requires ${requiredSessions} independent active scoring sessions`);
+      }
+      propagationSummary = await measureResultPropagation(
+        target,
+        competitionSlug,
+        activeSessions.slice(0, requiredSessions),
+      );
+      assertWorkloadBudget(propagationSummary, {
+        maxP95Ms: RESULT_PROPAGATION_P95_MS,
+        maxUnexpectedErrorRate: 0.001,
+      });
+    }
+  } finally {
+    // Restore fixture state even if a budget failure aborts receipt creation.
+    await closeOpenReversals(target);
   }
-
-  const peakResult = results.find((result) => result.tier.includes("2x")) ?? results[0]!;
-  assertWorkloadBudget(peakResult.summary, {
-    maxP95Ms: TARGET_P95_MS,
-    maxUnexpectedErrorRate: 0.001,
-  });
-
-  // Keep the seeded competition score-neutral for any later Gate D drills.
-  // These cleanup reversals are correctness operations, not latency samples.
-  await closeOpenReversals(target);
 
   const artifactDir = path.join(root, "artifacts");
   await mkdir(artifactDir, { recursive: true });
@@ -472,6 +573,7 @@ async function main() {
     qa_item: "QA-011",
     mode,
     evidence_class: evidenceClass,
+    slo_definition_version: CURRENT_SLO_DEFINITION_VERSION,
     candidate_sha: candidateSha ?? null,
     deployed_sha: deployedSha ?? null,
     competition_id: competitionId ?? null,
@@ -479,6 +581,10 @@ async function main() {
     title: "Scoring Mutation Writes Workload Summary",
     workload_profile: "volleyball_bounded_point_reversal",
     target_p95_budget_ms: TARGET_P95_MS,
+    minimum_samples_threshold: MINIMUM_SAMPLES_THRESHOLD,
+    minimum_sessions_threshold: MINIMUM_SESSIONS_THRESHOLD,
+    observed_session_count: mode === "staging" ? activeSessions.length : 0,
+    observation_window: observationWindow(startedAt, new Date()),
     independent_scoring_streams: activeSessions.length,
     tiers: results.map((result) => ({
       tier: result.tier,
@@ -486,12 +592,39 @@ async function main() {
       independent_streams: result.independentStreams,
       metrics: result.summary,
     })),
-    peak_summary: peakResult.summary,
+    peak_summary: peakResult!.summary,
     verdict,
     generated_at: new Date().toISOString(),
   };
   const receiptSha256 = createHash("sha256").update(JSON.stringify(receiptData)).digest("hex");
   await writeFile(summaryPath, JSON.stringify({ ...receiptData, receipt_sha256: receiptSha256 }, null, 2), "utf8");
+  if (mode === "staging" && propagationSummary) {
+    const propagationData = {
+      qa_item: "QA-011-RP",
+      mode,
+      evidence_class: evidenceClass,
+      slo_definition_version: CURRENT_SLO_DEFINITION_VERSION,
+      candidate_sha: candidateSha ?? null,
+      deployed_sha: deployedSha ?? null,
+      competition_id: competitionId ?? null,
+      target_url: baseUrl ?? null,
+      title: "Result Propagation Staging Summary",
+      target_p95_budget_ms: RESULT_PROPAGATION_P95_MS,
+      minimum_samples_threshold: MINIMUM_SAMPLES_THRESHOLD,
+      minimum_sessions_threshold: MINIMUM_SESSIONS_THRESHOLD,
+      observed_session_count: activeSessions.length,
+      observation_window: observationWindow(startedAt, new Date()),
+      peak_summary: propagationSummary,
+      verdict: "PASS",
+      generated_at: new Date().toISOString(),
+    };
+    const digest = createHash("sha256").update(JSON.stringify(propagationData)).digest("hex");
+    await writeFile(
+      path.join(artifactDir, "qa-011-result-propagation-summary.json"),
+      JSON.stringify({ ...propagationData, receipt_sha256: digest }, null, 2),
+      "utf8",
+    );
+  }
   console.log(`[QA-011] ${verdict}: ${summaryPath}`);
 
   if (app) await app.close();

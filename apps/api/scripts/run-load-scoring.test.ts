@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requireWriterAccessExchange } from "./lib/qa011-access-contract.ts";
+import { requireWriterAccessExchange, type AccessExchange } from "./lib/qa011-access-contract.js";
 
 test("QA-011 accepts only the production writer access-exchange contract", () => {
   assert.deepEqual(
@@ -27,7 +27,7 @@ test("QA-011 rejects the legacy writer_generation-only response", () => {
           session_id: "session-1",
           session_token: "session-token-1",
           writer_generation: 1,
-        },
+        } as unknown as AccessExchange,
         "match-1",
       ),
     /required writer session contract/,

@@ -18,14 +18,10 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
-import {
-  summarizeWorkload,
-  assertWorkloadBudget,
-  type WorkloadSample,
-} from "../packages/observability/src/workload.js";
-import { gateCC4PublicHeaders } from "../apps/api/src/gate-c-public-http.js";
+import { summarizeWorkload, assertWorkloadBudget, type WorkloadSample } from "@matchday/observability";
+import { gateCC4PublicHeaders } from "../src/gate-c-public-http.js";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 type Mode = "component" | "socket-component" | "staging";
 
@@ -56,6 +52,14 @@ const TIERS = [
 ];
 
 const TARGET_P95_MS = Number(process.env.TARGET_P95_MS ?? 2500);
+const CURRENT_SLO_DEFINITION_VERSION = "2026.09.gate-d";
+const MINIMUM_SAMPLES_THRESHOLD = Number(process.env.GATE_D_MINIMUM_SAMPLES ?? 10);
+const MINIMUM_SESSIONS_THRESHOLD = Number(process.env.GATE_D_MINIMUM_SESSIONS ?? 1);
+
+function observationWindow(startedAt: Date, endedAt: Date) {
+  if (startedAt >= endedAt) throw new Error("QA-010 observation window must be increasing");
+  return { starts_at: startedAt.toISOString(), ends_at: endedAt.toISOString() };
+}
 
 async function buildPublicServer() {
   const app = Fastify({ logger: false });
@@ -223,6 +227,7 @@ async function runTier(
 }
 
 async function main() {
+  const startedAt = new Date();
   console.log(`[QA-010] Starting Fastify Public Pages Load Workload Benchmark (Mode: ${mode.toUpperCase()})`);
   console.log(`  Target p95 budget: < ${TARGET_P95_MS} ms\n`);
 
@@ -280,7 +285,7 @@ async function main() {
     } catch {
       throw new Error(
         `QA-010 staging mode requires a valid seed fixture at ${seedFile}. ` +
-          "Please run 'pnpm tsx scripts/seed-staging-pilot.ts' first.",
+          "Please run 'pnpm seed:staging:pilot' first.",
       );
     }
 
@@ -303,10 +308,14 @@ async function main() {
     process.stdout.write(
       `Executing Tier: ${tier.name} (${tier.concurrency} concurrent clients, ${tier.operations} ops)...\n`,
     );
-    const result = await runTier(
-      { app: baseUrl ? undefined : app, baseUrl, competitionId, publicCompetitionSlug },
-      tier,
-    );
+    const target = baseUrl
+      ? {
+          baseUrl,
+          ...(competitionId ? { competitionId } : {}),
+          ...(publicCompetitionSlug ? { publicCompetitionSlug } : {}),
+        }
+      : { app: app! };
+    const result = await runTier(target, tier);
     results.push(result);
     console.log(
       `  ✓ Completed: ${result.summary.sampleCount}/${tier.operations} ops | ` +
@@ -352,6 +361,7 @@ async function main() {
     qa_item: "QA-010",
     mode,
     evidence_class: evidenceClass,
+    slo_definition_version: CURRENT_SLO_DEFINITION_VERSION,
     candidate_sha: candidateSha ?? null,
     deployed_sha: deployedSha ?? null,
     competition_id: competitionId ?? null,
@@ -359,6 +369,10 @@ async function main() {
     target_url: baseUrl ?? null,
     title: "Public Pages Read Workload Summary",
     target_p95_budget_ms: TARGET_P95_MS,
+    minimum_samples_threshold: MINIMUM_SAMPLES_THRESHOLD,
+    minimum_sessions_threshold: MINIMUM_SESSIONS_THRESHOLD,
+    observed_session_count: mode === "staging" ? 1 : 0,
+    observation_window: observationWindow(startedAt, new Date()),
     tiers: results.map((r) => ({
       tier: r.tier,
       metrics: r.summary,

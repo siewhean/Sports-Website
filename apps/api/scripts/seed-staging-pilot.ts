@@ -21,18 +21,18 @@ import {
   ScheduleJobQueue,
   SchedulerRuntime,
 } from "@matchday/scheduler";
-import type { ScheduleConstraints } from "@matchday/contracts";
+import type { Phase4SetupDocument, Phase4SetupStepValue, ScheduleConstraints } from "@matchday/contracts";
 import { Redis } from "ioredis";
 import postgres from "postgres";
-import { phase2DomainAdapter } from "../apps/api/src/phase-2-domain-adapter.js";
-import { Phase2Runtime } from "../apps/api/src/phase-2-runtime.js";
-import { phase3DomainAdapter } from "../apps/api/src/phase-3-domain-adapter.js";
-import { Phase3Runtime } from "../apps/api/src/phase-3-runtime.js";
-import { DeterministicPhase4AiStub } from "../apps/api/src/phase-4-ai-provider.js";
-import { ReliableGateBPhase4Runtime } from "../apps/api/src/phase-4-reliable-runtime.js";
-import { requireWriterAccessExchange } from "./lib/qa011-access-contract.ts";
+import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
+import { Phase2Runtime } from "../src/phase-2-runtime.js";
+import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
+import { Phase3Runtime } from "../src/phase-3-runtime.js";
+import { DeterministicPhase4AiStub } from "../src/phase-4-ai-provider.js";
+import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
+import { requireWriterAccessExchange } from "./lib/qa011-access-contract.js";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 const redisUrl = process.env.REDIS_URL;
 const targetUrl = (process.env.TARGET_URL ?? "http://127.0.0.1:4101").replace(/\/$/, "");
@@ -40,6 +40,24 @@ const scoringPassTtlMs = 7 * 24 * 60 * 60_000;
 
 function ignored<T>(value: T) {
   return { mode: "ignored" as const, value };
+}
+
+function setupStep(
+  document: Phase4SetupDocument,
+  stepId: "basics" | "capacity" | "settings" | "entries" | "format_preferences",
+): Phase4SetupStepValue {
+  switch (stepId) {
+    case "basics":
+      return { step_id: "basics", value: document.values.basics! };
+    case "capacity":
+      return { step_id: "capacity", value: document.values.capacity! };
+    case "settings":
+      return { step_id: "settings", value: document.values.settings! };
+    case "entries":
+      return { step_id: "entries", value: document.values.entries! };
+    case "format_preferences":
+      return { step_id: "format_preferences", value: document.values.format_preferences! };
+  }
 }
 
 function schedulingConstraints(areaId: string): ScheduleConstraints {
@@ -365,15 +383,15 @@ async function main() {
     const saveSetupStep = async <StepId extends "basics" | "capacity" | "settings" | "entries" | "format_preferences">(
       stepId: StepId,
     ) => {
-      const value = setupDocument.values[stepId];
-      if (!value) throw new Error(`Gate D canonical setup is missing ${stepId}`);
+      const step = setupStep(setupDocument, stepId);
+      if (!step.value) throw new Error(`Gate D canonical setup is missing ${stepId}`);
       const saved = await phase4.autosaveSetupDraft(
         actor,
         competitionId,
         {
           expected_revision: setupDocument.revision,
           idempotency_key: `gate-d-setup-${stepId}-${randomUUID()}`,
-          transition: { kind: "save_step", step: { step_id: stepId, value } },
+          transition: { kind: "save_step", step },
         },
         randomUUID(),
       );
