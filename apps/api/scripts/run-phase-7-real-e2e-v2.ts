@@ -744,7 +744,7 @@ async function main(): Promise<void> {
     console.log("Phase 7 real browser qualification: PASS");
   } finally {
     await stopProcesses();
-    await app?.close().catch(() => undefined);
+    await Promise.race([app?.close(), new Promise(r => setTimeout(r, 2000))]).catch(() => undefined);
     await scheduler?.stop().catch(() => undefined);
     await scheduleQueue?.close().catch(() => undefined);
     if (scheduleQueueName) await deleteOwnedScheduleQueueKeys(redis, scheduleQueueName).catch(() => undefined);
@@ -754,6 +754,7 @@ async function main(): Promise<void> {
     await sql.end({ timeout: 2 }).catch(() => undefined);
     await dropTestSchema(databaseUrl, schema).catch(() => undefined);
     await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
+    process.exit();
   }
 }
 
