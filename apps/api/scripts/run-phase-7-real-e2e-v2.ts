@@ -744,7 +744,7 @@ async function main(): Promise<void> {
     console.log("Phase 7 real browser qualification: PASS");
   } finally {
     await stopProcesses();
-    await Promise.race([app?.close(), new Promise(r => setTimeout(r, 2000))]).catch(() => undefined);
+    await Promise.race([app?.close(), new Promise((r) => setTimeout(r, 2000))]).catch(() => undefined);
     await scheduler?.stop().catch(() => undefined);
     await scheduleQueue?.close().catch(() => undefined);
     if (scheduleQueueName) await deleteOwnedScheduleQueueKeys(redis, scheduleQueueName).catch(() => undefined);
