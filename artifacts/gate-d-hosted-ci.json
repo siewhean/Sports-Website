@@ -1,0 +1,38 @@
+{
+  "schema_version": "2026.09.gate-d-hosted-ci",
+  "candidate_sha": "06f1acd6a90775f92d5b5c260c5545fc81c2470d",
+  "workflow_run_id": 33653457048,
+  "workflow_run_number": 651,
+  "conclusion": "PASS",
+  "jobs": {
+    "secrets": {
+      "job_id": 100326096483,
+      "conclusion": "PASS"
+    },
+    "quality-fast": {
+      "job_id": 100326184668,
+      "conclusion": "PASS"
+    },
+    "integration": {
+      "job_id": 100326184675,
+      "conclusion": "PASS"
+    },
+    "browser-e2e": {
+      "job_id": 100327154283,
+      "conclusion": "PASS",
+      "steps": ["test:e2e", "test:a11y", "test:visual"]
+    },
+    "gate-d-real-e2e": {
+      "job_id": 100327818553,
+      "conclusion": "PASS",
+      "steps": ["test:e2e:phase7:real"]
+    }
+  },
+  "artifact": {
+    "id": 9855886218,
+    "name": "verified-contracts-and-deployment",
+    "digest": "sha256:d85b27affd20aebf94aab515dc62df7b925c277407b9ab6b76cb597c56fb9223",
+    "expired": false,
+    "expires_at_utc": "2026-12-01T16:12:20Z"
+  }
+}
