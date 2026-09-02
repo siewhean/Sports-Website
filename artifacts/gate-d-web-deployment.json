@@ -1,0 +1,14 @@
+{
+  "schema_version": "2026.09.gate-d-web-deployment",
+  "candidate_sha": "06f1acd6a90775f92d5b5c260c5545fc81c2470d",
+  "provider": "vercel",
+  "project_id": "prj_3y6T5b9aTxy1o6PbpGeK2vGiTkMk",
+  "deployment_id": "dpl_GDndNwAxmULVdkm7oVEbB7iKBF6x",
+  "deployment_url": "https://sports-website-ggnfmoswt-siewheans-projects.vercel.app",
+  "branch_alias": "https://sports-website-web-git-phase-7-releas-28480a-siewheans-projects.vercel.app",
+  "git_ref": "phase-7/release-hardening",
+  "git_sha": "06f1acd6a90775f92d5b5c260c5545fc81c2470d",
+  "state": "READY",
+  "ready_at_utc": "2026-09-02T16:13:26.067Z",
+  "note": "Browser-facing deployment only. This does not substitute for the controlled Render API/PostgreSQL/Redis staging receipts required by Gate D."
+}
