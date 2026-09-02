@@ -17,13 +17,7 @@ const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 
 export const GATE_D_FREEZE_SCHEMA_VERSION = "2026.09.gate-d-freeze";
-export const REQUIRED_HOSTED_CI_JOBS = [
-  "secrets",
-  "quality-fast",
-  "integration",
-  "browser-e2e",
-  "gate-d-real-e2e",
-];
+export const REQUIRED_HOSTED_CI_JOBS = ["secrets", "quality-fast", "integration", "browser-e2e", "gate-d-real-e2e"];
 export const REQUIRED_HUMAN_EVIDENCE = [
   "accessibility_human_audit",
   "browser_device_matrix",
@@ -107,9 +101,7 @@ function validateEvidenceItem(item, key) {
 
 export async function validateGateDFreeze(expectedCandidateSha, options = {}) {
   if (!expectedCandidateSha || !SHA_PATTERN.test(expectedCandidateSha)) {
-    throw new Error(
-      `Gate D freeze validation requires a valid 40-character candidate SHA: ${expectedCandidateSha}`,
-    );
+    throw new Error(`Gate D freeze validation requires a valid 40-character candidate SHA: ${expectedCandidateSha}`);
   }
 
   const root = options.rootDir ?? defaultRoot;
