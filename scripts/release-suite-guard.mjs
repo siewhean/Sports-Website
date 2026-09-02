@@ -147,25 +147,28 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       runCommand("10  Vercel deployment verification", "pnpm test:vercel:verify", { expectTests: true });
       runCommand("11  Gate D source contract", "pnpm test:check:source", { expectTests: true });
       runCommand("12  Gate D receipt validator", "pnpm test:evidence:gate-d", { expectTests: true });
+      runCommand("13  Gate D freeze validator", "node --test scripts/validate-gate-d-freeze.test.mjs", {
+        expectTests: true,
+      });
     }
 
     // Phase B — integration + migration (requires postgres + redis + mailpit)
     if (PHASE === "ALL" || PHASE === "B") {
-      runCommand("13  Build (all packages)", "pnpm build");
-      runCommand("14  Migration check", "pnpm db:migrate:check");
-      runCommand("15  Backup restoration verification", "pnpm backup:verify", { isInfra: true });
-      runCommand("16  Integration tests", "pnpm test:integration", { isInfra: true, expectTests: true });
+      runCommand("14  Build (all packages)", "pnpm build");
+      runCommand("15  Migration check", "pnpm db:migrate:check");
+      runCommand("16  Backup restoration verification", "pnpm backup:verify", { isInfra: true });
+      runCommand("17  Integration tests", "pnpm test:integration", { isInfra: true, expectTests: true });
     }
 
     // Phase C — browser E2E + a11y + visual (requires full stack)
     if (PHASE === "ALL" || PHASE === "C") {
-      runCommand("17  Browser E2E", "pnpm test:e2e", { isInfra: true, expectTests: true });
-      runCommand("18  Gate D real browser qualification", "pnpm test:e2e:phase7:real", {
+      runCommand("18  Browser E2E", "pnpm test:e2e", { isInfra: true, expectTests: true });
+      runCommand("19  Gate D real browser qualification", "pnpm test:e2e:phase7:real", {
         isInfra: true,
         expectTests: true,
       });
-      runCommand("19  Accessibility (Playwright a11y)", "pnpm test:a11y", { isInfra: true, expectTests: true });
-      runCommand("20  Visual regression", "pnpm test:visual", { isInfra: true, expectTests: true });
+      runCommand("20  Accessibility (Playwright a11y)", "pnpm test:a11y", { isInfra: true, expectTests: true });
+      runCommand("21  Visual regression", "pnpm test:visual", { isInfra: true, expectTests: true });
     }
 
     console.log("\n" + "═".repeat(72));
