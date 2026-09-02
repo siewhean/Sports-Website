@@ -74,12 +74,24 @@ test("Gate D staging runners execute from the API workspace that owns their depe
   }
 });
 
-test("release readiness runs Gate D source tests and the real browser journey without requiring external receipts", async () => {
+test("release readiness runs Gate D source tests and real browser qualification without external evidence", async () => {
   const source = await readFile(path.join(root, "scripts/release-suite-guard.mjs"), "utf8");
   assert.match(source, /pnpm test:check:source/u);
   assert.match(source, /pnpm test:evidence:gate-d/u);
+  assert.match(source, /node --test scripts\/validate-gate-d-freeze\.test\.mjs/u);
   assert.match(source, /pnpm test:e2e:phase7:real/u);
   assert.doesNotMatch(source, /pnpm evidence:gate-d:verify/u);
+  assert.doesNotMatch(source, /validate-gate-d-freeze\.mjs\s+["']?\$?CANDIDATE_SHA/u);
+});
+
+test("hosted browser matrix has enough timeout headroom for dependency mirrors", async () => {
+  const source = await readFile(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const start = source.indexOf("  browser-e2e:");
+  const end = source.indexOf("\n  gate-d-real-e2e:", start);
+  assert.ok(start >= 0 && end > start, "browser-e2e workflow block must remain inspectable");
+  const browserJob = source.slice(start, end);
+  assert.match(browserJob, /timeout-minutes:\s*(?:[6-9]\d|\d{3,})/u);
+  assert.match(browserJob, /playwright install --with-deps chromium webkit firefox/u);
 });
 
 test("QA-011 propagation reuses already-started benchmark matches", async () => {
