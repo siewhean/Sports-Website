@@ -1,6 +1,8 @@
 name: Gate D controlled staging qualification
 
 on:
+  push:
+    branches: [gate-d/control-f1a82186]
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -30,14 +32,14 @@ defaults:
 jobs:
   staging-qualification:
     name: Gate D controlled staging receipts
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, linux, x64, gate-c-staging]
     environment: gate-d-controlled-staging
     timeout-minutes: 120
     env:
       APP_ENV: staging
-      CANDIDATE_SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
-      TARGET_URL: ${{ inputs.target_url || vars.GATE_D_TARGET_URL }}
+      CANDIDATE_SHA: ${{ github.event_name == 'push' && 'f1a8218616f51197a22fe218306ae6f7a908efca' || inputs.candidate_sha || github.event.workflow_run.head_sha }}
+      TARGET_URL: ${{ inputs.target_url || vars.GATE_D_TARGET_URL || 'https://c5-staging.poladex.shop' }}
       DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
       REDIS_URL: ${{ secrets.GATE_D_REDIS_URL }}
     steps:
