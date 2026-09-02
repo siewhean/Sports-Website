@@ -334,19 +334,16 @@ function requireAcceptedMutation(
 }
 
 /**
- * The latency sample starts only after the match is validly finalisable. The
- * seeded Gate D Volleyball settings are one set to one point, so production
- * requires its lifecycle start, a home point, and that set's completion before
- * finalisation. All three preparation commands are outside the timed sample.
+ * The measured workload has already emitted the match_started lifecycle event.
+ * After bounded point/reversal cleanup the Volleyball match is still in progress
+ * at a neutral score. With the Gate D one-set/one-point settings, a home point
+ * followed by set completion is the smallest valid preparation for finalisation.
+ * Both preparation commands remain outside the timed propagation sample.
  */
 async function prepareResultPropagationMatch(target: Target, session: ActiveScoringSession): Promise<void> {
-  const started = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), {
-    client_event_id: randomUUID(),
-    expected_sequence: session.sequence,
-    type: "match_started",
-    occurred_at: new Date().toISOString(),
-  });
-  requireAcceptedMutation(started, session, "propagation match-start preparation");
+  if (!Number.isSafeInteger(session.sequence) || session.sequence < 1) {
+    throw new Error(`QA-011 propagation requires an already-started measured match: ${session.matchId}`);
+  }
 
   const point = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), {
     client_event_id: randomUUID(),
