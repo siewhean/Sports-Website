@@ -79,6 +79,14 @@ jobs:
           }
           NODE
 
+      - name: Prepare runner-owned Gate D temp root
+        run: |
+          set -euo pipefail
+          runtime_tmp="$RUNNER_TEMP/matchday-gate-d-runtime-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rm -rf -- "$runtime_tmp"
+          mkdir -p "$runtime_tmp"
+          printf 'TMPDIR=%s\n' "$runtime_tmp" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
@@ -109,11 +117,6 @@ jobs:
       - name: Validate migration compatibility against Gate D database
         run: pnpm db:migrate:check
 
-      - name: Clear stale one-time Gate D handoff files
-        run: |
-          set -euo pipefail
-          find /tmp -maxdepth 1 -type d -name 'matchday-gate-d-scoring-*' -exec rm -rf -- {} +
-
       - name: Seed canonical Gate D pilot fixture
         run: pnpm seed:staging:pilot
 
@@ -121,10 +124,14 @@ jobs:
         id: scoring-handoff
         run: |
           set -euo pipefail
-          mapfile -t files < <(find /tmp -maxdepth 2 -type f -path '/tmp/matchday-gate-d-scoring-*/scorekeeper-access.json' -print)
+          mapfile -t files < <(find "$TMPDIR" -maxdepth 2 -type f -path "$TMPDIR/matchday-gate-d-scoring-*/scorekeeper-access.json" -print)
           test "${#files[@]}" -eq 1
           secret_file="${files[0]}"
           test "$(stat -c '%a' "$secret_file")" = "600"
+          case "$secret_file" in
+            "$TMPDIR"/matchday-gate-d-scoring-*/scorekeeper-access.json) ;;
+            *) echo 'Scoring handoff escaped runner-owned Gate D temp root' >&2; exit 1 ;;
+          esac
           printf 'secret_file=%s\n' "$secret_file" >> "$GITHUB_OUTPUT"
           printf 'secret_dir=%s\n' "$(dirname "$secret_file")" >> "$GITHUB_OUTPUT"
 
@@ -136,7 +143,7 @@ jobs:
           GATE_D_SCORING_SECRET_FILE: ${{ steps.scoring-handoff.outputs.secret_file }}
         run: pnpm test:load:scoring -- --mode=staging
 
-      - name: Prove one-time scoring handoff was destroyed
+      - name: Prove one-time scoring handoff was destroyed by QA-011
         run: |
           set -euo pipefail
           test ! -e '${{ steps.scoring-handoff.outputs.secret_file }}'
@@ -147,6 +154,18 @@ jobs:
 
       - name: Prove qualification did not mutate tracked source
         run: git diff --exit-code
+
+      - name: Unconditionally destroy runner-owned Gate D temp data
+        if: ${{ always() }}
+        run: |
+          set +e
+          secret_file='${{ steps.scoring-handoff.outputs.secret_file }}'
+          secret_dir='${{ steps.scoring-handoff.outputs.secret_dir }}'
+          if [ -n "$secret_file" ]; then rm -f -- "$secret_file"; fi
+          if [ -n "$secret_dir" ]; then rm -rf -- "$secret_dir"; fi
+          if [ -n "${TMPDIR:-}" ] && [[ "$TMPDIR" == "$RUNNER_TEMP"/matchday-gate-d-runtime-* ]]; then
+            rm -rf -- "$TMPDIR"
+          fi
 
       - name: Retain non-secret Gate D staging evidence
         if: ${{ always() }}
