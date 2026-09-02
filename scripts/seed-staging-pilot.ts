@@ -30,6 +30,7 @@ import { phase3DomainAdapter } from "../apps/api/src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../apps/api/src/phase-3-runtime.js";
 import { DeterministicPhase4AiStub } from "../apps/api/src/phase-4-ai-provider.js";
 import { ReliableGateBPhase4Runtime } from "../apps/api/src/phase-4-reliable-runtime.js";
+import { requireWriterAccessExchange } from "./lib/qa011-access-contract.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -103,6 +104,35 @@ async function requireApiResponse(url: string, init: RequestInit | undefined, la
     );
   }
   return response;
+}
+
+async function assertBenchmarkMatchPristine(sql: postgres.Sql, matchId: string): Promise<void> {
+  const [state] = await sql<
+    {
+      canonical_events: number;
+      stream_version: number;
+      result_snapshots: number;
+      active_writer_lease: boolean;
+    }[]
+  >`
+    SELECT
+      (SELECT count(*)::int FROM canonical_score_events WHERE match_id=${matchId}) AS canonical_events,
+      COALESCE((SELECT current_version FROM match_score_streams WHERE match_id=${matchId}),0)::int AS stream_version,
+      (SELECT count(*)::int FROM match_result_snapshots WHERE match_id=${matchId}) AS result_snapshots,
+      EXISTS(
+        SELECT 1 FROM match_writer_leases
+        WHERE match_id=${matchId} AND expires_at>clock_timestamp()
+      ) AS active_writer_lease;
+  `;
+  if (
+    !state ||
+    state.canonical_events !== 0 ||
+    state.stream_version !== 0 ||
+    state.result_snapshots !== 0 ||
+    state.active_writer_lease
+  ) {
+    throw new Error(`QA-011 benchmark match must be pristine before handoff: ${matchId}`);
+  }
 }
 
 async function main() {
@@ -558,33 +588,56 @@ async function main() {
       throw new Error("Post-seed public projection did not expose the canonical published fixtures for both divisions");
     }
 
+    // Verify the deployed access exchange with a dedicated pass. The passes in
+    // the benchmark handoff remain pristine: they are not exchanged before
+    // QA-011 owns their writer lease and mutation stream.
     const exchangeCandidate = scoreableMatches[0]!;
-    const exchangeResponse = await requireApiResponse(
-      `${targetUrl}/api/v1/scoring/access/exchange`,
+    const verificationPass = await phase2.createAccessPass(
+      actor,
+      competitionId,
+      exchangeCandidate.matchId,
       {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          token: exchangeCandidate.rawToken,
-          expected_match_id: exchangeCandidate.matchId,
-          device_id: `seed-verification-${randomUUID()}`,
-          device_label: "Gate D staging seed verification",
-        }),
+        expiresAt: new Date(Date.now() + scoringPassTtlMs).toISOString(),
+        role: "scorekeeper",
+        idempotencyKey: `gate-d-verification-pass-${exchangeCandidate.matchId}-${randomUUID()}`,
       },
-      "scoring access exchange",
+      randomUUID(),
     );
-    const exchange = (await exchangeResponse.json()) as {
-      match_id?: string;
-      session_id?: string;
-      session_token?: string;
-    };
-    if (
-      exchange.match_id !== exchangeCandidate.matchId ||
-      typeof exchange.session_id !== "string" ||
-      typeof exchange.session_token !== "string"
-    ) {
-      throw new Error(`Post-seed scoring exchange verification returned invalid state: ${JSON.stringify(exchange)}`);
+    if (!verificationPass.token) throw new Error("Scoring verification pass did not return a one-time token");
+    let verificationExchange: { sessionId: string; sessionToken: string; generation: number } | undefined;
+    try {
+      const exchangeResponse = await requireApiResponse(
+        `${targetUrl}/api/v1/scoring/access/exchange`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            token: verificationPass.token,
+            expected_match_id: exchangeCandidate.matchId,
+            device_id: `seed-verification-${randomUUID()}`,
+            device_label: "Gate D staging seed verification",
+          }),
+        },
+        "scoring access exchange",
+      );
+      if (exchangeResponse.status !== 200) {
+        throw new Error(`Post-seed scoring exchange verification returned HTTP ${exchangeResponse.status}`);
+      }
+      verificationExchange = requireWriterAccessExchange(
+        (await exchangeResponse.json()) as Record<string, unknown>,
+        exchangeCandidate.matchId,
+      );
+    } finally {
+      await phase2.revokeAccessPass(
+        actor,
+        competitionId,
+        verificationPass.id,
+        randomUUID(),
+        "Gate D staging seed verification complete",
+      );
     }
+    if (!verificationExchange) throw new Error("Post-seed scoring exchange verification did not complete");
+    for (const match of scoreableMatches) await assertBenchmarkMatchPristine(sql, match.matchId);
 
     const artifactDir = path.join(root, "artifacts");
     await mkdir(artifactDir, { recursive: true });

@@ -13,7 +13,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -24,6 +24,7 @@ import {
   summarizeWorkload,
   type WorkloadSample,
 } from "../packages/observability/src/workload.js";
+import { requireWriterAccessExchange, type AccessExchange } from "./lib/qa011-access-contract.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -32,7 +33,7 @@ type ActiveScoringSession = {
   matchId: string;
   sessionId: string;
   sessionToken: string;
-  generation: number | null;
+  generation: number;
   sequence: number;
   pendingReversalEventId: string | null;
 };
@@ -70,12 +71,26 @@ const targetUrlArg =
 const candidateShaArg =
   process.argv.find((value) => value.startsWith("--candidate-sha="))?.split("=")[1] ?? process.env.CANDIDATE_SHA;
 
+function validatedSeedHandoffDirectory(secretFile: string): string {
+  const resolvedFile = path.resolve(secretFile);
+  const expectedDirectoryPrefix = path.resolve(tmpdir(), "matchday-gate-d-scoring-");
+  const parent = path.dirname(resolvedFile);
+  if (
+    path.basename(resolvedFile) !== "scorekeeper-access.json" ||
+    !parent.startsWith(expectedDirectoryPrefix) ||
+    parent === expectedDirectoryPrefix
+  ) {
+    throw new Error("GATE_D_SCORING_SECRET_FILE must be the single-use seed:staging:pilot handoff file");
+  }
+  return parent;
+}
+
 function scoringHeaders(session: ActiveScoringSession): Record<string, string> {
   return {
     "content-type": "application/json",
     "x-scoring-session-id": session.sessionId,
     "x-scoring-session-token": session.sessionToken,
-    ...(session.generation !== null ? { "x-writer-generation": String(session.generation) } : {}),
+    "x-writer-generation": String(session.generation),
   };
 }
 
@@ -101,8 +116,9 @@ async function buildMockScoringServer() {
     return reply.status(200).send({
       session_id: sessionId,
       session_token: sessionToken,
-      writer_generation: 1,
       match_id: matchId,
+      mode: "writer",
+      generation: 1,
     });
   });
 
@@ -330,13 +346,7 @@ async function main() {
     if (!secretFile) {
       throw new Error("QA-011 staging mode requires the single-use GATE_D_SCORING_SECRET_FILE from seed:staging:pilot");
     }
-    const expectedSecretDirectoryPrefix = path.join(tmpdir(), "matchday-gate-d-scoring-");
-    if (
-      path.basename(secretFile) !== "scorekeeper-access.json" ||
-      !path.dirname(secretFile).startsWith(expectedSecretDirectoryPrefix)
-    ) {
-      throw new Error("GATE_D_SCORING_SECRET_FILE must be the single-use seed:staging:pilot handoff file");
-    }
+    const secretDirectory = validatedSeedHandoffDirectory(secretFile);
     let secret: {
       target_url?: string;
       competition_id?: string;
@@ -346,6 +356,9 @@ async function main() {
       secret = JSON.parse(await readFile(secretFile, "utf8")) as typeof secret;
     } finally {
       await rm(secretFile, { force: true }).catch(() => undefined);
+      await rmdir(secretDirectory).catch((error: unknown) => {
+        throw new Error("QA-011 could not remove the single-use scoring handoff directory", { cause: error });
+      });
     }
     if (
       secret.target_url?.replace(/\/$/, "") !== baseUrl ||
@@ -372,19 +385,13 @@ async function main() {
       if (!exchange.ok) {
         throw new Error(`Access exchange failed for ${match.matchId} (HTTP ${exchange.status})`);
       }
-      const data = (await exchange.json()) as {
-        session_id?: string;
-        session_token?: string;
-        writer_generation?: number;
-      };
-      if (!data.session_id || !data.session_token) {
-        throw new Error(`Access exchange for ${match.matchId} did not return session credentials`);
-      }
+      const data = (await exchange.json()) as AccessExchange;
+      const writer = requireWriterAccessExchange(data, match.matchId);
       activeSessions.push({
         matchId: match.matchId,
-        sessionId: data.session_id,
-        sessionToken: data.session_token,
-        generation: data.writer_generation ?? null,
+        sessionId: writer.sessionId,
+        sessionToken: writer.sessionToken,
+        generation: writer.generation,
         sequence: 0,
         pendingReversalEventId: null,
       });
@@ -394,7 +401,7 @@ async function main() {
     if (mode === "socket-component") baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
     for (let index = 0; index < 8; index++) {
       let status: number;
-      let data: { session_id?: string; session_token?: string; writer_generation?: number };
+      let data: AccessExchange;
       if (mode === "component") {
         const response = await app.inject({
           method: "POST",
@@ -412,12 +419,13 @@ async function main() {
         status = response.status;
         data = (await response.json()) as typeof data;
       }
-      if (status !== 200 || !data.session_id || !data.session_token) throw new Error("Mock access exchange failed");
+      if (status !== 200) throw new Error("Mock access exchange failed");
+      const writer = requireWriterAccessExchange(data, `mock-match-${index}`);
       activeSessions.push({
         matchId: `mock-match-${index}`,
-        sessionId: data.session_id,
-        sessionToken: data.session_token,
-        generation: data.writer_generation ?? 1,
+        sessionId: writer.sessionId,
+        sessionToken: writer.sessionToken,
+        generation: writer.generation,
         sequence: 0,
         pendingReversalEventId: null,
       });
@@ -489,7 +497,9 @@ async function main() {
   if (app) await app.close();
 }
 
-main().catch((error) => {
-  console.error("[QA-011] FAILED", error);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error("[QA-011] FAILED", error);
+    process.exit(1);
+  });
+}

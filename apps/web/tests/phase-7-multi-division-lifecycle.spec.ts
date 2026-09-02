@@ -188,6 +188,15 @@ async function scoringSession(page: Page): Promise<ScoringSessionOracle> {
   return value;
 }
 
+async function serverScoringSession(request: APIRequestContext, webOrigin: string): Promise<ScoringSessionOracle> {
+  const response = await request.get(`${webOrigin}/api/scoring/session`, { failOnStatusCode: false });
+  const text = await response.text();
+  expect(response.status(), `independent server scoring session\n${text}`).toBe(200);
+  const value = JSON.parse(text) as ScoringSessionOracle;
+  expect(Number.isSafeInteger(value.through_sequence)).toBe(true);
+  return value;
+}
+
 test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecycle & Offline Scoring Queue", () => {
   test("proves a two-division public schedule, offline replay exactly once, and real finalisation", async ({
     page,
@@ -295,6 +304,17 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     await expect
       .poll(getIndexedDbPendingQueueCount, { timeout: 10_000, intervals: [100, 250, 500] })
       .toBeGreaterThan(0);
+
+    // Browser transport remains offline here. BrowserContext.request is an
+    // independent API transport that shares the authenticated session cookie,
+    // proving the queued event has not reached canonical server state.
+    const unchangedWhileOffline = await serverScoringSession(context.request, webOrigin);
+    expect(unchangedWhileOffline.through_sequence).toBe(baselineSequence);
+    expect(unchangedWhileOffline.score.total_points.home).toBe(baselineHomePoints);
+    expect(unchangedWhileOffline.score.total_points.away).toBe(baselineAwayPoints);
+    expect(unchangedWhileOffline.score.actions.filter((action) => action.event_type === "point")).toHaveLength(
+      baselinePointActions,
+    );
 
     await context.setOffline(false);
     // Playwright restores transport but does not reliably emit the browser's

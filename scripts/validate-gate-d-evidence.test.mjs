@@ -1,13 +1,17 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { validateGateDEvidence } from "./validate-gate-d-evidence.mjs";
+import { CURRENT_SLO_DEFINITION_VERSION, validateGateDEvidence } from "./validate-gate-d-evidence.mjs";
 
 const VALID_SHA = "9dfc2f963a5f63c0cdf90101d3b1225368d8ea61";
 const OTHER_SHA = "6a1ca79048c25b02a1a34dc5c5eb7c0df92ae30c";
+const WINDOW = {
+  starts_at: "2026-09-02T08:00:00.000Z",
+  ends_at: "2026-09-02T08:20:00.000Z",
+};
 
 describe("Gate D Evidence Ledger Validation Suite", () => {
   let tmpDir;
@@ -16,88 +20,89 @@ describe("Gate D Evidence Ledger Validation Suite", () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-d-test-"));
     await mkdir(path.join(tmpDir, "artifacts"), { recursive: true });
   });
-
   afterEach(async () => {
-    if (tmpDir) {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
   });
 
   function createSignedReceipt(data) {
     const { receipt_sha256, ...dataToHash } = data;
-    const digest = createHash("sha256").update(JSON.stringify(dataToHash)).digest("hex");
-    return { ...dataToHash, receipt_sha256: digest };
+    return { ...dataToHash, receipt_sha256: createHash("sha256").update(JSON.stringify(dataToHash)).digest("hex") };
+  }
+
+  function peakSummary({ sampleCount = 200, errorCount = 0, p95Ms = 120.5 } = {}) {
+    return {
+      sampleCount,
+      successfulCount: sampleCount - errorCount,
+      expectedFailureCount: 0,
+      unexpectedFailureCount: errorCount,
+      errorRate: errorCount / sampleCount,
+      p50Ms: 25.4,
+      p95Ms,
+      p99Ms: Math.max(p95Ms, 150.2),
+      maxMs: Math.max(p95Ms, 180),
+    };
+  }
+
+  function receipt(qa_item, title, target_p95_budget_ms, peak_summary, custom = {}) {
+    return createSignedReceipt({
+      qa_item,
+      mode: "staging",
+      evidence_class: "gate_d_staging",
+      slo_definition_version: CURRENT_SLO_DEFINITION_VERSION,
+      candidate_sha: VALID_SHA,
+      deployed_sha: VALID_SHA,
+      competition_id: "comp-volleyball-pilot-01",
+      target_url: "https://matchday-gate-d-api.onrender.com",
+      title,
+      target_p95_budget_ms,
+      minimum_samples_threshold: 10,
+      minimum_sessions_threshold: 1,
+      observed_session_count: 8,
+      observation_window: WINDOW,
+      peak_summary,
+      verdict: "PASS",
+      generated_at: "2026-09-02T08:20:01.000Z",
+      ...custom,
+    });
   }
 
   async function writeValidStagingReceipts(custom = {}) {
-    const qa10Data = createSignedReceipt({
-      qa_item: "QA-010",
-      mode: "staging",
-      evidence_class: "gate_d_staging",
-      candidate_sha: VALID_SHA,
-      deployed_sha: VALID_SHA,
-      competition_id: "comp-volleyball-pilot-01",
-      target_url: "https://matchday-gate-d-api.onrender.com",
-      title: "Public Pages Read Workload Summary",
-      target_p95_budget_ms: 2500,
-      peak_summary: {
-        sampleCount: 200,
-        successfulCount: 200,
-        unexpectedFailureCount: 0,
-        errorRate: 0,
-        p50Ms: 25.4,
-        p95Ms: 120.5,
-        p99Ms: 150.2,
-        maxMs: 180.0,
-      },
-      verdict: "PASS",
-      generated_at: new Date().toISOString(),
-      ...(custom.qa10 ?? {}),
-    });
-
-    const qa11Data = createSignedReceipt({
-      qa_item: "QA-011",
-      mode: "staging",
-      evidence_class: "gate_d_staging",
-      candidate_sha: VALID_SHA,
-      deployed_sha: VALID_SHA,
-      competition_id: "comp-volleyball-pilot-01",
-      target_url: "https://matchday-gate-d-api.onrender.com",
-      title: "Scoring Mutation Writes Workload Summary",
-      target_p95_budget_ms: 500,
-      peak_summary: {
-        sampleCount: 240,
-        successfulCount: 240,
-        unexpectedFailureCount: 0,
-        errorRate: 0,
-        p50Ms: 15.2,
-        p95Ms: 85.4,
-        p99Ms: 110.1,
-        maxMs: 130.0,
-      },
-      verdict: "PASS",
-      generated_at: new Date().toISOString(),
-      ...(custom.qa11 ?? {}),
-    });
-
-    await writeFile(
-      path.join(tmpDir, "artifacts/qa-010-load-public-summary.json"),
-      JSON.stringify(qa10Data, null, 2),
-      "utf-8",
-    );
-    await writeFile(
-      path.join(tmpDir, "artifacts/qa-011-load-scoring-summary.json"),
-      JSON.stringify(qa11Data, null, 2),
-      "utf-8",
+    const entries = [
+      [
+        "qa-010-load-public-summary.json",
+        receipt("QA-010", "Public Pages Read Workload Summary", 2500, peakSummary(), custom.qa10),
+      ],
+      [
+        "qa-011-load-scoring-summary.json",
+        receipt("QA-011", "Scoring Mutation Writes Workload Summary", 500, peakSummary({ p95Ms: 85.4 }), custom.qa11),
+      ],
+      [
+        "qa-011-result-propagation-summary.json",
+        receipt(
+          "QA-011-RP",
+          "Result Propagation Staging Summary",
+          2000,
+          peakSummary({ p95Ms: 600 }),
+          custom.propagation,
+        ),
+      ],
+    ];
+    await Promise.all(
+      entries.map(([file, data]) => writeFile(path.join(tmpDir, "artifacts", file), JSON.stringify(data, null, 2))),
     );
   }
 
-  it("passes when valid staging receipts are present with matching candidate SHA", async () => {
+  async function mutate(file, fn) {
+    const filePath = path.join(tmpDir, "artifacts", file);
+    const data = JSON.parse(await readFile(filePath, "utf8"));
+    await writeFile(filePath, JSON.stringify(createSignedReceipt(fn(data)), null, 2));
+  }
+
+  it("passes only with all signed staging receipts from the same candidate", async () => {
     await writeValidStagingReceipts();
     const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
     assert.strictEqual(result.valid, true);
-    assert.strictEqual(result.passed, 2);
-    assert.strictEqual(result.failed.length, 0);
+    assert.strictEqual(result.passed, 3);
   });
 
   it("fails closed when expected candidate SHA is missing or malformed", async () => {
@@ -111,71 +116,97 @@ describe("Gate D Evidence Ledger Validation Suite", () => {
     );
   });
 
-  it("fails when candidate SHA does not match expected candidate SHA", async () => {
-    await writeValidStagingReceipts({ qa10: { candidate_sha: OTHER_SHA } });
-    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /candidate SHA mismatch/.test(f.error)));
-  });
-
-  it("fails when deployed SHA does not match candidate SHA", async () => {
-    await writeValidStagingReceipts({ qa11: { deployed_sha: OTHER_SHA } });
-    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /deployed SHA mismatch/.test(f.error)));
-  });
-
-  it("fails when receipt is a component diagnostic", async () => {
-    await writeValidStagingReceipts({
-      qa10: {
-        mode: "component",
-        evidence_class: "developer_component_diagnostic_only",
-        verdict: "COMPONENT_PASS_NOT_GATE_D_EVIDENCE",
-      },
-    });
-    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /not staging Gate D evidence/.test(f.error)));
-  });
-
-  it("fails when cross-receipt competition ID does not match", async () => {
-    await writeValidStagingReceipts({ qa11: { competition_id: "different-comp-id" } });
-    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /Competition ID mismatch between receipts/.test(f.error)));
-  });
-
-  it("fails when cross-receipt target URL does not match", async () => {
-    await writeValidStagingReceipts({ qa11: { target_url: "https://other-url.onrender.com" } });
-    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /Target URL mismatch between receipts/.test(f.error)));
-  });
-
-  it("fails when SHA-256 digest has been tampered with", async () => {
+  it("requires a separate result propagation receipt", async () => {
     await writeValidStagingReceipts();
-    const qa10File = path.join(tmpDir, "artifacts/qa-010-load-public-summary.json");
-    const raw = await import("node:fs/promises").then((fs) => fs.readFile(qa10File, "utf-8"));
-    const data = JSON.parse(raw);
-    data.peak_summary.p95Ms = 1.0; // modified metric without updating digest
-    await writeFile(qa10File, JSON.stringify(data, null, 2), "utf-8");
-
+    await rm(path.join(tmpDir, "artifacts/qa-011-result-propagation-summary.json"));
     const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
     assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /integrity check failed/.test(f.error)));
+    assert.ok(result.failed.some((failure) => failure.qa_item === "QA-011-RP"));
   });
 
-  it("fails when sample count is zero", async () => {
-    await writeValidStagingReceipts({ qa10: { peak_summary: { sampleCount: 0, p95Ms: 100, errorRate: 0 } } });
+  it("rejects stale telemetry contracts and invalid observation windows", async () => {
+    await writeValidStagingReceipts();
+    await mutate("qa-010-load-public-summary.json", (data) => ({ ...data, slo_definition_version: "old-contract" }));
+    await mutate("qa-011-load-scoring-summary.json", (data) => ({
+      ...data,
+      observation_window: { ...WINDOW, ends_at: WINDOW.starts_at },
+    }));
     const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
     assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /zero or missing sampleCount/.test(f.error)));
+    assert.ok(result.failed.some((failure) => /slo_definition_version/.test(failure.error)));
+    assert.ok(result.failed.some((failure) => /invalid observation time bounds/.test(failure.error)));
   });
 
-  it("fails when p95 exceeds SLA budget", async () => {
-    await writeValidStagingReceipts({ qa11: { peak_summary: { sampleCount: 200, p95Ms: 600.0, errorRate: 0 } } });
+  it("rejects insufficient samples, sessions, and malformed metric counts", async () => {
+    await writeValidStagingReceipts();
+    await mutate("qa-010-load-public-summary.json", (data) => ({ ...data, minimum_samples_threshold: 9 }));
+    await mutate("qa-011-load-scoring-summary.json", (data) => ({ ...data, observed_session_count: 0 }));
+    await mutate("qa-011-result-propagation-summary.json", (data) => ({
+      ...data,
+      peak_summary: { ...data.peak_summary, unexpectedFailureCount: 1 },
+    }));
     const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
     assert.strictEqual(result.valid, false);
-    assert.ok(result.failed.some((f) => /SLA breach: p95/.test(f.error)));
+    assert.ok(result.failed.some((failure) => /minimum_samples_threshold/.test(failure.error)));
+    assert.ok(result.failed.some((failure) => /observed_session_count/.test(failure.error)));
+    assert.ok(result.failed.some((failure) => /counts do not add up/.test(failure.error)));
+  });
+
+  it("rejects candidate/deployed mismatch, component diagnostics, and cross-target data", async () => {
+    await writeValidStagingReceipts();
+    await mutate("qa-010-load-public-summary.json", (data) => ({ ...data, candidate_sha: OTHER_SHA }));
+    await mutate("qa-011-load-scoring-summary.json", (data) => ({
+      ...data,
+      mode: "component",
+      evidence_class: "developer_component_diagnostic_only",
+    }));
+    await mutate("qa-011-result-propagation-summary.json", (data) => ({
+      ...data,
+      target_url: "https://other.example.test/",
+    }));
+    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
+    assert.strictEqual(result.valid, false);
+    assert.ok(result.failed.some((failure) => /candidate SHA mismatch/.test(failure.error)));
+    assert.ok(result.failed.some((failure) => /not staging Gate D evidence/.test(failure.error)));
+    assert.ok(result.failed.some((failure) => /Target URL mismatch/.test(failure.error)));
+  });
+
+  it("rejects p95 and API error-rate breaches while accepting strict boundaries", async () => {
+    await writeValidStagingReceipts();
+    await mutate("qa-010-load-public-summary.json", (data) => ({
+      ...data,
+      peak_summary: peakSummary({ p95Ms: 2500 }),
+    }));
+    await mutate("qa-011-load-scoring-summary.json", (data) => ({
+      ...data,
+      peak_summary: peakSummary({ p95Ms: 500 }),
+    }));
+    await mutate("qa-011-result-propagation-summary.json", (data) => ({
+      ...data,
+      peak_summary: peakSummary({ p95Ms: 2000 }),
+    }));
+    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
+    assert.strictEqual(result.valid, false);
+    assert.equal(result.failed.filter((failure) => /SLA breach/.test(failure.error)).length, 3);
+
+    await writeValidStagingReceipts();
+    await mutate("qa-011-load-scoring-summary.json", (data) => ({
+      ...data,
+      peak_summary: peakSummary({ errorCount: 1 }),
+    }));
+    const errorResult = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
+    assert.strictEqual(errorResult.valid, false);
+    assert.ok(errorResult.failed.some((failure) => /error rate/.test(failure.error)));
+  });
+
+  it("rejects a tampered receipt digest", async () => {
+    await writeValidStagingReceipts();
+    const file = path.join(tmpDir, "artifacts/qa-010-load-public-summary.json");
+    const data = JSON.parse(await readFile(file, "utf8"));
+    data.peak_summary.p95Ms = 1;
+    await writeFile(file, JSON.stringify(data, null, 2));
+    const result = await validateGateDEvidence(VALID_SHA, { rootDir: tmpDir });
+    assert.strictEqual(result.valid, false);
+    assert.ok(result.failed.some((failure) => /integrity check failed/.test(failure.error)));
   });
 });
