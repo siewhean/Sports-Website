@@ -9,7 +9,8 @@
  * with a reversal of that exact event. This keeps the aggregate score bounded
  * while still exercising real mutation, reducer, persistence, fencing and
  * projection work for arbitrarily long endurance runs. Finalisation belongs to
- * QA-006 and is intentionally not mixed into this latency benchmark.
+ * QA-006. QA-011 separately prepares and finalises isolated staging fixtures
+ * to measure public result propagation outside the scoring-write latency tier.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -25,6 +26,7 @@ import {
   type WorkloadSample,
 } from "../../../packages/observability/src/workload.js";
 import { requireWriterAccessExchange, type AccessExchange } from "./lib/qa011-access-contract.js";
+import { GATE_D_PROPAGATION_SAMPLE_COUNT, GATE_D_WRITER_HEARTBEAT_INTERVAL_MS } from "./lib/gate-d-qa011-contract.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -313,6 +315,115 @@ async function closeOpenReversals(target: Target): Promise<void> {
   }
 }
 
+function requireAcceptedMutation(
+  response: { status: number; data: Record<string, unknown> },
+  session: ActiveScoringSession,
+  label: string,
+): void {
+  const sequence = response.data.aggregate_version;
+  if (
+    response.status !== 200 ||
+    response.data.match_id !== session.matchId ||
+    response.data.outcome !== "accepted" ||
+    !Number.isSafeInteger(sequence) ||
+    Number(sequence) !== session.sequence + 1
+  ) {
+    throw new Error(`QA-011 ${label} was not accepted for match ${session.matchId}`);
+  }
+  session.sequence = Number(sequence);
+}
+
+/**
+ * The latency sample starts only after the match is validly finalisable. The
+ * seeded Gate D Volleyball settings are one set to one point, so production
+ * requires its lifecycle start, a home point, and that set's completion before
+ * finalisation. All three preparation commands are outside the timed sample.
+ */
+async function prepareResultPropagationMatch(target: Target, session: ActiveScoringSession): Promise<void> {
+  const started = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), {
+    client_event_id: randomUUID(),
+    expected_sequence: session.sequence,
+    type: "match_started",
+    occurred_at: new Date().toISOString(),
+  });
+  requireAcceptedMutation(started, session, "propagation match-start preparation");
+
+  const point = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), {
+    client_event_id: randomUUID(),
+    expected_sequence: session.sequence,
+    type: "point",
+    team_slot: "home",
+    segment_number: 1,
+    occurred_at: new Date().toISOString(),
+  });
+  requireAcceptedMutation(point, session, "propagation point preparation");
+
+  const completion = await requestJson(target, "POST", "/api/v1/scoring/events", scoringHeaders(session), {
+    client_event_id: randomUUID(),
+    expected_sequence: session.sequence,
+    type: "set_completion",
+    team_slot: "home",
+    segment_number: 1,
+    occurred_at: new Date().toISOString(),
+  });
+  requireAcceptedMutation(completion, session, "propagation set-completion preparation");
+}
+
+function validWriterHeartbeat(value: Record<string, unknown>, generation: number): boolean {
+  return value.mode === "writer" && value.generation === generation && value.read_only === false;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hasFinalPublicResult(payload: Record<string, unknown>, matchId: string): boolean {
+  const divisions = payload.divisions;
+  return (
+    Array.isArray(divisions) &&
+    divisions.some((division) => {
+      const results = record(division)?.results;
+      return (
+        Array.isArray(results) &&
+        results.some((result) => {
+          const candidate = record(result);
+          return candidate?.id === matchId && (candidate.state === "final" || candidate.state === "corrected");
+        })
+      );
+    })
+  );
+}
+
+function exactPublicResultVersion(
+  payload: Record<string, unknown>,
+  resultVersion: number,
+): "match" | "behind" | "invalid" {
+  const publication = record(payload.publication);
+  const freshness = record(payload.freshness);
+  const publicVersion = publication?.result_version;
+  const freshVersion = freshness?.result_version;
+  if (!Number.isSafeInteger(publicVersion) || !Number.isSafeInteger(freshVersion) || publicVersion !== freshVersion) {
+    return "invalid";
+  }
+  if (Number(publicVersion) < resultVersion) return "behind";
+  return Number(publicVersion) === resultVersion ? "match" : "invalid";
+}
+
+async function heartbeatActiveWriters(target: Target): Promise<void> {
+  for (const session of target.sessions) {
+    const response = await requestJson(target, "POST", "/api/v1/scoring/sessions/heartbeat", scoringHeaders(session), {
+      last_acknowledged_sequence: session.sequence,
+      pending_event_count: 0,
+      pending_through_sequence: session.sequence,
+    });
+    if (response.status !== 200 || !validWriterHeartbeat(response.data, session.generation)) {
+      throw new Error(`QA-011 writer heartbeat was rejected for match ${session.matchId} (HTTP ${response.status})`);
+    }
+  }
+}
+
 async function measureResultPropagation(
   target: Target,
   competitionSlug: string | undefined,
@@ -323,6 +434,9 @@ async function measureResultPropagation(
   }
   const samples: WorkloadSample[] = [];
   for (const session of sessions) {
+    // Correctness setup is explicitly outside the result-propagation timer.
+    // A rejection means the seeded fixture is invalid, not a latency failure.
+    await prepareResultPropagationMatch(target, session);
     const acceptedAt = performance.now();
     try {
       const finalise = await requestJson(target, "POST", "/api/v1/scoring/finalise", scoringHeaders(session), {
@@ -336,7 +450,9 @@ async function measureResultPropagation(
         finalise.data.match_id !== session.matchId ||
         finalise.data.outcome !== "accepted" ||
         !Number.isSafeInteger(resultVersion) ||
-        Number(resultVersion) < 1
+        Number(resultVersion) < 1 ||
+        !Number.isSafeInteger(finalise.data.aggregate_version) ||
+        Number(finalise.data.aggregate_version) !== session.sequence + 1
       ) {
         samples.push({ durationMs: performance.now() - acceptedAt, outcome: "unexpected_failure" });
         continue;
@@ -349,18 +465,13 @@ async function measureResultPropagation(
           `${target.baseUrl}/api/v1/public/competitions/${encodeURIComponent(competitionSlug)}/current`,
           { headers: { "user-agent": "qa-011-result-propagation/1.0" } },
         );
-        const body = response.ok
-          ? ((await response.json()) as { publication?: { result_version?: unknown } })
-          : undefined;
-        const publicResultVersion = body?.publication?.result_version;
-        if (
-          response.ok &&
-          Number.isSafeInteger(publicResultVersion) &&
-          Number(publicResultVersion) >= Number(resultVersion)
-        ) {
+        const body = response.ok ? record(await response.json().catch(() => undefined)) : undefined;
+        const freshness = body ? exactPublicResultVersion(body, Number(resultVersion)) : "invalid";
+        if (freshness === "match" && body && hasFinalPublicResult(body, session.matchId)) {
           visible = true;
           break;
         }
+        if (freshness === "invalid") break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       samples.push({ durationMs: performance.now() - acceptedAt, outcome: visible ? "success" : "unexpected_failure" });
@@ -407,9 +518,13 @@ async function main() {
       competition_id?: string;
       competition_slug?: string;
       scoreable_matches?: Array<{ match_id: string }>;
+      qa011_result_propagation_sample_count?: number;
     };
     if (!seed.competition_id || !Array.isArray(seed.scoreable_matches) || seed.scoreable_matches.length === 0) {
       throw new Error("Staging seed artifact is missing competition_id or scoreable matches");
+    }
+    if (seed.qa011_result_propagation_sample_count !== GATE_D_PROPAGATION_SAMPLE_COUNT) {
+      throw new Error("Staging seed artifact does not attest the canonical QA-011 propagation sample capacity");
     }
     if (seed.target_url && seed.target_url.replace(/\/$/, "") !== baseUrl) {
       throw new Error(`Seed TARGET_URL mismatch: seed=${seed.target_url} runner=${baseUrl}`);
@@ -519,12 +634,36 @@ async function main() {
   const results = [];
   let peakResult: Awaited<ReturnType<typeof runTier>> | undefined;
   let propagationSummary: ReturnType<typeof summarizeWorkload> | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let heartbeatInFlight: Promise<void> | undefined;
+  let heartbeatFailure: Error | undefined;
+  let workloadFailure: unknown;
+  const startHeartbeats = () => {
+    if (mode !== "staging") return;
+    const pulse = () => {
+      if (heartbeatInFlight || heartbeatFailure) return;
+      heartbeatInFlight = heartbeatActiveWriters(target)
+        .catch((error: unknown) => {
+          heartbeatFailure = error instanceof Error ? error : new Error("QA-011 writer heartbeat failed");
+        })
+        .finally(() => {
+          heartbeatInFlight = undefined;
+        });
+    };
+    pulse();
+    heartbeatTimer = setInterval(pulse, GATE_D_WRITER_HEARTBEAT_INTERVAL_MS);
+  };
+  const assertHeartbeatsHealthy = () => {
+    if (heartbeatFailure) throw heartbeatFailure;
+  };
   try {
+    startHeartbeats();
     for (const tier of TIERS) {
       console.log(
         `  ${tier.name}: ${tier.operations} writes across ${activeSessions.length} independent match streams`,
       );
       const result = await runTier(target, tier);
+      assertHeartbeatsHealthy();
       results.push(result);
       console.log(
         `    samples=${result.summary.sampleCount} p95=${result.summary.p95Ms.toFixed(2)}ms error=${(
@@ -539,7 +678,8 @@ async function main() {
     });
     if (mode === "staging") {
       await closeOpenReversals(target);
-      const requiredSessions = Math.max(MINIMUM_SAMPLES_THRESHOLD, 10);
+      assertHeartbeatsHealthy();
+      const requiredSessions = GATE_D_PROPAGATION_SAMPLE_COUNT;
       if (activeSessions.length < requiredSessions) {
         throw new Error(`QA-011 result propagation requires ${requiredSessions} independent active scoring sessions`);
       }
@@ -552,10 +692,22 @@ async function main() {
         maxP95Ms: RESULT_PROPAGATION_P95_MS,
         maxUnexpectedErrorRate: 0.001,
       });
+      assertHeartbeatsHealthy();
     }
+  } catch (error) {
+    workloadFailure = error;
+    throw error;
   } finally {
-    // Restore fixture state even if a budget failure aborts receipt creation.
-    await closeOpenReversals(target);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    await heartbeatInFlight;
+    const cleanupFailure = heartbeatFailure;
+    try {
+      // Restore fixture state even if a budget failure aborts receipt creation.
+      await closeOpenReversals(target);
+    } catch (error) {
+      if (!workloadFailure) throw error;
+    }
+    if (!workloadFailure && cleanupFailure) throw cleanupFailure;
   }
 
   const artifactDir = path.join(root, "artifacts");

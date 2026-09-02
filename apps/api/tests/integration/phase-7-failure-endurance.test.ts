@@ -254,7 +254,7 @@ describeInfrastructure(
       return payload as { aggregate_version: number; home_score: number; away_score: number };
     }
 
-    async function createRealScoringWorld(sportId: SportId = "basketball") {
+    async function createRealScoringWorld(sportId: SportId = "basketball", settingsOverride?: Record<string, number>) {
       const actor: Phase2Actor = { accountId };
       const competition = await runtime.createCompetition(
         actor,
@@ -281,6 +281,13 @@ describeInfrastructure(
         { name: "Division 1", teamLimit: 8 },
         randomUUID(),
       );
+      if (settingsOverride) {
+        await client`
+          UPDATE competition_sport_settings
+          SET settings_override=${client.json(settingsOverride)},revision=revision+1
+          WHERE competition_id=${competition.id}
+        `;
+      }
       await runtime.replaceEntries(
         actor,
         competition.id,
@@ -330,6 +337,47 @@ describeInfrastructure(
         deviceId: exchanged.deviceId,
       };
     }
+
+    describe("QA-011: Volleyball result-propagation preparation", () => {
+      it("uses production score commands to make the one-set Gate D fixture finalisable", async () => {
+        const world = await createRealScoringWorld("volleyball", {
+          bestOf: 1,
+          regularTargetPoints: 1,
+          decidingTargetPoints: 1,
+          winBy: 1,
+          pointCap: 1,
+        });
+
+        const started = await appendScoreEvent(world.auth, 0, {
+          type: "match_started",
+          occurred_at: new Date().toISOString(),
+        });
+        const point = await appendScoreEvent(world.auth, started.aggregate_version, {
+          type: "point",
+          team_slot: "home",
+          segment_number: 1,
+          occurred_at: new Date().toISOString(),
+        });
+        const completion = await appendScoreEvent(world.auth, point.aggregate_version, {
+          type: "set_completion",
+          team_slot: "home",
+          segment_number: 1,
+          occurred_at: new Date().toISOString(),
+        });
+        const finalised = await finalise(world.auth, completion.aggregate_version);
+
+        expect(started.aggregate_version).toBe(1);
+        expect(point.aggregate_version).toBe(2);
+        expect(completion.aggregate_version).toBe(3);
+        expect(finalised).toMatchObject({ aggregate_version: 4, home_score: 1, away_score: 0 });
+        const [snapshot] = await client<{ result_version: number; state: string }[]>`
+          SELECT result_version,state FROM match_result_snapshots
+          WHERE match_id=${world.match.id}
+          ORDER BY result_version DESC LIMIT 1
+        `;
+        expect(snapshot).toMatchObject({ result_version: expect.any(Number), state: "final" });
+      });
+    });
 
     describe("QA-007: Extended 2,000-Command Offline Ingestion Pipeline", () => {
       it("ingests and sequences a high-capacity 2,000 command batch with monotonic order and idempotent replay resilience", async () => {

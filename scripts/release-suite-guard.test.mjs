@@ -1,5 +1,10 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseNonzeroTestCount, VALID_PHASES } from "./release-suite-guard.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("release-suite-guard — Nonzero-Test & Configuration Protection", () => {
   it("recognises only valid release phases", () => {
@@ -48,5 +53,14 @@ describe("release-suite-guard — Nonzero-Test & Configuration Protection", () =
       expect(parseNonzeroTestCount("Generated OpenAPI contract is current and valid JSON.")).toBe(1);
       expect(parseNonzeroTestCount("1:08PM INF no leaks found")).toBe(1);
     });
+  });
+
+  it("keeps Gate D source checks in Phase A and real browser qualification in Phase C", async () => {
+    const source = await readFile(path.join(root, "scripts/release-suite-guard.mjs"), "utf8");
+    expect(source).toContain('"pnpm test:check:source"');
+    expect(source).toContain('"pnpm test:evidence:gate-d"');
+    expect(source).toContain('"pnpm test:e2e:phase7:real"');
+    expect(source).not.toContain('"pnpm evidence:gate-d:verify"');
+    expect(source).not.toContain('"pnpm test:load"');
   });
 });

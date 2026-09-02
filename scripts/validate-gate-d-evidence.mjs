@@ -27,7 +27,7 @@ export const MAXIMUM_ERROR_RATE = 0.001;
 export const REQUIRED_RECEIPTS = [
   {
     file: "artifacts/qa-010-load-public-summary.json",
-    name: "QA-010 Public Pages Staging Load Summary",
+    name: "QA-010 Public Projection API Response Staging Load Summary",
     qa_item: "QA-010",
     max_p95_ms: 2500,
   },

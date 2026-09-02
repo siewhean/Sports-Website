@@ -14,7 +14,7 @@
  * Suites are grouped into three phases that mirror CI:
  *   Phase A — static analysis (no infrastructure)
  *   Phase B — integration + migration (requires postgres + redis + mailpit)
- *   Phase C — browser E2E + a11y + visual (requires full stack)
+ *   Phase C — browser E2E + Gate D real E2E + a11y + visual (requires full stack)
  *
  * Exit codes:
  *   0   all required suites passed with verified test counts
@@ -57,7 +57,8 @@ export function parseNonzeroTestCount(output) {
     output.includes("current and valid JSON") ||
     output.includes("no leaks found") ||
     output.includes("benchmark PASS") ||
-    output.includes("benchmark complete")
+    output.includes("benchmark complete") ||
+    output.includes("qualification: PASS")
   ) {
     return 1;
   }
@@ -129,37 +130,42 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     // Phase A — static analysis (no infrastructure)
     if (PHASE === "ALL" || PHASE === "A") {
-      runCommand("1/13  Secret scan", "pnpm secrets:scan");
-      runCommand("2/13  Dependency audit", "pnpm dependencies:audit");
-      runCommand("3/13  Format check", "pnpm format:check");
-      runCommand("4/13  Lint", "pnpm lint");
-      runCommand("5/13  Type-check", "pnpm typecheck");
-      runCommand("6/13  Unit tests (all packages)", "pnpm test:unit", { expectTests: true });
-      runCommand("7/13  Gate C evidence seals", "pnpm test:seal:gate-c && pnpm test:evidence:gate-c", {
+      runCommand("1  Secret scan", "pnpm secrets:scan");
+      runCommand("2  Dependency audit", "pnpm dependencies:audit");
+      runCommand("3  Format check", "pnpm format:check");
+      runCommand("4  Lint", "pnpm lint");
+      runCommand("5  Type-check", "pnpm typecheck");
+      runCommand("6  Unit tests (all packages)", "pnpm test:unit", { expectTests: true });
+      runCommand("7  Gate C evidence seals", "pnpm test:seal:gate-c && pnpm test:evidence:gate-c", {
         expectTests: true,
       });
       runCommand(
-        "8/13  Fixture validation",
+        "8  Fixture validation",
         "pnpm validate:fixtures && pnpm validate:phase2 && pnpm validate:phase3 && pnpm validate:phase4",
       );
-      runCommand("9/13  OpenAPI contract", "pnpm openapi:check");
-      runCommand("10/13 Vercel deployment verification", "pnpm test:vercel:verify", { expectTests: true });
-      runCommand("10b/13 Load benchmarks (QA-010, QA-011)", "pnpm test:load", { expectTests: true });
+      runCommand("9  OpenAPI contract", "pnpm openapi:check");
+      runCommand("10  Vercel deployment verification", "pnpm test:vercel:verify", { expectTests: true });
+      runCommand("11  Gate D source contract", "pnpm test:check:source", { expectTests: true });
+      runCommand("12  Gate D receipt validator", "pnpm test:evidence:gate-d", { expectTests: true });
     }
 
     // Phase B — integration + migration (requires postgres + redis + mailpit)
     if (PHASE === "ALL" || PHASE === "B") {
-      runCommand("11/13 Build (all packages)", "pnpm build");
-      runCommand("11/13 Migration check", "pnpm db:migrate:check");
-      runCommand("11/13 Backup restoration verification", "pnpm backup:verify", { isInfra: true });
-      runCommand("12/13 Integration tests", "pnpm test:integration", { isInfra: true, expectTests: true });
+      runCommand("13  Build (all packages)", "pnpm build");
+      runCommand("14  Migration check", "pnpm db:migrate:check");
+      runCommand("15  Backup restoration verification", "pnpm backup:verify", { isInfra: true });
+      runCommand("16  Integration tests", "pnpm test:integration", { isInfra: true, expectTests: true });
     }
 
     // Phase C — browser E2E + a11y + visual (requires full stack)
     if (PHASE === "ALL" || PHASE === "C") {
-      runCommand("13/13 Browser E2E", "pnpm test:e2e", { isInfra: true, expectTests: true });
-      runCommand("13/13 Accessibility (Playwright a11y)", "pnpm test:a11y", { isInfra: true, expectTests: true });
-      runCommand("13/13 Visual regression", "pnpm test:visual", { isInfra: true, expectTests: true });
+      runCommand("17  Browser E2E", "pnpm test:e2e", { isInfra: true, expectTests: true });
+      runCommand("18  Gate D real browser qualification", "pnpm test:e2e:phase7:real", {
+        isInfra: true,
+        expectTests: true,
+      });
+      runCommand("19  Accessibility (Playwright a11y)", "pnpm test:a11y", { isInfra: true, expectTests: true });
+      runCommand("20  Visual regression", "pnpm test:visual", { isInfra: true, expectTests: true });
     }
 
     console.log("\n" + "═".repeat(72));

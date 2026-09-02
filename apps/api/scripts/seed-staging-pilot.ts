@@ -31,6 +31,7 @@ import { Phase3Runtime } from "../src/phase-3-runtime.js";
 import { DeterministicPhase4AiStub } from "../src/phase-4-ai-provider.js";
 import { ReliableGateBPhase4Runtime } from "../src/phase-4-reliable-runtime.js";
 import { requireWriterAccessExchange } from "./lib/qa011-access-contract.js";
+import { GATE_D_PROPAGATION_SAMPLE_COUNT } from "./lib/gate-d-qa011-contract.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -542,9 +543,14 @@ async function main() {
       JOIN scheduled_matches sm ON sm.match_id=m.id AND sm.schedule_revision_id=${aggregate.id}
       WHERE m.competition_id=${competitionId}
         AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
+        AND m.state='ready'
       ORDER BY m.division_id,m.id;
     `;
-    if (scoreableRows.length < 2) throw new Error("Gate D fixture did not produce enough scoreable matches");
+    if (scoreableRows.length < GATE_D_PROPAGATION_SAMPLE_COUNT) {
+      throw new Error(
+        `Gate D fixture requires at least ${GATE_D_PROPAGATION_SAMPLE_COUNT} pristine scoreable matches for QA-011 propagation`,
+      );
+    }
     const scoreableDivisionIds = new Set(scoreableRows.map((row) => row.division_id));
     if (
       scoreableDivisionIds.size !== divisions.length ||
@@ -552,6 +558,8 @@ async function main() {
     ) {
       throw new Error("Gate D fixture requires a resolved scoreable match in each division");
     }
+
+    for (const row of scoreableRows) await assertBenchmarkMatchPristine(sql, row.match_id);
 
     const scoreableMatches: Array<{ matchId: string; divisionId: string; rawToken: string }> = [];
     for (const row of scoreableRows) {
@@ -744,6 +752,7 @@ async function main() {
         environment_variable: "GATE_D_SCORING_SECRET_FILE",
         contract: "single_use_local_file_deleted_by_qa011_runner",
       },
+      qa011_result_propagation_sample_count: GATE_D_PROPAGATION_SAMPLE_COUNT,
     };
     await writeFile(artifactPath, JSON.stringify(output, null, 2), "utf8");
 

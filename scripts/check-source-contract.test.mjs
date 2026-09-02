@@ -74,6 +74,14 @@ test("Gate D staging runners execute from the API workspace that owns their depe
   }
 });
 
+test("release readiness runs Gate D source tests and the real browser journey without requiring external receipts", async () => {
+  const source = await readFile(path.join(root, "scripts/release-suite-guard.mjs"), "utf8");
+  assert.match(source, /pnpm test:check:source/u);
+  assert.match(source, /pnpm test:evidence:gate-d/u);
+  assert.match(source, /pnpm test:e2e:phase7:real/u);
+  assert.doesNotMatch(source, /pnpm evidence:gate-d:verify/u);
+});
+
 test("C5 staging fault manifest expands to exactly 72 safe command variables", () => {
   const parsed = parseGateCC5FaultCommandManifest(JSON.stringify(validFaultManifest()));
   const expanded = expandGateCC5FaultCommandEnvironment(parsed);

@@ -1,7 +1,7 @@
 /**
  * run-load-public.ts
  *
- * QA-010 Public Pages Load & Endurance Workload Benchmark.
+ * QA-010 Public Projection API Response Workload Benchmark.
  *
  * Modes:
  *  - component: Fast in-process mock (developer diagnostic only, NOT Gate D evidence)
@@ -9,7 +9,8 @@
  *  - staging: Mandatory Gate D mode. Runs real network HTTP sockets against TARGET_URL
  *             and verifies deployed Git SHA against CANDIDATE_SHA.
  *
- * SLA Target: p95 < 2,500ms, error rate < 0.1%
+ * Gate D SLO: deployed public projection API p95 < 2,500ms, error rate < 0.1%.
+ * This is deliberately not an end-user web-page load measurement.
  */
 
 import { createHash } from "node:crypto";
@@ -228,7 +229,7 @@ async function runTier(
 
 async function main() {
   const startedAt = new Date();
-  console.log(`[QA-010] Starting Fastify Public Pages Load Workload Benchmark (Mode: ${mode.toUpperCase()})`);
+  console.log(`[QA-010] Starting public projection API response benchmark (Mode: ${mode.toUpperCase()})`);
   console.log(`  Target p95 budget: < ${TARGET_P95_MS} ms\n`);
 
   let app: Awaited<ReturnType<typeof buildPublicServer>> | undefined;
@@ -327,7 +328,7 @@ async function main() {
 
   const peakResult = results.find((r) => r.tier.includes("2x")) ?? results[0]!;
   console.log("═".repeat(60));
-  console.log(`[QA-010] Public Pages Workload Summary (2x Peak) [${mode.toUpperCase()}]`);
+  console.log(`[QA-010] Public Projection API Response Summary (2x Peak) [${mode.toUpperCase()}]`);
   console.log("═".repeat(60));
   console.log(`  Total Samples:        ${peakResult.summary.sampleCount}`);
   console.log(`  Successful:           ${peakResult.summary.successfulCount}`);
@@ -367,7 +368,7 @@ async function main() {
     competition_id: competitionId ?? null,
     competition_slug: publicCompetitionSlug ?? null,
     target_url: baseUrl ?? null,
-    title: "Public Pages Read Workload Summary",
+    title: "Public Projection API Response Workload Summary",
     target_p95_budget_ms: TARGET_P95_MS,
     minimum_samples_threshold: MINIMUM_SAMPLES_THRESHOLD,
     minimum_sessions_threshold: MINIMUM_SESSIONS_THRESHOLD,
@@ -387,7 +388,7 @@ async function main() {
 
   await writeFile(summaryPath, JSON.stringify(finalReceipt, null, 2), "utf-8");
 
-  console.log(`[QA-010] ✓ ${mode.toUpperCase()} public pages load benchmark PASS (${summaryPath})\n`);
+  console.log(`[QA-010] ✓ ${mode.toUpperCase()} public projection API response benchmark PASS (${summaryPath})\n`);
   if (app) await app.close();
 }
 

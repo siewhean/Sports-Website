@@ -70,7 +70,7 @@ describe("Gate D Evidence Ledger Validation Suite", () => {
     const entries = [
       [
         "qa-010-load-public-summary.json",
-        receipt("QA-010", "Public Pages Read Workload Summary", 2500, peakSummary(), custom.qa10),
+        receipt("QA-010", "Public Projection API Response Workload Summary", 2500, peakSummary(), custom.qa10),
       ],
       [
         "qa-011-load-scoring-summary.json",
