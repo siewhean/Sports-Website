@@ -30,8 +30,8 @@ node - "$TARGET_URL" <<'NODE'
 const value = process.argv[2];
 const url = new URL(value);
 if (url.protocol !== "https:") throw new Error("TARGET_URL must be HTTPS for controlled Gate D staging");
-if (url.username || url.password || url.search || url.hash) {
-  throw new Error("TARGET_URL must not contain credentials, query, or fragment");
+if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+  throw new Error("TARGET_URL must be an HTTPS origin without credentials, path, query, or fragment");
 }
 NODE
 
@@ -39,6 +39,7 @@ CONTROL_ROOT="$(git rev-parse --show-toplevel)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/matchday-gate-d-controlled-XXXXXX")"
 WORKTREE="$TMP_ROOT/candidate"
 SEED_LOG="$TMP_ROOT/seed.log"
+RUNTIME_TMP="$TMP_ROOT/runtime-tmp"
 SCORING_SECRET_FILE=""
 SCORING_SECRET_DIR=""
 
@@ -47,6 +48,8 @@ cleanup() {
   if [[ -n "$SCORING_SECRET_FILE" ]]; then rm -f -- "$SCORING_SECRET_FILE"; fi
   if [[ -n "$SCORING_SECRET_DIR" ]]; then rmdir -- "$SCORING_SECRET_DIR" 2>/dev/null || true; fi
   git -C "$CONTROL_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+  # RUNTIME_TMP is inside TMP_ROOT. Removing the runner-owned root guarantees
+  # deletion even if the seeder created a handoff but its output could not be parsed.
   rm -rf -- "$TMP_ROOT"
 }
 trap cleanup EXIT INT TERM
@@ -58,6 +61,8 @@ cd "$WORKTREE"
 corepack enable
 pnpm install --frozen-lockfile
 
+mkdir -p "$RUNTIME_TMP"
+export TMPDIR="$RUNTIME_TMP"
 export CANDIDATE_SHA TARGET_URL DATABASE_URL REDIS_URL
 
 DEPLOYED_SHA="$(node - "$TARGET_URL" <<'NODE'
@@ -90,6 +95,10 @@ process.stdout.write(parsed);
 NODE
 )"
 SCORING_SECRET_DIR="$(dirname "$SCORING_SECRET_FILE")"
+case "$SCORING_SECRET_FILE" in
+  "$RUNTIME_TMP"/matchday-gate-d-scoring-*/scorekeeper-access.json) ;;
+  *) fail "single-use scoring handoff escaped the runner-owned temp directory" ;;
+esac
 [[ -f "$SCORING_SECRET_FILE" ]] || fail "single-use scoring handoff file does not exist"
 export GATE_D_SCORING_SECRET_FILE="$SCORING_SECRET_FILE"
 
