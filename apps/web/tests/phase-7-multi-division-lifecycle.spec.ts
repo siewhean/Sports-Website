@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page, type BrowserContext } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
@@ -188,8 +188,13 @@ async function scoringSession(page: Page): Promise<ScoringSessionOracle> {
   return value;
 }
 
-async function serverScoringSession(request: APIRequestContext, webOrigin: string): Promise<ScoringSessionOracle> {
-  const response = await request.get(`${webOrigin}/api/scoring/session`, { failOnStatusCode: false });
+async function serverScoringSession(context: BrowserContext, webOrigin: string): Promise<ScoringSessionOracle> {
+  const cookies = await context.cookies();
+  const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  const response = await context.request.get(`${webOrigin}/api/scoring/session`, {
+    headers: { cookie: cookieHeader },
+    failOnStatusCode: false,
+  });
   const text = await response.text();
   expect(response.status(), `independent server scoring session\n${text}`).toBe(200);
   const value = JSON.parse(text) as ScoringSessionOracle;
@@ -308,7 +313,7 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     // Browser transport remains offline here. BrowserContext.request is an
     // independent API transport that shares the authenticated session cookie,
     // proving the queued event has not reached canonical server state.
-    const unchangedWhileOffline = await serverScoringSession(context.request, webOrigin);
+    const unchangedWhileOffline = await serverScoringSession(context, webOrigin);
     expect(unchangedWhileOffline.through_sequence).toBe(baselineSequence);
     expect(unchangedWhileOffline.score.total_points.home).toBe(baselineHomePoints);
     expect(unchangedWhileOffline.score.total_points.away).toBe(baselineAwayPoints);
