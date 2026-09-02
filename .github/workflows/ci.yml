@@ -214,5 +214,6 @@ jobs:
       - name: Install the pinned pnpm version
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
       - run: pnpm test:e2e:phase7:real
