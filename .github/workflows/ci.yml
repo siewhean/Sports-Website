@@ -39,6 +39,11 @@ jobs:
       - name: Install the pinned pnpm version
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
+      - name: Print pinned Prettier diff for Gate D validator
+        run: |
+          pnpm exec prettier --write scripts/validate-gate-d-freeze.mjs
+          git diff -- scripts/validate-gate-d-freeze.mjs
+          exit 1
       - run: pnpm ci:assert-clean-outputs
       - run: pnpm test:guard
       - run: RELEASE_PHASE=A node scripts/release-suite-guard.mjs
