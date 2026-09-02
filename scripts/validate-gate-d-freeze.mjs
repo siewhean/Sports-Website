@@ -44,23 +44,31 @@ function isPlainObject(value) {
 }
 
 function requireString(value, label) {
-  if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} is required`);
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${label} is required`);
+  }
   return value.trim();
 }
 
 function requireExactPass(value, label) {
-  if (value !== "PASS") throw new Error(`${label} must be exactly PASS; received ${JSON.stringify(value)}`);
+  if (value !== "PASS") {
+    throw new Error(`${label} must be exactly PASS; received ${JSON.stringify(value)}`);
+  }
 }
 
 function requireCompletedAt(value, label) {
   const raw = requireString(value, label);
   const timestamp = new Date(raw);
-  if (Number.isNaN(timestamp.getTime())) throw new Error(`${label} must be a valid timestamp`);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new Error(`${label} must be a valid timestamp`);
+  }
   return timestamp.toISOString();
 }
 
 function validateHostedCi(hostedCi, expectedCandidateSha) {
-  if (!isPlainObject(hostedCi)) throw new Error("Gate D certification is missing hosted_ci");
+  if (!isPlainObject(hostedCi)) {
+    throw new Error("Gate D certification is missing hosted_ci");
+  }
   if (!Number.isSafeInteger(hostedCi.run_id) || hostedCi.run_id < 1) {
     throw new Error("Gate D certification hosted_ci.run_id must be a positive integer");
   }
@@ -69,7 +77,9 @@ function validateHostedCi(hostedCi, expectedCandidateSha) {
     throw new Error(`Gate D hosted CI head SHA mismatch: expected ${expectedCandidateSha}, got ${headSha}`);
   }
   requireExactPass(hostedCi.conclusion, "Gate D certification hosted_ci.conclusion");
-  if (!isPlainObject(hostedCi.jobs)) throw new Error("Gate D certification hosted_ci.jobs is required");
+  if (!isPlainObject(hostedCi.jobs)) {
+    throw new Error("Gate D certification hosted_ci.jobs is required");
+  }
   for (const job of REQUIRED_HOSTED_CI_JOBS) {
     requireExactPass(hostedCi.jobs[job], `Gate D hosted CI job ${job}`);
   }
@@ -77,7 +87,9 @@ function validateHostedCi(hostedCi, expectedCandidateSha) {
 }
 
 function validateEvidenceItem(item, key) {
-  if (!isPlainObject(item)) throw new Error(`Gate D human evidence ${key} is missing`);
+  if (!isPlainObject(item)) {
+    throw new Error(`Gate D human evidence ${key} is missing`);
+  }
   requireExactPass(item.status, `Gate D human evidence ${key}.status`);
   requireCompletedAt(item.completed_at, `Gate D human evidence ${key}.completed_at`);
   requireString(item.evidence_ref, `Gate D human evidence ${key}.evidence_ref`);
@@ -95,7 +107,9 @@ function validateEvidenceItem(item, key) {
 
 export async function validateGateDFreeze(expectedCandidateSha, options = {}) {
   if (!expectedCandidateSha || !SHA_PATTERN.test(expectedCandidateSha)) {
-    throw new Error(`Gate D freeze validation requires a valid 40-character candidate SHA: ${expectedCandidateSha}`);
+    throw new Error(
+      `Gate D freeze validation requires a valid 40-character candidate SHA: ${expectedCandidateSha}`,
+    );
   }
 
   const root = options.rootDir ?? defaultRoot;
@@ -114,18 +128,26 @@ export async function validateGateDFreeze(expectedCandidateSha, options = {}) {
   try {
     certification = JSON.parse(await readFile(certificationPath, "utf8"));
   } catch (error) {
-    throw new Error(`Gate D certification manifest is unavailable or invalid: ${certificationPath}`, { cause: error });
+    throw new Error(`Gate D certification manifest is unavailable or invalid: ${certificationPath}`, {
+      cause: error,
+    });
   }
-  if (!isPlainObject(certification)) throw new Error("Gate D certification manifest must be a JSON object");
+  if (!isPlainObject(certification)) {
+    throw new Error("Gate D certification manifest must be a JSON object");
+  }
   if (certification.schema_version !== GATE_D_FREEZE_SCHEMA_VERSION) {
     throw new Error(
       `Gate D certification schema mismatch: expected ${GATE_D_FREEZE_SCHEMA_VERSION}, got ${certification.schema_version}`,
     );
   }
-  if (certification.gate !== "D") throw new Error("Gate D certification manifest gate must be D");
+  if (certification.gate !== "D") {
+    throw new Error("Gate D certification manifest gate must be D");
+  }
   const candidateSha = requireString(certification.candidate_sha, "Gate D certification candidate_sha");
   if (!SHA_PATTERN.test(candidateSha) || candidateSha.toLowerCase() !== expectedCandidateSha.toLowerCase()) {
-    throw new Error(`Gate D certification candidate SHA mismatch: expected ${expectedCandidateSha}, got ${candidateSha}`);
+    throw new Error(
+      `Gate D certification candidate SHA mismatch: expected ${expectedCandidateSha}, got ${candidateSha}`,
+    );
   }
 
   const hostedCi = validateHostedCi(certification.hosted_ci, expectedCandidateSha);
