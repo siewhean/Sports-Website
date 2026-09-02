@@ -3,27 +3,91 @@
  *
  * Core competition/scoring state is created through the existing Phase 3 / Phase 2
  * runtimes so the fixture inherits the current sport-settings, entry, format,
- * materialisation, publication, and scoring-access contracts. Direct SQL is kept
- * to bootstrap identity/organisation rows and to combine two runtime-generated
- * draft schedules into the multi-division schedule that Phase 7 needs to qualify.
+ * materialisation, canonical multi-division scheduling, publication, and scoring-access
+ * contracts. Direct SQL is limited to identity/organisation bootstrap and post-seed
+ * invariant inspection.
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SPORT_PACKS } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
+import {
+  DomainScheduleOptimizer,
+  PostgresScheduleJobStore,
+  ScheduleJobQueue,
+  SchedulerRuntime,
+} from "@matchday/scheduler";
+import type { ScheduleConstraints } from "@matchday/contracts";
+import { Redis } from "ioredis";
 import postgres from "postgres";
 import { phase2DomainAdapter } from "../apps/api/src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../apps/api/src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../apps/api/src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../apps/api/src/phase-3-runtime.js";
+import { DeterministicPhase4AiStub } from "../apps/api/src/phase-4-ai-provider.js";
+import { ReliableGateBPhase4Runtime } from "../apps/api/src/phase-4-reliable-runtime.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
+const redisUrl = process.env.REDIS_URL;
 const targetUrl = (process.env.TARGET_URL ?? "http://127.0.0.1:4101").replace(/\/$/, "");
 const scoringPassTtlMs = 7 * 24 * 60 * 60_000;
+
+function ignored<T>(value: T) {
+  return { mode: "ignored" as const, value };
+}
+
+function schedulingConstraints(areaId: string): ScheduleConstraints {
+  return {
+    minimum_rest: ignored({ minutes: 0 }),
+    maximum_matches_per_day: ignored({ matches: 8 }),
+    preferred_final_time: ignored({
+      target_start_epoch_ms: Date.parse("2026-09-01T12:00:00.000Z"),
+      tolerance_minutes: 60,
+    }),
+    entry_unavailable: ignored({ by_entry_id: {} }),
+    official_availability: ignored({ by_official_id: {} }),
+    featured_playing_area: ignored({ area_id: areaId, match_ids: [] }),
+    avoid_consecutive_matches: ignored({ minutes: 0 }),
+    balance_early_matches: ignored({ before_local_time: "09:00" }),
+    balance_late_matches: ignored({ at_or_after_local_time: "18:00" }),
+    keep_division_together: ignored({ maximum_area_count: 1 }),
+    preserve_existing_schedule: ignored({ maximum_shift_minutes: 0, by_match_id: {} }),
+  };
+}
+
+async function waitForScheduleJob(
+  phase4: ReliableGateBPhase4Runtime,
+  accountId: string,
+  jobId: string,
+): Promise<Awaited<ReturnType<ReliableGateBPhase4Runtime["readScheduleJob"]>>> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const job = await phase4.readScheduleJob({ accountId }, jobId);
+    if (job.status === "completed") return job;
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(`Canonical Phase 4 schedule job ${jobId} ended in ${job.status}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for canonical Phase 4 schedule job ${jobId}`);
+}
+
+async function deleteOwnedRedisKeys(redis: Redis, queueName: string): Promise<void> {
+  const patterns = [`bull:${queueName}`, `bull:${queueName}:*`, `matchday:job-cancellation:bull:${queueName}:*`];
+  for (const pattern of patterns) {
+    let cursor = "0";
+    do {
+      const [nextCursor, keys] = await redis.scan(cursor, "MATCH", pattern, "COUNT", 100);
+      cursor = nextCursor;
+      if (keys.length > 0) await redis.del(...keys);
+    } while (cursor !== "0");
+  }
+}
 
 async function requireApiResponse(url: string, init: RequestInit | undefined, label: string): Promise<Response> {
   let response: Response;
@@ -42,8 +106,25 @@ async function requireApiResponse(url: string, init: RequestInit | undefined, la
 }
 
 async function main() {
+  if (!redisUrl) throw new Error("REDIS_URL is required for canonical Phase 4 staging schedule generation");
+  const parsedRedisUrl = new URL(redisUrl);
+  if (parsedRedisUrl.protocol !== "redis:" && parsedRedisUrl.protocol !== "rediss:") {
+    throw new Error("REDIS_URL must use redis:// or rediss://");
+  }
   const sql = postgres(databaseUrl, { max: 8, onnotice: () => undefined });
   const db = sql as unknown as PostgresJsSql;
+  const queueName = `matchday-gate-d-staging-${randomUUID()}`;
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
+  const scheduleQueue = new ScheduleJobQueue({ queueName, redisUrl });
+  const scheduler = new SchedulerRuntime({
+    queueName,
+    redisUrl,
+    workerId: `gate-d-staging-${randomUUID()}`,
+    store: new PostgresScheduleJobStore(sql),
+    optimizer: new DomainScheduleOptimizer({ maxIterationsPerRun: 3, workerExecArgv: [] }),
+    concurrency: 1,
+    processor: { leaseMs: 5_000, cancellationPollMs: 100, maxYieldIntervalMs: 30_000 },
+  });
   const accountId = randomUUID();
   const organisationId = randomUUID();
   const competitionSlug = `pilot-vball-${Date.now()}`;
@@ -89,6 +170,8 @@ async function main() {
     });
 
     const phase3 = new Phase3Runtime(db, phase3DomainAdapter);
+    if ((await redis.ping()) !== "PONG") throw new Error("REDIS_URL did not respond to PING");
+
     const phase2 = new Phase2Runtime(
       db,
       phase2DomainAdapter,
@@ -96,6 +179,23 @@ async function main() {
       undefined,
       "gate-d-staging-fallback-hmac-secret-at-least-32-chars",
     );
+    const phase4 = new ReliableGateBPhase4Runtime(
+      db,
+      phase3,
+      scheduleQueue,
+      {
+        mode: "stub",
+        provider: new DeterministicPhase4AiStub(),
+        timeoutMs: 2_000,
+        maximumAttempts: 1,
+        cacheTtlSeconds: 3_600,
+      },
+      undefined,
+      phase2,
+      phase2,
+      targetUrl,
+    );
+    await scheduler.start();
 
     const competition = await phase3.createCompetition(
       actor,
@@ -165,61 +265,173 @@ async function main() {
       WHERE competition_id=${competitionId};
     `;
 
-    await phase2.replaceCapacity(
+    await phase3.replaceCapacity(
       actor,
       competitionId,
-      [
-        {
-          name: "Court 1",
-          windows: [{ startsAt: "2026-09-01T00:00:00.000Z", endsAt: "2026-09-02T10:00:00.000Z" }],
-        },
-        {
-          name: "Court 2",
-          windows: [{ startsAt: "2026-09-01T00:00:00.000Z", endsAt: "2026-09-02T10:00:00.000Z" }],
-        },
-      ],
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Court 1",
+            slotMinutes: 30,
+            availability: [
+              { date: "2026-09-01", startTime: "00:00", endTime: "23:30" },
+              { date: "2026-09-02", startTime: "00:00", endTime: "10:00" },
+            ],
+          },
+          {
+            name: "Court 2",
+            slotMinutes: 30,
+            availability: [
+              { date: "2026-09-01", startTime: "00:00", endTime: "23:30" },
+              { date: "2026-09-02", startTime: "00:00", endTime: "10:00" },
+            ],
+          },
+        ],
+      },
       randomUUID(),
     );
 
-    const formats: Array<{ id: string; divisionId: string }> = [];
-    const schedules: Array<{ id: string; divisionId: string; formatId: string }> = [];
-    for (const division of divisions) {
-      const format = await phase2.generateFormat(actor, competitionId, division.id, randomUUID());
-      formats.push({ id: format.id, divisionId: division.id });
-      const schedule = await phase2.generateSchedule(actor, competitionId, format.id, randomUUID());
-      schedules.push({ id: schedule.id, divisionId: division.id, formatId: format.id });
+    const setup = await phase4.createSetupDraft(
+      actor,
+      competitionId,
+      `gate-d-create-setup-${randomUUID()}`,
+      randomUUID(),
+    );
+    let setupDocument = setup.document;
+    const saveSetupStep = async <StepId extends "basics" | "capacity" | "settings" | "entries" | "format_preferences">(
+      stepId: StepId,
+    ) => {
+      const value = setupDocument.values[stepId];
+      if (!value) throw new Error(`Gate D canonical setup is missing ${stepId}`);
+      const saved = await phase4.autosaveSetupDraft(
+        actor,
+        competitionId,
+        {
+          expected_revision: setupDocument.revision,
+          idempotency_key: `gate-d-setup-${stepId}-${randomUUID()}`,
+          transition: { kind: "save_step", step: { step_id: stepId, value } },
+        },
+        randomUUID(),
+      );
+      if (saved.outcome !== "saved") throw new Error(`Gate D canonical setup did not save ${stepId}`);
+      setupDocument = saved.document;
+    };
+    await saveSetupStep("basics");
+    await saveSetupStep("capacity");
+    await saveSetupStep("settings");
+    await saveSetupStep("entries");
+    await saveSetupStep("format_preferences");
+    const recommendations = setupDocument.values.format_recommendations;
+    const selectedRecommendation = recommendations?.recommendations[0];
+    if (!recommendations || !selectedRecommendation) {
+      throw new Error("Gate D canonical setup did not produce a multi-division format recommendation");
+    }
+    const selected = await phase4.autosaveSetupDraft(
+      actor,
+      competitionId,
+      {
+        expected_revision: setupDocument.revision,
+        idempotency_key: `gate-d-select-format-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: {
+            step_id: "format_recommendations",
+            value: { ...recommendations, selected_recommendation_id: selectedRecommendation.id },
+          },
+        },
+      },
+      randomUUID(),
+    );
+    if (selected.outcome !== "saved") throw new Error("Gate D canonical setup did not apply the selected format");
+    setupDocument = selected.document;
+    const formats = setupDocument.values.format_recommendations?.recommendations.find(
+      (recommendation) => recommendation.id === selectedRecommendation.id,
+    )?.division_formats;
+    if (!formats || formats.length !== divisions.length) {
+      throw new Error("Gate D canonical setup did not persist formats for both divisions");
+    }
+    for (const format of formats) {
+      if (!format.format_revision_id) throw new Error("Gate D canonical setup produced an unresolved format revision");
+      const materialised = await phase4.materialiseFormat(
+        actor,
+        format.format_revision_id,
+        `gate-d-materialise-format-${randomUUID()}`,
+        randomUUID(),
+      );
+      if (!materialised.match_count || materialised.match_count <= 0) {
+        throw new Error("Gate D canonical setup materialised an empty format");
+      }
+      await phase4.publishFormat(
+        actor,
+        format.format_revision_id,
+        `gate-d-publish-format-${randomUUID()}`,
+        randomUUID(),
+      );
     }
 
-    const aggregate = schedules[0];
-    const secondary = schedules[1];
-    if (!aggregate || !secondary) throw new Error("Gate D fixture requires two generated schedules");
-
-    await sql.begin(async (tx) => {
-      for (const format of formats) {
-        await tx`
-          INSERT INTO schedule_revision_formats(
-            schedule_revision_id,competition_id,division_id,format_revision_id
-          ) VALUES(${aggregate.id},${competitionId},${format.divisionId},${format.id})
-          ON CONFLICT DO NOTHING;
-        `;
-      }
-      await tx`
-        INSERT INTO scheduled_matches(
-          schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at
-        )
-        SELECT ${aggregate.id},match_id,competition_id,playing_area_id,
-               starts_at + interval '8 hours',ends_at + interval '8 hours'
-        FROM scheduled_matches WHERE schedule_revision_id=${secondary.id};
-      `;
-    });
-
-    const publication = await phase2.publishSchedule(actor, competitionId, aggregate.id, randomUUID());
-
-    await sql`
-      UPDATE format_revisions
-      SET status='published',published_at=COALESCE(published_at,now())
-      WHERE id=${secondary.formatId} AND status='draft';
+    const [area] = await sql<{ id: string }[]>`
+      SELECT id FROM playing_areas WHERE competition_id=${competitionId} ORDER BY id LIMIT 1;
     `;
+    if (!area) throw new Error("Gate D fixture has no playable area for canonical Phase 4 scheduling");
+    const [competitionState] = await sql<{ revision: number; capacity_revision: number }[]>`
+      SELECT revision,capacity_revision FROM competitions WHERE id=${competitionId};
+    `;
+    if (!competitionState) throw new Error("Gate D fixture competition disappeared before scheduling");
+    const generated = await phase4.generateSchedule(
+      actor,
+      competitionId,
+      {
+        idempotency_key: `gate-d-schedule-${randomUUID()}`,
+        expected_source_revision: competitionState.revision,
+        expected_capacity_revision: competitionState.capacity_revision,
+        objective: "balanced",
+        constraints: schedulingConstraints(area.id),
+      },
+      randomUUID(),
+    );
+    const completedJob = await waitForScheduleJob(phase4, accountId, generated.job.id);
+    if (!completedJob.current_best_option_id)
+      throw new Error("Canonical Phase 4 schedule job completed without an option");
+    const accepted = await phase4.acceptScheduleOption(
+      actor,
+      generated.job.id,
+      completedJob.current_best_option_id,
+      { idempotency_key: `gate-d-accept-schedule-${randomUUID()}`, expected_job_revision: completedJob.revision },
+      randomUUID(),
+    );
+    setupDocument = await phase4.resumeSetupDraft(
+      actor,
+      competitionId,
+      `gate-d-resume-schedule-${randomUUID()}`,
+      randomUUID(),
+    );
+    if (!setupDocument.values.schedule_review) {
+      throw new Error("Gate D canonical setup is missing the accepted schedule-review reference");
+    }
+    const scheduleReviewSaved = await phase4.autosaveSetupDraft(
+      actor,
+      competitionId,
+      {
+        expected_revision: setupDocument.revision,
+        idempotency_key: `gate-d-schedule-review-${randomUUID()}`,
+        transition: {
+          kind: "save_step",
+          step: { step_id: "schedule_review", value: setupDocument.values.schedule_review },
+        },
+      },
+      randomUUID(),
+    );
+    if (scheduleReviewSaved.outcome !== "saved") {
+      throw new Error("Gate D canonical schedule review was not retained before publication");
+    }
+    const publication = await phase4.publishScheduleRevision(
+      actor,
+      accepted.id,
+      { idempotency_key: `gate-d-publish-schedule-${randomUUID()}`, expected_revision: accepted.revision },
+      randomUUID(),
+    );
+    const aggregate = { id: accepted.id };
 
     const scoreableRows = await sql<{ match_id: string; division_id: string }[]>`
       SELECT DISTINCT m.id AS match_id,m.division_id
@@ -230,6 +442,13 @@ async function main() {
       ORDER BY m.division_id,m.id;
     `;
     if (scoreableRows.length < 2) throw new Error("Gate D fixture did not produce enough scoreable matches");
+    const scoreableDivisionIds = new Set(scoreableRows.map((row) => row.division_id));
+    if (
+      scoreableDivisionIds.size !== divisions.length ||
+      divisions.some((division) => !scoreableDivisionIds.has(division.id))
+    ) {
+      throw new Error("Gate D fixture requires a resolved scoreable match in each division");
+    }
 
     const scoreableMatches: Array<{ matchId: string; divisionId: string; rawToken: string }> = [];
     for (const row of scoreableRows) {
@@ -255,6 +474,8 @@ async function main() {
         scheduled_matches: number;
         linked_formats: number;
         published_schedule: string | null;
+        published_formats: number;
+        unlinked_matches: number;
       }[]
     >`
       SELECT
@@ -264,7 +485,18 @@ async function main() {
         (SELECT count(*)::int FROM scheduled_matches WHERE schedule_revision_id=${aggregate.id}) AS scheduled_matches,
         (SELECT count(*)::int FROM schedule_revision_formats WHERE schedule_revision_id=${aggregate.id}) AS linked_formats,
         (SELECT published_schedule_revision_id::text FROM competition_publications
-          WHERE competition_id=${competitionId}) AS published_schedule;
+          WHERE competition_id=${competitionId}) AS published_schedule,
+        (SELECT count(*)::int FROM format_revisions
+          WHERE competition_id=${competitionId} AND status='published') AS published_formats,
+        (SELECT count(*)::int FROM scheduled_matches scheduled
+          JOIN matches m ON m.id=scheduled.match_id
+          WHERE scheduled.schedule_revision_id=${aggregate.id}
+            AND m.competition_id=${competitionId}
+            AND NOT EXISTS (
+              SELECT 1 FROM schedule_revision_formats linked
+              WHERE linked.schedule_revision_id=scheduled.schedule_revision_id
+                AND linked.format_revision_id=m.format_revision_id
+            )) AS unlinked_matches;
     `;
     if (
       !counts ||
@@ -272,17 +504,59 @@ async function main() {
       counts.entries !== 16 ||
       counts.scheduled_matches < 2 ||
       counts.linked_formats !== 2 ||
-      counts.published_schedule !== aggregate.id
+      counts.published_schedule !== aggregate.id ||
+      counts.published_formats !== 2 ||
+      counts.unlinked_matches !== 0
     ) {
       throw new Error(`Post-seed database verification failed: ${JSON.stringify(counts)}`);
     }
 
-    await requireApiResponse(`${targetUrl}/api/v1/public/competitions/${competitionId}`, undefined, "public competition");
+    const scheduledByDivision = await sql<{ division_id: string; scheduled_matches: number }[]>`
+      SELECT m.division_id,count(*)::int AS scheduled_matches
+      FROM scheduled_matches sm
+      JOIN matches m ON m.id=sm.match_id
+      WHERE sm.schedule_revision_id=${aggregate.id}
+      GROUP BY m.division_id
+      ORDER BY m.division_id;
+    `;
+    if (
+      scheduledByDivision.length !== divisions.length ||
+      divisions.some(
+        (division) =>
+          !scheduledByDivision.some(
+            (scheduled) => scheduled.division_id === division.id && scheduled.scheduled_matches >= 1,
+          ),
+      )
+    ) {
+      throw new Error(`Post-seed schedule does not cover both divisions: ${JSON.stringify(scheduledByDivision)}`);
+    }
+
     await requireApiResponse(
-      `${targetUrl}/api/v1/public/competitions/${competitionId}/schedule`,
+      `${targetUrl}/api/v1/public/competitions/${encodeURIComponent(competitionSlug)}/current`,
+      undefined,
+      "public competition",
+    );
+    const publicScheduleResponse = await requireApiResponse(
+      `${targetUrl}/api/v1/public/competitions/${encodeURIComponent(competitionSlug)}/current`,
       undefined,
       "public multi-division schedule",
     );
+    const publicSchedule = (await publicScheduleResponse.json()) as {
+      publication?: { schedule_version?: number };
+      divisions?: Array<{ division?: { id?: string; name?: string }; schedule?: Array<{ id?: string }> }>;
+    };
+    if (
+      publicSchedule.publication?.schedule_version !== publication.schedule_version ||
+      !Array.isArray(publicSchedule.divisions) ||
+      divisions.some((division) => {
+        const projected = publicSchedule.divisions?.find(
+          (candidate) => candidate.division?.id === division.id && candidate.division?.name === division.name,
+        );
+        return !projected || !projected.schedule?.some((fixture) => typeof fixture.id === "string");
+      })
+    ) {
+      throw new Error("Post-seed public projection did not expose the canonical published fixtures for both divisions");
+    }
 
     const exchangeCandidate = scoreableMatches[0]!;
     const exchangeResponse = await requireApiResponse(
@@ -315,6 +589,18 @@ async function main() {
     const artifactDir = path.join(root, "artifacts");
     await mkdir(artifactDir, { recursive: true });
     const artifactPath = path.join(artifactDir, "staging-pilot-seed.json");
+    const secretDirectory = await mkdtemp(path.join(tmpdir(), "matchday-gate-d-scoring-"));
+    const scoringSecretFile = path.join(secretDirectory, "scorekeeper-access.json");
+    await writeFile(
+      scoringSecretFile,
+      JSON.stringify({
+        issued_at_utc: new Date().toISOString(),
+        target_url: targetUrl,
+        competition_id: competitionId,
+        matches: scoreableMatches.map(({ matchId, rawToken }) => ({ matchId, rawToken })),
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
     const output = {
       generated_at_utc: new Date().toISOString(),
       target_url: targetUrl,
@@ -324,12 +610,14 @@ async function main() {
       schedule_revision_id: aggregate.id,
       schedule_version: publication.schedule_version,
       divisions,
-      matches: scoreableMatches.map(({ matchId, rawToken }) => ({ matchId, rawToken })),
-      scoreable_matches: scoreableMatches.map(({ matchId, divisionId, rawToken }) => ({
+      scoreable_matches: scoreableMatches.map(({ matchId, divisionId }) => ({
         match_id: matchId,
         division_id: divisionId,
-        pass_token: rawToken,
       })),
+      scoring_secret_handoff: {
+        environment_variable: "GATE_D_SCORING_SECRET_FILE",
+        contract: "single_use_local_file_deleted_by_qa011_runner",
+      },
     };
     await writeFile(artifactPath, JSON.stringify(output, null, 2), "utf8");
 
@@ -339,7 +627,14 @@ async function main() {
     console.log(`✓ Scoreable matches:          ${scoreableMatches.length}`);
     console.log("✓ Deployed API verification:  PASS");
     console.log(`✓ Artifact:                    ${artifactPath}`);
+    console.log(
+      `✓ Single-use scoring handoff:  export GATE_D_SCORING_SECRET_FILE=${JSON.stringify(scoringSecretFile)}`,
+    );
   } finally {
+    await scheduler.stop().catch(() => undefined);
+    await scheduleQueue.close().catch(() => undefined);
+    await deleteOwnedRedisKeys(redis, queueName).catch(() => undefined);
+    await redis.quit().catch(() => undefined);
     await sql.end({ timeout: 2 });
   }
 }

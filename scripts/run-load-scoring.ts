@@ -13,7 +13,8 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -316,17 +317,47 @@ async function main() {
     const seed = JSON.parse(await readFile(seedPath, "utf8")) as {
       target_url?: string;
       competition_id?: string;
-      matches?: Array<{ matchId: string; rawToken: string }>;
+      scoreable_matches?: Array<{ match_id: string }>;
     };
-    if (!seed.competition_id || !Array.isArray(seed.matches) || seed.matches.length === 0) {
+    if (!seed.competition_id || !Array.isArray(seed.scoreable_matches) || seed.scoreable_matches.length === 0) {
       throw new Error("Staging seed artifact is missing competition_id or scoreable matches");
     }
     if (seed.target_url && seed.target_url.replace(/\/$/, "") !== baseUrl) {
       throw new Error(`Seed TARGET_URL mismatch: seed=${seed.target_url} runner=${baseUrl}`);
     }
     competitionId = seed.competition_id;
+    const secretFile = process.env.GATE_D_SCORING_SECRET_FILE;
+    if (!secretFile) {
+      throw new Error("QA-011 staging mode requires the single-use GATE_D_SCORING_SECRET_FILE from seed:staging:pilot");
+    }
+    const expectedSecretDirectoryPrefix = path.join(tmpdir(), "matchday-gate-d-scoring-");
+    if (
+      path.basename(secretFile) !== "scorekeeper-access.json" ||
+      !path.dirname(secretFile).startsWith(expectedSecretDirectoryPrefix)
+    ) {
+      throw new Error("GATE_D_SCORING_SECRET_FILE must be the single-use seed:staging:pilot handoff file");
+    }
+    let secret: {
+      target_url?: string;
+      competition_id?: string;
+      matches?: Array<{ matchId: string; rawToken: string }>;
+    };
+    try {
+      secret = JSON.parse(await readFile(secretFile, "utf8")) as typeof secret;
+    } finally {
+      await rm(secretFile, { force: true }).catch(() => undefined);
+    }
+    if (
+      secret.target_url?.replace(/\/$/, "") !== baseUrl ||
+      secret.competition_id !== competitionId ||
+      !Array.isArray(secret.matches) ||
+      secret.matches.length !== seed.scoreable_matches.length ||
+      secret.matches.some((match) => !seed.scoreable_matches!.some((seedMatch) => seedMatch.match_id === match.matchId))
+    ) {
+      throw new Error("Single-use scoring handoff does not match the sanitized seed artifact");
+    }
 
-    for (const match of seed.matches) {
+    for (const match of secret.matches) {
       if (!match.matchId || !match.rawToken) throw new Error("Seed match is missing matchId/rawToken");
       const exchange = await fetch(`${baseUrl}/api/v1/scoring/access/exchange`, {
         method: "POST",

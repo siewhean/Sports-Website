@@ -52,7 +52,7 @@ test.describe("QA-014 Browser Stored XSS & DOM Sanitization", () => {
 
     // The exact persisted payload must be present as text. This prevents the test from
     // passing merely because the page ignores the malicious database value.
-    await expect(page.getByText(state.xssMaliciousName, { exact: true })).toBeVisible();
+    await expect(page.getByText(state.xssMaliciousName, { exact: true }).first()).toBeVisible();
 
     // No executable script node containing the persisted payload may reach the DOM.
     const unescapedScriptTags = page.locator("script").filter({ hasText: "window.__xss_injected_flag" });
