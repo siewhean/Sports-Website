@@ -223,7 +223,7 @@ jobs:
               const readyRes = await fetch(`${base}/health/ready`, { signal: AbortSignal.timeout(15000) });
               if (readyRes.ok) {
                 readyBody = await readyRes.json();
-                if (readyBody.database && readyBody.redis && readyBody.queue) {
+                if (readyBody.dependencies?.database && readyBody.dependencies?.redis && readyBody.dependencies?.queue) {
                   readySuccess = true;
                   break;
                 }
