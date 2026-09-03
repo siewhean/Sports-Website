@@ -253,31 +253,7 @@ jobs:
         run: pnpm db:migrate
 
       - name: Seed canonical Gate D pilot fixture
-        run: |
-          node -e '
-            import { spawn } from "node:child_process";
-            const cp = spawn("pnpm", ["seed:staging:pilot"], { stdio: ["inherit", "pipe", "pipe"] });
-            let finished = false;
-            const timeout = setTimeout(() => {
-              if (!finished) {
-                console.error("❌ Seed script timed out after 300s");
-                cp.kill("SIGKILL");
-                process.exit(1);
-              }
-            }, 300000);
-            timeout.unref();
-            cp.stdout.on("data", (chunk) => {
-              process.stdout.write(chunk);
-              if (chunk.toString().includes("✓ Single-use scoring handoff")) {
-                finished = true;
-                setTimeout(() => process.exit(0), 2000);
-              }
-            });
-            cp.stderr.pipe(process.stderr);
-            cp.on("exit", (code) => {
-              if (!finished) process.exit(code ?? 1);
-            });
-          '
+        run: pnpm seed:staging:pilot
 
       - name: Locate single-use scoring handoff
         id: scoring-handoff
