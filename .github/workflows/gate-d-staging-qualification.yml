@@ -124,6 +124,11 @@ jobs:
           APP_ENV: test
         run: pnpm db:migrate:check
 
+      - name: Apply candidate migrations to isolated Gate D database
+        env:
+          APP_ENV: test
+        run: pnpm db:migrate
+
       - name: Seed canonical Gate D pilot fixture
         run: pnpm seed:staging:pilot
 
