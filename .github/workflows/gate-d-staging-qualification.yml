@@ -33,7 +33,7 @@ jobs:
   staging-qualification:
     name: Gate D controlled staging receipts
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: [self-hosted, macOS, singapore]
+    runs-on: ubuntu-latest
     environment: gate-d-controlled-staging
     timeout-minutes: 120
     env:
