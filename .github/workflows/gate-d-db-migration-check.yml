@@ -30,5 +30,7 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - name: Frozen install
         run: pnpm install --frozen-lockfile
+      - name: Build config dependency
+        run: pnpm --filter @matchday/config build
       - name: Verify isolated migration compatibility
         run: pnpm db:migrate:check
