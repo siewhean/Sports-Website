@@ -295,6 +295,14 @@ jobs:
               '  for (const session of activeSessions) await recoverSessionState(target, session);',
               '  await Promise.all(activeSessions.map((session) => recoverSessionState(target, session)));'
             );
+            patched = patched.replace(
+              'async function heartbeatActiveWriters(target: Target): Promise<void> {\n  for (const session of target.sessions) {',
+              'async function heartbeatActiveWriters(target: Target): Promise<void> {\n  await Promise.all(target.sessions.map(async (session) => {'
+            );
+            patched = patched.replace(
+              '    if (response.status !== 200 || !validWriterHeartbeat(response.data, session.generation)) {\n      throw new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n  }\n}',
+              '    if (response.status !== 200 || !validWriterHeartbeat(response.data, session.generation)) {\n      throw new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n  }));\n}'
+            );
             if (patched === original) throw new Error('QA-011 parallelization pattern did not match');
             fs.writeFileSync(file, patched);
           "
