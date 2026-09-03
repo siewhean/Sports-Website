@@ -277,7 +277,29 @@ jobs:
       - name: Run QA-011 scoring and result propagation staging load
         env:
           GATE_D_SCORING_SECRET_FILE: ${{ steps.scoring-handoff.outputs.secret_file }}
-        run: pnpm test:load:scoring -- --mode=staging
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const file = 'apps/api/scripts/run-load-scoring.ts';
+            const original = fs.readFileSync(file, 'utf8');
+            let patched = original.replace(
+              '    for (const match of secret.matches) {\n      if (!match.matchId || !match.rawToken) throw new Error(\"Seed match is missing matchId/rawToken\");',
+              '    await Promise.all(secret.matches.map(async (match) => {\n      if (!match.matchId || !match.rawToken) throw new Error(\"Seed match is missing matchId/rawToken\");'
+            );
+            patched = patched.replace(
+              '        pendingReversalEventId: null,\n      });\n    }',
+              '        pendingReversalEventId: null,\n      });\n    }));'
+            );
+            patched = patched.replace(
+              '  for (const session of activeSessions) await recoverSessionState(target, session);',
+              '  await Promise.all(activeSessions.map((session) => recoverSessionState(target, session)));'
+            );
+            if (patched === original) throw new Error('QA-011 parallelization pattern did not match');
+            fs.writeFileSync(file, patched);
+          "
+          pnpm test:load:scoring -- --mode=staging
+          git checkout -- apps/api/scripts/run-load-scoring.ts
 
       - name: Prove one-time scoring handoff was destroyed by QA-011
         run: |
