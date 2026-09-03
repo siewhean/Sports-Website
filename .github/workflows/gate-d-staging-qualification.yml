@@ -88,6 +88,7 @@ jobs:
           rm -rf -- "$runtime_tmp"
           mkdir -p "$runtime_tmp"
           printf 'TMPDIR=%s\n' "$runtime_tmp" >> "$GITHUB_ENV"
+          printf 'DATABASE_URL=%s\n' "${DATABASE_URL//-pooler/}" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -258,11 +259,11 @@ jobs:
             let finished = false;
             const timeout = setTimeout(() => {
               if (!finished) {
-                console.error("❌ Seed script timed out after 180s");
+                console.error("❌ Seed script timed out after 300s");
                 cp.kill("SIGKILL");
                 process.exit(1);
               }
-            }, 180000);
+            }, 300000);
             timeout.unref();
             cp.stdout.on("data", (chunk) => {
               process.stdout.write(chunk);
