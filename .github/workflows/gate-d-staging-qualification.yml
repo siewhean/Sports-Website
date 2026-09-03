@@ -116,6 +116,9 @@ jobs:
           console.log(`Verified deployed staging SHA ${body.git_sha}`);
           NODE
 
+      - name: Build workspace packages
+        run: pnpm build
+
       - name: Validate migration compatibility against Gate D database
         run: pnpm db:migrate:check
 
