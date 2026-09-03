@@ -1,0 +1,35 @@
+name: Gate D direct API diagnostic
+
+on:
+  push:
+    branches: [gate-d/diagnostics-f1a82186]
+
+permissions:
+  contents: read
+
+jobs:
+  direct-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CANDIDATE_SHA: f1a8218616f51197a22fe218306ae6f7a908efca
+      DIRECT_URL: https://gate-d-api.poladex.shop
+    steps:
+      - name: Probe dedicated API origin
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${DIRECT_URL%/}"
+          health_code="$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health -w '%{http_code}' "$base/health/ready" || true)"
+          build_code="$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/build -w '%{http_code}' "$base/api/v1/meta/build" || true)"
+          echo "DIRECT_HEALTH_HTTP=$health_code"
+          echo "DIRECT_BUILD_HTTP=$build_code"
+          test "$health_code" = '200'
+          test "$build_code" = '200'
+          CANDIDATE_SHA="$CANDIDATE_SHA" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const body = JSON.parse(fs.readFileSync('/tmp/build', 'utf8'));
+          if (body.git_sha !== process.env.CANDIDATE_SHA) throw new Error('deployed SHA mismatch');
+          if (body.environment !== 'staging') throw new Error('deployed environment is not staging');
+          console.log('DIRECT_BUILD_RESULT=PASS');
+          NODE
