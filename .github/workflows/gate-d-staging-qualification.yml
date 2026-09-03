@@ -120,6 +120,8 @@ jobs:
         run: pnpm build
 
       - name: Validate migration compatibility against Gate D database
+        env:
+          APP_ENV: test
         run: pnpm db:migrate:check
 
       - name: Seed canonical Gate D pilot fixture
