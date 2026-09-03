@@ -1,0 +1,116 @@
+name: Gate D network diagnostics
+
+on:
+  push:
+    branches: [gate-d/diagnostics-f1a82186]
+
+permissions:
+  contents: read
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    environment: gate-d-controlled-staging
+    timeout-minutes: 10
+    env:
+      CANDIDATE_SHA: f1a8218616f51197a22fe218306ae6f7a908efca
+      DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
+      REDIS_URL: ${{ secrets.GATE_D_REDIS_URL }}
+      TARGET_URL: ${{ vars.GATE_D_TARGET_URL }}
+    steps:
+      - name: Report configured inputs without secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'candidate=%s\n' "$CANDIDATE_SHA"
+          test -n "$DATABASE_URL" && echo 'database=SET' || echo 'database=UNSET'
+          test -n "$REDIS_URL" && echo 'redis=SET' || echo 'redis=UNSET'
+          test -n "$TARGET_URL" && echo 'target=SET' || echo 'target=UNSET'
+
+      - name: Probe PostgreSQL authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$DATABASE_URL" ]; then
+            echo 'POSTGRES_RESULT=UNSET'
+            exit 1
+          fi
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client >/dev/null
+          fi
+          result="$(PGCONNECT_TIMEOUT=12 psql "$DATABASE_URL" -XAtqc "select current_database() || ':' || current_user" 2>&1)" || {
+            echo 'POSTGRES_RESULT=FAILED'
+            printf '%s\n' "$result" | sed -E 's#(postgres(ql)?://)[^ ]+#\1<redacted>#g'
+            exit 1
+          }
+          echo 'POSTGRES_RESULT=PASS'
+
+      - name: Probe Redis authentication and PING
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$REDIS_URL" ]; then
+            echo 'REDIS_RESULT=UNSET'
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import net from 'node:net';
+          import tls from 'node:tls';
+
+          const url = new URL(process.env.REDIS_URL);
+          if (!['redis:', 'rediss:'].includes(url.protocol)) throw new Error('unsupported Redis protocol');
+          const port = Number(url.port || (url.protocol === 'rediss:' ? 6380 : 6379));
+          const socket = url.protocol === 'rediss:'
+            ? tls.connect({ host: url.hostname, port, servername: url.hostname, rejectUnauthorized: true })
+            : net.connect({ host: url.hostname, port });
+          socket.setTimeout(12000);
+
+          let buffer = '';
+          const command = (...parts) => parts.map((part) => `$${Buffer.byteLength(part)}\r\n${part}\r\n`).join('');
+          const frame = (parts) => `*${parts.length}\r\n${command(...parts)}`;
+          const commands = [];
+          if (url.password) {
+            const user = decodeURIComponent(url.username || 'default');
+            commands.push(frame(['AUTH', user, decodeURIComponent(url.password)]));
+          }
+          commands.push(frame(['PING']));
+
+          const done = (code, message) => {
+            if (message) console.log(message);
+            socket.destroy();
+            process.exit(code);
+          };
+          socket.on('connect', () => socket.write(commands.join('')));
+          socket.on('secureConnect', () => socket.write(commands.join('')));
+          socket.on('data', (chunk) => {
+            buffer += chunk.toString('utf8');
+            if (buffer.includes('+PONG\r\n')) done(0, 'REDIS_RESULT=PASS');
+            if (buffer.includes('-ERR') || buffer.includes('-NOAUTH') || buffer.includes('-WRONGPASS')) done(1, 'REDIS_RESULT=FAILED_AUTH');
+          });
+          socket.on('timeout', () => done(1, 'REDIS_RESULT=TIMEOUT'));
+          socket.on('error', () => done(1, 'REDIS_RESULT=CONNECTION_FAILED'));
+          NODE
+
+      - name: Probe deployed health and build attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$TARGET_URL" ]; then
+            echo 'TARGET_RESULT=UNSET'
+            exit 1
+          fi
+          base="${TARGET_URL%/}"
+          health_code="$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/gate-d-health -w '%{http_code}' "$base/health/ready" || true)"
+          build_code="$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/gate-d-build -w '%{http_code}' "$base/api/v1/meta/build" || true)"
+          echo "HEALTH_HTTP=$health_code"
+          echo "BUILD_HTTP=$build_code"
+          if [ "$health_code" != '200' ]; then echo 'HEALTH_RESULT=FAILED'; exit 1; fi
+          if [ "$build_code" != '200' ]; then echo 'BUILD_RESULT=FAILED'; exit 1; fi
+          CANDIDATE_SHA="$CANDIDATE_SHA" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const body = JSON.parse(fs.readFileSync('/tmp/gate-d-build', 'utf8'));
+          if (body.git_sha !== process.env.CANDIDATE_SHA) throw new Error('deployed SHA mismatch');
+          if (body.environment !== 'staging') throw new Error('deployed environment is not staging');
+          console.log('BUILD_RESULT=PASS');
+          NODE
