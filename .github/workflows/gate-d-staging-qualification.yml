@@ -33,7 +33,7 @@ jobs:
   staging-qualification:
     name: Gate D controlled staging receipts
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, singapore]
     environment: gate-d-controlled-staging
     timeout-minutes: 120
     env:
@@ -285,7 +285,8 @@ jobs:
           mapfile -t files < <(find "$TMPDIR" -maxdepth 2 -type f -path "$TMPDIR/matchday-gate-d-scoring-*/scorekeeper-access.json" -print)
           test "${#files[@]}" -eq 1
           secret_file="${files[0]}"
-          test "$(stat -c '%a' "$secret_file")" = "600"
+          perms="$(stat -c '%a' "$secret_file" 2>/dev/null || stat -f '%Lp' "$secret_file")"
+          test "$perms" = "600"
           case "$secret_file" in
             "$TMPDIR"/matchday-gate-d-scoring-*/scorekeeper-access.json) ;;
             *) echo 'Scoring handoff escaped runner-owned Gate D temp root' >&2; exit 1 ;;
