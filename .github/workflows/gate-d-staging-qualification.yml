@@ -99,6 +99,48 @@ jobs:
       - name: Frozen install
         run: pnpm install --frozen-lockfile
 
+      - name: Align Render staging API database URL with isolated Gate D branch
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RENDER_API_KEY:-}" ]; then
+            echo "Syncing DATABASE_URL to Render service srv-dabbmk2jobas73c0de20..."
+            res="$(curl -s -w "\n%{http_code}" -X PUT "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/env-vars/DATABASE_URL" \
+              -H "Authorization: Bearer $RENDER_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"value\": \"$DATABASE_URL\"}")"
+            status="$(echo "$res" | tail -n 1)"
+            body="$(echo "$res" | head -n -1)"
+            if [ "$status" != "200" ]; then
+              echo "Failed to sync DATABASE_URL to Render (HTTP $status): $body"
+              exit 1
+            fi
+            echo "DATABASE_URL updated on Render. Waiting for deployment to become live..."
+            sleep 15
+            for i in $(seq 1 40); do
+              deploy_res="$(curl -s -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/deploys?limit=1")"
+              deploy_status="$(echo "$deploy_res" | node -e '
+                let d = "";
+                process.stdin.on("data", c => d += c);
+                process.stdin.on("end", () => {
+                  try { const j = JSON.parse(d); console.log(j[0]?.deploy?.status || "unknown"); }
+                  catch { console.log("unknown"); }
+                });
+              ')"
+              echo "Current deploy status: $deploy_status (check $i/40)"
+              if [ "$deploy_status" = "live" ]; then
+                break
+              fi
+              if [ "$deploy_status" = "build_failed" ] || [ "$deploy_status" = "update_failed" ] || [ "$deploy_status" = "canceled" ]; then
+                echo "Deploy failed with status $deploy_status"
+                exit 1
+              fi
+              sleep 10
+            done
+          fi
+
       - name: Verify deployed API exact SHA
         run: |
           set -euo pipefail
@@ -114,6 +156,14 @@ jobs:
             throw new Error(`Gate D requires deployed APP_ENV=staging; got ${body.environment}`);
           }
           console.log(`Verified deployed staging SHA ${body.git_sha}`);
+
+          const readyRes = await fetch(`${base}/health/ready`, { signal: AbortSignal.timeout(15000) });
+          if (!readyRes.ok) throw new Error(`Health ready returned HTTP ${readyRes.status}`);
+          const readyBody = await readyRes.json();
+          if (!readyBody.database || !readyBody.redis || !readyBody.queue) {
+            throw new Error(`Health ready dependencies not satisfied: ${JSON.stringify(readyBody)}`);
+          }
+          console.log("Verified deployed staging health:", readyBody);
           NODE
 
       - name: Build workspace packages
@@ -130,7 +180,31 @@ jobs:
         run: pnpm db:migrate
 
       - name: Seed canonical Gate D pilot fixture
-        run: pnpm seed:staging:pilot
+        run: |
+          node -e '
+            import { spawn } from "node:child_process";
+            const cp = spawn("pnpm", ["seed:staging:pilot"], { stdio: ["inherit", "pipe", "pipe"] });
+            let finished = false;
+            const timeout = setTimeout(() => {
+              if (!finished) {
+                console.error("❌ Seed script timed out after 180s");
+                cp.kill("SIGKILL");
+                process.exit(1);
+              }
+            }, 180000);
+            timeout.unref();
+            cp.stdout.on("data", (chunk) => {
+              process.stdout.write(chunk);
+              if (chunk.toString().includes("✓ Single-use scoring handoff")) {
+                finished = true;
+                setTimeout(() => process.exit(0), 2000);
+              }
+            });
+            cp.stderr.pipe(process.stderr);
+            cp.on("exit", (code) => {
+              if (!finished) process.exit(code ?? 1);
+            });
+          '
 
       - name: Locate single-use scoring handoff
         id: scoring-handoff
