@@ -130,6 +130,7 @@ jobs:
           NODE
 
       - name: Align Render staging API database URL with isolated Gate D branch
+        if: ${{ contains(env.TARGET_URL, 'onrender.com') || contains(env.TARGET_URL, 'gate-d-api.poladex.shop') }}
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
