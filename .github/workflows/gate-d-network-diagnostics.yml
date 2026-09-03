@@ -28,6 +28,8 @@ jobs:
           test -n "$TARGET_URL" && echo 'target=SET' || echo 'target=UNSET'
 
       - name: Probe PostgreSQL authentication
+        id: postgres
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +49,8 @@ jobs:
           echo 'POSTGRES_RESULT=PASS'
 
       - name: Probe Redis authentication and PING
+        id: redis
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -67,6 +71,7 @@ jobs:
           socket.setTimeout(12000);
 
           let buffer = '';
+          let wrote = false;
           const command = (...parts) => parts.map((part) => `$${Buffer.byteLength(part)}\r\n${part}\r\n`).join('');
           const frame = (parts) => `*${parts.length}\r\n${command(...parts)}`;
           const commands = [];
@@ -76,13 +81,18 @@ jobs:
           }
           commands.push(frame(['PING']));
 
+          const write = () => {
+            if (wrote) return;
+            wrote = true;
+            socket.write(commands.join(''));
+          };
           const done = (code, message) => {
             if (message) console.log(message);
             socket.destroy();
             process.exit(code);
           };
-          socket.on('connect', () => socket.write(commands.join('')));
-          socket.on('secureConnect', () => socket.write(commands.join('')));
+          socket.on('connect', write);
+          socket.on('secureConnect', write);
           socket.on('data', (chunk) => {
             buffer += chunk.toString('utf8');
             if (buffer.includes('+PONG\r\n')) done(0, 'REDIS_RESULT=PASS');
@@ -93,6 +103,8 @@ jobs:
           NODE
 
       - name: Probe deployed health and build attestation
+        id: target
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -114,3 +126,14 @@ jobs:
           if (body.environment !== 'staging') throw new Error('deployed environment is not staging');
           console.log('BUILD_RESULT=PASS');
           NODE
+
+      - name: Summarize diagnostic gate
+        if: always()
+        shell: bash
+        run: |
+          echo 'POSTGRES_STEP=${{ steps.postgres.outcome }}'
+          echo 'REDIS_STEP=${{ steps.redis.outcome }}'
+          echo 'TARGET_STEP=${{ steps.target.outcome }}'
+          test '${{ steps.postgres.outcome }}' = 'success'
+          test '${{ steps.redis.outcome }}' = 'success'
+          test '${{ steps.target.outcome }}' = 'success'
