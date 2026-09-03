@@ -124,6 +124,31 @@ jobs:
               -H "Content-Type: application/json" \
               -d '{"value": "0.0.0.0"}' >/dev/null
 
+            echo "Ensuring HMAC keyring versions exist in isolated database..."
+            node --input-type=module <<'NODE'
+            import postgres from "./packages/database/node_modules/postgres/src/index.js";
+            const sql = postgres(process.env.DATABASE_URL, { ssl: "require" });
+            try {
+              await sql`
+                INSERT INTO scoring_fallback_code_hmac_key_versions (
+                  key_version, material_commitment, status
+                ) VALUES (
+                  'v1', decode(repeat('00', 32), 'hex'), 'primary'
+                ) ON CONFLICT (key_version) DO NOTHING;
+              `;
+              await sql`
+                INSERT INTO scoring_access_hmac_key_versions (
+                  key_version, material_commitment, status
+                ) VALUES (
+                  'v1', decode(repeat('00', 32), 'hex'), 'primary'
+                ) ON CONFLICT (key_version) DO NOTHING;
+              `;
+              console.log("Verified scoring HMAC keyring versions in isolated database");
+            } finally {
+              await sql.end({ timeout: 2 });
+            }
+            NODE
+
             echo "Environment variables updated. Triggering fresh deploy..."
             deploy_json="$(curl -s -f -X POST "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/deploys" \
               -H "Authorization: Bearer $RENDER_API_KEY" \
