@@ -1,0 +1,44 @@
+name: Gate D direct readiness diagnostic
+
+on:
+  push:
+    branches: [gate-d/control-f1a82186]
+    paths:
+      - .github/workflows/gate-d-direct-readiness-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compare:
+    name: Compare direct Render and drill readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe all Gate D origins
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const origins = [
+            'https://matchday-gate-d-api.onrender.com',
+            'https://gate-d-api.poladex.shop',
+            'https://c5-drill.poladex.shop',
+          ];
+          for (const origin of origins) {
+            console.log(`=== ${origin} ===`);
+            for (const path of ['/api/v1/meta/build', '/health/ready']) {
+              try {
+                const res = await fetch(`${origin}${path}`, { signal: AbortSignal.timeout(20000) });
+                console.log(`${path} HTTP ${res.status}`);
+                console.log(await res.text());
+              } catch (error) {
+                console.log(`${path} ERROR ${error instanceof Error ? error.message : String(error)}`);
+              }
+            }
+          }
+          NODE
