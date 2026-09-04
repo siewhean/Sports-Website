@@ -1,0 +1,90 @@
+name: Gate D Redis remediation
+
+on:
+  push:
+    branches: [gate-d/control-f1a82186]
+    paths:
+      - .github/workflows/gate-d-redis-remediation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  redis-remediation:
+    name: Enforce Gate D Redis noeviction policy
+    runs-on: ubuntu-latest
+    environment: gate-d-controlled-staging
+    timeout-minutes: 15
+    env:
+      REDIS_URL: ${{ secrets.GATE_D_REDIS_URL }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: f1a8218616f51197a22fe218306ae6f7a908efca
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@10.33.0
+
+      - name: Frozen install
+        run: pnpm install --frozen-lockfile
+
+      - name: Set and verify noeviction policy
+        run: |
+          set -euo pipefail
+          test -n "$REDIS_URL"
+          pnpm --filter @matchday/api exec node --input-type=module <<'NODE'
+          import { createClient } from "redis";
+
+          const client = createClient({ url: process.env.REDIS_URL });
+          client.on("error", () => {});
+
+          async function readPolicy() {
+            try {
+              const info = await client.sendCommand(["INFO", "memory"]);
+              const match = String(info).match(/^maxmemory_policy:(.+)$/m);
+              if (match?.[1]) return match[1].trim();
+            } catch {}
+            try {
+              const result = await client.sendCommand(["CONFIG", "GET", "maxmemory-policy"]);
+              if (Array.isArray(result)) return String(result.at(-1) ?? "").trim();
+              if (result && typeof result === "object") return String(result["maxmemory-policy"] ?? "").trim();
+            } catch {}
+            return "";
+          }
+
+          try {
+            await client.connect();
+            const pong = await client.ping();
+            if (pong !== "PONG") throw new Error(`unexpected PING response ${pong}`);
+
+            const before = await readPolicy();
+            if (!before) throw new Error("unable to read Redis maxmemory policy");
+            console.log(`Current Redis maxmemory policy: ${before}`);
+
+            if (before !== "noeviction") {
+              try {
+                await client.sendCommand(["CONFIG", "SET", "maxmemory-policy", "noeviction"]);
+              } catch (error) {
+                throw new Error(`provider rejected CONFIG SET maxmemory-policy noeviction: ${error instanceof Error ? error.message : String(error)}`);
+              }
+            }
+
+            const after = await readPolicy();
+            if (after !== "noeviction") {
+              throw new Error(`Redis maxmemory policy remains ${after || "unverifiable"}; expected noeviction`);
+            }
+            console.log("Verified isolated Gate D Redis policy: noeviction");
+          } finally {
+            if (client.isOpen) await client.quit().catch(() => client.disconnect());
+          }
+          NODE
