@@ -3,20 +3,7 @@ name: Gate D controlled staging qualification
 on:
   push:
     branches: [gate-d/control-f1a82186]
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [phase-7/release-hardening]
   workflow_dispatch:
-    inputs:
-      candidate_sha:
-        description: Exact 40-character Gate D candidate SHA
-        required: true
-        type: string
-      target_url:
-        description: Exact controlled-staging API base URL
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -32,16 +19,16 @@ defaults:
 jobs:
   staging-qualification:
     name: Gate D controlled staging receipts
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: gate-d-controlled-staging
     timeout-minutes: 120
     env:
       APP_ENV: staging
-      CANDIDATE_SHA: ${{ github.event_name == 'push' && 'f1a8218616f51197a22fe218306ae6f7a908efca' || inputs.candidate_sha || github.event.workflow_run.head_sha }}
-      TARGET_URL: ${{ inputs.target_url || vars.GATE_D_TARGET_URL || 'https://c5-staging.poladex.shop' }}
+      CANDIDATE_SHA: f1a8218616f51197a22fe218306ae6f7a908efca
+      TARGET_URL: https://c5-drill.poladex.shop
       DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
       REDIS_URL: ${{ secrets.GATE_D_REDIS_URL }}
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,26 +45,27 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
-      - name: Validate isolated staging inputs
+      - name: Validate frozen staging inputs
         run: |
           set -euo pipefail
-          test -n "$TARGET_URL"
           test -n "$DATABASE_URL"
           test -n "$REDIS_URL"
           node --input-type=module <<'NODE'
-          const url = new URL(process.env.TARGET_URL);
-          if (url.protocol !== "https:") throw new Error("Gate D TARGET_URL must use HTTPS");
-          if (url.username || url.password || url.search || url.hash) {
+          const target = new URL(process.env.TARGET_URL);
+          if (target.protocol !== "https:") throw new Error("Gate D TARGET_URL must use HTTPS");
+          if (target.origin !== "https://c5-drill.poladex.shop" || !["/", ""].includes(target.pathname)) {
+            throw new Error(`Gate D qualification target is frozen to https://c5-drill.poladex.shop; got ${target.origin}${target.pathname}`);
+          }
+          if (target.username || target.password || target.search || target.hash) {
             throw new Error("Gate D TARGET_URL must not contain credentials, query, or fragment");
           }
-          for (const [name, value] of [["DATABASE_URL", process.env.DATABASE_URL], ["REDIS_URL", process.env.REDIS_URL]]) {
-            const parsed = new URL(value);
-            if (name === "DATABASE_URL" && !["postgres:", "postgresql:"].includes(parsed.protocol)) {
-              throw new Error("GATE_D_DATABASE_URL must be PostgreSQL");
-            }
-            if (name === "REDIS_URL" && !["redis:", "rediss:"].includes(parsed.protocol)) {
-              throw new Error("GATE_D_REDIS_URL must be Redis");
-            }
+          const database = new URL(process.env.DATABASE_URL);
+          if (!["postgres:", "postgresql:"].includes(database.protocol)) {
+            throw new Error("GATE_D_DATABASE_URL must be PostgreSQL");
+          }
+          const redis = new URL(process.env.REDIS_URL);
+          if (!["redis:", "rediss:"].includes(redis.protocol)) {
+            throw new Error("GATE_D_REDIS_URL must be Redis");
           }
           NODE
 
@@ -100,13 +88,64 @@ jobs:
       - name: Frozen install
         run: pnpm install --frozen-lockfile
 
-      - name: Seed HMAC keyring versions in isolated database
-        env:
-          DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
+      - name: Fail-closed database and Redis preflight
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
-          import postgres from "./packages/database/node_modules/postgres/src/index.js";
+          pnpm --filter @matchday/api exec node --input-type=module <<'NODE'
+          import postgres from "postgres";
+          import { createClient } from "redis";
+
+          const failures = [];
+
+          const redis = createClient({ url: process.env.REDIS_URL });
+          redis.on("error", () => {});
+          try {
+            await redis.connect();
+            const pong = await redis.ping();
+            if (pong !== "PONG") throw new Error(`unexpected PING response ${pong}`);
+
+            let policy;
+            try {
+              const info = await redis.sendCommand(["INFO", "memory"]);
+              const match = String(info).match(/^maxmemory_policy:(.+)$/m);
+              policy = match?.[1]?.trim();
+            } catch {}
+            if (!policy) {
+              try {
+                const result = await redis.sendCommand(["CONFIG", "GET", "maxmemory-policy"]);
+                if (Array.isArray(result)) policy = String(result.at(-1) ?? "").trim();
+                else if (result && typeof result === "object") policy = String(result["maxmemory-policy"] ?? "").trim();
+              } catch {}
+            }
+            if (!policy) throw new Error("unable to verify maxmemory policy");
+            if (policy !== "noeviction") throw new Error(`maxmemory policy is ${policy}; Gate D requires noeviction`);
+            console.log("Verified isolated Redis connectivity and noeviction policy");
+          } catch (error) {
+            failures.push(`Redis preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            if (redis.isOpen) await redis.quit().catch(() => redis.disconnect());
+          }
+
+          const sql = postgres(process.env.DATABASE_URL, { ssl: "require", max: 1, connect_timeout: 10 });
+          try {
+            await sql`select 1 as ok`;
+            console.log("Verified isolated PostgreSQL authentication and connectivity");
+          } catch (error) {
+            failures.push(`Database preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            await sql.end({ timeout: 2 }).catch(() => {});
+          }
+
+          if (failures.length) {
+            throw new Error(failures.join(" | "));
+          }
+          NODE
+
+      - name: Seed HMAC keyring versions in isolated database
+        run: |
+          set -euo pipefail
+          pnpm --filter @matchday/api exec node --input-type=module <<'NODE'
+          import postgres from "postgres";
           const sql = postgres(process.env.DATABASE_URL, { ssl: "require" });
           try {
             await sql`
@@ -114,14 +153,14 @@ jobs:
                 key_version, material_commitment, status
               ) VALUES (
                 'v1', decode(repeat('00', 32), 'hex'), 'primary'
-              ) ON CONFLICT (key_version) DO NOTHING;
+              ) ON CONFLICT (key_version) DO NOTHING
             `;
             await sql`
               INSERT INTO scoring_access_hmac_key_versions (
                 key_version, material_commitment, status
               ) VALUES (
                 'v1', decode(repeat('00', 32), 'hex'), 'primary'
-              ) ON CONFLICT (key_version) DO NOTHING;
+              ) ON CONFLICT (key_version) DO NOTHING
             `;
             console.log("Verified scoring HMAC keyring versions in isolated database");
           } finally {
@@ -129,114 +168,28 @@ jobs:
           }
           NODE
 
-      - name: Align Render staging API database URL with isolated Gate D branch
-        if: ${{ contains(env.TARGET_URL, 'onrender.com') || contains(env.TARGET_URL, 'gate-d-api.poladex.shop') }}
-        env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
-          REDIS_URL: ${{ secrets.GATE_D_REDIS_URL }}
-        run: |
-          set -euo pipefail
-          if [ -n "${RENDER_API_KEY:-}" ]; then
-            direct_db_url="${DATABASE_URL//-pooler/}"
-            echo "Syncing DATABASE_URL, REDIS_URL, API_HOST to Render service srv-dabbmk2jobas73c0de20..."
-            curl -s -f -X PUT "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/env-vars/DATABASE_URL" \
-              -H "Authorization: Bearer $RENDER_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "{\"value\": \"$direct_db_url\"}" >/dev/null
-
-            curl -s -f -X PUT "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/env-vars/REDIS_URL" \
-              -H "Authorization: Bearer $RENDER_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "{\"value\": \"$REDIS_URL\"}" >/dev/null
-
-            curl -s -f -X PUT "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/env-vars/API_HOST" \
-              -H "Authorization: Bearer $RENDER_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{"value": "0.0.0.0"}' >/dev/null
-
-            echo "Environment variables updated. Triggering fresh deploy..."
-            deploy_json="$(curl -s -f -X POST "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/deploys" \
-              -H "Authorization: Bearer $RENDER_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{"clearCache": "do_not_clear"}')"
-            deploy_id="$(echo "$deploy_json" | node -e '
-              let d = "";
-              process.stdin.on("data", c => d += c);
-              process.stdin.on("end", () => {
-                const j = JSON.parse(d);
-                console.log(j.id || j.deploy?.id || "");
-              });
-            ')"
-            echo "Triggered deploy ID: $deploy_id. Waiting for status live..."
-            for i in $(seq 1 60); do
-              status_res="$(curl -s -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/deploys/$deploy_id")"
-              status="$(echo "$status_res" | node -e '
-                let d = "";
-                process.stdin.on("data", c => d += c);
-                process.stdin.on("end", () => {
-                  try { const j = JSON.parse(d); console.log(j.status || j.deploy?.status || "unknown"); }
-                  catch { console.log("unknown"); }
-                });
-              ')"
-              echo "Deploy $deploy_id status: $status (check $i/60)"
-              if [ "$status" = "live" ]; then
-                break
-              fi
-              if [ "$status" = "build_failed" ] || [ "$status" = "update_failed" ] || [ "$status" = "canceled" ]; then
-                echo "Deploy failed with status $status"
-                exit 1
-              fi
-              sleep 10
-            done
-          fi
-
-      - name: Verify deployed API exact SHA
+      - name: Verify deployed API exact SHA and dependencies
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
           const base = process.env.TARGET_URL.replace(/\/$/, "");
-          let metaSuccess = false;
-          let body;
-          for (let attempt = 1; attempt <= 12; attempt++) {
-            try {
-              const response = await fetch(`${base}/api/v1/meta/build`, { signal: AbortSignal.timeout(15000) });
-              if (response.ok) {
-                body = await response.json();
-                metaSuccess = true;
-                break;
-              }
-            } catch {}
-            await new Promise((r) => setTimeout(r, 5000));
+          const metaRes = await fetch(`${base}/api/v1/meta/build`, { signal: AbortSignal.timeout(15000) });
+          if (!metaRes.ok) throw new Error(`Build metadata returned HTTP ${metaRes.status}`);
+          const meta = await metaRes.json();
+          if (meta.git_sha !== process.env.CANDIDATE_SHA) {
+            throw new Error(`Deployed SHA mismatch: expected ${process.env.CANDIDATE_SHA}, got ${meta.git_sha}`);
           }
-          if (!metaSuccess || !body) throw new Error("Could not reach /api/v1/meta/build after retries");
-          if (body.git_sha !== process.env.CANDIDATE_SHA) {
-            throw new Error(`Deployed SHA mismatch: expected ${process.env.CANDIDATE_SHA}, got ${body.git_sha}`);
+          if (meta.environment !== "staging") {
+            throw new Error(`Gate D requires environment=staging; got ${meta.environment}`);
           }
-          if (body.environment !== "staging") {
-            throw new Error(`Gate D requires deployed APP_ENV=staging; got ${body.environment}`);
-          }
-          console.log(`Verified deployed staging SHA ${body.git_sha}`);
 
-          let readySuccess = false;
-          let readyBody;
-          for (let attempt = 1; attempt <= 12; attempt++) {
-            try {
-              const readyRes = await fetch(`${base}/health/ready`, { signal: AbortSignal.timeout(15000) });
-              if (readyRes.ok) {
-                readyBody = await readyRes.json();
-                if (readyBody.dependencies?.database && readyBody.dependencies?.redis && readyBody.dependencies?.queue) {
-                  readySuccess = true;
-                  break;
-                }
-              }
-            } catch {}
-            await new Promise((r) => setTimeout(r, 5000));
+          const readyRes = await fetch(`${base}/health/ready`, { signal: AbortSignal.timeout(15000) });
+          if (!readyRes.ok) throw new Error(`Readiness returned HTTP ${readyRes.status}`);
+          const ready = await readyRes.json();
+          if (!ready.dependencies?.database || !ready.dependencies?.redis || !ready.dependencies?.queue) {
+            throw new Error(`Health dependencies not satisfied: ${JSON.stringify(ready)}`);
           }
-          if (!readySuccess || !readyBody) {
-            throw new Error(`Health ready dependencies not satisfied: ${JSON.stringify(readyBody)}`);
-          }
-          console.log("Verified deployed staging health:", readyBody);
+          console.log(`Verified deployed staging SHA ${meta.git_sha} with database/redis/queue healthy`);
           NODE
 
       - name: Build workspace packages
@@ -274,60 +227,35 @@ jobs:
       - name: Run QA-010 public projection staging load
         run: pnpm test:load:public -- --mode=staging
 
-      - name: Run QA-011 scoring and result propagation staging load
-        env:
-          GATE_D_SCORING_SECRET_FILE: ${{ steps.scoring-handoff.outputs.secret_file }}
+      - name: Prove QA-011 harness is the frozen candidate version
         run: |
           set -euo pipefail
-          node -e "
-            const fs = require('fs');
-            const file = 'apps/api/scripts/run-load-scoring.ts';
-            const original = fs.readFileSync(file, 'utf8');
-            let patched = original;
+          expected_blob="$(git rev-parse "$CANDIDATE_SHA:apps/api/scripts/run-load-scoring.ts")"
+          actual_blob="$(git hash-object apps/api/scripts/run-load-scoring.ts)"
+          test "$actual_blob" = "$expected_blob"
+          git diff --exit-code -- apps/api/scripts/run-load-scoring.ts
+          echo "Verified QA-011 harness blob $actual_blob from frozen candidate"
 
-            // 1. Parallelize exchange
-            patched = patched.replace(
-              '    for (const match of secret.matches) {\n      if (!match.matchId || !match.rawToken) throw new Error(\"Seed match is missing matchId/rawToken\");',
-              '    await Promise.all(secret.matches.map(async (match) => {\n      if (!match.matchId || !match.rawToken) throw new Error(\"Seed match is missing matchId/rawToken\");'
-            );
-            patched = patched.replace(
-              '        pendingReversalEventId: null,\n      });\n    }',
-              '        pendingReversalEventId: null,\n      });\n    }));'
-            );
+      - name: Run unmodified QA-011 scoring and result propagation staging load
+        env:
+          GATE_D_SCORING_SECRET_FILE: ${{ steps.scoring-handoff.outputs.secret_file }}
+        run: pnpm test:load:scoring -- --mode=staging
 
-            // 2. Parallelize recover
-            patched = patched.replace(
-              '  for (const session of activeSessions) await recoverSessionState(target, session);',
-              '  await Promise.all(activeSessions.map((session) => recoverSessionState(target, session)));'
-            );
-
-            // 3. Parallelize closeOpenReversals
-            const oldClose = `async function closeOpenReversals(target: Target): Promise<void> {\n  for (const session of target.sessions) {\n    if (!session.pendingReversalEventId) continue;\n    const response = await requestJson(target, \"POST\", \"/api/v1/scoring/events\", scoringHeaders(session), {\n      client_event_id: randomUUID(),\n      expected_sequence: session.sequence,\n      type: \"reversal\",\n      reversal_target_event_id: session.pendingReversalEventId,\n      reason: \"QA-011 end-of-run bounded-state cleanup\",\n      occurred_at: new Date().toISOString(),\n    });\n    if (response.status < 200 || response.status >= 300) {\n      throw new Error(\`Failed to close bounded score state for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n    session.sequence += 1;\n    session.pendingReversalEventId = null;\n  }\n}`;
-            const newClose = `async function closeOpenReversals(target: Target): Promise<void> {\n  await Promise.all(target.sessions.map(async (session) => {\n    if (!session.pendingReversalEventId) return;\n    const response = await requestJson(target, \"POST\", \"/api/v1/scoring/events\", scoringHeaders(session), {\n      client_event_id: randomUUID(),\n      expected_sequence: session.sequence,\n      type: \"reversal\",\n      reversal_target_event_id: session.pendingReversalEventId,\n      reason: \"QA-011 end-of-run bounded-state cleanup\",\n      occurred_at: new Date().toISOString(),\n    });\n    if (response.status < 200 || response.status >= 300) {\n      throw new Error(\`Failed to close bounded score state for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n    session.sequence += 1;\n    session.pendingReversalEventId = null;\n  }));\n}`;
-            patched = patched.replace(oldClose, newClose);
-
-            // 4. Update heartbeatActiveWriters to parallelize with retry on transient network errors
-            const oldHeartbeat = `async function heartbeatActiveWriters(target: Target): Promise<void> {\n  for (const session of target.sessions) {\n    const response = await requestJson(target, \"POST\", \"/api/v1/scoring/sessions/heartbeat\", scoringHeaders(session), {\n      last_acknowledged_sequence: session.sequence,\n      pending_event_count: 0,\n      pending_through_sequence: session.sequence,\n    });\n    if (response.status !== 200 || !validWriterHeartbeat(response.data, session.generation)) {\n      throw new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n  }\n}`;
-            const newHeartbeat = `async function heartbeatActiveWriters(target: Target): Promise<void> {\n  await Promise.all(target.sessions.map(async (session) => {\n    let lastError;\n    for (let attempt = 1; attempt <= 3; attempt++) {\n      try {\n        const response = await requestJson(target, \"POST\", \"/api/v1/scoring/sessions/heartbeat\", scoringHeaders(session), {\n          last_acknowledged_sequence: session.sequence,\n          pending_event_count: 0,\n          pending_through_sequence: session.sequence,\n        });\n        if (response.status === 200 && validWriterHeartbeat(response.data, session.generation)) {\n          return;\n        }\n        lastError = new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n        if (response.status === 409 || response.status === 403) break;\n      } catch (err) {\n        lastError = err instanceof Error ? err : new Error(String(err));\n      }\n      await new Promise((resolve) => setTimeout(resolve, 500));\n    }\n    throw lastError ?? new Error(\`QA-011 writer heartbeat failed for match \${session.matchId}\`);\n  }));\n}`;
-            patched = patched.replace(oldHeartbeat, newHeartbeat);
-
-            // 5. Update startHeartbeats to await initial pulse and use 5s interval
-            const oldStartHeartbeats = `  const startHeartbeats = () => {\n    if (mode !== \"staging\") return;\n    const pulse = () => {\n      if (heartbeatInFlight || heartbeatFailure) return;\n      heartbeatInFlight = heartbeatActiveWriters(target)\n        .catch((error: unknown) => {\n          heartbeatFailure = error instanceof Error ? error : new Error(\"QA-011 writer heartbeat failed\");\n        })\n        .finally(() => {\n          heartbeatInFlight = undefined;\n        });\n    };\n    pulse();\n    heartbeatTimer = setInterval(pulse, GATE_D_WRITER_HEARTBEAT_INTERVAL_MS);\n  };`;
-            const newStartHeartbeats = `  const startHeartbeats = async () => {\n    if (mode !== \"staging\") return;\n    const pulse = () => {\n      if (heartbeatInFlight || heartbeatFailure) return;\n      heartbeatInFlight = heartbeatActiveWriters(target)\n        .catch((error: unknown) => {\n          heartbeatFailure = error instanceof Error ? error : new Error(\"QA-011 writer heartbeat failed\");\n        })\n        .finally(() => {\n          heartbeatInFlight = undefined;\n        });\n    };\n    await heartbeatActiveWriters(target);\n    heartbeatTimer = setInterval(pulse, 5_000);\n  };`;
-            patched = patched.replace(oldStartHeartbeats, newStartHeartbeats);
-            patched = patched.replace('    startHeartbeats();', '    await startHeartbeats();');
-
-            if (patched === original) throw new Error('QA-011 parallelization pattern did not match');
-            fs.writeFileSync(file, patched);
-          "
-          pnpm test:load:scoring -- --mode=staging
-          git checkout -- apps/api/scripts/run-load-scoring.ts
-
-      - name: Prove one-time scoring handoff was destroyed by QA-011
+      - name: Prove one-time scoring handoff was destroyed
+        if: ${{ always() && steps.scoring-handoff.outcome == 'success' }}
         run: |
           set -euo pipefail
           test ! -e '${{ steps.scoring-handoff.outputs.secret_file }}'
           test ! -d '${{ steps.scoring-handoff.outputs.secret_dir }}'
+
+      - name: Prove QA-011 harness remained unchanged
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          expected_blob="$(git rev-parse "$CANDIDATE_SHA:apps/api/scripts/run-load-scoring.ts")"
+          actual_blob="$(git hash-object apps/api/scripts/run-load-scoring.ts)"
+          test "$actual_blob" = "$expected_blob"
+          git diff --exit-code -- apps/api/scripts/run-load-scoring.ts
 
       - name: Verify all Gate D staging receipts
         run: pnpm evidence:gate-d:verify "$CANDIDATE_SHA"
