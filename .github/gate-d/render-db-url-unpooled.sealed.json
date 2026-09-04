@@ -1,0 +1,7 @@
+{
+  "schema": "matchday.gate-d.render-db-sealed.v1",
+  "ephemeral_public_key_b64": "5w3EKJsmgV/67nFlJmKu+er8IFZLwxSmcw8t0WMYEms=",
+  "iv_b64": "w4rUiJv6kxUMv69s",
+  "tag_b64": "3cYycRXuxOysbiCJYqJaSw==",
+  "ciphertext_b64": "ZKwUBnRaNvz/Ii3OR0rHddjb3tYRKBLXV7hF8wRmNH9Ch0q6ufSsx+e7gmW3TGxHJrkND/zSoSNRj9XC0sj5IruXiprKVzb/svi6DG2mfRzHXlmGDye6B8DIrmOyE2aanIJr2lNdOlGIL+UtQ1JMse4zifgAdXo7JqsUDA/pFTxsoZAHPv8leGhaTcLNhA=="
+}
