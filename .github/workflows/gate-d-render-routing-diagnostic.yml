@@ -1,0 +1,74 @@
+name: Gate D Render routing diagnostic
+
+on:
+  push:
+    branches: [gate-d/control-f1a82186]
+    paths:
+      - .github/workflows/gate-d-render-routing-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  diagnose:
+    name: Inspect Gate D Render routing
+    runs-on: ubuntu-latest
+    environment: gate-d-controlled-staging
+    timeout-minutes: 10
+    env:
+      RENDER_SERVICE_ID: srv-dabbmk2jobas73c0de20
+      TARGET_URL: https://c5-drill.poladex.shop
+      CANDIDATE_SHA: f1a8218616f51197a22fe218306ae6f7a908efca
+    steps:
+      - name: Inspect Render service and sanitized database identity
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          service="$(curl --fail --silent --show-error -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/$RENDER_SERVICE_ID")"
+          domains="$(curl --fail --silent --show-error -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/custom-domains" || printf '[]')"
+          db="$(curl --fail --silent --show-error -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/env-vars/DATABASE_URL")"
+          deploys="$(curl --fail --silent --show-error -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=3")"
+          SERVICE="$service" DOMAINS="$domains" DB="$db" DEPLOYS="$deploys" node --input-type=module <<'NODE'
+          function parse(name) {
+            try { return JSON.parse(process.env[name] || 'null'); } catch { return null; }
+          }
+          const service = parse('SERVICE');
+          const domains = parse('DOMAINS');
+          const db = parse('DB');
+          const deploys = parse('DEPLOYS');
+          console.log('Render service id:', service?.id ?? service?.service?.id ?? 'unknown');
+          console.log('Render service name:', service?.name ?? service?.service?.name ?? 'unknown');
+          console.log('Render service URL:', service?.serviceDetails?.url ?? service?.service?.serviceDetails?.url ?? service?.url ?? 'unknown');
+          console.log('Render custom domains:', JSON.stringify(domains));
+          const rawDb = db?.value ?? db?.envVar?.value ?? db?.envVar?.envVar?.value;
+          if (typeof rawDb === 'string') {
+            const u = new URL(rawDb);
+            console.log('Render DATABASE_URL host:', u.hostname);
+            console.log('Render DATABASE_URL role:', decodeURIComponent(u.username));
+            console.log('Render DATABASE_URL database:', u.pathname.replace(/^\//, ''));
+          } else {
+            console.log('Render DATABASE_URL identity: unavailable');
+          }
+          const rows = Array.isArray(deploys) ? deploys : (deploys?.deploys ?? []);
+          for (const entry of rows.slice(0, 3)) {
+            const d = entry.deploy ?? entry;
+            console.log('Deploy:', JSON.stringify({ id: d.id, status: d.status, commit: d.commit?.id ?? d.commit?.sha ?? d.commitId, createdAt: d.createdAt, finishedAt: d.finishedAt }));
+          }
+          NODE
+
+      - name: Inspect target response headers and health
+        run: |
+          set -euo pipefail
+          for path in /api/v1/meta/build /health/ready; do
+            echo "--- $path ---"
+            curl --silent --show-error --max-time 20 --dump-header - "$TARGET_URL$path" -o /tmp/body.txt || true
+            cat /tmp/body.txt || true
+            echo
+          done
