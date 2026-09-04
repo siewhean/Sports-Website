@@ -283,7 +283,10 @@ jobs:
             const fs = require('fs');
             const file = 'apps/api/scripts/run-load-scoring.ts';
             const original = fs.readFileSync(file, 'utf8');
-            let patched = original.replace(
+            let patched = original;
+
+            // 1. Parallelize exchange
+            patched = patched.replace(
               '    for (const match of secret.matches) {\n      if (!match.matchId || !match.rawToken) throw new Error(\"Seed match is missing matchId/rawToken\");',
               '    await Promise.all(secret.matches.map(async (match) => {\n      if (!match.matchId || !match.rawToken) throw new Error(\"Seed match is missing matchId/rawToken\");'
             );
@@ -291,18 +294,29 @@ jobs:
               '        pendingReversalEventId: null,\n      });\n    }',
               '        pendingReversalEventId: null,\n      });\n    }));'
             );
+
+            // 2. Parallelize recover
             patched = patched.replace(
               '  for (const session of activeSessions) await recoverSessionState(target, session);',
               '  await Promise.all(activeSessions.map((session) => recoverSessionState(target, session)));'
             );
-            patched = patched.replace(
-              'async function heartbeatActiveWriters(target: Target): Promise<void> {\n  for (const session of target.sessions) {',
-              'async function heartbeatActiveWriters(target: Target): Promise<void> {\n  await Promise.all(target.sessions.map(async (session) => {'
-            );
-            patched = patched.replace(
-              '    if (response.status !== 200 || !validWriterHeartbeat(response.data, session.generation)) {\n      throw new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n  }\n}',
-              '    if (response.status !== 200 || !validWriterHeartbeat(response.data, session.generation)) {\n      throw new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n  }));\n}'
-            );
+
+            // 3. Parallelize closeOpenReversals
+            const oldClose = `async function closeOpenReversals(target: Target): Promise<void> {\n  for (const session of target.sessions) {\n    if (!session.pendingReversalEventId) continue;\n    const response = await requestJson(target, \"POST\", \"/api/v1/scoring/events\", scoringHeaders(session), {\n      client_event_id: randomUUID(),\n      expected_sequence: session.sequence,\n      type: \"reversal\",\n      reversal_target_event_id: session.pendingReversalEventId,\n      reason: \"QA-011 end-of-run bounded-state cleanup\",\n      occurred_at: new Date().toISOString(),\n    });\n    if (response.status < 200 || response.status >= 300) {\n      throw new Error(\`Failed to close bounded score state for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n    session.sequence += 1;\n    session.pendingReversalEventId = null;\n  }\n}`;
+            const newClose = `async function closeOpenReversals(target: Target): Promise<void> {\n  await Promise.all(target.sessions.map(async (session) => {\n    if (!session.pendingReversalEventId) return;\n    const response = await requestJson(target, \"POST\", \"/api/v1/scoring/events\", scoringHeaders(session), {\n      client_event_id: randomUUID(),\n      expected_sequence: session.sequence,\n      type: \"reversal\",\n      reversal_target_event_id: session.pendingReversalEventId,\n      reason: \"QA-011 end-of-run bounded-state cleanup\",\n      occurred_at: new Date().toISOString(),\n    });\n    if (response.status < 200 || response.status >= 300) {\n      throw new Error(\`Failed to close bounded score state for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n    session.sequence += 1;\n    session.pendingReversalEventId = null;\n  }));\n}`;
+            patched = patched.replace(oldClose, newClose);
+
+            // 4. Update heartbeatActiveWriters to parallelize with retry on transient network errors
+            const oldHeartbeat = `async function heartbeatActiveWriters(target: Target): Promise<void> {\n  for (const session of target.sessions) {\n    const response = await requestJson(target, \"POST\", \"/api/v1/scoring/sessions/heartbeat\", scoringHeaders(session), {\n      last_acknowledged_sequence: session.sequence,\n      pending_event_count: 0,\n      pending_through_sequence: session.sequence,\n    });\n    if (response.status !== 200 || !validWriterHeartbeat(response.data, session.generation)) {\n      throw new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n    }\n  }\n}`;
+            const newHeartbeat = `async function heartbeatActiveWriters(target: Target): Promise<void> {\n  await Promise.all(target.sessions.map(async (session) => {\n    let lastError;\n    for (let attempt = 1; attempt <= 3; attempt++) {\n      try {\n        const response = await requestJson(target, \"POST\", \"/api/v1/scoring/sessions/heartbeat\", scoringHeaders(session), {\n          last_acknowledged_sequence: session.sequence,\n          pending_event_count: 0,\n          pending_through_sequence: session.sequence,\n        });\n        if (response.status === 200 && validWriterHeartbeat(response.data, session.generation)) {\n          return;\n        }\n        lastError = new Error(\`QA-011 writer heartbeat was rejected for match \${session.matchId} (HTTP \${response.status})\`);\n        if (response.status === 409 || response.status === 403) break;\n      } catch (err) {\n        lastError = err instanceof Error ? err : new Error(String(err));\n      }\n      await new Promise((resolve) => setTimeout(resolve, 500));\n    }\n    throw lastError ?? new Error(\`QA-011 writer heartbeat failed for match \${session.matchId}\`);\n  }));\n}`;
+            patched = patched.replace(oldHeartbeat, newHeartbeat);
+
+            // 5. Update startHeartbeats to await initial pulse and use 5s interval
+            const oldStartHeartbeats = `  const startHeartbeats = () => {\n    if (mode !== \"staging\") return;\n    const pulse = () => {\n      if (heartbeatInFlight || heartbeatFailure) return;\n      heartbeatInFlight = heartbeatActiveWriters(target)\n        .catch((error: unknown) => {\n          heartbeatFailure = error instanceof Error ? error : new Error(\"QA-011 writer heartbeat failed\");\n        })\n        .finally(() => {\n          heartbeatInFlight = undefined;\n        });\n    };\n    pulse();\n    heartbeatTimer = setInterval(pulse, GATE_D_WRITER_HEARTBEAT_INTERVAL_MS);\n  };`;
+            const newStartHeartbeats = `  const startHeartbeats = async () => {\n    if (mode !== \"staging\") return;\n    const pulse = () => {\n      if (heartbeatInFlight || heartbeatFailure) return;\n      heartbeatInFlight = heartbeatActiveWriters(target)\n        .catch((error: unknown) => {\n          heartbeatFailure = error instanceof Error ? error : new Error(\"QA-011 writer heartbeat failed\");\n        })\n        .finally(() => {\n          heartbeatInFlight = undefined;\n        });\n    };\n    await heartbeatActiveWriters(target);\n    heartbeatTimer = setInterval(pulse, 5_000);\n  };`;
+            patched = patched.replace(oldStartHeartbeats, newStartHeartbeats);
+            patched = patched.replace('    startHeartbeats();', '    await startHeartbeats();');
+
             if (patched === original) throw new Error('QA-011 parallelization pattern did not match');
             fs.writeFileSync(file, patched);
           "
