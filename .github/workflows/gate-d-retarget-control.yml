@@ -1,0 +1,51 @@
+name: Gate D guarded qualification retarget
+
+on:
+  push:
+    branches: [gate-d/control-f1a82186]
+    paths:
+      - .github/workflows/gate-d-retarget-control.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  retarget:
+    name: Retarget Gate D qualifier to dedicated API
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: gate-d/control-f1a82186
+          fetch-depth: 0
+
+      - name: Guarded target-only edit
+        run: |
+          set -euo pipefail
+          file=.github/workflows/gate-d-staging-qualification.yml
+          old='https://c5-drill.poladex.shop'
+          new='https://gate-d-api.poladex.shop'
+          count="$(grep -oF "$old" "$file" | wc -l | tr -d ' ')"
+          test "$count" = "3"
+          sed -i "s#${old}#${new}#g" "$file"
+          test "$(grep -oF "$new" "$file" | wc -l | tr -d ' ')" = "3"
+          test "$(grep -oF "$old" "$file" | wc -l | tr -d ' ')" = "0"
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = "$file"
+          git diff --check
+
+      - name: Commit control-only retarget
+        run: |
+          set -euo pipefail
+          git config user.name 'Matchday Gate D Control'
+          git config user.email '65327039+siewhean@users.noreply.github.com'
+          git add .github/workflows/gate-d-staging-qualification.yml
+          git commit -m 'ci(gate-d): target dedicated healthy Gate D API'
+          git push origin HEAD:gate-d/control-f1a82186
