@@ -1,0 +1,3 @@
+Gate D controlled-staging retry marker.
+Reason: previous attempt passed exact-SHA deployment, build, migration compatibility, and migration application, then stalled in disposable in-process scheduler queue cleanup before QA receipts.
+Candidate remains frozen at f1a8218616f51197a22fe218306ae6f7a908efca.
