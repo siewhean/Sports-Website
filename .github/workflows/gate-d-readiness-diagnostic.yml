@@ -1,0 +1,59 @@
+name: Gate D readiness diagnostic
+
+on:
+  push:
+    branches: [gate-d/control-f1a82186]
+    paths:
+      - .github/workflows/gate-d-readiness-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  readiness:
+    name: Inspect Gate D deployed readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_URL: https://c5-drill.poladex.shop
+      CANDIDATE_SHA: f1a8218616f51197a22fe218306ae6f7a908efca
+    steps:
+      - name: Probe build metadata and readiness
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const base = process.env.TARGET_URL.replace(/\/$/, "");
+
+          async function probe(path) {
+            try {
+              const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15000) });
+              const text = await res.text();
+              console.log(`${path} HTTP ${res.status}`);
+              console.log(text || '<empty body>');
+              return { status: res.status, text };
+            } catch (error) {
+              console.log(`${path} ERROR ${error instanceof Error ? error.message : String(error)}`);
+              return { status: 0, text: '' };
+            }
+          }
+
+          const meta = await probe('/api/v1/meta/build');
+          const ready = await probe('/health/ready');
+
+          if (meta.status === 200) {
+            const parsed = JSON.parse(meta.text);
+            if (parsed.git_sha !== process.env.CANDIDATE_SHA) {
+              throw new Error(`deployed SHA mismatch: ${parsed.git_sha}`);
+            }
+            if (parsed.environment !== 'staging') {
+              throw new Error(`deployed environment mismatch: ${parsed.environment}`);
+            }
+          }
+
+          if (ready.status !== 200) process.exitCode = 2;
+          NODE
