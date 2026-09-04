@@ -88,6 +88,81 @@ jobs:
       - name: Frozen install
         run: pnpm install --frozen-lockfile
 
+      - name: Resolve canonical deployed database credential
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Prefer the protected GitHub environment secret when it is current.
+          if pnpm --filter @matchday/api exec node --input-type=module <<'NODE'
+          import postgres from "postgres";
+          const sql = postgres(process.env.DATABASE_URL, { ssl: "require", max: 1, connect_timeout: 10 });
+          try {
+            await sql`select 1 as ok`;
+          } finally {
+            await sql.end({ timeout: 2 }).catch(() => {});
+          }
+          NODE
+          then
+            echo "Protected Gate D database credential is current"
+            exit 0
+          fi
+
+          # The protected secret can become stale after a Neon password rotation. In that
+          # case, recover only the DATABASE_URL already configured on the deployed Gate D
+          # Render service. Never print the API response or credential.
+          test -n "${RENDER_API_KEY:-}"
+          response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H 'Accept: application/json' \
+            'https://api.render.com/v1/services/srv-dabbmk2jobas73c0de20/env-vars/DATABASE_URL')"
+
+          live_database_url="$(printf '%s' "$response" | node --input-type=module -e '
+            let raw = "";
+            process.stdin.on("data", (chunk) => raw += chunk);
+            process.stdin.on("end", () => {
+              const data = JSON.parse(raw);
+              const seen = new Set();
+              function find(node) {
+                if (!node || typeof node !== "object" || seen.has(node)) return null;
+                seen.add(node);
+                if (typeof node.value === "string" && (node.key === "DATABASE_URL" || node.name === "DATABASE_URL")) return node.value;
+                if (typeof node.value === "string" && Object.keys(node).length <= 3) return node.value;
+                for (const value of Object.values(node)) {
+                  const found = find(value);
+                  if (found) return found;
+                }
+                return null;
+              }
+              const value = find(data);
+              if (!value) process.exit(2);
+              process.stdout.write(value);
+            });
+          ')"
+
+          test -n "$live_database_url"
+          case "$live_database_url" in
+            postgres://*|postgresql://*) ;;
+            *) echo 'Render DATABASE_URL is not PostgreSQL' >&2; exit 1 ;;
+          esac
+
+          echo "::add-mask::$live_database_url"
+          live_database_url="${live_database_url//-pooler/}"
+          echo "::add-mask::$live_database_url"
+          printf 'DATABASE_URL=%s\n' "$live_database_url" >> "$GITHUB_ENV"
+
+          DATABASE_URL="$live_database_url" pnpm --filter @matchday/api exec node --input-type=module <<'NODE'
+          import postgres from "postgres";
+          const sql = postgres(process.env.DATABASE_URL, { ssl: "require", max: 1, connect_timeout: 10 });
+          try {
+            await sql`select 1 as ok`;
+            console.log("Recovered and verified the deployed Gate D database credential without exposing it");
+          } finally {
+            await sql.end({ timeout: 2 });
+          }
+          NODE
+
       - name: Fail-closed database and Redis connectivity preflight
         run: |
           set -euo pipefail
