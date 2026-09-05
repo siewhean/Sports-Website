@@ -398,6 +398,9 @@ type CanonicalScoringContext = {
   pack_version: string;
   settings: SportPackSettings;
   settings_fingerprint: string;
+  match_state?: string | undefined;
+  settings_locked?: boolean | undefined;
+  current_version?: number | undefined;
 };
 
 function date(value: Date | string): Date {
@@ -2859,11 +2862,14 @@ export class Phase2Runtime {
         recommended_snapshot: Record<string, unknown> | string;
         competition_override: Record<string, unknown> | string;
         division_override: Record<string, unknown> | string | null;
+        match_state: string;
+        locked_at: Date | string | null;
       }>(
         `SELECT m.competition_id,m.division_id,c.sport_code,settings.pack_version,
                 division_settings.pack_version AS division_pack_version,
                 settings.recommended_snapshot,settings.settings_override AS competition_override,
-                division_settings.settings_override AS division_override
+                division_settings.settings_override AS division_override,
+                m.state AS match_state,settings.locked_at
          FROM matches m
          JOIN competitions c ON c.id=m.competition_id
          JOIN competition_sport_settings settings
@@ -2872,7 +2878,7 @@ export class Phase2Runtime {
            ON division_settings.division_id=m.division_id
           AND division_settings.competition_id=m.competition_id
           AND division_settings.sport_code=c.sport_code
-         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m,settings" : ""}`,
+         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m" : ""}`,
         [matchId],
       ),
       "Match scoring settings not found",
@@ -2916,6 +2922,8 @@ export class Phase2Runtime {
       pack_version: row.pack_version,
       settings,
       settings_fingerprint: stableHash(settings),
+      match_state: row.match_state,
+      settings_locked: Boolean(row.locked_at),
     };
   }
 
@@ -2985,8 +2993,9 @@ export class Phase2Runtime {
         pack_version: string;
         settings_snapshot: SportPackSettings | string;
         settings_fingerprint: string;
+        current_version: number;
       }>(
-        `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint
+        `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version
          FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
         [matchId],
       ),
@@ -3016,6 +3025,9 @@ export class Phase2Runtime {
       pack_version: stream.pack_version,
       settings: jsonValue<SportPackSettings>(stream.settings_snapshot),
       settings_fingerprint: stream.settings_fingerprint,
+      match_state: context.match_state,
+      settings_locked: context.settings_locked,
+      current_version: Number(stream.current_version),
     };
   }
 
@@ -3250,29 +3262,20 @@ export class Phase2Runtime {
             server_received_at: serializedDate(duplicate.server_timestamp),
           };
         }
-        const match = required(
-          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
-          "Match not found",
-        );
-        if (match.state === "final" || match.state === "corrected") {
+        const matchState = context.match_state;
+        if (matchState === "final" || matchState === "corrected") {
           throw new ApiError(409, ErrorCode.MATCH_FINALISED_READ_ONLY, "Finalised matches require organiser reopening");
         }
         const existing = await this.canonicalScoreEvents(tx, session.match_id);
-        const stream = required(
-          await tx.unsafe<{ current_version: number }>(
-            `SELECT current_version FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
-            [session.match_id],
-          ),
-          "Match score stream not found",
-        );
-        if (stream.current_version !== expectedAggregateVersion) {
+        const currentStreamVersion = context.current_version ?? 0;
+        if (currentStreamVersion !== expectedAggregateVersion) {
           throw new ApiError(
             409,
             ErrorCode.SCORE_VERSION_CONFLICT,
-            `Expected aggregate version ${expectedAggregateVersion}, current version is ${stream.current_version}`,
+            `Expected aggregate version ${expectedAggregateVersion}, current version is ${currentStreamVersion}`,
           );
         }
-        const sequence = stream.current_version + 1;
+        const sequence = currentStreamVersion + 1;
         const eventId = randomUUID();
         const event = materialiseFiveSportScoreEvent(command, {
           eventId,
@@ -3329,10 +3332,12 @@ export class Phase2Runtime {
           sequence,
           this.now(),
         ]);
-        await tx.unsafe(
-          `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2) WHERE competition_id=$1`,
-          [context.competition_id, this.now()],
-        );
+        if (!context.settings_locked) {
+          await tx.unsafe(
+            `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2) WHERE competition_id=$1`,
+            [context.competition_id, this.now()],
+          );
+        }
         if (command.type === "match_started") {
           await tx.unsafe(`UPDATE matches SET state='in_progress' WHERE id=$1 AND state IN ('pending','ready')`, [
             session.match_id,

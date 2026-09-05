@@ -91,7 +91,10 @@ const rateLimitRedis = new Redis(config.redisUrl, {
   enableOfflineQueue: false,
   maxRetriesPerRequest: 1,
 });
-const postgresClient = postgres(config.databaseUrl, { max: 10, onnotice: () => undefined });
+const postgresClient = postgres(config.databaseUrl, {
+  max: Number(process.env.DB_POOL_MAX ?? 30),
+  onnotice: () => undefined,
+});
 const identitySql = postgresClient as unknown as PostgresJsSql;
 const identityRuntime = new IdentityAssuranceRuntime(
   identityProvider,
