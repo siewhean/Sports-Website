@@ -32,7 +32,15 @@ export function isExpectedFrameworkWarning(text: string) {
   );
 }
 
-const standardCancellationFailures = ["cancelled", "Load request cancelled", "net::ERR_ABORTED", "NS_BINDING_ABORTED"];
+const standardCancellationFailures = [
+  "cancelled",
+  "Load request cancelled",
+  "net::ERR_ABORTED",
+  "NS_BINDING_ABORTED",
+  // Firefox reports a cancelled Next.js RSC navigation with this exact
+  // platform error. It is only accepted by the narrowly scoped RSC helper.
+  "NS_BASE_STREAM_CLOSED",
+];
 
 export function isExpectedTeardownFontCancellation(input: {
   failure: string;
@@ -88,11 +96,7 @@ export function isExpectedRscNavigationCancellation(input: {
   pageUrl: string;
   requestUrl: string;
 }): boolean {
-  if (
-    !["cancelled", "Load request cancelled", "net::ERR_ABORTED", "NS_BINDING_ABORTED"].includes(input.failure) ||
-    input.method !== "GET"
-  )
-    return false;
+  if (!standardCancellationFailures.includes(input.failure) || input.method !== "GET") return false;
   try {
     const pageUrl = new URL(input.pageUrl);
     const requestUrl = new URL(input.requestUrl);

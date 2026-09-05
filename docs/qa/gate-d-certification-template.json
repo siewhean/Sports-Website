@@ -1,0 +1,83 @@
+{
+  "schema_version": "2026.09.gate-d-freeze",
+  "gate": "D",
+  "candidate_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+  "hosted_ci": {
+    "run_id": 0,
+    "head_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+    "conclusion": "PENDING",
+    "jobs": {
+      "secrets": "PENDING",
+      "quality-fast": "PENDING",
+      "integration": "PENDING",
+      "browser-e2e": "PENDING",
+      "gate-d-real-e2e": "PENDING"
+    }
+  },
+  "human_evidence": {
+    "accessibility_human_audit": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "browser_device_matrix": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "budget_android": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "incident_tabletop": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "event_day_tabletop": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "restore_drill": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "deployed_seo_crawl": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "local_pilot": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "standings_oracle": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "organiser_intervention_log": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE"
+    },
+    "critical_high_defects": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE",
+      "critical_open": 0,
+      "high_open": 0
+    },
+    "independent_review": {
+      "status": "PENDING",
+      "completed_at": "REPLACE_WITH_ISO_TIMESTAMP",
+      "evidence_ref": "REPLACE_WITH_CONTROLLED_EVIDENCE_REFERENCE",
+      "verdict": "PENDING",
+      "reviewer": "REPLACE_WITH_REVIEWER_IDENTITY"
+    }
+  }
+}

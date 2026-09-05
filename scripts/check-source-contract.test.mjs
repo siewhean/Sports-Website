@@ -55,6 +55,57 @@ test("final verification requires source verification followed by exact-SHA evid
   assert.equal(scripts.check, "pnpm check:source && pnpm evidence:gate-c:verify");
 });
 
+test("Gate D staging runners execute from the API workspace that owns their dependencies", async () => {
+  const scripts = await packageScripts();
+  for (const script of [
+    "seed:staging:pilot",
+    "test:load:public",
+    "test:load:scoring",
+    "test:load:component",
+    "test:load:socket-component",
+    "test:load:staging",
+  ]) {
+    assert.match(
+      scripts[script],
+      /pnpm --filter @matchday\/api exec tsx scripts\//u,
+      `${script} must use API workspace`,
+    );
+    assert.doesNotMatch(scripts[script], /\.\.\/\.\.\/scripts\//u, `${script} must not execute root-owned TypeScript`);
+  }
+});
+
+test("release readiness runs Gate D source tests and real browser qualification without external evidence", async () => {
+  const source = await readFile(path.join(root, "scripts/release-suite-guard.mjs"), "utf8");
+  assert.match(source, /pnpm test:check:source/u);
+  assert.match(source, /pnpm test:evidence:gate-d/u);
+  assert.match(source, /node --test scripts\/validate-gate-d-freeze\.test\.mjs/u);
+  assert.match(source, /pnpm test:e2e:phase7:real/u);
+  assert.doesNotMatch(source, /pnpm evidence:gate-d:verify/u);
+  assert.doesNotMatch(source, /validate-gate-d-freeze\.mjs\s+["']?\$?CANDIDATE_SHA/u);
+});
+
+test("hosted browser matrix has enough timeout headroom for dependency mirrors", async () => {
+  const source = await readFile(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const start = source.indexOf("  browser-e2e:");
+  const end = source.indexOf("\n  gate-d-real-e2e:", start);
+  assert.ok(start >= 0 && end > start, "browser-e2e workflow block must remain inspectable");
+  const browserJob = source.slice(start, end);
+  assert.match(browserJob, /timeout-minutes:\s*(?:[6-9]\d|\d{3,})/u);
+  assert.match(browserJob, /playwright install --with-deps chromium webkit firefox/u);
+});
+
+test("QA-011 propagation reuses already-started benchmark matches", async () => {
+  const source = await readFile(path.join(root, "apps/api/scripts/run-load-scoring.ts"), "utf8");
+  const start = source.indexOf("async function prepareResultPropagationMatch");
+  const end = source.indexOf("\nfunction validWriterHeartbeat", start);
+  assert.ok(start >= 0 && end > start, "QA-011 propagation preparation function must remain inspectable");
+  const preparation = source.slice(start, end);
+  assert.doesNotMatch(preparation, /type:\s*"match_started"/u);
+  assert.match(preparation, /session\.sequence\s*<\s*1/u);
+  assert.match(preparation, /type:\s*"point"/u);
+  assert.match(preparation, /type:\s*"set_completion"/u);
+});
+
 test("C5 staging fault manifest expands to exactly 72 safe command variables", () => {
   const parsed = parseGateCC5FaultCommandManifest(JSON.stringify(validFaultManifest()));
   const expanded = expandGateCC5FaultCommandEnvironment(parsed);

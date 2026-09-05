@@ -45,6 +45,32 @@ describe("configuration", () => {
     expect(() => parseConfig({ APP_ENV: "production" })).toThrow("DATABASE_URL");
   });
 
+  it("permits the Gate D public benchmark rate limit only in controlled staging", () => {
+    const staging = parseConfig({
+      APP_ENV: "staging",
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: "750",
+      ...oidcConfig,
+    });
+    expect(staging.api.anonymousRateLimitMax).toBe(750);
+    expect(() => parseConfig({ GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: "750" })).toThrow("only be configured in staging");
+    expect(() =>
+      parseConfig({
+        APP_ENV: "production",
+        DATABASE_URL: "postgres://user:secret@db.internal/matchday",
+        REDIS_URL: "redis://cache.internal:6379",
+        DEEP_HEALTH_TOKEN: "a".repeat(32),
+        IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
+        GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: "750",
+        ...edgeCacheConfig,
+        ...oidcConfig,
+      }),
+    ).toThrow("only be configured in staging");
+    expect(() => parseConfig({ GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: "599" })).toThrow("expected number to be >=600");
+  });
+
   it("rejects wildcard and insecure production origins", () => {
     const base = {
       APP_ENV: "production",

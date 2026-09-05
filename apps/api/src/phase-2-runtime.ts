@@ -398,6 +398,9 @@ type CanonicalScoringContext = {
   pack_version: string;
   settings: SportPackSettings;
   settings_fingerprint: string;
+  match_state?: string | undefined;
+  settings_locked?: boolean | undefined;
+  current_version?: number | undefined;
 };
 
 function date(value: Date | string): Date {
@@ -888,6 +891,11 @@ export class Phase2Runtime {
     },
   ): Promise<void> {
     const fingerprints = this.scoringAccessRateLimiter.fingerprints(input.credential, input.ipAddress);
+    // A fresh Redis window can report a zero-second TTL. Capture one timestamp
+    // for the durable receipt and never persist an expiry that precedes it.
+    const attemptedAt = this.now();
+    const rateLimitStateExpiresAt =
+      input.rateLimitStateExpiresAt.getTime() < attemptedAt.getTime() ? attemptedAt : input.rateLimitStateExpiresAt;
     try {
       await tx.unsafe(
         `INSERT INTO scoring_access_attempts (
@@ -904,9 +912,9 @@ export class Phase2Runtime {
           fingerprints.ip,
           fingerprints.keyVersion,
           input.requestId,
-          this.now(),
+          attemptedAt,
           input.cooldownUntil ?? null,
-          input.rateLimitStateExpiresAt,
+          rateLimitStateExpiresAt,
         ],
       );
     } catch (error) {
@@ -2774,6 +2782,7 @@ export class Phase2Runtime {
     generation: number | null | undefined,
     requireWriter = true,
     lockSession = true,
+    includeOfflineAuth = false,
   ) {
     const rows = await tx.unsafe<{
       id: string;
@@ -2793,15 +2802,20 @@ export class Phase2Runtime {
       organisation_id: string;
       division_id: string;
       competition_status: string;
+      oa_issued_at: Date | string | null;
+      oa_recording_expires_at: Date | string | null;
+      oa_replay_expires_at: Date | string | null;
     }>(
       `SELECT s.id,s.competition_id,s.match_id,s.session_token_hash,s.generation,s.mode,s.expires_at,
               s.revoked_at,s.access_pass_id,p.scope,p.expires_at AS pass_expires_at,
               l.access_session_id AS lease_session_id,l.generation AS lease_generation,l.expires_at AS lease_expires_at,
               c.organisation_id,m.division_id,c.status AS competition_status
+              ${includeOfflineAuth ? ",oa.issued_at AS oa_issued_at,oa.recording_expires_at AS oa_recording_expires_at,oa.replay_expires_at AS oa_replay_expires_at" : ",NULL::timestamptz AS oa_issued_at,NULL::timestamptz AS oa_recording_expires_at,NULL::timestamptz AS oa_replay_expires_at"}
        FROM scoring_access_sessions s
        JOIN scoring_access_passes p ON p.id=s.access_pass_id
        LEFT JOIN match_writer_leases l ON l.match_id=s.match_id
        JOIN matches m ON m.id=s.match_id JOIN competitions c ON c.id=m.competition_id
+       ${includeOfflineAuth ? "LEFT JOIN scoring_offline_authorizations oa ON oa.access_session_id=s.id AND oa.writer_generation=s.generation AND oa.status='active'" : ""}
        WHERE s.id=$1 ${lockSession ? "FOR UPDATE OF s" : ""}`,
       [sessionId],
     );
@@ -2854,11 +2868,14 @@ export class Phase2Runtime {
         recommended_snapshot: Record<string, unknown> | string;
         competition_override: Record<string, unknown> | string;
         division_override: Record<string, unknown> | string | null;
+        match_state: string;
+        locked_at: Date | string | null;
       }>(
         `SELECT m.competition_id,m.division_id,c.sport_code,settings.pack_version,
                 division_settings.pack_version AS division_pack_version,
                 settings.recommended_snapshot,settings.settings_override AS competition_override,
-                division_settings.settings_override AS division_override
+                division_settings.settings_override AS division_override,
+                m.state AS match_state,settings.locked_at
          FROM matches m
          JOIN competitions c ON c.id=m.competition_id
          JOIN competition_sport_settings settings
@@ -2867,7 +2884,7 @@ export class Phase2Runtime {
            ON division_settings.division_id=m.division_id
           AND division_settings.competition_id=m.competition_id
           AND division_settings.sport_code=c.sport_code
-         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m,settings" : ""}`,
+         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m" : ""}`,
         [matchId],
       ),
       "Match scoring settings not found",
@@ -2911,6 +2928,8 @@ export class Phase2Runtime {
       pack_version: row.pack_version,
       settings,
       settings_fingerprint: stableHash(settings),
+      match_state: row.match_state,
+      settings_locked: Boolean(row.locked_at),
     };
   }
 
@@ -2955,38 +2974,43 @@ export class Phase2Runtime {
     matchId: string,
     context: CanonicalScoringContext,
   ): Promise<CanonicalScoringContext> {
-    await tx.unsafe(
-      `INSERT INTO match_score_streams (
-         match_id,competition_id,division_id,sport_code,pack_version,
-         settings_snapshot,settings_fingerprint,current_version,created_at,updated_at
-       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,0,$8,$8)
-       ON CONFLICT (match_id) DO NOTHING`,
-      [
-        matchId,
-        context.competition_id,
-        context.division_id,
-        context.sport_code,
-        context.pack_version,
-        context.settings,
-        context.settings_fingerprint,
-        this.now(),
-      ],
+    // Fast path: SELECT FOR UPDATE first — avoids a wasted INSERT on every write after stream creation.
+    type StreamRow = {
+      competition_id: string;
+      division_id: string;
+      sport_code: SportId;
+      pack_version: string;
+      settings_snapshot: SportPackSettings | string;
+      settings_fingerprint: string;
+      current_version: number;
+    };
+    let streamRows = await tx.unsafe<StreamRow>(
+      `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version
+       FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
+      [matchId],
     );
-    const stream = required(
-      await tx.unsafe<{
-        competition_id: string;
-        division_id: string;
-        sport_code: SportId;
-        pack_version: string;
-        settings_snapshot: SportPackSettings | string;
-        settings_fingerprint: string;
-      }>(
-        `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint
-         FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
-        [matchId],
-      ),
-      "Match score stream not found",
-    );
+    if (!streamRows[0]) {
+      // Stream does not exist yet — create it (only on first score event for this match).
+      streamRows = await tx.unsafe<StreamRow>(
+        `INSERT INTO match_score_streams (
+           match_id,competition_id,division_id,sport_code,pack_version,
+           settings_snapshot,settings_fingerprint,current_version,created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,0,$8,$8)
+         ON CONFLICT (match_id) DO UPDATE SET match_id=EXCLUDED.match_id
+         RETURNING competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version`,
+        [
+          matchId,
+          context.competition_id,
+          context.division_id,
+          context.sport_code,
+          context.pack_version,
+          context.settings,
+          context.settings_fingerprint,
+          this.now(),
+        ],
+      );
+    }
+    const stream = required(streamRows, "Match score stream not found");
     if (
       stream.competition_id !== context.competition_id ||
       stream.division_id !== context.division_id ||
@@ -3011,6 +3035,9 @@ export class Phase2Runtime {
       pack_version: stream.pack_version,
       settings: jsonValue<SportPackSettings>(stream.settings_snapshot),
       settings_fingerprint: stream.settings_fingerprint,
+      match_state: context.match_state,
+      settings_locked: context.settings_locked,
+      current_version: Number(stream.current_version),
     };
   }
 
@@ -3173,6 +3200,8 @@ export class Phase2Runtime {
     if (!command) throw new ApiError(422, ErrorCode.SCORE_EVENT_INVALID, "Score event command is invalid");
     try {
       return await this.transaction(async (tx) => {
+        const _t0 = performance.now();
+        // Pre-lock: light session read without row lock.
         let session = await this.authenticateScoringSession(
           tx,
           auth.sessionId,
@@ -3181,8 +3210,20 @@ export class Phase2Runtime {
           true,
           false,
         );
+        const _t1 = performance.now();
+        // Serialize all writers for this match with a transaction-scoped advisory lock.
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
-        session = await this.authenticateScoringSession(tx, auth.sessionId, auth.sessionToken, auth.generation);
+        // Authoritative session read under lock — also fetches offline auth in one JOIN.
+        session = await this.authenticateScoringSession(
+          tx,
+          auth.sessionId,
+          auth.sessionToken,
+          auth.generation,
+          true,
+          true,
+          true,
+        );
+        const _t2 = performance.now();
         const permission: ScoringPermission = command.type === "reversal" ? "score:reverse" : "score:write";
         if (!jsonValue<ScoringPermission[]>(session.scope).includes(permission)) {
           throw new ApiError(403, ErrorCode.SCORING_PERMISSION_DENIED, "Scoring session lacks the required permission");
@@ -3196,15 +3237,28 @@ export class Phase2Runtime {
         }
         const currentContext = await this.canonicalScoringContext(tx, session.match_id, true);
         const context = await this.ensureCanonicalStream(tx, session.match_id, currentContext);
-        const legacyCorrection = (
-          await tx.unsafe<{ present: boolean }>(
-            `SELECT EXISTS (
-               SELECT 1 FROM canonical_score_events
-               WHERE match_id=$1 AND event_type='legacy_correction'
-             ) AS present`,
-            [session.match_id],
-          )
-        )[0]?.present;
+        const _t3 = performance.now();
+
+        // Step 2: ONE query for legacy detection + idempotency + full event history.
+        const historyRows = await tx.unsafe<
+          CanonicalScoreEventRow & {
+            event_type: string;
+            command_fingerprint: string;
+            server_timestamp: Date | string;
+          }
+        >(
+          `SELECT id,client_event_id,aggregate_version,sequence,command,
+                  actor_access_session_id,actor_account_id,
+                  event_type,command_fingerprint,server_timestamp
+           FROM canonical_score_events
+           WHERE match_id=$1
+           ORDER BY aggregate_version`,
+          [session.match_id],
+        );
+        const _t4 = performance.now();
+
+        // Derive legacy, duplicate, and history from the single result set.
+        const legacyCorrection = historyRows.some((r) => r.event_type === "legacy_correction");
         if (legacyCorrection) {
           throw new ApiError(
             409,
@@ -3214,20 +3268,9 @@ export class Phase2Runtime {
         }
         assertFiveSportScoreCommandAllowed(context.sport_code, command, context.settings);
         const fingerprint = stableHash(wireScoreCommand(command));
-        const duplicate = (
-          await tx.unsafe<{
-            id: string;
-            aggregate_version: number;
-            command_fingerprint: string;
-            server_timestamp: Date | string;
-          }>(
-            `SELECT id,aggregate_version,command_fingerprint,server_timestamp FROM canonical_score_events
-             WHERE match_id=$1 AND client_event_id=$2`,
-            [session.match_id, command.clientEventId],
-          )
-        )[0];
-        if (duplicate) {
-          if (duplicate.command_fingerprint !== fingerprint) {
+        const duplicateRow = historyRows.find((r) => r.client_event_id === command.clientEventId);
+        if (duplicateRow) {
+          if (duplicateRow.command_fingerprint !== fingerprint) {
             throw new ApiError(
               409,
               ErrorCode.IDEMPOTENCY_KEY_REUSED,
@@ -3237,37 +3280,47 @@ export class Phase2Runtime {
           return {
             client_event_id: command.clientEventId,
             duplicate: true as const,
-            event_id: duplicate.id,
-            command_fingerprint: duplicate.command_fingerprint,
+            event_id: duplicateRow.id,
+            command_fingerprint: duplicateRow.command_fingerprint,
             outcome: "duplicate" as const,
-            sequence: duplicate.aggregate_version,
-            aggregate_version: duplicate.aggregate_version,
-            server_received_at: serializedDate(duplicate.server_timestamp),
+            sequence: duplicateRow.aggregate_version,
+            aggregate_version: duplicateRow.aggregate_version,
+            server_received_at: serializedDate(duplicateRow.server_timestamp),
           };
         }
-        const match = required(
-          await tx.unsafe<{ state: string }>(`SELECT state FROM matches WHERE id=$1 FOR UPDATE`, [session.match_id]),
-          "Match not found",
-        );
-        if (match.state === "final" || match.state === "corrected") {
+        const matchState = context.match_state;
+        if (matchState === "final" || matchState === "corrected") {
           throw new ApiError(409, ErrorCode.MATCH_FINALISED_READ_ONLY, "Finalised matches require organiser reopening");
         }
-        const existing = await this.canonicalScoreEvents(tx, session.match_id);
-        const stream = required(
-          await tx.unsafe<{ current_version: number }>(
-            `SELECT current_version FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
-            [session.match_id],
-          ),
-          "Match score stream not found",
-        );
-        if (stream.current_version !== expectedAggregateVersion) {
+
+        // Build event list from history rows for reducer replay.
+        const existing = historyRows
+          .flatMap((row) => {
+            const cmd = parseFiveSportScoreCommand(jsonValue(row.command));
+            if (!cmd || cmd.type === "legacy_correction") return [];
+            const actorId = row.actor_access_session_id ?? row.actor_account_id;
+            if (!actorId) throw new Error("Canonical score event actor is missing");
+            return [{ row, cmd, actorId }];
+          })
+          .map(({ row, cmd, actorId }) =>
+            materialiseFiveSportScoreEvent(cmd, {
+              eventId: row.id,
+              matchId: session.match_id,
+              sequence: row.sequence,
+              actorId,
+              scoringSessionId: row.actor_access_session_id ?? actorId,
+            }),
+          );
+
+        const currentStreamVersion = context.current_version ?? 0;
+        if (currentStreamVersion !== expectedAggregateVersion) {
           throw new ApiError(
             409,
             ErrorCode.SCORE_VERSION_CONFLICT,
-            `Expected aggregate version ${expectedAggregateVersion}, current version is ${stream.current_version}`,
+            `Expected aggregate version ${expectedAggregateVersion}, current version is ${currentStreamVersion}`,
           );
         }
-        const sequence = stream.current_version + 1;
+        const sequence = currentStreamVersion + 1;
         const eventId = randomUUID();
         const event = materialiseFiveSportScoreEvent(command, {
           eventId,
@@ -3293,61 +3346,108 @@ export class Phase2Runtime {
             "This session does not hold the active writer lease",
           );
         }
-        await this.assertOfflineRecordingTimestamp(tx, session.id, writerGeneration, command.occurredAt);
+
+        // Step 3: Offline auth validation — data already fetched via the session JOIN above.
+        if (session.oa_replay_expires_at !== null) {
+          if (date(session.oa_replay_expires_at).getTime() <= this.now().getTime()) {
+            throw new ApiError(403, ErrorCode.OFFLINE_AUTHORIZATION_EXPIRED, "Offline replay window has expired");
+          }
+          const deviceTimestamp = new Date(command.occurredAt);
+          if (
+            !Number.isFinite(deviceTimestamp.getTime()) ||
+            (session.oa_issued_at !== null && deviceTimestamp.getTime() < date(session.oa_issued_at).getTime()) ||
+            (session.oa_recording_expires_at !== null &&
+              deviceTimestamp.getTime() >= date(session.oa_recording_expires_at).getTime())
+          ) {
+            throw new ApiError(
+              409,
+              ErrorCode.OFFLINE_RECORDING_EXPIRED,
+              "The command timestamp is outside the authorised offline recording window",
+            );
+          }
+        }
+
         const serverReceivedAt = this.now();
+        const auditMetadata = JSON.stringify({ competition_id: context.competition_id });
+        const auditAfter = JSON.stringify({ event_id: eventId, event_type: command.type, aggregate_version: sequence });
+        const outboxPayload = JSON.stringify({
+          competition_id: context.competition_id,
+          match_id: session.match_id,
+          aggregate_version: sequence,
+          event_type: command.type,
+        });
+        const outboxKey = `${requestId}:scoring_event.appended:${session.match_id}`;
+
+        // Step 4: Atomic write tail — one data-modifying CTE for all writes.
         await tx.unsafe(
-          `INSERT INTO canonical_score_events (
-             id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
-             command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp,
-             server_timestamp,reversal_target_event_id,reason
-           ) VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8::jsonb,$9,$10,$11,$12,$15,$13,$14)`,
+          `WITH inserted_event AS (
+             INSERT INTO canonical_score_events (
+               id,competition_id,division_id,match_id,client_event_id,aggregate_version,sequence,event_type,
+               command,command_fingerprint,actor_access_session_id,writer_generation,device_timestamp,
+               server_timestamp,reversal_target_event_id,reason
+             ) VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8::jsonb,$9,$10,$11,$12,$15,$13,$14)
+           ),
+           updated_stream AS (
+             UPDATE match_score_streams SET current_version=$6,updated_at=$15 WHERE match_id=$4
+           ),
+           locked_settings AS (
+             UPDATE competition_sport_settings
+             SET locked_at=COALESCE(locked_at,$15)
+             WHERE competition_id=$2 AND $16::boolean
+           ),
+           started_match AS (
+             UPDATE matches SET state='in_progress'
+             WHERE id=$4 AND state IN ('pending','ready') AND $17::boolean
+           ),
+           audit AS (
+             INSERT INTO audit_events (
+               occurred_at, request_id, actor_account_id, actor_type, organisation_id,
+               action, target_type, target_id, reason, before_state, after_state, metadata
+             ) VALUES (
+               $15,$18,$19,'access_pass',$20,'scoring_event.appended','match',$4,NULL,NULL,
+               ($21::jsonb #>> '{}')::jsonb,
+               ($22::jsonb #>> '{}')::jsonb
+             )
+           )
+           INSERT INTO outbox_events (
+             aggregate_type, aggregate_id, event_type, payload, idempotency_key, created_at, available_at
+           ) VALUES ('match',$4,'scoring_event.appended',($23::jsonb #>> '{}')::jsonb,$24,$15,$15)`,
           [
-            eventId,
-            context.competition_id,
-            context.division_id,
-            session.match_id,
-            command.clientEventId,
-            sequence,
-            command.type,
-            wireScoreCommand(command),
-            fingerprint,
-            session.id,
-            writerGeneration,
-            command.occurredAt,
-            command.reversalTargetEventId ?? null,
-            command.reason ?? null,
-            serverReceivedAt,
+            eventId, // $1
+            context.competition_id, // $2
+            context.division_id, // $3
+            session.match_id, // $4
+            command.clientEventId, // $5
+            sequence, // $6
+            command.type, // $7
+            wireScoreCommand(command), // $8
+            fingerprint, // $9
+            session.id, // $10
+            writerGeneration, // $11
+            command.occurredAt, // $12
+            command.reversalTargetEventId ?? null, // $13
+            command.reason ?? null, // $14
+            serverReceivedAt, // $15
+            !context.settings_locked, // $16 — lock settings condition
+            command.type === "match_started", // $17 — start match condition
+            requestId, // $18
+            null, // $19 actor_account_id
+            session.organisation_id, // $20
+            auditAfter, // $21 after_state
+            auditMetadata, // $22 metadata
+            outboxPayload, // $23
+            outboxKey, // $24
           ],
         );
-        await tx.unsafe(`UPDATE match_score_streams SET current_version=$2,updated_at=$3 WHERE match_id=$1`, [
-          session.match_id,
-          sequence,
-          this.now(),
-        ]);
-        await tx.unsafe(
-          `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2) WHERE competition_id=$1`,
-          [context.competition_id, this.now()],
-        );
-        if (command.type === "match_started") {
-          await tx.unsafe(`UPDATE matches SET state='in_progress' WHERE id=$1 AND state IN ('pending','ready')`, [
-            session.match_id,
-          ]);
-        }
-        await this.evidence(tx, {
-          requestId,
-          actorAccountId: null,
-          actorType: "access_pass",
-          organisationId: session.organisation_id,
-          action: "scoring_event.appended",
-          targetType: "match",
-          targetId: session.match_id,
-          after: { event_id: eventId, event_type: command.type, aggregate_version: sequence },
-          eventPayload: {
-            competition_id: context.competition_id,
-            match_id: session.match_id,
-            aggregate_version: sequence,
-            event_type: command.type,
-          },
+        const _t5 = performance.now();
+        /* istanbul ignore next */
+        console.debug("appendCanonicalScoreEvent timings (ms)", {
+          pre_lock_auth: Math.round(_t1 - _t0),
+          lock_and_auth: Math.round(_t2 - _t1),
+          context_and_stream: Math.round(_t3 - _t2),
+          history_query: Math.round(_t4 - _t3),
+          write_cte: Math.round(_t5 - _t4),
+          total_in_tx: Math.round(_t5 - _t0),
         });
         return {
           client_event_id: command.clientEventId,

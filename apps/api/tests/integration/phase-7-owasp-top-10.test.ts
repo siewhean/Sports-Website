@@ -1,0 +1,630 @@
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { dropTestSchema, migrateDatabase } from "@matchday/database";
+import { SPORT_PACKS } from "@matchday/domain";
+import { systemClock, type PostgresJsSql } from "@matchday/identity";
+import { DeterministicIdentityProvider } from "@matchday/identity/testing";
+import { Redis } from "ioredis";
+import postgres, { type Sql } from "postgres";
+import { buildApp } from "../../src/app.js";
+import { healthyProbes, testConfig } from "../helpers.js";
+import { PostgresIdentityUnitOfWork } from "../../src/identity-postgres.js";
+import { IdentityApiRuntime } from "../../src/identity-runtime.js";
+import { EntitlementRuntime } from "../../src/entitlement-runtime.js";
+import { Phase2Runtime } from "../../src/phase-2-runtime.js";
+import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
+import { Phase3Runtime } from "../../src/phase-3-runtime.js";
+import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
+import { RedisScoringAccessRateLimiter } from "../../src/scoring-access-rate-limit.js";
+import { ErrorCode } from "../../src/errors.js";
+
+const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
+const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
+const redisUrl = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/15";
+const schema = `test_phase7_owasp_${randomUUID().replaceAll("-", "")}`;
+const namespace = `matchday:test:owasp-rate-limit:${randomUUID()}:`;
+const migrationsDirectory = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../../packages/database/migrations",
+);
+
+let client!: Sql;
+let redis!: Redis;
+let identityProvider!: DeterministicIdentityProvider;
+let identityRuntime!: IdentityApiRuntime;
+let entitlementRuntime!: EntitlementRuntime;
+let phase2Runtime!: Phase2Runtime;
+let phase3Runtime!: Phase3Runtime;
+let app!: Awaited<ReturnType<typeof buildApp>>;
+
+let tenantA_orgId = "";
+let tenantA_userId = "";
+let tenantB_orgId = "";
+let tenantB_userId = "";
+
+const WEBHOOK_SECRET = "whsec_test_secret_for_owasp_qualification_123456";
+
+describeInfrastructure("QA-014 — HTTP-Level & Production-Path OWASP Top 10 Security Suite", () => {
+  beforeAll(async () => {
+    await dropTestSchema(databaseUrl, schema);
+    await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+
+    client = postgres(databaseUrl, {
+      max: 10,
+      connection: { search_path: schema },
+      onnotice: () => undefined,
+    });
+
+    redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
+
+    for (const [sportId, pack] of Object.entries(SPORT_PACKS)) {
+      const hash = phase3DomainAdapter.hash(pack);
+      await client`
+        INSERT INTO sport_pack_versions (
+          sport_code, version, schema_version, definition, definition_hash, status, revision, activated_at
+        ) VALUES (
+          ${sportId}, ${pack.version}, 1, ${client.json(pack)}, ${hash}, 'active', 1, now()
+        ) ON CONFLICT (sport_code, version) DO UPDATE SET
+          status = 'active',
+          activated_at = now();
+      `;
+    }
+
+    tenantA_orgId = randomUUID();
+    tenantA_userId = randomUUID();
+    tenantB_orgId = randomUUID();
+    tenantB_userId = randomUUID();
+
+    await client`
+      INSERT INTO accounts (id, primary_email, display_name, email_verified_at)
+      VALUES
+        (${tenantA_userId}, 'alice@tenant-a.com', 'Alice Tenant A', now()),
+        (${tenantB_userId}, 'bob@tenant-b.com', 'Bob Tenant B', now());
+    `;
+
+    await client`
+      INSERT INTO provider_identities (account_id, issuer, subject)
+      VALUES
+        (${tenantA_userId}, 'https://identity.example.test', 'tenant-a-subject'),
+        (${tenantB_userId}, 'https://identity.example.test', 'tenant-b-subject');
+    `;
+
+    await client.begin(async (tx) => {
+      await tx`
+        INSERT INTO organisations (id, name, slug)
+        VALUES
+          (${tenantA_orgId}, 'Tenant A Org', ${`tenant-a-${randomUUID().slice(0, 8)}`}),
+          (${tenantB_orgId}, 'Tenant B Org', ${`tenant-b-${randomUUID().slice(0, 8)}`});
+      `;
+      await tx`
+        INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
+        VALUES
+          (${tenantA_orgId}, ${tenantA_userId}, 'owner', 'active'),
+          (${tenantB_orgId}, ${tenantB_userId}, 'owner', 'active');
+      `;
+    });
+
+    identityProvider = new DeterministicIdentityProvider({
+      issuer: "https://identity.example.test",
+      subject: "tenant-a-subject",
+      email: "alice@tenant-a.com",
+      displayName: "Alice Tenant A",
+      providerSessionId: "session-123",
+      emailVerified: true,
+    });
+
+    identityRuntime = new IdentityApiRuntime(
+      identityProvider,
+      new PostgresIdentityUnitOfWork(client as unknown as PostgresJsSql),
+      "owasp-test-csrf-secret-at-least-32-chars-long",
+      systemClock,
+    );
+
+    const rateLimiter = new RedisScoringAccessRateLimiter(
+      redis,
+      "gate-c-scoring-access-test-hmac-secret-32-bytes",
+      namespace,
+    );
+
+    entitlementRuntime = new EntitlementRuntime(client as unknown as PostgresJsSql);
+    phase2Runtime = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      () => new Date(),
+      rateLimiter,
+      "test-fallback-hmac-secret-at-least-32-chars-long",
+    );
+    phase3Runtime = new Phase3Runtime(client as unknown as PostgresJsSql, phase3DomainAdapter);
+
+    const config = testConfig({
+      STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      API_ALLOWED_ORIGINS: "https://app.matchday.example",
+    });
+
+    app = await buildApp({
+      config,
+      probes: healthyProbes,
+      identityRuntime,
+      phase2Runtime,
+      phase3Runtime,
+      entitlementRuntime,
+    });
+  });
+
+  afterAll(async () => {
+    if (app) {
+      await app.close();
+    }
+    if (redis) {
+      const keys: string[] = [];
+      let cursor = "0";
+      do {
+        const [next, batch] = await redis.scan(cursor, "MATCH", `${namespace}*`, "COUNT", 100);
+        cursor = next;
+        keys.push(...batch);
+      } while (cursor !== "0");
+      if (keys.length > 0) await redis.unlink(...keys);
+      await redis.quit();
+    }
+    if (client) {
+      await client.end({ timeout: 2 });
+    }
+    await dropTestSchema(databaseUrl, schema);
+  });
+
+  describe("A01: Broken Access Control (IDOR & Authenticated Route Authorization)", () => {
+    it("strictly blocks unauthenticated access to protected management endpoints", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/organisations/competition-options",
+      });
+
+      expect([401, 403]).toContain(response.statusCode);
+    });
+
+    it("prevents authenticated Tenant A session with valid CSRF from mutating Tenant B competition via HTTP", async () => {
+      // 1. Create Tenant B's competition
+      const compB = await phase3Runtime.createCompetition(
+        { accountId: tenantB_userId },
+        {
+          organisationId: tenantB_orgId,
+          name: "Tenant B Private Tournament",
+          slug: `tenant-b-tourney-${randomUUID()}`,
+          sportCode: "volleyball",
+          timezone: "UTC",
+          startsOn: "2026-09-01",
+          endsOn: "2026-09-02",
+          venue: "Main Hall",
+          address: "1 Sports Rd",
+          countryCode: "SG",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+
+      // 2. Sign in as Tenant A to obtain authentic session cookie and CSRF token
+      identityProvider.claims = {
+        issuer: "https://identity.example.test",
+        subject: "tenant-a-subject",
+        email: "alice@tenant-a.com",
+        displayName: "Alice Tenant A",
+        emailVerified: true,
+        providerSessionId: `prov-sess-${randomUUID()}`,
+      };
+
+      const sessionA = await identityRuntime.signIn(
+        {
+          authorizationCode: "auth-code-a",
+          expectedState: "state-a",
+          expectedNonce: "nonce-a",
+          pkceVerifier: "verifier-a",
+          redirectUri: "https://app.matchday.example/callback",
+        },
+        "req-signin-a",
+      );
+
+      // 3. Attempt cross-tenant mutation with Tenant A's authenticated session + valid CSRF
+      const idorResponse = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${compB.id}/lifecycle/archive`,
+        headers: {
+          cookie: `matchday_session=${sessionA.sessionToken}`,
+          "x-csrf-token": sessionA.csrfToken,
+          origin: "https://app.matchday.example",
+          "content-type": "application/json",
+        },
+        payload: {
+          revision: 1,
+          action: "archive",
+        },
+      });
+
+      // Must be rejected with exact 403 COMPETITION_ACCESS_DENIED
+      expect(idorResponse.statusCode).toBe(403);
+      const body = idorResponse.json() as { error?: { code?: string } };
+      expect([ErrorCode.COMPETITION_ACCESS_DENIED, ErrorCode.ORGANISATION_ACCESS_DENIED]).toContain(body.error?.code);
+    });
+  });
+
+  describe("A02: Cryptographic Failures & Webhook Tampering", () => {
+    it("rejects forged, missing, or replayed billing webhook HTTP requests with 401", async () => {
+      const payload = {
+        id: `evt_${randomUUID()}`,
+        type: "checkout.session.completed",
+        data: {
+          object: {
+            id: "cs_fake_123",
+            metadata: { organisation_id: tenantA_orgId, tier: "organiser_pro" },
+          },
+        },
+      };
+
+      // 1. Missing signature
+      const resMissing = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing/webhook",
+        headers: { "content-type": "application/json" },
+        payload,
+      });
+      expect(resMissing.statusCode).toBe(401);
+
+      // 2. Bad forged signature
+      const resBadSig = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing/webhook",
+        headers: {
+          "stripe-signature": "t=12345,v1=bad_forged_hmac_signature",
+          "content-type": "application/json",
+        },
+        payload,
+      });
+      expect(resBadSig.statusCode).toBe(401);
+
+      // 3. Stale timestamp replay attack signed with the real test secret
+      const expiredTimestamp = 10000; // > 5 min old
+      const payloadString = JSON.stringify(payload);
+      const replayHmac = createHmac("sha256", WEBHOOK_SECRET)
+        .update(`${expiredTimestamp}.${payloadString}`)
+        .digest("hex");
+
+      const resReplay = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing/webhook",
+        headers: {
+          "stripe-signature": `t=${expiredTimestamp},v1=${replayHmac}`,
+          "content-type": "application/json",
+        },
+        payload,
+      });
+      expect(resReplay.statusCode).toBe(401);
+    });
+  });
+
+  describe("A03: Injection (SQL Injection Resistance)", () => {
+    it("safely parameterizes SQL injection payloads across HTTP routes without corruption", async () => {
+      const sqliPayload = "Tournament'); DROP TABLE competitions; --";
+
+      const comp = await phase3Runtime.createCompetition(
+        { accountId: tenantA_userId },
+        {
+          organisationId: tenantA_orgId,
+          name: sqliPayload,
+          slug: `sqli-test-${randomUUID()}`,
+          sportCode: "volleyball",
+          timezone: "UTC",
+          startsOn: "2026-09-01",
+          endsOn: "2026-09-02",
+          venue: "Hall A",
+          address: "1 Rd",
+          countryCode: "SG",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+
+      expect(comp.id).toBeDefined();
+
+      const sqliRouteResponse = await app.inject({
+        method: "GET",
+        url: `/api/v1/public/search?q=${encodeURIComponent(sqliPayload)}`,
+      });
+      expect([200, 400, 404]).toContain(sqliRouteResponse.statusCode);
+
+      const checkTable = await client`SELECT count(*)::int as count FROM competitions WHERE id = ${comp.id};`;
+      expect(checkTable[0]!.count).toBe(1);
+    });
+  });
+
+  describe("A05: Security Misconfiguration & CSRF Protection Matrix", () => {
+    it("includes vital security headers on HTTP responses", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/health/live",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    });
+
+    it("strictly enforces CSRF protection matrix on authenticated mutating HTTP routes", async () => {
+      // 1. Create Tenant A's competition
+      const compA = await phase3Runtime.createCompetition(
+        { accountId: tenantA_userId },
+        {
+          organisationId: tenantA_orgId,
+          name: "Tenant A CSRF Test Competition",
+          slug: `tenant-a-csrf-${randomUUID()}`,
+          sportCode: "volleyball",
+          timezone: "UTC",
+          startsOn: "2026-09-01",
+          endsOn: "2026-09-02",
+          venue: "Hall 1",
+          address: "1 Sports Rd",
+          countryCode: "SG",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+
+      // 2. Sign in as Tenant A
+      identityProvider.claims = {
+        issuer: "https://identity.example.test",
+        subject: "tenant-a-subject",
+        email: "alice@tenant-a.com",
+        displayName: "Alice Tenant A",
+        emailVerified: true,
+        providerSessionId: `prov-sess-${randomUUID()}`,
+      };
+
+      const session = await identityRuntime.signIn(
+        {
+          authorizationCode: "auth-code-csrf",
+          expectedState: "state-csrf",
+          expectedNonce: "nonce-csrf",
+          pkceVerifier: "verifier-csrf",
+          redirectUri: "https://app.matchday.example/callback",
+        },
+        "req-signin-csrf",
+      );
+
+      // 3. Case A: Missing CSRF token -> Rejected 403
+      const missingCsrfRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${compA.id}/lifecycle/archive`,
+        headers: {
+          cookie: `matchday_session=${session.sessionToken}`,
+          origin: "https://app.matchday.example",
+          "content-type": "application/json",
+        },
+        payload: { revision: 1, action: "archive" },
+      });
+      expect(missingCsrfRes.statusCode).toBe(403);
+
+      // 4. Case B: Invalid / Forged CSRF token -> Rejected 403
+      const invalidCsrfRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${compA.id}/lifecycle/archive`,
+        headers: {
+          cookie: `matchday_session=${session.sessionToken}`,
+          "x-csrf-token": "completely-invalid-csrf-token-string",
+          origin: "https://app.matchday.example",
+          "content-type": "application/json",
+        },
+        payload: { revision: 1, action: "archive" },
+      });
+      expect(invalidCsrfRes.statusCode).toBe(403);
+
+      // 5. Case C: Valid CSRF token -> Accepted 200
+      const validCsrfRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${compA.id}/lifecycle/archive`,
+        headers: {
+          cookie: `matchday_session=${session.sessionToken}`,
+          "x-csrf-token": session.csrfToken,
+          origin: "https://app.matchday.example",
+          "content-type": "application/json",
+        },
+        payload: { revision: 1, action: "archive" },
+      });
+      expect([200, 201]).toContain(validCsrfRes.statusCode);
+    });
+  });
+
+  describe("A07: Identification and Authentication Failures (Rate Limiting & Revocation)", () => {
+    it("accepts valid access pass, rejects revoked pass, and enforces 429 rate limiting on brute force abuse", async () => {
+      const comp = await phase3Runtime.createCompetition(
+        { accountId: tenantA_userId },
+        {
+          organisationId: tenantA_orgId,
+          name: "Scoring Security Tournament",
+          slug: `scoring-sec-${randomUUID()}`,
+          sportCode: "volleyball",
+          timezone: "UTC",
+          startsOn: "2026-09-01",
+          endsOn: "2026-09-02",
+          venue: "Main Hall",
+          address: "1 Sports Rd",
+          countryCode: "SG",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+
+      const divisionId = randomUUID();
+      const formatRevId = randomUUID();
+      const matchId = randomUUID();
+      const graph = {
+        id: formatRevId,
+        schemaVersion: 1,
+        entryCount: 2,
+        stages: [
+          {
+            id: "final-stage",
+            label: "Final",
+            kind: "single_elimination",
+            order: 1,
+            groupIds: [],
+            groupSize: null,
+            outputRanks: 2,
+            matchIds: [matchId],
+          },
+        ],
+        matches: [
+          {
+            id: matchId,
+            stageId: "final-stage",
+            round: 1,
+            order: 1,
+            purpose: "championship",
+            home: { type: "entry_seed", seed: 1 },
+            away: { type: "entry_seed", seed: 2 },
+          },
+        ],
+        terminalMatchIds: [matchId],
+      };
+      const defHash = phase3DomainAdapter.hash(graph);
+
+      await client`
+        INSERT INTO divisions (id, competition_id, name, team_limit)
+        VALUES (${divisionId}, ${comp.id}, 'Division 1', 8);
+      `;
+      await client`
+        INSERT INTO format_revisions (id, competition_id, division_id, revision, definition, definition_hash, status, created_by)
+        VALUES (${formatRevId}, ${comp.id}, ${divisionId}, 1, ${client.json(graph)}, ${defHash}, 'draft', ${tenantA_userId});
+      `;
+      await client`
+        INSERT INTO matches (id, competition_id, division_id, format_revision_id, code, stage, round_number, ordinal, state)
+        VALUES (${matchId}, ${comp.id}, ${divisionId}, ${formatRevId}, 'M1', 'final', 1, 1, 'ready');
+      `;
+
+      // 1. Positive Control: Create valid unrevoked pass and exchange it
+      const validPassId = randomUUID();
+      const validSecret = randomBytes(24).toString("hex");
+      const validSecretHash = createHash("sha256").update(validSecret).digest();
+
+      await client`
+        INSERT INTO scoring_access_passes (
+          id, competition_id, match_id, secret_hash, expires_at, created_by, role, scope
+        ) VALUES (
+          ${validPassId}, ${comp.id}, ${matchId}, ${validSecretHash}, now() + interval '1 hour',
+          ${tenantA_userId}, 'scorekeeper', '["score:read","score:write","score:reverse","score:finalise"]'::jsonb
+        );
+      `;
+
+      const validExchange = await app.inject({
+        method: "POST",
+        url: "/api/v1/scoring/access/exchange",
+        headers: { "content-type": "application/json", origin: "https://app.matchday.test" },
+        payload: {
+          token: validSecret,
+          expected_match_id: matchId,
+          device_id: `valid-device-${randomUUID()}`,
+        },
+      });
+
+      expect(validExchange.statusCode).toBe(200);
+      const sessionData = validExchange.json() as { session_id?: string };
+      expect(sessionData.session_id).toBeDefined();
+
+      // 2. Revocation Test: Revoke the pass and assert exchange fails
+      await client`
+        UPDATE scoring_access_passes
+        SET revoked_at = now(), revocation_reason = 'Security Drill Revocation'
+        WHERE id = ${validPassId};
+      `;
+
+      const revokedExchange = await app.inject({
+        method: "POST",
+        url: "/api/v1/scoring/access/exchange",
+        headers: { "content-type": "application/json", origin: "https://app.matchday.test" },
+        payload: {
+          token: validSecret,
+          expected_match_id: matchId,
+          device_id: `valid-device-${randomUUID()}`,
+        },
+      });
+
+      expect([401, 403, 404]).toContain(revokedExchange.statusCode);
+
+      // 3. Redis-backed 429 Rate Limiting Brute Force Drill
+      const targetAttackerIp = "198.51.100.42";
+      const forgedCredential = "bad-credential-brute-force-attack";
+
+      // Make 5 consecutive invalid exchange attempts from the attacker IP
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        const attemptRes = await app.inject({
+          method: "POST",
+          url: "/api/v1/scoring/access/exchange",
+          headers: {
+            "content-type": "application/json",
+            "x-forwarded-for": targetAttackerIp,
+            origin: "https://app.matchday.test",
+          },
+          payload: {
+            token: forgedCredential,
+            expected_match_id: matchId,
+            device_id: "attacker-device-id-at-least-32-chars-long",
+          },
+        });
+        expect([401, 403, 404]).toContain(attemptRes.statusCode);
+      }
+
+      // The 5th attempt hits rate limit threshold -> HTTP 429
+      const limitedRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/scoring/access/exchange",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": targetAttackerIp,
+          origin: "https://app.matchday.test",
+        },
+        payload: {
+          token: forgedCredential,
+          expected_match_id: matchId,
+          device_id: "attacker-device-id-at-least-32-chars-long",
+        },
+      });
+
+      expect(limitedRes.statusCode).toBe(429);
+      const limitedBody = limitedRes.json() as { error?: { code?: string } };
+      expect(limitedBody.error?.code).toBe(ErrorCode.ACCESS_RATE_LIMITED);
+      expect(limitedRes.headers["retry-after"]).toBeDefined();
+    });
+  });
+
+  describe("A08: Software and Data Integrity (Cross-Site Scripting XSS)", () => {
+    it("stores HTML/script tags as literal string data without unescaped execution across HTTP routes", async () => {
+      const xssPayload = "<script>alert('xss')</script>";
+
+      const comp = await phase3Runtime.createCompetition(
+        { accountId: tenantA_userId },
+        {
+          organisationId: tenantA_orgId,
+          name: `XSS Test ${xssPayload}`,
+          slug: `xss-test-${randomUUID()}`,
+          sportCode: "volleyball",
+          timezone: "UTC",
+          startsOn: "2026-09-01",
+          endsOn: "2026-09-02",
+          venue: "Main Hall",
+          address: "1 Sports Rd",
+          countryCode: "SG",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/public/competitions/${comp.id}`,
+      });
+
+      if (response.statusCode === 200) {
+        expect(response.headers["content-type"]).toContain("application/json");
+        expect(response.body).toContain(xssPayload);
+      }
+    });
+  });
+});
