@@ -295,7 +295,33 @@ jobs:
           APP_ENV: test
         run: pnpm db:migrate
 
+      - name: Warm up isolated Gate D database before fixture seed
+        run: |
+          set -euo pipefail
+          pnpm --filter @matchday/api exec node --input-type=module <<'NODE'
+          import postgres from "postgres";
+          const sql = postgres(process.env.DATABASE_URL, { ssl: "require", max: 1, connect_timeout: 30 });
+          try {
+            const deadline = Date.now() + 60_000;
+            let ok = false;
+            while (Date.now() < deadline) {
+              try {
+                await sql`SELECT 1 AS ok`;
+                ok = true;
+                break;
+              } catch {
+                await new Promise((r) => setTimeout(r, 2000));
+              }
+            }
+            if (!ok) throw new Error("Gate D database did not become ready within 60 s");
+            console.log("Gate D database warm-up verified — compute is active and accepting connections");
+          } finally {
+            await sql.end({ timeout: 2 });
+          }
+          NODE
+
       - name: Seed canonical Gate D pilot fixture
+        timeout-minutes: 10
         run: pnpm seed:staging:pilot
 
       - name: Locate single-use scoring handoff
