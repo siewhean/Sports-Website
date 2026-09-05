@@ -249,9 +249,25 @@ jobs:
           set -euo pipefail
           node --input-type=module <<'NODE'
           const base = process.env.TARGET_URL.replace(/\/$/, "");
-          const metaRes = await fetch(`${base}/api/v1/meta/build`, { signal: AbortSignal.timeout(15000) });
-          if (!metaRes.ok) throw new Error(`Build metadata returned HTTP ${metaRes.status}`);
-          const meta = await metaRes.json();
+          async function fetchWithRetry(url, label, maxAttempts = 5) {
+            let lastError;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              try {
+                const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+                if (res.ok) return await res.json();
+                lastError = new Error(`${label} returned HTTP ${res.status}`);
+              } catch (err) {
+                lastError = err;
+              }
+              if (attempt < maxAttempts) {
+                console.log(`Retrying ${label} (attempt ${attempt}/${maxAttempts})...`);
+                await new Promise((r) => setTimeout(r, 2000 * attempt));
+              }
+            }
+            throw lastError;
+          }
+
+          const meta = await fetchWithRetry(`${base}/api/v1/meta/build`, "Build metadata");
           if (meta.git_sha !== process.env.CANDIDATE_SHA) {
             throw new Error(`Deployed SHA mismatch: expected ${process.env.CANDIDATE_SHA}, got ${meta.git_sha}`);
           }
@@ -259,9 +275,7 @@ jobs:
             throw new Error(`Gate D requires environment=staging; got ${meta.environment}`);
           }
 
-          const readyRes = await fetch(`${base}/health/ready`, { signal: AbortSignal.timeout(15000) });
-          if (!readyRes.ok) throw new Error(`Readiness returned HTTP ${readyRes.status}`);
-          const ready = await readyRes.json();
+          const ready = await fetchWithRetry(`${base}/health/ready`, "Readiness");
           if (!ready.dependencies?.database || !ready.dependencies?.redis || !ready.dependencies?.queue) {
             throw new Error(`Health dependencies not satisfied: ${JSON.stringify(ready)}`);
           }
