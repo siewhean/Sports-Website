@@ -774,7 +774,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error("❌ Gate D staging pilot seeder failed:", error);
-  process.exitCode = 1;
-});
+main()
+  .catch((error) => {
+    console.error("❌ Gate D staging pilot seeder failed:", error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    // BullMQ worker threads may keep the event loop alive after cleanup.
+    // Force-exit to prevent the step from hanging after all work is done.
+    process.exit(process.exitCode ?? 0);
+  });
