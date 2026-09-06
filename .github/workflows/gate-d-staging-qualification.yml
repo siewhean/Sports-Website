@@ -2,7 +2,7 @@ name: Gate D controlled staging qualification
 
 on:
   push:
-    branches: [gate-d/control-74fa9132]
+    branches: [gate-d/control-ab5a4e89]
   workflow_dispatch:
 
 permissions:
@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 120
     env:
       APP_ENV: staging
-      CANDIDATE_SHA: 74fa91329306083fd7eb2fa3203bf58e9afb2ec5
+      CANDIDATE_SHA: ab5a4e895aea458c9bfb06820cb894453c8409c2
       TARGET_URL: https://gate-d-api.poladex.shop
       DATABASE_URL: ${{ secrets.GATE_D_DATABASE_URL }}
       REDIS_URL: ${{ secrets.GATE_D_REDIS_URL }}
