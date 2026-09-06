@@ -73,5 +73,11 @@ function redisConnection(redisUrl: string) {
     ...(url.password.length === 0 ? {} : { password: url.password }),
     ...(url.protocol === "rediss:" ? { tls: {} } : {}),
     maxRetriesPerRequest: null,
+    // Prevent indefinite hang on slow TLS handshake (e.g. Render free-tier cold start).
+    connectTimeout: 15_000,
+    // Give up reconnecting after 5 attempts so callers receive an error rather than
+    // blocking forever. BullMQ requires maxRetriesPerRequest:null but does not
+    // require infinite reconnection.
+    retryStrategy: (times: number) => (times >= 5 ? null : Math.min(times * 500, 3_000)),
   };
 }
