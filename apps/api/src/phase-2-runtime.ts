@@ -3278,6 +3278,7 @@ export class Phase2Runtime {
             );
           }
           return {
+            match_id: session.match_id,
             client_event_id: command.clientEventId,
             duplicate: true as const,
             event_id: duplicateRow.id,
@@ -3450,6 +3451,7 @@ export class Phase2Runtime {
           total_in_tx: Math.round(_t5 - _t0),
         });
         return {
+          match_id: session.match_id,
           client_event_id: command.clientEventId,
           duplicate: false as const,
           event_id: eventId,
