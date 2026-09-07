@@ -1,0 +1,75 @@
+name: OCI controlled staging deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact 40-character candidate SHA to deploy
+        required: true
+        type: string
+      public_hostname:
+        description: HTTPS hostname already pointing at the OCI VM
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-controlled-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy exact candidate to OCI staging
+    runs-on: ubuntu-latest
+    environment: gate-d-controlled-staging
+    timeout-minutes: 30
+    env:
+      OCI_HOST: ${{ secrets.OCI_STAGING_HOST }}
+      OCI_USER: ${{ secrets.OCI_STAGING_USER }}
+      OCI_PUBLIC_HOSTNAME: ${{ inputs.public_hostname }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+    steps:
+      - name: Validate deployment inputs
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          test -n "$OCI_HOST"
+          test -n "$OCI_USER"
+          node -e 'const hostname = process.env.OCI_PUBLIC_HOSTNAME; const u = new URL(`https://${hostname}`); const dnsHostname = /^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/u; if (u.protocol !== "https:" || u.hostname !== hostname.toLowerCase() || u.username || u.password || u.pathname !== "/" || u.search || u.hash || !dnsHostname.test(u.hostname)) process.exit(1)'
+
+      - name: Prepare pinned SSH identity
+        env:
+          OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_STAGING_SSH_PRIVATE_KEY }}
+          OCI_KNOWN_HOSTS: ${{ secrets.OCI_STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$OCI_SSH_PRIVATE_KEY"
+          test -n "$OCI_KNOWN_HOSTS"
+          umask 077
+          printf '%s\n' "$OCI_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oci-staging-key"
+          printf '%s\n' "$OCI_KNOWN_HOSTS" > "$RUNNER_TEMP/oci-known-hosts"
+
+      - name: Deploy and verify exact SHA
+        run: |
+          set -euo pipefail
+          candidate_sha="${CANDIDATE_SHA,,}"
+          public_hostname="${OCI_PUBLIC_HOSTNAME,,}"
+          ssh -i "$RUNNER_TEMP/oci-staging-key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
+            "$OCI_USER@$OCI_HOST" bash -s -- "$candidate_sha" "$public_hostname" <<'REMOTE'
+          set -euo pipefail
+          candidate_sha="$1"
+          public_hostname="$2"
+          cd /opt/matchday
+          git fetch origin "$candidate_sha"
+          git checkout --detach "$candidate_sha"
+          CANDIDATE_SHA="$candidate_sha" OCI_PUBLIC_HOSTNAME="$public_hostname" infra/oci/deploy.sh
+          REMOTE
+
+          actual_sha="$(curl --fail --silent --show-error "https://${public_hostname}/api/v1/meta/build" | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => process.stdout.write(JSON.parse(s).git_sha ?? ""))')"
+          test "$actual_sha" = "$candidate_sha"
+          echo "OCI staging verified for $actual_sha"
