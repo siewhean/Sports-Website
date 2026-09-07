@@ -25,8 +25,10 @@ jobs:
     timeout-minutes: 120
     env:
       CANDIDATE_SHA: b8d0dc1b3d393a453615a1b0c930dc11cd9b48cb
-      CONTROL_TOOLING_SHA: dc6fcac2dd3b63ab003deaf16258aaafe7c86aee
-      CANDIDATE_CI_RUN_ID: '34131250651'
+      # The control branch is the immutable workflow/tooling source for this run.
+      # It is deliberately distinct from the frozen product candidate below.
+      CONTROL_TOOLING_SHA: ${{ github.sha }}
+      CANDIDATE_CI_RUN_ID: "34131250651"
       TARGET_URL: https://c5-drill.poladex.shop
       OCI_PUBLIC_HOSTNAME: c5-drill.poladex.shop
       OCI_HOST: ${{ secrets.OCI_STAGING_HOST }}
@@ -122,9 +124,9 @@ jobs:
           candidate="$1"
           control_sha="$2"
           hostname="$3"
-          repo=/opt/matchday
-          worktree="/opt/matchday-candidates/$candidate"
-          transfer="/opt/matchday-gate-d-transfer/$candidate"
+          repo=/opt/matchday/oci-src
+          worktree="/home/opc/matchday-gate-d/candidates/$candidate"
+          transfer="/home/opc/matchday-gate-d/transfer/$candidate"
           env_source="$repo/infra/oci/.env.oci"
 
           test -d "$repo/.git"
