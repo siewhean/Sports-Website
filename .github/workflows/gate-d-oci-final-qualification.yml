@@ -217,7 +217,7 @@ jobs:
             sleep 5
           done
 
-          "${compose[@]}" exec -T api node --input-type=module <<'NODE'
+          "${compose[@]}" exec -T -w /app/packages/database api node --input-type=module <<'NODE'
           import postgres from 'postgres';
           const sql = postgres(process.env.DATABASE_URL, { max: 1 });
           try {
