@@ -266,13 +266,13 @@ jobs:
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
-            "$OCI_USER@$OCI_HOST:/opt/matchday-gate-d-transfer/$CANDIDATE_SHA/scorekeeper-access.json" \
+            "$OCI_USER@$OCI_HOST:/home/opc/matchday-gate-d/transfer/$CANDIDATE_SHA/scorekeeper-access.json" \
             "$secret_file"
           scp -i "$RUNNER_TEMP/oci-staging-key" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
-            "$OCI_USER@$OCI_HOST:/opt/matchday-gate-d-transfer/$CANDIDATE_SHA/staging-pilot-seed.json" \
+            "$OCI_USER@$OCI_HOST:/home/opc/matchday-gate-d/transfer/$CANDIDATE_SHA/staging-pilot-seed.json" \
             candidate/artifacts/staging-pilot-seed.json
           chmod 600 "$secret_file"
           test "$(stat -c '%a' "$secret_file")" = 600
@@ -282,7 +282,7 @@ jobs:
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
-            "$OCI_USER@$OCI_HOST" "rm -rf -- '/opt/matchday-gate-d-transfer/$CANDIDATE_SHA'"
+            "$OCI_USER@$OCI_HOST" "rm -rf -- '/home/opc/matchday-gate-d/transfer/$CANDIDATE_SHA'"
 
       - name: Install pinned candidate dependencies
         working-directory: candidate
@@ -348,7 +348,7 @@ jobs:
               -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
               "$OCI_USER@$OCI_HOST" \
-              "rm -rf -- '/opt/matchday-gate-d-transfer/$CANDIDATE_SHA'; api_id=\$(docker ps --filter label=com.docker.compose.project=matchday-oci --filter label=com.docker.compose.service=api -q | head -1); if [ -n \"\$api_id\" ]; then docker exec \"\$api_id\" sh -lc 'rm -rf /tmp/matchday-gate-d-scoring-*'; fi" || true
+              "rm -rf -- '/home/opc/matchday-gate-d/transfer/$CANDIDATE_SHA'; api_id=\$(docker ps --filter label=com.docker.compose.project=matchday-oci --filter label=com.docker.compose.service=api -q | head -1); if [ -n \"\$api_id\" ]; then docker exec \"\$api_id\" sh -lc 'rm -rf /tmp/matchday-gate-d-scoring-*'; fi" || true
           fi
 
       - name: Retain non-secret final Gate D receipts
