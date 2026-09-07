@@ -8,7 +8,7 @@ ENV COREPACK_HOME=/tmp/corepack
 RUN corepack enable \
   && corepack prepare pnpm@10.33.0 --activate
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY apps/ apps/
 COPY packages/ packages/
 RUN pnpm install --frozen-lockfile
