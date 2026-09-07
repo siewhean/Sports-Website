@@ -233,7 +233,7 @@ jobs:
           NODE
 
           docker exec "$api_id" sh -lc 'rm -rf /app/artifacts /tmp/matchday-gate-d-scoring-* && mkdir -p /app/artifacts'
-          "${compose[@]}" exec -T -e TARGET_URL="https://${hostname}" api pnpm seed:staging:pilot
+          "${compose[@]}" exec -T --interactive=false -e TARGET_URL="https://${hostname}" api pnpm seed:staging:pilot
 
           mapfile -t secret_files < <(docker exec "$api_id" sh -lc \
             "find /tmp -maxdepth 2 -type f -path '/tmp/matchday-gate-d-scoring-*/scorekeeper-access.json' -print")
