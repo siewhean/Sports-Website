@@ -324,6 +324,7 @@ jobs:
           APP_ENV: staging
           TMPDIR: ${{ runner.temp }}
           GATE_D_SCORING_SECRET_FILE: ${{ steps.handoff.outputs.secret_file }}
+          NODE_OPTIONS: --import=${{ github.workspace }}/scripts/gate-d-safe-fetch-trace.mjs
         run: pnpm test:load:scoring -- --mode=staging
 
       - name: Prove one-time scoring handoff destroyed
