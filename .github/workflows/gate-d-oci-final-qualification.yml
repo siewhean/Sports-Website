@@ -288,12 +288,18 @@ jobs:
             -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
             "$OCI_USER@$OCI_HOST" "rm -rf -- '/home/opc/matchday-gate-d/transfer/$CANDIDATE_SHA'"
 
-      - name: Install pinned candidate dependencies
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+
+      - name: Install and build pinned candidate dependencies
         working-directory: candidate
         run: |
           set -euo pipefail
           npm install --global pnpm@10.33.0
+          test "$(node --version)" = v24.18.0
           pnpm install --frozen-lockfile
+          pnpm --filter @matchday/api... build
 
       - name: Run QA-010 public projection load against OCI
         working-directory: candidate
