@@ -12,15 +12,23 @@ globalThis.fetch = async (...args) => {
   const request = args[0];
   const url = typeof request === "string" ? request : request instanceof URL ? request.href : request.url;
 
-  if (!url.includes("/api/v1/scoring/events") || response.ok) return response;
+  if (!url.includes("/api/v1/scoring/events")) return response;
 
   let code = "non_json_error";
+  let outcome = "unavailable";
+  let aggregateVersionKind = "unavailable";
   try {
     const body = await response.clone().json();
     if (typeof body?.error?.code === "string") code = body.error.code;
+    if (typeof body?.outcome === "string") outcome = body.outcome;
+    aggregateVersionKind = typeof body?.aggregate_version;
   } catch {
     // The response metadata remains sufficient when an intermediary sent HTML.
   }
-  console.log(`[gate-d-control] rejected scoring mutation: status=${response.status} code=${code}`);
+  if (!response.ok || outcome !== "accepted") {
+    console.log(
+      `[gate-d-control] non-accepted scoring mutation: status=${response.status} outcome=${outcome} aggregate_version_type=${aggregateVersionKind} code=${code}`,
+    );
+  }
   return response;
 };
