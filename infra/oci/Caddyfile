@@ -1,6 +1,10 @@
 {$OCI_PUBLIC_HOSTNAME} {
   encode gzip zstd
-  @api path /api/v1/* /health/* /openapi.json /docs/*
+  @privateHealth path /health/deep /health/deep/*
+  handle @privateHealth {
+    respond 404
+  }
+  @api path /api/v1/* /health/live /health/ready /health/version /openapi.json /docs /docs/*
   handle @api {
     reverse_proxy api:4000
   }

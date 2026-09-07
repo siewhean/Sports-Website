@@ -4,7 +4,7 @@ This is a provider-specific deployment for the Matchday API, PostgreSQL, Redis, 
 
 ## VM and network
 
-Create an OCI Always Free Ampere A1 VM in the tenancy home region. The current Always Free allowance is up to 2 OCPUs and 12 GB RAM in total, subject to OCI capacity. Use Ubuntu ARM64. Add ingress rules for TCP 22 from the operator IP and TCP 80/443 from the internet. Do not expose PostgreSQL 5432 or Redis 6379.
+Use an OCI Ampere A1 VM with at least 2 OCPUs and 12 GB RAM running Ubuntu ARM64. Confirm the tenancy's available Always Free allocation and capacity before provisioning. Add ingress rules for TCP 22 from the operator IP and TCP 80/443 from the internet. Do not expose PostgreSQL 5432 or Redis 6379.
 
 Install Docker Engine and the Compose plugin, clone this repository, and create `infra/oci/.env.oci` from `.env.oci.example`. Generate unique URL-safe secrets; do not commit the file. Replace every `CHANGE_ME` token and both `staging.example.com` and `example.com` values with the real staging hostname and its apex registrable domain. Keep `SCORING_SESSION_SEAL_KEY` separate from the API HMAC keys because the web BFF uses it to seal its host-only scoring cookie. Configure the required OIDC tenant, edge-cache purge bridge, and SMTP sink/provider. Create an A record for `OCI_PUBLIC_HOSTNAME` pointing to the VM before starting Caddy so it can obtain a certificate. The fixed Compose address `172.30.0.10` is Caddy; keep `API_TRUSTED_PROXIES=172.30.0.10` so client IPs survive the proxy for rate limiting.
 
@@ -23,7 +23,11 @@ git checkout --detach "$CANDIDATE_SHA"
 infra/oci/deploy.sh
 ```
 
-The script refuses a dirty checkout, runs migrations in a one-shot container, starts the API and worker, waits for `/health/ready`, and verifies `/api/v1/meta/build` reports the exact candidate SHA. PostgreSQL and Redis are reachable only on the Compose backend network.
+The script refuses a dirty checkout or unresolved secret placeholders, runs migrations in a one-shot container, starts the services, waits for `/health/ready` with bounded requests, and verifies both the API Git SHA and web build-ID header. It also rejects a stopped or restarting worker during three startup observations. PostgreSQL and Redis are reachable only on the Compose backend network, and Caddy blocks public `/health/deep` requests. `Dockerfile.dockerignore` excludes nested environment files and local dependencies from the build context.
+
+The exported `CANDIDATE_SHA` is authoritative for each deployment; updating application code does not require editing the secret file. Set `IDENTITY_HOSTED_RECOVERY_URL` to the real identity provider's recovery page. SMTP port 587 uses `SMTP_SECURE=false` for STARTTLS; implicit TLS on port 465 uses `true`. Configure both SMTP authentication fields when required by the provider.
+
+Run deployment regression checks with `node --test infra/oci/deploy.test.mjs`. These exercise preflight and rollout control flow with mock commands; they do not prove container startup or OCI performance.
 
 The workflow intentionally accepts any full SHA that the staging checkout can fetch; release approval supplies the candidate SHA and the API attestation prevents a different image from being mistaken for it. Keep branch and approval policy in the protected GitHub environment rather than relying on a provider-specific branch name.
 
