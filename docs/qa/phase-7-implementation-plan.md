@@ -8,6 +8,8 @@
 
 **Gates:** D (local pilot) and E (national parallel pilot)
 
+**Current Gate D evidence:** [7 September audit and remaining closure](gate-d-current-status.md). Latest deployed candidate passed hosted CI and public-read load, but failed the scoring latency budget; Gate D remains HOLD.
+
 **Scope:** QA-001–017, QA-019–030 (QA-018 printed fallback pack is Phase 5-owned, already satisfied at Gate C)
 
 ---

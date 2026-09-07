@@ -198,6 +198,27 @@ function nestedValues(value: unknown, keys: ReadonlySet<string>): string[] {
 }
 
 describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
+  it("serializes concurrent first writes on a stream that is created once", async () => {
+    const world = await createScoringWorld("volleyball");
+    const command = {
+      client_event_id: randomUUID(),
+      type: "match_started",
+      occurred_at: new Date().toISOString(),
+    };
+    const receipts = await Promise.all([
+      runtime.appendCanonicalScoreEvent(world.auth, command, 0, randomUUID()),
+      runtime.appendCanonicalScoreEvent(world.auth, command, 0, randomUUID()),
+    ]);
+    expect(receipts.map((receipt) => receipt.duplicate).sort()).toEqual([false, true]);
+    expect(new Set(receipts.map((receipt) => receipt.event_id)).size).toBe(1);
+    expect(receipts.every((receipt) => receipt.aggregate_version === 1)).toBe(true);
+
+    const [stream] = await sql<{ current_version: number }[]>`
+      SELECT current_version FROM match_score_streams WHERE match_id=${world.match.id}
+    `;
+    expect(stream?.current_version).toBe(1);
+  });
+
   it.each([
     ["badminton", 21, 0],
     ["table_tennis", 11, 0],

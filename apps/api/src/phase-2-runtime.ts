@@ -391,7 +391,18 @@ type CanonicalScoreEventRow = {
   actor_account_id: string | null;
 };
 
+type CanonicalStreamRow = {
+  competition_id: string;
+  division_id: string;
+  sport_code: SportId;
+  pack_version: string;
+  settings_snapshot: SportPackSettings | string;
+  settings_fingerprint: string;
+  current_version: number;
+};
+
 type CanonicalScoringContext = {
+  locked_stream?: CanonicalStreamRow | null;
   competition_id: string;
   division_id: string;
   sport_code: SportId;
@@ -2870,13 +2881,16 @@ export class Phase2Runtime {
         division_override: Record<string, unknown> | string | null;
         match_state: string;
         locked_at: Date | string | null;
+        locked_stream: CanonicalStreamRow | null;
       }>(
-        `SELECT m.competition_id,m.division_id,c.sport_code,settings.pack_version,
+        `${lock ? "WITH locked_match AS MATERIALIZED (SELECT * FROM matches WHERE id=$1 FOR UPDATE)" : ""}
+         SELECT m.competition_id,m.division_id,c.sport_code,settings.pack_version,
                 division_settings.pack_version AS division_pack_version,
                 settings.recommended_snapshot,settings.settings_override AS competition_override,
                 division_settings.settings_override AS division_override,
-                m.state AS match_state,settings.locked_at
-         FROM matches m
+                m.state AS match_state,settings.locked_at,
+                ${lock ? "row_to_json(stream)" : "NULL::json"} AS locked_stream
+         FROM ${lock ? "locked_match" : "matches"} m
          JOIN competitions c ON c.id=m.competition_id
          JOIN competition_sport_settings settings
            ON settings.competition_id=m.competition_id AND settings.sport_code=c.sport_code
@@ -2884,7 +2898,16 @@ export class Phase2Runtime {
            ON division_settings.division_id=m.division_id
           AND division_settings.competition_id=m.competition_id
           AND division_settings.sport_code=c.sport_code
-         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m" : ""}`,
+         ${
+           lock
+             ? `LEFT JOIN LATERAL (
+                  SELECT competition_id,division_id,sport_code,pack_version,
+                         settings_snapshot,settings_fingerprint,current_version
+                  FROM match_score_streams WHERE match_id=m.id FOR UPDATE
+                ) stream ON true`
+             : ""
+         }
+         WHERE m.id=$1`,
         [matchId],
       ),
       "Match scoring settings not found",
@@ -2930,6 +2953,7 @@ export class Phase2Runtime {
       settings_fingerprint: stableHash(settings),
       match_state: row.match_state,
       settings_locked: Boolean(row.locked_at),
+      ...(lock ? { locked_stream: row.locked_stream } : {}),
     };
   }
 
@@ -2974,24 +2998,21 @@ export class Phase2Runtime {
     matchId: string,
     context: CanonicalScoringContext,
   ): Promise<CanonicalScoringContext> {
-    // Fast path: SELECT FOR UPDATE first — avoids a wasted INSERT on every write after stream creation.
-    type StreamRow = {
-      competition_id: string;
-      division_id: string;
-      sport_code: SportId;
-      pack_version: string;
-      settings_snapshot: SportPackSettings | string;
-      settings_fingerprint: string;
-      current_version: number;
-    };
-    let streamRows = await tx.unsafe<StreamRow>(
-      `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version
-       FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
-      [matchId],
-    );
+    // The append path has already locked the match and stream together. Other
+    // callers can still acquire the stream lock here when no row was prefetched.
+    let streamRows =
+      context.locked_stream !== undefined
+        ? context.locked_stream === null
+          ? []
+          : [context.locked_stream]
+        : await tx.unsafe<CanonicalStreamRow>(
+            `SELECT competition_id,division_id,sport_code,pack_version,settings_snapshot,settings_fingerprint,current_version
+             FROM match_score_streams WHERE match_id=$1 FOR UPDATE`,
+            [matchId],
+          );
     if (!streamRows[0]) {
       // Stream does not exist yet — create it (only on first score event for this match).
-      streamRows = await tx.unsafe<StreamRow>(
+      streamRows = await tx.unsafe<CanonicalStreamRow>(
         `INSERT INTO match_score_streams (
            match_id,competition_id,division_id,sport_code,pack_version,
            settings_snapshot,settings_fingerprint,current_version,created_at,updated_at
