@@ -1,6 +1,8 @@
 # Deployment infrastructure
 
-Production deployment definitions will target containerised API and workers plus CDN-hosted web assets. Provider-specific resources remain blocked on the Phase 0 provider and regional-durability decisions.
+The OCI controlled-staging deployment is defined in [`../oci`](../oci/). It runs the containerised API, web surface, worker, PostgreSQL, Redis, and Caddy HTTPS proxy on an OCI VM. Production deployment still requires a separate durability and provider decision.
+
+The manual deployment is also exposed as the `OCI controlled staging deploy` workflow. Configure the `gate-d-controlled-staging` environment with `OCI_STAGING_HOST`, `OCI_STAGING_USER`, `OCI_STAGING_SSH_PRIVATE_KEY`, and `OCI_STAGING_KNOWN_HOSTS` before dispatching it.
 
 The provider-neutral contract is checked into `asset-delivery.contract.json`. Every web build must run `pnpm deploy:manifest` and retain `artifacts/deployment-manifest.json` with its release evidence. `pnpm asset-delivery:verify:origin` starts the exact local production build, binds its public build-ID response header to that manifest, verifies every immutable asset's bytes, and checks compression, conditional requests, private HTML, service-worker caching, and security headers.
 
