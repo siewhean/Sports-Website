@@ -3240,6 +3240,7 @@ export class Phase2Runtime {
             );
           }
           return {
+            match_id: session.match_id,
             client_event_id: command.clientEventId,
             duplicate: true as const,
             event_id: duplicate.id,
@@ -3355,6 +3356,7 @@ export class Phase2Runtime {
           },
         });
         return {
+          match_id: session.match_id,
           client_event_id: command.clientEventId,
           duplicate: false as const,
           event_id: eventId,
