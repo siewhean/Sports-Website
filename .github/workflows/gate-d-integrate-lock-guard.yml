@@ -30,22 +30,15 @@ jobs:
 
           path = Path('apps/api/src/phase-2-runtime.ts')
           text = path.read_text()
-          old = '''           locked_settings AS (
-             UPDATE competition_sport_settings
-             SET locked_at=COALESCE(locked_at,$15)
-             WHERE competition_id=$2 AND $16::boolean
-           ),'''
-          new = '''           locked_settings AS (
-             UPDATE competition_sport_settings
-             SET locked_at=$15
-             WHERE competition_id=$2 AND locked_at IS NULL AND $16::boolean
-           ),'''
+          old = "SET locked_at=COALESCE(locked_at,$15)\n             WHERE competition_id=$2 AND $16::boolean"
+          new = "SET locked_at=$15\n             WHERE competition_id=$2 AND locked_at IS NULL AND $16::boolean"
           count = text.count(old)
           if count != 1:
-              raise SystemExit(f'expected exactly one settings-lock CTE, found {count}')
+              raise SystemExit(f'expected exactly one settings-lock CTE fragment, found {count}')
           path.write_text(text.replace(old, new, 1))
           PY
           git diff --check
+          test "$(git diff --name-only)" = 'apps/api/src/phase-2-runtime.ts'
           git diff -- apps/api/src/phase-2-runtime.ts
 
       - name: Commit exact integration
