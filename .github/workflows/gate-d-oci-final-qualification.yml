@@ -175,8 +175,12 @@ jobs:
           for service in api web worker migrate; do
             "${compose[@]}" build --pull "$service"
           done
-          "${compose[@]}" --profile migration run --rm migrate
-          "${compose[@]}" up -d --remove-orphans postgres redis api web worker caddy
+          # The remote script arrives over stdin. Do not let the one-off
+          # migration container consume the remainder of that script.
+          "${compose[@]}" --profile migration run --rm -T migrate
+          # Tags are stable by design; force replacement so this service set
+          # is the exact frozen candidate rather than the previous image.
+          "${compose[@]}" up -d --force-recreate --remove-orphans postgres redis api web worker caddy
 
           for attempt in $(seq 1 60); do
             if curl --connect-timeout 5 --max-time 10 --fail --silent --show-error \
