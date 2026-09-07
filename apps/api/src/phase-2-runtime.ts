@@ -3392,8 +3392,8 @@ export class Phase2Runtime {
            ),
            locked_settings AS (
              UPDATE competition_sport_settings
-             SET locked_at=COALESCE(locked_at,$15)
-             WHERE competition_id=$2 AND $16::boolean
+             SET locked_at=$15
+             WHERE competition_id=$2 AND locked_at IS NULL AND $16::boolean
            ),
            started_match AS (
              UPDATE matches SET state='in_progress'
