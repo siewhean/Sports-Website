@@ -169,7 +169,12 @@ jobs:
             grep -Fxq "      $expected" <<<"$compose_config"
           done
 
-          "${compose[@]}" build --pull api web worker migrate
+          # The isolated ARM staging VM's Docker BuildKit daemon permits one
+          # build session at a time.  Build the same frozen services in order
+          # to avoid its multi-session deadlock; no candidate source changes.
+          for service in api web worker migrate; do
+            "${compose[@]}" build --pull "$service"
+          done
           "${compose[@]}" --profile migration run --rm migrate
           "${compose[@]}" up -d --remove-orphans postgres redis api web worker caddy
 
