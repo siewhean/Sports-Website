@@ -17,17 +17,19 @@ globalThis.fetch = async (...args) => {
   let code = "non_json_error";
   let outcome = "unavailable";
   let aggregateVersionKind = "unavailable";
+  let aggregateVersion = -1;
   try {
     const body = await response.clone().json();
     if (typeof body?.error?.code === "string") code = body.error.code;
     if (typeof body?.outcome === "string") outcome = body.outcome;
     aggregateVersionKind = typeof body?.aggregate_version;
+    if (Number.isSafeInteger(body?.aggregate_version)) aggregateVersion = body.aggregate_version;
   } catch {
     // The response metadata remains sufficient when an intermediary sent HTML.
   }
-  if (!response.ok || outcome !== "accepted") {
+  if (!response.ok || outcome !== "accepted" || aggregateVersion >= 31) {
     console.log(
-      `[gate-d-control] non-accepted scoring mutation: status=${response.status} outcome=${outcome} aggregate_version_type=${aggregateVersionKind} code=${code}`,
+      `[gate-d-control] scoring mutation: status=${response.status} outcome=${outcome} aggregate_version=${aggregateVersion} aggregate_version_type=${aggregateVersionKind} code=${code}`,
     );
   }
   return response;
