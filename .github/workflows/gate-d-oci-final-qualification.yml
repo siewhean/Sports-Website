@@ -177,7 +177,7 @@ jobs:
           done
           # The remote script arrives over stdin. Do not let the one-off
           # migration container consume the remainder of that script.
-          "${compose[@]}" --profile migration run --rm -T migrate
+          "${compose[@]}" --profile migration run --rm -T --interactive=false migrate
           # Tags are stable by design; force replacement so this service set
           # is the exact frozen candidate rather than the previous image.
           "${compose[@]}" up -d --force-recreate --remove-orphans postgres redis api web worker caddy
