@@ -2872,7 +2872,7 @@ export class Phase2Runtime {
            ON division_settings.division_id=m.division_id
           AND division_settings.competition_id=m.competition_id
           AND division_settings.sport_code=c.sport_code
-         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m,settings" : ""}`,
+         WHERE m.id=$1 ${lock ? "FOR UPDATE OF m" : ""}`,
         [matchId],
       ),
       "Match scoring settings not found",
@@ -3331,7 +3331,7 @@ export class Phase2Runtime {
           this.now(),
         ]);
         await tx.unsafe(
-          `UPDATE competition_sport_settings SET locked_at=COALESCE(locked_at,$2) WHERE competition_id=$1`,
+          `UPDATE competition_sport_settings SET locked_at=$2 WHERE competition_id=$1 AND locked_at IS NULL`,
           [context.competition_id, this.now()],
         );
         if (command.type === "match_started") {
