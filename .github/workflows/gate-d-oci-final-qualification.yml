@@ -1,0 +1,358 @@
+name: Gate D OCI final candidate qualification
+
+on:
+  push:
+    branches: [gate-d/control-b8d0dc1b]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: gate-d-oci-final-qualification
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  qualify:
+    name: Gate D OCI exact-SHA receipts
+    runs-on: ubuntu-24.04
+    environment: gate-d-controlled-staging
+    timeout-minutes: 120
+    env:
+      CANDIDATE_SHA: b8d0dc1b3d393a453615a1b0c930dc11cd9b48cb
+      CONTROL_TOOLING_SHA: dc6fcac2dd3b63ab003deaf16258aaafe7c86aee
+      CANDIDATE_CI_RUN_ID: '34131250651'
+      TARGET_URL: https://c5-drill.poladex.shop
+      OCI_PUBLIC_HOSTNAME: c5-drill.poladex.shop
+      OCI_HOST: ${{ secrets.OCI_STAGING_HOST }}
+      OCI_USER: ${{ secrets.OCI_STAGING_USER }}
+
+    steps:
+      - name: Check out control tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Wait for exact candidate CI and PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 120); do
+            run_json="$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_CI_RUN_ID}")"
+            read -r status conclusion head_sha < <(printf '%s' "$run_json" | node -e '
+              let s=""; process.stdin.on("data", d => s += d).on("end", () => {
+                const j=JSON.parse(s); console.log(j.status ?? "", j.conclusion ?? "", j.head_sha ?? "");
+              });')
+            test "$head_sha" = "$CANDIDATE_SHA"
+            if [ "$status" = completed ]; then
+              test "$conclusion" = success
+              break
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo 'Exact candidate CI did not complete within the bounded wait' >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          pr_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/43")"
+          read -r pr_state pr_head < <(printf '%s' "$pr_json" | node -e '
+            let s=""; process.stdin.on("data", d => s += d).on("end", () => {
+              const j=JSON.parse(s); console.log(j.state ?? "", j.head?.sha ?? "");
+            });')
+          test "$pr_state" = open
+          test "$pr_head" = "$CANDIDATE_SHA"
+
+      - name: Check out exact product candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove frozen candidate and QA-011 harness
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git -C candidate fetch --no-tags origin phase-7/release-hardening
+          test "$(git -C candidate rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git -C candidate status --porcelain=v1 --untracked-files=all)"
+          expected_blob="$(git -C candidate rev-parse "$CANDIDATE_SHA:apps/api/scripts/run-load-scoring.ts")"
+          actual_blob="$(git -C candidate hash-object apps/api/scripts/run-load-scoring.ts)"
+          test "$actual_blob" = "$expected_blob"
+          echo "Frozen QA-011 harness blob: $actual_blob"
+
+      - name: Prepare pinned SSH identity
+        env:
+          OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_STAGING_SSH_PRIVATE_KEY }}
+          OCI_KNOWN_HOSTS: ${{ secrets.OCI_STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$OCI_HOST"
+          test -n "$OCI_USER"
+          test -n "$OCI_SSH_PRIVATE_KEY"
+          test -n "$OCI_KNOWN_HOSTS"
+          umask 077
+          printf '%s\n' "$OCI_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oci-staging-key"
+          printf '%s\n' "$OCI_KNOWN_HOSTS" > "$RUNNER_TEMP/oci-known-hosts"
+
+      - name: Deploy exact product candidate and seed canonical fixture on OCI
+        run: |
+          set -euo pipefail
+          ssh -i "$RUNNER_TEMP/oci-staging-key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
+            "$OCI_USER@$OCI_HOST" bash -s -- \
+            "$CANDIDATE_SHA" "$CONTROL_TOOLING_SHA" "$OCI_PUBLIC_HOSTNAME" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          candidate="$1"
+          control_sha="$2"
+          hostname="$3"
+          repo=/opt/matchday
+          worktree="/opt/matchday-candidates/$candidate"
+          transfer="/opt/matchday-gate-d-transfer/$candidate"
+          env_source="$repo/infra/oci/.env.oci"
+
+          test -d "$repo/.git"
+          test -f "$env_source"
+          env_mode="$(stat -c '%a' "$env_source" 2>/dev/null || stat -f '%Lp' "$env_source")"
+          test "$env_mode" = 600
+
+          git -C "$repo" fetch --no-tags origin "$candidate"
+          git -C "$repo" fetch --no-tags origin "$control_sha"
+          git -C "$repo" cat-file -e "$candidate^{commit}"
+          git -C "$repo" cat-file -e "$control_sha^{commit}"
+
+          git -C "$repo" worktree remove --force "$worktree" >/dev/null 2>&1 || true
+          rm -rf -- "$worktree"
+          git -C "$repo" worktree prune
+          git -C "$repo" worktree add --detach "$worktree" "$candidate"
+          test "$(git -C "$worktree" rev-parse HEAD)" = "$candidate"
+          test -z "$(git -C "$worktree" status --porcelain=v1 --untracked-files=no)"
+
+          mkdir -p "$worktree/infra/oci"
+          for name in .env.oci.example Caddyfile Dockerfile Dockerfile.dockerignore compose.yaml; do
+            git -C "$repo" show "$control_sha:infra/oci/$name" > "$worktree/infra/oci/$name"
+          done
+          cp "$env_source" "$worktree/infra/oci/.env.oci"
+          chmod 600 "$worktree/infra/oci/.env.oci"
+
+          cd "$worktree"
+          export CANDIDATE_SHA="$candidate"
+          export OCI_PUBLIC_HOSTNAME="$hostname"
+          export OCI_ENV_FILE=.env.oci
+          export BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          compose=(docker compose --env-file infra/oci/.env.oci -f infra/oci/compose.yaml)
+
+          compose_config="$("${compose[@]}" config)"
+          for expected in \
+            "API_ALLOWED_ORIGINS: https://${hostname}" \
+            "MATCHDAY_PUBLIC_ORIGIN: https://${hostname}" \
+            "IDENTITY_OIDC_CALLBACK_URI: https://${hostname}/api/v1/identity/callback" \
+            "IDENTITY_POST_AUTH_REDIRECT_URIS: https://${hostname}/organiser"; do
+            grep -Fxq "      $expected" <<<"$compose_config"
+          done
+
+          "${compose[@]}" build --pull api web worker migrate
+          "${compose[@]}" --profile migration run --rm migrate
+          "${compose[@]}" up -d --remove-orphans postgres redis api web worker caddy
+
+          for attempt in $(seq 1 60); do
+            if curl --connect-timeout 5 --max-time 10 --fail --silent --show-error \
+              "https://${hostname}/health/ready" >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              "${compose[@]}" ps
+              exit 1
+            fi
+            sleep 5
+          done
+
+          actual_sha="$(curl --fail --silent --show-error "https://${hostname}/api/v1/meta/build" | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin).get("git_sha", ""))')"
+          test "$actual_sha" = "$candidate"
+          ready_json="$(curl --fail --silent --show-error "https://${hostname}/health/ready")"
+          printf '%s' "$ready_json" | python3 -c '
+          import json,sys
+          j=json.load(sys.stdin); d=j.get("dependencies", {})
+          assert d.get("database") and d.get("redis") and d.get("queue"), j
+          '
+          web_build_id="$(curl --fail --silent --show-error -D - -o /dev/null "https://${hostname}/" | \
+            awk 'tolower($1) == "x-matchday-build-id:" { print $2 }' | tr -d '\r\n')"
+          test "$web_build_id" = "$candidate"
+
+          api_id="$("${compose[@]}" ps -q api)"
+          worker_id="$("${compose[@]}" ps -q worker)"
+          test -n "$api_id"
+          test -n "$worker_id"
+          for observation in 1 2 3; do
+            worker_state="$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' "$worker_id")"
+            test "$worker_state" = 'running 0'
+            sleep 5
+          done
+
+          "${compose[@]}" exec -T api node --input-type=module <<'NODE'
+          import postgres from 'postgres';
+          const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+          try {
+            await sql`INSERT INTO scoring_fallback_code_hmac_key_versions
+              (key_version,material_commitment,status)
+              VALUES ('v1',decode(repeat('00',32),'hex'),'primary')
+              ON CONFLICT (key_version) DO NOTHING`;
+            await sql`INSERT INTO scoring_access_hmac_key_versions
+              (key_version,material_commitment,status)
+              VALUES ('v1',decode(repeat('00',32),'hex'),'primary')
+              ON CONFLICT (key_version) DO NOTHING`;
+          } finally { await sql.end({ timeout: 2 }); }
+          NODE
+
+          docker exec "$api_id" sh -lc 'rm -rf /app/artifacts /tmp/matchday-gate-d-scoring-* && mkdir -p /app/artifacts'
+          "${compose[@]}" exec -T -e TARGET_URL="https://${hostname}" api pnpm seed:staging:pilot
+
+          mapfile -t secret_files < <(docker exec "$api_id" sh -lc \
+            "find /tmp -maxdepth 2 -type f -path '/tmp/matchday-gate-d-scoring-*/scorekeeper-access.json' -print")
+          test "${#secret_files[@]}" -eq 1
+          secret_file="${secret_files[0]}"
+          secret_dir="$(dirname "$secret_file")"
+          test "$(docker exec "$api_id" stat -c '%a' "$secret_file")" = 600
+
+          rm -rf -- "$transfer"
+          install -d -m 700 "$transfer"
+          docker cp "$api_id:$secret_file" "$transfer/scorekeeper-access.json"
+          docker cp "$api_id:/app/artifacts/staging-pilot-seed.json" "$transfer/staging-pilot-seed.json"
+          chmod 600 "$transfer/scorekeeper-access.json"
+          chmod 644 "$transfer/staging-pilot-seed.json"
+          docker exec "$api_id" rm -f -- "$secret_file"
+          docker exec "$api_id" rmdir -- "$secret_dir"
+
+          test -z "$(git -C "$worktree" status --porcelain=v1 --untracked-files=no)"
+          expected_blob="$(git -C "$worktree" rev-parse "$candidate:apps/api/scripts/run-load-scoring.ts")"
+          actual_blob="$(git -C "$worktree" hash-object apps/api/scripts/run-load-scoring.ts)"
+          test "$actual_blob" = "$expected_blob"
+          echo "OCI deployment and canonical seed ready for exact candidate $candidate"
+          REMOTE_SCRIPT
+
+      - name: Retrieve single-use handoff and seed receipt
+        id: handoff
+        run: |
+          set -euo pipefail
+          secret_dir="$RUNNER_TEMP/matchday-gate-d-scoring-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 700 "$secret_dir"
+          secret_file="$secret_dir/scorekeeper-access.json"
+          mkdir -p candidate/artifacts
+          scp -i "$RUNNER_TEMP/oci-staging-key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
+            "$OCI_USER@$OCI_HOST:/opt/matchday-gate-d-transfer/$CANDIDATE_SHA/scorekeeper-access.json" \
+            "$secret_file"
+          scp -i "$RUNNER_TEMP/oci-staging-key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
+            "$OCI_USER@$OCI_HOST:/opt/matchday-gate-d-transfer/$CANDIDATE_SHA/staging-pilot-seed.json" \
+            candidate/artifacts/staging-pilot-seed.json
+          chmod 600 "$secret_file"
+          test "$(stat -c '%a' "$secret_file")" = 600
+          printf 'secret_file=%s\n' "$secret_file" >> "$GITHUB_OUTPUT"
+          printf 'secret_dir=%s\n' "$secret_dir" >> "$GITHUB_OUTPUT"
+          ssh -i "$RUNNER_TEMP/oci-staging-key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
+            "$OCI_USER@$OCI_HOST" "rm -rf -- '/opt/matchday-gate-d-transfer/$CANDIDATE_SHA'"
+
+      - name: Install pinned candidate dependencies
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.33.0
+          pnpm install --frozen-lockfile
+
+      - name: Run QA-010 public projection load against OCI
+        working-directory: candidate
+        env:
+          APP_ENV: staging
+          TMPDIR: ${{ runner.temp }}
+        run: pnpm test:load:public -- --mode=staging
+
+      - name: Re-prove frozen QA-011 harness before load
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          expected_blob="$(git rev-parse "$CANDIDATE_SHA:apps/api/scripts/run-load-scoring.ts")"
+          actual_blob="$(git hash-object apps/api/scripts/run-load-scoring.ts)"
+          test "$actual_blob" = "$expected_blob"
+          git diff --exit-code -- apps/api/scripts/run-load-scoring.ts
+          echo "Verified QA-011 harness blob $actual_blob"
+
+      - name: Run unchanged QA-011 scoring and result propagation against OCI
+        working-directory: candidate
+        env:
+          APP_ENV: staging
+          TMPDIR: ${{ runner.temp }}
+          GATE_D_SCORING_SECRET_FILE: ${{ steps.handoff.outputs.secret_file }}
+        run: pnpm test:load:scoring -- --mode=staging
+
+      - name: Prove one-time scoring handoff destroyed
+        if: ${{ always() && steps.handoff.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          test ! -e '${{ steps.handoff.outputs.secret_file }}'
+          test ! -d '${{ steps.handoff.outputs.secret_dir }}'
+
+      - name: Validate exact-SHA evidence ledger
+        working-directory: candidate
+        run: node scripts/validate-gate-d-evidence.mjs "$CANDIDATE_SHA"
+
+      - name: Prove harness and tracked product source remained unchanged
+        if: ${{ always() }}
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          expected_blob="$(git rev-parse "$CANDIDATE_SHA:apps/api/scripts/run-load-scoring.ts")"
+          actual_blob="$(git hash-object apps/api/scripts/run-load-scoring.ts)"
+          test "$actual_blob" = "$expected_blob"
+          git diff --exit-code
+
+      - name: Clean up any residual one-time secrets
+        if: ${{ always() }}
+        run: |
+          set +e
+          rm -rf -- "$RUNNER_TEMP"/matchday-gate-d-scoring-*
+          if [ -f "$RUNNER_TEMP/oci-staging-key" ]; then
+            ssh -i "$RUNNER_TEMP/oci-staging-key" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/oci-known-hosts" \
+              "$OCI_USER@$OCI_HOST" \
+              "rm -rf -- '/opt/matchday-gate-d-transfer/$CANDIDATE_SHA'; api_id=\$(docker ps --filter label=com.docker.compose.project=matchday-oci --filter label=com.docker.compose.service=api -q | head -1); if [ -n \"\$api_id\" ]; then docker exec \"\$api_id\" sh -lc 'rm -rf /tmp/matchday-gate-d-scoring-*'; fi" || true
+          fi
+
+      - name: Retain non-secret final Gate D receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gate-d-oci-final-${{ env.CANDIDATE_SHA }}
+          path: |
+            candidate/artifacts/staging-pilot-seed.json
+            candidate/artifacts/qa-010-load-public-summary.json
+            candidate/artifacts/qa-011-load-scoring-summary.json
+            candidate/artifacts/qa-011-result-propagation-summary.json
+          if-no-files-found: warn
+          retention-days: 90
