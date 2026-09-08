@@ -504,6 +504,68 @@ function compareAssignment(left: ScheduleAssignment, right: ScheduleAssignment):
   );
 }
 
+function buildTransitiveDependencies(matches: readonly SchedulingMatch[]): Map<string, Set<string>> {
+  const byId = new Map(matches.map((m) => [m.id, m]));
+  const ancestors = new Map<string, Set<string>>();
+  function getAncestors(id: string): Set<string> {
+    const existing = ancestors.get(id);
+    if (existing) return existing;
+    const match = byId.get(id);
+    const set = new Set<string>(match?.dependencyMatchIds ?? []);
+    for (const depId of match?.dependencyMatchIds ?? []) {
+      for (const anc of getAncestors(depId)) {
+        set.add(anc);
+      }
+    }
+    ancestors.set(id, set);
+    return set;
+  }
+  for (const match of matches) {
+    getAncestors(match.id);
+  }
+  return ancestors;
+}
+
+function maxMatchesForEntryInCollection(
+  entryId: string,
+  matches: readonly SchedulingMatch[],
+  ancestorsByMatchId: ReadonlyMap<string, ReadonlySet<string>>,
+): number {
+  const relevant = matches.filter((m) => m.possibleEntryIds.includes(entryId));
+  if (relevant.length <= 1) return relevant.length;
+  const definite = relevant.filter((m) => m.possibleEntryIds.length === 2);
+  const advancement = relevant.filter((m) => m.possibleEntryIds.length > 2);
+  if (advancement.length === 0) return definite.length;
+
+  const advIds = new Set(advancement.map((m) => m.id));
+  const memo = new Map<string, number>();
+  function chainLen(id: string): number {
+    const cached = memo.get(id);
+    if (cached !== undefined) return cached;
+    const ancestors = ancestorsByMatchId.get(id);
+    let maxPrev = 0;
+    if (ancestors) {
+      for (const prevId of advIds) {
+        if (ancestors.has(prevId)) {
+          const len = chainLen(prevId);
+          if (len > maxPrev) maxPrev = len;
+        }
+      }
+    }
+    const res = 1 + maxPrev;
+    memo.set(id, res);
+    return res;
+  }
+
+  let maxAdvChain = 0;
+  for (const m of advancement) {
+    const len = chainLen(m.id);
+    if (len > maxAdvChain) maxAdvChain = len;
+  }
+
+  return definite.length + maxAdvChain;
+}
+
 export function validateSchedule(
   problem: ScheduleProblem,
   submittedAssignments: readonly ScheduleAssignment[],
@@ -683,29 +745,30 @@ export function validateSchedule(
 
   const maximumSeverity = severityFor(problem.constraints.maximumMatchesPerDay.mode);
   if (maximumSeverity) {
-    const counts = new Map<string, { count: number; matchIds: string[] }>();
+    const ancestors = buildTransitiveDependencies(problem.matches);
+    const matchesByDate = new Map<string, SchedulingMatch[]>();
     for (const assignment of assigned) {
       const match = matches.get(assignment.matchId)!;
       const date = localDateKey(assignment.startEpochMs, problem.timeZone);
-      for (const entryId of match.possibleEntryIds) {
-        const key = `${entryId}\0${date}`;
-        const state = counts.get(key) ?? { count: 0, matchIds: [] };
-        state.count += 1;
-        state.matchIds.push(match.id);
-        counts.set(key, state);
-      }
+      const list = matchesByDate.get(date) ?? [];
+      list.push(match);
+      matchesByDate.set(date, list);
     }
-    for (const [key, state] of counts) {
-      const limit = problem.constraints.maximumMatchesPerDay.value.matches;
-      if (state.count > limit) {
-        const [entryId, date] = key.split("\0");
-        violations.push({
-          code: "maximum_matches_per_day",
-          severity: maximumSeverity,
-          matchIds: state.matchIds,
-          message: `Possible participant ${entryId} has ${state.count} matches on ${date}; configured maximum is ${limit}`,
-          amount: state.count - limit,
-        });
+    const limit = problem.constraints.maximumMatchesPerDay.value.matches;
+    for (const [date, dayMatches] of matchesByDate) {
+      const dayEntries = new Set(dayMatches.flatMap((m) => m.possibleEntryIds));
+      for (const entryId of dayEntries) {
+        const count = maxMatchesForEntryInCollection(entryId, dayMatches, ancestors);
+        if (count > limit) {
+          const matchIds = dayMatches.filter((m) => m.possibleEntryIds.includes(entryId)).map((m) => m.id);
+          violations.push({
+            code: "maximum_matches_per_day",
+            severity: maximumSeverity,
+            matchIds,
+            message: `Possible participant ${entryId} has ${count} matches on ${date}; configured maximum is ${limit}`,
+            amount: count - limit,
+          });
+        }
       }
     }
   }
@@ -913,16 +976,23 @@ function pairRestMinutes(problem: ScheduleProblem, assignments: readonly Schedul
 
 function entryDayCounts(problem: ScheduleProblem, assignments: readonly ScheduleAssignment[]): number[] {
   const matches = new Map(problem.matches.map((match) => [match.id, match]));
-  const counts = new Map<string, number>();
+  const ancestors = buildTransitiveDependencies(problem.matches);
+  const matchesByDate = new Map<string, SchedulingMatch[]>();
   for (const assignment of assignments) {
     const match = matches.get(assignment.matchId)!;
     const date = localDateKey(assignment.startEpochMs, problem.timeZone);
-    for (const entryId of match.possibleEntryIds) {
-      const key = `${entryId}\0${date}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    const list = matchesByDate.get(date) ?? [];
+    list.push(match);
+    matchesByDate.set(date, list);
+  }
+  const counts: number[] = [];
+  for (const dayMatches of matchesByDate.values()) {
+    const dayEntries = new Set(dayMatches.flatMap((m) => m.possibleEntryIds));
+    for (const entryId of dayEntries) {
+      counts.push(maxMatchesForEntryInCollection(entryId, dayMatches, ancestors));
     }
   }
-  return [...counts.values()];
+  return counts;
 }
 
 function roundScore(value: number): number {
@@ -1264,6 +1334,7 @@ type CandidateEvaluationContext = {
   localMinuteByStart: ReadonlyMap<number, number>;
   earlyThreshold: number;
   lateThreshold: number;
+  ancestorsByMatchId: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 function partialAllows(
@@ -1344,14 +1415,14 @@ function partialAllows(
   }
   if (problem.constraints.maximumMatchesPerDay.mode === "required") {
     const date = context.localDateByStart.get(candidate.startEpochMs)!;
+    const limit = problem.constraints.maximumMatchesPerDay.value.matches;
+    const priorOnDate = [...assigned.values()]
+      .filter((prior) => context.localDateByStart.get(prior.startEpochMs) === date)
+      .map((prior) => matches.get(prior.matchId)!);
+    const dayMatches = [...priorOnDate, match];
     for (const entryId of match.possibleEntryIds) {
-      const count = [...assigned.values()].filter((prior) => {
-        const priorMatch = matches.get(prior.matchId)!;
-        return (
-          priorMatch.possibleEntryIds.includes(entryId) && context.localDateByStart.get(prior.startEpochMs) === date
-        );
-      }).length;
-      if (count >= problem.constraints.maximumMatchesPerDay.value.matches) return false;
+      const count = maxMatchesForEntryInCollection(entryId, dayMatches, context.ancestorsByMatchId);
+      if (count > limit) return false;
     }
   }
   if (match.isChampionshipFinal && problem.constraints.preferredFinalTime.mode === "required") {
@@ -1416,16 +1487,14 @@ function candidateRank(
       )
     : Number.MAX_SAFE_INTEGER;
   const date = context.localDateByStart.get(candidate.startEpochMs)!;
+  const priorOnDate = assignedValues
+    .filter((prior) => context.localDateByStart.get(prior.startEpochMs) === date)
+    .map((prior) => matches.get(prior.matchId)!);
+  const candidateDayMatches = [...priorOnDate, match];
   const dailyLoad = Math.max(
     0,
-    ...match.possibleEntryIds.map(
-      (entryId) =>
-        assignedValues.filter((prior) => {
-          const priorMatch = matches.get(prior.matchId)!;
-          return (
-            priorMatch.possibleEntryIds.includes(entryId) && context.localDateByStart.get(prior.startEpochMs) === date
-          );
-        }).length + 1,
+    ...match.possibleEntryIds.map((entryId) =>
+      maxMatchesForEntryInCollection(entryId, candidateDayMatches, context.ancestorsByMatchId),
     ),
   );
   const finalDelta =
@@ -1549,13 +1618,14 @@ function exceedsRequiredDailyMatchCapacity(problem: ScheduleProblem): boolean {
   if (problem.constraints.maximumMatchesPerDay.mode !== "required") return false;
   const availableDates = new Set(problem.slots.map((slot) => localDateKey(slot.startEpochMs, problem.timeZone)));
   const totalLimit = problem.constraints.maximumMatchesPerDay.value.matches * availableDates.size;
-  const possibleMatchesByEntry = new Map<string, number>();
-  for (const match of problem.matches) {
-    for (const entryId of match.possibleEntryIds) {
-      possibleMatchesByEntry.set(entryId, (possibleMatchesByEntry.get(entryId) ?? 0) + 1);
+  const ancestors = buildTransitiveDependencies(problem.matches);
+  const allEntries = new Set(problem.matches.flatMap((match) => match.possibleEntryIds));
+  for (const entryId of allEntries) {
+    if (maxMatchesForEntryInCollection(entryId, problem.matches, ancestors) > totalLimit) {
+      return true;
     }
   }
-  return [...possibleMatchesByEntry.values()].some((count) => count > totalLimit);
+  return false;
 }
 
 function generateIteration(problem: ScheduleProblem, iteration: number): ScheduleAssignment[] {
@@ -1577,6 +1647,7 @@ function generateIteration(problem: ScheduleProblem, iteration: number): Schedul
     ),
     earlyThreshold: parseLocalTime(problem.constraints.balanceEarlyMatches.value.beforeLocalTime, "Early threshold"),
     lateThreshold: parseLocalTime(problem.constraints.balanceLateMatches.value.atOrAfterLocalTime, "Late threshold"),
+    ancestorsByMatchId: buildTransitiveDependencies(problem.matches),
   };
   const assigned = new Map<string, ScheduleAssignment>();
   for (const match of topologicalMatches(problem.matches)) {

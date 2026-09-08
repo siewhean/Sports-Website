@@ -294,6 +294,24 @@ describe("Phase 4 configurable constraint semantics", () => {
     expect(generateScheduleCandidates(problem(matches, slots(3), configured), { maxIterations: 3 })).toEqual([]);
   });
 
+  it("correctly accounts for mutually exclusive tournament advancement branches under maximumMatchesPerDay", () => {
+    // 4 teams: a, b, c, d
+    // 2 semifinals, 1 final, 1 bronze (all sharing a, b, c, d in possibleEntryIds)
+    const sf1 = simpleMatch("sf1", ["a", "b", "c", "d"]);
+    const sf2 = simpleMatch("sf2", ["a", "b", "c", "d"]);
+    const finalMatch = simpleMatch("final", ["a", "b", "c", "d"], ["sf1", "sf2"], { isChampionshipFinal: true });
+    const bronzeMatch = simpleMatch("bronze", ["a", "b", "c", "d"], ["sf1", "sf2"]);
+    const matches = [sf1, sf2, finalMatch, bronzeMatch];
+    // Each team plays at most 1 semifinal and 1 medal match (2 matches total)
+    const configured = constraints({ maximumMatchesPerDay: setting("required", { matches: 2 }) });
+    const available = slots(4);
+    const candidates = generateScheduleCandidates(problem(matches, available, configured), { maxIterations: 1 });
+    expect(candidates.length).toBeGreaterThan(0);
+    const validation = validateSchedule(problem(matches, available, configured), candidates[0]!.assignments);
+    expect(validation.valid).toBe(true);
+    expect(validation.violations.filter((v) => v.code === "maximum_matches_per_day")).toEqual([]);
+  });
+
   it("enforces entry/official availability, featured area, division cohesion, and existing schedule preservation", () => {
     const match = simpleMatch("featured", ["a", "b"], [], { officialIds: ["o1"] });
     const available = slots(2, 2);
