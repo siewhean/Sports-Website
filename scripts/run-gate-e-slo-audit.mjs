@@ -8,7 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHA_PATTERN = /^[0-9a-f]{40}$/iu;
 
 function requireSha(value) {
-  if (!value || !SHA_PATTERN.test(value)) throw new Error(`Gate E SLO audit requires an exact 40-character SHA; got ${value}`);
+  if (!value || !SHA_PATTERN.test(value))
+    throw new Error(`Gate E SLO audit requires an exact 40-character SHA; got ${value}`);
   return value.toLowerCase();
 }
 
@@ -18,14 +19,18 @@ async function readJson(file) {
 
 function requireReceipt(receipt, expectedQa, candidateSha, budgetMs) {
   if (receipt.qa_item !== expectedQa) throw new Error(`Expected ${expectedQa} receipt; got ${receipt.qa_item}`);
-  if (String(receipt.candidate_sha).toLowerCase() !== candidateSha) throw new Error(`${expectedQa} candidate SHA mismatch`);
-  if (String(receipt.deployed_sha).toLowerCase() !== candidateSha) throw new Error(`${expectedQa} deployed SHA mismatch`);
+  if (String(receipt.candidate_sha).toLowerCase() !== candidateSha)
+    throw new Error(`${expectedQa} candidate SHA mismatch`);
+  if (String(receipt.deployed_sha).toLowerCase() !== candidateSha)
+    throw new Error(`${expectedQa} deployed SHA mismatch`);
   if (receipt.verdict !== "PASS") throw new Error(`${expectedQa} receipt is not PASS`);
   const peak = receipt.peak_summary;
-  if (!peak || !Number.isFinite(peak.p95Ms) || !Number.isFinite(peak.errorRate)) throw new Error(`${expectedQa} peak summary is invalid`);
+  if (!peak || !Number.isFinite(peak.p95Ms) || !Number.isFinite(peak.errorRate))
+    throw new Error(`${expectedQa} peak summary is invalid`);
   if (peak.p95Ms >= budgetMs) throw new Error(`${expectedQa} p95 ${peak.p95Ms}ms is not below ${budgetMs}ms`);
   if (peak.errorRate > 0.001) throw new Error(`${expectedQa} error rate ${peak.errorRate} exceeds 0.1%`);
-  if (!receipt.receipt_sha256 || !/^[0-9a-f]{64}$/iu.test(receipt.receipt_sha256)) throw new Error(`${expectedQa} receipt hash missing`);
+  if (!receipt.receipt_sha256 || !/^[0-9a-f]{64}$/iu.test(receipt.receipt_sha256))
+    throw new Error(`${expectedQa} receipt hash missing`);
   return peak;
 }
 
@@ -41,7 +46,8 @@ export async function runGateESloAudit(candidateSha, options = {}) {
   const propagationPeak = requireReceipt(propagation, "QA-011-RP", sha, 2000);
 
   const competitionIds = new Set([qa010.competition_id, qa011.competition_id, propagation.competition_id]);
-  if (competitionIds.size !== 1 || [...competitionIds][0] === undefined) throw new Error("Gate E SLO source receipts must share one competition ID");
+  if (competitionIds.size !== 1 || [...competitionIds][0] === undefined)
+    throw new Error("Gate E SLO source receipts must share one competition ID");
 
   const receipt = {
     qa_item: "QA-024",
@@ -74,7 +80,11 @@ export async function runGateESloAudit(candidateSha, options = {}) {
   const receiptSha256 = createHash("sha256").update(JSON.stringify(receipt), "utf8").digest("hex");
   const output = { ...receipt, receipt_sha256: receiptSha256 };
   await mkdir(artifactsDir, { recursive: true });
-  await writeFile(path.join(artifactsDir, "gate-e-slo-validation.json"), `${JSON.stringify(output, null, 2)}\n`, "utf8");
+  await writeFile(
+    path.join(artifactsDir, "gate-e-slo-validation.json"),
+    `${JSON.stringify(output, null, 2)}\n`,
+    "utf8",
+  );
   return output;
 }
 

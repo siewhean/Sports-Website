@@ -9,7 +9,8 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/iu;
 const PUBLIC_PATHS = ["/", "/competitions", "/pricing", "/privacy", "/terms", "/cookies", "/support", "/notifications"];
 
 function requireSha(value) {
-  if (!value || !SHA_PATTERN.test(value)) throw new Error(`Gate E SEO audit requires an exact 40-character SHA; got ${value}`);
+  if (!value || !SHA_PATTERN.test(value))
+    throw new Error(`Gate E SEO audit requires an exact 40-character SHA; got ${value}`);
   return value.toLowerCase();
 }
 
@@ -33,16 +34,31 @@ export async function runGateESeoAudit(candidateSha, targetUrl, options = {}) {
   const pageResults = [];
 
   for (const publicPath of PUBLIC_PATHS) {
-    const response = await fetchImpl(`${origin}${publicPath}`, { redirect: "follow", signal: AbortSignal.timeout(20_000) });
+    const response = await fetchImpl(`${origin}${publicPath}`, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(20_000),
+    });
     if (!response.ok) throw new Error(`${publicPath} returned HTTP ${response.status}`);
     const buildId = response.headers.get("x-matchday-build-id");
     if (buildId !== sha) throw new Error(`${publicPath} build ID mismatch: expected ${sha}, got ${buildId}`);
     const html = await response.text();
     if (publicPath === "/") {
       requireMatch(html, /<title[^>]*>[^<]+<\/title>/iu, "home page must contain a non-empty title");
-      requireMatch(html, /<meta[^>]+name=["']description["'][^>]+content=["'][^"']+["']/iu, "home page must contain a meta description");
-      requireMatch(html, /<meta[^>]+property=["']og:title["'][^>]+content=["'][^"']+["']/iu, "home page must contain OpenGraph title metadata");
-      requireMatch(html, /<meta[^>]+property=["']og:description["'][^>]+content=["'][^"']+["']/iu, "home page must contain OpenGraph description metadata");
+      requireMatch(
+        html,
+        /<meta[^>]+name=["']description["'][^>]+content=["'][^"']+["']/iu,
+        "home page must contain a meta description",
+      );
+      requireMatch(
+        html,
+        /<meta[^>]+property=["']og:title["'][^>]+content=["'][^"']+["']/iu,
+        "home page must contain OpenGraph title metadata",
+      );
+      requireMatch(
+        html,
+        /<meta[^>]+property=["']og:description["'][^>]+content=["'][^"']+["']/iu,
+        "home page must contain OpenGraph description metadata",
+      );
     }
     pageResults.push({ path: publicPath, status: response.status, build_id: buildId });
   }
@@ -53,7 +69,8 @@ export async function runGateESeoAudit(candidateSha, targetUrl, options = {}) {
   for (const blocked of ["/api/", "/organiser/", "/score/", "/internal/"]) {
     if (!robots.includes(`Disallow: ${blocked}`)) throw new Error(`robots.txt must disallow ${blocked}`);
   }
-  if (!robots.includes(`Sitemap: ${origin}/sitemap.xml`)) throw new Error("robots.txt does not advertise the canonical sitemap");
+  if (!robots.includes(`Sitemap: ${origin}/sitemap.xml`))
+    throw new Error("robots.txt does not advertise the canonical sitemap");
 
   const sitemapResponse = await fetchImpl(`${origin}/sitemap.xml`, { signal: AbortSignal.timeout(20_000) });
   if (!sitemapResponse.ok) throw new Error(`sitemap.xml returned HTTP ${sitemapResponse.status}`);

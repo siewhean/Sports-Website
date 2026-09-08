@@ -36,7 +36,8 @@ function requireExact(value, expected, label) {
 function requireSha(value, label, expected) {
   const sha = requireString(value, label).toLowerCase();
   if (!SHA_PATTERN.test(sha)) throw new Error(`${label} must be a 40-character SHA`);
-  if (expected && sha !== expected.toLowerCase()) throw new Error(`${label} mismatch: expected ${expected}, got ${sha}`);
+  if (expected && sha !== expected.toLowerCase())
+    throw new Error(`${label} mismatch: expected ${expected}, got ${sha}`);
   return sha;
 }
 
@@ -55,7 +56,9 @@ function validateTechnicalReceipt(receipt, expectedQa, candidateSha, acceptedVer
   requireExact(receipt.qa_item, expectedQa, `${expectedQa}.qa_item`);
   requireSha(receipt.candidate_sha, `${expectedQa}.candidate_sha`, candidateSha);
   if (!acceptedVerdicts.includes(receipt.verdict)) {
-    throw new Error(`${expectedQa}.verdict must be one of ${acceptedVerdicts.join(", ")}; got ${JSON.stringify(receipt.verdict)}`);
+    throw new Error(
+      `${expectedQa}.verdict must be one of ${acceptedVerdicts.join(", ")}; got ${JSON.stringify(receipt.verdict)}`,
+    );
   }
   requireHash(receipt.receipt_sha256, `${expectedQa}.receipt_sha256`);
 }
@@ -81,19 +84,22 @@ export async function validateGateEAutomated(candidateSha, options = {}) {
   requireSha(certification.candidate_sha, "Gate E candidate_sha", expectedSha);
 
   const hostedCi = requireObject(certification.hosted_ci, "Gate E hosted_ci");
-  if (!Number.isSafeInteger(hostedCi.run_id) || hostedCi.run_id < 1) throw new Error("Gate E hosted_ci.run_id must be a positive integer");
+  if (!Number.isSafeInteger(hostedCi.run_id) || hostedCi.run_id < 1)
+    throw new Error("Gate E hosted_ci.run_id must be a positive integer");
   requireSha(hostedCi.head_sha, "Gate E hosted_ci.head_sha", expectedSha);
   requireExact(hostedCi.conclusion, "PASS", "Gate E hosted_ci.conclusion");
   const jobs = requireObject(hostedCi.jobs, "Gate E hosted_ci.jobs");
   for (const job of REQUIRED_HOSTED_CI_JOBS) requireExact(jobs[job], "PASS", `Gate E hosted CI job ${job}`);
 
   const qualification = requireObject(certification.controlled_qualification, "Gate E controlled_qualification");
-  if (!Number.isSafeInteger(qualification.run_id) || qualification.run_id < 1) throw new Error("Gate E controlled_qualification.run_id must be a positive integer");
+  if (!Number.isSafeInteger(qualification.run_id) || qualification.run_id < 1)
+    throw new Error("Gate E controlled_qualification.run_id must be a positive integer");
   requireSha(qualification.candidate_sha, "Gate E controlled_qualification.candidate_sha", expectedSha);
   requireExact(qualification.conclusion, "PASS", "Gate E controlled_qualification.conclusion");
 
   const waivers = requireObject(certification.human_waivers, "Gate E human_waivers");
-  for (const waiver of REQUIRED_WAIVERS) requireExact(waivers[waiver], "WAIVED_NOT_EXECUTED", `Gate E human waiver ${waiver}`);
+  for (const waiver of REQUIRED_WAIVERS)
+    requireExact(waivers[waiver], "WAIVED_NOT_EXECUTED", `Gate E human waiver ${waiver}`);
 
   validateTechnicalReceipt(slo, "QA-024", expectedSha, ["PASS"]);
   validateTechnicalReceipt(seo, "QA-028", expectedSha, ["PASS"]);
@@ -101,14 +107,30 @@ export async function validateGateEAutomated(candidateSha, options = {}) {
   validateTechnicalReceipt(security, "QA-029-AUTOMATED", expectedSha, ["PASS_AUTOMATED_SCOPE"]);
   validateTechnicalReceipt(legal, "QA-027", expectedSha, ["PASS_TECHNICAL_PACKAGE_WITH_GATE_F_DEFERMENT"]);
 
-  if (slo.metrics?.scoring_peak_2x_p95_ms >= 500 || slo.metrics?.public_projection_peak_2x_p95_ms >= 2500 || slo.metrics?.result_propagation_p95_ms >= 2000) {
+  if (
+    slo.metrics?.scoring_peak_2x_p95_ms >= 500 ||
+    slo.metrics?.public_projection_peak_2x_p95_ms >= 2500 ||
+    slo.metrics?.result_propagation_p95_ms >= 2000
+  ) {
     throw new Error("Gate E SLO receipt contains an out-of-budget p95");
   }
-  if (slo.metrics?.scoring_error_rate > 0.001 || slo.metrics?.public_projection_error_rate > 0.001 || slo.metrics?.result_propagation_error_rate > 0.001) {
+  if (
+    slo.metrics?.scoring_error_rate > 0.001 ||
+    slo.metrics?.public_projection_error_rate > 0.001 ||
+    slo.metrics?.result_propagation_error_rate > 0.001
+  ) {
     throw new Error("Gate E SLO receipt contains an excessive error rate");
   }
-  requireExact(security.independent_manual_pentest, "WAIVED_NOT_EXECUTED", "Gate E security independent pentest disposition");
-  requireExact(legal.formal_authorised_legal_approval, "DEFERRED_TO_GATE_F_BY_ADR_0003", "Gate E legal approval disposition");
+  requireExact(
+    security.independent_manual_pentest,
+    "WAIVED_NOT_EXECUTED",
+    "Gate E security independent pentest disposition",
+  );
+  requireExact(
+    legal.formal_authorised_legal_approval,
+    "DEFERRED_TO_GATE_F_BY_ADR_0003",
+    "Gate E legal approval disposition",
+  );
 
   return {
     valid: true,

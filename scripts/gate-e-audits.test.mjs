@@ -40,9 +40,18 @@ test("QA-024 composes exact-SHA Gate D receipts into Gate E SLO evidence", async
       verdict: "PASS",
       receipt_sha256: HASH,
     };
-    await writeFile(path.join(artifactsDir, "qa-010-load-public-summary.json"), JSON.stringify({ ...base, qa_item: "QA-010", peak_summary: { p95Ms: 200, errorRate: 0 } }));
-    await writeFile(path.join(artifactsDir, "qa-011-load-scoring-summary.json"), JSON.stringify({ ...base, qa_item: "QA-011", peak_summary: { p95Ms: 400, errorRate: 0 } }));
-    await writeFile(path.join(artifactsDir, "qa-011-result-propagation-summary.json"), JSON.stringify({ ...base, qa_item: "QA-011-RP", peak_summary: { p95Ms: 150, errorRate: 0 } }));
+    await writeFile(
+      path.join(artifactsDir, "qa-010-load-public-summary.json"),
+      JSON.stringify({ ...base, qa_item: "QA-010", peak_summary: { p95Ms: 200, errorRate: 0 } }),
+    );
+    await writeFile(
+      path.join(artifactsDir, "qa-011-load-scoring-summary.json"),
+      JSON.stringify({ ...base, qa_item: "QA-011", peak_summary: { p95Ms: 400, errorRate: 0 } }),
+    );
+    await writeFile(
+      path.join(artifactsDir, "qa-011-result-propagation-summary.json"),
+      JSON.stringify({ ...base, qa_item: "QA-011-RP", peak_summary: { p95Ms: 150, errorRate: 0 } }),
+    );
     const receipt = await runGateESloAudit(SHA, { artifactsDir });
     assert.equal(receipt.verdict, "PASS");
     assert.equal(receipt.metrics.scoring_peak_2x_p95_ms, 400);
@@ -52,13 +61,28 @@ test("QA-024 composes exact-SHA Gate D receipts into Gate E SLO evidence", async
 test("QA-028 validates deployed metadata, robots and sitemap", async () => {
   await withArtifacts(async (artifactsDir) => {
     const origin = "https://example.test";
-    const expectedPaths = ["/", "/competitions", "/pricing", "/privacy", "/terms", "/cookies", "/support", "/notifications"];
+    const expectedPaths = [
+      "/",
+      "/competitions",
+      "/pricing",
+      "/privacy",
+      "/terms",
+      "/cookies",
+      "/support",
+      "/notifications",
+    ];
     const sitemap = `<?xml version="1.0"?><urlset>${expectedPaths.map((p) => `<url><loc>${origin}${p === "/" ? "" : p}</loc></url>`).join("")}</urlset>`;
     const fetchImpl = async (url) => {
       const pathname = new URL(url).pathname;
-      if (pathname === "/robots.txt") return textResponse(`User-agent: *\nDisallow: /api/\nDisallow: /organiser/\nDisallow: /score/\nDisallow: /internal/\nSitemap: ${origin}/sitemap.xml\n`);
+      if (pathname === "/robots.txt")
+        return textResponse(
+          `User-agent: *\nDisallow: /api/\nDisallow: /organiser/\nDisallow: /score/\nDisallow: /internal/\nSitemap: ${origin}/sitemap.xml\n`,
+        );
       if (pathname === "/sitemap.xml") return textResponse(sitemap);
-      const html = pathname === "/" ? '<html><head><title>Matchday</title><meta name="description" content="Competitions"><meta property="og:title" content="Matchday"><meta property="og:description" content="Competitions"></head></html>' : "<html></html>";
+      const html =
+        pathname === "/"
+          ? '<html><head><title>Matchday</title><meta name="description" content="Competitions"><meta property="og:title" content="Matchday"><meta property="og:description" content="Competitions"></head></html>'
+          : "<html></html>";
       return textResponse(html, { "x-matchday-build-id": SHA });
     };
     const receipt = await runGateESeoAudit(SHA, origin, { artifactsDir, fetchImpl });
@@ -72,7 +96,8 @@ test("QA-030 validates SPF, DKIM and DMARC", async () => {
     const resolveTxtImpl = async (name) => {
       if (name === "mail.example.test") return [["v=spf1 include:_spf.example.test -all"]];
       if (name === "_dmarc.mail.example.test") return [["v=DMARC1; p=quarantine; rua=mailto:dmarc@example.test"]];
-      if (name === "selector._domainkey.mail.example.test") return [["v=DKIM1; k=rsa; p=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"]];
+      if (name === "selector._domainkey.mail.example.test")
+        return [["v=DKIM1; k=rsa; p=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"]];
       throw new Error(`unexpected DNS name ${name}`);
     };
     const receipt = await runGateEEmailAudit(SHA, "mail.example.test", "selector", { artifactsDir, resolveTxtImpl });
@@ -93,7 +118,10 @@ test("automated security audit binds headers and API build metadata to the candi
         "content-security-policy": "default-src 'self'; object-src 'none'; frame-ancestors 'none'",
       });
     };
-    const receipt = await runGateESecurityAudit(SHA, "https://example.test", "https://example.test", { artifactsDir, fetchImpl });
+    const receipt = await runGateESecurityAudit(SHA, "https://example.test", "https://example.test", {
+      artifactsDir,
+      fetchImpl,
+    });
     assert.equal(receipt.verdict, "PASS_AUTOMATED_SCOPE");
     assert.equal(receipt.independent_manual_pentest, "WAIVED_NOT_EXECUTED");
   });

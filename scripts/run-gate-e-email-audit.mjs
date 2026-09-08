@@ -11,7 +11,8 @@ const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)
 const SELECTOR_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/iu;
 
 function requireSha(value) {
-  if (!value || !SHA_PATTERN.test(value)) throw new Error(`Gate E email audit requires an exact 40-character SHA; got ${value}`);
+  if (!value || !SHA_PATTERN.test(value))
+    throw new Error(`Gate E email audit requires an exact 40-character SHA; got ${value}`);
   return value.toLowerCase();
 }
 
@@ -43,7 +44,9 @@ function parseTags(record) {
       .filter(Boolean)
       .map((part) => {
         const index = part.indexOf("=");
-        return index === -1 ? [part.toLowerCase(), ""] : [part.slice(0, index).trim().toLowerCase(), part.slice(index + 1).trim()];
+        return index === -1
+          ? [part.toLowerCase(), ""]
+          : [part.slice(0, index).trim().toLowerCase(), part.slice(index + 1).trim()];
       }),
   );
 }
@@ -75,7 +78,8 @@ export async function runGateEEmailAudit(candidateSha, domainValue, selectorValu
   const dkim = findRecord(dkimTxt, "v=DKIM1");
   if (!dkim) throw new Error(`No DKIM record found for ${selector}._domainkey.${domain}`);
   const dkimTags = parseTags(dkim);
-  if (!dkimTags.p || String(dkimTags.p).length < 32) throw new Error("DKIM public key is missing or unexpectedly short");
+  if (!dkimTags.p || String(dkimTags.p).length < 32)
+    throw new Error("DKIM public key is missing or unexpectedly short");
 
   const receipt = {
     qa_item: "QA-030",
@@ -88,7 +92,8 @@ export async function runGateEEmailAudit(candidateSha, domainValue, selectorValu
     dkim: { status: "PASS", key_present: true, record_name: `${selector}._domainkey.${domain}` },
     template_rendering: {
       status: "PASS_VIA_HOSTED_CI_REQUIREMENT",
-      evidence: "@matchday/notifications templates-email.test.ts and integration tests must be green in the exact-SHA hosted CI run",
+      evidence:
+        "@matchday/notifications templates-email.test.ts and integration tests must be green in the exact-SHA hosted CI run",
     },
     verdict: "PASS",
     generated_at: new Date().toISOString(),
@@ -96,7 +101,11 @@ export async function runGateEEmailAudit(candidateSha, domainValue, selectorValu
   const receiptSha256 = createHash("sha256").update(JSON.stringify(receipt), "utf8").digest("hex");
   const output = { ...receipt, receipt_sha256: receiptSha256 };
   await mkdir(artifactsDir, { recursive: true });
-  await writeFile(path.join(artifactsDir, "gate-e-email-deliverability.json"), `${JSON.stringify(output, null, 2)}\n`, "utf8");
+  await writeFile(
+    path.join(artifactsDir, "gate-e-email-deliverability.json"),
+    `${JSON.stringify(output, null, 2)}\n`,
+    "utf8",
+  );
   return output;
 }
 

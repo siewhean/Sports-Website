@@ -8,7 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHA_PATTERN = /^[0-9a-f]{40}$/iu;
 
 function requireSha(value) {
-  if (!value || !SHA_PATTERN.test(value)) throw new Error(`Gate E security audit requires an exact 40-character SHA; got ${value}`);
+  if (!value || !SHA_PATTERN.test(value))
+    throw new Error(`Gate E security audit requires an exact 40-character SHA; got ${value}`);
   return value.toLowerCase();
 }
 
@@ -22,7 +23,8 @@ function requireOrigin(value, label) {
 
 function requireHeader(headers, name, predicate, message) {
   const value = headers.get(name);
-  if (!value || !predicate(value)) throw new Error(`${name} validation failed: ${message}; received ${JSON.stringify(value)}`);
+  if (!value || !predicate(value))
+    throw new Error(`${name} validation failed: ${message}; received ${JSON.stringify(value)}`);
   return value;
 }
 
@@ -38,8 +40,18 @@ export async function runGateESecurityAudit(candidateSha, webUrl, apiUrl = webUr
   const buildId = web.headers.get("x-matchday-build-id");
   if (buildId !== sha) throw new Error(`Web build ID mismatch: expected ${sha}, got ${buildId}`);
 
-  const hsts = requireHeader(web.headers, "strict-transport-security", (value) => /max-age=\d+/iu.test(value), "must contain max-age");
-  const nosniff = requireHeader(web.headers, "x-content-type-options", (value) => value.toLowerCase() === "nosniff", "must equal nosniff");
+  const hsts = requireHeader(
+    web.headers,
+    "strict-transport-security",
+    (value) => /max-age=\d+/iu.test(value),
+    "must contain max-age",
+  );
+  const nosniff = requireHeader(
+    web.headers,
+    "x-content-type-options",
+    (value) => value.toLowerCase() === "nosniff",
+    "must equal nosniff",
+  );
   const referrer = requireHeader(web.headers, "referrer-policy", (value) => value.trim().length > 0, "must be present");
   const csp = requireHeader(
     web.headers,
@@ -54,7 +66,8 @@ export async function runGateESecurityAudit(candidateSha, webUrl, apiUrl = webUr
   const metaResponse = await fetchImpl(`${apiOrigin}/api/v1/meta/build`, { signal: AbortSignal.timeout(20_000) });
   if (!metaResponse.ok) throw new Error(`API build metadata returned HTTP ${metaResponse.status}`);
   const meta = await metaResponse.json();
-  if (String(meta.git_sha).toLowerCase() !== sha) throw new Error(`API build SHA mismatch: expected ${sha}, got ${meta.git_sha}`);
+  if (String(meta.git_sha).toLowerCase() !== sha)
+    throw new Error(`API build SHA mismatch: expected ${sha}, got ${meta.git_sha}`);
 
   const receipt = {
     qa_item: "QA-029-AUTOMATED",
@@ -84,7 +97,11 @@ export async function runGateESecurityAudit(candidateSha, webUrl, apiUrl = webUr
   const receiptSha256 = createHash("sha256").update(JSON.stringify(receipt), "utf8").digest("hex");
   const output = { ...receipt, receipt_sha256: receiptSha256 };
   await mkdir(artifactsDir, { recursive: true });
-  await writeFile(path.join(artifactsDir, "gate-e-security-automation.json"), `${JSON.stringify(output, null, 2)}\n`, "utf8");
+  await writeFile(
+    path.join(artifactsDir, "gate-e-security-automation.json"),
+    `${JSON.stringify(output, null, 2)}\n`,
+    "utf8",
+  );
   return output;
 }
 
