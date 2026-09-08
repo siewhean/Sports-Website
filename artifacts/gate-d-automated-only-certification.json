@@ -1,0 +1,70 @@
+{
+  "schema_version": "2026.09.gate-d-automated-only-waiver",
+  "gate": "D",
+  "assurance_profile": "automated-only-owner-waived-v1",
+  "candidate_sha": "fd9dabad92484e08534485230dc7d423d6eb1d08",
+  "decision_ref": "docs/decisions/0004-phase7-automated-only-assurance.md",
+  "pr_number": 43,
+  "pr_decision_comment_id": 5584011390,
+  "hosted_ci": {
+    "run_id": 34190555628,
+    "conclusion": "PASS",
+    "jobs": {
+      "secrets": "PASS",
+      "quality-fast": "PASS",
+      "integration": "PASS",
+      "browser-e2e": "PASS",
+      "gate-d-real-e2e": "PASS"
+    },
+    "automated_evidence": {
+      "backup_restore": "PASS",
+      "browser_matrix_chromium_webkit_firefox": "PASS",
+      "accessibility_automation": "PASS",
+      "visual_regression": "PASS",
+      "integration_security_and_contracts": "PASS"
+    }
+  },
+  "controlled_qualification": {
+    "run_id": 34190842572,
+    "conclusion": "PASS",
+    "artifact_id": 10042701736,
+    "artifact_name": "gate-d-oci-final-fd9dabad92484e08534485230dc7d423d6eb1d08",
+    "artifact_digest": "sha256:d1daf3eda12c7d4e2574458d98931f90420e960397d422647b7bdcb404d5f21e",
+    "qa_010": {
+      "verdict": "PASS",
+      "peak_2x_p95_ms": 180.92138999999997,
+      "budget_ms": 2500,
+      "error_rate": 0,
+      "receipt_sha256": "fec399b23dad55be357abb339de53ddb15525eff43701204975a4bfd697fa56e"
+    },
+    "qa_011_scoring": {
+      "verdict": "PASS",
+      "peak_2x_p95_ms": 438.05801800000063,
+      "budget_ms": 500,
+      "error_rate": 0,
+      "receipt_sha256": "534743277680dd1ba07a276198b97d6c35efdf837af2f30ca035b265b13d7f8a"
+    },
+    "qa_011_result_propagation": {
+      "verdict": "PASS",
+      "p95_ms": 217.3459700000003,
+      "budget_ms": 2000,
+      "error_rate": 0,
+      "receipt_sha256": "6b6d8bd81ad5f669183d436d8c97050adc54b6e4ccc13acc45d8f157960dc92c"
+    }
+  },
+  "human_physical_evidence": {
+    "accessibility_human_audit": "WAIVED_NOT_EXECUTED",
+    "physical_browser_device_matrix": "WAIVED_NOT_EXECUTED",
+    "budget_android_physical": "WAIVED_NOT_EXECUTED",
+    "incident_tabletop": "WAIVED_NOT_EXECUTED",
+    "event_day_tabletop": "WAIVED_NOT_EXECUTED",
+    "local_pilot": "WAIVED_NOT_EXECUTED",
+    "pilot_standings_observation": "WAIVED_NOT_EXECUTED",
+    "organiser_intervention_log": "WAIVED_NOT_EXECUTED",
+    "pilot_critical_high_defect_observation": "WAIVED_NOT_EXECUTED",
+    "independent_gate_d_review": "WAIVED_NOT_EXECUTED"
+  },
+  "gate_status": "AUTOMATED-ONLY PASS / HUMAN EVIDENCE WAIVED",
+  "full_assurance_gate_d": "NOT_CLAIMED",
+  "notes": "Human and physical sessions were not performed. This certificate must not be represented as evidence that those sessions passed."
+}
