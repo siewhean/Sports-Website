@@ -50,6 +50,8 @@ services:
     env_file: ${OCI_PROD_ENV_FILE:-.env.prod}
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
       EDGE_CACHE_PURGE_BEARER_TOKEN: ""
       EDGE_CACHE_PURGE_ENDPOINT: ""
       SCORING_SESSION_SEAL_KEY: ""
@@ -78,6 +80,7 @@ services:
       BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -147,6 +150,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
       SCORING_SESSION_SEAL_KEY: ""
     depends_on:
       postgres: { condition: service_healthy }
