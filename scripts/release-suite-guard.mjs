@@ -150,6 +150,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       runCommand("13  Gate D freeze validator", "node --test scripts/validate-gate-d-freeze.test.mjs", {
         expectTests: true,
       });
+      runCommand(
+        "13b Gate E automated evidence auditors",
+        "node --test scripts/gate-e-audits.test.mjs scripts/validate-gate-e-automated.test.mjs",
+        { expectTests: true },
+      );
     }
 
     // Phase B — integration + migration (requires postgres + redis + mailpit)
