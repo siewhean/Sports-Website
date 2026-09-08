@@ -1,0 +1,167 @@
+name: matchday-prod
+
+services:
+  postgres:
+    image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 1.0
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - matchday-prod-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      backend:
+        ipv4_address: 172.31.0.2
+
+  redis:
+    image: redis:8.2-alpine@sha256:30abb90e62f14b737010746def3ba99cc79fe19dcdb3d37b41f21fc62e7da19d
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 0.5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - matchday-prod-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      backend:
+        ipv4_address: 172.31.0.3
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infra/oci/Dockerfile
+      target: migrate
+      args:
+        MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+    env_file: ${OCI_PROD_ENV_FILE:-.env.prod}
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      EDGE_CACHE_PURGE_BEARER_TOKEN: ""
+      EDGE_CACHE_PURGE_ENDPOINT: ""
+      SCORING_SESSION_SEAL_KEY: ""
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks:
+      backend:
+        ipv4_address: 172.31.0.4
+    profiles: [migration]
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/oci/Dockerfile
+      target: api
+      args:
+        MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 1.0
+    env_file: ${OCI_PROD_ENV_FILE:-.env.prod}
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 4000
+      GIT_SHA: ${CANDIDATE_SHA}
+      BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    expose: ["4000"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health/live').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      backend:
+        ipv4_address: 172.31.0.11
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/oci/Dockerfile
+      target: web
+      args:
+        MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
+    restart: unless-stopped
+    mem_limit: 1536m
+    cpus: 1.0
+    environment:
+      APP_ENV: ${APP_ENV}
+      NODE_ENV: production
+      PORT: 3000
+      MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
+      MATCHDAY_API_BASE_URL: https://${OCI_PUBLIC_HOSTNAME}
+      SCORING_SESSION_SEAL_KEY: ${SCORING_SESSION_SEAL_KEY}
+    depends_on:
+      api: { condition: service_healthy }
+    expose: ["3000"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      backend:
+        ipv4_address: 172.31.0.12
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/oci/Dockerfile
+      target: worker
+      args:
+        MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 0.5
+    env_file: ${OCI_PROD_ENV_FILE:-.env.prod}
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      SCORING_SESSION_SEAL_KEY: ""
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks:
+      backend:
+        ipv4_address: 172.31.0.13
+
+volumes:
+  matchday-prod-postgres:
+  matchday-prod-redis:
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
