@@ -12,15 +12,12 @@ defaults:
     shell: bash
 
 jobs:
-  probe:
+  public-contracts:
     runs-on: ubuntu-24.04
-    environment: gate-d-controlled-staging
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       PROBE_CANDIDATE_SHA: fd9dabad92484e08534485230dc7d423d6eb1d08
       TARGET_URL: https://c5-drill.poladex.shop
-      OCI_HOST: ${{ secrets.OCI_STAGING_HOST }}
-      OCI_USER: ${{ secrets.OCI_STAGING_USER }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -35,28 +32,34 @@ jobs:
         run: node scripts/run-gate-e-security-audit.mjs "$PROBE_CANDIDATE_SHA" "$TARGET_URL" "$TARGET_URL"
       - name: Probe technical legal package
         run: node scripts/run-gate-e-legal-audit.mjs "$PROBE_CANDIDATE_SHA"
-      - name: Read non-secret SMTP identity from OCI
+
+  smtp-identity:
+    runs-on: ubuntu-24.04
+    environment: gate-d-controlled-staging
+    timeout-minutes: 10
+    env:
+      OCI_HOST: ${{ secrets.OCI_STAGING_HOST }}
+      OCI_USER: ${{ secrets.OCI_STAGING_USER }}
+    steps:
+      - name: Prepare pinned SSH identity
         env:
           OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_STAGING_SSH_PRIVATE_KEY }}
           OCI_KNOWN_HOSTS: ${{ secrets.OCI_STAGING_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
+          test -n "$OCI_HOST"
+          test -n "$OCI_USER"
+          test -n "$OCI_SSH_PRIVATE_KEY"
+          test -n "$OCI_KNOWN_HOSTS"
           umask 077
           printf '%s\n' "$OCI_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oci-key"
           printf '%s\n' "$OCI_KNOWN_HOSTS" > "$RUNNER_TEMP/known-hosts"
+      - name: Read non-secret SMTP identity from OCI
+        run: |
+          set -euo pipefail
           ssh -i "$RUNNER_TEMP/oci-key" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/known-hosts" \
             "$OCI_USER@$OCI_HOST" \
-            "python3 - <<'PY'
-from pathlib import Path
-p=Path('/opt/matchday/oci-src/infra/oci/.env.oci')
-values={}
-for line in p.read_text().splitlines():
-    if '=' not in line or line.lstrip().startswith('#'): continue
-    k,v=line.split('=',1)
-    if k in {'SMTP_HOST','SMTP_PORT','SMTP_SECURE','SMTP_FROM'}: values[k]=v
-for k in ['SMTP_HOST','SMTP_PORT','SMTP_SECURE','SMTP_FROM']:
-    print(f'{k}={values.get(k, "")}' )
-PY"
+            "grep -E '^(SMTP_HOST|SMTP_PORT|SMTP_SECURE|SMTP_FROM)=' /opt/matchday/oci-src/infra/oci/.env.oci"
