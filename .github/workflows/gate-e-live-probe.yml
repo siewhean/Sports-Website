@@ -32,6 +32,15 @@ jobs:
         run: node scripts/run-gate-e-security-audit.mjs "$PROBE_CANDIDATE_SHA" "$TARGET_URL" "$TARGET_URL"
       - name: Probe technical legal package
         run: node scripts/run-gate-e-legal-audit.mjs "$PROBE_CANDIDATE_SHA"
+      - name: Inspect public sender DNS posture
+        run: |
+          set -euo pipefail
+          echo 'SPF/TXT records for c5-drill.poladex.shop:'
+          dig +short TXT c5-drill.poladex.shop || true
+          echo 'DMARC records for c5-drill.poladex.shop:'
+          dig +short TXT _dmarc.c5-drill.poladex.shop || true
+          echo 'Root-domain TXT records for poladex.shop:'
+          dig +short TXT poladex.shop || true
 
   smtp-identity:
     runs-on: ubuntu-24.04
@@ -63,3 +72,12 @@ jobs:
             -o UserKnownHostsFile="$RUNNER_TEMP/known-hosts" \
             "$OCI_USER@$OCI_HOST" \
             "grep -E '^(SMTP_HOST|SMTP_PORT|SMTP_SECURE|SMTP_FROM)=' /opt/matchday/oci-src/infra/oci/.env.oci"
+      - name: Confirm expected staging sender identity
+        run: |
+          set -euo pipefail
+          ssh -i "$RUNNER_TEMP/oci-key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/known-hosts" \
+            "$OCI_USER@$OCI_HOST" \
+            "grep -Fqx 'SMTP_FROM=Matchday <no-reply@c5-drill.poladex.shop>' /opt/matchday/oci-src/infra/oci/.env.oci && echo 'SMTP_FROM matches c5-drill.poladex.shop'"
