@@ -24,11 +24,11 @@ jobs:
     environment: gate-d-controlled-staging
     timeout-minutes: 120
     env:
-      CANDIDATE_SHA: b8d0dc1b3d393a453615a1b0c930dc11cd9b48cb
+      CANDIDATE_SHA: fd9dabad92484e08534485230dc7d423d6eb1d08
       # The control branch is the immutable workflow/tooling source for this run.
       # It is deliberately distinct from the frozen product candidate below.
       CONTROL_TOOLING_SHA: ${{ github.sha }}
-      CANDIDATE_CI_RUN_ID: "34131250651"
+      CANDIDATE_CI_RUN_ID: "34190555628"
       TARGET_URL: https://c5-drill.poladex.shop
       OCI_PUBLIC_HOSTNAME: c5-drill.poladex.shop
       OCI_HOST: ${{ secrets.OCI_STAGING_HOST }}
@@ -324,7 +324,6 @@ jobs:
           APP_ENV: staging
           TMPDIR: ${{ runner.temp }}
           GATE_D_SCORING_SECRET_FILE: ${{ steps.handoff.outputs.secret_file }}
-          NODE_OPTIONS: --import=${{ github.workspace }}/scripts/gate-d-safe-fetch-trace.mjs
         run: pnpm test:load:scoring -- --mode=staging
 
       - name: Prove one-time scoring handoff destroyed
