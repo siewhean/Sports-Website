@@ -91,7 +91,10 @@ const rateLimitRedis = new Redis(config.redisUrl, {
   enableOfflineQueue: false,
   maxRetriesPerRequest: 1,
 });
-const postgresClient = postgres(config.databaseUrl, { max: 10, onnotice: () => undefined });
+const postgresClient = postgres(config.databaseUrl, {
+  max: Number(process.env.DB_POOL_MAX ?? 30),
+  onnotice: () => undefined,
+});
 const identitySql = postgresClient as unknown as PostgresJsSql;
 const identityRuntime = new IdentityAssuranceRuntime(
   identityProvider,
@@ -172,6 +175,7 @@ const app = await buildApp({
   config,
   probes: createDependencyProbes(config),
   rateLimitRedis,
+  anonymousRateLimitMax: config.api.anonymousRateLimitMax,
   resolveVerifiedScoringRateLimitSessionId: async (request) => {
     const sessionId = request.headers["x-scoring-session-id"];
     const sessionToken = request.headers["x-scoring-session-token"];

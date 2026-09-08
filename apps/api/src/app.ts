@@ -424,6 +424,46 @@ export async function buildApp(options: BuildAppOptions) {
     return reply.code(statusCode).send(envelope);
   });
 
+  const buildMetadataSchema = Type.Object({
+    git_sha: Type.String(),
+    build_timestamp: Type.String(),
+    app_version: Type.String(),
+    environment: Type.String(),
+  });
+
+  const getBuildMetadata = () => ({
+    git_sha: process.env.RENDER_GIT_COMMIT || process.env.GIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || "unknown",
+    build_timestamp: process.env.BUILD_TIMESTAMP || "2026-09-01T00:00:00.000Z",
+    app_version: "0.1.0",
+    environment: process.env.APP_ENV || (deployedEnvironment ? "staging" : "development"),
+  });
+
+  app.get(
+    "/api/v1/meta/build",
+    {
+      schema: {
+        description: "Deployment build metadata and Git SHA attestation.",
+        response: { 200: buildMetadataSchema },
+        tags: ["meta"],
+      },
+      config: { rateLimit: false },
+    },
+    async () => getBuildMetadata(),
+  );
+
+  app.get(
+    "/health/version",
+    {
+      schema: {
+        description: "Deployment version metadata alias.",
+        response: { 200: buildMetadataSchema },
+        tags: ["health"],
+      },
+      config: { rateLimit: false },
+    },
+    async () => getBuildMetadata(),
+  );
+
   app.get(
     "/health/live",
     {

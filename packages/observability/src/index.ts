@@ -9,3 +9,4 @@ export * from "./workload.js";
 export * from "./workload-profile.js";
 export * from "./workload-runner.js";
 export * from "./c5-integrated-workload.js";
+export * from "./pilot-telemetry.js";

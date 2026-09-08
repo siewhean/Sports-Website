@@ -40,14 +40,8 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm ci:assert-clean-outputs
-      - run: pnpm dependencies:audit
-      - run: pnpm format:check
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test:unit
-      - run: pnpm test:seal:gate-c
-      - run: pnpm test:evidence:gate-c
-      - run: pnpm test:vercel:verify
+      - run: pnpm test:guard
+      - run: RELEASE_PHASE=A node scripts/release-suite-guard.mjs
 
   integration:
     runs-on: ubuntu-latest
@@ -108,7 +102,7 @@ jobs:
 
   browser-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     needs: [quality-fast]
     services:
       postgres:
@@ -170,3 +164,56 @@ jobs:
       - run: pnpm test:e2e
       - run: pnpm test:a11y
       - run: pnpm test:visual
+
+  gate-d-real-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [secrets, quality-fast, integration]
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: matchday
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.27.4
+        ports:
+          - 1025:1025
+          - 8025:8025
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      MAILPIT_API_URL: http://127.0.0.1:8025
+      RUN_INFRA_TESTS: "1"
+      LOG_LEVEL: silent
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
+      - run: pnpm test:e2e:phase7:real

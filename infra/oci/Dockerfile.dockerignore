@@ -1,0 +1,16 @@
+.git
+.github
+.codex
+node_modules
+**/node_modules
+apps/web/.next
+artifacts
+coverage
+dist
+**/dist
+*.log
+.env
+.env.*
+**/.env
+**/.env.*
+**/.turbo

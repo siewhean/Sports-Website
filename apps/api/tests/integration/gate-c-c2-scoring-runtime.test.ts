@@ -577,7 +577,11 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
         0,
         randomUUID(),
       ),
-    ).resolves.toMatchObject({ duplicate: false, aggregate_version: 1 });
+    ).resolves.toMatchObject({
+      duplicate: false,
+      match_id: match.id,
+      aggregate_version: 1,
+    });
     const concurrentGoalIds = [randomUUID(), randomUUID()];
     const concurrentGoalCommands = concurrentGoalIds.map((clientEventId, index) => ({
       client_event_id: clientEventId,
@@ -662,6 +666,7 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       ),
     ).resolves.toMatchObject({
       duplicate: true,
+      match_id: match.id,
       event_id: goal.event_id,
       sequence: goal.sequence,
       aggregate_version: goal.aggregate_version,

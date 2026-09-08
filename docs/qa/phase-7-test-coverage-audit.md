@@ -159,7 +159,7 @@
 
 ---
 
-### QA-010 Load: public pages
+### QA-010 Load: public projection API responses
 
 | Coverage dimension          | Existing | Assessment  |
 | --------------------------- | -------- | ----------- |

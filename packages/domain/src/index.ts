@@ -38,3 +38,4 @@ export * from "./five-sport-scoring.js";
 export * from "./five-sport-scoring-wire.js";
 export * from "./offline-scoring.js";
 export * from "./entitlements.js";
+export * from "./standings-manual-oracle.js";

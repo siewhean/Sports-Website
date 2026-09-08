@@ -27,6 +27,11 @@ export default defineConfig({
     "**/phase-4-real-api.spec.ts",
     "**/v1-real-api.spec.ts",
     "**/v1-competition-real-api.spec.ts",
+    // Gate D qualification must never run against the demo-only webServer used
+    // by the ordinary browser CI job. These specs have their own fail-closed
+    // production-backed config (playwright.gate-d.config.ts).
+    "**/phase-7-multi-division-lifecycle.spec.ts",
+    "**/phase-7-security-rendering.spec.ts",
   ],
   fullyParallel: true,
   forbidOnly: true,

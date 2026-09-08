@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run lib/*.test.ts tests/unit",
     "test:e2e": "env -u NO_COLOR playwright test --grep-invert 'visual baseline(s)?'",
+    "test:e2e:gate-d": "env -u NO_COLOR playwright test --config playwright.gate-d.config.ts",
     "test:a11y": "env -u NO_COLOR playwright test --grep '@a11y'",
     "test:visual": "env -u NO_COLOR playwright test --grep 'visual baseline(s)?' ${CI:+-u}"
   },

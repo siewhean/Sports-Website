@@ -52,6 +52,10 @@ const rawConfigSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   API_ALLOWED_ORIGINS: z.string().default("http://127.0.0.1:3000,http://localhost:3000"),
   API_TRUSTED_PROXIES: z.string().default(""),
+  GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(600).max(10_000).optional(),
+  ),
   MATCHDAY_PUBLIC_ORIGIN: optionalUrlSchema,
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
@@ -131,6 +135,7 @@ export type AppConfig = {
     port: number;
     allowedOrigins: readonly string[];
     trustedProxies: readonly string[];
+    anonymousRateLimitMax: number;
   };
   publicOrigin?: string;
   databaseUrl: string;
@@ -396,6 +401,11 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     if (!isIpOrCidr(proxy)) throw new Error("Trusted proxies must be explicit IP addresses or CIDR ranges");
   }
 
+  if (parsed.GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX !== undefined && parsed.APP_ENV !== "staging") {
+    throw new Error("GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX may only be configured in staging");
+  }
+  const anonymousRateLimitMax = parsed.GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX ?? 100;
+
   const postAuthRedirectUris = parsed.IDENTITY_POST_AUTH_REDIRECT_URIS.split(",")
     .map((value) => value.trim())
     .filter(Boolean)
@@ -586,6 +596,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       port: parsed.API_PORT,
       allowedOrigins,
       trustedProxies,
+      anonymousRateLimitMax,
     },
     ...(publicOrigin ? { publicOrigin } : {}),
     databaseUrl: parsed.DATABASE_URL,
