@@ -1,0 +1,65 @@
+name: Gate E format helper
+
+on:
+  push:
+    branches: [gate-e/format-helper-1b77c391]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: phase-7/gate-e-automated-certification
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@10.33.0
+      - run: pnpm install --frozen-lockfile
+      - name: Format only Gate E files
+        run: |
+          set -euo pipefail
+          pnpm exec prettier --write \
+            docs/qa/gate-e-automated-only-plan.md \
+            scripts/gate-e-audits.test.mjs \
+            scripts/run-gate-e-email-audit.mjs \
+            scripts/run-gate-e-legal-audit.mjs \
+            scripts/run-gate-e-security-audit.mjs \
+            scripts/run-gate-e-seo-audit.mjs \
+            scripts/run-gate-e-slo-audit.mjs \
+            scripts/validate-gate-e-automated.mjs \
+            scripts/validate-gate-e-automated.test.mjs
+      - name: Fail closed on unexpected changes
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only)
+          allowed='^(docs/qa/gate-e-automated-only-plan\.md|scripts/gate-e-audits\.test\.mjs|scripts/run-gate-e-email-audit\.mjs|scripts/run-gate-e-legal-audit\.mjs|scripts/run-gate-e-security-audit\.mjs|scripts/run-gate-e-seo-audit\.mjs|scripts/run-gate-e-slo-audit\.mjs|scripts/validate-gate-e-automated\.mjs|scripts/validate-gate-e-automated\.test\.mjs)$'
+          for file in "${changed[@]}"; do
+            [[ "$file" =~ $allowed ]] || { echo "Unexpected formatted path: $file" >&2; exit 1; }
+          done
+          test "${#changed[@]}" -gt 0
+          pnpm format:check
+      - name: Commit formatting to Gate E branch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            docs/qa/gate-e-automated-only-plan.md \
+            scripts/gate-e-audits.test.mjs \
+            scripts/run-gate-e-email-audit.mjs \
+            scripts/run-gate-e-legal-audit.mjs \
+            scripts/run-gate-e-security-audit.mjs \
+            scripts/run-gate-e-seo-audit.mjs \
+            scripts/run-gate-e-slo-audit.mjs \
+            scripts/validate-gate-e-automated.mjs \
+            scripts/validate-gate-e-automated.test.mjs
+          git commit -m 'style(gate-e): format certification tooling'
+          git push origin HEAD:phase-7/gate-e-automated-certification
