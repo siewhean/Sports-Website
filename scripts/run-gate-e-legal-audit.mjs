@@ -8,7 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHA_PATTERN = /^[0-9a-f]{40}$/iu;
 
 function requireSha(value) {
-  if (!value || !SHA_PATTERN.test(value)) throw new Error(`Gate E legal audit requires an exact 40-character SHA; got ${value}`);
+  if (!value || !SHA_PATTERN.test(value))
+    throw new Error(`Gate E legal audit requires an exact 40-character SHA; got ${value}`);
   return value.toLowerCase();
 }
 
@@ -18,7 +19,8 @@ async function requireSubstantiveFile(relativePath, needles = []) {
   const text = await readFile(absolute, "utf8");
   if (!info.isFile() || text.trim().length < 200) throw new Error(`${relativePath} is missing or not substantive`);
   for (const needle of needles) {
-    if (!text.toLowerCase().includes(needle.toLowerCase())) throw new Error(`${relativePath} is missing required concept: ${needle}`);
+    if (!text.toLowerCase().includes(needle.toLowerCase()))
+      throw new Error(`${relativePath} is missing required concept: ${needle}`);
   }
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -30,7 +32,10 @@ export async function runGateELegalAudit(candidateSha, options = {}) {
     privacy_page: await requireSubstantiveFile("apps/web/app/privacy/page.tsx", ["privacy"]),
     terms_page: await requireSubstantiveFile("apps/web/app/terms/page.tsx", ["terms"]),
     cookie_page: await requireSubstantiveFile("apps/web/app/cookies/page.tsx", ["cookie"]),
-    legal_deferment_adr: await requireSubstantiveFile("docs/decisions/0003-phase6-legal-privacy-approval-gate.md", ["Gate F", "formal authorised legal/privacy approval"]),
+    legal_deferment_adr: await requireSubstantiveFile("docs/decisions/0003-phase6-legal-privacy-approval-gate.md", [
+      "Gate F",
+      "formal authorised legal/privacy approval",
+    ]),
   };
 
   const receipt = {

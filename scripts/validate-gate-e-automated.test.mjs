@@ -60,7 +60,11 @@ async function withEvidence(mutator, run) {
     },
   };
   mutator?.(files);
-  await Promise.all(Object.entries(files).map(([name, value]) => writeFile(path.join(artifactsDir, name), JSON.stringify(value), "utf8")));
+  await Promise.all(
+    Object.entries(files).map(([name, value]) =>
+      writeFile(path.join(artifactsDir, name), JSON.stringify(value), "utf8"),
+    ),
+  );
   try {
     return await run({ artifactsDir });
   } finally {
@@ -83,7 +87,10 @@ test("rejects a fake PASS for a waived human requirement", async () => {
       files["gate-e-certification.json"].human_waivers.national_parallel_pilot = "PASS";
     },
     async ({ artifactsDir }) => {
-      await assert.rejects(validateGateEAutomated(SHA, { artifactsDir }), /national_parallel_pilot.*WAIVED_NOT_EXECUTED/u);
+      await assert.rejects(
+        validateGateEAutomated(SHA, { artifactsDir }),
+        /national_parallel_pilot.*WAIVED_NOT_EXECUTED/u,
+      );
     },
   );
 });
