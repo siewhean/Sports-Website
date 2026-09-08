@@ -155,6 +155,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         "node --test scripts/gate-e-audits.test.mjs scripts/validate-gate-e-automated.test.mjs",
         { expectTests: true },
       );
+      runCommand(
+        "13c Gate F production operations and certification validators",
+        "node --test scripts/validate-production-config.test.mjs scripts/gate-f-audits.test.mjs scripts/validate-gate-f.test.mjs",
+        { expectTests: true },
+      );
     }
 
     // Phase B — integration + migration (requires postgres + redis + mailpit)

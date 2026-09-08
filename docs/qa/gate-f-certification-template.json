@@ -1,0 +1,51 @@
+{
+  "schema_version": "2026.09.gate-f-production",
+  "gate": "F",
+  "assurance_profile": "automated-only-owner-waived-v2",
+  "candidate_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+  "production_deployment": {
+    "hostname": "matchday.poladex.shop",
+    "deployed_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+    "environment": "production",
+    "conclusion": "PENDING"
+  },
+  "hosted_ci": {
+    "run_id": 0,
+    "head_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+    "conclusion": "PENDING",
+    "jobs": {
+      "secrets": "PENDING",
+      "quality-fast": "PENDING",
+      "integration": "PENDING",
+      "browser-e2e": "PENDING",
+      "gate-d-real-e2e": "PENDING"
+    }
+  },
+  "simulation": {
+    "conclusion": "PENDING",
+    "receipts": {
+      "migration_expand_contract": "PENDING",
+      "zero_downtime_rollback": "PENDING",
+      "backup_restore": "PENDING",
+      "cdn_cache_purge": "PENDING",
+      "slo_baseline": "PENDING",
+      "alert_routing": "PENDING",
+      "feature_flags": "PENDING",
+      "cost_controls": "PENDING",
+      "dns_tls": "PENDING",
+      "security": "PENDING",
+      "seo": "PENDING",
+      "email": "PENDING",
+      "accessibility": "PENDING",
+      "legal_technical": "PENDING"
+    }
+  },
+  "human_waivers": {
+    "independent_manual_pentest": "WAIVED_NOT_EXECUTED",
+    "independent_gate_f_reviewer": "WAIVED_NOT_EXECUTED",
+    "physical_device_matrix_session": "WAIVED_NOT_EXECUTED",
+    "human_screen_reader_audit": "WAIVED_NOT_EXECUTED",
+    "live_organiser_pilot_observation": "WAIVED_NOT_EXECUTED"
+  },
+  "legal_approval": "DEFERRED_TO_FIRST_COMMERCIAL_RELEASE"
+}

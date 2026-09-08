@@ -12,3 +12,18 @@
     reverse_proxy web:3000
   }
 }
+
+matchday.poladex.shop {
+  encode gzip zstd
+  @privateHealth path /health/deep /health/deep/*
+  handle @privateHealth {
+    respond 404
+  }
+  @api path /api/v1/* /health/live /health/ready /health/version /openapi.json /docs /docs/*
+  handle @api {
+    reverse_proxy 172.31.0.11:4000
+  }
+  handle {
+    reverse_proxy 172.31.0.12:3000
+  }
+}
