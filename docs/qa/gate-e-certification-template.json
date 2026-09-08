@@ -1,0 +1,31 @@
+{
+  "schema_version": "2026.09.gate-e-automated-only",
+  "gate": "E",
+  "assurance_profile": "automated-only-owner-waived-v1",
+  "candidate_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+  "hosted_ci": {
+    "run_id": 0,
+    "head_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+    "conclusion": "PENDING",
+    "jobs": {
+      "secrets": "PENDING",
+      "quality-fast": "PENDING",
+      "integration": "PENDING",
+      "browser-e2e": "PENDING",
+      "gate-d-real-e2e": "PENDING"
+    }
+  },
+  "controlled_qualification": {
+    "run_id": 0,
+    "candidate_sha": "REPLACE_WITH_EXACT_40_CHARACTER_SHA",
+    "conclusion": "PENDING"
+  },
+  "human_waivers": {
+    "national_parallel_pilot": "WAIVED_NOT_EXECUTED",
+    "pilot_standings_observation": "WAIVED_NOT_EXECUTED",
+    "organiser_intervention_log": "WAIVED_NOT_EXECUTED",
+    "pilot_critical_high_defect_observation": "WAIVED_NOT_EXECUTED",
+    "independent_manual_pentest": "WAIVED_NOT_EXECUTED",
+    "independent_gate_e_review": "WAIVED_NOT_EXECUTED"
+  }
+}
