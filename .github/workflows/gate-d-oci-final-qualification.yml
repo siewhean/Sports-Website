@@ -50,10 +50,16 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H 'Accept: application/vnd.github+json' \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_CI_RUN_ID}")"
-            read -r status conclusion head_sha < <(printf '%s' "$run_json" | node -e '
+            mapfile -t run_fields < <(printf '%s' "$run_json" | node -e '
               let s=""; process.stdin.on("data", d => s += d).on("end", () => {
-                const j=JSON.parse(s); console.log(j.status ?? "", j.conclusion ?? "", j.head_sha ?? "");
+                const j=JSON.parse(s);
+                console.log(j.status ?? "");
+                console.log(j.conclusion ?? "");
+                console.log(j.head_sha ?? "");
               });')
+            status="${run_fields[0]:-}"
+            conclusion="${run_fields[1]:-}"
+            head_sha="${run_fields[2]:-}"
             test "$head_sha" = "$CANDIDATE_SHA"
             if [ "$status" = completed ]; then
               test "$conclusion" = success
