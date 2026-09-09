@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { PublicCompetitionProjection, PublicDivisionProjection } from "@matchday/contracts";
 import { PublicCompetition } from "@/components/phase2/PublicCompetition";
-import { toCompetitionView } from "./phase2-public.server";
+import { normalizeEtag, toCompetitionView } from "./phase2-public.server";
 
 function division(id: string, name: string, team: string, matchId: string, startsAt: string): PublicDivisionProjection {
   return {
@@ -95,5 +95,17 @@ describe("public competition server adapter", () => {
     expect(markup).toContain('data-division-id="women"');
     const ids = [...markup.matchAll(/\sid="([^"]+)"/gu)].map((match) => match[1]);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("normalizes ETags across plain, quoted, weak, and compressed proxy variants", () => {
+    const raw = "c4-1-0-1-b458f1abe4f6e4ea2057d53f0f7407755199961fa2cff21fcc0ce49cb7fe499b";
+    expect(normalizeEtag(raw)).toBe(raw);
+    expect(normalizeEtag(`"${raw}"`)).toBe(raw);
+    expect(normalizeEtag(`W/"${raw}"`)).toBe(raw);
+    expect(normalizeEtag(`"${raw}-gzip"`)).toBe(raw);
+    expect(normalizeEtag(`"${raw}-br"`)).toBe(raw);
+    expect(normalizeEtag(`"${raw}-zstd"`)).toBe(raw);
+    expect(normalizeEtag(null)).toBeNull();
+    expect(normalizeEtag("")).toBeNull();
   });
 });

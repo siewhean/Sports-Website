@@ -253,10 +253,20 @@ export function toCompetitionSummaryView(entry: PublicCompetitionSummary): Compe
   };
 }
 
+export function normalizeEtag(value: string | null): string | null {
+  if (!value) return null;
+  return value
+    .replace(/^W\//, "")
+    .replace(/^"|"$/g, "")
+    .replace(/-(?:gzip|br|zstd)$/, "");
+}
+
 function publicHeadersMatchProjection(response: Response, projection: GateCC4PublicCompetitionProjection): boolean {
-  const quotedEtag = `"${projection.freshness.etag}"`;
+  const responseEtag = normalizeEtag(response.headers.get("etag"));
+  const projectionEtag = normalizeEtag(projection.freshness.etag);
   return (
-    response.headers.get("etag") === quotedEtag &&
+    Boolean(responseEtag) &&
+    responseEtag === projectionEtag &&
     response.headers.get("x-matchday-schedule-version") === String(projection.freshness.schedule_version) &&
     response.headers.get("x-matchday-result-version") === String(projection.freshness.result_version) &&
     response.headers.get("x-matchday-projection-version") === String(projection.freshness.projection_version)
@@ -273,7 +283,10 @@ const apiCompetitionReadPort: CompetitionReadPort = {
     if (!baseUrl || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null;
     try {
       const response = await fetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, {
-        headers: { accept: "application/json" },
+        headers: {
+          accept: "application/json",
+          "accept-encoding": "identity",
+        },
         cache: "no-store",
       });
       if (!response.ok) return null;
