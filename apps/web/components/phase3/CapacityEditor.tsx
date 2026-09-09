@@ -174,7 +174,11 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
                 <Field label={phase3CapacityCopy.areaName} error={issues[`area-${areaIndex}-name`]}>
                   <input value={area.name} onChange={(event) => updateArea(areaIndex, { name: event.target.value })} />
                 </Field>
-                <Field label={phase3CapacityCopy.slotMinutes} error={issues[`area-${areaIndex}-slot`]}>
+                <Field
+                  label={phase3CapacityCopy.slotMinutes}
+                  hint={phase3CapacityCopy.slotMinutesHint}
+                  error={issues[`area-${areaIndex}-slot`]}
+                >
                   <input
                     type="number"
                     min={1}
@@ -183,7 +187,11 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
                     onChange={(event) => updateArea(areaIndex, { slotMinutes: Number(event.target.value) })}
                   />
                 </Field>
-                <Field label={phase3CapacityCopy.reserveSlots} error={issues[`area-${areaIndex}-reserve`]}>
+                <Field
+                  label={phase3CapacityCopy.reserveSlots}
+                  hint={phase3CapacityCopy.reserveSlotsHint}
+                  error={issues[`area-${areaIndex}-reserve`]}
+                >
                   <input
                     type="number"
                     min={0}
@@ -261,11 +269,22 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
   );
 }
 
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+function Field({
+  label,
+  error,
+  hint,
+  children,
+}: {
+  label: string;
+  error?: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className={styles.field}>
       <span>{label}</span>
       {children}
+      {hint ? <p className={styles.fieldHint}>{hint}</p> : null}
       {error ? <small role="alert">{error}</small> : null}
     </label>
   );
@@ -306,6 +325,9 @@ function WindowGroup({
           {kind === "availability" ? phase3CapacityCopy.addWindow : phase3CapacityCopy.addBreak}
         </button>
       </header>
+      <p className={styles.windowGroupSubtitle}>
+        {kind === "availability" ? phase3CapacityCopy.availableWindowsHint : phase3CapacityCopy.unavailableWindowsHint}
+      </p>
       {windows.map((window, windowIndex) => (
         <div className={styles.windowRow} key={window.id}>
           <div className={styles.window}>
@@ -344,6 +366,9 @@ function WindowGroup({
               />
               <span>{phase3CapacityCopy.crossMidnight}</span>
             </label>
+            {window.crossMidnight ? (
+              <p className={styles.windowGroupHint}>{phase3CapacityCopy.crossMidnightHint}</p>
+            ) : null}
             <button
               className={styles.iconButton}
               type="button"

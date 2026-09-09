@@ -173,6 +173,27 @@
 .windowRow > .formError {
   padding-bottom: 0.75rem;
 }
+.fieldHint {
+  margin: 0;
+  color: #5c5b55;
+  font-size: 0.76rem;
+  font-weight: 450;
+  line-height: 1.5;
+}
+.windowGroupHint {
+  margin: 0.35rem 0 0.5rem;
+  color: #5c5b55;
+  font-size: 0.76rem;
+  font-weight: 450;
+  line-height: 1.5;
+}
+.windowGroupSubtitle {
+  margin: 0 0 0.5rem;
+  color: #5c5b55;
+  font-size: 0.76rem;
+  font-weight: 450;
+  line-height: 1.5;
+}
 .checkbox {
   min-height: 44px;
   display: flex;

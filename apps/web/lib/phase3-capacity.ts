@@ -452,15 +452,22 @@ export function isCapacityMutationBody(value: unknown): value is CapacityMutatio
 
 export const phase3CapacityCopy = {
   title: "Capacity",
-  intro: "Define continuous local-time windows for each playing area. Break remnants are never combined.",
+  intro:
+    "Set the times each playing area is available. MATCHDAY calculates how many match slots fit, accounting for slot length and any reserved or blocked-out time.",
   eyebrow: "Competition calendar",
   playingAreas: "Playing areas",
   addArea: "Add playing area",
   areaName: "Area name",
   slotMinutes: "Match slot (minutes)",
+  slotMinutesHint: "Time allocated per match slot, including changeover. Typically 30 or 45 minutes.",
   reserveSlots: "Reserve slots",
+  reserveSlotsHint: "Slots held back for ceremonies or overruns. These are subtracted from available match capacity.",
   availableWindows: "Available windows",
+  availableWindowsHint:
+    "Add one row per block of time this area is open for play. Multiple windows on the same day are allowed.",
   unavailableWindows: "Unavailable periods",
+  unavailableWindowsHint:
+    "Block out time when the area is closed within an availability window — e.g. a lunch break or court changeover. These cut into the window above.",
   addWindow: "Add window",
   addBreak: "Add unavailable period",
   remove: "Remove",
@@ -468,6 +475,7 @@ export const phase3CapacityCopy = {
   starts: "Starts",
   ends: "Ends",
   crossMidnight: "Ends the next day",
+  crossMidnightHint: "Tick this if the window runs past midnight — e.g. 22:00 to 02:00 the following morning.",
   save: "Save capacity",
   saving: "Saving…",
   saved: "Capacity saved",

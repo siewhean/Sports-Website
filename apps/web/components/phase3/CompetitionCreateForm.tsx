@@ -385,10 +385,12 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
               {fieldErrors.sport_code}
             </p>
           ) : null}
+          {draft.sport_code ? <p className={styles.hint}>{messages.organiserCreate.sportLockNote}</p> : null}
         </div>
         {field(phase3CompetitionCreateMachine.fields.venue, messages.organiserCreate.venue, {
           required: true,
           autoComplete: phase3CompetitionCreateMachine.autocomplete.venue,
+          hint: messages.organiserCreate.venueHint,
         })}
         {field(phase3CompetitionCreateMachine.fields.address, messages.organiserCreate.address, {
           required: true,
@@ -401,6 +403,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
           required: true,
           autoComplete: phase3CompetitionCreateMachine.autocomplete.country,
           maxLength: 2,
+          hint: messages.organiserCreate.countryHint,
         })}
         {field(phase3CompetitionCreateMachine.fields.startsOn, messages.organiserCreate.startsOn, {
           type: "date",
@@ -409,12 +412,15 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
         {field(phase3CompetitionCreateMachine.fields.endsOn, messages.organiserCreate.endsOn, {
           type: "date",
           required: true,
+          hint: messages.organiserCreate.endsOnHint,
         })}
         {field(phase3CompetitionCreateMachine.fields.timezone, messages.organiserCreate.timezone, {
           required: true,
+          hint: messages.organiserCreate.timezoneHint,
         })}
         {field(phase3CompetitionCreateMachine.fields.locale, messages.organiserCreate.locale, {
           required: true,
+          hint: messages.organiserCreate.localeHint,
         })}
       </div>
       <button
