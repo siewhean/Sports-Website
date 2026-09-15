@@ -366,9 +366,6 @@ function WindowGroup({
               />
               <span>{phase3CapacityCopy.crossMidnight}</span>
             </label>
-            {window.crossMidnight ? (
-              <p className={styles.windowGroupHint}>{phase3CapacityCopy.crossMidnightHint}</p>
-            ) : null}
             <button
               className={styles.iconButton}
               type="button"
@@ -378,6 +375,12 @@ function WindowGroup({
               <Trash aria-hidden="true" />
             </button>
           </div>
+          <p className={styles.windowGroupHint}>{phase3CapacityCopy.crossMidnightHint}</p>
+          {window.crossMidnight ? (
+            <p className={styles.windowGroupHint} role="status">
+              {phase3CapacityCopy.crossMidnightSelected}
+            </p>
+          ) : null}
           {windowErrors[windowIndex] ? (
             <p id={`${kind}-${areaIndex}-${windowIndex}-error`} className={styles.formError} role="alert">
               {windowErrors[windowIndex]}

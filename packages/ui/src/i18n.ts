@@ -92,9 +92,23 @@ export const messages = {
   },
   organiserCreate: {
     title: "Create competition",
-    subtitle: "Set the competition identity, sport, dates and venue.",
-    intro:
-      "Fill in the event details below. The sport you pick determines the rules and score format — it cannot be changed after creation.",
+    subtitle: "Start with the essentials. You can plan teams, capacity and format next.",
+    intro: "This takes about two minutes. Your draft is saved on this device while you work.",
+    steps: ["Competition", "Venue", "Dates and time"],
+    stepDescriptions: [
+      "Name the event and choose the sport.",
+      "Add the location shown on fixtures and public pages.",
+      "Set when and where match times will be scheduled.",
+    ],
+    progress: "Competition creation progress",
+    stepCurrent: "Step",
+    stepOf: "of",
+    next: "Continue",
+    back: "Back",
+    afterCreateTitle: "What happens next",
+    afterCreate:
+      "Add playing areas and available times, confirm rules, import entries, then choose and publish a schedule.",
+    generatedSlug: "We made this from the competition name. You can edit it.",
     organisation: "Organisation",
     loadingOrganisations: "Loading organisations",
     chooseOrganisation: "Choose an organisation",

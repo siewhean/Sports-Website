@@ -207,7 +207,7 @@ export function firstInvalidCompetitionCreateField(
   return null;
 }
 
-function competitionCreateFieldIsValid(field: CompetitionCreateField, draft: CompetitionCreateDraft): boolean {
+export function competitionCreateFieldIsValid(field: CompetitionCreateField, draft: CompetitionCreateDraft): boolean {
   switch (field) {
     case "organisation_id":
       return uuidPattern.test(draft.organisation_id);

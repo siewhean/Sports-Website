@@ -6,11 +6,13 @@ const competitionId = "4dc85811-e715-40f4-8609-2523f7516e5a";
 
 async function fillCompetition(page: Page) {
   await page.getByLabel("Competition name").fill("National Open");
-  await page.getByLabel("Public address").fill("national-open");
+  await expect(page.getByLabel("Public address")).toHaveValue("national-open");
   await page.getByLabel("Sport").selectOption("badminton");
-  await page.getByLabel("Venue").fill("National Hall");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByLabel("Venue name").fill("National Hall");
   await page.getByLabel("Address", { exact: true }).fill("1 Arena Road");
   await page.getByLabel("City or locality (optional)").fill("Singapore");
+  await page.getByRole("button", { name: "Continue" }).click();
   await page.getByLabel("Start date").fill("2027-05-01");
   await page.getByLabel("End date").fill("2027-05-02");
 }
@@ -66,7 +68,7 @@ test("a first-time organiser can create a competition without a pre-existing org
   await page.getByRole("link", { name: "Create competition" }).click();
   await expect(page).toHaveURL(/\/organiser\/competitions\/new$/u);
   await expect(page.getByLabel("Organisation")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Create competition" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
   await fillCompetition(page);
   await page.getByRole("button", { name: "Create competition" }).click();
 
@@ -135,7 +137,7 @@ test("an unavailable organisation service keeps creation disabled and offers ret
     page.getByText("Your organisations could not be loaded. Try again before creating a competition."),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry organisation list" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Create competition" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
 });
 
 test("an unauthenticated organiser can start the MATCHDAY sign-in flow from competition creation", async ({ page }) => {
@@ -157,5 +159,5 @@ test("an unauthenticated organiser can start the MATCHDAY sign-in flow from comp
       `${new URL(page.url()).origin}/organiser/competitions/new`,
     )}`,
   );
-  await expect(page.getByRole("button", { name: "Create competition" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
 });

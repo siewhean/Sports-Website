@@ -9,6 +9,75 @@
   color: var(--foundation-ink-muted, #475569);
 }
 
+.progress {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.progress li {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  min-height: 3rem;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 2px solid #cbd5e1;
+  color: #64748b;
+  font-size: 0.875rem;
+}
+
+.progress span {
+  display: grid;
+  place-items: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.progress li[data-current="true"] {
+  border-color: #172554;
+  color: #172554;
+}
+
+.progress li[data-current="true"] span,
+.progress li[data-complete="true"] span {
+  background: #172554;
+  color: #fff;
+}
+
+.step {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.stepHeading p {
+  margin: 0 0 0.25rem;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.stepHeading h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.35rem;
+}
+
+.stepHeading span {
+  display: block;
+  margin-top: 0.35rem;
+  color: #475569;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -84,6 +153,41 @@
   cursor: pointer;
 }
 
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.back {
+  min-height: 2.75rem;
+  border: 1px solid #64748b;
+  border-radius: 999px;
+  padding: 0.7rem 1.2rem;
+  color: #172554;
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.back:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+.nextSteps {
+  max-width: 54rem;
+  padding: 1rem 1.1rem;
+  border-left: 0.3rem solid #0f766e;
+  background: #f0fdfa;
+  color: #134e4a;
+}
+
+.nextSteps p {
+  margin: 0.35rem 0 0;
+}
+
 .submit:disabled {
   cursor: not-allowed;
   opacity: 0.65;
@@ -120,6 +224,10 @@
 }
 
 @media (max-width: 44rem) {
+  .progress {
+    grid-template-columns: 1fr;
+  }
+
   .grid {
     grid-template-columns: minmax(0, 1fr);
   }

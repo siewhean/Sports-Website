@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { messages } from "@matchday/ui";
+import { messages, opaqueId } from "@matchday/ui";
 import {
   firstInvalidCompetitionCreateField,
+  competitionCreateFieldIsValid,
   parseCompetitionCreateReceipt,
   parseCompetitionOrganisationBootstrapReceipt,
   parseCompetitionOrganisationOptions,
@@ -32,6 +33,22 @@ const initialDraft = (): CompetitionCreateDraft => ({
 });
 
 const DRAFT_STORAGE_KEY = "matchday-competition-create-draft-v1";
+const SLUG_EDITED_STORAGE_KEY = "matchday-competition-create-slug-edited-v1";
+
+const createSteps = [
+  [opaqueId("organisation_id"), opaqueId("name"), opaqueId("slug"), opaqueId("sport_code")],
+  [opaqueId("venue"), opaqueId("address"), opaqueId("country_code")],
+  [opaqueId("starts_on"), opaqueId("ends_on"), opaqueId("timezone"), opaqueId("locale")],
+] as const satisfies ReadonlyArray<ReadonlyArray<CompetitionCreateField>>;
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+    .slice(0, 120);
+}
 
 function loadSavedDraft(): Partial<CompetitionCreateDraft> {
   if (typeof window === "undefined") return {};
@@ -56,11 +73,35 @@ function persistDraft(draft: CompetitionCreateDraft) {
   }
 }
 
+function loadSlugEdited() {
+  if (typeof window === "undefined") return false;
+  try {
+    return (
+      sessionStorage.getItem(SLUG_EDITED_STORAGE_KEY) === "true" ||
+      localStorage.getItem(SLUG_EDITED_STORAGE_KEY) === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function persistSlugEdited() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(SLUG_EDITED_STORAGE_KEY, "true");
+    localStorage.setItem(SLUG_EDITED_STORAGE_KEY, "true");
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 function clearSavedDraft() {
   if (typeof window === "undefined") return;
   try {
     sessionStorage.removeItem(DRAFT_STORAGE_KEY);
     localStorage.removeItem(DRAFT_STORAGE_KEY);
+    sessionStorage.removeItem(SLUG_EDITED_STORAGE_KEY);
+    localStorage.removeItem(SLUG_EDITED_STORAGE_KEY);
   } catch {
     // Ignore storage errors
   }
@@ -96,7 +137,10 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   const [commandError, setCommandError] = useState("");
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  const [activeStep, setActiveStep] = useState(0);
+  const [slugEdited, setSlugEdited] = useState(loadSlugEdited);
   const formRef = useRef<HTMLFormElement>(null);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
 
@@ -141,13 +185,37 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
 
   function update(field: CompetitionCreateField, value: string) {
     setDraft((current) => {
-      const next = { ...current, [field]: value };
+      const next = {
+        ...current,
+        [field]: value,
+        ...(field === "name" && !slugEdited ? { slug: slugify(value) } : {}),
+      };
       persistDraft(next);
       return next;
     });
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
     setCommandError("");
     setAnnouncement("");
+  }
+
+  function validateStep(stepIndex: number) {
+    const bootstrapRequired = organisations.length === 0 && !draft.organisation_id;
+    const invalidField = createSteps[stepIndex]?.find(
+      (fieldName) =>
+        !(fieldName === "organisation_id" && bootstrapRequired) && !competitionCreateFieldIsValid(fieldName, draft),
+    );
+    if (!invalidField) return true;
+    setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
+    setCommandError(messages.organiserCreate.validationSummary);
+    requestAnimationFrame(() => focusField(invalidField));
+    return false;
+  }
+
+  function continueStep() {
+    if (!validateStep(activeStep)) return;
+    setCommandError("");
+    setActiveStep((current) => Math.min(current + 1, createSteps.length - 1));
+    requestAnimationFrame(() => stepHeadingRef.current?.focus());
   }
 
   function focusField(field: CompetitionCreateField) {
@@ -257,7 +325,13 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
           maxLength={options.maxLength}
           aria-invalid={Boolean(errorId)}
           aria-describedby={[hintId, errorId].filter(Boolean).join(" ") || undefined}
-          onChange={(event) => update(name, event.currentTarget.value)}
+          onChange={(event) => {
+            if (name === "slug") {
+              setSlugEdited(true);
+              persistSlugEdited();
+            }
+            update(name, event.currentTarget.value);
+          }}
         />
         {options.hint ? (
           <p id={hintId} className={styles.hint}>
@@ -278,159 +352,216 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   return (
     <form ref={formRef} className={styles.form} noValidate onSubmit={submit}>
       <p className={styles.intro}>{messages.organiserCreate.intro}</p>
+      <ol className={styles.progress} aria-label={messages.organiserCreate.progress}>
+        {messages.organiserCreate.steps.map((step, index) => (
+          <li key={step} data-current={index === activeStep} data-complete={index < activeStep}>
+            <span>{index + 1}</span>
+            <strong>{step}</strong>
+          </li>
+        ))}
+      </ol>
       {commandError ? (
         <div ref={errorRef} className={styles.summary} role="alert" tabIndex={-1}>
           {commandError}
         </div>
       ) : null}
-      <div className={styles.grid}>
-        {showOrganisationSelector ? (
-          <div className={styles.field}>
-            <label htmlFor={phase3CompetitionCreateMachine.fields.organisationId}>
-              {messages.organiserCreate.organisation}
-            </label>
-            <select
-              id={phase3CompetitionCreateMachine.fields.organisationId}
-              name={phase3CompetitionCreateMachine.fields.organisationId}
-              value={draft.organisation_id}
-              required={organisations.length > 0}
-              disabled={organisationsLoading || organisations.length === 0}
-              aria-invalid={Boolean(fieldErrors.organisation_id || organisationsError)}
-              aria-describedby={
-                fieldErrors.organisation_id || organisationsError
-                  ? `${phase3CompetitionCreateMachine.fields.organisationId}-error`
-                  : undefined
-              }
-              onChange={(event) =>
-                update(phase3CompetitionCreateMachine.fields.organisationId, event.currentTarget.value)
-              }
-            >
-              <option value="" disabled>
-                {organisationsLoading
-                  ? messages.organiserCreate.loadingOrganisations
-                  : messages.organiserCreate.chooseOrganisation}
-              </option>
-              {organisations.map((organisation) => (
-                <option key={organisation.id} value={organisation.id}>
-                  {organisation.name} ·{" "}
-                  {organisation.role === "owner"
-                    ? messages.organiserCreate.ownerRole
-                    : messages.organiserCreate.organiserRole}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.organisation_id || organisationsError ? (
-              <p
-                id={`${phase3CompetitionCreateMachine.fields.organisationId}-error`}
-                className={styles.error}
-                role={organisationsError ? "alert" : undefined}
+      <section className={styles.step} aria-labelledby={`create-step-${activeStep}`}>
+        <header className={styles.stepHeading}>
+          <p>
+            {messages.organiserCreate.stepCurrent} {activeStep + 1} {messages.organiserCreate.stepOf}{" "}
+            {createSteps.length}
+          </p>
+          <h2 ref={stepHeadingRef} id={`create-step-${activeStep}`} tabIndex={-1}>
+            {messages.organiserCreate.steps[activeStep]}
+          </h2>
+          <span>{messages.organiserCreate.stepDescriptions[activeStep]}</span>
+        </header>
+        <div className={styles.grid}>
+          {activeStep === 0 && showOrganisationSelector ? (
+            <div className={styles.field}>
+              <label htmlFor={phase3CompetitionCreateMachine.fields.organisationId}>
+                {messages.organiserCreate.organisation}
+              </label>
+              <select
+                id={phase3CompetitionCreateMachine.fields.organisationId}
+                name={phase3CompetitionCreateMachine.fields.organisationId}
+                value={draft.organisation_id}
+                required={organisations.length > 0}
+                disabled={organisationsLoading || organisations.length === 0}
+                aria-invalid={Boolean(fieldErrors.organisation_id || organisationsError)}
+                aria-describedby={
+                  fieldErrors.organisation_id || organisationsError
+                    ? `${phase3CompetitionCreateMachine.fields.organisationId}-error`
+                    : undefined
+                }
+                onChange={(event) =>
+                  update(phase3CompetitionCreateMachine.fields.organisationId, event.currentTarget.value)
+                }
               >
-                {fieldErrors.organisation_id ?? organisationsError}
-              </p>
-            ) : null}
-            {organisationsError ? (
-              <>
-                <button
-                  className={styles.retry}
-                  type="button"
-                  onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
+                <option value="" disabled>
+                  {organisationsLoading
+                    ? messages.organiserCreate.loadingOrganisations
+                    : messages.organiserCreate.chooseOrganisation}
+                </option>
+                {organisations.map((organisation) => (
+                  <option key={organisation.id} value={organisation.id}>
+                    {organisation.name} ·{" "}
+                    {organisation.role === "owner"
+                      ? messages.organiserCreate.ownerRole
+                      : messages.organiserCreate.organiserRole}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.organisation_id || organisationsError ? (
+                <p
+                  id={`${phase3CompetitionCreateMachine.fields.organisationId}-error`}
+                  className={styles.error}
+                  role={organisationsError ? "alert" : undefined}
                 >
-                  {messages.organiserCreate.retryOrganisations}
-                </button>
-                {organisationsAuthRequired ? (
-                  <a className={styles.retry} href={signInHref}>
-                    {messages.organiserCreate.signInToLoadOrganisations}
-                  </a>
-                ) : null}
-              </>
-            ) : null}
-            <p className={styles.live} role="status">
-              {organisationsLoading ? messages.organiserCreate.loadingOrganisations : ""}
-            </p>
-          </div>
-        ) : null}
-        {field(phase3CompetitionCreateMachine.fields.name, messages.organiserCreate.name, {
-          required: true,
-          maxLength: 160,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.slug, messages.organiserCreate.slug, {
-          required: true,
-          maxLength: 120,
-          hint: messages.organiserCreate.slugHint,
-        })}
-        <div className={styles.field}>
-          <label htmlFor={phase3CompetitionCreateMachine.fields.sportCode}>{messages.organiserCreate.sport}</label>
-          <select
-            id={phase3CompetitionCreateMachine.fields.sportCode}
-            name={phase3CompetitionCreateMachine.fields.sportCode}
-            value={draft.sport_code}
-            required
-            aria-invalid={Boolean(fieldErrors.sport_code)}
-            aria-describedby={
-              fieldErrors.sport_code ? `${phase3CompetitionCreateMachine.fields.sportCode}-error` : undefined
-            }
-            onChange={(event) => update(phase3CompetitionCreateMachine.fields.sportCode, event.currentTarget.value)}
-          >
-            <option value="" disabled>
-              {messages.organiserCreate.chooseSport}
-            </option>
-            {phase3CompetitionSports.map((sport) => (
-              <option key={sport.code} value={sport.code}>
-                {messages.organiserCreate.sports[sport.code]}
-              </option>
-            ))}
-          </select>
-          {fieldErrors.sport_code ? (
-            <p id={`${phase3CompetitionCreateMachine.fields.sportCode}-error`} className={styles.error}>
-              {fieldErrors.sport_code}
-            </p>
+                  {fieldErrors.organisation_id ?? organisationsError}
+                </p>
+              ) : null}
+              {organisationsError ? (
+                <>
+                  <button
+                    className={styles.retry}
+                    type="button"
+                    onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
+                  >
+                    {messages.organiserCreate.retryOrganisations}
+                  </button>
+                  {organisationsAuthRequired ? (
+                    <a className={styles.retry} href={signInHref}>
+                      {messages.organiserCreate.signInToLoadOrganisations}
+                    </a>
+                  ) : null}
+                </>
+              ) : null}
+              <p className={styles.live} role="status">
+                {organisationsLoading ? messages.organiserCreate.loadingOrganisations : ""}
+              </p>
+            </div>
           ) : null}
-          {draft.sport_code ? <p className={styles.hint}>{messages.organiserCreate.sportLockNote}</p> : null}
+          {activeStep === 0 &&
+            field(phase3CompetitionCreateMachine.fields.name, messages.organiserCreate.name, {
+              required: true,
+              maxLength: 160,
+            })}
+          {activeStep === 0 &&
+            field(phase3CompetitionCreateMachine.fields.slug, messages.organiserCreate.slug, {
+              required: true,
+              maxLength: 120,
+              hint: messages.organiserCreate.slugHint,
+            })}
+          {activeStep === 0 ? (
+            <div className={styles.field}>
+              <label htmlFor={phase3CompetitionCreateMachine.fields.sportCode}>{messages.organiserCreate.sport}</label>
+              <select
+                id={phase3CompetitionCreateMachine.fields.sportCode}
+                name={phase3CompetitionCreateMachine.fields.sportCode}
+                value={draft.sport_code}
+                required
+                aria-invalid={Boolean(fieldErrors.sport_code)}
+                aria-describedby={
+                  fieldErrors.sport_code ? `${phase3CompetitionCreateMachine.fields.sportCode}-error` : undefined
+                }
+                onChange={(event) => update(phase3CompetitionCreateMachine.fields.sportCode, event.currentTarget.value)}
+              >
+                <option value="" disabled>
+                  {messages.organiserCreate.chooseSport}
+                </option>
+                {phase3CompetitionSports.map((sport) => (
+                  <option key={sport.code} value={sport.code}>
+                    {messages.organiserCreate.sports[sport.code]}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.sport_code ? (
+                <p id={`${phase3CompetitionCreateMachine.fields.sportCode}-error`} className={styles.error}>
+                  {fieldErrors.sport_code}
+                </p>
+              ) : null}
+              {draft.sport_code ? <p className={styles.hint}>{messages.organiserCreate.sportLockNote}</p> : null}
+            </div>
+          ) : null}
+          {activeStep === 1 &&
+            field(phase3CompetitionCreateMachine.fields.venue, messages.organiserCreate.venue, {
+              required: true,
+              autoComplete: phase3CompetitionCreateMachine.autocomplete.venue,
+              hint: messages.organiserCreate.venueHint,
+            })}
+          {activeStep === 1 &&
+            field(phase3CompetitionCreateMachine.fields.address, messages.organiserCreate.address, {
+              required: true,
+              autoComplete: phase3CompetitionCreateMachine.autocomplete.address,
+            })}
+          {activeStep === 1 &&
+            field(phase3CompetitionCreateMachine.fields.locality, messages.organiserCreate.locality, {
+              autoComplete: phase3CompetitionCreateMachine.autocomplete.locality,
+            })}
+          {activeStep === 1 &&
+            field(phase3CompetitionCreateMachine.fields.countryCode, messages.organiserCreate.country, {
+              required: true,
+              autoComplete: phase3CompetitionCreateMachine.autocomplete.country,
+              maxLength: 2,
+              hint: messages.organiserCreate.countryHint,
+            })}
+          {activeStep === 2 &&
+            field(phase3CompetitionCreateMachine.fields.startsOn, messages.organiserCreate.startsOn, {
+              type: "date",
+              required: true,
+            })}
+          {activeStep === 2 &&
+            field(phase3CompetitionCreateMachine.fields.endsOn, messages.organiserCreate.endsOn, {
+              type: "date",
+              required: true,
+              hint: messages.organiserCreate.endsOnHint,
+            })}
+          {activeStep === 2 &&
+            field(phase3CompetitionCreateMachine.fields.timezone, messages.organiserCreate.timezone, {
+              required: true,
+              hint: messages.organiserCreate.timezoneHint,
+            })}
+          {activeStep === 2 &&
+            field(phase3CompetitionCreateMachine.fields.locale, messages.organiserCreate.locale, {
+              required: true,
+              hint: messages.organiserCreate.localeHint,
+            })}
         </div>
-        {field(phase3CompetitionCreateMachine.fields.venue, messages.organiserCreate.venue, {
-          required: true,
-          autoComplete: phase3CompetitionCreateMachine.autocomplete.venue,
-          hint: messages.organiserCreate.venueHint,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.address, messages.organiserCreate.address, {
-          required: true,
-          autoComplete: phase3CompetitionCreateMachine.autocomplete.address,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.locality, messages.organiserCreate.locality, {
-          autoComplete: phase3CompetitionCreateMachine.autocomplete.locality,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.countryCode, messages.organiserCreate.country, {
-          required: true,
-          autoComplete: phase3CompetitionCreateMachine.autocomplete.country,
-          maxLength: 2,
-          hint: messages.organiserCreate.countryHint,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.startsOn, messages.organiserCreate.startsOn, {
-          type: "date",
-          required: true,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.endsOn, messages.organiserCreate.endsOn, {
-          type: "date",
-          required: true,
-          hint: messages.organiserCreate.endsOnHint,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.timezone, messages.organiserCreate.timezone, {
-          required: true,
-          hint: messages.organiserCreate.timezoneHint,
-        })}
-        {field(phase3CompetitionCreateMachine.fields.locale, messages.organiserCreate.locale, {
-          required: true,
-          hint: messages.organiserCreate.localeHint,
-        })}
+      </section>
+      <div className={styles.actions}>
+        {activeStep > 0 ? (
+          <button className={styles.back} type="button" onClick={() => setActiveStep((current) => current - 1)}>
+            {messages.organiserCreate.back}
+          </button>
+        ) : null}
+        {activeStep < createSteps.length - 1 ? (
+          <button
+            className={styles.submit}
+            type="button"
+            disabled={organisationsLoading || Boolean(organisationsError)}
+            onClick={continueStep}
+          >
+            {messages.organiserCreate.next}
+          </button>
+        ) : (
+          <button
+            className={styles.submit}
+            type="submit"
+            disabled={busy || organisationsLoading || Boolean(organisationsError)}
+            data-busy={busy}
+          >
+            {busy ? messages.organiserCreate.saving : messages.organiserCreate.submit}
+          </button>
+        )}
       </div>
-      <button
-        className={styles.submit}
-        type="submit"
-        disabled={busy || organisationsLoading || Boolean(organisationsError)}
-        data-busy={busy}
-      >
-        {busy ? messages.organiserCreate.saving : messages.organiserCreate.submit}
-      </button>
+      {activeStep === 0 && !slugEdited && draft.slug ? (
+        <p className={styles.hint}>{messages.organiserCreate.generatedSlug}</p>
+      ) : null}
+      <aside className={styles.nextSteps} aria-label={messages.organiserCreate.afterCreateTitle}>
+        <strong>{messages.organiserCreate.afterCreateTitle}</strong>
+        <p>{messages.organiserCreate.afterCreate}</p>
+      </aside>
       <p className={styles.live} aria-live="polite" aria-atomic="true">
         {announcement}
       </p>

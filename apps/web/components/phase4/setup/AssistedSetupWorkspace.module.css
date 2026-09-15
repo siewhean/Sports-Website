@@ -434,8 +434,9 @@
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 10px;
-  align-items: center;
-  min-height: 48px;
+  align-items: start;
+  min-height: 58px;
+  padding-block: 8px;
   border-bottom: 1px solid var(--hairline);
   font-size: 0.8rem;
 }
@@ -448,6 +449,16 @@
 .radioRow > span {
   display: grid;
   gap: 2px;
+}
+.checkRow > span {
+  display: grid;
+  gap: 3px;
+}
+.checkRow small {
+  color: var(--ink-muted);
+  font-size: 0.68rem;
+  font-weight: 450;
+  line-height: 1.4;
 }
 .radioRow small {
   color: var(--ink-muted);
@@ -531,15 +542,22 @@
   border-top: 1px solid var(--hairline);
   list-style: none;
 }
-.review li {
+.review li > button {
   display: grid;
-  grid-template-columns: 38px 1fr;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
+  width: 100%;
   min-height: 72px;
+  padding: 10px 0;
+  border: 0;
   border-bottom: 1px solid var(--hairline);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.review li > span {
+.review li > button > span:first-child {
   display: grid;
   place-items: center;
   width: 28px;
@@ -548,7 +566,7 @@
   border-radius: 50%;
   color: #946600;
 }
-.review li[data-ready="true"] > span {
+.review li[data-ready="true"] > button > span:first-child {
   border-color: var(--signal-strong);
   color: #668100;
 }
@@ -556,12 +574,25 @@
   width: 16px;
   height: 16px;
 }
-.review li > div {
+.review li > button > span:nth-child(2) {
   display: grid;
   gap: 3px;
 }
 .review li small {
   color: var(--ink-muted);
+}
+.review li > button > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--ink-muted);
+}
+.review li > button:focus-visible {
+  outline: 3px solid var(--signal-strong);
+  outline-offset: 3px;
+}
+.review li > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 .publicationNote {
   display: grid;

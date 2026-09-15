@@ -73,6 +73,14 @@ const copy = {
   settingsReferences: opaqueId("settings references"),
   continueTo: opaqueId("Continue to"),
   setupUnavailable: opaqueId("The canonical setup values are unavailable. Reload before editing."),
+  rankAllEntriesHint: opaqueId("Creates ranking or placement matches so every entry receives a final position."),
+  knockoutHint: opaqueId("Reserves a knockout stage after the initial rounds."),
+  placementHint: opaqueId("Adds placement matches for teams outside the title match."),
+  crossGroupHint: opaqueId("Allows qualifying teams to meet opponents from a different group."),
+  warningCapacity: opaqueId("This format needs more match slots than the current capacity provides."),
+  warningInfeasible: opaqueId("This format cannot be scheduled with the current entries, rules, and capacity."),
+  warningGeneric: opaqueId("Review this format before selecting it."),
+  planCapacity: opaqueId("Plan capacity"),
 } as const;
 
 export function AssistedSetupJourneyView({
@@ -287,7 +295,9 @@ export function AssistedSetupJourneyView({
           {setup.current_step === "schedule_review" ? (
             <ScheduleStep setup={setup} competitionId={document.competitionId} />
           ) : null}
-          {setup.current_step === "review_publish" ? <ReviewStep setup={setup} /> : null}
+          {setup.current_step === "review_publish" ? (
+            <ReviewStep setup={setup} disabled={disabled} onGoTo={onGoTo} />
+          ) : null}
         </div>
 
         <p className={styles.announcement} aria-live="polite">
@@ -657,24 +667,28 @@ function PreferencesStep({
         <legend>{t("prototype.75b063db3af7")}</legend>
         <CheckField
           label={t("prototype.f3b5604b4491")}
+          helper={copy.rankAllEntriesHint}
           checked={value.ranking.rank_all_entries}
           disabled={disabled}
           onChange={(checked) => toggle(opaqueId("ranking"), opaqueId("rank_all_entries"), checked)}
         />
         <CheckField
           label={t("prototype.ef99dd58f698")}
+          helper={copy.knockoutHint}
           checked={value.knockout.required}
           disabled={disabled}
           onChange={(checked) => toggle(opaqueId("knockout"), opaqueId("required"), checked)}
         />
         <CheckField
           label={t("prototype.8fa183fcdb36")}
+          helper={copy.placementHint}
           checked={value.placement.required}
           disabled={disabled}
           onChange={(checked) => toggle(opaqueId("placement"), opaqueId("required"), checked)}
         />
         <CheckField
           label={t("prototype.0776908af4e1")}
+          helper={copy.crossGroupHint}
           checked={value.qualification.cross_group_allowed}
           disabled={disabled}
           onChange={(checked) => toggle(opaqueId("qualification"), opaqueId("cross_group_allowed"), checked)}
@@ -768,7 +782,7 @@ function RecommendationStep({
             {item.warning_codes.length ? (
               <ul>
                 {item.warning_codes.map((warning) => (
-                  <li key={warning}>{warning.replaceAll("_", " ")}</li>
+                  <li key={warning}>{formatWarning(warning)}</li>
                 ))}
               </ul>
             ) : null}
@@ -785,6 +799,12 @@ function RecommendationStep({
                 t("prototype.c810c402a124")
               )}
             </button>
+            {shortfall ? (
+              <Link className={styles.textLink} href={`/organiser/competitions/${setup.competition_id}/capacity`}>
+                {copy.planCapacity}
+                <ArrowRight />
+              </Link>
+            ) : null}
           </article>
         );
       })}
@@ -831,7 +851,15 @@ function ScheduleStep({ setup, competitionId }: { setup: Phase4SetupDocument; co
   );
 }
 
-function ReviewStep({ setup }: { setup: Phase4SetupDocument }) {
+function ReviewStep({
+  setup,
+  disabled,
+  onGoTo,
+}: {
+  setup: Phase4SetupDocument;
+  disabled: boolean;
+  onGoTo(step: Phase4SetupStepId): void;
+}) {
   const rows = assistedSetupSteps.slice(0, 7).map((step) => ({
     step,
     complete: setup.completed_steps.includes(step.id),
@@ -842,13 +870,16 @@ function ReviewStep({ setup }: { setup: Phase4SetupDocument }) {
       <ul>
         {rows.map(({ step, complete, issues }) => (
           <li key={step.id} data-ready={complete && !issues.length}>
-            <span>{complete && !issues.length ? <Check /> : <Warning />}</span>
-            <div>
-              <strong>{step.label}</strong>
-              <small>
-                {issues[0]?.message ?? (complete ? t("prototype.6aa852ff8317") : t("prototype.07297fa94a99"))}
-              </small>
-            </div>
+            <button type="button" disabled={disabled} onClick={() => onGoTo(step.id)}>
+              <span>{complete && !issues.length ? <Check /> : <Warning />}</span>
+              <span>
+                <strong>{step.label}</strong>
+                <small>
+                  {issues[0]?.message ?? (complete ? t("prototype.6aa852ff8317") : t("prototype.07297fa94a99"))}
+                </small>
+              </span>
+              {!complete || issues.length ? <ArrowRight aria-hidden="true" /> : null}
+            </button>
           </li>
         ))}
       </ul>
@@ -888,11 +919,13 @@ function ReferenceRow({
 
 function CheckField({
   label,
+  helper,
   checked,
   disabled,
   onChange,
 }: {
   label: string;
+  helper: string;
   checked: boolean;
   disabled: boolean;
   onChange(value: boolean): void;
@@ -905,9 +938,19 @@ function CheckField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
       />
-      <span>{label}</span>
+      <span>
+        <strong>{label}</strong>
+        <small>{helper}</small>
+      </span>
     </label>
   );
+}
+
+function formatWarning(warning: string) {
+  if (warning === "CAPACITY_SHORTFALL" || warning === "insufficient_capacity" || warning === "requires_more_slots")
+    return copy.warningCapacity;
+  if (warning === "SCHEDULE_INFEASIBLE") return copy.warningInfeasible;
+  return copy.warningGeneric;
 }
 
 function Field({ id, label, helper, children }: { id?: string; label: string; helper?: string; children: ReactNode }) {
