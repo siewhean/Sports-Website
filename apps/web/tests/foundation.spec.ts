@@ -88,7 +88,7 @@ test("organiser, official and public shells expose role-specific primary actions
 
   await page.goto("/competitions/singapore-open");
   await expect(page.getByRole("heading", { name: "Singapore Open 2026" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Next matches" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Up Next" })).toBeVisible();
 });
 
 test("public realtime failure degrades to polling and offline copy", async ({ page, context }) => {
