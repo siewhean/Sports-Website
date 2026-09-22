@@ -88,10 +88,11 @@ test("@a11y competition creation preserves recovery context and strict WCAG A/AA
   await organisation.selectOption({ label: "National Sports · Organiser" });
   await expect(page.getByLabel("Competition name")).toHaveValue("National Open");
 
+  // Continue without selecting sport — should focus Sport field (slug auto-derived from name)
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByLabel("Public address")).toBeFocused();
+  await expect(page.getByLabel("Sport")).toBeFocused();
   await expect(page.getByRole("alert").filter({ hasText: "Check the highlighted competition detail" })).toBeVisible();
-  await page.getByLabel("Public address").fill("national-open");
+  await page.getByLabel("Sport").selectOption("badminton");
   await expect(page.getByRole("alert").filter({ hasText: "Check the highlighted competition detail" })).toHaveCount(0);
   await assertNoWcagAOrAaViolations(page);
 });
