@@ -156,14 +156,22 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   const slug = `browser-owned-${seed.fixtureKey}`;
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
+
+  // Step 0: Organisation, Name, Public address, Sport
   await page.getByLabel("Organisation").selectOption(seed.organisationId);
   await page.getByLabel("Competition name").fill("Phase 4 Browser Verified Cup");
   await page.getByLabel("Public address").fill(slug);
   await page.getByLabel("Sport").selectOption("canoe_polo");
-  await page.getByLabel("Venue").fill("Real E2E Arena");
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  // Step 1: Venue, Address, Locality, Country
+  await page.getByLabel("Venue name").fill("Real E2E Arena");
   await page.getByLabel("Address", { exact: true }).fill("4 Integration Road");
-  await page.getByLabel("Locality").fill("Singapore");
+  await page.getByLabel("City or locality (optional)").fill("Singapore");
   await page.getByLabel("Country code").fill("SG");
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  // Step 2: Dates, Timezone, Locale + submit
   await page.getByLabel("Start date").fill("2027-08-01");
   await page.getByLabel("End date").fill("2027-08-02");
   await page.getByLabel("Time zone").fill("Asia/Singapore");
