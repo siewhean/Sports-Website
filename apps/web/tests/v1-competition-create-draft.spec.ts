@@ -23,7 +23,7 @@ test("unfinished competition creation survives navigation and reload", async ({ 
   await page.getByRole("button", { name: "Continue" }).click();
 
   // Step 1: Venue
-  await page.getByLabel("Venue").fill("Draft Arena");
+  await page.getByLabel("Venue name").fill("Draft Arena");
 
   // Navigate away and back (route mock persists in this page context)
   await page.goto("/");
@@ -35,7 +35,7 @@ test("unfinished competition creation survives navigation and reload", async ({ 
 
   // Advance to step 1 and verify venue persisted
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByLabel("Venue")).toHaveValue("Draft Arena");
+  await expect(page.getByLabel("Venue name")).toHaveValue("Draft Arena");
 
   // Navigate to step 0, reload, verify step 0 fields still present
   await page.getByRole("button", { name: "Back" }).click();
