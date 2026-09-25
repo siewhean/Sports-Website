@@ -242,18 +242,6 @@ export function PhoneScoring({
   const supportsPeriodAdvance = definition.operationalControls.some(
     (control) => control.id === phase2Machine.periodChange,
   );
-  const exceptionalOutcomeRecorded = scoreState.actions.some(
-    (action) => !action.reversed && (action.eventType === "retirement" || action.eventType === "walkover"),
-  );
-  const requiredSegmentWins = Math.floor(definition.segments.length / 2) + 1;
-  const regulationReached =
-    definition.scoreMode === "segments"
-      ? exceptionalOutcomeRecorded ||
-        Math.max(scoreState.segmentWins.home, scoreState.segmentWins.away) >= requiredSegmentWins
-      : scoreState.currentSegment >= definition.segments.length;
-  const drawResolved = definition.drawAllowed || score.home !== score.away || exceptionalOutcomeRecorded;
-  const finalisationReady =
-    scoreState.lifecycle === "in_progress" && scoreState.conflicts.length === 0 && regulationReached && drawResolved;
   const locked = scoringMutationIsLocked({
     writerState,
     offlineState,
@@ -1970,18 +1958,10 @@ export function PhoneScoring({
             )}
           </section>
           {!locked ? (
-            <>
-              {!finalisationReady ? <p>{phase2Copy.finalisationNotReady}</p> : null}
-              <button
-                className="p2-score-primary p2-score-final"
-                type="button"
-                disabled={!finalisationReady}
-                onClick={() => setPhase("review")}
-              >
-                {phase2Copy.reviewFinal}
-                <ArrowRight />
-              </button>
-            </>
+            <button className="p2-score-primary p2-score-final" type="button" onClick={() => setPhase("review")}>
+              {phase2Copy.reviewFinal}
+              <ArrowRight />
+            </button>
           ) : null}
           {pendingAction || reversalTarget ? (
             <dialog
