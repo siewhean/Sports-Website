@@ -206,13 +206,13 @@ describe("phase 2 browser scoring transport", () => {
     const advance = source.indexOf("const advancePeriod = async");
     const append = source.indexOf("await port.appendEvent(command)", advance);
     const selector = source.indexOf("void advancePeriod(event.target.value)", append);
-    const finalisationGuard = source.indexOf("disabled={!finalisationReady}", selector);
+    const finalisationMessage = source.indexOf('error.code === "FINALISATION_INVALID"', selector);
 
     expect(advance).toBeGreaterThan(-1);
     expect(source.indexOf("eventType: phase2Machine.periodChange", advance)).toBeGreaterThan(advance);
     expect(append).toBeGreaterThan(advance);
     expect(selector).toBeGreaterThan(append);
-    expect(finalisationGuard).toBeGreaterThan(selector);
+    expect(finalisationMessage).toBeGreaterThan(-1);
   });
 
   it("distinguishes a lapsed writer lease from a genuinely expired scoring session", () => {
