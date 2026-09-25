@@ -39,12 +39,61 @@ After the deployment is ready, run the unchanged QA-010 and QA-011 staging workl
 
 For the scoring latency investigation, compare `DB_POOL_MAX=8`, `12`, and `20` in separate clean runs. Keep the configuration that produces server p95 below 400 ms and client p95 below 500 ms. Do not change the QA-011 workload, threshold, or receipt validator.
 
+## Production and Staging Dual-Stack Architecture
+
+The OCI host supports isolated dual-stack execution with shared Caddy ingress:
+
+- **Shared Ingress (Caddy)**: Single Caddy container (`matchday-oci-caddy-1`) attached to both backend subnets:
+  - Staging IP: `172.30.0.10`
+  - Production IP: `172.31.0.10`
+  - Ports: 80, 443
+  - Routes `matchday.poladex.shop` -> Production API (`172.31.0.11:4000`), Web (`172.31.0.12:3000`)
+  - Routes `c5-drill.poladex.shop` -> Staging API (`172.30.0.11:4000`), Web (`172.30.0.12:3000`)
+  - Blocks `/health/deep*` publicly with HTTP 404
+- **Production Stack (`matchday-prod`)**:
+  - Network: `matchday-prod_backend` (`172.31.0.0/24`)
+  - Database: `matchday_prod` on `172.31.0.2` (`matchday-prod-postgres-1`)
+  - Redis: `172.31.0.3` (`matchday-prod-redis-1`)
+  - API: `172.31.0.11:4000` (alias `prod-api`)
+  - Web: `172.31.0.12:3000` (alias `prod-web`)
+  - Worker: `172.31.0.13` (alias `prod-worker`)
+  - Environment file: `infra/oci/.env.prod` (mode 600)
+- **Staging Stack (`matchday-oci`)**:
+  - Network: `matchday-oci_backend` (`172.30.0.0/24`)
+  - Database: `matchday` on `172.30.0.2` (`matchday-oci-postgres-1`)
+  - Redis: `172.30.0.3` (`matchday-oci-redis-1`)
+  - API: `172.30.0.11:4000` (alias `staging-api`)
+  - Web: `172.30.0.12:3000` (alias `staging-web`)
+  - Worker: `172.30.0.13` (alias `staging-worker`)
+  - Environment file: `infra/oci/.env.oci` (mode 600)
+
+## Production Deployment
+
+From `/opt/matchday/oci-src`:
+
+```sh
+export CANDIDATE_SHA=40_CHARACTER_SHA
+export OCI_PUBLIC_HOSTNAME=matchday.poladex.shop
+git checkout --detach "$CANDIDATE_SHA"
+infra/oci/deploy-prod.sh
+```
+
+Post-deploy topology verification:
+
+```sh
+./infra/oci/verify-production-topology.sh matchday.poladex.shop c5-drill.poladex.shop "$CANDIDATE_SHA"
+```
+
 ## Operations
 
 ```sh
+# Production stack
+docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps
+docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml logs --tail=200 api
+
+# Staging stack
 docker compose --env-file infra/oci/.env.oci -f infra/oci/compose.yaml ps
 docker compose --env-file infra/oci/.env.oci -f infra/oci/compose.yaml logs --tail=200 api
-docker compose --env-file infra/oci/.env.oci -f infra/oci/compose.yaml logs --tail=200 postgres redis
 ```
 
-Back up the PostgreSQL volume before destructive maintenance. Rotate the `.env.oci` secrets through the configured secret-handling process, then redeploy a new exact SHA. Treat the VM as staging infrastructure and keep database/Redis ports private.
+Back up the PostgreSQL volume before destructive maintenance. Rotate the `.env.prod` and `.env.oci` secrets through the configured secret-handling process, then redeploy a new exact SHA. Keep database and Redis ports strictly internal to their respective Docker bridge networks.

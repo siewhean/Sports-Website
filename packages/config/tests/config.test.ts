@@ -158,19 +158,31 @@ describe("configuration", () => {
     });
   });
 
-  it("requires enabled OTLP telemetry in production", () => {
+  it("supports disabled telemetry in production and validates enabled OTLP endpoints", () => {
     const production = {
       APP_ENV: "production",
       DATABASE_URL: "postgres://user:secret@db.internal/matchday",
       REDIS_URL: "redis://cache.internal:6379",
       DEEP_HEALTH_TOKEN: "a".repeat(32),
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
-      OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
       ...edgeCacheConfig,
       ...oidcConfig,
     };
-    expect(() => parseConfig(production)).toThrow("OTEL_ENABLED must be true");
-    expect(parseConfig({ ...production, OTEL_ENABLED: "true" }).telemetry.enabled).toBe(true);
+    expect(parseConfig(production).telemetry.enabled).toBe(false);
+    expect(parseConfig({ ...production, OTEL_ENABLED: "false" }).telemetry.enabled).toBe(false);
+    expect(
+      parseConfig({
+        ...production,
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
+      }).telemetry.enabled,
+    ).toBe(true);
+    expect(() =>
+      parseConfig({
+        ...production,
+        OTEL_ENABLED: "true",
+      }),
+    ).toThrow("OTEL_EXPORTER_OTLP_ENDPOINT");
     expect(() =>
       parseConfig({
         ...production,
@@ -178,6 +190,20 @@ describe("configuration", () => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector.internal:4318",
       }),
     ).toThrow("Production OTLP endpoints must use HTTPS");
+    expect(() =>
+      parseConfig({
+        ...production,
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://127.0.0.1:4318",
+      }),
+    ).toThrow("Production OTLP endpoints must not use local loopback");
+    expect(() =>
+      parseConfig({
+        ...production,
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://localhost:4318",
+      }),
+    ).toThrow("Production OTLP endpoints must not use local loopback");
   });
 
   it("requires a private CSRF secret and __Host cookie outside local/test", () => {

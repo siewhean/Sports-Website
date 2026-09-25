@@ -157,7 +157,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       );
       runCommand(
         "13c Gate F production operations and certification validators",
-        "node --test scripts/validate-production-config.test.mjs scripts/gate-f-audits.test.mjs scripts/validate-gate-f.test.mjs",
+        "node --test scripts/validate-production-config.test.mjs scripts/infrastructure-regression.test.mjs scripts/gate-f-audits.test.mjs scripts/validate-gate-f.test.mjs",
         { expectTests: true },
       );
     }
