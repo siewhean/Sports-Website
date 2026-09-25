@@ -88,6 +88,9 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
     expect.arrayContaining([expect.stringMatching(/scoring|session|token|auth/i)]),
   );
 
+  await page.getByLabel("Period").selectOption("2");
+  await expect(page.getByLabel("Period")).toHaveValue("2");
+  await expect(page.getByRole("button", { name: "Review final score" })).toBeEnabled();
   await page.getByRole("button", { name: "Review final score" }).click();
   await expect(page.getByRole("heading", { name: `${state.homeName} 1–0 ${state.awayName}` })).toBeVisible();
   await page.getByRole("button", { name: "Confirm final result" }).click();
