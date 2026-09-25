@@ -15,8 +15,10 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 ARG MATCHDAY_BUILD_ID
+ARG BUILD_TIMESTAMP
 ARG MATCHDAY_PUBLIC_ORIGIN
 ENV MATCHDAY_BUILD_ID=${MATCHDAY_BUILD_ID}
+ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
 ENV MATCHDAY_PUBLIC_ORIGIN=${MATCHDAY_PUBLIC_ORIGIN}
 RUN pnpm --filter @matchday/api... build \
   && pnpm --filter @matchday/worker... build \
@@ -28,6 +30,15 @@ FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd3
 WORKDIR /app
 ENV NODE_ENV=production
 ENV COREPACK_HOME=/tmp/corepack
+
+ARG MATCHDAY_BUILD_ID
+ARG BUILD_TIMESTAMP
+ENV MATCHDAY_BUILD_ID=${MATCHDAY_BUILD_ID}
+ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+
+LABEL org.opencontainers.image.revision="${MATCHDAY_BUILD_ID}"
+LABEL org.opencontainers.image.created="${BUILD_TIMESTAMP}"
+LABEL org.opencontainers.image.source="https://github.com/siewhean/Sports-Website"
 
 RUN corepack enable \
   && corepack prepare pnpm@10.33.0 --activate
@@ -45,3 +56,4 @@ CMD ["pnpm", "--filter", "@matchday/web", "start"]
 
 FROM runtime AS migrate
 CMD ["pnpm", "--filter", "@matchday/database", "db:migrate"]
+

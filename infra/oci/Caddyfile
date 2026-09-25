@@ -1,4 +1,4 @@
-{$OCI_PUBLIC_HOSTNAME} {
+matchday.poladex.shop {
   encode gzip zstd
   @privateHealth path /health/deep /health/deep/*
   handle @privateHealth {
@@ -6,9 +6,25 @@
   }
   @api path /api/v1/* /health/live /health/ready /health/version /openapi.json /docs /docs/*
   handle @api {
-    reverse_proxy api:4000
+    reverse_proxy 172.31.0.11:4000
   }
   handle {
-    reverse_proxy web:3000
+    reverse_proxy 172.31.0.12:3000
   }
 }
+
+c5-drill.poladex.shop {
+  encode gzip zstd
+  @privateHealth path /health/deep /health/deep/*
+  handle @privateHealth {
+    respond 404
+  }
+  @api path /api/v1/* /health/live /health/ready /health/version /openapi.json /docs /docs/*
+  handle @api {
+    reverse_proxy 172.30.0.11:4000
+  }
+  handle {
+    reverse_proxy 172.30.0.12:3000
+  }
+}
+

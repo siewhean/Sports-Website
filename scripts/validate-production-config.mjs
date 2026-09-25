@@ -73,6 +73,37 @@ export function validateProductionConfig(env) {
     if (env.POSTGRES_DB === "matchday" || env.POSTGRES_USER === "matchday") {
       errors.push("Production POSTGRES_DB and POSTGRES_USER must be isolated from staging (got matchday)");
     }
+
+    // OTEL validation in production:
+    // If OTEL_ENABLED is true, require non-localhost HTTPS endpoint.
+    // If OTEL_ENABLED is false, reject fake localhost loopback endpoints.
+    const otelEnabled = env.OTEL_ENABLED === "true";
+    if (otelEnabled) {
+      if (!env.OTEL_EXPORTER_OTLP_ENDPOINT || env.OTEL_EXPORTER_OTLP_ENDPOINT.trim() === "") {
+        errors.push("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED is true");
+      } else {
+        try {
+          const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
+          if (otelUrl.protocol !== "https:") {
+            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS");
+          }
+          if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
+            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT cannot use local loopback");
+          }
+        } catch {
+          errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL");
+        }
+      }
+    } else if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+      try {
+        const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
+        if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
+          errors.push("Production configuration must not specify localhost loopback OTEL_EXPORTER_OTLP_ENDPOINT");
+        }
+      } catch {
+        errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL if present");
+      }
+    }
   }
 
   if (errors.length > 0) {
