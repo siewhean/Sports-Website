@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Type, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance } from "fastify";
-import type { PublicProjectionFreshness } from "@matchday/contracts";
+import type { PublicCompetitionSummary, PublicProjectionFreshness } from "@matchday/contracts";
 import { assertPublicProjectionPrivacy } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
@@ -148,6 +148,43 @@ export class GateCC4PublicTruthRuntime {
     this.publicProjectionRepo = publicProjectionRepo ?? new PublicProjectionRepository(sql);
   }
 
+  async list(): Promise<PublicCompetitionSummary[]> {
+    const rows = await this.sql.unsafe<{
+      id: string;
+      name: string;
+      slug: string;
+      sport_code: PublicCompetitionSummary["sport_code"];
+      timezone: string;
+      starts_on: Date | string;
+      ends_on: Date | string;
+      status: PublicCompetitionSummary["status"];
+    }>(
+      `SELECT competition.id,competition.name,competition.slug,competition.sport_code,
+              competition.timezone,competition.starts_on,competition.ends_on,competition.status
+       FROM competitions competition
+       JOIN competition_publications publication
+         ON publication.competition_id=competition.id
+       JOIN public_competition_projections current_projection
+         ON current_projection.competition_id=competition.id
+        AND current_projection.schedule_version=publication.schedule_version
+        AND current_projection.result_version=publication.result_version
+       WHERE competition.status IN ('active', 'published', 'live', 'completed', 'archived')
+         AND (publication.schedule_version > 0 OR publication.result_version > 0)
+       ORDER BY competition.starts_on DESC,competition.name,competition.id`,
+      [],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      sport_code: row.sport_code,
+      timezone: row.timezone,
+      starts_on: instant(row.starts_on).slice(0, 10),
+      ends_on: instant(row.ends_on).slice(0, 10),
+      status: row.status,
+    }));
+  }
+
   async read(
     slug: string,
     selectedDivisionId?: string,
@@ -230,9 +267,51 @@ export class GateCC4PublicTruthRuntime {
 
 export async function registerGateCC4PublicTruthRoutes(
   app: FastifyInstance,
-  options: { runtime: Pick<GateCC4PublicTruthRuntime, "read"> } | Pick<GateCC4PublicTruthRuntime, "read">,
+  options:
+    | { runtime: Pick<GateCC4PublicTruthRuntime, "list" | "read"> }
+    | Pick<GateCC4PublicTruthRuntime, "list" | "read">,
 ): Promise<void> {
   const runtime = "runtime" in options ? options.runtime : options;
+
+  app.get(
+    "/api/v1/public/competitions",
+    {
+      schema: {
+        description: "List competitions with an exact current public projection. No sign-in is required.",
+        tags: ["public"],
+        response: {
+          200: strict({
+            competitions: Type.Array(
+              strict({
+                id: Type.String({ format: "uuid" }),
+                name: Type.String(),
+                slug: Type.String({ minLength: 1, maxLength: 120 }),
+                sport_code: Type.Union([
+                  Type.Literal("canoe_polo"),
+                  Type.Literal("badminton"),
+                  Type.Literal("table_tennis"),
+                  Type.Literal("volleyball"),
+                  Type.Literal("basketball"),
+                ]),
+                timezone: Type.String(),
+                starts_on: Type.String({ format: "date" }),
+                ends_on: Type.String({ format: "date" }),
+                status: Type.Union([
+                  Type.Literal("active"),
+                  Type.Literal("published"),
+                  Type.Literal("live"),
+                  Type.Literal("completed"),
+                  Type.Literal("archived"),
+                ]),
+              }),
+            ),
+          }),
+        },
+      },
+    },
+    async () => ({ competitions: await runtime.list() }),
+  );
+
   const handler = async (
     request: {
       params: { slug: string };
