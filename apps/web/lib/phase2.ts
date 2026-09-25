@@ -498,7 +498,7 @@ export const phase2Copy = {
   serviceUnavailable:
     "Scoring access could not be verified. Check the code or try again when the service is available.",
   semanticRejected: "This action is not valid for the current match state. Review the details and try again.",
-  finalisationNotReady: "This match is not ready to finalise. Complete the required periods or games, resolve any scoring conflicts, then try again.",
+  finalisationNotReady:\n    "This match is not ready to finalise. Complete the required periods or games, resolve any scoring conflicts, then try again.",
   periodAdvanceInvalid: "Move through match periods in order before recording the next period.",
   eventLog: "Match events",
   noEvents: "No events recorded",
