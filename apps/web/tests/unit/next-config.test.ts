@@ -35,6 +35,36 @@ describe("V1 preview API rewrite", () => {
     ]);
   });
 
+  it("redirects interactive identity routes directly to the API origin to preserve host-bound OIDC flow cookies", async () => {
+    process.env.RENDER_API_ORIGIN = "https://matchday-v1-api.onrender.com";
+    process.env.MATCHDAY_BUILD_ID = "v1-preview-with-render-origin";
+
+    const config = (await import("../../next.config")).default;
+
+    await expect(config.redirects?.()).resolves.toEqual([
+      {
+        source: "/api/v1/identity/authorize",
+        destination: "https://matchday-v1-api.onrender.com/api/v1/identity/authorize",
+        permanent: false,
+      },
+      {
+        source: "/api/v1/identity/callback",
+        destination: "https://matchday-v1-api.onrender.com/api/v1/identity/callback",
+        permanent: false,
+      },
+      {
+        source: "/api/v1/identity/recovery",
+        destination: "https://matchday-v1-api.onrender.com/api/v1/identity/recovery",
+        permanent: false,
+      },
+      {
+        source: "/api/v1/identity/sign-out",
+        destination: "https://matchday-v1-api.onrender.com/api/v1/identity/sign-out",
+        permanent: false,
+      },
+    ]);
+  });
+
   it.each([
     "http://matchday-v1-api.onrender.com",
     "https://user:secret@matchday-v1-api.onrender.com",
