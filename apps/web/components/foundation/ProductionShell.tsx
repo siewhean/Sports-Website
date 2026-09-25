@@ -2,6 +2,7 @@ import Link from "next/link";
 import { messages, type ShellKind } from "@matchday/ui";
 import { BrandLink } from "./Primitives";
 import { NotificationBell } from "./NotificationBell";
+import { IdentityStatus } from "./IdentityStatus";
 
 const organiserLinks = messages.organiser.sections.map((label, index) => ({
   label,
@@ -44,6 +45,7 @@ export function ProductionShell({
         <div className="flex items-center gap-2">
           {showNotifications ? <NotificationBell /> : null}
           {utility}
+          <IdentityStatus className="site-header__access" />
         </div>
       </header>
       <div className="production-shell__body">
