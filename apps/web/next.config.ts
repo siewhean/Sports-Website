@@ -49,6 +49,31 @@ const nextConfig: NextConfig = {
       headers: [{ key: "X-Matchday-Build-Id", value: releaseBuildId }],
     },
   ],
+  redirects: async () =>
+    configuredRenderApiOrigin
+      ? [
+          {
+            source: "/api/v1/identity/authorize",
+            destination: `${configuredRenderApiOrigin}/api/v1/identity/authorize`,
+            permanent: false,
+          },
+          {
+            source: "/api/v1/identity/callback",
+            destination: `${configuredRenderApiOrigin}/api/v1/identity/callback`,
+            permanent: false,
+          },
+          {
+            source: "/api/v1/identity/recovery",
+            destination: `${configuredRenderApiOrigin}/api/v1/identity/recovery`,
+            permanent: false,
+          },
+          {
+            source: "/api/v1/identity/sign-out",
+            destination: `${configuredRenderApiOrigin}/api/v1/identity/sign-out`,
+            permanent: false,
+          },
+        ]
+      : [],
   rewrites: async () =>
     configuredRenderApiOrigin
       ? [
