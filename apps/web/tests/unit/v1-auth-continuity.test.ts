@@ -17,6 +17,27 @@ describe("V1 authenticated competition continuity", () => {
     expect(cookieHostMatches("web.matchday.test", "api.matchday.test.evil")).toBe(false);
   });
 
+  it("keeps shared headers identity-aware on public and app-shell pages", async () => {
+    const identitySource = await readFile(
+      new URL("../../components/foundation/IdentityStatus.tsx", import.meta.url),
+      "utf8",
+    );
+    const chromeSource = await readFile(new URL("../../components/foundation/SiteChrome.tsx", import.meta.url), "utf8");
+    const shellSource = await readFile(
+      new URL("../../components/foundation/ProductionShell.tsx", import.meta.url),
+      "utf8",
+    );
+    const signInSource = await readFile(new URL("../../app/sign-in/page.tsx", import.meta.url), "utf8");
+
+    expect(identitySource).toContain('fetch("/api/v1/identity/me"');
+    expect(identitySource).toContain('credentials: "same-origin"');
+    expect(identitySource).toContain('data-identity-state="authenticated"');
+    expect(chromeSource).toContain("<IdentityStatus");
+    expect(shellSource).toContain("<IdentityStatus");
+    expect(signInSource).toContain("readCurrentIdentitySession");
+    expect(signInSource).toContain('redirect("/organiser")');
+  });
+
   it("hydrates the public competitions header from the authenticated identity", async () => {
     const pageSource = await readFile(new URL("../../app/competitions/page.tsx", import.meta.url), "utf8");
     const listSource = await readFile(
