@@ -242,6 +242,15 @@ export function PhoneScoring({
   const supportsPeriodAdvance = definition.operationalControls.some(
     (control) => control.id === phase2Machine.periodChange,
   );
+  const activeScorecardDefinition = useMemo(() => {
+    if (!supportsPeriodAdvance) return definition;
+    return {
+      ...definition,
+      operationalControls: definition.operationalControls.filter(
+        (control) => control.id !== phase2Machine.periodChange,
+      ),
+    };
+  }, [definition, supportsPeriodAdvance]);
   const locked = scoringMutationIsLocked({
     writerState,
     offlineState,
@@ -477,7 +486,8 @@ export function PhoneScoring({
         }
         if (error.state === "invalid") {
           const message =
-            error.code === "FINALISATION_INVALID" ? phase2Copy.finalisationNotReady : phase2Copy.semanticRejected;
+            error.detailMessage ??
+            (error.code === "FINALISATION_INVALID" ? phase2Copy.finalisationNotReady : phase2Copy.semanticRejected);
           if (actionDialogRef.current?.open) {
             setScorerError(message);
             setInteractionError("");
@@ -1006,6 +1016,7 @@ export function PhoneScoring({
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
+      setActionPending(false);
     }
   };
 
@@ -1136,6 +1147,7 @@ export function PhoneScoring({
     });
 
   const advancePeriod = async (nextValue: string) => {
+    if (mutationInFlightRef.current > 0 || actionPending) return;
     const nextSegment = Number(nextValue);
     if (nextSegment === scoreState.currentSegment) {
       setPeriod(nextValue);
@@ -1271,6 +1283,7 @@ export function PhoneScoring({
       return;
     }
     mutationInFlightRef.current += 1;
+    setActionPending(true);
     setInteractionError("");
     sessionRefreshFenceRef.current.cancel();
     setActionPending(true);
@@ -1329,6 +1342,13 @@ export function PhoneScoring({
   };
 
   const finalize = async () => {
+    if (mutationInFlightRef.current > 0 || actionPending) return;
+    if (supportsPeriodAdvance && scoreState.currentSegment < definition.segments.length) {
+      setInteractionError(phase2Copy.finalisationNotReady);
+      setAnnouncement(phase2Copy.finalisationNotReady);
+      window.requestAnimationFrame(() => interactionErrorRef.current?.focus({ preventScroll: true }));
+      return;
+    }
     mutationInFlightRef.current += 1;
     setInteractionError("");
     await sessionRefreshFenceRef.current.waitForIdle();
@@ -1811,13 +1831,14 @@ export function PhoneScoring({
               <dd>{phase2Copy.manualTimeOnly}</dd>
             </div>
           </dl>
-          <button className="p2-score-primary" type="button" disabled={locked} onClick={finalize}>
+          <button className="p2-score-primary" type="button" disabled={locked || actionPending} onClick={finalize}>
             {phase2Copy.finalise}
             <Check />
           </button>
           <button
             className="p2-score-secondary"
             type="button"
+            disabled={actionPending}
             onClick={() => {
               setPhase("live");
               window.requestAnimationFrame(() => scoreControlsRef.current?.focus({ preventScroll: true }));
@@ -1836,7 +1857,7 @@ export function PhoneScoring({
                   <select
                     value={period}
                     onChange={(event) => void advancePeriod(event.target.value)}
-                    disabled={locked || !supportsPeriodAdvance}
+                    disabled={locked || actionPending || !supportsPeriodAdvance}
                   >
                     {definition.segments.map((segment) => (
                       <option
@@ -1883,7 +1904,7 @@ export function PhoneScoring({
                 </dl>
               ) : null}
               <FiveSportScoreControls
-                definition={definition}
+                definition={activeScorecardDefinition}
                 homeLabel={home}
                 awayLabel={away}
                 score={score}
@@ -1958,7 +1979,12 @@ export function PhoneScoring({
             )}
           </section>
           {!locked ? (
-            <button className="p2-score-primary p2-score-final" type="button" onClick={() => setPhase("review")}>
+            <button
+              className="p2-score-primary p2-score-final"
+              type="button"
+              disabled={actionPending}
+              onClick={() => setPhase("review")}
+            >
               {phase2Copy.reviewFinal}
               <ArrowRight />
             </button>

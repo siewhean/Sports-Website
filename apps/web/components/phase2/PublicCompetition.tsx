@@ -5,7 +5,13 @@ import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 import { DoubleEliminationBracket } from "@/components/phase2/DoubleEliminationBracket";
 import { phase2Copy, type CompetitionView, type PublicDivisionView } from "@/lib/phase2";
 
-export function PublicCompetition({ competition }: { competition: CompetitionView }) {
+export function PublicCompetition({
+  competition,
+  viewer = null,
+}: {
+  competition: CompetitionView;
+  viewer?: { displayName: string } | null;
+}) {
   const publicationVersion = publicPublicationVersion(competition.publicationRevision);
   const publicDivisions =
     competition.publicDivisions && competition.publicDivisions.length > 0
@@ -27,7 +33,7 @@ export function PublicCompetition({ competition }: { competition: CompetitionVie
       <a className="skip-link" href="#public-main">
         {phase2Copy.skip}
       </a>
-      <SiteHeader />
+      <SiteHeader viewer={viewer} />
       <main id="public-main">
         <header className="p2-public__identity">
           <div>
@@ -129,10 +135,6 @@ function PublicDivisionSections({
               <span>{liveMatch.home}</span>
               <strong>{liveMatch.homeScore}</strong>
             </div>
-            <p>
-              <span>{phase2Copy.periodPrefix}2</span>
-              <strong>04:12</strong>
-            </p>
             <div>
               <span>{liveMatch.away}</span>
               <strong>{liveMatch.awayScore}</strong>

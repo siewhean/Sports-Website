@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { MarketingHome } from "@/components/marketing/MarketingHome";
 import { messages } from "@matchday/ui";
+import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export const metadata: Metadata = {
   title: messages.metadata.homeTitle,
@@ -12,6 +13,7 @@ export const metadata: Metadata = {
   },
 };
 
-export default function Home() {
-  return <MarketingHome />;
+export default async function Home() {
+  const session = await readCurrentIdentitySession();
+  return <MarketingHome viewer={session.status === "authenticated" ? session.identity : null} />;
 }

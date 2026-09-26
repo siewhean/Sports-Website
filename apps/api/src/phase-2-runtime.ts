@@ -3440,6 +3440,31 @@ export class Phase2Runtime {
             outboxKey, // $24
           ],
         );
+
+        const publication = (
+          await tx.unsafe<{ schedule_version: number; result_version: number }>(
+            `SELECT schedule_version,result_version
+             FROM competition_publications
+             WHERE competition_id=$1
+             FOR UPDATE`,
+            [context.competition_id],
+          )
+        )[0];
+        if (publication && publication.schedule_version > 0) {
+          await tx.unsafe(
+            `UPDATE competition_publications
+             SET updated_at=$2
+             WHERE competition_id=$1`,
+            [context.competition_id, serverReceivedAt],
+          );
+          await this.writePublicProjection(
+            tx,
+            context.competition_id,
+            publication.schedule_version,
+            publication.result_version,
+          );
+        }
+
         const _t5 = performance.now();
         /* istanbul ignore next */
         console.debug("appendCanonicalScoreEvent timings (ms)", {
@@ -5006,6 +5031,7 @@ export class Phase2Runtime {
          FROM matches m
          JOIN match_result_snapshots snapshot ON snapshot.match_id=m.id
          WHERE m.division_id=$1 AND snapshot.result_version<=$2
+           AND snapshot.state IN ('final','corrected')
            AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
          ORDER BY m.id,snapshot.result_version DESC`,
       [divisionId, resultVersion],
@@ -5197,7 +5223,8 @@ export class Phase2Runtime {
       const gf1Result = (
         await tx.unsafe<{ home_score: number; away_score: number }>(
           `SELECT home_score, away_score FROM match_result_snapshots
-           WHERE match_id=$1 AND result_version<=$2 ORDER BY result_version DESC LIMIT 1`,
+           WHERE match_id=$1 AND result_version<=$2 AND state IN ('final','corrected')
+           ORDER BY result_version DESC LIMIT 1`,
           [grandFinal1.id, resultVersion],
         )
       )[0];
@@ -5296,6 +5323,7 @@ export class Phase2Runtime {
               s.home_score,s.away_score,s.state
        FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
        WHERE m.division_id=$1 AND ($2::integer IS NULL OR s.result_version <= $2)
+         AND s.state IN ('final','corrected')
        ORDER BY m.id,s.result_version DESC`,
       [divisionId, maximumResultVersion],
     );
@@ -5394,10 +5422,65 @@ export class Phase2Runtime {
            JOIN division_entries home ON home.id=m.home_entry_id
            JOIN division_entries away ON away.id=m.away_entry_id
            WHERE m.competition_id=$1 AND s.result_version <= $2
+             AND s.state IN ('final','corrected')
            ORDER BY m.id,s.result_version DESC`,
             [competitionId, resultVersion],
           )
         : [];
+    const persistedPublicResults: Array<PublicMatchResult & { division_id: string }> = results.map((match) => ({
+      division_id: match.division_id,
+      id: match.id,
+      code: match.code,
+      stage: match.stage,
+      home: { id: match.home_entry_id, name: match.home_name },
+      away: { id: match.away_entry_id, name: match.away_name },
+      home_score: match.home_score,
+      away_score: match.away_score,
+      state: match.state,
+      updated_at: serializedDate(match.created_at),
+    }));
+    const liveMatches = await tx.unsafe<{
+      id: string;
+      division_id: string;
+      code: string;
+      stage: string;
+      home_entry_id: string;
+      away_entry_id: string;
+      home_name: string;
+      away_name: string;
+      stream_updated_at: Date | string;
+    }>(
+      `SELECT m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
+              home.name AS home_name,away.name AS away_name,stream.updated_at AS stream_updated_at
+       FROM matches m
+       JOIN match_score_streams stream ON stream.match_id=m.id
+       JOIN division_entries home ON home.id=m.home_entry_id
+       JOIN division_entries away ON away.id=m.away_entry_id
+       WHERE m.competition_id=$1 AND m.state='in_progress'
+       ORDER BY m.id`,
+      [competitionId],
+    );
+    const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
+    for (const match of liveMatches) {
+      const canonical = await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true });
+      liveResults.push({
+        division_id: match.division_id,
+        id: match.id,
+        code: match.code,
+        stage: match.stage,
+        home: { id: match.home_entry_id, name: match.home_name },
+        away: { id: match.away_entry_id, name: match.away_name },
+        home_score: canonical.state.score.home,
+        away_score: canonical.state.score.away,
+        state: "in_progress",
+        updated_at: serializedDate(match.stream_updated_at),
+      });
+    }
+    const liveMatchIds = new Set(liveResults.map((result) => result.id));
+    const projectionResults = [
+      ...persistedPublicResults.filter((result) => !liveMatchIds.has(result.id)),
+      ...liveResults,
+    ];
     const standings =
       resultVersion > 0
         ? await tx.unsafe<{ division_id: string; standings: unknown; explanation: unknown }>(
@@ -5433,18 +5516,18 @@ export class Phase2Runtime {
           ends_at: serializedDate(match.ends_at),
           area: { id: match.area_id, name: match.area_name },
         }));
-      const publicResults: PublicMatchResult[] = results
+      const publicResults: PublicMatchResult[] = projectionResults
         .filter((match) => match.division_id === division.id)
         .map((match) => ({
           id: match.id,
           code: match.code,
           stage: match.stage,
-          home: { id: match.home_entry_id, name: match.home_name },
-          away: { id: match.away_entry_id, name: match.away_name },
+          home: match.home,
+          away: match.away,
           home_score: match.home_score,
           away_score: match.away_score,
           state: match.state,
-          updated_at: serializedDate(match.created_at),
+          updated_at: match.updated_at,
         }));
       const divisionStandings = standingsByDivision.get(division.id);
       const divisionBracket = bracketByDivision.get(division.id);

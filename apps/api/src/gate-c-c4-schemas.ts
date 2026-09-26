@@ -200,7 +200,7 @@ const gateCC4PublicResult = gateCC4Strict({
   away: gateCC4PublicParticipant,
   home_score: Type.Integer({ minimum: 0 }),
   away_score: Type.Integer({ minimum: 0 }),
-  state: Type.Union([Type.Literal("final"), Type.Literal("corrected")]),
+  state: Type.Union([Type.Literal("in_progress"), Type.Literal("final"), Type.Literal("corrected")]),
   updated_at: gateCC4DateTime,
 });
 const gateCC4PublicDivision = gateCC4Strict({

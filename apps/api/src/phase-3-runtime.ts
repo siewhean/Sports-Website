@@ -1062,6 +1062,7 @@ export class Phase3Runtime {
        WHERE m.competition_id=$1 AND m.division_id=$2
          AND (m.home_entry_id=$3 OR m.away_entry_id=$3)
          AND s.result_version <= $4
+         AND s.state IN ('final','corrected')
        ORDER BY m.id,s.result_version DESC`,
       [competitionId, divisionId, entryId, publication.result_version],
     );
@@ -2871,6 +2872,7 @@ export class Phase3Runtime {
          FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
          WHERE m.competition_id=$1 AND m.division_id=$2 AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
            AND s.result_version <= $3
+           AND s.state IN ('final','corrected')
          ORDER BY m.id,s.result_version DESC`,
       [competitionId, divisionId, publication.result_version],
     );

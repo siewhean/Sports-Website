@@ -230,6 +230,54 @@ describe("Gate C C4 public truth runtime", () => {
     },
   );
 
+  it("serializes in-progress match results through the strict public HTTP schema", async () => {
+    const liveMatchId = "44444444-4444-4444-8444-444444444444";
+    const liveResult = {
+      id: liveMatchId,
+      code: "OPEN-1",
+      stage: "group",
+      home: { id: null, name: "Marina Blue" },
+      away: { id: null, name: "Harbour Gold" },
+      home_score: 2,
+      away_score: 1,
+      state: "in_progress" as const,
+      updated_at: "2026-08-01T00:00:04.000Z",
+    };
+    const base = projection();
+    const firstDivision = { ...base.divisions[0]!, results: [liveResult] };
+    const freshness = {
+      division_id: divisionId,
+      division_projection_versions: { [divisionId]: 3, [reserveDivisionId]: 2 },
+      schedule_version: 4,
+      result_version: 7,
+      projection_version: 3,
+      generated_at: "2026-08-01T00:00:05.000Z",
+      source_updated_at: "2026-08-01T00:00:04.000Z",
+      etag: "c4-live-result",
+    };
+    const app = Fastify();
+    await registerGateCC4PublicTruthRoutes(app, {
+      read: async () => ({
+        payload: {
+          ...base,
+          divisions: [firstDivision, base.divisions[1]!],
+          results: [liveResult],
+          freshness,
+        },
+        freshness,
+      }),
+    } as unknown as GateCC4PublicTruthRuntime);
+
+    const response = await app.inject("/api/v1/public/competitions/national-open/current");
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      divisions: [{ results: [{ id: liveMatchId, state: "in_progress", home_score: 2, away_score: 1 }] }],
+      results: [{ id: liveMatchId, state: "in_progress", home_score: 2, away_score: 1 }],
+    });
+  });
+
   it("scopes the public response and ETag to one requested division", async () => {
     const { runtime } = runtimeWithRows([
       {

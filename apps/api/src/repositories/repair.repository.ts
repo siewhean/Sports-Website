@@ -565,7 +565,9 @@ export class RepairRepository {
               snapshot.home_score, snapshot.away_score
        FROM matches match
        LEFT JOIN match_result_snapshots snapshot
-         ON snapshot.match_id = match.id AND snapshot.result_version <= $2
+         ON snapshot.match_id = match.id
+        AND snapshot.result_version <= $2
+        AND snapshot.state IN ('final','corrected')
        WHERE match.format_revision_id = $1
        ORDER BY match.id, snapshot.result_version DESC NULLS LAST`,
       [formatRevisionId, maxResultVersion],
