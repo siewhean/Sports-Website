@@ -11,9 +11,8 @@ type IdentityStatusProps = Readonly<{
 }>;
 
 type IdentityPayload = {
-  account?: {
-    display_name?: unknown;
-  };
+  status?: unknown;
+  displayName?: unknown;
 };
 
 export function IdentityStatus({ className, initialDisplayName = null }: IdentityStatusProps) {
@@ -23,24 +22,25 @@ export function IdentityStatus({ className, initialDisplayName = null }: Identit
     const controller = new AbortController();
     let active = true;
 
-    void fetch("/api/v1/identity/me", {
+    void fetch("/api/identity/current", {
       ...identityStatusRequest,
       headers: { accept: "application/json" },
       signal: controller.signal,
     })
       .then(async (response) => {
         if (!active) return;
-        if (!response.ok) {
-          setDisplayName(null);
-          return;
-        }
+        if (!response.ok) return;
         const payload = (await response.json().catch(() => null)) as IdentityPayload | null;
-        const candidate = payload?.account?.display_name;
-        setDisplayName(typeof candidate === "string" && candidate.trim() ? candidate.trim() : null);
+        const candidate = payload?.displayName;
+        setDisplayName(
+          payload?.status === "authenticated" && typeof candidate === "string" && candidate.trim()
+            ? candidate.trim()
+            : null,
+        );
       })
       .catch((error: unknown) => {
         if (!active || (error instanceof DOMException && error.name === "AbortError")) return;
-        setDisplayName(null);
+        // Preserve server-provided identity on transient refresh failures.
       });
 
     return () => {
