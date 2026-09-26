@@ -27,6 +27,10 @@ describe("V1 authenticated competition continuity", () => {
       new URL("../../components/foundation/ProductionShell.tsx", import.meta.url),
       "utf8",
     );
+    const organiserWorkspaceSource = await readFile(
+      new URL("../../components/phase2/OrganiserWorkspace.tsx", import.meta.url),
+      "utf8",
+    );
     const signInSource = await readFile(new URL("../../app/sign-in/page.tsx", import.meta.url), "utf8");
 
     expect(identitySource).toContain('fetch("/api/v1/identity/me"');
@@ -34,6 +38,7 @@ describe("V1 authenticated competition continuity", () => {
     expect(identitySource).toContain('data-identity-state="authenticated"');
     expect(chromeSource).toContain("<IdentityStatus");
     expect(shellSource).toContain("<IdentityStatus");
+    expect(organiserWorkspaceSource).toContain("<IdentityStatus");
     expect(signInSource).toContain("readCurrentIdentitySession");
     expect(signInSource).toContain('redirect("/organiser")');
   });
