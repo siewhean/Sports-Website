@@ -265,11 +265,11 @@ export class GateCC4PublicTruthRuntime {
   }
 }
 
+type PublicTruthRuntime = Pick<GateCC4PublicTruthRuntime, "list" | "read">;
+
 export async function registerGateCC4PublicTruthRoutes(
   app: FastifyInstance,
-  options:
-    | { runtime: Pick<GateCC4PublicTruthRuntime, "list" | "read"> }
-    | Pick<GateCC4PublicTruthRuntime, "list" | "read">,
+  options: { runtime: PublicTruthRuntime } | PublicTruthRuntime,
 ): Promise<void> {
   const runtime = "runtime" in options ? options.runtime : options;
 
