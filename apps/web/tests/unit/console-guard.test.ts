@@ -3,6 +3,7 @@ import {
   isExpectedFrameworkWarning,
   isExpectedRscNavigationCancellation,
   isExpectedTeardownFontCancellation,
+  isExpectedTeardownIdentityCancellation,
   isExpectedTeardownServiceWorkerCancellation,
   isExpectedTeardownStaticAssetCancellation,
 } from "../helpers/console-guard";
@@ -128,5 +129,27 @@ describe("static-asset teardown cancellation", () => {
     { ...cancellation, pageUrl: "about:blank" },
   ])("keeps genuine or unrelated asset failures observable", (input) => {
     expect(isExpectedTeardownStaticAssetCancellation(input)).toBe(false);
+  });
+});
+
+describe("identity teardown cancellation", () => {
+  const cancellation = {
+    failure: "cancelled",
+    pageUrl: "https://127.0.0.1:3100/organiser",
+    requestUrl: "https://127.0.0.1:3100/api/identity/current",
+  };
+
+  it("ignores only same-origin identity status cancelled during navigation teardown", () => {
+    expect(isExpectedTeardownIdentityCancellation(cancellation)).toBe(true);
+    expect(isExpectedTeardownIdentityCancellation({ ...cancellation, failure: "net::ERR_ABORTED" })).toBe(true);
+  });
+
+  it.each([
+    { ...cancellation, failure: "net::ERR_FAILED" },
+    { ...cancellation, requestUrl: "https://cdn.example.com/api/identity/current" },
+    { ...cancellation, requestUrl: "https://127.0.0.1:3100/api/competitions" },
+    { ...cancellation, pageUrl: "about:blank" },
+  ])("keeps genuine or unrelated identity failures observable", (input) => {
+    expect(isExpectedTeardownIdentityCancellation(input)).toBe(false);
   });
 });

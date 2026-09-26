@@ -42,7 +42,7 @@ export function ProductionShell({
           <p>{subtitle}</p>
           <h1>{title}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="production-shell__actions">
           {showNotifications ? <NotificationBell /> : null}
           {utility}
           <IdentityStatus className="site-header__access" />

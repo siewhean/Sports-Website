@@ -73,6 +73,21 @@ export function isExpectedTeardownServiceWorkerCancellation(input: {
   }
 }
 
+export function isExpectedTeardownIdentityCancellation(input: {
+  failure: string;
+  pageUrl: string;
+  requestUrl: string;
+}): boolean {
+  if (!standardCancellationFailures.includes(input.failure)) return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return pageUrl.origin === requestUrl.origin && requestUrl.pathname === "/api/identity/current";
+  } catch {
+    return false;
+  }
+}
+
 export function isExpectedTeardownStaticAssetCancellation(input: {
   failure: string;
   pageUrl: string;
@@ -152,6 +167,7 @@ export function installConsoleGuard(page: Page) {
     )
       return;
     if (isExpectedTeardownServiceWorkerCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
+    if (isExpectedTeardownIdentityCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
     if (
       isExpectedTeardownStaticAssetCancellation({
         failure,

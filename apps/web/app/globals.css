@@ -3726,6 +3726,52 @@ svg {
   justify-self: end;
 }
 
+.production-shell__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.notification-bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink);
+  transition:
+    background-color 140ms var(--ease-out),
+    border-color 140ms var(--ease-out);
+}
+
+.notification-bell:hover {
+  background: var(--surface-subtle);
+  border-color: var(--ink-muted);
+}
+
+.notification-bell__badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+}
+
 .production-shell__body {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
