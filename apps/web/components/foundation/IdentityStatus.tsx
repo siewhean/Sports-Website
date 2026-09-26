@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { messages } from "@matchday/ui";
+import { identityStatusRequest } from "@/lib/identity-status";
 
 type IdentityStatusProps = Readonly<{
   className?: string;
@@ -23,8 +24,7 @@ export function IdentityStatus({ className, initialDisplayName = null }: Identit
     let active = true;
 
     void fetch("/api/v1/identity/me", {
-      cache: "no-store",
-      credentials: "same-origin",
+      ...identityStatusRequest,
       headers: { accept: "application/json" },
       signal: controller.signal,
     })
