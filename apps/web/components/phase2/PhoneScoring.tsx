@@ -1016,6 +1016,7 @@ export function PhoneScoring({
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
+      setActionPending(false);
     }
   };
 
@@ -1282,6 +1283,7 @@ export function PhoneScoring({
       return;
     }
     mutationInFlightRef.current += 1;
+    setActionPending(true);
     setInteractionError("");
     sessionRefreshFenceRef.current.cancel();
     setActionPending(true);
@@ -1340,6 +1342,7 @@ export function PhoneScoring({
   };
 
   const finalize = async () => {
+    if (mutationInFlightRef.current > 0 || actionPending) return;
     if (supportsPeriodAdvance && scoreState.currentSegment < definition.segments.length) {
       setInteractionError(phase2Copy.finalisationNotReady);
       setAnnouncement(phase2Copy.finalisationNotReady);
@@ -1828,13 +1831,14 @@ export function PhoneScoring({
               <dd>{phase2Copy.manualTimeOnly}</dd>
             </div>
           </dl>
-          <button className="p2-score-primary" type="button" disabled={locked} onClick={finalize}>
+          <button className="p2-score-primary" type="button" disabled={locked || actionPending} onClick={finalize}>
             {phase2Copy.finalise}
             <Check />
           </button>
           <button
             className="p2-score-secondary"
             type="button"
+            disabled={actionPending}
             onClick={() => {
               setPhase("live");
               window.requestAnimationFrame(() => scoreControlsRef.current?.focus({ preventScroll: true }));
@@ -1975,7 +1979,12 @@ export function PhoneScoring({
             )}
           </section>
           {!locked ? (
-            <button className="p2-score-primary p2-score-final" type="button" onClick={() => setPhase("review")}>
+            <button
+              className="p2-score-primary p2-score-final"
+              type="button"
+              disabled={actionPending}
+              onClick={() => setPhase("review")}
+            >
               {phase2Copy.reviewFinal}
               <ArrowRight />
             </button>
