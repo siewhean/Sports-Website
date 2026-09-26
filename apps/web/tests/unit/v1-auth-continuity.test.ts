@@ -33,7 +33,7 @@ describe("V1 authenticated competition continuity", () => {
     );
     const signInSource = await readFile(new URL("../../app/sign-in/page.tsx", import.meta.url), "utf8");
 
-    expect(identitySource).toContain('fetch("/api/v1/identity/me"');
+    expect(identitySource).toContain('fetch("/api/identity/current"');
     expect(identitySource).toContain('credentials: "same-origin"');
     expect(identitySource).toContain('data-identity-state="authenticated"');
     expect(chromeSource).toContain("<IdentityStatus");
@@ -41,6 +41,14 @@ describe("V1 authenticated competition continuity", () => {
     expect(organiserWorkspaceSource).toContain("<IdentityStatus");
     expect(signInSource).toContain("readCurrentIdentitySession");
     expect(signInSource).toContain('redirect("/organiser")');
+
+    const identityRouteSource = await readFile(
+      new URL("../../app/api/identity/current/route.ts", import.meta.url),
+      "utf8",
+    );
+    expect(identityRouteSource).toContain("readCurrentIdentitySession");
+    expect(identityRouteSource).toContain('"cache-control": "private, no-store"');
+    expect(identityRouteSource).toContain("session.identity.displayName");
   });
 
   it("hydrates the public competitions header from the authenticated identity", async () => {
