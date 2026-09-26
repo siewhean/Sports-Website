@@ -1,9 +1,12 @@
 import { LegalPage } from "@/components/foundation/LegalPage";
+import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 import { legalMessages, messages } from "@matchday/ui";
 
-export default function TermsPage() {
+export default async function TermsPage() {
+  const session = await readCurrentIdentitySession();
+  const viewer = session.status === "authenticated" ? session.identity : null;
   return (
-    <LegalPage title={messages.legal.termsTitle}>
+    <LegalPage viewer={viewer} title={messages.legal.termsTitle}>
       <p>
         {legalMessages.lastUpdated}: {legalMessages.updatedOn}
       </p>
