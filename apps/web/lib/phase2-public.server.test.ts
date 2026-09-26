@@ -97,6 +97,67 @@ describe("public competition server adapter", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("maps in-progress results to live scores without fabricating a match clock", () => {
+    const open = division("open", "Open", "Open Team", "open-match", "2027-01-01T01:00:00.000Z");
+    open.results = [
+      {
+        id: "open-match",
+        code: "Open-1",
+        stage: "group",
+        home: { id: "open-home", name: "Open Team Home" },
+        away: { id: "open-away", name: "Open Team Away" },
+        home_score: 2,
+        away_score: 1,
+        state: "in_progress",
+        updated_at: "2027-01-01T01:10:00.000Z",
+      },
+      {
+        id: "result-only-live",
+        code: "Open-2",
+        stage: "group",
+        home: { id: "open-home", name: "Open Team Home" },
+        away: { id: "open-away", name: "Open Team Away" },
+        home_score: 3,
+        away_score: 2,
+        state: "in_progress",
+        updated_at: "2027-01-01T01:11:00.000Z",
+      },
+    ];
+    const projection: PublicCompetitionProjection = {
+      competition: {
+        id: "competition",
+        name: "Cup",
+        slug: "cup",
+        sport_code: "canoe_polo",
+        timezone: "Asia/Singapore",
+        starts_on: "2027-01-01",
+        ends_on: "2027-01-01",
+        status: "live",
+      },
+      divisions: [open],
+      division: open.division,
+      publication: { schedule_version: 1, result_version: 3 },
+      schedule: open.schedule,
+      results: open.results,
+      standings: open.standings,
+      bracket: open.bracket,
+      last_updated_at: "2027-01-01T01:11:00.000Z",
+    };
+
+    const view = toCompetitionView(projection);
+    expect(view.matches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "open-match", status: "live", homeScore: 2, awayScore: 1 }),
+        expect.objectContaining({ id: "result-only-live", status: "live", homeScore: 3, awayScore: 2 }),
+      ]),
+    );
+
+    const markup = renderToStaticMarkup(createElement(PublicCompetition, { competition: view }));
+    expect(markup).toContain("Open Team Home");
+    expect(markup).toContain("Open Team Away");
+    expect(markup).not.toContain("04:12");
+  });
+
   it("normalizes ETags across plain, quoted, weak, and compressed proxy variants", () => {
     const raw = "c4-1-0-1-b458f1abe4f6e4ea2057d53f0f7407755199961fa2cff21fcc0ce49cb7fe499b";
     expect(normalizeEtag(raw)).toBe(raw);
