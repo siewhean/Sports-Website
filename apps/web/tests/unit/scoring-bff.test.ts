@@ -749,9 +749,7 @@ describe("scoring BFF", () => {
   it("preserves a semantic 422 as an in-context invalid-state response", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        json({ error: { code: "EVENT_NOT_ALLOWED", message: "Sensitive upstream detail." } }, 422),
-      ),
+      vi.fn().mockResolvedValue(json({ error: { code: "EVENT_NOT_ALLOWED", message: "Sensitive upstream detail." } }, 422)),
     );
 
     const response = await appendScoringEvent(
