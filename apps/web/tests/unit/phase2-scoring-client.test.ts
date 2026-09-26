@@ -215,6 +215,53 @@ describe("phase 2 browser scoring transport", () => {
     expect(finalisationMessage).toBeGreaterThan(-1);
   });
 
+  it("preserves authoritative semantic validation detail separately from transport state", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            error: "invalid",
+            code: "FINALISATION_INVALID",
+            message: "Complete period 2 before finalising.",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+
+    await expect(
+      createScoringCommandPort("api").appendEvent({
+        clientEventId: eventId,
+        expectedSequence: 0,
+        matchId,
+        eventType: phase2Machine.periodChange,
+        canonical: true,
+        scorer: "",
+        period: 2,
+        segmentNumber: 2,
+        manualTime: "00:00",
+      }),
+    ).rejects.toMatchObject({
+      state: "invalid",
+      code: "FINALISATION_INVALID",
+      detailMessage: "Complete period 2 before finalising.",
+      message: "Complete period 2 before finalising.",
+    });
+  });
+
+  it("guards period mutation re-entry, disables the selector, and removes the duplicate operational control", async () => {
+    const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("if (mutationInFlightRef.current > 0 || actionPending) return;");
+    expect(source).toContain("disabled={locked || actionPending || !supportsPeriodAdvance}");
+    expect(source).toContain("const activeScorecardDefinition = useMemo");
+    expect(source).toContain("control.id !== phase2Machine.periodChange");
+    expect(source).toContain("definition={activeScorecardDefinition}");
+    expect(source).toContain("scoreState.currentSegment < definition.segments.length");
+    expect(source).toContain("error.detailMessage ??");
+  });
+
   it("distinguishes a lapsed writer lease from a genuinely expired scoring session", () => {
     const now = Date.parse("2030-01-01T00:00:00.000Z");
 
