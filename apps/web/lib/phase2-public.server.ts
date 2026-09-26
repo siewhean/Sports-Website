@@ -24,7 +24,7 @@ import {
 } from "@/lib/phase2";
 
 function apiBaseUrl(): string | null {
-  const configured = process.env.MATCHDAY_API_BASE_URL?.trim();
+  const configured = (process.env.MATCHDAY_API_BASE_URL ?? process.env.RENDER_API_ORIGIN)?.trim();
   if (!configured) return null;
   try {
     const url = new URL(configured);
@@ -129,7 +129,12 @@ function toDivisionView(
         home: result?.home.name ?? match.home.name,
         away: result?.away.name ?? match.away.name,
         ...(result ? { homeScore: result.home_score, awayScore: result.away_score } : {}),
-        status: result ? ("final" as const) : ("scheduled" as const),
+        status:
+          result?.state === "in_progress"
+            ? ("live" as const)
+            : result
+              ? ("final" as const)
+              : ("scheduled" as const),
       };
     }),
     ...results
@@ -144,7 +149,7 @@ function toDivisionView(
         away: result.away.name,
         homeScore: result.home_score,
         awayScore: result.away_score,
-        status: "final" as const,
+        status: result.state === "in_progress" ? ("live" as const) : ("final" as const),
       })),
   ];
   const teams = [...new Set(matches.flatMap((match) => [match.home, match.away]).filter((name) => name !== "TBD"))];
@@ -264,13 +269,16 @@ export function normalizeEtag(value: string | null): string | null {
 function publicHeadersMatchProjection(response: Response, projection: GateCC4PublicCompetitionProjection): boolean {
   const responseEtag = normalizeEtag(response.headers.get("etag"));
   const projectionEtag = normalizeEtag(projection.freshness.etag);
-  return (
-    Boolean(responseEtag) &&
-    responseEtag === projectionEtag &&
-    response.headers.get("x-matchday-schedule-version") === String(projection.freshness.schedule_version) &&
-    response.headers.get("x-matchday-result-version") === String(projection.freshness.result_version) &&
-    response.headers.get("x-matchday-projection-version") === String(projection.freshness.projection_version)
-  );
+  if (!responseEtag || responseEtag !== projectionEtag) return false;
+  const expectedHeaders = {
+    "x-matchday-schedule-version": String(projection.freshness.schedule_version),
+    "x-matchday-result-version": String(projection.freshness.result_version),
+    "x-matchday-projection-version": String(projection.freshness.projection_version),
+  } as const;
+  return Object.entries(expectedHeaders).every(([name, expected]) => {
+    const actual = response.headers.get(name);
+    return actual === null || actual === expected;
+  });
 }
 
 function canonicalProjection(value: unknown): GateCC4PublicCompetitionProjection | null {
