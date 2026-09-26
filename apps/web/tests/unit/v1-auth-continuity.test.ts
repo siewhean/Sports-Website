@@ -47,7 +47,7 @@ describe("V1 authenticated competition continuity", () => {
       "utf8",
     );
     expect(identityRouteSource).toContain("readCurrentIdentitySession");
-    expect(identityRouteSource).toContain('"cache-control": "private, no-store"');
+    expect(identityRouteSource).toContain("identityStatusResponseHeaders");
     expect(identityRouteSource).toContain("session.identity.displayName");
   });
 
