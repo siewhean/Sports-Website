@@ -5,6 +5,7 @@ import type {
   PublicCompetitionProjection,
   PublicCompetitionSummary,
   PublicDivisionProjection,
+  PublicMatchResult,
 } from "@matchday/contracts";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import {
@@ -88,6 +89,11 @@ function number(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function publicMatchStatus(result: PublicMatchResult | undefined): MatchView["status"] {
+  if (!result) return "scheduled";
+  return result.state === "in_progress" ? "live" : "final";
+}
+
 function standingsView(value: Record<string, unknown> | null): StandingView[] {
   const rows = value && Array.isArray(value.standings) ? value.standings : [];
   return rows.flatMap((candidate) => {
@@ -129,12 +135,7 @@ function toDivisionView(
         home: result?.home.name ?? match.home.name,
         away: result?.away.name ?? match.away.name,
         ...(result ? { homeScore: result.home_score, awayScore: result.away_score } : {}),
-        status:
-          result?.state === "in_progress"
-            ? ("live" as const)
-            : result
-              ? ("final" as const)
-              : ("scheduled" as const),
+        status: publicMatchStatus(result),
       };
     }),
     ...results
@@ -149,7 +150,7 @@ function toDivisionView(
         away: result.away.name,
         homeScore: result.home_score,
         awayScore: result.away_score,
-        status: result.state === "in_progress" ? ("live" as const) : ("final" as const),
+        status: publicMatchStatus(result),
       })),
   ];
   const teams = [...new Set(matches.flatMap((match) => [match.home, match.away]).filter((name) => name !== "TBD"))];
