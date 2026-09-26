@@ -747,7 +747,12 @@ describe("scoring BFF", () => {
   });
 
   it("preserves a semantic 422 as an in-context invalid-state response", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ error: { code: "EVENT_NOT_ALLOWED" } }, 422)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({ error: { code: "EVENT_NOT_ALLOWED", message: "Sensitive upstream detail." } }, 422),
+      ),
+    );
 
     const response = await appendScoringEvent(
       bffRequest(
@@ -767,6 +772,47 @@ describe("scoring BFF", () => {
 
     expect(response.status).toBe(422);
     expect(await response.json()).toEqual({ error: "invalid" });
+  });
+
+  it("forwards an allowlisted finalisation message on a semantic 422", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            error: {
+              code: "FINALISATION_INVALID",
+              message: "Complete the required regulation periods before finalising.",
+              request_id: eventId,
+            },
+          },
+          422,
+        ),
+      ),
+    );
+
+    const response = await appendScoringEvent(
+      bffRequest(
+        "POST",
+        "/api/scoring/events",
+        {
+          client_event_id: eventId,
+          expected_sequence: 3,
+          type: "game_completion",
+          team_slot: "home",
+          segment_number: 1,
+          occurred_at: "2026-07-17T02:00:00.000Z",
+        },
+        sealedCookie(),
+      ),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({
+      error: "invalid",
+      code: "FINALISATION_INVALID",
+      message: "Complete the required regulation periods before finalising.",
+    });
   });
 
   it("preserves offline recording expiry without exposing upstream detail", async () => {
