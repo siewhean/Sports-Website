@@ -91,8 +91,9 @@ export class ScoringTransportError extends Error {
     public readonly code: string | null = null,
     public readonly currentSequence: number | null = null,
     public readonly currentAggregateVersion: number | null = null,
+    public readonly detailMessage: string | null = null,
   ) {
-    super(state);
+    super(detailMessage ?? state);
     this.name = "ScoringTransportError";
   }
 }
@@ -164,6 +165,7 @@ async function responsePayload<T>(response: Response): Promise<T> {
       code?: string;
       current_sequence?: number;
       current_aggregate_version?: number;
+      message?: string;
     } | null;
     const state =
       payload?.error === "conflict" ||
@@ -183,6 +185,7 @@ async function responsePayload<T>(response: Response): Promise<T> {
       typeof payload?.code === "string" ? payload.code : null,
       Number.isSafeInteger(payload?.current_sequence) ? Number(payload?.current_sequence) : null,
       Number.isSafeInteger(payload?.current_aggregate_version) ? Number(payload?.current_aggregate_version) : null,
+      typeof payload?.message === "string" && payload.message.trim() ? payload.message.trim() : null,
     );
   }
   return response.json() as Promise<T>;
