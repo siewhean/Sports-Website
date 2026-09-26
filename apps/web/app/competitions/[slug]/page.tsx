@@ -28,7 +28,10 @@ export default async function CompetitionPage({ params }: { params: Promise<{ sl
       {jsonLd ? (
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }} />
       ) : null}
-      <PublicCompetition competition={competition} viewer={session.status === "authenticated" ? session.identity : null} />
+      <PublicCompetition
+        competition={competition}
+        viewer={session.status === "authenticated" ? session.identity : null}
+      />
     </>
   );
 }
