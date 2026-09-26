@@ -3330,9 +3330,8 @@ export class Phase2Runtime {
           actorId: session.id,
           scoringSessionId: session.id,
         });
-        let reducedScoreState: FiveSportScoreState;
         try {
-          reducedScoreState = reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
+          reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
         } catch (error) {
           throw new ApiError(
             422,
