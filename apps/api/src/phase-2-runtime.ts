@@ -3452,31 +3452,17 @@ export class Phase2Runtime {
           )
         )[0];
         if (publication && publication.schedule_version > 0) {
-          const nextResultVersion = publication.result_version + 1;
-          await tx.unsafe(
-            `INSERT INTO match_result_snapshots (
-               match_id,result_version,through_sequence,home_score,away_score,state,snapshot
-             ) VALUES ($1,$2,$3,$4,$5,'in_progress',$6::jsonb)`,
-            [
-              session.match_id,
-              nextResultVersion,
-              sequence,
-              reducedScoreState.score.home,
-              reducedScoreState.score.away,
-              JSON.stringify(reducedScoreState),
-            ],
-          );
           await tx.unsafe(
             `UPDATE competition_publications
-             SET result_version=$2,updated_at=$3
+             SET updated_at=$2
              WHERE competition_id=$1`,
-            [context.competition_id, nextResultVersion, serverReceivedAt],
+            [context.competition_id, serverReceivedAt],
           );
           await this.writePublicProjection(
             tx,
             context.competition_id,
             publication.schedule_version,
-            nextResultVersion,
+            publication.result_version,
           );
         }
 
@@ -5437,10 +5423,53 @@ export class Phase2Runtime {
            JOIN division_entries home ON home.id=m.home_entry_id
            JOIN division_entries away ON away.id=m.away_entry_id
            WHERE m.competition_id=$1 AND s.result_version <= $2
+             AND s.state IN ('final','corrected')
            ORDER BY m.id,s.result_version DESC`,
             [competitionId, resultVersion],
           )
         : [];
+    const liveMatches = await tx.unsafe<{
+      id: string;
+      division_id: string;
+      code: string;
+      stage: string;
+      home_entry_id: string;
+      away_entry_id: string;
+      home_name: string;
+      away_name: string;
+      stream_updated_at: Date | string;
+    }>(
+      `SELECT m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
+              home.name AS home_name,away.name AS away_name,stream.updated_at AS stream_updated_at
+       FROM matches m
+       JOIN match_score_streams stream ON stream.match_id=m.id
+       JOIN division_entries home ON home.id=m.home_entry_id
+       JOIN division_entries away ON away.id=m.away_entry_id
+       WHERE m.competition_id=$1 AND m.state='in_progress'
+       ORDER BY m.id`,
+      [competitionId],
+    );
+    const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
+    for (const match of liveMatches) {
+      const canonical = await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true });
+      liveResults.push({
+        division_id: match.division_id,
+        id: match.id,
+        code: match.code,
+        stage: match.stage,
+        home: { id: match.home_entry_id, name: match.home_name },
+        away: { id: match.away_entry_id, name: match.away_name },
+        home_score: canonical.state.score.home,
+        away_score: canonical.state.score.away,
+        state: "in_progress",
+        updated_at: serializedDate(match.stream_updated_at),
+      });
+    }
+    const liveMatchIds = new Set(liveResults.map((result) => result.id));
+    const projectionResults = [
+      ...results.filter((result) => !liveMatchIds.has(result.id)),
+      ...liveResults,
+    ];
     const standings =
       resultVersion > 0
         ? await tx.unsafe<{ division_id: string; standings: unknown; explanation: unknown }>(
@@ -5476,7 +5505,7 @@ export class Phase2Runtime {
           ends_at: serializedDate(match.ends_at),
           area: { id: match.area_id, name: match.area_name },
         }));
-      const publicResults: PublicMatchResult[] = results
+      const publicResults: PublicMatchResult[] = projectionResults
         .filter((match) => match.division_id === division.id)
         .map((match) => ({
           id: match.id,
