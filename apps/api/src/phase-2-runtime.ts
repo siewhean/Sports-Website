@@ -3330,8 +3330,9 @@ export class Phase2Runtime {
           actorId: session.id,
           scoringSessionId: session.id,
         });
+        let reducedScoreState: FiveSportScoreState;
         try {
-          reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
+          reducedScoreState = reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
         } catch (error) {
           throw new ApiError(
             422,
@@ -3440,6 +3441,45 @@ export class Phase2Runtime {
             outboxKey, // $24
           ],
         );
+
+        const publication = (
+          await tx.unsafe<{ schedule_version: number; result_version: number }>(
+            `SELECT schedule_version,result_version
+             FROM competition_publications
+             WHERE competition_id=$1
+             FOR UPDATE`,
+            [context.competition_id],
+          )
+        )[0];
+        if (publication && publication.schedule_version > 0) {
+          const nextResultVersion = publication.result_version + 1;
+          await tx.unsafe(
+            `INSERT INTO match_result_snapshots (
+               match_id,result_version,through_sequence,home_score,away_score,state,snapshot
+             ) VALUES ($1,$2,$3,$4,$5,'in_progress',$6::jsonb)`,
+            [
+              session.match_id,
+              nextResultVersion,
+              sequence,
+              reducedScoreState.score.home,
+              reducedScoreState.score.away,
+              JSON.stringify(reducedScoreState),
+            ],
+          );
+          await tx.unsafe(
+            `UPDATE competition_publications
+             SET result_version=$2,updated_at=$3
+             WHERE competition_id=$1`,
+            [context.competition_id, nextResultVersion, serverReceivedAt],
+          );
+          await this.writePublicProjection(
+            tx,
+            context.competition_id,
+            publication.schedule_version,
+            nextResultVersion,
+          );
+        }
+
         const _t5 = performance.now();
         /* istanbul ignore next */
         console.debug("appendCanonicalScoreEvent timings (ms)", {
@@ -5006,6 +5046,7 @@ export class Phase2Runtime {
          FROM matches m
          JOIN match_result_snapshots snapshot ON snapshot.match_id=m.id
          WHERE m.division_id=$1 AND snapshot.result_version<=$2
+           AND snapshot.state IN ('final','corrected')
            AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL
          ORDER BY m.id,snapshot.result_version DESC`,
       [divisionId, resultVersion],
@@ -5197,7 +5238,8 @@ export class Phase2Runtime {
       const gf1Result = (
         await tx.unsafe<{ home_score: number; away_score: number }>(
           `SELECT home_score, away_score FROM match_result_snapshots
-           WHERE match_id=$1 AND result_version<=$2 ORDER BY result_version DESC LIMIT 1`,
+           WHERE match_id=$1 AND result_version<=$2 AND state IN ('final','corrected')
+           ORDER BY result_version DESC LIMIT 1`,
           [grandFinal1.id, resultVersion],
         )
       )[0];
@@ -5296,6 +5338,7 @@ export class Phase2Runtime {
               s.home_score,s.away_score,s.state
        FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
        WHERE m.division_id=$1 AND ($2::integer IS NULL OR s.result_version <= $2)
+         AND s.state IN ('final','corrected')
        ORDER BY m.id,s.result_version DESC`,
       [divisionId, maximumResultVersion],
     );
@@ -5384,7 +5427,7 @@ export class Phase2Runtime {
             away_name: string;
             home_score: number;
             away_score: number;
-            state: "final" | "corrected";
+            state: "in_progress" | "final" | "corrected";
             created_at: Date | string;
           }>(
             `SELECT DISTINCT ON (m.id) m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
