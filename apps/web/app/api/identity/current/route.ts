@@ -1,21 +1,17 @@
 import { NextResponse } from "next/server";
 import { readCurrentIdentitySession } from "@/lib/identity-session.server";
-
-const privateNoStoreHeaders = {
-  "cache-control": "private, no-store",
-  pragma: "no-cache",
-} as const;
+import { identityStatusResponseHeaders, identityStatusValues } from "@/lib/identity-status";
 
 export async function GET() {
   const session = await readCurrentIdentitySession();
 
-  if (session.status === "authenticated") {
+  if (session.status === identityStatusValues.authenticated) {
     return NextResponse.json(
       {
-        status: "authenticated",
+        status: identityStatusValues.authenticated,
         displayName: session.identity.displayName,
       },
-      { headers: privateNoStoreHeaders },
+      { headers: identityStatusResponseHeaders },
     );
   }
 
@@ -24,6 +20,6 @@ export async function GET() {
       status: session.status,
       displayName: null,
     },
-    { headers: privateNoStoreHeaders },
+    { headers: identityStatusResponseHeaders },
   );
 }
