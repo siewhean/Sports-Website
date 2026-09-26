@@ -47,6 +47,7 @@ services:
       target: migrate
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
     env_file: ${OCI_ENV_FILE:-.env.oci}
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -67,6 +68,7 @@ services:
       target: api
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
     restart: unless-stopped
     mem_limit: 2g
     cpus: 1.0
@@ -96,6 +98,9 @@ services:
     networks:
       backend:
         ipv4_address: 172.30.0.11
+        aliases:
+          - staging-api
+          - matchday-staging-api
 
   web:
     build:
@@ -104,6 +109,7 @@ services:
       target: web
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
         MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
     restart: unless-stopped
     mem_limit: 1536m
@@ -132,6 +138,9 @@ services:
     networks:
       backend:
         ipv4_address: 172.30.0.12
+        aliases:
+          - staging-web
+          - matchday-staging-web
 
   worker:
     build:
@@ -140,11 +149,14 @@ services:
       target: worker
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
     restart: unless-stopped
     mem_limit: 1g
     cpus: 0.5
     env_file: ${OCI_ENV_FILE:-.env.oci}
     environment:
+      GIT_SHA: ${CANDIDATE_SHA}
+      BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       SCORING_SESSION_SEAL_KEY: ""
@@ -154,6 +166,9 @@ services:
     networks:
       backend:
         ipv4_address: 172.30.0.13
+        aliases:
+          - staging-worker
+          - matchday-staging-worker
 
   caddy:
     image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
@@ -175,6 +190,8 @@ services:
     networks:
       backend:
         ipv4_address: 172.30.0.10
+      prod_backend:
+        ipv4_address: 172.31.0.10
 
 volumes:
   matchday-postgres:
@@ -188,3 +205,6 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/24
+  prod_backend:
+    name: matchday-prod_backend
+    external: true

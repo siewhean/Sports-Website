@@ -47,11 +47,11 @@ services:
       target: migrate
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
     env_file: ${OCI_PROD_ENV_FILE:-.env.prod}
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
       EDGE_CACHE_PURGE_BEARER_TOKEN: ""
       EDGE_CACHE_PURGE_ENDPOINT: ""
       SCORING_SESSION_SEAL_KEY: ""
@@ -69,6 +69,7 @@ services:
       target: api
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
     restart: unless-stopped
     mem_limit: 2g
     cpus: 1.0
@@ -80,7 +81,6 @@ services:
       BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -99,6 +99,9 @@ services:
     networks:
       backend:
         ipv4_address: 172.31.0.11
+        aliases:
+          - prod-api
+          - matchday-prod-api
 
   web:
     build:
@@ -107,6 +110,7 @@ services:
       target: web
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
         MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
     restart: unless-stopped
     mem_limit: 1536m
@@ -135,6 +139,9 @@ services:
     networks:
       backend:
         ipv4_address: 172.31.0.12
+        aliases:
+          - prod-web
+          - matchday-prod-web
 
   worker:
     build:
@@ -143,14 +150,16 @@ services:
       target: worker
       args:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
     restart: unless-stopped
     mem_limit: 1g
     cpus: 0.5
     env_file: ${OCI_PROD_ENV_FILE:-.env.prod}
     environment:
+      GIT_SHA: ${CANDIDATE_SHA}
+      BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
       SCORING_SESSION_SEAL_KEY: ""
     depends_on:
       postgres: { condition: service_healthy }
@@ -158,6 +167,9 @@ services:
     networks:
       backend:
         ipv4_address: 172.31.0.13
+        aliases:
+          - prod-worker
+          - matchday-prod-worker
 
 volumes:
   matchday-prod-postgres:
@@ -165,6 +177,7 @@ volumes:
 
 networks:
   backend:
+    name: matchday-prod_backend
     driver: bridge
     ipam:
       config:

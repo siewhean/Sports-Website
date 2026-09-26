@@ -355,7 +355,9 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   requireProductionValue(parsed.APP_ENV, source, "REDIS_URL");
   requireProductionValue(parsed.APP_ENV, source, "DEEP_HEALTH_TOKEN");
   requireProductionValue(parsed.APP_ENV, source, "API_ALLOWED_ORIGINS");
-  requireProductionValue(parsed.APP_ENV, source, "OTEL_EXPORTER_OTLP_ENDPOINT");
+  if (parsed.OTEL_ENABLED) {
+    requireProductionValue(parsed.APP_ENV, source, "OTEL_EXPORTER_OTLP_ENDPOINT");
+  }
   const publicOrigin = parsed.MATCHDAY_PUBLIC_ORIGIN
     ? validatedPublicOrigin(parsed.MATCHDAY_PUBLIC_ORIGIN, parsed.APP_ENV)
     : undefined;
@@ -367,9 +369,6 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   }
   if (parsed.APP_ENV !== "local" && parsed.APP_ENV !== "test" && parsed.IDENTITY_PROVIDER !== "oidc") {
     throw new Error("IDENTITY_PROVIDER must be oidc outside local/test");
-  }
-  if (parsed.APP_ENV === "production" && !parsed.OTEL_ENABLED) {
-    throw new Error("OTEL_ENABLED must be true in production");
   }
   if (Boolean(parsed.EDGE_CACHE_PURGE_ENDPOINT) !== Boolean(parsed.EDGE_CACHE_PURGE_BEARER_TOKEN)) {
     throw new Error("EDGE_CACHE_PURGE_ENDPOINT and EDGE_CACHE_PURGE_BEARER_TOKEN must be configured together");
@@ -552,8 +551,13 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
     }
-    if (parsed.APP_ENV === "production" && url.protocol !== "https:") {
-      throw new Error("Production OTLP endpoints must use HTTPS");
+    if (parsed.APP_ENV === "production") {
+      if (url.protocol !== "https:") {
+        throw new Error("Production OTLP endpoints must use HTTPS");
+      }
+      if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") {
+        throw new Error("Production OTLP endpoints must not use local loopback");
+      }
     }
     if (url.username || url.password || url.search || url.hash) {
       throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
