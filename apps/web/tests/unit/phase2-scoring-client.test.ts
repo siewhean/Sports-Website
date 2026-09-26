@@ -260,6 +260,9 @@ describe("phase 2 browser scoring transport", () => {
     expect(source).toContain("definition={activeScorecardDefinition}");
     expect(source).toContain("scoreState.currentSegment < definition.segments.length");
     expect(source).toContain("error.detailMessage ??");
+    expect(source).toContain("disabled={locked || actionPending} onClick={finalize}");
+    expect(source).toContain("setActionPending(true)");
+    expect(source).toContain("setActionPending(false)");
   });
 
   it("distinguishes a lapsed writer lease from a genuinely expired scoring session", () => {
