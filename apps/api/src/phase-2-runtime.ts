@@ -5413,7 +5413,7 @@ export class Phase2Runtime {
             away_name: string;
             home_score: number;
             away_score: number;
-            state: "in_progress" | "final" | "corrected";
+            state: "final" | "corrected";
             created_at: Date | string;
           }>(
             `SELECT DISTINCT ON (m.id) m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
@@ -5428,6 +5428,18 @@ export class Phase2Runtime {
             [competitionId, resultVersion],
           )
         : [];
+    const persistedPublicResults: Array<PublicMatchResult & { division_id: string }> = results.map((match) => ({
+      division_id: match.division_id,
+      id: match.id,
+      code: match.code,
+      stage: match.stage,
+      home: { id: match.home_entry_id, name: match.home_name },
+      away: { id: match.away_entry_id, name: match.away_name },
+      home_score: match.home_score,
+      away_score: match.away_score,
+      state: match.state,
+      updated_at: serializedDate(match.created_at),
+    }));
     const liveMatches = await tx.unsafe<{
       id: string;
       division_id: string;
@@ -5467,7 +5479,7 @@ export class Phase2Runtime {
     }
     const liveMatchIds = new Set(liveResults.map((result) => result.id));
     const projectionResults = [
-      ...results.filter((result) => !liveMatchIds.has(result.id)),
+      ...persistedPublicResults.filter((result) => !liveMatchIds.has(result.id)),
       ...liveResults,
     ];
     const standings =
@@ -5511,12 +5523,12 @@ export class Phase2Runtime {
           id: match.id,
           code: match.code,
           stage: match.stage,
-          home: { id: match.home_entry_id, name: match.home_name },
-          away: { id: match.away_entry_id, name: match.away_name },
+          home: match.home,
+          away: match.away,
           home_score: match.home_score,
           away_score: match.away_score,
           state: match.state,
-          updated_at: serializedDate(match.created_at),
+          updated_at: match.updated_at,
         }));
       const divisionStandings = standingsByDivision.get(division.id);
       const divisionBracket = bracketByDivision.get(division.id);
