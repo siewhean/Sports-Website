@@ -4,6 +4,7 @@ import {
   isExpectedRscNavigationCancellation,
   isExpectedTeardownFontCancellation,
   isExpectedTeardownIdentityCancellation,
+  isExpectedTeardownIdentityPageError,
   isExpectedTeardownServiceWorkerCancellation,
   isExpectedTeardownStaticAssetCancellation,
 } from "../helpers/console-guard";
@@ -151,5 +152,26 @@ describe("identity teardown cancellation", () => {
     { ...cancellation, pageUrl: "about:blank" },
   ])("keeps genuine or unrelated identity failures observable", (input) => {
     expect(isExpectedTeardownIdentityCancellation(input)).toBe(false);
+  });
+});
+
+describe("identity teardown page error", () => {
+  it("ignores WebKit navigation-teardown identity access control errors", () => {
+    expect(
+      isExpectedTeardownIdentityPageError("/127.0.0.1:3100/api/identity/current due to access control checks."),
+    ).toBe(true);
+    expect(
+      isExpectedTeardownIdentityPageError(
+        "Fetch API cannot load http://127.0.0.1:3100/api/identity/current due to access control checks.",
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "/127.0.0.1:3100/api/identity/current failed to load",
+    "/127.0.0.1:3100/api/competitions due to access control checks.",
+    "TypeError: undefined is not an object",
+  ])("keeps other page errors observable", (message) => {
+    expect(isExpectedTeardownIdentityPageError(message)).toBe(false);
   });
 });
