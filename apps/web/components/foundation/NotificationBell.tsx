@@ -36,14 +36,10 @@ export function NotificationBell() {
   }, []);
 
   return (
-    <Link
-      href="/notifications"
-      aria-label={messages.notifications.title}
-      className="relative inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-neutral-700 bg-neutral-900 text-neutral-200 transition-colors hover:bg-neutral-800 hover:text-white"
-    >
+    <Link href="/notifications" aria-label={messages.notifications.title} className="notification-bell">
       <Bell size={20} aria-hidden="true" />
       {unreadCount > 0 ? (
-        <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-indigo-600 px-1 text-center text-[11px] font-semibold leading-5 text-white">
+        <span className="notification-bell__badge">
           {unreadCount > 99 ? messages.notifications.overflowCount : unreadCount}
         </span>
       ) : null}

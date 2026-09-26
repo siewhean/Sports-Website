@@ -329,7 +329,9 @@ export function scoringSessionAnnouncement(session: ScoringSessionView, now: num
 }
 
 export function canonicalSegmentNumber(eventType: string, currentSegment: number, selectedSegment: number): number {
-  return eventType === phase2Machine.overtime ? currentSegment + 1 : selectedSegment;
+  return eventType === phase2Machine.overtime || eventType === phase2Machine.periodChange
+    ? currentSegment + 1
+    : selectedSegment;
 }
 
 function appendBody(command: ScoringEventCommand): Record<string, unknown> {

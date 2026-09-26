@@ -3,6 +3,8 @@ import {
   isExpectedFrameworkWarning,
   isExpectedRscNavigationCancellation,
   isExpectedTeardownFontCancellation,
+  isExpectedTeardownIdentityCancellation,
+  isExpectedTeardownIdentityPageError,
   isExpectedTeardownServiceWorkerCancellation,
   isExpectedTeardownStaticAssetCancellation,
 } from "../helpers/console-guard";
@@ -128,5 +130,48 @@ describe("static-asset teardown cancellation", () => {
     { ...cancellation, pageUrl: "about:blank" },
   ])("keeps genuine or unrelated asset failures observable", (input) => {
     expect(isExpectedTeardownStaticAssetCancellation(input)).toBe(false);
+  });
+});
+
+describe("identity teardown cancellation", () => {
+  const cancellation = {
+    failure: "cancelled",
+    pageUrl: "https://127.0.0.1:3100/organiser",
+    requestUrl: "https://127.0.0.1:3100/api/identity/current",
+  };
+
+  it("ignores only same-origin identity status cancelled during navigation teardown", () => {
+    expect(isExpectedTeardownIdentityCancellation(cancellation)).toBe(true);
+    expect(isExpectedTeardownIdentityCancellation({ ...cancellation, failure: "net::ERR_ABORTED" })).toBe(true);
+  });
+
+  it.each([
+    { ...cancellation, failure: "net::ERR_FAILED" },
+    { ...cancellation, requestUrl: "https://cdn.example.com/api/identity/current" },
+    { ...cancellation, requestUrl: "https://127.0.0.1:3100/api/competitions" },
+    { ...cancellation, pageUrl: "about:blank" },
+  ])("keeps genuine or unrelated identity failures observable", (input) => {
+    expect(isExpectedTeardownIdentityCancellation(input)).toBe(false);
+  });
+});
+
+describe("identity teardown page error", () => {
+  it("ignores WebKit navigation-teardown identity access control errors", () => {
+    expect(
+      isExpectedTeardownIdentityPageError("/127.0.0.1:3100/api/identity/current due to access control checks."),
+    ).toBe(true);
+    expect(
+      isExpectedTeardownIdentityPageError(
+        "Fetch API cannot load http://127.0.0.1:3100/api/identity/current due to access control checks.",
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "/127.0.0.1:3100/api/identity/current failed to load",
+    "/127.0.0.1:3100/api/competitions due to access control checks.",
+    "TypeError: undefined is not an object",
+  ])("keeps other page errors observable", (message) => {
+    expect(isExpectedTeardownIdentityPageError(message)).toBe(false);
   });
 });

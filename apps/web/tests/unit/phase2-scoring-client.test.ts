@@ -195,9 +195,24 @@ describe("Gate C3 offline mutation gating", () => {
 });
 
 describe("phase 2 browser scoring transport", () => {
-  it("submits Basketball overtime against the next authoritative segment", () => {
+  it("submits timed period changes and Basketball overtime against the next authoritative segment", () => {
+    expect(canonicalSegmentNumber(phase2Machine.periodChange, 1, 1)).toBe(2);
     expect(canonicalSegmentNumber(phase2Machine.overtime, 4, 4)).toBe(5);
     expect(canonicalSegmentNumber("three_point_score", 4, 4)).toBe(4);
+  });
+
+  it("binds the period selector to an authoritative period-change mutation before final review", async () => {
+    const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
+    const advance = source.indexOf("const advancePeriod = async");
+    const append = source.indexOf("await port.appendEvent(command)", advance);
+    const selector = source.indexOf("void advancePeriod(event.target.value)", append);
+    const finalisationMessage = source.indexOf('error.code === "FINALISATION_INVALID"', selector);
+
+    expect(advance).toBeGreaterThan(-1);
+    expect(source.indexOf("eventType: phase2Machine.periodChange", advance)).toBeGreaterThan(advance);
+    expect(append).toBeGreaterThan(advance);
+    expect(selector).toBeGreaterThan(append);
+    expect(finalisationMessage).toBeGreaterThan(-1);
   });
 
   it("distinguishes a lapsed writer lease from a genuinely expired scoring session", () => {

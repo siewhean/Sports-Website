@@ -97,6 +97,75 @@ describe("Gate C C4 public truth runtime", () => {
     expect(calls[0]?.query).toContain("jsonb_object_agg(version.division_id::text, version.projection_version)");
   });
 
+  it("lists only competitions backed by the current public projection without authentication", async () => {
+    const { runtime, calls } = runtimeWithRows([
+      {
+        id: competitionId,
+        name: "National Open",
+        slug: "national-open",
+        sport_code: "canoe_polo",
+        timezone: "Asia/Singapore",
+        starts_on: "2026-08-01",
+        ends_on: "2026-08-03",
+        status: "live",
+      },
+    ]);
+
+    await expect(runtime.list()).resolves.toEqual([
+      {
+        id: competitionId,
+        name: "National Open",
+        slug: "national-open",
+        sport_code: "canoe_polo",
+        timezone: "Asia/Singapore",
+        starts_on: "2026-08-01",
+        ends_on: "2026-08-03",
+        status: "live",
+      },
+    ]);
+    expect(calls[0]?.query).toContain("current_projection.schedule_version=publication.schedule_version");
+    expect(calls[0]?.query).toContain("current_projection.result_version=publication.result_version");
+    expect(calls[0]?.query).toContain("publication.schedule_version > 0 OR publication.result_version > 0");
+  });
+
+  it("serves the competition listing anonymously", async () => {
+    const app = Fastify();
+    await registerGateCC4PublicTruthRoutes(app, {
+      list: async () => [
+        {
+          id: competitionId,
+          name: "National Open",
+          slug: "national-open",
+          sport_code: "canoe_polo",
+          timezone: "Asia/Singapore",
+          starts_on: "2026-08-01",
+          ends_on: "2026-08-03",
+          status: "live",
+        },
+      ],
+      read: async () => null,
+    } as unknown as GateCC4PublicTruthRuntime);
+
+    const response = await app.inject("/api/v1/public/competitions");
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      competitions: [
+        {
+          id: competitionId,
+          name: "National Open",
+          slug: "national-open",
+          sport_code: "canoe_polo",
+          timezone: "Asia/Singapore",
+          starts_on: "2026-08-01",
+          ends_on: "2026-08-03",
+          status: "live",
+        },
+      ],
+    });
+  });
+
   it("returns null when no exact current projection exists", async () => {
     const { runtime } = runtimeWithRows([]);
     await expect(runtime.read("missing-open")).resolves.toBeNull();

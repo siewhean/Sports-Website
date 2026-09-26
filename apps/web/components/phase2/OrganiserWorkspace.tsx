@@ -22,6 +22,7 @@ import {
 } from "@/lib/phase2";
 import { SurfaceStatePanel } from "./SurfaceState";
 import { AccessPassManager } from "@/components/phase5/AccessPassManager";
+import { IdentityStatus } from "@/components/foundation/IdentityStatus";
 
 function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
   const shared: Record<OrganiserSection, { title: string; intro: string }> = {
@@ -121,10 +122,13 @@ export function OrganiserWorkspace({
             <span>{competition.name}</span>
             <small>{competition.publicationRevision}</small>
           </div>
-          <p className="p2-sync" data-sync-state={syncState}>
-            <span aria-hidden="true" />
-            {syncLabel ?? phase2Copy.draftSynced}
-          </p>
+          <div className="flex items-center gap-3">
+            <p className="p2-sync" data-sync-state={syncState}>
+              <span aria-hidden="true" />
+              {syncLabel ?? phase2Copy.draftSynced}
+            </p>
+            <IdentityStatus className="site-header__access" />
+          </div>
         </header>
       ) : null}
       <div className="p2-organiser__layout">

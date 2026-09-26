@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { messages } from "@matchday/ui";
 import { BrandLink } from "./Primitives";
+import { IdentityStatus } from "./IdentityStatus";
 
 const productionRoutes = [
   { href: "/competitions", label: messages.navigation.public },
@@ -29,15 +30,7 @@ export function SiteHeader({
           </Link>
         ))}
       </nav>
-      {viewer ? (
-        <Link className="site-header__access" href="/organiser">
-          {viewer.displayName}
-        </Link>
-      ) : (
-        <a className="site-header__access" href="/api/v1/identity/authorize">
-          {messages.navigation.signIn}
-        </a>
-      )}
+      <IdentityStatus className="site-header__access" initialDisplayName={viewer?.displayName ?? null} />
     </header>
   );
 }

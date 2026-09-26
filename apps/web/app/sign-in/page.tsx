@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
 import { translate as t } from "@matchday/ui";
 import { BrandLink } from "@/components/foundation/Primitives";
+import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 import styles from "./SignInPage.module.css";
 
 export const metadata: Metadata = {
@@ -12,6 +14,10 @@ export const metadata: Metadata = {
 export default async function SignInPage({ searchParams }: Readonly<{ searchParams: Promise<{ reason?: string }> }>) {
   const { reason } = await searchParams;
   const stepUpRequired = reason === "step-up";
+  if (!stepUpRequired) {
+    const session = await readCurrentIdentitySession();
+    if (session.status === "authenticated") redirect("/organiser");
+  }
 
   return (
     <main className={styles.page} id="main-content">

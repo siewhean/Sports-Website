@@ -239,6 +239,9 @@ export function PhoneScoring({
   const definition = scorecardDefinition;
   const manualTimeEnabled = definition.fields.some((field) => field.id === "manual_event_time" && field.enabled);
   const score = { home: scoreState.home, away: scoreState.away };
+  const supportsPeriodAdvance = definition.operationalControls.some(
+    (control) => control.id === phase2Machine.periodChange,
+  );
   const locked = scoringMutationIsLocked({
     writerState,
     offlineState,
@@ -473,12 +476,14 @@ export function PhoneScoring({
           return;
         }
         if (error.state === "invalid") {
+          const message =
+            error.code === "FINALISATION_INVALID" ? phase2Copy.finalisationNotReady : phase2Copy.semanticRejected;
           if (actionDialogRef.current?.open) {
-            setScorerError(phase2Copy.semanticRejected);
+            setScorerError(message);
             setInteractionError("");
           } else {
-            setInteractionError(phase2Copy.semanticRejected);
-            setAnnouncement(phase2Copy.semanticRejected);
+            setInteractionError(message);
+            setAnnouncement(message);
             window.requestAnimationFrame(() => interactionErrorRef.current?.focus({ preventScroll: true }));
           }
           return;
@@ -1130,6 +1135,67 @@ export function PhoneScoring({
       setAnnouncement(phase2Copy.offlinePendingFinalisation);
     });
 
+  const advancePeriod = async (nextValue: string) => {
+    const nextSegment = Number(nextValue);
+    if (nextSegment === scoreState.currentSegment) {
+      setPeriod(nextValue);
+      return;
+    }
+    if (
+      !supportsPeriodAdvance ||
+      !Number.isInteger(nextSegment) ||
+      nextSegment !== scoreState.currentSegment + 1 ||
+      nextSegment > definition.segments.length
+    ) {
+      setPeriod(String(scoreState.currentSegment));
+      setInteractionError(phase2Copy.periodAdvanceInvalid);
+      setAnnouncement(phase2Copy.periodAdvanceInvalid);
+      window.requestAnimationFrame(() => interactionErrorRef.current?.focus({ preventScroll: true }));
+      return;
+    }
+
+    const command: ScoringEventCommand = {
+      clientEventId: crypto.randomUUID(),
+      expectedSequence: throughSequence,
+      matchId,
+      eventType: phase2Machine.periodChange,
+      canonical: true,
+      scorer: "",
+      period: nextSegment,
+      segmentNumber: nextSegment,
+      manualTime: "00:00",
+      occurredAt: new Date().toISOString(),
+    };
+
+    mutationInFlightRef.current += 1;
+    sessionRefreshFenceRef.current.cancel();
+    setActionPending(true);
+    setInteractionError("");
+    setAnnouncement(phase2Copy.scoreControlsPending);
+    try {
+      if (!navigator.onLine) throw new ScoringTransportError(phase2Machine.unavailable);
+      const receipt = await port.appendEvent(command);
+      setPendingSync(receipt.syncState === "pending");
+      await applySession(await port.recoverSession());
+      setAnnouncement(phase2Copy.eventRecorded);
+    } catch (error) {
+      if (error instanceof ScoringTransportError && error.state === "unavailable" && offlineAuthorizationId) {
+        try {
+          await queueOfflineEvent(command, phase2Copy.eventRecorded);
+        } catch (offlineError) {
+          handleOfflineQueueFailure(offlineError, phase2Copy.offlineEventStorageError);
+        }
+      } else {
+        setPeriod(String(scoreState.currentSegment));
+        await handleTransportError(error);
+      }
+    } finally {
+      sessionRefreshFenceRef.current.cancel();
+      mutationInFlightRef.current -= 1;
+      setActionPending(false);
+    }
+  };
+
   const recordAction = async () => {
     if (!pendingAction) return;
     const participant = scorer.trim();
@@ -1767,9 +1833,20 @@ export function PhoneScoring({
               <div>
                 <label>
                   <span>{definition.segmentLabel}</span>
-                  <select value={period} onChange={(event) => setPeriod(event.target.value)} disabled={locked}>
+                  <select
+                    value={period}
+                    onChange={(event) => void advancePeriod(event.target.value)}
+                    disabled={locked || !supportsPeriodAdvance}
+                  >
                     {definition.segments.map((segment) => (
-                      <option key={segment.number} value={segment.number}>
+                      <option
+                        key={segment.number}
+                        value={segment.number}
+                        disabled={
+                          supportsPeriodAdvance &&
+                          (segment.number < scoreState.currentSegment || segment.number > scoreState.currentSegment + 1)
+                        }
+                      >
                         {definition.segmentLabel} {segment.number}
                       </option>
                     ))}

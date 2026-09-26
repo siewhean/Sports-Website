@@ -73,6 +73,25 @@ export function isExpectedTeardownServiceWorkerCancellation(input: {
   }
 }
 
+export function isExpectedTeardownIdentityCancellation(input: {
+  failure: string;
+  pageUrl: string;
+  requestUrl: string;
+}): boolean {
+  if (!standardCancellationFailures.includes(input.failure)) return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return pageUrl.origin === requestUrl.origin && requestUrl.pathname === "/api/identity/current";
+  } catch {
+    return false;
+  }
+}
+
+export function isExpectedTeardownIdentityPageError(message: string): boolean {
+  return message.includes("/api/identity/current") && message.endsWith("due to access control checks.");
+}
+
 export function isExpectedTeardownStaticAssetCancellation(input: {
   failure: string;
   pageUrl: string;
@@ -121,9 +140,10 @@ export function installConsoleGuard(page: Page) {
     }
   });
   page.on("pageerror", (error) => {
-    // WebKit reports cancelled speculative Next RSC prefetches as access-control
-    // errors rather than request cancellation events.
+    // WebKit reports cancelled speculative Next RSC prefetches and navigation-teardown
+    // identity status requests as access-control errors rather than request cancellation events.
     if (error.message.includes("_rsc=") && error.message.endsWith("due to access control checks.")) return;
+    if (isExpectedTeardownIdentityPageError(error.message)) return;
     state.failures.push(`pageerror: ${error.message}`);
   });
   page.on("requestfailed", (request) => {
@@ -152,6 +172,7 @@ export function installConsoleGuard(page: Page) {
     )
       return;
     if (isExpectedTeardownServiceWorkerCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
+    if (isExpectedTeardownIdentityCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
     if (
       isExpectedTeardownStaticAssetCancellation({
         failure,
