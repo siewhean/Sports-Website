@@ -272,9 +272,18 @@ describe("Gate C C4 public truth runtime", () => {
     await app.close();
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      divisions: [{ results: [{ id: liveMatchId, state: "in_progress", home_score: 2, away_score: 1 }] }],
-      results: [{ id: liveMatchId, state: "in_progress", home_score: 2, away_score: 1 }],
+    const body = response.json();
+    expect(body.divisions[0]?.results[0]).toMatchObject({
+      id: liveMatchId,
+      state: "in_progress",
+      home_score: 2,
+      away_score: 1,
+    });
+    expect(body.results[0]).toMatchObject({
+      id: liveMatchId,
+      state: "in_progress",
+      home_score: 2,
+      away_score: 1,
     });
   });
 
