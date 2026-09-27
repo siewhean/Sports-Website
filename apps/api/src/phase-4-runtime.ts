@@ -403,6 +403,7 @@ export type Phase4PublicProjectionPort = {
     competitionId: string,
     scheduleVersion: number,
     resultVersion: number,
+    options?: { liveScores?: Map<string, { home: number; away: number }> },
   ): Promise<void>;
 };
 

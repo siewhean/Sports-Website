@@ -3330,8 +3330,9 @@ export class Phase2Runtime {
           actorId: session.id,
           scoringSessionId: session.id,
         });
+        let reduced: ReturnType<typeof reduceFiveSportScoreEvents>;
         try {
-          reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
+          reduced = reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
         } catch (error) {
           throw new ApiError(
             422,
@@ -3369,6 +3370,9 @@ export class Phase2Runtime {
         }
 
         const serverReceivedAt = this.now();
+        const leaseExpiresAt = new Date(
+          Math.min(date(session.pass_expires_at).getTime(), serverReceivedAt.getTime() + 45_000),
+        );
         const auditMetadata = JSON.stringify({ competition_id: context.competition_id });
         const auditAfter = JSON.stringify({ event_id: eventId, event_type: command.type, aggregate_version: sequence });
         const outboxPayload = JSON.stringify({
@@ -3390,6 +3394,13 @@ export class Phase2Runtime {
            ),
            updated_stream AS (
              UPDATE match_score_streams SET current_version=$6,updated_at=$15 WHERE match_id=$4
+           ),
+           updated_lease AS (
+             UPDATE match_writer_leases SET expires_at=$25
+             WHERE match_id=$4 AND access_session_id=$10 AND generation=$11 AND expires_at>$15
+           ),
+           updated_session AS (
+             UPDATE scoring_access_sessions SET last_heartbeat_at=$15 WHERE id=$10
            ),
            locked_settings AS (
              UPDATE competition_sport_settings
@@ -3438,6 +3449,7 @@ export class Phase2Runtime {
             auditMetadata, // $22 metadata
             outboxPayload, // $23
             outboxKey, // $24
+            leaseExpiresAt, // $25
           ],
         );
 
@@ -3462,6 +3474,7 @@ export class Phase2Runtime {
             context.competition_id,
             publication.schedule_version,
             publication.result_version,
+            { liveScores: new Map([[session.match_id, { home: reduced.score.home, away: reduced.score.away }]]) },
           );
         }
 
@@ -5342,6 +5355,7 @@ export class Phase2Runtime {
     competitionId: string,
     scheduleVersion: number,
     resultVersion: number,
+    options: { liveScores?: Map<string, { home: number; away: number }> } = {},
   ) {
     const competition = required(
       await tx.unsafe<{
@@ -5462,7 +5476,15 @@ export class Phase2Runtime {
     );
     const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
     for (const match of liveMatches) {
-      const canonical = await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true });
+      const knownScore = options.liveScores?.get(match.id);
+      const homeScore =
+        knownScore !== undefined
+          ? knownScore.home
+          : (await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true })).state.score.home;
+      const awayScore =
+        knownScore !== undefined
+          ? knownScore.away
+          : (await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true })).state.score.away;
       liveResults.push({
         division_id: match.division_id,
         id: match.id,
@@ -5470,8 +5492,8 @@ export class Phase2Runtime {
         stage: match.stage,
         home: { id: match.home_entry_id, name: match.home_name },
         away: { id: match.away_entry_id, name: match.away_name },
-        home_score: canonical.state.score.home,
-        away_score: canonical.state.score.away,
+        home_score: homeScore,
+        away_score: awayScore,
         state: "in_progress",
         updated_at: serializedDate(match.stream_updated_at),
       });
