@@ -22,6 +22,7 @@ export * from "./double-elimination.js";
 export * from "./format-builder.js";
 export * from "./schedule.js";
 export * from "./schedule-constraints.js";
+export * from "./canonical-intervals.js";
 export * from "./assisted-setup.js";
 export * from "./scoring.js";
 export * from "./results.js";

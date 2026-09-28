@@ -167,12 +167,13 @@ describe("OfficialRepository (Unit)", () => {
         officialId,
         windows: [{ startsAt: "2026-09-01T10:00:00Z", endsAt: "2026-09-01T09:00:00Z" }],
       }),
-    ).rejects.toThrow("Availability window must have positive duration (endsAt > startsAt)");
+    ).rejects.toThrow("Availability window must have positive duration");
 
     // Case 1: unassigned official -> no revision bump
     mockUnsafe.mockResolvedValueOnce([
       { id: officialId, competition_id: competitionId, organisation_id: organisationId },
     ]);
+    mockUnsafe.mockResolvedValueOnce([]); // existing windows
     mockUnsafe.mockResolvedValueOnce([{ count: "0" }]); // hasAssignments = false
     mockUnsafe.mockResolvedValueOnce([]); // DELETE
     mockUnsafe.mockResolvedValueOnce([
@@ -193,6 +194,7 @@ describe("OfficialRepository (Unit)", () => {
     mockUnsafe.mockResolvedValueOnce([
       { id: officialId, competition_id: competitionId, organisation_id: organisationId },
     ]);
+    mockUnsafe.mockResolvedValueOnce([]); // existing windows
     mockUnsafe.mockResolvedValueOnce([{ count: "1" }]); // hasAssignments = true
     mockUnsafe.mockResolvedValueOnce([{ revision: 6 }]); // increment revision
     mockUnsafe.mockResolvedValueOnce([]); // DELETE
@@ -231,6 +233,7 @@ describe("OfficialRepository (Unit)", () => {
     // Success replacement
     mockUnsafe.mockResolvedValueOnce([{ id: matchId }]); // match exists
     mockUnsafe.mockResolvedValueOnce([{ id: officialId, competition_id: competitionId }]); // official exists
+    mockUnsafe.mockResolvedValueOnce([]); // existing assignments
     mockUnsafe.mockResolvedValueOnce([{ revision: 7 }]); // increment revision
     mockUnsafe.mockResolvedValueOnce([]); // DELETE match_official_assignments
     mockUnsafe.mockResolvedValueOnce([
@@ -258,6 +261,7 @@ describe("OfficialRepository (Unit)", () => {
     // assignOfficial
     mockUnsafe.mockResolvedValueOnce([{ id: matchId }]); // match exists
     mockUnsafe.mockResolvedValueOnce([{ id: officialId, competition_id: competitionId }]); // official exists
+    mockUnsafe.mockResolvedValueOnce([]); // existing assignment check -> empty
     mockUnsafe.mockResolvedValueOnce([{ revision: 8 }]); // increment revision
     mockUnsafe.mockResolvedValueOnce([
       { id: "asgn-2", match_id: matchId, official_id: officialId, assigned_role: null },

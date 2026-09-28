@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { areCanonicalIntervalsEqual, canonicaliseIntervals } from "@matchday/domain";
 import type {
   SqlExecutor,
   LockMode,
@@ -283,12 +284,21 @@ export class OfficialRepository {
       throw new Error(`Official not found in competition: ${params.officialId}`);
     }
 
-    for (const w of params.windows) {
-      const start = new Date(w.startsAt).getTime();
-      const end = new Date(w.endsAt).getTime();
-      if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
-        throw new Error("Availability window must have positive duration (endsAt > startsAt)");
-      }
+    // Canonicalise and validate requested intervals
+    const canonicalRequested = canonicaliseIntervals(
+      params.windows.map((w) => ({ startsAt: w.startsAt, endsAt: w.endsAt })),
+    );
+
+    // Fetch existing windows
+    const existingWindows = await this.listAvailability(params.competitionId, params.officialId, executor);
+
+    // Compare canonical intervals to detect semantic no-op
+    const isSemanticNoOp = areCanonicalIntervalsEqual(
+      existingWindows.map((w) => ({ startsAt: w.starts_at, endsAt: w.ends_at })),
+      canonicalRequested,
+    );
+    if (isSemanticNoOp) {
+      return { windows: existingWindows, bumpedRevision: false };
     }
 
     const assignmentRows = await executor.unsafe<{ count: string }>(
@@ -312,14 +322,20 @@ export class OfficialRepository {
     );
 
     const inserted: OfficialAvailabilityWindowRecord[] = [];
-    for (const w of params.windows) {
+    for (const w of canonicalRequested) {
       const rows = await executor.unsafe<OfficialAvailabilityWindowRecord>(
         `INSERT INTO official_availability_windows (
            competition_id, organisation_id, official_id, starts_at, ends_at
          )
          VALUES ($1, $2, $3, $4, $5)
          RETURNING ${WINDOW_COLUMNS}`,
-        [params.competitionId, params.organisationId, params.officialId, w.startsAt, w.endsAt],
+        [
+          params.competitionId,
+          params.organisationId,
+          params.officialId,
+          new Date(w.startEpochMs).toISOString(),
+          new Date(w.endEpochMs).toISOString(),
+        ],
       );
       if (rows[0]) inserted.push(rows[0]);
     }
@@ -404,11 +420,75 @@ export class OfficialRepository {
       if (!official) {
         throw new Error(`Official not found in competition: ${a.officialId}`);
       }
+      if (official.archived_at) {
+        throw new Error(`Cannot assign archived official to match: ${a.officialId}`);
+      }
       if (a.assignedRole && a.assignedRole.trim().length > 40) {
         throw new Error("Assigned role must not exceed 40 characters");
       }
     }
 
+    const existingAssignments = await this.listMatchAssignments(params.competitionId, params.matchId, executor);
+
+    const existingMap = new Map<string, string | null>(
+      existingAssignments.map((a) => [a.official_id, a.assigned_role ?? null]),
+    );
+    const requestedMap = new Map<string, string | null>(
+      params.assignments.map((a) => [a.officialId, a.assignedRole ? a.assignedRole.trim() : null]),
+    );
+
+    const existingIds = new Set(existingMap.keys());
+    const requestedIds = new Set(requestedMap.keys());
+    const sameIds = existingIds.size === requestedIds.size && [...existingIds].every((id) => requestedIds.has(id));
+
+    if (sameIds) {
+      const sameRoles = [...existingIds].every((id) => existingMap.get(id) === requestedMap.get(id));
+      if (sameRoles) {
+        // Exact semantic replay / no-op: no revision bump, no DB write, no audit
+        return { assignments: existingAssignments, bumpedRevision: false };
+      }
+
+      // Role labels changed, but official ID set identical: update metadata without scheduling bump
+      await executor.unsafe(
+        `DELETE FROM match_official_assignments
+         WHERE competition_id = $1 AND match_id = $2`,
+        [params.competitionId, params.matchId],
+      );
+
+      const inserted: MatchOfficialAssignmentRecord[] = [];
+      for (const a of params.assignments) {
+        const rows = await executor.unsafe<MatchOfficialAssignmentRecord>(
+          `INSERT INTO match_official_assignments (
+             competition_id, organisation_id, match_id, official_id, assigned_role
+           )
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING ${ASSIGNMENT_COLUMNS}`,
+          [
+            params.competitionId,
+            params.organisationId,
+            params.matchId,
+            a.officialId,
+            a.assignedRole ? a.assignedRole.trim() : null,
+          ],
+        );
+        if (rows[0]) inserted.push(rows[0]);
+      }
+
+      await this.recordEvidence(executor, {
+        action: "official.assignments.updated",
+        targetType: "match",
+        targetId: params.matchId,
+        organisationId: params.organisationId,
+        competitionId: params.competitionId,
+        actorId: params.actorId,
+        requestId: params.requestId,
+        metadata: { match_id: params.matchId, role_only: true, count: inserted.length },
+      });
+
+      return { assignments: inserted, bumpedRevision: false };
+    }
+
+    // Official IDs changed (official added or removed) -> atomic scheduling revision bump
     await this.incrementCompetitionRevision(params.competitionId, executor);
 
     await executor.unsafe(
@@ -473,7 +553,53 @@ export class OfficialRepository {
     if (!official) {
       throw new Error(`Official not found in competition: ${params.officialId}`);
     }
+    if (official.archived_at) {
+      throw new Error(`Cannot assign archived official to match: ${params.officialId}`);
+    }
+    if (params.assignedRole && params.assignedRole.trim().length > 40) {
+      throw new Error("Assigned role must not exceed 40 characters");
+    }
 
+    const newRole = params.assignedRole ? params.assignedRole.trim() : null;
+
+    const existingRows = await executor.unsafe<MatchOfficialAssignmentRecord>(
+      `SELECT ${ASSIGNMENT_COLUMNS} FROM match_official_assignments
+       WHERE competition_id = $1 AND match_id = $2 AND official_id = $3`,
+      [params.competitionId, params.matchId, params.officialId],
+    );
+    const existing = existingRows[0];
+
+    if (existing) {
+      if ((existing.assigned_role ?? null) === newRole) {
+        // Exact no-op
+        return { assignment: existing, bumpedRevision: false };
+      }
+
+      // Role updated on existing assignment: no scheduling revision bump
+      const updatedRows = await executor.unsafe<MatchOfficialAssignmentRecord>(
+        `UPDATE match_official_assignments
+         SET assigned_role = $1, updated_at = now()
+         WHERE id = $2
+         RETURNING ${ASSIGNMENT_COLUMNS}`,
+        [newRole, existing.id],
+      );
+      const updated = updatedRows[0]!;
+
+      await this.recordEvidence(executor, {
+        action: "official.assignments.updated",
+        targetType: "match",
+        targetId: params.matchId,
+        organisationId: params.organisationId,
+        competitionId: params.competitionId,
+        actorId: params.actorId,
+        requestId: params.requestId,
+        metadata: { match_id: params.matchId, official_id: params.officialId, role_only: true },
+      });
+
+      return { assignment: updated, bumpedRevision: false };
+    }
+
+    // New assignment: bumps scheduling revision
     await this.incrementCompetitionRevision(params.competitionId, executor);
 
     const rows = await executor.unsafe<MatchOfficialAssignmentRecord>(
@@ -482,13 +608,7 @@ export class OfficialRepository {
        )
        VALUES ($1, $2, $3, $4, $5)
        RETURNING ${ASSIGNMENT_COLUMNS}`,
-      [
-        params.competitionId,
-        params.organisationId,
-        params.matchId,
-        params.officialId,
-        params.assignedRole ? params.assignedRole.trim() : null,
-      ],
+      [params.competitionId, params.organisationId, params.matchId, params.officialId, newRole],
     );
     const created = rows[0]!;
 

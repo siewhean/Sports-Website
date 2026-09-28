@@ -325,4 +325,172 @@ describe("OfficialRepository (PostgreSQL Integration)", () => {
     const finalRev = await getRevision(ctx.competitionId);
     expect(finalRev).toBe(initialRev + 2);
   });
+
+  describe("Checkpoint 2B Semantic No-Op & Archived Assignment Hardening", () => {
+    it("satisfies the 10 hardening scenarios", async () => {
+      const ctx = await createCompetitionContext("CP2BHardening");
+      const rev0 = await getRevision(ctx.competitionId);
+
+      const officialA = await repo.createOfficial({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        name: "Official A",
+      });
+      const officialB = await repo.createOfficial({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        name: "Official B",
+      });
+      const officialArchived = await repo.createOfficial({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        name: "Official Archived",
+      });
+      await repo.archiveOfficial({
+        competitionId: ctx.competitionId,
+        officialId: officialArchived.id,
+      });
+
+      // Initially assign A to matchId1 (+1 revision)
+      const initAssign = await repo.assignOfficial({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        matchId: ctx.matchId1,
+        officialId: officialA.id,
+        assignedRole: "lead",
+      });
+      expect(initAssign.bumpedRevision).toBe(true);
+      const revAfterAssignA = await getRevision(ctx.competitionId);
+      expect(revAfterAssignA).toBe(rev0 + 1);
+
+      // Scenario 1: Set availability for assigned A: [09:00..12:00] (+1 revision)
+      const setAvailA = await repo.replaceAvailability({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        officialId: officialA.id,
+        windows: [{ startsAt: "2026-09-01T09:00:00Z", endsAt: "2026-09-01T12:00:00Z" }],
+      });
+      expect(setAvailA.bumpedRevision).toBe(true);
+      const revAfterAvailA = await getRevision(ctx.competitionId);
+      expect(revAfterAvailA).toBe(revAfterAssignA + 1);
+
+      // Scenario 1a: Assigned availability A -> same A (no bump)
+      const replayAvailA = await repo.replaceAvailability({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        officialId: officialA.id,
+        windows: [{ startsAt: "2026-09-01T09:00:00Z", endsAt: "2026-09-01T12:00:00Z" }],
+      });
+      expect(replayAvailA.bumpedRevision).toBe(false);
+      expect(await getRevision(ctx.competitionId)).toBe(revAfterAvailA);
+
+      // Scenario 2: A represented as split adjacent windows -> canonical same A (no bump)
+      const splitAdjacentAvailA = await repo.replaceAvailability({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        officialId: officialA.id,
+        windows: [
+          { startsAt: "2026-09-01T09:00:00Z", endsAt: "2026-09-01T10:30:00Z" },
+          { startsAt: "2026-09-01T10:30:00Z", endsAt: "2026-09-01T12:00:00Z" },
+        ],
+      });
+      expect(splitAdjacentAvailA.bumpedRevision).toBe(false);
+      expect(await getRevision(ctx.competitionId)).toBe(revAfterAvailA);
+
+      // Scenario 3: Assigned availability A -> different B (+1)
+      const diffAvailA = await repo.replaceAvailability({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        officialId: officialA.id,
+        windows: [{ startsAt: "2026-09-01T09:00:00Z", endsAt: "2026-09-01T13:00:00Z" }],
+      });
+      expect(diffAvailA.bumpedRevision).toBe(true);
+      const revAfterDiffAvail = await getRevision(ctx.competitionId);
+      expect(revAfterDiffAvail).toBe(revAfterAvailA + 1);
+
+      // Scenario 4: Assignment [A] -> [A] (no bump)
+      const replayAssign = await repo.replaceMatchAssignments({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        matchId: ctx.matchId1,
+        assignments: [{ officialId: officialA.id, assignedRole: "lead" }],
+      });
+      expect(replayAssign.bumpedRevision).toBe(false);
+      expect(await getRevision(ctx.competitionId)).toBe(revAfterDiffAvail);
+
+      // Scenario 5: [A role=x] -> [A role=y] (no scheduling bump)
+      const roleChange = await repo.replaceMatchAssignments({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        matchId: ctx.matchId1,
+        assignments: [{ officialId: officialA.id, assignedRole: "assistant" }],
+      });
+      expect(roleChange.bumpedRevision).toBe(false);
+      expect(await getRevision(ctx.competitionId)).toBe(revAfterDiffAvail);
+      const updatedMatchAssignments = await repo.listMatchAssignments(ctx.competitionId, ctx.matchId1);
+      expect(updatedMatchAssignments[0]?.assigned_role).toBe("assistant");
+
+      // Scenario 6: [A] -> [A,B] (+1)
+      const addB = await repo.replaceMatchAssignments({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        matchId: ctx.matchId1,
+        assignments: [
+          { officialId: officialA.id, assignedRole: "assistant" },
+          { officialId: officialB.id, assignedRole: "line_judge" },
+        ],
+      });
+      expect(addB.bumpedRevision).toBe(true);
+      const revAfterAddB = await getRevision(ctx.competitionId);
+      expect(revAfterAddB).toBe(revAfterDiffAvail + 1);
+
+      // Scenario 7: [A,B] -> [B] (+1)
+      const removeA = await repo.replaceMatchAssignments({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        matchId: ctx.matchId1,
+        assignments: [{ officialId: officialB.id, assignedRole: "line_judge" }],
+      });
+      expect(removeA.bumpedRevision).toBe(true);
+      const revAfterRemoveA = await getRevision(ctx.competitionId);
+      expect(revAfterRemoveA).toBe(revAfterAddB + 1);
+
+      // Scenario 8: [] -> [] (no bump)
+      await repo.unassignOfficial({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        matchId: ctx.matchId1,
+        officialId: officialB.id,
+      });
+      const revEmpty = await getRevision(ctx.competitionId);
+      const emptyToEmpty = await repo.replaceMatchAssignments({
+        competitionId: ctx.competitionId,
+        organisationId: ctx.organisationId,
+        matchId: ctx.matchId1,
+        assignments: [],
+      });
+      expect(emptyToEmpty.bumpedRevision).toBe(false);
+      expect(await getRevision(ctx.competitionId)).toBe(revEmpty);
+
+      // Scenario 9: Assign archived official -> rejected
+      await expect(
+        repo.assignOfficial({
+          competitionId: ctx.competitionId,
+          organisationId: ctx.organisationId,
+          matchId: ctx.matchId1,
+          officialId: officialArchived.id,
+        }),
+      ).rejects.toThrow(/archived/i);
+
+      // Scenario 10: Replace set containing archived official -> rejected
+      await expect(
+        repo.replaceMatchAssignments({
+          competitionId: ctx.competitionId,
+          organisationId: ctx.organisationId,
+          matchId: ctx.matchId1,
+          assignments: [{ officialId: officialArchived.id }],
+        }),
+      ).rejects.toThrow(/archived/i);
+    });
+  });
 });
