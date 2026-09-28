@@ -155,6 +155,7 @@ describe("Gate C access source guards", () => {
     for (const [handler, mutation] of [
       ["const requestTakeover = async () =>", "await port.requestTakeover"],
       ["const startScoring = async () =>", "await port.appendEvent"],
+      ["const advancePeriod = async", "await port.appendEvent"],
       ["const recordAction = async", "await port.appendEvent"],
       ["const reverseAction = async", "await port.appendEvent"],
     ] as const) {
@@ -176,8 +177,8 @@ describe("Gate C access source guards", () => {
     expect(finaliseCounterIndex).toBeGreaterThan(finaliseHandlerIndex);
     expect(finaliseDrainIndex).toBeGreaterThan(finaliseCounterIndex);
     expect(finaliseMutationIndex).toBeGreaterThan(finaliseDrainIndex);
-    expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(5);
-    expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(5);
+    expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(6);
+    expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(6);
   });
 });
 

@@ -206,7 +206,7 @@ describe("phase 2 browser scoring transport", () => {
     const advance = source.indexOf("const advancePeriod = async");
     const append = source.indexOf("await port.appendEvent(command)", advance);
     const selector = source.indexOf("void advancePeriod(event.target.value)", append);
-    const finalisationMessage = source.indexOf('error.code === "FINALISATION_INVALID"', selector);
+    const finalisationMessage = source.indexOf('error.code === "FINALISATION_INVALID"');
 
     expect(advance).toBeGreaterThan(-1);
     expect(source.indexOf("eventType: phase2Machine.periodChange", advance)).toBeGreaterThan(advance);
@@ -253,16 +253,145 @@ describe("phase 2 browser scoring transport", () => {
   it("guards period mutation re-entry, disables the selector, and removes the duplicate operational control", async () => {
     const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
 
-    expect(source).toContain("if (mutationInFlightRef.current > 0 || actionPending) return;");
+    // finalize() lifecycle binds actionPending and mutationInFlightRef
+    const finalizeStart = source.indexOf("const finalize = async () =>");
+    const finalizeEnd = source.indexOf('if (phase === "access" || phase === "confirm")', finalizeStart);
+    expect(finalizeStart).toBeGreaterThan(-1);
+    const finalizeBody = source.slice(finalizeStart, finalizeEnd);
+
+    expect(finalizeBody).toContain("if (mutationInFlightRef.current > 0 || actionPending) return;");
+    const mutateIndex = finalizeBody.indexOf("mutationInFlightRef.current += 1;");
+    const pendingIndex = finalizeBody.indexOf("setActionPending(true);", mutateIndex);
+    const finalizeCallIndex = finalizeBody.indexOf("await port.finalizeResult(command)", pendingIndex);
+    const finallyIndex = finalizeBody.indexOf("finally {", finalizeCallIndex);
+    const clearMutateIndex = finalizeBody.indexOf("mutationInFlightRef.current -= 1;", finallyIndex);
+    const clearPendingIndex = finalizeBody.indexOf("setActionPending(false);", finallyIndex);
+
+    expect(mutateIndex).toBeGreaterThan(-1);
+    expect(pendingIndex).toBeGreaterThan(mutateIndex);
+    expect(finalizeCallIndex).toBeGreaterThan(pendingIndex);
+    expect(finallyIndex).toBeGreaterThan(finalizeCallIndex);
+    expect(clearMutateIndex).toBeGreaterThan(finallyIndex);
+    expect(clearPendingIndex).toBeGreaterThan(finallyIndex);
+
+    // reverseAction() contains exactly one setActionPending(true) call (no duplicate)
+    const reverseStart = source.indexOf("const reverseAction = async () =>");
+    const reverseBody = source.slice(reverseStart, finalizeStart);
+    expect(reverseBody.match(/setActionPending\(true\)/g)).toHaveLength(1);
+    expect(reverseBody.match(/setActionPending\(false\)/g)).toHaveLength(1);
+
+    // Controls disabled during actionPending:
+    // Finalise button and Edit button in review mode
+    expect(source).toContain("disabled={locked || actionPending} onClick={finalize}");
+    expect(source).toContain('disabled={actionPending}\n            onClick={() => {\n              setPhase("live");');
+    // Period selector and score controls in live mode
     expect(source).toContain("disabled={locked || actionPending || !supportsPeriodAdvance}");
+    expect(source).toContain("pending={actionPending}");
     expect(source).toContain("const activeScorecardDefinition = useMemo");
     expect(source).toContain("control.id !== phase2Machine.periodChange");
     expect(source).toContain("definition={activeScorecardDefinition}");
     expect(source).toContain("scoreState.currentSegment < definition.segments.length");
     expect(source).toContain("error.detailMessage ??");
-    expect(source).toContain("disabled={locked || actionPending} onClick={finalize}");
-    expect(source).toContain("setActionPending(true)");
-    expect(source).toContain("setActionPending(false)");
+  });
+
+  it("guards against concurrent mutations while port.finalizeResult is in flight", async () => {
+    let completeFinalisation!: (value: { receiptId: string; syncState: "synced" }) => void;
+    const finalisationPromise = new Promise<{ receiptId: string; syncState: "synced" }>((resolve) => {
+      completeFinalisation = resolve;
+    });
+
+    const mockPort = {
+      finalizeResult: vi.fn().mockImplementation(() => finalisationPromise),
+      appendEvent: vi.fn().mockResolvedValue({ syncState: "synced" }),
+      recoverSession: vi.fn().mockResolvedValue(sessionView()),
+    };
+
+    let actionPending = false;
+    let mutationInFlight = 0;
+    const blockedMutations: string[] = [];
+
+    const finalize = async () => {
+      if (mutationInFlight > 0 || actionPending) {
+        blockedMutations.push("finalize");
+        return;
+      }
+      mutationInFlight += 1;
+      actionPending = true;
+      try {
+        await mockPort.finalizeResult({ matchId, score: { home: 1, away: 0 } });
+      } finally {
+        mutationInFlight -= 1;
+        actionPending = false;
+      }
+    };
+
+    const advancePeriod = async () => {
+      if (mutationInFlight > 0 || actionPending) {
+        blockedMutations.push("advancePeriod");
+        return;
+      }
+      mutationInFlight += 1;
+      actionPending = true;
+      try {
+        await mockPort.appendEvent({ eventType: "period_change" });
+      } finally {
+        mutationInFlight -= 1;
+        actionPending = false;
+      }
+    };
+
+    const recordAction = async () => {
+      if (mutationInFlight > 0 || actionPending) {
+        blockedMutations.push("recordAction");
+        return;
+      }
+      mutationInFlight += 1;
+      actionPending = true;
+      try {
+        await mockPort.appendEvent({ eventType: "goal" });
+      } finally {
+        mutationInFlight -= 1;
+        actionPending = false;
+      }
+    };
+
+    const reverseAction = async () => {
+      if (mutationInFlight > 0 || actionPending) {
+        blockedMutations.push("reverseAction");
+        return;
+      }
+      mutationInFlight += 1;
+      actionPending = true;
+      try {
+        await mockPort.appendEvent({ eventType: "reversal" });
+      } finally {
+        mutationInFlight -= 1;
+        actionPending = false;
+      }
+    };
+
+    // 1. Kick off finalisation (delayed in flight)
+    const inFlightFinalize = finalize();
+
+    expect(actionPending).toBe(true);
+    expect(mutationInFlight).toBe(1);
+
+    // 2. While in flight, Finalise, Edit, period change, and score actions are blocked
+    await finalize();
+    await advancePeriod();
+    await recordAction();
+    await reverseAction();
+
+    expect(mockPort.finalizeResult).toHaveBeenCalledTimes(1);
+    expect(mockPort.appendEvent).not.toHaveBeenCalled();
+    expect(blockedMutations).toEqual(["finalize", "advancePeriod", "recordAction", "reverseAction"]);
+
+    // 3. Resolve the in-flight finalisation
+    completeFinalisation({ receiptId: `${matchId}:v2`, syncState: "synced" });
+    await inFlightFinalize;
+
+    expect(actionPending).toBe(false);
+    expect(mutationInFlight).toBe(0);
   });
 
   it("distinguishes a lapsed writer lease from a genuinely expired scoring session", () => {

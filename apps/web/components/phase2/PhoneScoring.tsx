@@ -1286,7 +1286,6 @@ export function PhoneScoring({
     setActionPending(true);
     setInteractionError("");
     sessionRefreshFenceRef.current.cancel();
-    setActionPending(true);
     setAnnouncement(phase2Copy.scoreControlsPending);
     let reversalCommand: ScoringEventCommand | null = null;
     try {
@@ -1350,6 +1349,7 @@ export function PhoneScoring({
       return;
     }
     mutationInFlightRef.current += 1;
+    setActionPending(true);
     setInteractionError("");
     await sessionRefreshFenceRef.current.waitForIdle();
     setAnnouncement(phase2Copy.scoreControlsPending);
@@ -1380,6 +1380,7 @@ export function PhoneScoring({
     } finally {
       sessionRefreshFenceRef.current.cancel();
       mutationInFlightRef.current -= 1;
+      setActionPending(false);
     }
   };
 
