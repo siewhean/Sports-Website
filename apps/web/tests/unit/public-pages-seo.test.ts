@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { messages } from "@matchday/ui";
@@ -12,21 +12,27 @@ import robots from "../../app/robots.js";
 import sitemap from "../../app/sitemap.js";
 import { publicCompetitionJsonLd, serializeJsonLd } from "../../lib/public-competition-json-ld.js";
 
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: () => undefined,
+  }),
+}));
+
 describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => {
   const publicOrigin = "https://preview.matchday.test";
 
-  it("renders terms of service page", () => {
-    const html = renderToString(React.createElement(TermsPage));
+  it("renders terms of service page", async () => {
+    const html = renderToString(await TermsPage());
     expect(html).toContain(messages.legal.termsTitle);
   });
 
-  it("renders privacy policy page", () => {
-    const html = renderToString(React.createElement(PrivacyPage));
+  it("renders privacy policy page", async () => {
+    const html = renderToString(await PrivacyPage());
     expect(html).toContain(messages.legal.privacyTitle);
   });
 
-  it("renders cookie policy page", () => {
-    const html = renderToString(React.createElement(CookiesPage));
+  it("renders cookie policy page", async () => {
+    const html = renderToString(await CookiesPage());
     expect(html).toContain(messages.legal.cookiesTitle);
   });
 
@@ -37,8 +43,8 @@ describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => 
     expect(html).toContain(messages.support.contactEmail);
   });
 
-  it("renders pricing page with commercial tiers", () => {
-    const html = renderToString(React.createElement(PricingPage));
+  it("renders pricing page with commercial tiers", async () => {
+    const html = renderToString(await PricingPage());
     expect(html).toContain(messages.pricing.title);
     expect(html).toContain(messages.pricing.starterName);
     expect(html).toContain(messages.pricing.eventPassName);

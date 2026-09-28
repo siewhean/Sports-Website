@@ -55,7 +55,7 @@ function safeError(
   clearCookie = false,
   explicitState?: SafeError,
   sourceHeaders?: Headers,
-  machine?: { code?: string; current_sequence?: number; current_aggregate_version?: number },
+  machine?: { code?: string; message?: string; current_sequence?: number; current_aggregate_version?: number },
 ): Response {
   const state: SafeError =
     explicitState ??
@@ -70,10 +70,13 @@ function safeError(
             : [400, 401, 403].includes(status)
               ? "access"
               : "unavailable");
+  const exposedMessage =
+    status === 422 && machine?.code && EXPOSED_ERROR_CODES.has(machine.code) ? machine.message : undefined;
   const response = jsonResponse(
     {
       error: state,
       ...(machine?.code && EXPOSED_ERROR_CODES.has(machine.code) ? { code: machine.code } : {}),
+      ...(exposedMessage ? { message: exposedMessage } : {}),
       ...(Number.isSafeInteger(machine?.current_sequence) ? { current_sequence: machine?.current_sequence } : {}),
       ...(Number.isSafeInteger(machine?.current_aggregate_version)
         ? { current_aggregate_version: machine?.current_aggregate_version }
@@ -662,6 +665,7 @@ async function upstreamSafeError(response: Response, clearCookie = false): Promi
       ? ((payload as Record<string, unknown>).error as Record<string, unknown>)
       : null;
   const code = envelope && typeof envelope.code === "string" ? envelope.code : "";
+  const message = envelope ? (stringValue(envelope.message, 500) ?? undefined) : undefined;
   const currentSequence =
     envelope && Number.isSafeInteger(envelope.current_sequence) ? Number(envelope.current_sequence) : undefined;
   const currentAggregateVersion =
@@ -678,6 +682,7 @@ async function upstreamSafeError(response: Response, clearCookie = false): Promi
           : undefined;
   return safeError(exposedStatus(response.status), clearCookie, state, response.headers, {
     code,
+    message,
     current_sequence: currentSequence,
     current_aggregate_version: currentAggregateVersion,
   });

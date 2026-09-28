@@ -4,6 +4,7 @@ import { PublicCompetition } from "@/components/phase2/PublicCompetition";
 import { phase2Copy } from "@/lib/phase2";
 import { getCompetitionView } from "@/lib/phase2-public.server";
 import { publicCompetitionJsonLd, serializeJsonLd } from "@/lib/public-competition-json-ld";
+import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -18,7 +19,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function CompetitionPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const competition = await getCompetitionView(slug);
+  const [competition, session] = await Promise.all([getCompetitionView(slug), readCurrentIdentitySession()]);
   if (!competition) notFound();
   const jsonLd = publicCompetitionJsonLd(competition, process.env.MATCHDAY_PUBLIC_ORIGIN);
 
@@ -27,7 +28,10 @@ export default async function CompetitionPage({ params }: { params: Promise<{ sl
       {jsonLd ? (
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }} />
       ) : null}
-      <PublicCompetition competition={competition} />
+      <PublicCompetition
+        competition={competition}
+        viewer={session.status === "authenticated" ? session.identity : null}
+      />
     </>
   );
 }

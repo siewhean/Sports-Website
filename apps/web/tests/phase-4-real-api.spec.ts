@@ -163,6 +163,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await page.getByLabel("Public address").fill(slug);
   await page.getByLabel("Sport").selectOption("canoe_polo");
   await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
 
   // Step 1: Venue, Address, Locality, Country
   await page.getByLabel("Venue name").fill("Real E2E Arena");
@@ -170,6 +171,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await page.getByLabel("City or locality (optional)").fill("Singapore");
   await page.getByLabel("Country code").fill("SG");
   await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Dates and time" })).toBeVisible();
 
   // Step 2: Dates, Timezone, Locale + submit
   await page.getByLabel("Start date").fill("2027-08-01");

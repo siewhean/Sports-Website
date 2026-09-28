@@ -25,7 +25,7 @@ export type PublicMatchResult = {
   away: PublicParticipant;
   home_score: number;
   away_score: number;
-  state: "final" | "corrected";
+  state: "in_progress" | "final" | "corrected";
   updated_at: string;
 };
 

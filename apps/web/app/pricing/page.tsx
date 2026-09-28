@@ -1,6 +1,7 @@
 import { SiteHeader, SiteFooter } from "@/components/foundation/SiteChrome";
 import { messages } from "@matchday/ui";
 import styles from "./PricingPage.module.css";
+import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export const metadata = {
   title: messages.metadata.pricingTitle,
@@ -42,10 +43,12 @@ const TIERS = [
   },
 ];
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  const session = await readCurrentIdentitySession();
+  const viewer = session.status === "authenticated" ? session.identity : null;
   return (
     <div className={styles.container}>
-      <SiteHeader />
+      <SiteHeader viewer={viewer} />
       <main className={styles.main}>
         <div className={styles.header}>
           <h1 className={styles.title}>{messages.pricing.title}</h1>

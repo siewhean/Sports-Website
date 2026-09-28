@@ -64,6 +64,9 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   await expect(page.locator(".p2-event-log")).toContainText("Aisha Tan");
   await expect(page.getByText("1 event pending sync")).toBeVisible();
 
+  await page.getByLabel("Period").selectOption("2");
+  await expect(page.getByLabel("Period")).toHaveValue("2");
+
   await page.getByRole("button", { name: "Review final score" }).click();
   await expect(page.getByRole("heading", { name: "Marina Blue 1–0 Harbour Gold" })).toBeVisible();
   await page.getByRole("button", { name: "Confirm final result" }).click();

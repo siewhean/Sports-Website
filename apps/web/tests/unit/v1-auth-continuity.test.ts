@@ -51,6 +51,35 @@ describe("V1 authenticated competition continuity", () => {
     expect(identityRouteSource).toContain("session.identity.displayName");
   });
 
+  it("passes authenticated server identity into public page headers before hydration", async () => {
+    const paths = [
+      "../../app/page.tsx",
+      "../../app/competitions/[slug]/page.tsx",
+      "../../app/competitions/singapore-open/page.tsx",
+      "../../app/pricing/page.tsx",
+      "../../app/privacy/page.tsx",
+      "../../app/terms/page.tsx",
+      "../../app/cookies/page.tsx",
+    ];
+
+    for (const path of paths) {
+      const source = await readFile(new URL(path, import.meta.url), "utf8");
+      expect(source).toContain("readCurrentIdentitySession");
+      expect(source).toContain('session.status === "authenticated"');
+    }
+
+    const marketing = await readFile(new URL("../../components/marketing/MarketingHome.tsx", import.meta.url), "utf8");
+    const publicCompetition = await readFile(
+      new URL("../../components/phase2/PublicCompetition.tsx", import.meta.url),
+      "utf8",
+    );
+    const legal = await readFile(new URL("../../components/foundation/LegalPage.tsx", import.meta.url), "utf8");
+
+    expect(marketing).toContain("<SiteHeader inverse viewer={viewer} />");
+    expect(publicCompetition).toContain("<SiteHeader viewer={viewer} />");
+    expect(legal).toContain("<SiteHeader viewer={viewer} />");
+  });
+
   it("hydrates the public competitions header from the authenticated identity", async () => {
     const pageSource = await readFile(new URL("../../app/competitions/page.tsx", import.meta.url), "utf8");
     const listSource = await readFile(
