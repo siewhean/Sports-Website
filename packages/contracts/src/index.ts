@@ -218,3 +218,4 @@ export type {
   CompetitionSponsor,
 } from "./billing.js";
 export type { BillingSummary, BillingWebhookPayload } from "./billing.js";
+export * from "./officials.js";

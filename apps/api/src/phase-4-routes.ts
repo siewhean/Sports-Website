@@ -6,6 +6,7 @@ import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase4FormatBuilderDocument } from "@matchday/contracts";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
+import { registerPhase4OfficialRoutes } from "./phase-4-official-routes.js";
 
 const Id = Type.String({ format: "uuid" });
 const IdempotencyKey = Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" });
@@ -1150,4 +1151,6 @@ export async function registerPhase4Routes(
       return { ...maintenance, queue_recovery: queueRecovery };
     },
   );
+
+  await registerPhase4OfficialRoutes(app, options);
 }
