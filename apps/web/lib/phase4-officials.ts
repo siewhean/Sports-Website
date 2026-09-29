@@ -23,6 +23,20 @@ export const phase4OfficialsCopy = {
   errorBody: "Unable to load officials at this time.",
 } as const;
 
+export const phase4OfficialsMachine = {
+  validationError: "VALIDATION_ERROR",
+  commandResponseInvalid: "COMMAND_RESPONSE_INVALID",
+  authRequired: "AUTH_REQUIRED",
+  apiUnavailable: "API_UNAVAILABLE",
+  upstreamError: "UPSTREAM_ERROR",
+  noStore: "no-store",
+  cacheControl: "cache-control",
+  get: "GET",
+  post: "POST",
+  patch: "PATCH",
+  put: "PUT",
+} as const;
+
 export type OfficialView = {
   id: string;
   competitionId: string;
@@ -65,24 +79,154 @@ export type OfficialWorkspaceDocument = {
   canEdit: boolean;
 };
 
-function record(value: unknown): Record<string, unknown> | null {
+export function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
 
-function exact(value: Record<string, unknown>, keys: readonly string[]): boolean {
+export function exact(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).sort().join(",") === [...keys].sort().join(",");
 }
 
-function nonEmpty(value: unknown): value is string {
+export function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function isoDate(value: unknown): value is string {
+export function isoDate(value: unknown): value is string {
   if (typeof value !== "string" || !value) return false;
   const time = Date.parse(value);
   return Number.isFinite(time);
+}
+
+export function isOfficialResponse(value: unknown): boolean {
+  const row = record(value);
+  if (!row || !exact(row, ["id", "competition_id", "name", "default_role", "archived", "created_at", "updated_at"])) {
+    return false;
+  }
+  if (!nonEmpty(row.id) || !nonEmpty(row.competition_id)) return false;
+  if (typeof row.name !== "string" || row.name.length < 1 || row.name.length > 80) return false;
+  if (
+    row.default_role !== null &&
+    (typeof row.default_role !== "string" || row.default_role.length < 1 || row.default_role.length > 40)
+  ) {
+    return false;
+  }
+  if (typeof row.archived !== "boolean") return false;
+  if (!isoDate(row.created_at) || !isoDate(row.updated_at)) return false;
+  return true;
+}
+
+export function isOfficialMutationResponse(value: unknown): boolean {
+  const root = record(value);
+  if (!root || !exact(root, ["official", "bumped_revision"])) return false;
+  if (typeof root.bumped_revision !== "boolean") return false;
+  return isOfficialResponse(root.official);
+}
+
+export function isAvailabilityMutationResponse(value: unknown): boolean {
+  const root = record(value);
+  if (!root || !exact(root, ["windows", "bumped_revision"])) return false;
+  if (typeof root.bumped_revision !== "boolean") return false;
+  if (!Array.isArray(root.windows)) return false;
+  for (const w of root.windows) {
+    const row = record(w);
+    if (!row || !exact(row, ["starts_at", "ends_at"])) return false;
+    if (!isoDate(row.starts_at) || !isoDate(row.ends_at)) return false;
+    if (Date.parse(row.starts_at) >= Date.parse(row.ends_at)) return false;
+  }
+  return true;
+}
+
+export function isMatchOfficialsMutationResponse(value: unknown): boolean {
+  const root = record(value);
+  if (!root || !exact(root, ["assignments", "bumped_revision"])) return false;
+  if (typeof root.bumped_revision !== "boolean") return false;
+  if (!Array.isArray(root.assignments)) return false;
+  for (const a of root.assignments) {
+    const row = record(a);
+    if (!row) return false;
+    const hasOfficial = "official" in row;
+    const expectedKeys = hasOfficial
+      ? ["assigned_role", "match_id", "official", "official_id"]
+      : ["assigned_role", "match_id", "official_id"];
+    if (!exact(row, expectedKeys)) return false;
+    if (!nonEmpty(row.match_id) || !nonEmpty(row.official_id)) return false;
+    if (
+      row.assigned_role !== null &&
+      (typeof row.assigned_role !== "string" || row.assigned_role.length < 1 || row.assigned_role.length > 40)
+    ) {
+      return false;
+    }
+    if (hasOfficial && row.official !== undefined) {
+      const off = record(row.official);
+      if (!off || !exact(off, ["archived", "default_role", "id", "name"])) return false;
+      if (!nonEmpty(off.id)) return false;
+      if (typeof off.name !== "string" || off.name.length < 1 || off.name.length > 80) return false;
+      if (
+        off.default_role !== null &&
+        (typeof off.default_role !== "string" || off.default_role.length < 1 || off.default_role.length > 40)
+      ) {
+        return false;
+      }
+      if (typeof off.archived !== "boolean") return false;
+    }
+  }
+  return true;
+}
+
+export function isOfficialWorkspaceResponse(value: unknown): boolean {
+  const root = record(value);
+  if (!root || !exact(root, ["officials", "availability", "assignments"])) return false;
+  if (!Array.isArray(root.officials) || !Array.isArray(root.assignments)) return false;
+  const availabilityRaw = record(root.availability);
+  if (!availabilityRaw) return false;
+
+  for (const item of root.officials) {
+    if (!isOfficialResponse(item)) return false;
+  }
+
+  for (const [officialId, windowsRaw] of Object.entries(availabilityRaw)) {
+    if (!nonEmpty(officialId) || !Array.isArray(windowsRaw)) return false;
+    for (const w of windowsRaw) {
+      const windowRow = record(w);
+      if (!windowRow || !exact(windowRow, ["starts_at", "ends_at"])) return false;
+      if (!isoDate(windowRow.starts_at) || !isoDate(windowRow.ends_at)) return false;
+      if (Date.parse(windowRow.starts_at) >= Date.parse(windowRow.ends_at)) return false;
+    }
+  }
+
+  for (const item of root.assignments) {
+    const row = record(item);
+    if (!row) return false;
+    const hasOfficial = "official" in row;
+    const expectedKeys = hasOfficial
+      ? ["assigned_role", "match_id", "official", "official_id"]
+      : ["assigned_role", "match_id", "official_id"];
+    if (!exact(row, expectedKeys)) return false;
+    if (!nonEmpty(row.match_id) || !nonEmpty(row.official_id)) return false;
+    if (
+      row.assigned_role !== null &&
+      (typeof row.assigned_role !== "string" || row.assigned_role.length < 1 || row.assigned_role.length > 40)
+    ) {
+      return false;
+    }
+    if (hasOfficial && row.official !== undefined) {
+      const off = record(row.official);
+      if (!off || !exact(off, ["archived", "default_role", "id", "name"])) return false;
+      if (!nonEmpty(off.id)) return false;
+      if (typeof off.name !== "string" || off.name.length < 1 || off.name.length > 80) return false;
+      if (
+        off.default_role !== null &&
+        (typeof off.default_role !== "string" || off.default_role.length < 1 || off.default_role.length > 40)
+      ) {
+        return false;
+      }
+      if (typeof off.archived !== "boolean") return false;
+    }
+  }
+
+  return true;
 }
 
 export function parseOfficialWorkspaceResponse(
