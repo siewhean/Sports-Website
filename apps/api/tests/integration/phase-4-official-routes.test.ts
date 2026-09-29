@@ -723,6 +723,25 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
       expect([ErrorCode.OFFICIAL_AVAILABILITY_INVALID, "VALIDATION_ERROR"]).toContain(JSON.parse(res.body).error.code);
     });
 
+    it("rejects window containing unknown nested field with 400 REQUEST_INVALID", async () => {
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials/${officialId}/availability`,
+        headers: ownerHeaders(),
+        body: {
+          windows: [
+            {
+              starts_at: "2027-08-01T09:00:00.000Z",
+              ends_at: "2027-08-01T12:00:00.000Z",
+              extra_property: "disallowed",
+            },
+          ],
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe(ErrorCode.REQUEST_INVALID);
+    });
+
     it("merges overlapping and contiguous intervals into canonical windows", async () => {
       const res = await app.inject({
         method: "PUT",
@@ -862,6 +881,24 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
       });
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body).error.code).toBe(ErrorCode.OFFICIAL_ASSIGNMENT_INVALID);
+    });
+
+    it("rejects match assignment containing unknown nested field such as role with 400 REQUEST_INVALID", async () => {
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
+        headers: ownerHeaders(),
+        body: {
+          assignments: [
+            {
+              official_id: officialAId,
+              role: "lead", // unknown nested field; contract requires assigned_role
+            },
+          ],
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe(ErrorCode.REQUEST_INVALID);
     });
 
     it("rejects assigning an archived official with 409 OFFICIAL_ARCHIVED", async () => {
@@ -1200,7 +1237,7 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
         method: "PUT",
         url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
         headers: ownerHeaders(),
-        body: { assignments: [{ official_id: canonOfficialId, role: "lead" }] },
+        body: { assignments: [{ official_id: canonOfficialId, assigned_role: "lead" }] },
       });
       expect(assignRes.statusCode).toBe(200);
 
@@ -1412,9 +1449,10 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
         randomUUID(),
       );
 
-      const [jobRowA] = await client<{ input_snapshot: ScheduleJobInput }[]>`
-        SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${genA.job.id}`;
+      const [jobRowA] = await client<{ input_snapshot: ScheduleJobInput; problem_hash: string }[]>`
+        SELECT input_snapshot, problem_hash FROM schedule_generation_jobs WHERE id=${genA.job.id}`;
       const snapA = jobRowA!.input_snapshot;
+      const problemHashA = jobRowA!.problem_hash;
       await client`DELETE FROM schedule_generation_jobs WHERE id=${genA.job.id}`;
 
       // Scenario B:
@@ -1462,9 +1500,10 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
         randomUUID(),
       );
 
-      const [jobRowB] = await client<{ input_snapshot: ScheduleJobInput }[]>`
-        SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${genB.job.id}`;
+      const [jobRowB] = await client<{ input_snapshot: ScheduleJobInput; problem_hash: string }[]>`
+        SELECT input_snapshot, problem_hash FROM schedule_generation_jobs WHERE id=${genB.job.id}`;
       const snapB = jobRowB!.input_snapshot;
+      const problemHashB = jobRowB!.problem_hash;
       await client`DELETE FROM schedule_generation_jobs WHERE id=${genB.job.id}`;
 
       // Assert deterministic match official IDs ordering (sorted by official UUID)
@@ -1480,6 +1519,11 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
       expect(off1AvailA).toHaveLength(1);
       expect(off1AvailA![0]!.start_epoch_ms).toBe(Date.parse("2027-08-01T01:00:00Z"));
       expect(off1AvailA![0]!.end_epoch_ms).toBe(Date.parse("2027-08-01T03:00:00Z"));
+
+      // Assert exact DB problem_hash equality
+      expect(problemHashA).toBeDefined();
+      expect(problemHashA).toMatch(/^[0-9a-f]{64}$/);
+      expect(problemHashA).toBe(problemHashB);
     });
   });
 

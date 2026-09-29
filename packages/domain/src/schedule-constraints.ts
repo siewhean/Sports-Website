@@ -1888,3 +1888,87 @@ export function toScheduleJobInput(
     },
   };
 }
+
+/**
+ * Analyzes a schedule problem when no feasible schedule can be found (or during preflight)
+ * to pinpoint exact official availability and concurrency conflicts.
+ */
+export function diagnoseScheduleInfeasibility(problem: ScheduleProblem): readonly ScheduleViolation[] {
+  const violations: ScheduleViolation[] = [];
+  const officialAvailability = problem.constraints.officialAvailability;
+  const isRequired = officialAvailability.mode === "required";
+
+  // 1. Check for matches with assigned officials who have NO feasible slots in the problem
+  for (const match of problem.matches) {
+    if (!match.officialIds || match.officialIds.length === 0) continue;
+
+    for (const officialId of match.officialIds) {
+      const windows = officialAvailability.value.byOfficialId[officialId] ?? [];
+
+      if (isRequired) {
+        // Find if any slot in the entire problem can accommodate this match duration within the official's availability
+        const hasFeasibleSlot = problem.slots.some((slot) => {
+          const matchEnd = slot.startEpochMs + match.durationMinutes * MINUTE_MS;
+          if (matchEnd > slot.endEpochMs) return false;
+          return windows.some((window) => slot.startEpochMs >= window.startEpochMs && matchEnd <= window.endEpochMs);
+        });
+
+        if (!hasFeasibleSlot) {
+          violations.push({
+            code: "official_unavailable",
+            severity: "required",
+            matchIds: [match.id],
+            message: `Official ${officialId} has no available window matching any valid slot for match ${match.id}`,
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Check for official over-allocation (maximum concurrent/sequential match capacity)
+  // For each official, check if the number of matches assigned exceeds the maximum number of
+  // non-overlapping slots in the problem during the official's available hours.
+  const matchesByOfficial = new Map<string, SchedulingMatch[]>();
+  for (const match of problem.matches) {
+    for (const officialId of match.officialIds ?? []) {
+      const list = matchesByOfficial.get(officialId) ?? [];
+      list.push(match);
+      matchesByOfficial.set(officialId, list);
+    }
+  }
+
+  for (const [officialId, assignedMatches] of matchesByOfficial.entries()) {
+    if (assignedMatches.length <= 1) continue;
+
+    // Filter problem slots to those where the official is available (if required)
+    const windows = officialAvailability.value.byOfficialId[officialId] ?? [];
+    const validSlots = isRequired
+      ? problem.slots.filter((slot) =>
+          windows.some((w) => slot.startEpochMs >= w.startEpochMs && slot.endEpochMs <= w.endEpochMs),
+        )
+      : problem.slots;
+
+    // Find the maximum number of mutually non-overlapping slots from validSlots
+    // Standard greedy interval scheduling algorithm: sort by end time, pick greedily
+    const sortedSlots = [...validSlots].sort((a, b) => a.endEpochMs - b.endEpochMs);
+    let maxSequentialSlots = 0;
+    let lastEnd = -Infinity;
+    for (const slot of sortedSlots) {
+      if (slot.startEpochMs >= lastEnd) {
+        maxSequentialSlots += 1;
+        lastEnd = slot.endEpochMs;
+      }
+    }
+
+    if (assignedMatches.length > maxSequentialSlots) {
+      violations.push({
+        code: "official_overlap",
+        severity: "hard",
+        matchIds: assignedMatches.map((m) => m.id),
+        message: `Official ${officialId} is assigned to ${assignedMatches.length} matches but only ${maxSequentialSlots} non-overlapping slots are available`,
+      });
+    }
+  }
+
+  return violations;
+}

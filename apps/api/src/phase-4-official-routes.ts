@@ -31,8 +31,12 @@ function strict<T extends Record<string, TSchema>>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
 }
 
-function rejectUnknownBodyFields(allowed: readonly string[]) {
+function rejectUnknownBodyFields(
+  allowed: readonly string[],
+  nestedArray?: { property: string; allowed: readonly string[] },
+) {
   const expected = new Set(allowed);
+  const nestedExpected = nestedArray ? new Set(nestedArray.allowed) : null;
   return async (request: FastifyRequest) => {
     const body = request.body;
     if (
@@ -42,6 +46,26 @@ function rejectUnknownBodyFields(allowed: readonly string[]) {
       Object.keys(body).some((field) => !expected.has(field))
     )
       throw new ApiError(400, ErrorCode.REQUEST_INVALID, "Request body contains an unknown field");
+
+    if (nestedArray && typeof body === "object" && body !== null && !Array.isArray(body)) {
+      const arr = (body as Record<string, unknown>)[nestedArray.property];
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          if (
+            typeof item === "object" &&
+            item !== null &&
+            !Array.isArray(item) &&
+            Object.keys(item).some((field) => !nestedExpected!.has(field))
+          ) {
+            throw new ApiError(
+              400,
+              ErrorCode.REQUEST_INVALID,
+              `Nested item in ${nestedArray.property} contains an unknown field`,
+            );
+          }
+        }
+      }
+    }
   };
 }
 
@@ -338,7 +362,7 @@ export async function registerPhase4OfficialRoutes(
     }>(
       `${prefix}/competitions/:competitionId/officials/:officialId/availability`,
       {
-        preValidation: rejectUnknownBodyFields(["windows"]),
+        preValidation: rejectUnknownBodyFields(["windows"], { property: "windows", allowed: ["starts_at", "ends_at"] }),
         schema: {
           ...mutation,
           params: strict({ competitionId: Id, officialId: Id }),
@@ -385,7 +409,10 @@ export async function registerPhase4OfficialRoutes(
     }>(
       `${prefix}/competitions/:competitionId/matches/:matchId/officials`,
       {
-        preValidation: rejectUnknownBodyFields(["assignments"]),
+        preValidation: rejectUnknownBodyFields(["assignments"], {
+          property: "assignments",
+          allowed: ["official_id", "assigned_role"],
+        }),
         schema: {
           ...mutation,
           params: strict({ competitionId: Id, matchId: Id }),

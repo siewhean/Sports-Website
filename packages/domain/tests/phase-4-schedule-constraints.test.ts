@@ -4,6 +4,7 @@ import {
   createDefaultFormatTemplates,
   assertResolvedMatchParticipants,
   deriveSchedulingMatches,
+  diagnoseScheduleInfeasibility,
   evaluateScheduleQuality,
   generateConstraintAwareSchedule,
   generateScheduleCandidates,
@@ -890,6 +891,43 @@ describe("Phase 4 golden schedule oracles", () => {
         }),
       );
       expect(() => generateConstraintAwareSchedule(impossibleAvailability)).toThrow(/No valid slot remains/);
+    });
+
+    it("diagnoses impossible official constraints into structured violations", () => {
+      // 1. Official unavailable diagnosis
+      const m1 = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-eta"] });
+      const slotT0 = slots(1, 1, 30);
+      const impossibleAvailability = problem(
+        [m1],
+        slotT0,
+        constraints({
+          officialAvailability: setting("required", {
+            byOfficialId: {
+              "official-eta": [{ startEpochMs: START + 120 * MINUTE_MS, endEpochMs: START + 150 * MINUTE_MS }],
+            },
+          }),
+        }),
+      );
+      const diag1 = diagnoseScheduleInfeasibility(impossibleAvailability);
+      expect(diag1).toHaveLength(1);
+      expect(diag1[0]).toMatchObject({
+        code: "official_unavailable",
+        severity: "required",
+        matchIds: ["m1"],
+      });
+
+      // 2. Official overlap / over-allocation diagnosis
+      const m2 = simpleMatch("m2", ["t1", "t2"], [], { officialIds: ["official-zeta"] });
+      const m3 = simpleMatch("m3", ["t3", "t4"], [], { officialIds: ["official-zeta"] });
+      const simultaneousOnlySlots = slots(2, 2, 30); // 2 slots on 2 areas at same time -> 1 sequential slot max
+      const overAllocated = problem([m2, m3], simultaneousOnlySlots, constraints());
+      const diag2 = diagnoseScheduleInfeasibility(overAllocated);
+      expect(diag2).toHaveLength(1);
+      expect(diag2[0]).toMatchObject({
+        code: "official_overlap",
+        severity: "hard",
+        matchIds: ["m2", "m3"],
+      });
     });
   });
 });

@@ -1,8 +1,12 @@
 import type { ScheduleJobInput, ScheduleJobResult } from "@matchday/contracts";
-import { describe, expect, it } from "vitest";
+import { diagnoseScheduleInfeasibility } from "@matchday/domain";
+import { describe, expect, it, vi } from "vitest";
 
-import { DomainScheduleOptimizer } from "../../src/domain-optimizer.js";
-import { scheduleInput } from "../fixtures.js";
+import { deterministicJsonHash } from "../../src/canonical.js";
+import { DomainScheduleOptimizer, toProblem } from "../../src/domain-optimizer.js";
+import type { ClaimedScheduleJob, ScheduleJobStore } from "../../src/ports.js";
+import { ScheduleJobProcessor } from "../../src/processor.js";
+import { executionContext, scheduleInput } from "../fixtures.js";
 
 const START = Date.UTC(2026, 6, 20, 1, 0); // 09:00 Asia/Singapore
 const MINUTE_MS = 60_000;
@@ -1129,6 +1133,223 @@ describe("SCH-006: Scheduler Worker Official Constraint Activation", () => {
 
     const verified = await optimizer.verifyCandidate(input, fixedCandidate);
     expect(verified).toBeNull();
+  });
+
+  it("diagnoses impossible official schedules into structured violations for organizer UI", () => {
+    // Case 1: Assigned official unavailable for all slots
+    const base = baseInput("pitch-1");
+    const inputUnavailable: ScheduleJobInput = {
+      ...base,
+      matches: [
+        {
+          match_id: "match-unavail",
+          division_id: "division-1",
+          duration_minutes: 30,
+          dependency_match_ids: [],
+          possible_entry_ids: ["team-a", "team-b"],
+          official_ids: ["official-x"],
+          is_championship_final: false,
+        },
+      ],
+      slots: [
+        {
+          slot_id: "slot-0900",
+          interval_id: "i-1",
+          area_id: "pitch-1",
+          start_epoch_ms: START,
+          end_epoch_ms: START + 30 * MINUTE_MS,
+        },
+      ],
+      constraints: {
+        ...base.constraints,
+        official_availability: {
+          mode: "required",
+          value: {
+            by_official_id: {
+              // Official only available at 12:00, but slot is at 09:00
+              "official-x": [{ start_epoch_ms: START + 180 * MINUTE_MS, end_epoch_ms: START + 240 * MINUTE_MS }],
+            },
+          },
+        },
+      },
+    };
+
+    const problemUnavailable = toProblem(inputUnavailable);
+    const diagUnavailable = diagnoseScheduleInfeasibility(problemUnavailable);
+    expect(diagUnavailable).toHaveLength(1);
+    expect(diagUnavailable[0]).toMatchObject({
+      code: "official_unavailable",
+      severity: "required",
+      matchIds: ["match-unavail"],
+    });
+
+    // Case 2: Official overlap / over-allocation
+    const inputOverAllocated: ScheduleJobInput = {
+      ...base,
+      matches: [
+        {
+          match_id: "m1",
+          division_id: "division-1",
+          duration_minutes: 30,
+          dependency_match_ids: [],
+          possible_entry_ids: ["team-a", "team-b"],
+          official_ids: ["official-shared"],
+          is_championship_final: false,
+        },
+        {
+          match_id: "m2",
+          division_id: "division-1",
+          duration_minutes: 30,
+          dependency_match_ids: [],
+          possible_entry_ids: ["team-c", "team-d"],
+          official_ids: ["official-shared"],
+          is_championship_final: false,
+        },
+      ],
+      // 2 simultaneous slots on 2 pitches at 09:00 -> max 1 sequential slot!
+      slots: [
+        {
+          slot_id: "slot-p1",
+          interval_id: "i-1",
+          area_id: "pitch-1",
+          start_epoch_ms: START,
+          end_epoch_ms: START + 30 * MINUTE_MS,
+        },
+        {
+          slot_id: "slot-p2",
+          interval_id: "i-1",
+          area_id: "pitch-2",
+          start_epoch_ms: START,
+          end_epoch_ms: START + 30 * MINUTE_MS,
+        },
+      ],
+      constraints: {
+        ...base.constraints,
+        official_availability: {
+          mode: "required",
+          value: {
+            by_official_id: {
+              "official-shared": [{ start_epoch_ms: START, end_epoch_ms: START + 60 * MINUTE_MS }],
+            },
+          },
+        },
+      },
+    };
+
+    const problemOverAllocated = toProblem(inputOverAllocated);
+    const diagOverlap = diagnoseScheduleInfeasibility(problemOverAllocated);
+    expect(diagOverlap).toHaveLength(1);
+    expect(diagOverlap[0]).toMatchObject({
+      code: "official_overlap",
+      severity: "hard",
+      matchIds: ["m1", "m2"],
+    });
+  });
+
+  it("integrates with ScheduleJobProcessor to persist no_solution on impossible official schedule", async () => {
+    const impossibleInput: ScheduleJobInput = {
+      ...baseInput("pitch-1"),
+      matches: [
+        {
+          match_id: "match-imp",
+          division_id: "division-1",
+          duration_minutes: 30,
+          dependency_match_ids: [],
+          possible_entry_ids: ["team-a", "team-b"],
+          official_ids: ["official-none"],
+          is_championship_final: false,
+        },
+      ],
+      slots: [
+        {
+          slot_id: "slot-1",
+          interval_id: "i-1",
+          area_id: "pitch-1",
+          start_epoch_ms: START,
+          end_epoch_ms: START + 30 * MINUTE_MS,
+        },
+      ],
+      constraints: {
+        ...baseInput("pitch-1").constraints,
+        official_availability: {
+          mode: "required",
+          value: { by_official_id: { "official-none": [] } },
+        },
+      },
+    };
+
+    class TestStore implements ScheduleJobStore {
+      currentBest: ScheduleJobResult | null = null;
+      finishedState: string | null = null;
+      async probe() {
+        return true;
+      }
+      async claimJob(): Promise<{ outcome: "claimed"; job: ClaimedScheduleJob }> {
+        return {
+          outcome: "claimed",
+          job: {
+            jobId: impossibleInput.job_id,
+            competitionId: impossibleInput.competition_id,
+            input: impossibleInput,
+            inputHash: deterministicJsonHash(impossibleInput),
+            fenceToken: "fence-1",
+            correlationId: "corr-1",
+            continuedFromJobId: null,
+            continuationIteration: 0,
+            exploredCandidates: 0,
+            currentBest: null,
+          },
+        };
+      }
+      async renewLease() {
+        return true;
+      }
+      getCancellationStatus = vi.fn(async () => ({ requested: false, requestedAtEpochMs: null }));
+      async checkpointBest(req: { candidate: ScheduleJobResult; iteration: number }) {
+        this.currentBest = req.candidate;
+        return { accepted: true, result: req.candidate };
+      }
+      async recordProgress() {}
+      async finishJob(req: {
+        state: "cancelled" | "completed" | "no_solution" | "stale";
+        currentBestRevision: number | null;
+      }) {
+        this.finishedState = req.state;
+      }
+      async releaseAfterFailure() {}
+      async markDeadLettered() {}
+      async close() {}
+    }
+
+    const impossibleStore = new TestStore();
+    const processor = new ScheduleJobProcessor({
+      workerId: "test-worker",
+      store: impossibleStore,
+      optimizer,
+      cancellationPollMs: 50,
+      maxYieldIntervalMs: 5_000,
+    });
+
+    const processResult = await processor.process(
+      {
+        schemaVersion: 1,
+        jobId: impossibleInput.job_id,
+        competitionId: impossibleInput.competition_id,
+        inputHash: deterministicJsonHash(impossibleInput),
+        correlationId: "corr-1",
+      },
+      executionContext(),
+    );
+
+    // Job finishes with state: "no_solution" and currentBestRevision: null
+    expect(processResult.state).toBe("no_solution");
+    expect(processResult.currentBestRevision).toBeNull();
+    expect(impossibleStore.finishedState).toBe("no_solution");
+
+    // Infeasibility diagnostic pinpoints the exact cause
+    const violations = diagnoseScheduleInfeasibility(toProblem(impossibleInput));
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.code).toBe("official_unavailable");
   });
 });
 
