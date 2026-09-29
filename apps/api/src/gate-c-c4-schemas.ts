@@ -202,6 +202,17 @@ const gateCC4PublicResult = gateCC4Strict({
   away_score: Type.Integer({ minimum: 0 }),
   state: Type.Union([Type.Literal("in_progress"), Type.Literal("final"), Type.Literal("corrected")]),
   updated_at: gateCC4DateTime,
+  current_segment: Type.Optional(Type.Integer({ minimum: 1 })),
+  segments: Type.Optional(
+    Type.Array(
+      gateCC4Strict({
+        number: Type.Integer({ minimum: 1 }),
+        home: Type.Integer({ minimum: 0 }),
+        away: Type.Integer({ minimum: 0 }),
+      }),
+    ),
+  ),
+  recorded_time_seconds: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
 });
 const gateCC4PublicDivision = gateCC4Strict({
   division: gateCC4Strict({ id: gateCC4Id, name: Type.String() }),

@@ -2,12 +2,26 @@ import Link from "next/link";
 import { messages } from "@matchday/ui";
 import { BrandLink } from "./Primitives";
 import { IdentityStatus } from "./IdentityStatus";
+import { ThemeControl } from "./ThemeControl";
 
-const productionRoutes = [
-  { href: "/competitions", label: messages.navigation.public },
-  { href: "/organiser", label: messages.navigation.organiser },
-  { href: "/official", label: messages.navigation.official },
-];
+export const productionRoutes = [
+  { href: "/competitions", label: messages.navigation.viewResults },
+  { href: "/play", label: messages.navigation.play },
+  { href: "/organiser", label: messages.navigation.organise },
+  { href: "/official", label: messages.navigation.officiate },
+] as const;
+
+export function JourneyNavigation({ className = "" }: { className?: string }) {
+  return (
+    <nav className={className} aria-label={messages.navigation.journeys}>
+      {productionRoutes.map((route) => (
+        <Link key={route.href} href={route.href}>
+          {route.label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
 
 type SiteHeaderViewer = Readonly<{
   displayName: string;
@@ -23,14 +37,11 @@ export function SiteHeader({
   return (
     <header className={`site-header${inverse ? " site-header--inverse" : ""}`}>
       <BrandLink inverse={inverse} />
-      <nav aria-label={messages.navigation.menu}>
-        {productionRoutes.map((route) => (
-          <Link key={route.href} href={route.href}>
-            {route.label}
-          </Link>
-        ))}
-      </nav>
-      <IdentityStatus className="site-header__access" initialDisplayName={viewer?.displayName ?? null} />
+      <JourneyNavigation className="site-header__journeys" />
+      <div className="site-header__utilities">
+        <ThemeControl />
+        <IdentityStatus className="site-header__access" initialDisplayName={viewer?.displayName ?? null} />
+      </div>
     </header>
   );
 }

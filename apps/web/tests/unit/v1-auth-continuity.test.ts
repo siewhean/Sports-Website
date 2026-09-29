@@ -22,6 +22,7 @@ describe("V1 authenticated competition continuity", () => {
       new URL("../../components/foundation/IdentityStatus.tsx", import.meta.url),
       "utf8",
     );
+    const identityRequestSource = await readFile(new URL("../../lib/identity-status.ts", import.meta.url), "utf8");
     const chromeSource = await readFile(new URL("../../components/foundation/SiteChrome.tsx", import.meta.url), "utf8");
     const shellSource = await readFile(
       new URL("../../components/foundation/ProductionShell.tsx", import.meta.url),
@@ -34,7 +35,8 @@ describe("V1 authenticated competition continuity", () => {
     const signInSource = await readFile(new URL("../../app/sign-in/page.tsx", import.meta.url), "utf8");
 
     expect(identitySource).toContain('fetch("/api/identity/current"');
-    expect(identitySource).toContain("identityStatusRequest");
+    expect(identitySource).toContain("...identityStatusRequest");
+    expect(identityRequestSource).toContain('credentials: "same-origin"');
     expect(identitySource).toContain('data-identity-state="authenticated"');
     expect(chromeSource).toContain("<IdentityStatus");
     expect(shellSource).toContain("<IdentityStatus");
@@ -74,10 +76,12 @@ describe("V1 authenticated competition continuity", () => {
       "utf8",
     );
     const legal = await readFile(new URL("../../components/foundation/LegalPage.tsx", import.meta.url), "utf8");
+    const ancillary = await readFile(new URL("../../components/ancillary/AncillaryPage.tsx", import.meta.url), "utf8");
 
-    expect(marketing).toContain("<SiteHeader inverse viewer={viewer} />");
+    expect(marketing).toContain("<SiteHeader viewer={viewer} />");
     expect(publicCompetition).toContain("<SiteHeader viewer={viewer} />");
-    expect(legal).toContain("<SiteHeader viewer={viewer} />");
+    expect(legal).toContain("<AncillaryPage title={title} viewer={viewer}");
+    expect(ancillary).toContain("<SiteHeader viewer={viewer} />");
   });
 
   it("hydrates the public competitions header from the authenticated identity", async () => {

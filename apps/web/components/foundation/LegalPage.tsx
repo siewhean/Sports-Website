@@ -1,4 +1,5 @@
-import { SiteFooter, SiteHeader } from "./SiteChrome";
+import { AncillaryPage } from "@/components/ancillary/AncillaryPage";
+import styles from "./LegalPage.module.css";
 
 export function LegalPage({
   title,
@@ -6,13 +7,8 @@ export function LegalPage({
   viewer = null,
 }: Readonly<{ title: string; children: React.ReactNode; viewer?: { displayName: string } | null }>) {
   return (
-    <div className="legal-page">
-      <SiteHeader viewer={viewer} />
-      <main id="main-content">
-        <h1>{title}</h1>
-        {children}
-      </main>
-      <SiteFooter />
-    </div>
+    <AncillaryPage title={title} viewer={viewer} narrow>
+      <div className={styles.prose}>{children}</div>
+    </AncillaryPage>
   );
 }

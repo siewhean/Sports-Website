@@ -1,6 +1,7 @@
 import type { PublicProjectionFreshness } from "@matchday/contracts";
 
-export const gateCC4PublicCacheControl = "public, max-age=0, s-maxage=15, must-revalidate";
+// Live scores must not be held at a shared cache after a version notification.
+export const gateCC4PublicCacheControl = "public, max-age=0, s-maxage=0, must-revalidate";
 
 export type GateCC4PublicHeaders = Readonly<{
   etag: string;

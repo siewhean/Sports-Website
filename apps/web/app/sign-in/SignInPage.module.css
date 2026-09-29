@@ -1,23 +1,17 @@
 .page {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   min-height: 100dvh;
-  padding: clamp(20px, 3vw, 40px);
   background: var(--canvas);
   color: var(--ink);
-}
-
-.header {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
 }
 
 .content {
   align-self: center;
   width: min(100%, 720px);
+  flex: 1;
   margin: 0 auto;
-  padding: clamp(40px, 8vw, 88px) 0;
+  padding: clamp(40px, 8vw, 88px) clamp(16px, 3vw, 40px);
   border-top: 1px solid var(--hairline);
 }
 
@@ -42,7 +36,7 @@
   max-width: 62ch;
   margin: 14px 0 0;
   color: var(--ink-muted);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -80,12 +74,8 @@
 }
 
 @media (max-width: 767px) {
-  .page {
-    padding: 18px;
-  }
-
   .content {
-    padding: 48px 0 64px;
+    padding-block: 48px 64px;
   }
 
   .content h1 {

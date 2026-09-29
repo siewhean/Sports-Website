@@ -257,7 +257,7 @@ export async function openPhase2Scorekeeper(page: Page) {
   await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();
-  await page.getByRole("checkbox", { name: "I am at Match 12 and ready to score this fixture." }).check();
+  await page.getByRole("checkbox", { name: /ready to score/i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
   await expect(page.getByRole("heading", { name: "Match 12" })).toBeVisible();
 }

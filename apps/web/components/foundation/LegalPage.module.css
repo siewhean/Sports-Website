@@ -1,0 +1,29 @@
+.prose {
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+.prose :is(p, ul, ol) {
+  max-width: 65ch;
+  margin: 0 0 20px;
+}
+.prose :is(h2, h3) {
+  max-width: 65ch;
+  margin: 40px 0 16px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+.prose h2 {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+}
+.prose a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--signal-strong);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+.prose a:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}

@@ -64,6 +64,8 @@ import {
   terminalOfflineQueueState,
 } from "@/lib/phase2-scoring";
 import { LatestRequestFence } from "@/lib/latest-request";
+import { elapsedTimeMode, formatRecordedTime, recordedElapsedSeconds } from "@/lib/scoring-time";
+import styles from "./PhoneScoring.module.css";
 
 type ScoringPhase = "access" | "confirm" | "live" | "review" | "receipt";
 type OfflineState =
@@ -117,25 +119,6 @@ const scoreControlsCopy: FiveSportScoreControlsCopy = {
   formatActionLabel: (controlLabel, sideLabel) => (sideLabel ? `${controlLabel} ${sideLabel}` : controlLabel),
 };
 
-function timeSeconds(value: string): number | null {
-  const trimmed = value.trim();
-  const match = /^(\d{1,2}):([0-5]\d)$/.exec(trimmed);
-  if (match) {
-    const minutes = Number(match[1]);
-    const seconds = Number(match[2]);
-    const total = minutes * 60 + seconds;
-    return total <= 3_599 ? total : null;
-  }
-  const digitsMatch = /^(\d{1,2})([0-5]\d)$/.exec(trimmed);
-  if (digitsMatch) {
-    const minutes = Number(digitsMatch[1]);
-    const seconds = Number(digitsMatch[2]);
-    const total = minutes * 60 + seconds;
-    return total <= 3_599 ? total : null;
-  }
-  return null;
-}
-
 function initialScoreState(): ScoringSessionView["scoreState"] {
   return {
     home: 0,
@@ -169,7 +152,9 @@ export function PhoneScoring({
   const [scorer, setScorer] = useState("");
   const [scorerError, setScorerError] = useState("");
   const [period, setPeriod] = useState("1");
-  const [eventTime, setEventTime] = useState("09:42");
+  const [eventTime, setEventTime] = useState("00:00");
+  const [timeMode, setTimeMode] = useState<"elapsed" | "remaining">(elapsedTimeMode);
+  const [periodDurationMinutes, setPeriodDurationMinutes] = useState<number | null>(null);
   const [scorecardDefinition, setScorecardDefinition] = useState(() => buildFiveSportScorecardDefinition(demoSportId));
   const [allowUnknownScorer, setAllowUnknownScorer] = useState(false);
   const [unknownParticipant, setUnknownParticipant] = useState(false);
@@ -195,9 +180,11 @@ export function PhoneScoring({
   const [competitionSlug, setCompetitionSlug] = useState<string | null>(
     mode === phase2Machine.scoringDemoMode ? phase2Machine.singaporeOpenSlug : null,
   );
+  const [competitionName, setCompetitionName] = useState<string | null>(null);
   const [matchId, setMatchId] = useState(phase2Machine.matchTwelveId);
   const [matchLabel, setMatchLabel] = useState<string>(phase2Copy.matchTwelve);
   const [stage, setStage] = useState<string>(phase2Copy.groupB);
+  const [fixtureSchedule, setFixtureSchedule] = useState<ScoringSessionView["schedule"]>(null);
   const [home, setHome] = useState<string>(phase2Copy.marinaBlue);
   const [away, setAway] = useState<string>(phase2Copy.harbourGold);
   const [finalReceipt, setFinalReceipt] = useState<{ receiptId: string; publishedAt: string } | null>(null);
@@ -238,7 +225,12 @@ export function PhoneScoring({
 
   const definition = scorecardDefinition;
   const manualTimeEnabled = definition.fields.some((field) => field.id === "manual_event_time" && field.enabled);
+  const recordedSeconds = manualTimeEnabled ? recordedElapsedSeconds(eventTime, timeMode, periodDurationMinutes) : null;
+  const elapsedTime = recordedSeconds === null ? null : formatRecordedTime(recordedSeconds);
   const score = { home: scoreState.home, away: scoreState.away };
+  const latestReversibleAction = [...scoreState.actions]
+    .reverse()
+    .find((action) => action.reversible && !action.reversed);
   const supportsPeriodAdvance = definition.operationalControls.some(
     (control) => control.id === phase2Machine.periodChange,
   );
@@ -292,6 +284,7 @@ export function PhoneScoring({
     retainScoringPrincipalCookie(session.principalId, session.expiresAt);
     const previousState = writerStateRef.current;
     setCompetitionSlug(session.competitionSlug);
+    setCompetitionName(session.competitionName ?? session.competitionSlug);
     setScorecardDefinition(buildFiveSportScorecardDefinition(session.sportId, session.sportSettings));
     setAllowUnknownScorer(
       session.sportId === phase2Machine.canoePolo && session.sportSettings.allowUnknownScorer === true,
@@ -299,6 +292,8 @@ export function PhoneScoring({
     setMatchId(session.matchId);
     setMatchLabel(session.matchLabel);
     setStage(session.stage);
+    setFixtureSchedule(session.schedule ?? null);
+    setPeriodDurationMinutes(session.periodDurationMinutes ?? null);
     setHome(session.home);
     setAway(session.away);
     setScoreState(session.scoreState);
@@ -1222,7 +1217,7 @@ export function PhoneScoring({
       scoreState.currentSegment,
       segmentNumber,
     );
-    const manualTimeSeconds = manualTimeEnabled ? timeSeconds(eventTime) : null;
+    const manualTimeSeconds = manualTimeEnabled ? recordedSeconds : null;
     if (!Number.isInteger(segmentNumber) || segmentNumber < 1 || (manualTimeEnabled && manualTimeSeconds === null)) {
       setScorerError(phase2Copy.periodRequired);
       return;
@@ -1241,7 +1236,7 @@ export function PhoneScoring({
       ...(unknownParticipant ? { unknownParticipant: true } : {}),
       period: submittedSegmentNumber,
       segmentNumber: submittedSegmentNumber,
-      manualTime: eventTime,
+      manualTime: elapsedTime ?? eventTime,
       ...(manualTimeEnabled ? { manualTimeSeconds } : {}),
       occurredAt: new Date().toISOString(),
     };
@@ -1305,7 +1300,7 @@ export function PhoneScoring({
         scorer: "",
         period: reversalTarget.segmentNumber,
         segmentNumber: reversalTarget.segmentNumber,
-        manualTime: eventTime,
+        manualTime: elapsedTime ?? eventTime,
         ...(targetIsLocal
           ? { reversalTargetClientEventId: reversalTarget.clientEventId }
           : { reversalTargetEventId: reversalTarget.eventId }),
@@ -1417,13 +1412,17 @@ export function PhoneScoring({
         ) : null}
         <section>
           <p className="p2-eyebrow">
-            {matchLabel} · {stage}
+            {phase === "access" ? phase2Copy.scoringAccess : `${competitionName ?? ""} · ${matchLabel} · ${stage}`}
           </p>
-          <h1>
-            {home}
-            <span>{phase2Copy.versus}</span>
-            {away}
-          </h1>
+          {phase === "access" ? (
+            <h1>{phase2Copy.codeHint}</h1>
+          ) : (
+            <h1>
+              {home}
+              <span>{phase2Copy.versus}</span>
+              {away}
+            </h1>
+          )}
           {phase === "access" ? (
             <div className="p2-score-form">
               <label>
@@ -1451,12 +1450,16 @@ export function PhoneScoring({
             <div className="p2-score-form">
               <dl>
                 <div>
-                  <dt>{phase2Copy.schedule}</dt>
-                  <dd>{phase2Copy.courtTwoStart}</dd>
+                  <dt>{phase2Copy.fixtureLocation}</dt>
+                  <dd>{fixtureSchedule?.areaName ?? phase2Copy.fixtureUnknownArea}</dd>
                 </div>
                 <div>
-                  <dt>{phase2Copy.publicVersion}</dt>
-                  <dd>{phase2Copy.scheduleRevisionCode}</dd>
+                  <dt>{phase2Copy.fixtureStart}</dt>
+                  <dd>
+                    {fixtureSchedule?.startsAt
+                      ? new Date(fixtureSchedule.startsAt).toLocaleString()
+                      : phase2Copy.fixtureUnscheduled}
+                  </dd>
                 </div>
               </dl>
               <label className="p2-check">
@@ -1521,7 +1524,7 @@ export function PhoneScoring({
 
   return (
     <main
-      className="p2-score"
+      className={`p2-score ${styles.scoringPage}`}
       id="score-main"
       data-scoring-phase={phase}
       data-writer-state={writerState}
@@ -1531,7 +1534,7 @@ export function PhoneScoring({
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
-      <header className="p2-score__header">
+      <header className={`p2-score__header ${styles.matchHeader}`}>
         <div>
           <p>{stage}</p>
           <h1>{matchLabel}</h1>
@@ -1553,7 +1556,7 @@ export function PhoneScoring({
       offlineState === phase2Machine.offlineOnline &&
       mode === phase2Machine.scoringApiMode &&
       writerState === phase2Machine.active ? (
-        <section className="p2-score-warning" aria-labelledby="offline-preparation-title">
+        <section className={`p2-score-warning ${styles.secondaryNotice}`} aria-labelledby="offline-preparation-title">
           <CloudCheck aria-hidden="true" />
           <div>
             <strong id="offline-preparation-title">{phase2Copy.offlinePreparationTitle}</strong>
@@ -1712,7 +1715,7 @@ export function PhoneScoring({
           </div>
         </section>
       ) : null}
-      <section className="p5-scoring-device" aria-labelledby="scoring-device-label">
+      <section className={`p5-scoring-device ${styles.deviceDetails}`} aria-labelledby="scoring-device-label">
         <strong id="scoring-device-label">{t("prototype.fb6eea41124e")}</strong>
         {editingDeviceLabel ? (
           <div>
@@ -1850,7 +1853,7 @@ export function PhoneScoring({
         </section>
       ) : (
         <>
-          <section className="p2-event-controls" aria-label={definition.displayName}>
+          <section className={`p2-event-controls ${styles.eventControls}`} aria-label={definition.displayName}>
             <div className="p2-event-context">
               <div>
                 <label>
@@ -1875,15 +1878,45 @@ export function PhoneScoring({
                   </select>
                 </label>
                 {manualTimeEnabled ? (
-                  <label>
-                    <span>{phase2Copy.eventTimeLabel}</span>
-                    <input
-                      type="text"
-                      value={eventTime}
-                      onChange={(event) => setEventTime(event.target.value)}
-                      disabled={locked}
-                    />
-                  </label>
+                  <div className={styles.timeEntry}>
+                    {periodDurationMinutes !== null ? (
+                      <label>
+                        <span>{phase2Copy.timeMode}</span>
+                        <select
+                          value={timeMode}
+                          onChange={(event) => {
+                            setTimeMode(event.target.value as "elapsed" | "remaining");
+                            setEventTime(
+                              event.target.value === "remaining"
+                                ? formatRecordedTime(periodDurationMinutes * 60)
+                                : "00:00",
+                            );
+                          }}
+                          disabled={locked}
+                        >
+                          <option value="elapsed">{phase2Copy.elapsedTime}</option>
+                          <option value="remaining">{phase2Copy.remainingTime}</option>
+                        </select>
+                      </label>
+                    ) : null}
+                    <label>
+                      <span>{timeMode === "remaining" ? phase2Copy.remainingTime : phase2Copy.eventTimeLabel}</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={eventTime}
+                        onChange={(event) => setEventTime(event.target.value)}
+                        aria-invalid={recordedSeconds === null}
+                        aria-describedby="recorded-time-feedback"
+                        disabled={locked}
+                      />
+                    </label>
+                    <small id="recorded-time-feedback" role={recordedSeconds === null ? "alert" : undefined}>
+                      {recordedSeconds === null
+                        ? phase2Copy.invalidRecordedTime
+                        : `${phase2Copy.elapsedPreview}: ${elapsedTime}`}
+                    </small>
+                  </div>
                 ) : null}
               </div>
             </div>
@@ -1914,11 +1947,21 @@ export function PhoneScoring({
                 pending={actionPending}
                 statusMessage={
                   manualTimeEnabled
-                    ? `${definition.segmentLabel} ${scoreState.currentSegment} · ${phase2Copy.manualTime} ${eventTime}`
+                    ? `${definition.segmentLabel} ${scoreState.currentSegment} · ${phase2Copy.elapsedPreview} ${elapsedTime ?? "—"}`
                     : `${definition.segmentLabel} ${scoreState.currentSegment}`
                 }
                 onActivate={openActionDialog}
               />
+              {latestReversibleAction && !locked ? (
+                <button
+                  type="button"
+                  className={`p2-score-secondary ${styles.quickUndo}`}
+                  disabled={actionPending}
+                  onClick={(event) => openReversalDialog(latestReversibleAction, event.currentTarget)}
+                >
+                  {phase2Copy.reverseEvent}: {latestReversibleAction.label}
+                </button>
+              ) : null}
             </div>
           </section>
           <section className="p2-event-log" aria-labelledby="event-log-title">
@@ -2037,7 +2080,7 @@ export function PhoneScoring({
                 {manualTimeEnabled ? (
                   <div>
                     <dt>{phase2Copy.eventTimeLabel}</dt>
-                    <dd>{eventTime}</dd>
+                    <dd>{elapsedTime ?? eventTime}</dd>
                   </div>
                 ) : null}
               </dl>

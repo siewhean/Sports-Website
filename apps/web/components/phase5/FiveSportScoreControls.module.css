@@ -1,145 +1,181 @@
 .surface {
   min-width: 0;
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
+  color: #f5f7f2;
 }
-
 .header {
-  min-width: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
 }
-
-.header > div,
 .header h2,
 .header p,
+.status,
 .clockNotice {
-  min-width: 0;
-  overflow-wrap: anywhere;
+  margin: 0;
 }
-
-.header h2,
+.header h2 {
+  font-size: 1rem;
+}
 .header p,
 .clockNotice,
 .status {
-  margin: 0;
+  color: #b8c2b7;
+  font-size: 0.8125rem;
 }
-
 .clockNotice {
-  max-width: 24rem;
-  text-align: end;
+  max-width: 25rem;
 }
-
 .scoreboard {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: 0.5rem;
   margin: 0;
 }
-
 .scoreboard > div {
   min-width: 0;
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.25rem;
-  padding: 0.875rem;
-  border: 1px solid currentColor;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid #444d43;
   border-radius: 0.75rem;
+  background: #1a201b;
 }
-
 .scoreboard dt {
   min-width: 0;
   overflow-wrap: anywhere;
+  font-size: clamp(0.875rem, 3vw, 1.125rem);
+  font-weight: 650;
 }
-
 .scoreboard dd {
   margin: 0;
-  font-size: clamp(1.75rem, 8vw, 3rem);
-  font-weight: 700;
-  line-height: 1;
+  font: 700 clamp(2.5rem, 11vw, 4.5rem)/1 var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  color: #e2fa77;
 }
-
 .status {
-  min-height: 1.5rem;
+  min-height: 1.25rem;
   overflow-wrap: anywhere;
 }
-
 .groups {
   min-width: 0;
   display: grid;
-  gap: 1rem;
+  gap: 0.5rem;
 }
-
 .group {
   min-width: 0;
   margin: 0;
-  padding: 0.875rem;
-  border: 1px solid currentColor;
-  border-radius: 0.75rem;
+  padding: 0;
+  border: 0;
 }
-
 .group legend {
-  max-width: 100%;
-  padding-inline: 0.35rem;
-  overflow-wrap: anywhere;
+  padding: 0 0 0.4rem;
+  font-size: 0.8125rem;
   font-weight: 700;
 }
-
 .actions {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-  gap: 0.625rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
 }
-
 .action {
   min-width: 0;
   min-height: 48px;
   display: grid;
   place-content: center;
-  gap: 0.2rem;
-  padding: 0.7rem 0.8rem;
-  border: 1px solid currentColor;
+  gap: 0.125rem;
+  padding: 0.5rem;
+  border: 1px solid #667064;
   border-radius: 0.65rem;
-  background: #1b1f1c;
+  background: #202820;
   color: inherit;
   font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.15;
   text-align: center;
   overflow-wrap: anywhere;
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    transform 120ms ease;
 }
-
+.primaryGroup .action {
+  min-height: 64px;
+  border-color: #a1ba5b;
+  background: #31411e;
+}
+.action:hover:not(:disabled) {
+  background: #415622;
+}
+.action:active:not(:disabled) {
+  transform: scale(0.98);
+}
 .action:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.55;
 }
-
-.action:focus-visible {
-  outline: 3px solid currentColor;
-  outline-offset: 3px;
+.action:focus-visible,
+.secondaryGroup summary:focus-visible {
+  outline: 3px solid #e2fa77;
+  outline-offset: 2px;
 }
-
 .action strong {
-  font-size: 0.85em;
+  font-size: 0.875rem;
 }
-
-@media (max-width: 30rem) {
-  .header {
+.secondaryGroup {
+  min-width: 0;
+  border-top: 1px solid #414a40;
+}
+.secondaryGroup summary {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+.secondaryGroup summary::-webkit-details-marker {
+  display: none;
+}
+.secondaryGroup summary::after {
+  content: "+";
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.secondaryGroup[open] summary::after {
+  content: "−";
+}
+.secondaryGroup summary span {
+  margin-left: auto;
+  color: #b8c2b7;
+  font-size: 0.75rem;
+}
+.secondaryGroup .actions {
+  padding-bottom: 0.75rem;
+}
+@media (max-width: 380px) {
+  .scoreboard > div {
     display: grid;
   }
-
+}
+@media (max-width: 30rem) {
   .clockNotice {
     max-width: none;
-    text-align: start;
   }
-
-  .scoreboard {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .actions {
-    grid-template-columns: minmax(0, 1fr);
+}
+@media (prefers-reduced-motion: reduce) {
+  .action {
+    transition: none;
   }
 }

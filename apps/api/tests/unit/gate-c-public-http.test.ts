@@ -30,7 +30,7 @@ describe("Gate C C4 public projection HTTP freshness", () => {
       "x-matchday-result-version": "7",
       "x-matchday-projection-version": "9",
     });
-    expect(gateCC4PublicCacheControl).toBe("public, max-age=0, s-maxage=15, must-revalidate");
+    expect(gateCC4PublicCacheControl).toBe("public, max-age=0, s-maxage=0, must-revalidate");
   });
 
   it("returns 304 for matching strong or weak ETags", () => {

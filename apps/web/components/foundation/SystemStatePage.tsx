@@ -1,7 +1,9 @@
 "use client";
 
 import { ArrowClockwise, LockKey, Plugs, WarningCircle } from "@phosphor-icons/react/dist/ssr";
-import { ActionLink, BrandLink } from "./Primitives";
+import { ActionLink } from "./Primitives";
+import { SiteFooter, SiteHeader } from "./SiteChrome";
+import styles from "./SystemStatePage.module.css";
 
 const iconByKind = {
   forbidden: LockKey,
@@ -32,31 +34,30 @@ export function SystemStatePage({
 }>) {
   const Icon = iconByKind[kind];
   return (
-    <main className="system-state" id="main-content">
-      <header>
-        <BrandLink prefetch={false} />
-      </header>
-      <section aria-labelledby="system-state-title">
-        <div className="system-state__icon" aria-hidden="true">
+    <div className={styles.page}>
+      <SiteHeader />
+      <main className={styles.main} id="main-content" aria-labelledby="system-state-title">
+        <div className={styles.icon} aria-hidden="true">
           <Icon />
         </div>
-        <p className="system-state__code">{code}</p>
+        <p className={styles.code}>{code}</p>
         <h1 id="system-state-title">{title}</h1>
         <p>{body}</p>
-        {detail ? <p className="system-state__detail">{detail}</p> : null}
+        {detail ? <p className={styles.detail}>{detail}</p> : null}
         {actionHref ? (
           <ActionLink href={actionHref} prefetch={false}>
             {actionLabel}
           </ActionLink>
         ) : (
-          <button className="foundation-action foundation-action--dark" type="button" onClick={action}>
+          <button className={styles.action} type="button" onClick={action}>
             <span>{actionLabel}</span>
-            <span className="foundation-action__icon" aria-hidden="true">
+            <span aria-hidden="true">
               <ArrowClockwise />
             </span>
           </button>
         )}
-      </section>
-    </main>
+      </main>
+      <SiteFooter />
+    </div>
   );
 }

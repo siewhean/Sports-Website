@@ -59,6 +59,7 @@ const ScoringFinalisationReceiptSchema = Type.Object(
 const ScoringSessionStateSchema = Type.Object({
   competition: Type.Object({
     slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
+    name: Type.String(),
     sport_code: Type.Union([
       Type.Literal("canoe_polo"),
       Type.Literal("badminton"),
@@ -70,6 +71,7 @@ const ScoringSessionStateSchema = Type.Object({
   sport: Type.Object({
     pack_version: Type.String({ minLength: 1 }),
     settings: Type.Record(Type.String(), Type.Any()),
+    period_duration_minutes: Type.Union([Type.Integer({ minimum: 1, maximum: 60 }), Type.Null()]),
   }),
   match: Type.Object({
     id: Id,
@@ -81,6 +83,14 @@ const ScoringSessionStateSchema = Type.Object({
       Type.Literal("in_progress"),
       Type.Literal("final"),
       Type.Literal("corrected"),
+    ]),
+    schedule: Type.Union([
+      Type.Object({
+        area_name: Type.Union([Type.String(), Type.Null()]),
+        starts_at: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
+        revision: Type.Integer({ minimum: 1 }),
+      }),
+      Type.Null(),
     ]),
     home: Type.Object({ id: Type.Union([Id, Type.Null()]), name: Type.Union([Type.String(), Type.Null()]) }),
     away: Type.Object({ id: Type.Union([Id, Type.Null()]), name: Type.Union([Type.String(), Type.Null()]) }),
