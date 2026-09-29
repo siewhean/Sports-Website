@@ -5,8 +5,8 @@ import { NextResponse } from "next/server";
 import {
   exact,
   isOfficialWorkspaceResponse,
+  isUuid,
   isoDate,
-  nonEmpty,
   phase4OfficialsCopy,
   phase4OfficialsMachine,
   record,
@@ -187,27 +187,36 @@ export function validateMatchAssignmentsBody(
 
   for (const item of row.assignments) {
     const a = record(item);
-    if (!a || !exact(a, ["assigned_role", "official_id"])) {
-      return { ok: false, message: "Each assignment must contain exactly official_id and assigned_role" };
+    if (!a) {
+      return { ok: false, message: "Each assignment must be an object" };
     }
-    if (!nonEmpty(a.official_id)) {
-      return { ok: false, message: "Assignment official_id must be a non-empty string" };
+    for (const key of Object.keys(a)) {
+      if (key !== "official_id" && key !== "assigned_role") {
+        return { ok: false, message: `Unknown field '${key}' in assignment item` };
+      }
+    }
+    if (!("official_id" in a)) {
+      return { ok: false, message: "Assignment item missing required 'official_id'" };
+    }
+    if (!isUuid(a.official_id)) {
+      return { ok: false, message: "Assignment official_id must be a valid UUID" };
     }
     if (seenOfficialIds.has(a.official_id)) {
       return { ok: false, message: `Duplicate official assignment for '${a.official_id}'` };
     }
     seenOfficialIds.add(a.official_id);
 
-    if (
-      a.assigned_role !== null &&
-      (typeof a.assigned_role !== "string" || a.assigned_role.trim().length < 1 || a.assigned_role.length > 40)
-    ) {
-      return { ok: false, message: "Assigned role must be null or between 1 and 40 characters" };
+    let assignedRole: string | null = null;
+    if ("assigned_role" in a && a.assigned_role !== undefined && a.assigned_role !== null) {
+      if (typeof a.assigned_role !== "string" || a.assigned_role.trim().length < 1 || a.assigned_role.length > 40) {
+        return { ok: false, message: "Assigned role must be null or between 1 and 40 characters" };
+      }
+      assignedRole = a.assigned_role.trim();
     }
 
     assignments.push({
       official_id: a.official_id,
-      assigned_role: typeof a.assigned_role === "string" ? a.assigned_role.trim() : null,
+      assigned_role: assignedRole,
     });
   }
 

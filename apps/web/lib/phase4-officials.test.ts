@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   createDemoOfficialWorkspace,
+  isAvailabilityMutationResponse,
+  isMatchOfficialsMutationResponse,
+  isOfficialMutationResponse,
+  isOfficialResponse,
+  isOfficialWorkspaceResponse,
+  isRfc3339DateTime,
+  isUuid,
   officialWorkspaceUnavailableDocument,
   parseOfficialWorkspaceResponse,
   phase4OfficialsCopy,
@@ -184,5 +191,130 @@ describe("phase4-officials read model", () => {
     expect(phase4OfficialsCopy.windowsCount(0)).toBe("0 windows");
     expect(phase4OfficialsCopy.windowsCount(1)).toBe("1 window");
     expect(phase4OfficialsCopy.windowsCount(2)).toBe("2 windows");
+  });
+
+  describe("UUID validation helper", () => {
+    it("accepts valid RFC4122 UUIDs", () => {
+      expect(isUuid("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
+      expect(isUuid("10000000-0000-4000-8000-000000000001")).toBe(true);
+      expect(isUuid("c0000000-0000-0000-0000-000000000001")).toBe(true);
+    });
+
+    it("rejects malformed or non-UUID inputs", () => {
+      expect(isUuid("abc")).toBe(false);
+      expect(isUuid("")).toBe(false);
+      expect(isUuid("6000")).toBe(false);
+      expect(isUuid("not-a-uuid-string-of-length-thirty-six")).toBe(false);
+      expect(isUuid(null)).toBe(false);
+      expect(isUuid(undefined)).toBe(false);
+      expect(isUuid(12345)).toBe(false);
+    });
+  });
+
+  describe("RFC3339 date-time validation helper", () => {
+    it("accepts valid RFC3339 date-times with Z or numeric offsets", () => {
+      expect(isRfc3339DateTime("2026-09-29T15:30:00Z")).toBe(true);
+      expect(isRfc3339DateTime("2026-09-29T15:30:00.000Z")).toBe(true);
+      expect(isRfc3339DateTime("2026-09-29T23:30:00+08:00")).toBe(true);
+      expect(isRfc3339DateTime("2026-09-29T23:30:00-05:00")).toBe(true);
+    });
+
+    it("rejects non-RFC3339 date strings", () => {
+      expect(isRfc3339DateTime("2026-09-29")).toBe(false);
+      expect(isRfc3339DateTime("09/29/2026")).toBe(false);
+      expect(isRfc3339DateTime("2026-09-29 15:30")).toBe(false);
+      expect(isRfc3339DateTime("15:30")).toBe(false);
+      expect(isRfc3339DateTime("")).toBe(false);
+      expect(isRfc3339DateTime("invalid-timestamp")).toBe(false);
+      expect(isRfc3339DateTime(null)).toBe(false);
+    });
+  });
+
+  describe("strict upstream response parsing", () => {
+    it("isOfficialResponse rejects non-UUID id or competition_id", () => {
+      const valid = {
+        id: official1Id,
+        competition_id: competitionId,
+        name: "Official A",
+        default_role: "Lead",
+        archived: false,
+        created_at: "2026-08-01T00:00:00.000Z",
+        updated_at: "2026-08-01T00:00:00.000Z",
+      };
+      expect(isOfficialResponse(valid)).toBe(true);
+      expect(isOfficialResponse({ ...valid, id: "not-a-uuid" })).toBe(false);
+      expect(isOfficialResponse({ ...valid, competition_id: "not-a-uuid" })).toBe(false);
+      expect(isOfficialResponse({ ...valid, created_at: "2026-08-01" })).toBe(false);
+    });
+
+    it("isOfficialMutationResponse rejects non-UUID official", () => {
+      expect(
+        isOfficialMutationResponse({
+          official: {
+            id: "not-a-uuid",
+            competition_id: competitionId,
+            name: "Official A",
+            default_role: null,
+            archived: false,
+            created_at: "2026-08-01T00:00:00.000Z",
+            updated_at: "2026-08-01T00:00:00.000Z",
+          },
+          bumped_revision: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("isAvailabilityMutationResponse rejects non-RFC3339 window timestamp", () => {
+      expect(
+        isAvailabilityMutationResponse({
+          windows: [{ starts_at: "2026-08-15 09:00", ends_at: "2026-08-15 12:00" }],
+          bumped_revision: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("isMatchOfficialsMutationResponse rejects non-UUID match_id or official_id", () => {
+      expect(
+        isMatchOfficialsMutationResponse({
+          assignments: [{ match_id: "not-a-uuid", official_id: official1Id, assigned_role: null }],
+          bumped_revision: true,
+        }),
+      ).toBe(false);
+      expect(
+        isMatchOfficialsMutationResponse({
+          assignments: [{ match_id: match1Id, official_id: "6000", assigned_role: null }],
+          bumped_revision: true,
+        }),
+      ).toBe(false);
+      expect(
+        isMatchOfficialsMutationResponse({
+          assignments: [
+            {
+              match_id: match1Id,
+              official_id: official1Id,
+              assigned_role: "Lead",
+              official: {
+                id: "not-a-uuid",
+                name: "Official A",
+                default_role: null,
+                archived: false,
+              },
+            },
+          ],
+          bumped_revision: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("isOfficialWorkspaceResponse rejects non-UUID availability map keys", () => {
+      const invalidKeys = {
+        ...validPayload,
+        availability: {
+          "not-a-uuid-key": [{ starts_at: "2026-08-15T09:00:00.000Z", ends_at: "2026-08-15T12:00:00.000Z" }],
+        },
+      };
+      expect(isOfficialWorkspaceResponse(invalidKeys)).toBe(false);
+      expect(parseOfficialWorkspaceResponse(invalidKeys, competitionId)).toBeNull();
+    });
   });
 });

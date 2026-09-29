@@ -93,10 +93,24 @@ export function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-export function isoDate(value: unknown): value is string {
-  if (typeof value !== "string" || !value) return false;
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+export const RFC3339_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+export function isRfc3339DateTime(value: unknown): value is string {
+  if (typeof value !== "string" || !RFC3339_PATTERN.test(value)) {
+    return false;
+  }
   const time = Date.parse(value);
   return Number.isFinite(time);
+}
+
+export function isoDate(value: unknown): value is string {
+  return isRfc3339DateTime(value);
 }
 
 export function isOfficialResponse(value: unknown): boolean {
@@ -104,7 +118,7 @@ export function isOfficialResponse(value: unknown): boolean {
   if (!row || !exact(row, ["id", "competition_id", "name", "default_role", "archived", "created_at", "updated_at"])) {
     return false;
   }
-  if (!nonEmpty(row.id) || !nonEmpty(row.competition_id)) return false;
+  if (!isUuid(row.id) || !isUuid(row.competition_id)) return false;
   if (typeof row.name !== "string" || row.name.length < 1 || row.name.length > 80) return false;
   if (
     row.default_role !== null &&
@@ -113,7 +127,7 @@ export function isOfficialResponse(value: unknown): boolean {
     return false;
   }
   if (typeof row.archived !== "boolean") return false;
-  if (!isoDate(row.created_at) || !isoDate(row.updated_at)) return false;
+  if (!isRfc3339DateTime(row.created_at) || !isRfc3339DateTime(row.updated_at)) return false;
   return true;
 }
 
@@ -132,7 +146,7 @@ export function isAvailabilityMutationResponse(value: unknown): boolean {
   for (const w of root.windows) {
     const row = record(w);
     if (!row || !exact(row, ["starts_at", "ends_at"])) return false;
-    if (!isoDate(row.starts_at) || !isoDate(row.ends_at)) return false;
+    if (!isRfc3339DateTime(row.starts_at) || !isRfc3339DateTime(row.ends_at)) return false;
     if (Date.parse(row.starts_at) >= Date.parse(row.ends_at)) return false;
   }
   return true;
@@ -151,7 +165,7 @@ export function isMatchOfficialsMutationResponse(value: unknown): boolean {
       ? ["assigned_role", "match_id", "official", "official_id"]
       : ["assigned_role", "match_id", "official_id"];
     if (!exact(row, expectedKeys)) return false;
-    if (!nonEmpty(row.match_id) || !nonEmpty(row.official_id)) return false;
+    if (!isUuid(row.match_id) || !isUuid(row.official_id)) return false;
     if (
       row.assigned_role !== null &&
       (typeof row.assigned_role !== "string" || row.assigned_role.length < 1 || row.assigned_role.length > 40)
@@ -161,7 +175,7 @@ export function isMatchOfficialsMutationResponse(value: unknown): boolean {
     if (hasOfficial && row.official !== undefined) {
       const off = record(row.official);
       if (!off || !exact(off, ["archived", "default_role", "id", "name"])) return false;
-      if (!nonEmpty(off.id)) return false;
+      if (!isUuid(off.id)) return false;
       if (typeof off.name !== "string" || off.name.length < 1 || off.name.length > 80) return false;
       if (
         off.default_role !== null &&
@@ -187,11 +201,11 @@ export function isOfficialWorkspaceResponse(value: unknown): boolean {
   }
 
   for (const [officialId, windowsRaw] of Object.entries(availabilityRaw)) {
-    if (!nonEmpty(officialId) || !Array.isArray(windowsRaw)) return false;
+    if (!isUuid(officialId) || !Array.isArray(windowsRaw)) return false;
     for (const w of windowsRaw) {
       const windowRow = record(w);
       if (!windowRow || !exact(windowRow, ["starts_at", "ends_at"])) return false;
-      if (!isoDate(windowRow.starts_at) || !isoDate(windowRow.ends_at)) return false;
+      if (!isRfc3339DateTime(windowRow.starts_at) || !isRfc3339DateTime(windowRow.ends_at)) return false;
       if (Date.parse(windowRow.starts_at) >= Date.parse(windowRow.ends_at)) return false;
     }
   }
@@ -204,7 +218,7 @@ export function isOfficialWorkspaceResponse(value: unknown): boolean {
       ? ["assigned_role", "match_id", "official", "official_id"]
       : ["assigned_role", "match_id", "official_id"];
     if (!exact(row, expectedKeys)) return false;
-    if (!nonEmpty(row.match_id) || !nonEmpty(row.official_id)) return false;
+    if (!isUuid(row.match_id) || !isUuid(row.official_id)) return false;
     if (
       row.assigned_role !== null &&
       (typeof row.assigned_role !== "string" || row.assigned_role.length < 1 || row.assigned_role.length > 40)
@@ -214,7 +228,7 @@ export function isOfficialWorkspaceResponse(value: unknown): boolean {
     if (hasOfficial && row.official !== undefined) {
       const off = record(row.official);
       if (!off || !exact(off, ["archived", "default_role", "id", "name"])) return false;
-      if (!nonEmpty(off.id)) return false;
+      if (!isUuid(off.id)) return false;
       if (typeof off.name !== "string" || off.name.length < 1 || off.name.length > 80) return false;
       if (
         off.default_role !== null &&
@@ -252,7 +266,7 @@ export function parseOfficialWorkspaceResponse(
     if (!row || !exact(row, ["id", "competition_id", "name", "default_role", "archived", "created_at", "updated_at"])) {
       return null;
     }
-    if (!nonEmpty(row.id) || !nonEmpty(row.competition_id)) return null;
+    if (!isUuid(row.id) || !isUuid(row.competition_id)) return null;
     if (typeof row.name !== "string" || row.name.length < 1 || row.name.length > 80) return null;
     if (
       row.default_role !== null &&
@@ -261,7 +275,7 @@ export function parseOfficialWorkspaceResponse(
       return null;
     }
     if (typeof row.archived !== "boolean") return null;
-    if (!isoDate(row.created_at) || !isoDate(row.updated_at)) return null;
+    if (!isRfc3339DateTime(row.created_at) || !isRfc3339DateTime(row.updated_at)) return null;
 
     officials.push({
       id: row.id,
@@ -276,12 +290,12 @@ export function parseOfficialWorkspaceResponse(
 
   const availability: Record<string, AvailabilityWindowView[]> = {};
   for (const [officialId, windowsRaw] of Object.entries(availabilityRaw)) {
-    if (!nonEmpty(officialId) || !Array.isArray(windowsRaw)) return null;
+    if (!isUuid(officialId) || !Array.isArray(windowsRaw)) return null;
     const windowList: AvailabilityWindowView[] = [];
     for (const w of windowsRaw) {
       const windowRow = record(w);
       if (!windowRow || !exact(windowRow, ["starts_at", "ends_at"])) return null;
-      if (!isoDate(windowRow.starts_at) || !isoDate(windowRow.ends_at)) return null;
+      if (!isRfc3339DateTime(windowRow.starts_at) || !isRfc3339DateTime(windowRow.ends_at)) return null;
       if (Date.parse(windowRow.starts_at) >= Date.parse(windowRow.ends_at)) return null;
       windowList.push({
         startsAt: windowRow.starts_at,
@@ -300,7 +314,7 @@ export function parseOfficialWorkspaceResponse(
       ? ["match_id", "official_id", "assigned_role", "official"]
       : ["match_id", "official_id", "assigned_role"];
     if (!exact(row, expectedKeys)) return null;
-    if (!nonEmpty(row.match_id) || !nonEmpty(row.official_id)) return null;
+    if (!isUuid(row.match_id) || !isUuid(row.official_id)) return null;
     if (
       row.assigned_role !== null &&
       (typeof row.assigned_role !== "string" || row.assigned_role.length < 1 || row.assigned_role.length > 40)
@@ -312,7 +326,7 @@ export function parseOfficialWorkspaceResponse(
     if (hasOfficial && row.official !== undefined) {
       const offRow = record(row.official);
       if (!offRow || !exact(offRow, ["id", "name", "default_role", "archived"])) return null;
-      if (!nonEmpty(offRow.id)) return null;
+      if (!isUuid(offRow.id)) return null;
       if (typeof offRow.name !== "string" || offRow.name.length < 1 || offRow.name.length > 80) return null;
       if (
         offRow.default_role !== null &&

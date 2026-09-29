@@ -291,6 +291,28 @@ describe("Phase 4 Officials BFF", () => {
         error: { code: "COMMAND_RESPONSE_INVALID" },
       });
     });
+
+    it("returns 502 when upstream official response contains non-UUID id", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          if (String(input).endsWith("/api/v1/identity/me")) return mockIdentityResponse();
+          return Response.json({ ...mockOfficialPayload, id: "not-a-uuid" });
+        }),
+      );
+
+      const res = await createOfficial(
+        makeMutationRequest("POST", `/api/phase4/competitions/${competitionId}/officials`, {
+          name: "Official A",
+        }),
+        { params: Promise.resolve({ competitionId }) },
+      );
+
+      expect(res.status).toBe(502);
+      expect(await res.json()).toMatchObject({
+        error: { code: "COMMAND_RESPONSE_INVALID" },
+      });
+    });
   });
 
   // -------------------------------------------------------------
@@ -566,6 +588,42 @@ describe("Phase 4 Officials BFF", () => {
       expect(res.status).toBe(400);
       expect(await res.json()).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
     });
+
+    it("accepts valid RFC3339 timestamps including numeric timezone offsets", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          if (String(input).endsWith("/api/v1/identity/me")) return mockIdentityResponse();
+          return Response.json({
+            windows: [{ starts_at: "2026-09-29T15:30:00Z", ends_at: "2026-09-30T01:30:00+08:00" }],
+            bumped_revision: true,
+          });
+        }),
+      );
+
+      const res = await replaceAvailability(
+        makeMutationRequest("PUT", `/api/phase4/competitions/${competitionId}/officials/${officialId}/availability`, {
+          windows: [{ starts_at: "2026-09-29T15:30:00Z", ends_at: "2026-09-30T01:30:00+08:00" }],
+        }),
+        { params: Promise.resolve({ competitionId, officialId }) },
+      );
+
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects non-RFC3339 date strings like date-only or missing-seconds", async () => {
+      for (const invalidDate of ["2026-09-29", "2026-09-29 15:30", "15:30", "09/29/2026"]) {
+        const res = await replaceAvailability(
+          makeMutationRequest("PUT", `/api/phase4/competitions/${competitionId}/officials/${officialId}/availability`, {
+            windows: [{ starts_at: invalidDate, ends_at: "2026-09-29T18:00:00Z" }],
+          }),
+          { params: Promise.resolve({ competitionId, officialId }) },
+        );
+
+        expect(res.status).toBe(400);
+        expect(await res.json()).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
+      }
+    });
   });
 
   // -------------------------------------------------------------
@@ -665,6 +723,69 @@ describe("Phase 4 Officials BFF", () => {
       expect(await res.json()).toMatchObject({
         error: { code: "OFFICIAL_ARCHIVED" },
       });
+    });
+
+    it("accepts omitting optional assigned_role and normalizes to null", async () => {
+      let forwardedBody: Record<string, unknown> | null = null;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          if (String(input).endsWith("/api/v1/identity/me")) return mockIdentityResponse();
+          if (init?.body) forwardedBody = JSON.parse(String(init.body));
+          return Response.json({
+            assignments: [{ match_id: matchId, official_id: officialId, assigned_role: null }],
+            bumped_revision: false,
+          });
+        }),
+      );
+
+      const res = await replaceAssignments(
+        makeMutationRequest("PUT", `/api/phase4/competitions/${competitionId}/matches/${matchId}/officials`, {
+          assignments: [{ official_id: officialId }],
+        }),
+        { params: Promise.resolve({ competitionId, matchId }) },
+      );
+
+      expect(res.status).toBe(200);
+      expect(forwardedBody).toEqual({
+        assignments: [{ official_id: officialId, assigned_role: null }],
+      });
+    });
+
+    it("rejects non-UUID official_id in assignments", async () => {
+      for (const invalidId of ["abc", "", "6000", "not-a-uuid"]) {
+        const res = await replaceAssignments(
+          makeMutationRequest("PUT", `/api/phase4/competitions/${competitionId}/matches/${matchId}/officials`, {
+            assignments: [{ official_id: invalidId }],
+          }),
+          { params: Promise.resolve({ competitionId, matchId }) },
+        );
+        expect(res.status).toBe(400);
+        expect(await res.json()).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
+      }
+    });
+
+    it("returns 502 when upstream assignment response contains malformed non-UUID IDs", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          if (String(input).endsWith("/api/v1/identity/me")) return mockIdentityResponse();
+          return Response.json({
+            assignments: [{ match_id: "not-a-uuid", official_id: officialId, assigned_role: null }],
+            bumped_revision: true,
+          });
+        }),
+      );
+
+      const res = await replaceAssignments(
+        makeMutationRequest("PUT", `/api/phase4/competitions/${competitionId}/matches/${matchId}/officials`, {
+          assignments: [{ official_id: officialId }],
+        }),
+        { params: Promise.resolve({ competitionId, matchId }) },
+      );
+
+      expect(res.status).toBe(502);
+      expect(await res.json()).toMatchObject({ error: { code: "COMMAND_RESPONSE_INVALID" } });
     });
   });
 
