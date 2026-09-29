@@ -33,6 +33,9 @@ export default async function CompetitionSectionPage({
   if (result.state === "notFound") notFound();
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase2Copy.errorBody);
+  if (section === "officials") {
+    redirect(`/organiser/competitions/${encodeURIComponent(id)}/officials`);
+  }
   if (section === phase3CapacityMachine.section) {
     const capacity = await getCapacityDocument(result.competition.id, result.competition.name, query.state);
     return (

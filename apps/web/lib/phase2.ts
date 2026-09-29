@@ -11,6 +11,7 @@ export type OrganiserSection =
   | "entries"
   | "capacity"
   | "format"
+  | "officials"
   | "schedule"
   | "results"
   | "publish"
@@ -273,6 +274,7 @@ export const organiserSections: ReadonlyArray<{ id: OrganiserSection; label: str
   { id: "entries", label: "Teams and division", short: "Entries" },
   { id: "capacity", label: "Capacity", short: "Capacity" },
   { id: "format", label: "Group to knockout", short: "Format" },
+  { id: "officials", label: "Officials", short: "Officials" },
   { id: "schedule", label: "Schedule", short: "Schedule" },
   { id: "results", label: "Standings and advancement", short: "Results" },
   { id: "publish", label: "Publication", short: "Publish" },
@@ -285,6 +287,7 @@ export const v1OrganiserSections: ReadonlyArray<{ id: OrganiserSection; label: s
   { id: "entries", label: "Teams", short: "Teams" },
   { id: "capacity", label: "Capacity", short: "Capacity" },
   { id: "format", label: "Format", short: "Format" },
+  { id: "officials", label: "Officials", short: "Officials" },
   { id: "schedule", label: "Schedule", short: "Schedule" },
   { id: "results", label: "Results", short: "Results" },
   { id: "publish", label: "Publish", short: "Publish" },
@@ -319,6 +322,8 @@ export const phase2Copy = {
   capacityIntro: "Continuous availability is calculated per playing area. Break remnants are never combined.",
   formatTitle: "Group to knockout",
   formatIntro: "Two groups advance into semi-finals, a bronze match and the final.",
+  officialsTitle: "Officials",
+  officialsIntro: "Manage competition officials, their availability, and match assignments.",
   scheduleTitle: "Schedule",
   scheduleIntro: "Review and manage the match schedule across all playing areas.",
   resultsTitle: "Standings and advancement",
