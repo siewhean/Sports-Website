@@ -4,10 +4,11 @@ import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { parseConfig } from "@matchday/config";
-import type { Phase4FormatBuilderDocument, ScheduleConstraints } from "@matchday/contracts";
+import type { Phase4FormatBuilderDocument, ScheduleConstraints, ScheduleJobInput } from "@matchday/contracts";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import { createDefaultFormatTemplates } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
+import { DomainScheduleOptimizer } from "@matchday/scheduler";
 import { buildApp } from "../../src/app.js";
 import { ErrorCode } from "../../src/errors.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
@@ -1165,6 +1166,320 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
       }
 
       await client`DELETE FROM schedule_generation_jobs WHERE id = ${jobId}`;
+    });
+
+    it("canonicalises contiguous and overlapping persisted availability windows into a single interval in the job snapshot", async () => {
+      // 1. Create a dedicated official
+      const offRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials`,
+        headers: ownerHeaders(),
+        body: { name: `Canon Off ${randomUUID().slice(0, 6)}`, default_role: "referee" },
+      });
+      expect(offRes.statusCode).toBe(201);
+      const canonOfficialId = JSON.parse(offRes.body).id;
+
+      // 2. Set overlapping and contiguous availability windows:
+      // 01:00-02:00, 01:30-02:30, 02:30-03:00 -> should merge to 01:00-03:00
+      const putWindows = await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials/${canonOfficialId}/availability`,
+        headers: ownerHeaders(),
+        body: {
+          windows: [
+            { starts_at: "2027-08-01T01:00:00Z", ends_at: "2027-08-01T02:00:00Z" },
+            { starts_at: "2027-08-01T01:30:00Z", ends_at: "2027-08-01T02:30:00Z" },
+            { starts_at: "2027-08-01T02:30:00Z", ends_at: "2027-08-01T03:00:00Z" },
+          ],
+        },
+      });
+      expect(putWindows.statusCode).toBe(200);
+
+      // 3. Assign this official to match 1
+      const assignRes = await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
+        headers: ownerHeaders(),
+        body: { assignments: [{ official_id: canonOfficialId, role: "lead" }] },
+      });
+      expect(assignRes.statusCode).toBe(200);
+
+      // 4. Generate schedule
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      const constraints: ScheduleConstraints = {
+        minimum_rest: { mode: "ignored", value: { minutes: 0 } },
+        maximum_matches_per_day: { mode: "ignored", value: { matches: 8 } },
+        preferred_final_time: {
+          mode: "ignored",
+          value: { target_start_epoch_ms: Date.parse("2027-08-01T12:00:00Z"), tolerance_minutes: 60 },
+        },
+        entry_unavailable: { mode: "ignored", value: { by_entry_id: {} } },
+        official_availability: {
+          mode: "required",
+          value: { by_official_id: {} },
+        },
+        featured_playing_area: { mode: "ignored", value: { area_id: areaId, match_ids: [] } },
+        avoid_consecutive_matches: { mode: "ignored", value: { minutes: 0 } },
+        balance_early_matches: { mode: "ignored", value: { before_local_time: "09:00" } },
+        balance_late_matches: { mode: "ignored", value: { at_or_after_local_time: "18:00" } },
+        keep_division_together: { mode: "ignored", value: { maximum_area_count: 1 } },
+        preserve_existing_schedule: { mode: "ignored", value: { maximum_shift_minutes: 0, by_match_id: {} } },
+      };
+
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `canon-avail-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints,
+        },
+        randomUUID(),
+      );
+
+      const [jobRow] = await client<{ input_snapshot: ScheduleJobInput }[]>`
+        SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${gen.job.id}`;
+      expect(jobRow).toBeDefined();
+
+      const snapshot = jobRow!.input_snapshot;
+      const officialWindows = snapshot.constraints.official_availability.value.by_official_id[canonOfficialId];
+
+      // Exact assertion: 3 overlapping/contiguous windows merged into exactly 1 canonical interval
+      expect(officialWindows).toBeDefined();
+      expect(officialWindows).toHaveLength(1);
+      expect(officialWindows![0]!.start_epoch_ms).toBe(Date.parse("2027-08-01T01:00:00Z"));
+      expect(officialWindows![0]!.end_epoch_ms).toBe(Date.parse("2027-08-01T03:00:00Z"));
+
+      await client`DELETE FROM schedule_generation_jobs WHERE id = ${gen.job.id}`;
+    });
+
+    it("executes scheduler worker directly on persisted DB input snapshot and verifies official constraint satisfaction", async () => {
+      // 1. Snapshot the job input from the database
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      const constraints: ScheduleConstraints = {
+        minimum_rest: { mode: "ignored", value: { minutes: 0 } },
+        maximum_matches_per_day: { mode: "ignored", value: { matches: 8 } },
+        preferred_final_time: {
+          mode: "ignored",
+          value: { target_start_epoch_ms: Date.parse("2027-08-01T12:00:00Z"), tolerance_minutes: 60 },
+        },
+        entry_unavailable: { mode: "ignored", value: { by_entry_id: {} } },
+        official_availability: {
+          mode: "preferred",
+          weight: 5,
+          value: { by_official_id: {} },
+        },
+        featured_playing_area: { mode: "ignored", value: { area_id: areaId, match_ids: [] } },
+        avoid_consecutive_matches: { mode: "ignored", value: { minutes: 0 } },
+        balance_early_matches: { mode: "ignored", value: { before_local_time: "09:00" } },
+        balance_late_matches: { mode: "ignored", value: { at_or_after_local_time: "18:00" } },
+        keep_division_together: { mode: "ignored", value: { maximum_area_count: 1 } },
+        preserve_existing_schedule: { mode: "ignored", value: { maximum_shift_minutes: 0, by_match_id: {} } },
+      };
+
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `worker-exec-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints,
+        },
+        randomUUID(),
+      );
+
+      const [jobRow] = await client<{ input_snapshot: ScheduleJobInput }[]>`
+        SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${gen.job.id}`;
+      expect(jobRow).toBeDefined();
+
+      const input = jobRow!.input_snapshot;
+
+      // 2. Feed the exact persisted input_snapshot directly to DomainScheduleOptimizer worker
+      const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 4, workerExecArgv: [] });
+      optimizer.validateInput(input);
+
+      const candidates: { iteration: number; result: import("@matchday/contracts").ScheduleJobResult }[] = [];
+      for await (const candidate of optimizer.optimize({
+        input,
+        seed: null,
+        startIteration: 0,
+        signal: new AbortController().signal,
+        maxYieldIntervalMs: 15_000,
+      })) {
+        candidates.push(candidate);
+      }
+
+      expect(candidates.length).toBeGreaterThan(0);
+      const best = candidates[0]!.result;
+      expect(best.status).toBe("valid");
+      expect(best.quality?.valid).toBe(true);
+
+      // 3. Independently verify candidate through optimizer.verifyCandidate
+      const verified = await optimizer.verifyCandidate(input, best);
+      expect(verified).not.toBeNull();
+      expect(verified?.quality.valid).toBe(true);
+      expect(verified?.violations.filter((v) => v.code === "official_overlap")).toEqual([]);
+
+      await client`DELETE FROM schedule_generation_jobs WHERE id = ${gen.job.id}`;
+    });
+
+    it("guarantees deterministic input snapshot across split vs merged windows and assignment insertion order", async () => {
+      // 1. Create two officials
+      const off1Res = await app.inject({
+        method: "POST",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials`,
+        headers: ownerHeaders(),
+        body: { name: `Det Off 1 ${randomUUID().slice(0, 6)}`, default_role: "referee" },
+      });
+      const off1Id = JSON.parse(off1Res.body).id;
+
+      const off2Res = await app.inject({
+        method: "POST",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials`,
+        headers: ownerHeaders(),
+        body: { name: `Det Off 2 ${randomUUID().slice(0, 6)}`, default_role: "umpire" },
+      });
+      const off2Id = JSON.parse(off2Res.body).id;
+
+      // Scenario A:
+      // - Assignments inserted in order: off1 then off2
+      // - Availability for off1: single merged window 09:00 - 11:00
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
+        headers: ownerHeaders(),
+        body: {
+          assignments: [
+            { official_id: off1Id, assigned_role: "head_referee" },
+            { official_id: off2Id, assigned_role: "assistant" },
+          ],
+        },
+      });
+
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials/${off1Id}/availability`,
+        headers: ownerHeaders(),
+        body: {
+          windows: [{ starts_at: "2027-08-01T01:00:00Z", ends_at: "2027-08-01T03:00:00Z" }],
+        },
+      });
+
+      const compA = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      const constraints: ScheduleConstraints = {
+        minimum_rest: { mode: "ignored", value: { minutes: 0 } },
+        maximum_matches_per_day: { mode: "ignored", value: { matches: 8 } },
+        preferred_final_time: {
+          mode: "ignored",
+          value: { target_start_epoch_ms: Date.parse("2027-08-01T12:00:00Z"), tolerance_minutes: 60 },
+        },
+        entry_unavailable: { mode: "ignored", value: { by_entry_id: {} } },
+        official_availability: { mode: "preferred", weight: 5, value: { by_official_id: {} } },
+        featured_playing_area: { mode: "ignored", value: { area_id: areaId, match_ids: [] } },
+        avoid_consecutive_matches: { mode: "ignored", value: { minutes: 0 } },
+        balance_early_matches: { mode: "ignored", value: { before_local_time: "09:00" } },
+        balance_late_matches: { mode: "ignored", value: { at_or_after_local_time: "18:00" } },
+        keep_division_together: { mode: "ignored", value: { maximum_area_count: 1 } },
+        preserve_existing_schedule: { mode: "ignored", value: { maximum_shift_minutes: 0, by_match_id: {} } },
+      };
+
+      const genA = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `det-test-a-${randomUUID()}`,
+          expected_source_revision: Number(compA.revision),
+          expected_capacity_revision: Number(compA.capacity_revision),
+          objective: "balanced",
+          constraints,
+        },
+        randomUUID(),
+      );
+
+      const [jobRowA] = await client<{ input_snapshot: ScheduleJobInput }[]>`
+        SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${genA.job.id}`;
+      const snapA = jobRowA!.input_snapshot;
+      await client`DELETE FROM schedule_generation_jobs WHERE id=${genA.job.id}`;
+
+      // Scenario B:
+      // - Assignments inserted in reversed order: off2 then off1, with different role labels!
+      // - Availability for off1: two contiguous split windows 09:00 - 10:00 and 10:00 - 11:00
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
+        headers: ownerHeaders(),
+        body: {
+          assignments: [
+            { official_id: off2Id, assigned_role: "line_judge" },
+            { official_id: off1Id, assigned_role: "solo_referee" },
+          ],
+        },
+      });
+
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials/${off1Id}/availability`,
+        headers: ownerHeaders(),
+        body: {
+          windows: [
+            { starts_at: "2027-08-01T01:00:00Z", ends_at: "2027-08-01T02:00:00Z" },
+            { starts_at: "2027-08-01T02:00:00Z", ends_at: "2027-08-01T03:00:00Z" },
+          ],
+        },
+      });
+
+      const compB = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      const genB = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `det-test-b-${randomUUID()}`,
+          expected_source_revision: Number(compB.revision),
+          expected_capacity_revision: Number(compB.capacity_revision),
+          objective: "balanced",
+          constraints,
+        },
+        randomUUID(),
+      );
+
+      const [jobRowB] = await client<{ input_snapshot: ScheduleJobInput }[]>`
+        SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${genB.job.id}`;
+      const snapB = jobRowB!.input_snapshot;
+      await client`DELETE FROM schedule_generation_jobs WHERE id=${genB.job.id}`;
+
+      // Assert deterministic match official IDs ordering (sorted by official UUID)
+      const matchA = snapA.matches.find((m) => m.match_id === match1Id);
+      const matchB = snapB.matches.find((m) => m.match_id === match1Id);
+      expect(matchA?.official_ids).toEqual(matchB?.official_ids);
+      expect(matchA?.official_ids).toEqual([off1Id, off2Id].sort());
+
+      // Assert canonicalised availability is identical regardless of split vs merged windows
+      const off1AvailA = snapA.constraints.official_availability.value.by_official_id[off1Id];
+      const off1AvailB = snapB.constraints.official_availability.value.by_official_id[off1Id];
+      expect(off1AvailA).toEqual(off1AvailB);
+      expect(off1AvailA).toHaveLength(1);
+      expect(off1AvailA![0]!.start_epoch_ms).toBe(Date.parse("2027-08-01T01:00:00Z"));
+      expect(off1AvailA![0]!.end_epoch_ms).toBe(Date.parse("2027-08-01T03:00:00Z"));
     });
   });
 
