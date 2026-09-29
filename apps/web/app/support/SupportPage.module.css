@@ -1,0 +1,85 @@
+.sections {
+  display: grid;
+  gap: clamp(48px, 7vw, 88px);
+}
+.sectionTitle {
+  margin: 0 0 24px;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  letter-spacing: -0.035em;
+}
+.faqs {
+  border-top: 1px solid var(--hairline);
+}
+.faq {
+  border-bottom: 1px solid var(--hairline);
+}
+.faq summary {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 4px;
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 650;
+  list-style: none;
+}
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+.faq summary svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  transition: transform 180ms var(--ease-out);
+}
+.faq[open] summary svg {
+  transform: rotate(180deg);
+}
+.faq summary:focus-visible,
+.contact a:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.faq p {
+  max-width: 65ch;
+  margin: 0;
+  padding: 0 4px 24px;
+  color: var(--ink-muted);
+  line-height: 1.65;
+}
+.contact {
+  padding: clamp(24px, 4vw, 40px);
+  background: var(--surface-subtle);
+  border: 1px solid var(--hairline);
+  border-radius: 20px;
+}
+.contact h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2vw, 1.85rem);
+}
+.contact p {
+  max-width: 60ch;
+  margin: 12px 0 24px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+.contact a {
+  min-height: 48px;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--ink);
+  color: var(--surface);
+  border-radius: 999px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  .faq summary svg {
+    transition: none;
+  }
+}

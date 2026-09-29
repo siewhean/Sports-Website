@@ -19,12 +19,13 @@ import {
 } from "./phase2";
 
 export type ApiSessionState = {
-  competition: { slug: string; sport_code: SportId };
-  sport: { pack_version: string; settings: SportPackSettings };
+  competition: { slug: string; name?: string; sport_code: SportId };
+  sport: { pack_version: string; settings: SportPackSettings; period_duration_minutes?: number | null };
   match: {
     id: string;
     code: string;
     stage: string;
+    schedule?: { area_name: string | null; starts_at: string | null; revision: number } | null;
     home: { id: string | null; name: string | null };
     away: { id: string | null; name: string | null };
   };
@@ -249,12 +250,25 @@ export function scoringSessionView(state: ApiSessionState): ScoringSessionView {
   return {
     principalId: state.access.principal_id,
     competitionSlug: state.competition.slug,
+    competitionName: state.competition.name ?? state.competition.slug,
     sportId: state.competition.sport_code,
     sportPackVersion: state.sport.pack_version,
     sportSettings: state.sport.settings,
+    periodDurationMinutes:
+      state.sport.period_duration_minutes ??
+      (typeof state.sport.settings.periodDurationMinutes === "number"
+        ? state.sport.settings.periodDurationMinutes
+        : null),
     matchId: state.match.id,
     matchLabel: state.match.code,
     stage: state.match.stage,
+    schedule: state.match.schedule
+      ? {
+          areaName: state.match.schedule.area_name,
+          startsAt: state.match.schedule.starts_at,
+          revision: state.match.schedule.revision,
+        }
+      : null,
     home: state.match.home.name ?? "TBD",
     away: state.match.away.name ?? "TBD",
     homeScore: state.score.home,
@@ -545,12 +559,18 @@ class DemoScoringCommandPort implements ScoringCommandPort {
     return {
       principalId: "d".repeat(64),
       competitionSlug: phase2Machine.singaporeOpenSlug,
+      competitionName: "Singapore Open",
       sportId: this.sportId,
       sportPackVersion: pack.version,
       sportSettings: pack.recommendedSettings,
+      periodDurationMinutes:
+        typeof pack.recommendedSettings.periodDurationMinutes === "number"
+          ? pack.recommendedSettings.periodDurationMinutes
+          : null,
       matchId: phase2Machine.matchTwelveId,
       matchLabel: phase2Copy.matchTwelve,
       stage: phase2Copy.groupB,
+      schedule: null,
       home: phase2Copy.marinaBlue,
       away: phase2Copy.harbourGold,
       homeScore: reduced.score.home,

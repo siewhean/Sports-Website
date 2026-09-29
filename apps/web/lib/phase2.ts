@@ -28,6 +28,10 @@ export type MatchView = {
   homeScore?: number;
   awayScore?: number;
   resultVersion?: number;
+  currentSegment?: number;
+  segments?: Array<{ number: number; home: number; away: number }>;
+  recordedTimeSeconds?: number | null;
+  updatedAt?: string;
   status: "scheduled" | "live" | "final";
 };
 
@@ -210,12 +214,15 @@ export type ScoringScoreStateView = {
 export type ScoringSessionView = {
   principalId: string;
   competitionSlug: string;
+  competitionName?: string;
   sportId: SportId;
   sportPackVersion: string;
   sportSettings: SportPackSettings;
+  periodDurationMinutes?: number | null;
   matchId: string;
   matchLabel: string;
   stage: string;
+  schedule?: { areaName: string | null; startsAt: string | null; revision: number } | null;
   home: string;
   away: string;
   homeScore: number;
@@ -383,7 +390,16 @@ export const phase2Copy = {
   codeLabel: "Scoring code",
   codeHint: "Use the match-specific code from the organiser.",
   codeError: "That scoring code is not valid for this match.",
-  confirmMatch: "I am at Match 12 and ready to score this fixture.",
+  confirmMatch: "I have checked this fixture and am ready to score.",
+  fixtureLocation: "Playing area",
+  fixtureStart: "Scheduled start",
+  fixtureUnscheduled: "No published schedule slot",
+  fixtureUnknownArea: "Area not assigned",
+  timeMode: "Clock input",
+  elapsedTime: "Elapsed time",
+  remainingTime: "Time remaining",
+  elapsedPreview: "Recorded elapsed time",
+  invalidRecordedTime: "Enter a time within this period, in mm:ss format.",
   startScoring: "Start scoring",
   scorerLabel: "Scorer name",
   scorerHint: "Required on every scoring event for audit attribution.",

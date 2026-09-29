@@ -135,6 +135,14 @@ function toDivisionView(
         home: result?.home.name ?? match.home.name,
         away: result?.away.name ?? match.away.name,
         ...(result ? { homeScore: result.home_score, awayScore: result.away_score } : {}),
+        ...(result
+          ? {
+              currentSegment: result.current_segment,
+              segments: result.segments,
+              recordedTimeSeconds: result.recorded_time_seconds,
+              updatedAt: result.updated_at,
+            }
+          : {}),
         status: publicMatchStatus(result),
       };
     }),
@@ -150,6 +158,10 @@ function toDivisionView(
         away: result.away.name,
         homeScore: result.home_score,
         awayScore: result.away_score,
+        currentSegment: result.current_segment,
+        segments: result.segments,
+        recordedTimeSeconds: result.recorded_time_seconds,
+        updatedAt: result.updated_at,
         status: publicMatchStatus(result),
       })),
   ];
@@ -233,6 +245,7 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
   if (!primary) throw new Error("Public competition projection requires at least one division");
   return {
     id: competition.id,
+    sportCode: competition.sport_code,
     slug: competition.slug,
     name: competition.name,
     sport: publicSportName(competition.sport_code),

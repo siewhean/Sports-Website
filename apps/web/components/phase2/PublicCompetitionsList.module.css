@@ -73,6 +73,32 @@
   list-style: none;
 }
 
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 28px 0;
+}
+.filters button {
+  min-height: 48px;
+  padding: 0 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface, var(--canvas));
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.filters button[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--canvas);
+}
+.filters button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .board > li {
   border-top: 1px solid var(--hairline);
 }

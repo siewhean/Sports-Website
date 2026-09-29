@@ -27,6 +27,9 @@ export type PublicMatchResult = {
   away_score: number;
   state: "in_progress" | "final" | "corrected";
   updated_at: string;
+  current_segment?: number;
+  segments?: Array<{ number: number; home: number; away: number }>;
+  recorded_time_seconds?: number | null;
 };
 
 export type PublicDivisionProjection = {
@@ -106,8 +109,8 @@ export type ScoringFinalisationReceipt = {
 };
 
 export type ScoringSessionState = {
-  competition: { slug: string; sport_code: Phase3SportCode };
-  sport: { pack_version: string; settings: Record<string, unknown> };
+  competition: { slug: string; sport_code: Phase3SportCode; name?: string };
+  sport: { pack_version: string; settings: Record<string, unknown>; period_duration_minutes?: number | null };
   match: {
     id: string;
     code: string;
@@ -115,6 +118,7 @@ export type ScoringSessionState = {
     state: "pending" | "ready" | "in_progress" | "final" | "corrected";
     home: { id: string | null; name: string | null };
     away: { id: string | null; name: string | null };
+    schedule?: { area_name: string | null; starts_at: string | null; revision: number | null } | null;
   };
   access: {
     principal_id: string;

@@ -50,6 +50,8 @@ import { registerNotificationRoutes } from "./notification-routes.js";
 import type { NotificationService } from "@matchday/notifications";
 import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHandle } from "./telemetry.js";
 import type { PostgresJsSql } from "@matchday/identity";
+import type postgres from "postgres";
+import { registerCasualRoutes } from "./casual-routes.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
@@ -141,6 +143,7 @@ export type BuildAppOptions = {
   exportRuntime?: ExportRuntime;
   adminRuntime?: AdminRuntime;
   notificationService?: NotificationService;
+  casualSql?: postgres.Sql;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -362,7 +365,7 @@ export async function buildApp(options: BuildAppOptions) {
       reply.header("Pragma", "no-cache");
       reply.header("Vary", "Origin, Cookie");
     } else if (route.startsWith("/api/v1/public/")) {
-      reply.header("Cache-Control", "public, max-age=15, stale-while-revalidate=45");
+      reply.header("Cache-Control", "public, max-age=0, s-maxage=0, must-revalidate");
     }
   });
 
@@ -661,6 +664,13 @@ export async function buildApp(options: BuildAppOptions) {
         identityRequests,
       });
     }
+  }
+
+  if (options.casualSql) {
+    await registerCasualRoutes(app as unknown as FastifyInstance, {
+      sql: options.casualSql,
+      ...(identityRequests ? { identityRequests } : {}),
+    });
   }
 
   if (options.gateCC4PublicTruthRuntime) {

@@ -1,0 +1,46 @@
+.page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.main {
+  width: min(100%, 1280px);
+  flex: 1;
+  margin-inline: auto;
+  padding: clamp(40px, 5vw, 80px) clamp(16px, 3vw, 40px) clamp(64px, 8vw, 112px);
+}
+
+.narrow {
+  max-width: 840px;
+}
+
+.heading {
+  max-width: 65ch;
+  margin-bottom: clamp(40px, 6vw, 72px);
+}
+
+.heading h1 {
+  margin: 0;
+  font-size: clamp(2.5rem, 5vw, 4.5rem);
+  line-height: 1.03;
+  letter-spacing: -0.055em;
+}
+
+.heading p {
+  margin: 20px 0 0;
+  color: var(--ink-muted);
+  font-size: clamp(1rem, 1.3vw, 1.2rem);
+  line-height: 1.6;
+}
+
+@media (max-width: 600px) {
+  .main {
+    padding-block: 40px 72px;
+  }
+  .heading {
+    margin-bottom: 40px;
+  }
+}

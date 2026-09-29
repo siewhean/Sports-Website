@@ -1,16 +1,16 @@
-.page {
+.container {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  background-color: var(--color-background, #f8fafc);
-  color: var(--color-foreground, #0f172a);
+  min-height: 100dvh;
+  background: var(--canvas);
+  color: var(--ink);
 }
 
-.container {
+.main {
   flex: 1;
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 3rem 1.5rem 5rem;
+  padding: clamp(40px, 5vw, 80px) clamp(16px, 3vw, 40px) clamp(64px, 8vw, 112px);
   width: 100%;
 }
 
@@ -24,28 +24,28 @@
   font-size: 2.5rem;
   font-weight: 800;
   letter-spacing: -0.025em;
-  color: var(--color-navy, #0f172a);
+  color: var(--ink);
   margin-bottom: 1rem;
 }
 
 .subtitle {
   font-size: 1.15rem;
-  color: var(--color-slate-600, #475569);
+  color: var(--ink-muted);
   line-height: 1.6;
 }
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 2rem;
   align-items: stretch;
 }
 
 .card {
   position: relative;
-  background: white;
+  background: var(--surface);
   border-radius: 1rem;
-  border: 1px solid var(--color-slate-200, #e2e8f0);
+  border: 1px solid var(--hairline);
   padding: 2.5rem 2rem;
   display: flex;
   flex-direction: column;
@@ -61,8 +61,8 @@
 }
 
 .featured {
-  border-color: var(--color-teal, #0d9488);
-  box-shadow: 0 10px 25px -5px rgba(13, 148, 136, 0.15);
+  border-color: var(--signal-strong);
+  box-shadow: var(--shadow-soft);
 }
 
 .cardBadge {
@@ -70,8 +70,8 @@
   top: -12px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--color-teal, #0d9488);
-  color: white;
+  background: var(--signal);
+  color: var(--signal-ink);
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
   font-size: 0.75rem;
@@ -96,17 +96,17 @@
 .amount {
   font-size: 2.75rem;
   font-weight: 800;
-  color: var(--color-navy, #0f172a);
+  color: var(--ink);
 }
 
 .period {
   font-size: 1rem;
-  color: var(--color-slate-500, #64748b);
+  color: var(--ink-muted);
 }
 
 .description {
-  font-size: 0.95rem;
-  color: var(--color-slate-600, #475569);
+  font-size: 1rem;
+  color: var(--ink-muted);
   margin-bottom: 2rem;
   min-height: 2.8rem;
 }
@@ -125,31 +125,45 @@
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
-  font-size: 0.925rem;
-  color: var(--color-slate-700, #334155);
+  font-size: 1rem;
+  color: var(--ink);
 }
 
 .checkIcon {
-  color: var(--color-teal, #0d9488);
+  color: var(--signal-strong);
   font-weight: 800;
 }
 
 .ctaButton {
   display: block;
   text-align: center;
+  min-height: 48px;
   padding: 0.85rem 1.5rem;
   border-radius: 0.5rem;
   font-weight: 600;
   text-decoration: none;
-  background: var(--color-navy, #0f172a);
-  color: white;
+  background: var(--ink);
+  color: var(--surface);
   transition: background-color 0.2s;
 }
 
 .featured .ctaButton {
-  background: var(--color-teal, #0d9488);
+  background: var(--signal);
+  color: var(--signal-ink);
 }
 
 .ctaButton:hover {
   opacity: 0.92;
+}
+
+.ctaButton:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .ctaButton {
+    transition: none;
+  }
 }
