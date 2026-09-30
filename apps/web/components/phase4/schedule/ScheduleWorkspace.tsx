@@ -45,6 +45,8 @@ import {
   type ScheduleObjective,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
+import type { ScheduleOfficialsProjection } from "@/lib/phase4-officials";
+import { MatchOfficialsSummary } from "./MatchOfficialsSummary";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -78,11 +80,13 @@ function withRevision(document: ScheduleDocument, revision: NonNullable<Schedule
 
 export function ScheduleWorkspace({
   document: initialDocument,
+  officials,
   initialSelectedMatchId = null,
   initialNotice = null,
 }: {
   advanced?: boolean;
   document: ScheduleDocument;
+  officials?: ScheduleOfficialsProjection;
   initialSelectedMatchId?: string | null;
   initialNotice?: typeof phase4ScheduleMachine.moveNotice | null;
 }) {
@@ -470,6 +474,7 @@ export function ScheduleWorkspace({
             locked={Boolean(selectedLock)}
             onToggleLock={toggleLock}
             disabled={disabled || !assignment}
+            officials={officials}
           />
         </div>
       ) : (
@@ -791,12 +796,14 @@ function MatchInspector({
   locked,
   onToggleLock,
   disabled,
+  officials,
 }: {
   document: ScheduleDocument;
   match: ScheduleMatch | null;
   locked: boolean;
   onToggleLock: () => Promise<void>;
   disabled: boolean;
+  officials?: ScheduleOfficialsProjection;
 }) {
   const assignment = match ? assignmentForMatch(document.currentRevision, match.id) : null;
   return (
@@ -857,6 +864,11 @@ function MatchInspector({
               <p>{phase4ScheduleCopy.noDependencies}</p>
             )}
           </section>
+          <MatchOfficialsSummary
+            competitionId={document.competitionId}
+            matchId={match.id}
+            officialsProjection={officials}
+          />
           <button className={styles.lockButton} type="button" disabled={disabled} onClick={() => void onToggleLock()}>
             {locked ? <LockKeyOpen /> : <LockKey />}
             {locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}

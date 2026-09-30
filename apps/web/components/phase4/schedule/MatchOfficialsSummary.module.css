@@ -1,0 +1,95 @@
+.officialsSection {
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--schedule-line);
+  min-width: 0;
+}
+
+.title {
+  margin: 0 0 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--schedule-ink);
+  letter-spacing: -0.01em;
+}
+
+.notice,
+.emptyNotice {
+  margin: 0 0 0.6rem;
+  color: var(--schedule-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.officialsList {
+  margin: 0 0 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.officialItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--schedule-line);
+  min-width: 0;
+}
+
+.officialItem:first-child {
+  border-top: 0;
+}
+
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.officialName {
+  font-size: 0.76rem;
+  font-weight: 550;
+  color: var(--schedule-ink);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background-color: var(--color-surface-sunken, #f3f4f6);
+  color: var(--color-text-secondary, #6b7280);
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.roleText {
+  color: var(--schedule-muted);
+  font:
+    500 0.69rem/1.3 var(--font-geist-mono),
+    monospace;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.manageLink {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 0.35rem;
+  font-size: 0.73rem;
+  font-weight: 550;
+  color: var(--schedule-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.manageLink:hover,
+.manageLink:focus-visible {
+  color: var(--schedule-signal, #0052cc);
+}

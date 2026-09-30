@@ -7,8 +7,64 @@ import {
   createDemoOfficialWorkspace,
   officialWorkspaceUnavailableDocument,
   parseOfficialWorkspaceResponse,
+  type MatchOfficialAssignmentView,
   type OfficialWorkspaceDocument,
+  type SurfaceState,
 } from "@/lib/phase4-officials";
+
+const globalForDemo = globalThis as unknown as {
+  __demoOfficialWorkspaces?: Map<string, OfficialWorkspaceDocument>;
+};
+
+const demoWorkspaces = globalForDemo.__demoOfficialWorkspaces ?? new Map<string, OfficialWorkspaceDocument>();
+if (!globalForDemo.__demoOfficialWorkspaces) {
+  globalForDemo.__demoOfficialWorkspaces = demoWorkspaces;
+}
+
+export function getDemoOfficialWorkspace(competitionId: string, canEdit = true): OfficialWorkspaceDocument {
+  const existing = demoWorkspaces.get(competitionId);
+  if (existing) {
+    return { ...existing, canEdit };
+  }
+  const initial = createDemoOfficialWorkspace(competitionId, canEdit);
+  demoWorkspaces.set(competitionId, initial);
+  return initial;
+}
+
+export function resetDemoOfficialWorkspaces(): void {
+  demoWorkspaces.clear();
+}
+
+export function updateDemoMatchAssignments(
+  competitionId: string,
+  matchId: string,
+  assignments: { official_id: string; assigned_role: string | null }[],
+): MatchOfficialAssignmentView[] {
+  const current = getDemoOfficialWorkspace(competitionId, true);
+  const otherAssignments = current.assignments.filter((a) => a.matchId !== matchId);
+  const newAssignments: MatchOfficialAssignmentView[] = assignments.map((a) => {
+    const off = current.officials.find((o) => o.id === a.official_id);
+    return {
+      matchId,
+      officialId: a.official_id,
+      assignedRole: a.assigned_role,
+      official: off
+        ? {
+            id: off.id,
+            name: off.name,
+            defaultRole: off.defaultRole,
+            archived: off.archived,
+          }
+        : undefined,
+    };
+  });
+  const updated: OfficialWorkspaceDocument = {
+    ...current,
+    assignments: [...otherAssignments, ...newAssignments],
+  };
+  demoWorkspaces.set(competitionId, updated);
+  return newAssignments;
+}
 
 function apiBaseUrl(): URL | null {
   const configured = process.env.MATCHDAY_API_BASE_URL?.trim();
@@ -32,9 +88,17 @@ async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
   return null;
 }
 
-export async function getOfficialWorkspace(competitionId: string, canEdit = true): Promise<OfficialWorkspaceDocument> {
+export async function getOfficialWorkspace(
+  competitionId: string,
+  canEdit = true,
+  previewState?: SurfaceState | null,
+): Promise<OfficialWorkspaceDocument> {
+  if (previewState && previewState !== "ready") {
+    return officialWorkspaceUnavailableDocument(competitionId, previewState, canEdit);
+  }
+
   if (demoFixturesEnabled()) {
-    return createDemoOfficialWorkspace(competitionId, canEdit);
+    return getDemoOfficialWorkspace(competitionId, canEdit);
   }
 
   const base = apiBaseUrl();

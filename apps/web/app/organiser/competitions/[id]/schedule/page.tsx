@@ -2,6 +2,8 @@ import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
 import { ScheduleWorkspace } from "@/components/phase4/schedule/ScheduleWorkspace";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
+import { toScheduleOfficialsProjection } from "@/lib/phase4-officials";
+import { getOfficialWorkspace } from "@/lib/phase4-officials.server";
 import { phase4ScheduleCopy, phase4ScheduleMachine } from "@/lib/phase4-schedule";
 import { getScheduleDocument } from "@/lib/phase4-schedule.server";
 
@@ -10,7 +12,7 @@ export default async function SchedulePage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ state?: string; match?: string; notice?: string }>;
+  searchParams: Promise<{ state?: string; match?: string; notice?: string; officials_state?: string }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -18,13 +20,23 @@ export default async function SchedulePage({
   if (result.state === "notFound") notFound();
   if (result.state === "permission") redirect("/forbidden");
   if (result.state === "error") throw new Error(phase4ScheduleCopy.errorBody);
-  const document = await getScheduleDocument({
-    competitionId: result.competition.id,
-    competitionName: result.competition.name,
-    timeZone: result.competition.timezone,
-    publicationRevision: result.competition.publicationRevision,
-    ...(query.state ? { previewState: query.state } : {}),
-  });
+  const previewOfficialsState =
+    query.officials_state === "error" ||
+    query.officials_state === "offline" ||
+    query.officials_state === "permission" ||
+    query.officials_state === "empty"
+      ? query.officials_state
+      : null;
+  const [document, officialWorkspace] = await Promise.all([
+    getScheduleDocument({
+      competitionId: result.competition.id,
+      competitionName: result.competition.name,
+      timeZone: result.competition.timezone,
+      publicationRevision: result.competition.publicationRevision,
+      ...(query.state ? { previewState: query.state } : {}),
+    }),
+    getOfficialWorkspace(result.competition.id, result.competition.canEdit ?? false, previewOfficialsState),
+  ]);
   return (
     <OrganiserWorkspace
       competition={result.competition}
@@ -50,6 +62,7 @@ export default async function SchedulePage({
       sectionContent={
         <ScheduleWorkspace
           document={document}
+          officials={toScheduleOfficialsProjection(officialWorkspace)}
           initialSelectedMatchId={query.match}
           initialNotice={query.notice === phase4ScheduleMachine.moveNotice ? phase4ScheduleMachine.moveNotice : null}
         />

@@ -2,6 +2,7 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import {
   exact,
   isOfficialWorkspaceResponse,
@@ -11,6 +12,7 @@ import {
   phase4OfficialsMachine,
   record,
 } from "@/lib/phase4-officials";
+import { getDemoOfficialWorkspace } from "@/lib/phase4-officials.server";
 import { readPhase3Json } from "@/lib/phase3-settings-command.server";
 
 export type ValidationResult<T> = { ok: true; body: T } | { ok: false; message: string };
@@ -20,6 +22,48 @@ export function validationError(message: string) {
 }
 
 export async function forwardWorkspaceGet(request: NextRequest, competitionId: string) {
+  if (demoFixturesEnabled()) {
+    const ws = getDemoOfficialWorkspace(competitionId);
+    return NextResponse.json(
+      {
+        officials: ws.officials.map((o) => ({
+          id: o.id,
+          competition_id: o.competitionId,
+          name: o.name,
+          default_role: o.defaultRole,
+          archived: o.archived,
+          created_at: o.createdAt,
+          updated_at: o.updatedAt,
+        })),
+        availability: Object.fromEntries(
+          Object.entries(ws.availability).map(([k, v]) => [
+            k,
+            v.map((w) => ({ starts_at: w.startsAt, ends_at: w.endsAt })),
+          ]),
+        ),
+        assignments: ws.assignments.map((a) => ({
+          match_id: a.matchId,
+          official_id: a.officialId,
+          assigned_role: a.assignedRole,
+          ...(a.official
+            ? {
+                official: {
+                  id: a.official.id,
+                  name: a.official.name,
+                  default_role: a.official.defaultRole,
+                  archived: a.official.archived,
+                },
+              }
+            : {}),
+        })),
+      },
+      {
+        status: 200,
+        headers: { [phase4OfficialsMachine.cacheControl]: phase4OfficialsMachine.noStore },
+      },
+    );
+  }
+
   const result = await readPhase3Json(
     request,
     `/api/v1/phase4/competitions/${encodeURIComponent(competitionId)}/officials/workspace`,

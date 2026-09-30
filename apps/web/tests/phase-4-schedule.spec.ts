@@ -317,3 +317,110 @@ test("schedule state routes remain truthful and non-mutating", async ({ page }) 
   await expect(page.getByText("Schedule is read only", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish schedule" })).toBeDisabled();
 });
+
+test.describe("read-only official assignment integration (CP 5.5)", () => {
+  const match1Id = "30000000-0000-4000-8000-000000000001";
+  const match2Id = "30000000-0000-4000-8000-000000000002";
+  const match3Id = "30000000-0000-4000-8000-000000000003";
+
+  test("assigned official visible in MatchInspector and deep links to Officials page", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match1Id}`);
+    await dismissConsent(page);
+
+    // Inspector shows Officials section with Official A and assigned role
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+
+    const officialItem = inspector.getByTestId("schedule-assigned-official").filter({ hasText: "Official A" });
+    await expect(officialItem).toBeVisible();
+    await expect(officialItem).toContainText("Lead Official");
+
+    // Manage officials link is present and points to Officials page with ?match=
+    const manageLink = inspector.getByRole("link", { name: "Manage officials" });
+    await expect(manageLink).toBeVisible();
+    await expect(manageLink).toHaveAttribute("href", new RegExp(`/officials\\?match=${match1Id}$`));
+
+    // Click Manage officials and verify navigation + preselection
+    await manageLink.click();
+    await expect(page).toHaveURL(new RegExp(`/officials\\?match=${match1Id}$`));
+    await expect(page.getByRole("heading", { name: "Match official assignments" })).toBeVisible();
+
+    // Verify M1 is selected in Officials page match selector
+    const matchSelect = page.locator("select").filter({ has: page.locator(`option[value="${match1Id}"]`) });
+    await expect(matchSelect).toHaveValue(match1Id);
+  });
+
+  test("displays empty state when match has no assigned officials", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match3Id}`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+    await expect(inspector.getByText("No officials assigned")).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Manage officials" })).toHaveAttribute(
+      "href",
+      new RegExp(`/officials\\?match=${match3Id}$`),
+    );
+  });
+
+  test("displays archived badge for archived assigned official", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match2Id}`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+
+    const archivedItem = inspector.getByTestId("schedule-assigned-official").filter({ hasText: "Archived Official C" });
+    await expect(archivedItem).toBeVisible();
+    await expect(archivedItem.getByText("Archived", { exact: true })).toBeVisible();
+  });
+
+  test("displays temporary unavailable notice when officials workspace cannot load", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match1Id}&officials_state=error`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+    await expect(inspector.getByText("Official assignments are temporarily unavailable.")).toBeVisible();
+    await expect(inspector.getByText("No officials assigned")).not.toBeVisible();
+  });
+
+  test("fresh return: Schedule reflects updated assignments after editing on Officials page", async ({ page }) => {
+    // 1. Initial Schedule view: M1 has Official A
+    await page.goto(`${scheduleUrl}?match=${match1Id}`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByTestId("schedule-assigned-official").filter({ hasText: "Official A" })).toBeVisible();
+
+    // 2. Click Manage officials to navigate
+    await inspector.getByRole("link", { name: "Manage officials" }).click();
+    await expect(page).toHaveURL(new RegExp(`/officials\\?match=${match1Id}$`));
+
+    // 3. Edit assignments on Officials page
+    await page.getByRole("button", { name: "Edit match officials" }).click();
+
+    // Check Official B and uncheck Official A
+    const checkboxA = page.locator(`#match-official-60000000-0000-4000-8000-000000000001`);
+    const checkboxB = page.locator(`#match-official-60000000-0000-4000-8000-000000000002`);
+    await checkboxA.uncheck();
+    await checkboxB.check();
+    await page.locator(`#match-role-60000000-0000-4000-8000-000000000002`).fill("Line Judge");
+
+    // Save
+    await page.getByRole("button", { name: "Save assignments" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Match officials saved." })).toBeVisible();
+
+    // 4. Return to Schedule
+    await page.goto(`${scheduleUrl}?match=${match1Id}`);
+
+    // Inspector now shows Official B and does not show Official A
+    const inspectorAfter = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(
+      inspectorAfter.getByTestId("schedule-assigned-official").filter({ hasText: "Official B" }),
+    ).toBeVisible();
+    await expect(
+      inspectorAfter.getByTestId("schedule-assigned-official").filter({ hasText: "Official A" }),
+    ).not.toBeVisible();
+  });
+});

@@ -1,5 +1,6 @@
 import { civilMinuteAtEpoch } from "@matchday/domain";
 import type { SurfaceState } from "./phase2";
+export type { SurfaceState };
 
 export const phase4OfficialsCopy = {
   title: "Officials",
@@ -130,6 +131,13 @@ export const phase4OfficialsCopy = {
   conflictOfficialUnavailable: (name: string) => `${name} is not available for this match's current scheduled time.`,
   conflictOfficialOverlap: (name: string, matchCode: string) =>
     `${name} is also assigned to ${matchCode} at this time.`,
+  officialsSectionTitle: "Officials",
+  noOfficialsAssigned: "No officials assigned",
+  officialsUnavailable: "Official assignments are temporarily unavailable.",
+  manageOfficials: "Manage officials",
+  viewOfficials: "View officials",
+  unknownOfficial: "Unknown official",
+  noAssignedRole: "No assigned role",
 } as const;
 
 export function officialCommandErrorMessage(status: number, code?: string | null): string {
@@ -273,6 +281,44 @@ export type OfficialWorkspaceDocument = {
   assignments: MatchOfficialAssignmentView[];
   canEdit: boolean;
 };
+
+export type ScheduleOfficialView = Readonly<{
+  id: string;
+  name: string;
+  defaultRole: string | null;
+  archived: boolean;
+}>;
+
+export type ScheduleOfficialAssignmentView = Readonly<{
+  matchId: string;
+  officialId: string;
+  assignedRole: string | null;
+}>;
+
+export type ScheduleOfficialsProjection = Readonly<{
+  state: SurfaceState;
+  officials: readonly ScheduleOfficialView[];
+  assignments: readonly ScheduleOfficialAssignmentView[];
+  canEdit: boolean;
+}>;
+
+export function toScheduleOfficialsProjection(workspace: OfficialWorkspaceDocument): ScheduleOfficialsProjection {
+  return {
+    state: workspace.state,
+    canEdit: workspace.canEdit,
+    officials: workspace.officials.map((o) => ({
+      id: o.id,
+      name: o.name,
+      defaultRole: o.defaultRole,
+      archived: o.archived,
+    })),
+    assignments: workspace.assignments.map((a) => ({
+      matchId: a.matchId,
+      officialId: a.officialId,
+      assignedRole: a.assignedRole,
+    })),
+  };
+}
 
 export function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -579,6 +625,8 @@ export function createDemoOfficialWorkspace(competitionId: string, canEdit = tru
   const match1Id = "30000000-0000-4000-8000-000000000001";
   const match2Id = "30000000-0000-4000-8000-000000000002";
 
+  const compUuid = isUuid(competitionId) ? competitionId : "10000000-0000-4000-8000-000000000001";
+
   return {
     state: "ready",
     competitionId,
@@ -586,7 +634,7 @@ export function createDemoOfficialWorkspace(competitionId: string, canEdit = tru
     officials: [
       {
         id: officialAId,
-        competitionId,
+        competitionId: compUuid,
         name: "Official A",
         defaultRole: "Lead Official",
         archived: false,
@@ -595,7 +643,7 @@ export function createDemoOfficialWorkspace(competitionId: string, canEdit = tru
       },
       {
         id: officialBId,
-        competitionId,
+        competitionId: compUuid,
         name: "Official B",
         defaultRole: "Line Judge",
         archived: false,
@@ -604,7 +652,7 @@ export function createDemoOfficialWorkspace(competitionId: string, canEdit = tru
       },
       {
         id: officialCId,
-        competitionId,
+        competitionId: compUuid,
         name: "Archived Official C",
         defaultRole: "Timekeeper",
         archived: true,
