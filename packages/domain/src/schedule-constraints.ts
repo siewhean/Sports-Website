@@ -1890,8 +1890,8 @@ export function toScheduleJobInput(
 }
 
 /**
- * Analyzes a schedule problem when no feasible schedule can be found (or during preflight)
- * to pinpoint exact official availability and concurrency conflicts.
+ * Identifies official-related infeasibility conditions that can be proven from the schedule problem.
+ * Conservative analysis; not an unsatisfiable-core solver.
  */
 export function diagnoseScheduleInfeasibility(problem: ScheduleProblem): readonly ScheduleViolation[] {
   const violations: ScheduleViolation[] = [];

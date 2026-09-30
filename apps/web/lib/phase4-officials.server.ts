@@ -107,7 +107,7 @@ export function updateDemoMatchAssignments(
     if (off.archived && !existingIds.includes(off.id)) {
       return {
         ok: false,
-        status: 400,
+        status: 409,
         errorCode: "OFFICIAL_ARCHIVED",
         message: phase4OfficialsCopy.archivedCannotReassign,
       };

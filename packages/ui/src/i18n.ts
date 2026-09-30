@@ -303,6 +303,14 @@ export const messages = {
     failedRetained: "Optimisation failed; best result retained",
     failed: "Optimisation failed",
     noSolution: "No valid schedule found",
+    officialConflictsDetected: "Official conflicts detected",
+    officialConflictsDisclaimer:
+      "Matchday detected potential official scheduling conflicts. Resolving these may not guarantee a feasible schedule if other constraints are also tight.",
+    officialUnavailableForMatch: "Official unavailable for required match",
+    officialOverlapForMatches: "Official assigned to concurrent/overlapping matches",
+    noFeasibleScheduleGeneric:
+      "No feasible schedule could be found that satisfies all required constraints and playing areas.",
+    reviewOfficials: "Review officials",
     inputsChanged: "Schedule inputs changed",
     bestAvailable: "The current best remains available.",
     selectedUnchanged: "The selected draft remains unchanged.",

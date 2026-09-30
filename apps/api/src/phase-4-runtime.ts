@@ -22,8 +22,10 @@ import type {
   Phase4SetupValues,
   ScheduleAssignment,
   ScheduleConstraints,
+  ScheduleJobDiagnosticsResponse,
   ScheduleJobView,
   ScheduleObjective,
+  ScheduleOfficialDiagnostic,
   ScheduleOptionView,
   ScheduleQuality,
   ScheduleRevisionView,
@@ -37,6 +39,7 @@ import {
   canonicaliseIntervals,
   deriveAssistedSetupProgress,
   deriveSchedulingMatches,
+  diagnoseScheduleInfeasibility,
   evaluateScheduleQuality,
   materialiseFormatGraph,
   recommendCompetitionFormats,
@@ -3687,6 +3690,55 @@ export class Phase4Runtime {
     );
     await this.competitionAccess(this.sql, row.competition_id, actor, false);
     return this.jobView(this.sql, jobId);
+  }
+
+  async readScheduleJobDiagnostics(actor: Phase3Actor, jobId: string): Promise<ScheduleJobDiagnosticsResponse> {
+    const job = await this.readScheduleJob(actor, jobId);
+    if (job.status !== "no_solution") {
+      return {
+        job_id: jobId,
+        status: job.status,
+        diagnostics: [],
+      };
+    }
+
+    const row = first(
+      await this.sql.unsafe<{ input_snapshot: JsonObject | string }>(
+        `SELECT input_snapshot FROM schedule_generation_jobs WHERE id=$1`,
+        [jobId],
+      ),
+      ErrorCode.SCHEDULE_JOB_NOT_FOUND,
+      "Schedule job not found",
+    );
+
+    const problem = this.problemFromSnapshot(row.input_snapshot);
+    const violations = diagnoseScheduleInfeasibility(problem);
+
+    const diagnosticsMap = new Map<string, ScheduleOfficialDiagnostic>();
+    for (const v of violations) {
+      if (v.code === "official_unavailable" || v.code === "official_overlap") {
+        const sortedMatchIds = [...v.matchIds].sort();
+        const key = `${v.code}:${sortedMatchIds.join(",")}`;
+        if (!diagnosticsMap.has(key)) {
+          diagnosticsMap.set(key, {
+            code: v.code,
+            severity: v.severity === "required" ? "required" : "hard",
+            match_ids: sortedMatchIds,
+          });
+        }
+      }
+    }
+
+    const sortedDiagnostics = Array.from(diagnosticsMap.values()).sort((a, b) => {
+      if (a.code !== b.code) return a.code.localeCompare(b.code);
+      return a.match_ids.join(",").localeCompare(b.match_ids.join(","));
+    });
+
+    return {
+      job_id: jobId,
+      status: job.status,
+      diagnostics: sortedDiagnostics,
+    };
   }
 
   async listScheduleJobs(actor: Phase3Actor, competitionId: string) {

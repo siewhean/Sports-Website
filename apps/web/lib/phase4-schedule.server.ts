@@ -73,6 +73,7 @@ export function scheduleUnavailableDocument(input: ScheduleInput, state: Schedul
     canEdit: false,
     canPublish: false,
     activeJob: null,
+    latestNoSolutionJob: null,
     currentRevision: null,
     revisions: [],
     alternatives: [],
@@ -116,7 +117,15 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
       .map((job) => parseScheduleJobView(job))
       .filter((job): job is NonNullable<typeof job> => job !== null);
     const comparable = selectComparableScheduleOptions(jobs, parsed.sourceRevision, parsed.capacityRevision);
-    return { ...parsed, alternatives: comparable };
+    const latestJob = jobs[0] ?? null;
+    const latestNoSolutionJob =
+      latestJob &&
+      latestJob.status === "no_solution" &&
+      latestJob.sourceRevision === parsed.sourceRevision &&
+      latestJob.capacityRevision === parsed.capacityRevision
+        ? latestJob
+        : null;
+    return { ...parsed, alternatives: comparable, latestNoSolutionJob };
   } catch {
     return scheduleUnavailableDocument(input, "offline");
   }
@@ -358,6 +367,7 @@ export function parseScheduleWorkspace(value: unknown, input: ScheduleInput): Sc
     canEdit,
     canPublish: canEdit && currentRevision?.status === "ready_for_review",
     activeJob,
+    latestNoSolutionJob: null,
     currentRevision,
     revisions: revisions as ScheduleRevision[],
     alternatives: activeJob?.currentBest ? [activeJob.currentBest] : [],
@@ -842,6 +852,7 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
       createdAt: "2026-07-20T04:20:00.000Z",
       updatedAt: "2026-07-20T04:22:00.000Z",
     },
+    latestNoSolutionJob: null,
     currentRevision: revision,
     revisions: [
       revision,

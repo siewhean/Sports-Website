@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parseConfig } from "@matchday/config";
 import type { Phase4FormatBuilderDocument, ScheduleConstraints, ScheduleJobInput } from "@matchday/contracts";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
@@ -1588,6 +1588,306 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
         statusCode: 409,
         code: ErrorCode.STALE_SCHEDULE_INPUT,
       });
+    });
+  });
+
+  describe("Suite 9: Safe no_solution Official Diagnostics (CP 5.6)", () => {
+    let diagOffId: string;
+
+    function getConstraints(officialMode: "required" | "ignored" = "required"): ScheduleConstraints {
+      return {
+        minimum_rest: { mode: "ignored", value: { minutes: 0 } },
+        maximum_matches_per_day: { mode: "ignored", value: { matches: 8 } },
+        preferred_final_time: {
+          mode: "ignored",
+          value: { target_start_epoch_ms: Date.parse("2027-08-01T12:00:00Z"), tolerance_minutes: 60 },
+        },
+        entry_unavailable: { mode: "ignored", value: { by_entry_id: {} } },
+        official_availability: { mode: officialMode, value: { by_official_id: {} } },
+        featured_playing_area: { mode: "ignored", value: { area_id: areaId, match_ids: [] } },
+        avoid_consecutive_matches: { mode: "ignored", value: { minutes: 0 } },
+        balance_early_matches: { mode: "ignored", value: { before_local_time: "09:00" } },
+        balance_late_matches: { mode: "ignored", value: { at_or_after_local_time: "18:00" } },
+        keep_division_together: { mode: "ignored", value: { maximum_area_count: 1 } },
+        preserve_existing_schedule: { mode: "ignored", value: { maximum_shift_minutes: 0, by_match_id: {} } },
+      };
+    }
+
+    beforeAll(async () => {
+      const [off] = await client<{ id: string }[]>`
+        INSERT INTO competition_officials(competition_id, organisation_id, name, default_role)
+        VALUES (${comp1Id}, ${org1Id}, 'Diagnostics Official', 'referee') RETURNING id`;
+      diagOffId = off!.id;
+    });
+
+    afterEach(async () => {
+      await client`DELETE FROM schedule_generation_jobs WHERE competition_id=${comp1Id}`;
+    });
+
+    it("diagnoses official_unavailable when an assigned official has no feasible window", async () => {
+      // 1. Assign diagOffId to match1Id
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
+        headers: ownerHeaders(),
+        body: {
+          assignments: [{ official_id: diagOffId, assigned_role: "referee" }],
+        },
+      });
+
+      // 2. Give diagOffId an availability window on 2027-08-02 (outside 2027-08-01 tournament slots)
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials/${diagOffId}/availability`,
+        headers: ownerHeaders(),
+        body: {
+          windows: [{ starts_at: "2027-08-02T10:00:00Z", ends_at: "2027-08-02T11:00:00Z" }],
+        },
+      });
+
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      // 3. Generate schedule job
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `diag-unavail-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints: getConstraints("required"),
+        },
+        randomUUID(),
+      );
+
+      // 4. Update status to no_solution
+      await client`UPDATE schedule_generation_jobs SET status='no_solution', completed_at=now() WHERE id=${gen.job.id}`;
+
+      // 5. Query diagnostics endpoint
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/schedule-jobs/${gen.job.id}/diagnostics`,
+        headers: ownerHeaders(),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data).toEqual({
+        job_id: gen.job.id,
+        status: "no_solution",
+        diagnostics: [
+          {
+            code: "official_unavailable",
+            severity: "required",
+            match_ids: [match1Id],
+          },
+        ],
+      });
+
+      // 6. Payload safety verification
+      expect(res.body).not.toContain("input_snapshot");
+      expect(res.body).not.toContain("constraints");
+      expect(res.body).not.toContain(diagOffId);
+      expect(res.body).not.toContain("start_epoch_ms");
+      expect(res.body).not.toContain("message");
+      expect(res.body).not.toContain("has no available window");
+    });
+
+    it("diagnoses official_overlap when an assigned official is over-allocated", async () => {
+      // 1. Assign diagOffId to both match1Id and match2Id
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
+        headers: ownerHeaders(),
+        body: {
+          assignments: [{ official_id: diagOffId, assigned_role: "referee" }],
+        },
+      });
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match2Id}/officials`,
+        headers: ownerHeaders(),
+        body: {
+          assignments: [{ official_id: diagOffId, assigned_role: "referee" }],
+        },
+      });
+
+      // 2. Give diagOffId availability covering only 1 slot (00:00Z to 00:30Z on 2027-08-01)
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/officials/${diagOffId}/availability`,
+        headers: ownerHeaders(),
+        body: {
+          windows: [{ starts_at: "2027-08-01T00:00:00Z", ends_at: "2027-08-01T00:30:00Z" }],
+        },
+      });
+
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      // 3. Generate schedule job
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `diag-overlap-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints: getConstraints("required"),
+        },
+        randomUUID(),
+      );
+
+      // 4. Update status to no_solution
+      await client`UPDATE schedule_generation_jobs SET status='no_solution', completed_at=now() WHERE id=${gen.job.id}`;
+
+      // 5. Query diagnostics endpoint
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/schedule-jobs/${gen.job.id}/diagnostics`,
+        headers: ownerHeaders(),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data).toEqual({
+        job_id: gen.job.id,
+        status: "no_solution",
+        diagnostics: [
+          {
+            code: "official_overlap",
+            severity: "hard",
+            match_ids: [match1Id, match2Id].sort(),
+          },
+        ],
+      });
+
+      // Payload safety
+      expect(res.body).not.toContain("input_snapshot");
+      expect(res.body).not.toContain(diagOffId);
+      expect(res.body).not.toContain("assigned to");
+    });
+
+    it("returns empty diagnostics for a no_solution job when there are no official conflicts", async () => {
+      // 1. Clear assignments
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match1Id}/officials`,
+        headers: ownerHeaders(),
+        body: { assignments: [] },
+      });
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/phase4/competitions/${comp1Id}/matches/${match2Id}/officials`,
+        headers: ownerHeaders(),
+        body: { assignments: [] },
+      });
+
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `diag-clean-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints: getConstraints("ignored"),
+        },
+        randomUUID(),
+      );
+
+      await client`UPDATE schedule_generation_jobs SET status='no_solution', completed_at=now() WHERE id=${gen.job.id}`;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/schedule-jobs/${gen.job.id}/diagnostics`,
+        headers: ownerHeaders(),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({
+        job_id: gen.job.id,
+        status: "no_solution",
+        diagnostics: [],
+      });
+    });
+
+    it("returns empty diagnostics for non-no_solution jobs (e.g. queued or running)", async () => {
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `diag-queued-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints: getConstraints("required"),
+        },
+        randomUUID(),
+      );
+
+      // Job is 'queued' by default
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/schedule-jobs/${gen.job.id}/diagnostics`,
+        headers: ownerHeaders(),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({
+        job_id: gen.job.id,
+        status: "queued",
+        diagnostics: [],
+      });
+    });
+
+    it("enforces multi-tenant access control and returns 404 for callers from another organisation", async () => {
+      // 1. Create a job for comp1 (owned by org1)
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `diag-access-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints: getConstraints("required"),
+        },
+        randomUUID(),
+      );
+      await client`UPDATE schedule_generation_jobs SET status='no_solution', completed_at=now() WHERE id=${gen.job.id}`;
+
+      // 2. Caller from org2 attempts to read diagnostics
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/schedule-jobs/${gen.job.id}/diagnostics`,
+        headers: otherOrgHeaders(),
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).error.code).toBe(ErrorCode.COMPETITION_ACCESS_DENIED);
     });
   });
 });

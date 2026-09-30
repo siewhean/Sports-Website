@@ -29,6 +29,7 @@ function createTestScheduleDocument(matches: ScheduleMatch[] = []): ScheduleDocu
     canEdit: true,
     canPublish: true,
     activeJob: null,
+    latestNoSolutionJob: null,
     currentRevision: {
       id: "rev-1",
       revision: 1,

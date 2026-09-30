@@ -437,3 +437,336 @@ test.describe("read-only official assignment integration (CP 5.5)", () => {
     ).not.toBeVisible();
   });
 });
+
+test.describe("safe no_solution official diagnostics (CP 5.6)", () => {
+  const jobId = "60000000-0000-4000-8000-000000000020";
+  const match1Id = "30000000-0000-4000-8000-000000000001";
+  const match2Id = "30000000-0000-4000-8000-000000000002";
+
+  function queuedJob(id = jobId) {
+    return {
+      id,
+      competition_id: "00000000-0000-4000-8000-000000000001",
+      revision: 1,
+      source_revision: 1,
+      capacity_revision: 1,
+      capacity_hash: "cap-hash",
+      status: "queued",
+      objective: "balanced",
+      continued_from_job_id: null,
+      current_best_option_id: null,
+      current_best: null,
+      progress_iteration: null,
+      explored_candidates: 0,
+      progress_updated_at: null,
+      cancellation_requested_at: null,
+      started_at: null,
+      completed_at: null,
+      failure_class: null,
+      created_at: "2026-08-15T00:00:00.000Z",
+      updated_at: "2026-08-15T00:00:00.000Z",
+    };
+  }
+
+  function noSolutionJob(id = jobId) {
+    return {
+      id,
+      competition_id: "00000000-0000-4000-8000-000000000001",
+      revision: 1,
+      source_revision: 1,
+      capacity_revision: 1,
+      capacity_hash: "cap-hash",
+      status: "no_solution",
+      objective: "balanced",
+      continued_from_job_id: null,
+      current_best_option_id: null,
+      current_best: null,
+      progress_iteration: null,
+      explored_candidates: 12,
+      progress_updated_at: null,
+      cancellation_requested_at: null,
+      started_at: "2026-08-15T00:00:00.000Z",
+      completed_at: "2026-08-15T00:01:00.000Z",
+      failure_class: null,
+      created_at: "2026-08-15T00:00:00.000Z",
+      updated_at: "2026-08-15T00:01:00.000Z",
+    };
+  }
+
+  test("terminal no_solution transition fetches diagnostics exactly once", async ({ page }) => {
+    let diagnosticsCalls = 0;
+    let pollCount = 0;
+
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      pollCount += 1;
+      const job = pollCount === 1 ? queuedJob() : noSolutionJob();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(job),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      diagnosticsCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_unavailable",
+              severity: "required",
+              match_ids: [match1Id],
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    const generateBtn = page.getByRole("button", { name: /Generate/ }).first();
+    await generateBtn.click();
+
+    const diagnosticsContainer = page.getByTestId("no-solution-diagnostics");
+    await expect(diagnosticsContainer).toBeVisible();
+    expect(diagnosticsCalls).toBe(1);
+
+    await page.waitForTimeout(500);
+    expect(diagnosticsCalls).toBe(1);
+  });
+
+  test("displays official overlap diagnostics with review officials link", async ({ page }) => {
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_overlap",
+              severity: "hard",
+              match_ids: [match1Id, match2Id],
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const diagnosticsContainer = page.getByTestId("no-solution-diagnostics");
+    await expect(diagnosticsContainer).toBeVisible();
+    await expect(diagnosticsContainer.getByText("Official conflicts detected")).toBeVisible();
+    await expect(diagnosticsContainer.getByText("Official assigned to concurrent/overlapping matches")).toBeVisible();
+    const reviewLink = diagnosticsContainer.getByRole("link", { name: "Review officials" });
+    await expect(reviewLink).toBeVisible();
+    await expect(reviewLink).toHaveAttribute("href", new RegExp(`/officials$`));
+  });
+
+  test("displays official unavailable diagnostics with match deep-link", async ({ page }) => {
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_unavailable",
+              severity: "required",
+              match_ids: [match1Id],
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const diagnosticsContainer = page.getByTestId("no-solution-diagnostics");
+    await expect(diagnosticsContainer).toBeVisible();
+    await expect(diagnosticsContainer.getByText("Official unavailable for required match")).toBeVisible();
+    const reviewLink = diagnosticsContainer.getByRole("link", { name: /Review officials/ });
+    await expect(reviewLink).toBeVisible();
+    await expect(reviewLink).toHaveAttribute("href", new RegExp(`/officials\\?match=${match1Id}$`));
+  });
+
+  test("displays generic notice when diagnostics array is empty", async ({ page }) => {
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const genericNotice = page.getByTestId("no-solution-generic");
+    await expect(genericNotice).toBeVisible();
+    await expect(
+      genericNotice.getByText(
+        "No feasible schedule could be found that satisfies all required constraints and playing areas.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByTestId("no-solution-diagnostics")).not.toBeVisible();
+  });
+
+  test("degrades gracefully on 503 error and allows regeneration", async ({ page }) => {
+    allowConsoleFailure(page, /^console\.error: Failed to load resource: the server responded with a status of 503/);
+
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "SERVICE_UNAVAILABLE" } }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const genericNotice = page.getByTestId("no-solution-generic");
+    await expect(genericNotice).toBeVisible();
+    await expect(
+      genericNotice.getByText(
+        "No feasible schedule could be found that satisfies all required constraints and playing areas.",
+      ),
+    ).toBeVisible();
+
+    const regenBtn = page.getByRole("button", { name: /Generate/ }).first();
+    await expect(regenBtn).toBeEnabled();
+  });
+});

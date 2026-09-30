@@ -914,6 +914,11 @@ export async function registerPhase4Routes(
     { schema: { ...read, params: strict({ jobId: Id }), tags: ["phase4-schedules"] } },
     async (request) => options.runtime.listScheduleOptions(await readActor(request), request.params.jobId),
   );
+  app.get<{ Params: { jobId: string } }>(
+    "/api/v1/schedule-jobs/:jobId/diagnostics",
+    { schema: { ...read, params: strict({ jobId: Id }), tags: ["phase4-schedules"] } },
+    async (request) => options.runtime.readScheduleJobDiagnostics(await readActor(request), request.params.jobId),
+  );
   const JobMutationBody = strict({ idempotency_key: IdempotencyKey, expected_revision: Type.Integer({ minimum: 1 }) });
   app.post<{ Params: { jobId: string }; Body: Static<typeof JobMutationBody> }>(
     "/api/v1/schedule-jobs/:jobId/continue",

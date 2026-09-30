@@ -32,6 +32,7 @@ import {
   phase4ScheduleCopy,
   phase4ScheduleMachine,
   scheduleConflictForMatch,
+  parseScheduleJobDiagnostics,
   parseScheduleJobEnvelope,
   parseScheduleJobView,
   parseScheduleLockResponse,
@@ -43,10 +44,12 @@ import {
   type ScheduleJobStatus,
   type ScheduleMatch,
   type ScheduleObjective,
+  type ScheduleOfficialDiagnostic,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
 import type { ScheduleOfficialsProjection } from "@/lib/phase4-officials";
 import { MatchOfficialsSummary } from "./MatchOfficialsSummary";
+import { NoSolutionOfficialDiagnostics } from "./NoSolutionOfficialDiagnostics";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -78,6 +81,12 @@ function withRevision(document: ScheduleDocument, revision: NonNullable<Schedule
   };
 }
 
+type DiagnosticsState =
+  | { kind: "idle" }
+  | { kind: "loading"; jobId: string }
+  | { kind: "ready"; jobId: string; diagnostics: readonly ScheduleOfficialDiagnostic[] }
+  | { kind: "error"; jobId: string };
+
 export function ScheduleWorkspace({
   document: initialDocument,
   officials,
@@ -96,7 +105,9 @@ export function ScheduleWorkspace({
     () => true,
     () => false,
   );
-  const [job, setJob] = useState(document.activeJob);
+  const [job, setJob] = useState(document.activeJob ?? document.latestNoSolutionJob);
+  const [diagnosticsState, setDiagnosticsState] = useState<DiagnosticsState>({ kind: "idle" });
+  const fetchedDiagnosticsJobIdRef = useRef<string | null>(null);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
   const [selectedMatchId, setSelectedMatchId] = useState(
@@ -129,6 +140,7 @@ export function ScheduleWorkspace({
   const disabled = !hydrated || !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
   const polledJobStatus = job?.status;
+  const diagnosticsJobId = job?.status === "no_solution" ? job.id : null;
 
   function focusStatusHeading() {
     window.requestAnimationFrame(() => statusHeadingRef.current?.focus({ preventScroll: true }));
@@ -184,6 +196,48 @@ export function ScheduleWorkspace({
     };
   }, [polledJobId, polledJobStatus]);
 
+  useEffect(() => {
+    if (!diagnosticsJobId) return;
+    if (fetchedDiagnosticsJobIdRef.current === diagnosticsJobId) return;
+
+    fetchedDiagnosticsJobIdRef.current = diagnosticsJobId;
+    setDiagnosticsState({ kind: "loading", jobId: diagnosticsJobId });
+    let live = true;
+
+    const fetchDiagnostics = async () => {
+      try {
+        const response = await fetch(`/api/phase4/schedule/jobs/${encodeURIComponent(diagnosticsJobId)}/diagnostics`, {
+          cache: phase4ScheduleMachine.noStore,
+        });
+        const payload: unknown = await response.json().catch(() => null);
+        if (!live) return;
+        if (!response.ok) {
+          setDiagnosticsState({ kind: "error", jobId: diagnosticsJobId });
+          return;
+        }
+        const parsed = parseScheduleJobDiagnostics(payload);
+        if (!parsed) {
+          setDiagnosticsState({ kind: "error", jobId: diagnosticsJobId });
+          return;
+        }
+        setDiagnosticsState({
+          kind: "ready",
+          jobId: diagnosticsJobId,
+          diagnostics: parsed.diagnostics,
+        });
+      } catch {
+        if (live) {
+          setDiagnosticsState({ kind: "error", jobId: diagnosticsJobId });
+        }
+      }
+    };
+
+    void fetchDiagnostics();
+    return () => {
+      live = false;
+    };
+  }, [diagnosticsJobId]);
+
   async function command(
     name: string,
     url: string,
@@ -221,6 +275,8 @@ export function ScheduleWorkspace({
   }
 
   async function generate() {
+    fetchedDiagnosticsJobIdRef.current = null;
+    setDiagnosticsState({ kind: "idle" });
     if (job?.currentBest) setRetainedAlternatives((current) => withRetainedAlternative(current, job.currentBest!));
     await command(
       phase4ScheduleMachine.generateAction,
@@ -417,6 +473,16 @@ export function ScheduleWorkspace({
           <ShieldWarning aria-hidden="true" />
           {commandError}
         </div>
+      ) : null}
+
+      {job?.status === "no_solution" ? (
+        <NoSolutionOfficialDiagnostics
+          competitionId={document.competitionId}
+          matches={document.matches}
+          diagnostics={diagnosticsState.kind === "ready" ? diagnosticsState.diagnostics : null}
+          loading={diagnosticsState.kind === "loading"}
+          error={diagnosticsState.kind === "error"}
+        />
       ) : null}
 
       <section className={styles.commandBar} aria-labelledby="strategy-title">

@@ -675,7 +675,7 @@ describe("Schedule Officials Integration (CP 5.5)", () => {
       }
     });
 
-    it("fail-closed: newly assigned archived official returns 400 OFFICIAL_ARCHIVED", () => {
+    it("fail-closed: newly assigned archived official returns 409 OFFICIAL_ARCHIVED", () => {
       // officialCId is archived and NOT assigned to match1Id
       const result = updateDemoMatchAssignments(
         competitionId,
@@ -685,7 +685,7 @@ describe("Schedule Officials Integration (CP 5.5)", () => {
       );
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.status).toBe(400);
+        expect(result.status).toBe(409);
         expect(result.errorCode).toBe("OFFICIAL_ARCHIVED");
         expect(result.message).toBe(phase4OfficialsCopy.archivedCannotReassign);
       }

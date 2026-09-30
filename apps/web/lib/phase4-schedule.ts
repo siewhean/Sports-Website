@@ -239,6 +239,20 @@ export type ScheduleUnlockReceipt = Readonly<{
   matchId: string;
 }>;
 
+export type ScheduleOfficialDiagnosticCode = "official_unavailable" | "official_overlap";
+
+export type ScheduleOfficialDiagnostic = Readonly<{
+  code: ScheduleOfficialDiagnosticCode;
+  severity: "required" | "hard";
+  matchIds: readonly string[];
+}>;
+
+export type ScheduleJobDiagnostics = Readonly<{
+  jobId: string;
+  status: ScheduleJobStatus;
+  diagnostics: readonly ScheduleOfficialDiagnostic[];
+}>;
+
 export type ScheduleDocument = Readonly<{
   state: ScheduleSurfaceState;
   competitionId: string;
@@ -251,6 +265,7 @@ export type ScheduleDocument = Readonly<{
   canEdit: boolean;
   canPublish: boolean;
   activeJob: ScheduleJob | null;
+  latestNoSolutionJob: ScheduleJob | null;
   currentRevision: ScheduleRevision | null;
   revisions: readonly ScheduleRevision[];
   alternatives: readonly ScheduleOption[];
@@ -454,6 +469,12 @@ function iso(value: unknown): value is string {
 
 function nullableIso(value: unknown): value is string | null {
   return value === null || iso(value);
+}
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && uuidPattern.test(value);
 }
 
 const jobStatuses = new Set<ScheduleJobStatus>([
@@ -740,6 +761,46 @@ export function parseScheduleJobEnvelope(value: unknown): ScheduleJob | null {
   )
     return null;
   return parseScheduleJobView(item.job);
+}
+
+export function parseScheduleJobDiagnostics(value: unknown): ScheduleJobDiagnostics | null {
+  const item = record(value);
+  if (
+    !item ||
+    !exact(item, ["job_id", "status", "diagnostics"]) ||
+    !nonEmpty(item.job_id) ||
+    !isUuid(item.job_id) ||
+    !nonEmpty(item.status) ||
+    !jobStatuses.has(item.status as ScheduleJobStatus) ||
+    !Array.isArray(item.diagnostics)
+  )
+    return null;
+
+  const diagnostics: ScheduleOfficialDiagnostic[] = [];
+  for (const entry of item.diagnostics) {
+    const diag = record(entry);
+    if (
+      !diag ||
+      !exact(diag, ["code", "severity", "match_ids"]) ||
+      (diag.code !== "official_unavailable" && diag.code !== "official_overlap") ||
+      (diag.severity !== "required" && diag.severity !== "hard") ||
+      !Array.isArray(diag.match_ids) ||
+      !diag.match_ids.every(isUuid)
+    )
+      return null;
+
+    diagnostics.push({
+      code: diag.code,
+      severity: diag.severity,
+      matchIds: diag.match_ids as string[],
+    });
+  }
+
+  return {
+    jobId: item.job_id,
+    status: item.status as ScheduleJobStatus,
+    diagnostics,
+  };
 }
 
 export function parseScheduleRevisionView(
