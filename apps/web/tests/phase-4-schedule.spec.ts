@@ -801,4 +801,55 @@ test.describe("safe no_solution official diagnostics (CP 5.6)", () => {
     await matchButton.click();
     await expect(inspector.getByRole("heading", { name: "M2" })).toBeVisible();
   });
+
+  test("unknown schedule input warning disables publish, suppresses move link, and preserves generation", async ({
+    page,
+  }) => {
+    await page.goto(`${scheduleUrl}?input_state=unknown`);
+    await dismissConsent(page);
+
+    // 1. Warning banner is visible with test ID and specific unverified copy
+    const warningBanner = page.getByTestId("unknown-schedule-warning");
+    await expect(warningBanner).toBeVisible();
+    await expect(warningBanner).toContainText(
+      "Schedule freshness could not be verified. Refresh or generate a new schedule before moving or publishing matches.",
+    );
+    await expect(page.getByTestId("stale-schedule-warning")).not.toBeVisible();
+
+    // 2. Publish button is disabled
+    const publishButton = page.getByRole("button", { name: "Publish schedule" });
+    await expect(publishButton).toBeDisabled();
+
+    // 3. Move link in match inspector is suppressed
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Move match" })).not.toBeVisible();
+
+    // 4. Generate button remains enabled and inspector is interactive
+    const generateButton = page.getByRole("button", { name: /Generate/ }).first();
+    await expect(generateButton).toBeEnabled();
+
+    // Inspector can select another match and remains interactive
+    const matchButton = page.getByRole("button", { name: /M2/ }).first();
+    await matchButton.click();
+    await expect(inspector.getByRole("heading", { name: "M2" })).toBeVisible();
+  });
+
+  test("current schedule input freshness has no warning, permits publish, and renders move link", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?input_state=current`);
+    await dismissConsent(page);
+
+    // 1. No freshness warnings visible
+    await expect(page.getByTestId("stale-schedule-warning")).not.toBeVisible();
+    await expect(page.getByTestId("unknown-schedule-warning")).not.toBeVisible();
+
+    // 2. Publish button is enabled
+    const publishButton = page.getByRole("button", { name: "Publish schedule" });
+    await expect(publishButton).toBeEnabled();
+
+    // 3. Move link in match inspector is available
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Move match" })).toBeVisible();
+  });
 });

@@ -319,6 +319,9 @@ export const messages = {
     inputsChanged: "Schedule inputs changed",
     scheduleInputsChangedGuidance:
       "Schedule inputs changed after this schedule was generated. Generate a new schedule before moving or publishing matches.",
+    freshnessUnverified: "Schedule freshness unverified",
+    scheduleFreshnessUnverifiedGuidance:
+      "Schedule freshness could not be verified. Refresh or generate a new schedule before moving or publishing matches.",
     bestAvailable: "The current best remains available.",
     selectedUnchanged: "The selected draft remains unchanged.",
     objectiveQuality: "{objective} · quality {quality}",

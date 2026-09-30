@@ -69,7 +69,9 @@ export const phase4ScheduleMachine = {
   endEpochField: "end_epoch_ms",
   currentInputState: "current",
   staleInputState: "stale",
+  unknownInputState: "unknown",
   staleScheduleWarningTestId: "stale-schedule-warning",
+  unknownScheduleWarningTestId: "unknown-schedule-warning",
 } as const;
 
 export type ScheduleSurfaceState = "ready" | "read-only" | "permission" | "offline" | "error" | "loading" | "empty";

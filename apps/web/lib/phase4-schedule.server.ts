@@ -840,7 +840,9 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     capacityRevision: 2,
     constraints: scheduleConstraints(),
     canEdit: state === "ready",
-    canPublish: state === "ready" && input.previewInputState !== phase4ScheduleMachine.staleInputState,
+    canPublish:
+      state === "ready" &&
+      (input.previewInputState ? input.previewInputState === phase4ScheduleMachine.currentInputState : true),
     activeJob: {
       id: alternatives[1]!.jobId,
       revision: 5,
@@ -864,7 +866,9 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     currentRevisionInputState:
       input.previewInputState === phase4ScheduleMachine.staleInputState
         ? phase4ScheduleMachine.staleInputState
-        : phase4ScheduleMachine.currentInputState,
+        : input.previewInputState === phase4ScheduleMachine.unknownInputState
+          ? phase4ScheduleMachine.unknownInputState
+          : phase4ScheduleMachine.currentInputState,
     revisions: [
       revision,
       {

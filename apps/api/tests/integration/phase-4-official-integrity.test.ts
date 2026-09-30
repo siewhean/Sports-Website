@@ -11,6 +11,7 @@ import type { PostgresJsSql } from "@matchday/identity";
 import { DomainScheduleOptimizer, PostgresScheduleJobStore, type ScheduleCandidate } from "@matchday/scheduler";
 import { buildApp } from "../../src/app.js";
 import { ErrorCode } from "../../src/errors.js";
+import { GateCC4PublicTruthRuntime } from "../../src/gate-c-c4-public-truth.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { DeterministicPhase4AiStub } from "../../src/phase-4-ai-provider.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
@@ -36,6 +37,7 @@ let app!: Awaited<ReturnType<typeof buildApp>>;
 let ownerId = "";
 let org1Id = "";
 let compId = "";
+let compSlug = "";
 let divisionId = "";
 let match1Id = "";
 let match2Id = "";
@@ -120,12 +122,13 @@ beforeAll(async () => {
     phase2,
   );
 
+  const generatedSlug = `integrity-cup-${randomUUID()}`;
   const comp = await phase3.createCompetition(
     { accountId: ownerId },
     {
       organisationId: org1Id,
       name: "Integrity Cup",
-      slug: `integrity-cup-${randomUUID()}`,
+      slug: generatedSlug,
       sportCode: "canoe_polo",
       venue: "Pool 1",
       address: "1 Pool Way",
@@ -138,6 +141,7 @@ beforeAll(async () => {
     randomUUID(),
   );
   compId = comp.id;
+  compSlug = generatedSlug;
 
   const [area] = await client<{ id: string }[]>`
     INSERT INTO playing_areas(competition_id, name, slot_minutes, sort_order)
@@ -201,6 +205,7 @@ beforeAll(async () => {
     phase3Runtime: phase3,
     phase4Runtime: phase4,
     phase2Runtime: phase2,
+    gateCC4PublicTruthRuntime: new GateCC4PublicTruthRuntime(client as unknown as PostgresJsSql),
   });
 }, 60_000);
 
@@ -611,20 +616,43 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
     expect(published.status).toBe("published");
   });
 
-  it("CP 6.5 & CP 6.6: Published history safety and regeneration convergence", async () => {
-    // We published freshSchedule above.
-    const [pubBefore] = await client<{ schedule_version: number }[]>`
-      SELECT schedule_version FROM competition_publications WHERE competition_id=${compId}`;
+  it("CP 6.5 & CP 6.6: Complete Published-History and Public Truth Proof under official mutation", async () => {
+    // 1. Before mutation capture
+    const [pubBefore] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
+    const s1RevisionId = pubBefore!.published_schedule_revision_id;
     const initialVersion = pubBefore!.schedule_version;
 
-    const [publishedRevision] = await client<{ id: string; status: string; published_at: Date }[]>`
-      SELECT id, status, published_at FROM schedule_revisions WHERE competition_id=${compId} AND status='published' LIMIT 1`;
-    expect(publishedRevision).toBeDefined();
-    expect(publishedRevision!.published_at).not.toBeNull();
+    // Capture S1 revision row and assignment_hash
+    const [s1RowBefore] = await client<{ id: string; status: string; published_at: Date; assignment_hash: string }[]>`
+      SELECT id, status, published_at, assignment_hash FROM schedule_revisions WHERE id=${s1RevisionId}`;
+    expect(s1RowBefore).toBeDefined();
+    expect(s1RowBefore!.status).toBe("published");
+    expect(s1RowBefore!.published_at).not.toBeNull();
+    const originalPublishedAt = s1RowBefore!.published_at;
+    const originalHash = s1RowBefore!.assignment_hash;
 
-    const originalPublishedAt = publishedRevision!.published_at;
+    // Capture all scheduled_matches for S1 deterministically ordered by match_id
+    const s1MatchesBefore = await client<
+      { match_id: string; playing_area_id: string; starts_at: Date; ends_at: Date }[]
+    >`
+      SELECT match_id, playing_area_id, starts_at, ends_at
+      FROM scheduled_matches
+      WHERE schedule_revision_id=${s1RevisionId}
+      ORDER BY match_id`;
+    expect(s1MatchesBefore.length).toBeGreaterThan(0);
 
-    // Mutate assigned official with a schedule-relevant change
+    // Capture public truth response and ETag
+    const publicBefore = await app.inject({
+      method: "GET",
+      url: `/api/v1/public/competitions/${compSlug}/current`,
+    });
+    expect(publicBefore.statusCode).toBe(200);
+    const s1Etag = publicBefore.headers["etag"];
+    expect(s1Etag).toBeDefined();
+    const s1PublicBody = publicBefore.body;
+
+    // 2. Perform official scheduling-input mutation
     const [assignedRow] = await client<{ official_id: string }[]>`
       SELECT official_id FROM match_official_assignments WHERE competition_id=${compId} LIMIT 1`;
 
@@ -639,16 +667,49 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
     expect(availMutRes.statusCode).toBe(200);
     expect(JSON.parse(availMutRes.body).bumped_revision).toBe(true);
 
-    // CP 6.5: Verify published schedule revision rows remain immutable and schedule_version unchanged
-    const [publishedAfter] = await client<{ id: string; status: string; published_at: Date }[]>`
-      SELECT id, status, published_at FROM schedule_revisions WHERE id=${publishedRevision!.id}`;
-    expect(publishedAfter!.published_at.toISOString()).toBe(originalPublishedAt.toISOString());
+    // 3. Assert all unchanged after official mutation:
+    // S1.id, S1.status, S1.published_at, S1.assignment_hash
+    const [s1RowAfter] = await client<{ id: string; status: string; published_at: Date; assignment_hash: string }[]>`
+      SELECT id, status, published_at, assignment_hash FROM schedule_revisions WHERE id=${s1RevisionId}`;
+    expect(s1RowAfter!.id).toBe(s1RevisionId);
+    expect(s1RowAfter!.status).toBe("published");
+    expect(s1RowAfter!.published_at.toISOString()).toBe(originalPublishedAt.toISOString());
+    expect(s1RowAfter!.assignment_hash).toBe(originalHash);
 
-    const [pubAfter] = await client<{ schedule_version: number }[]>`
-      SELECT schedule_version FROM competition_publications WHERE competition_id=${compId}`;
+    // Immutable scheduled_matches: exact semantic equality
+    const s1MatchesAfter = await client<
+      { match_id: string; playing_area_id: string; starts_at: Date; ends_at: Date }[]
+    >`
+      SELECT match_id, playing_area_id, starts_at, ends_at
+      FROM scheduled_matches
+      WHERE schedule_revision_id=${s1RevisionId}
+      ORDER BY match_id`;
+    expect(s1MatchesAfter).toEqual(s1MatchesBefore);
+
+    // competition_publications.schedule_version and published_schedule_revision_id
+    const [pubAfter] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
     expect(pubAfter!.schedule_version).toBe(initialVersion);
+    expect(pubAfter!.published_schedule_revision_id).toBe(s1RevisionId);
 
-    // CP 6.6: Regeneration and publication convergence
+    // Public schedule body and ETag
+    const publicAfter = await app.inject({
+      method: "GET",
+      url: `/api/v1/public/competitions/${compSlug}/current`,
+    });
+    expect(publicAfter.statusCode).toBe(200);
+    expect(publicAfter.headers["etag"]).toBe(s1Etag);
+    expect(publicAfter.body).toBe(s1PublicBody);
+
+    // Conditional request with S1 ETag yields 304 Not Modified
+    const condRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/public/competitions/${compSlug}/current`,
+      headers: { "if-none-match": s1Etag },
+    });
+    expect(condRes.statusCode).toBe(304);
+
+    // 4. CP 6.6: Explicit S2 publication changes public truth and ETag
     const regenerated = await solveAndAcceptSchedule(compId);
     const wsRegen = await phase4.scheduleWorkspace({ accountId: ownerId }, compId);
     expect(wsRegen.current_revision_input_state).toBe("current");
@@ -662,13 +723,40 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
     expect(newPublish.status).toBe("published");
     expect(newPublish.schedule_version).toBe(initialVersion + 1);
 
-    const [pubFinal] = await client<{ schedule_version: number }[]>`
-      SELECT schedule_version FROM competition_publications WHERE competition_id=${compId}`;
+    // Pointer points to S2
+    const [pubFinal] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
+    expect(pubFinal!.published_schedule_revision_id).toBe(regenerated.scheduleRevisionId);
     expect(pubFinal!.schedule_version).toBe(initialVersion + 1);
+
+    // S1 remains immutable in history (superseded by S2)
+    const [s1Final] = await client<{ id: string; status: string; published_at: Date; assignment_hash: string }[]>`
+      SELECT id, status, published_at, assignment_hash FROM schedule_revisions WHERE id=${s1RevisionId}`;
+    expect(s1Final!.status).toBe("superseded");
+    expect(s1Final!.published_at.toISOString()).toBe(originalPublishedAt.toISOString());
+
+    // Public truth now reflects S2 with new ETag
+    const publicS2 = await app.inject({
+      method: "GET",
+      url: `/api/v1/public/competitions/${compSlug}/current`,
+    });
+    expect(publicS2.statusCode).toBe(200);
+    const s2Etag = publicS2.headers["etag"];
+    expect(s2Etag).toBeDefined();
+    expect(s2Etag).not.toBe(s1Etag);
+
+    // Conditional request with old S1 ETag returns 200 with new representation
+    const condOldRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/public/competitions/${compSlug}/current`,
+      headers: { "if-none-match": s1Etag },
+    });
+    expect(condOldRes.statusCode).toBe(200);
+    expect(condOldRes.headers["etag"]).toBe(s2Etag);
   });
 
-  it("CP 6.13: Transaction Idempotency Replay returns receipt without bypassing staleness", async () => {
-    // Generate and accept S3
+  it("CP 6.13, 6.16, 6.17, 6.18: Idempotent publish replay after later official mutation, failed stale receipt safety, and fresh retry", async () => {
+    // 1. Generate and accept S3
     const s3 = await solveAndAcceptSchedule(compId);
     const idemKey = `idem-pub-${randomUUID()}`;
 
@@ -680,8 +768,27 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
       randomUUID(),
     );
     expect(pubReceipt.idempotent_replay).toBe(false);
+    const publishedVersion = pubReceipt.schedule_version;
 
-    // Replay same key -> returns cached receipt
+    // Capture audit count before replay
+    const [auditBefore] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM audit_events WHERE action = 'schedule.publish' AND organisation_id = ${org1Id}`;
+
+    // 2. Perform official scheduling-input mutation -> bumps competition revision
+    const [assignedRow] = await client<{ official_id: string }[]>`
+      SELECT official_id FROM match_official_assignments WHERE competition_id=${compId} LIMIT 1`;
+    const mutRes = await app.inject({
+      method: "PUT",
+      url: `/api/v1/phase4/competitions/${compId}/officials/${assignedRow!.official_id}/availability`,
+      headers: ownerHeaders(),
+      payload: {
+        windows: [{ starts_at: "2027-08-01T06:00:00.000Z", ends_at: "2027-08-01T07:00:00.000Z" }],
+      },
+    });
+    expect(mutRes.statusCode).toBe(200);
+    expect(JSON.parse(mutRes.body).bumped_revision).toBe(true);
+
+    // 3. Replay exact publish request with key K
     const replay = await phase4.publishScheduleRevision(
       { accountId: ownerId },
       s3.scheduleRevisionId,
@@ -690,6 +797,70 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
     );
     expect(replay.idempotent_replay).toBe(true);
     expect(replay.id).toBe(pubReceipt.id);
+    expect(replay.schedule_version).toBe(publishedVersion);
+
+    // Assert: schedule_version and published_schedule_revision_id unchanged
+    const [pubCheck] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
+    expect(pubCheck!.schedule_version).toBe(publishedVersion);
+    expect(pubCheck!.published_schedule_revision_id).toBe(s3.scheduleRevisionId);
+
+    // Assert: no second audit/outbox success mutation
+    const [auditAfter] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM audit_events WHERE action = 'schedule.publish' AND organisation_id = ${org1Id}`;
+    expect(auditAfter!.count).toBe(auditBefore!.count);
+
+    // 4. Failed Stale Publication Receipt (CP 6A #17)
+    const sStale = await solveAndAcceptSchedule(compId);
+    const staleMut = await app.inject({
+      method: "PUT",
+      url: `/api/v1/phase4/competitions/${compId}/officials/${assignedRow!.official_id}/availability`,
+      headers: ownerHeaders(),
+      payload: {
+        windows: [{ starts_at: "2027-08-01T05:00:00.000Z", ends_at: "2027-08-01T06:00:00.000Z" }],
+      },
+    });
+    expect(JSON.parse(staleMut.body).bumped_revision).toBe(true);
+
+    const staleKey = `stale-attempt-${randomUUID()}`;
+    await expect(
+      phase4.publishScheduleRevision(
+        { accountId: ownerId },
+        sStale.scheduleRevisionId,
+        { idempotency_key: staleKey, expected_revision: sStale.revision },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: ErrorCode.STALE_SCHEDULE_INPUT,
+    });
+
+    // Failed attempt creates NO successful receipt
+    const [staleReceipt] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM phase4_mutation_receipts
+      WHERE idempotency_key = ${staleKey}`;
+    expect(staleReceipt!.count).toBe(0);
+
+    // 5. Fresh Retry (CP 6A #18)
+    const s4 = await solveAndAcceptSchedule(compId);
+    const ws4 = await phase4.scheduleWorkspace({ accountId: ownerId }, compId);
+    expect(ws4.current_revision_input_state).toBe("current");
+
+    const freshKey = `fresh-retry-${randomUUID()}`;
+    const freshPub = await phase4.publishScheduleRevision(
+      { accountId: ownerId },
+      s4.scheduleRevisionId,
+      { idempotency_key: freshKey, expected_revision: s4.revision },
+      randomUUID(),
+    );
+    expect(freshPub.status).toBe("published");
+    expect(freshPub.idempotent_replay).toBe(false);
+    expect(freshPub.schedule_version).toBe(publishedVersion + 1);
+
+    const [finalPub] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
+    expect(finalPub!.published_schedule_revision_id).toBe(s4.scheduleRevisionId);
+    expect(finalPub!.schedule_version).toBe(publishedVersion + 1);
   });
 
   it("Preserves stale input state when a subsequent neutral official mutation occurs", async () => {
@@ -730,11 +901,19 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
     expect(wsStillStale.current_revision_input_state).toBe("stale");
   });
 
-  it("CP 6.12: Concurrent Mutex / Transaction Serialization between official mutation and schedule publish/move", async () => {
+  it("CP 6.12 Case 1: Official-First → Publish (Concurrent Mutex / Serialization)", async () => {
     // 1. Generate and accept a fresh schedule
     const fresh = await solveAndAcceptSchedule(compId);
     const ws = await phase4.scheduleWorkspace({ accountId: ownerId }, compId);
     expect(ws.current_revision_input_state).toBe("current");
+
+    const [pubBefore] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
+    const pubBeforeVersion = pubBefore!.schedule_version;
+    const pubBeforeRevisionId = pubBefore!.published_schedule_revision_id;
+
+    const publicBefore = await app.inject({ method: "GET", url: `/api/v1/public/competitions/${compSlug}/current` });
+    const publicBeforeEtag = publicBefore.headers["etag"];
 
     // 2. Simulate concurrent execution where an official mutation starts and holds the advisory lock
     // while a publishScheduleRevision request is dispatched.
@@ -760,10 +939,11 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
     await tx1Acquired;
 
     // Tx2: Attempt to publish schedule revision. It starts, but will block trying to acquire the same advisory lock.
+    const pubIdemKey = `pub-concurrent-${randomUUID()}`;
     const publishPromise = phase4.publishScheduleRevision(
       { accountId: ownerId },
       fresh.scheduleRevisionId,
-      { idempotency_key: `pub-concurrent-${randomUUID()}`, expected_revision: fresh.revision },
+      { idempotency_key: pubIdemKey, expected_revision: fresh.revision },
       randomUUID(),
     );
 
@@ -779,5 +959,295 @@ describe("SCH-006 Checkpoint 6 — Revision, Move & Publication Integrity", () =
       statusCode: 409,
       code: ErrorCode.STALE_SCHEDULE_INPUT,
     });
+
+    // Postconditions:
+    // schedule_version unchanged
+    const [pubAfter] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
+    expect(pubAfter!.schedule_version).toBe(pubBeforeVersion);
+    expect(pubAfter!.published_schedule_revision_id).toBe(pubBeforeRevisionId);
+
+    // no schedule.publish success receipt
+    const [receiptRow] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM phase4_mutation_receipts
+      WHERE operation = 'schedule.publish' AND idempotency_key = ${pubIdemKey}`;
+    expect(receiptRow!.count).toBe(0);
+
+    // no public projection change
+    const publicAfter = await app.inject({ method: "GET", url: `/api/v1/public/competitions/${compSlug}/current` });
+    expect(publicAfter.headers["etag"]).toBe(publicBeforeEtag);
+  });
+
+  it("CP 6.12 Case 2: Official-First → Move (Concurrent Mutex / Serialization)", async () => {
+    // 1. Fresh accepted revision S
+    const fresh = await solveAndAcceptSchedule(compId);
+    const ws = await phase4.scheduleWorkspace({ accountId: ownerId }, compId);
+    expect(ws.current_revision_input_state).toBe("current");
+
+    const occupiedSlots = new Set(ws.current_revision!.assignments.map((assignment) => assignment.slot_id));
+    const movable = ws.current_revision!.assignments.at(-1)!;
+    let validTarget: { area_id: string; slot_id: string; start_epoch_ms: number; end_epoch_ms: number } | null = null;
+    for (const area of ws.areas) {
+      for (const slot of area.slots) {
+        if (occupiedSlots.has(slot.id)) continue;
+        const preview = await phase4.validateScheduleMove({ accountId: ownerId }, fresh.scheduleRevisionId, {
+          match_id: movable.match_id,
+          playing_area_id: area.id,
+          slot_id: slot.id,
+          start_epoch_ms: slot.start_epoch_ms,
+          end_epoch_ms: slot.end_epoch_ms,
+        });
+        if (preview.validation.valid) {
+          validTarget = {
+            area_id: area.id,
+            slot_id: slot.id,
+            start_epoch_ms: slot.start_epoch_ms,
+            end_epoch_ms: slot.end_epoch_ms,
+          };
+          break;
+        }
+      }
+      if (validTarget) break;
+    }
+    expect(validTarget).not.toBeNull();
+
+    // 2. Transaction A acquires lock, waits, bumps revision, commits
+    let unblockTx1: () => void = () => {};
+    const tx1Blocked = new Promise<void>((resolve) => {
+      unblockTx1 = resolve;
+    });
+
+    let tx1Ready: () => void = () => {};
+    const tx1Acquired = new Promise<void>((resolve) => {
+      tx1Ready = resolve;
+    });
+
+    const tx1Promise = client.begin(async (tx) => {
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1||':'||$2, 0))`, ["phase4-schedule", compId]);
+      tx1Ready();
+      await tx1Blocked;
+      await tx.unsafe(`UPDATE competitions SET revision = revision + 1 WHERE id = $1`, [compId]);
+    });
+
+    await tx1Acquired;
+
+    // Concurrent move queued behind advisory lock
+    const moveKey = `move-concurrent-${randomUUID()}`;
+    const movePromise = phase4.moveScheduleMatch(
+      { accountId: ownerId },
+      fresh.scheduleRevisionId,
+      {
+        idempotency_key: moveKey,
+        expected_revision: fresh.revision,
+        match_id: movable.match_id,
+        playing_area_id: validTarget!.area_id,
+        slot_id: validTarget!.slot_id,
+        start_epoch_ms: validTarget!.start_epoch_ms,
+        end_epoch_ms: validTarget!.end_epoch_ms,
+      },
+      randomUUID(),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    unblockTx1();
+    await tx1Promise;
+
+    // Expected: move rejects 409 STALE_SCHEDULE_INPUT
+    await expect(movePromise).rejects.toMatchObject({
+      statusCode: 409,
+      code: ErrorCode.STALE_SCHEDULE_INPUT,
+    });
+
+    // Assert: no child revision created
+    const [childCount] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM schedule_revisions WHERE parent_revision_id = ${fresh.scheduleRevisionId}`;
+    expect(childCount!.count).toBe(0);
+
+    // Assert: no scheduled_matches for a child revision
+    const [childMatches] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM scheduled_matches
+      WHERE schedule_revision_id IN (SELECT id FROM schedule_revisions WHERE parent_revision_id = ${fresh.scheduleRevisionId})`;
+    expect(childMatches!.count).toBe(0);
+
+    // Assert: no schedule.move success receipt
+    const [receiptRow] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM phase4_mutation_receipts
+      WHERE operation = 'schedule.move' AND idempotency_key = ${moveKey}`;
+    expect(receiptRow!.count).toBe(0);
+
+    // Assert: no schedule.match.moved success audit event
+    const [auditCount] = await client<{ count: number }[]>`
+      SELECT count(*)::int as count FROM audit_events
+      WHERE action = 'schedule.match.moved' AND organisation_id = ${org1Id} AND target_id = ${movable.match_id}`;
+    expect(auditCount!.count).toBe(0);
+  });
+
+  it("CP 6.12 Case 3: Move-First → Official Mutation (Sequential / Serialization)", async () => {
+    // 1. Fresh accepted revision S1
+    const s1 = await solveAndAcceptSchedule(compId);
+    const ws1 = await phase4.scheduleWorkspace({ accountId: ownerId }, compId);
+    expect(ws1.current_revision_input_state).toBe("current");
+
+    const occupiedSlots = new Set(ws1.current_revision!.assignments.map((assignment) => assignment.slot_id));
+    const movable = ws1.current_revision!.assignments.at(-1)!;
+    let validTarget: { area_id: string; slot_id: string; start_epoch_ms: number; end_epoch_ms: number } | null = null;
+    for (const area of ws1.areas) {
+      for (const slot of area.slots) {
+        if (occupiedSlots.has(slot.id)) continue;
+        const preview = await phase4.validateScheduleMove({ accountId: ownerId }, s1.scheduleRevisionId, {
+          match_id: movable.match_id,
+          playing_area_id: area.id,
+          slot_id: slot.id,
+          start_epoch_ms: slot.start_epoch_ms,
+          end_epoch_ms: slot.end_epoch_ms,
+        });
+        if (preview.validation.valid) {
+          validTarget = {
+            area_id: area.id,
+            slot_id: slot.id,
+            start_epoch_ms: slot.start_epoch_ms,
+            end_epoch_ms: slot.end_epoch_ms,
+          };
+          break;
+        }
+      }
+      if (validTarget) break;
+    }
+    expect(validTarget).not.toBeNull();
+
+    // 2. Move transaction executes first and commits successfully -> produces S2
+    const moveKey = `move-first-${randomUUID()}`;
+    const s2 = await phase4.moveScheduleMatch(
+      { accountId: ownerId },
+      s1.scheduleRevisionId,
+      {
+        idempotency_key: moveKey,
+        expected_revision: s1.revision,
+        match_id: movable.match_id,
+        playing_area_id: validTarget!.area_id,
+        slot_id: validTarget!.slot_id,
+        start_epoch_ms: validTarget!.start_epoch_ms,
+        end_epoch_ms: validTarget!.end_epoch_ms,
+      },
+      randomUUID(),
+    );
+    expect(s2.revision).toBe(s1.revision + 1);
+
+    // 3. Scheduling-relevant official mutation acquires lock and commits
+    const [assignedRow] = await client<{ official_id: string }[]>`
+      SELECT official_id FROM match_official_assignments WHERE competition_id=${compId} LIMIT 1`;
+    const mutRes = await app.inject({
+      method: "PUT",
+      url: `/api/v1/phase4/competitions/${compId}/officials/${assignedRow!.official_id}/availability`,
+      headers: ownerHeaders(),
+      payload: {
+        windows: [{ starts_at: "2027-08-01T08:30:00.000Z", ends_at: "2027-08-01T11:30:00.000Z" }],
+      },
+    });
+    expect(mutRes.statusCode).toBe(200);
+    expect(JSON.parse(mutRes.body).bumped_revision).toBe(true);
+
+    // 4. S2 exists
+    const s2Detail = await phase4.readScheduleRevision({ accountId: ownerId }, s2.id);
+    expect(s2Detail.id).toBe(s2.id);
+
+    // S2 current_revision_input_state becomes stale
+    const wsAfter = await phase4.scheduleWorkspace({ accountId: ownerId }, compId);
+    expect(wsAfter.current_revision?.id).toBe(s2.id);
+    expect(wsAfter.current_revision_input_state).toBe("stale");
+
+    // S2 cannot subsequently be moved
+    await expect(
+      phase4.moveScheduleMatch(
+        { accountId: ownerId },
+        s2.id,
+        {
+          idempotency_key: `move-after-stale-${randomUUID()}`,
+          expected_revision: s2.revision,
+          match_id: movable.match_id,
+          playing_area_id: validTarget!.area_id,
+          slot_id: validTarget!.slot_id,
+          start_epoch_ms: validTarget!.start_epoch_ms,
+          end_epoch_ms: validTarget!.end_epoch_ms,
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: ErrorCode.STALE_SCHEDULE_INPUT,
+    });
+
+    // S2 cannot subsequently be marked ready
+    await expect(
+      phase4.markScheduleReady(
+        { accountId: ownerId },
+        s2.id,
+        { idempotency_key: `ready-after-stale-${randomUUID()}`, expected_revision: s2.revision },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: ErrorCode.STALE_SCHEDULE_INPUT,
+    });
+
+    // S2 cannot subsequently be published
+    await expect(
+      phase4.publishScheduleRevision(
+        { accountId: ownerId },
+        s2.id,
+        { idempotency_key: `pub-after-stale-${randomUUID()}`, expected_revision: s2.revision },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: ErrorCode.STALE_SCHEDULE_INPUT,
+    });
+  });
+
+  it("CP 6.12 Case 4: Publish-First → Official Mutation (Sequential / Serialization)", async () => {
+    // 1. Fresh review-ready S1
+    const s1 = await solveAndAcceptSchedule(compId);
+    const pubRes = await phase4.publishScheduleRevision(
+      { accountId: ownerId },
+      s1.scheduleRevisionId,
+      { idempotency_key: `pub-first-${randomUUID()}`, expected_revision: s1.revision },
+      randomUUID(),
+    );
+    expect(pubRes.status).toBe("published");
+    const publishedVersion = pubRes.schedule_version;
+
+    // 2. Official scheduling-input mutation commits
+    const [assignedRow] = await client<{ official_id: string }[]>`
+      SELECT official_id FROM match_official_assignments WHERE competition_id=${compId} LIMIT 1`;
+    const mutRes = await app.inject({
+      method: "PUT",
+      url: `/api/v1/phase4/competitions/${compId}/officials/${assignedRow!.official_id}/availability`,
+      headers: ownerHeaders(),
+      payload: {
+        windows: [{ starts_at: "2027-08-01T07:30:00.000Z", ends_at: "2027-08-01T10:30:00.000Z" }],
+      },
+    });
+    expect(mutRes.statusCode).toBe(200);
+    expect(JSON.parse(mutRes.body).bumped_revision).toBe(true);
+
+    // 3. Postconditions:
+    // S1 remains published
+    const [s1Row] = await client<{ status: string }[]>`
+      SELECT status FROM schedule_revisions WHERE id=${s1.scheduleRevisionId}`;
+    expect(s1Row!.status).toBe("published");
+
+    // public remains S1
+    const [pubRow] = await client<{ schedule_version: number; published_schedule_revision_id: string }[]>`
+      SELECT schedule_version, published_schedule_revision_id FROM competition_publications WHERE competition_id=${compId}`;
+    expect(pubRow!.published_schedule_revision_id).toBe(s1.scheduleRevisionId);
+    expect(pubRow!.schedule_version).toBe(publishedVersion);
+
+    // schedule_version does not increment again
+    expect(pubRow!.schedule_version).toBe(publishedVersion);
+
+    // private freshness becomes stale
+    const wsAfter = await phase4.scheduleWorkspace({ accountId: ownerId }, compId);
+    expect(wsAfter.current_revision_input_state).toBe("stale");
   });
 });

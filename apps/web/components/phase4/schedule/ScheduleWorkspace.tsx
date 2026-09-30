@@ -469,6 +469,15 @@ export function ScheduleWorkspace({
           tone="warning"
         />
       ) : null}
+      {document.currentRevisionInputState === phase4ScheduleMachine.unknownInputState ? (
+        <StatusRail
+          testId={phase4ScheduleMachine.unknownScheduleWarningTestId}
+          icon={<Warning />}
+          title={phase4ScheduleCopy.freshnessUnverified}
+          body={phase4ScheduleCopy.scheduleFreshnessUnverifiedGuidance}
+          tone="warning"
+        />
+      ) : null}
       {document.warnings.map((warning) => (
         <StatusRail
           key={`${warning.code}-${warning.message}`}
@@ -530,7 +539,7 @@ export function ScheduleWorkspace({
             onClick={() => void publish()}
             disabled={
               !document.canPublish ||
-              document.currentRevisionInputState === phase4ScheduleMachine.staleInputState ||
+              document.currentRevisionInputState !== phase4ScheduleMachine.currentInputState ||
               disabled
             }
           >
@@ -957,7 +966,7 @@ function MatchInspector({
             {locked ? <LockKeyOpen /> : <LockKey />}
             {locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}
           </button>
-          {assignment && document.currentRevisionInputState !== phase4ScheduleMachine.staleInputState ? (
+          {assignment && document.currentRevisionInputState === phase4ScheduleMachine.currentInputState ? (
             <Link
               className={styles.moveLink}
               href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
