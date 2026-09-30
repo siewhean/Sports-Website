@@ -1,39 +1,53 @@
 "use client";
 
 import type { RefObject } from "react";
-import { phase4OfficialsCopy, type OfficialView } from "@/lib/phase4-officials";
+import {
+  formatWindowDisplay,
+  phase4OfficialsCopy,
+  phase4OfficialsMachine,
+  type AvailabilityWindowView,
+  type OfficialView,
+} from "@/lib/phase4-officials";
 import styles from "./OfficialsRosterView.module.css";
 
 export function OfficialDetails({
   official,
   assignmentCount,
   windowCount,
+  windows = [],
+  timeZone = phase4OfficialsMachine.defaultTimeZone,
   canEdit,
   busy,
   workspaceOutOfSync,
   isArchiveConfirm,
   onOpenEdit,
+  onOpenAvailabilityEdit,
   onRequestArchive,
   onConfirmArchive,
   onCancelArchive,
   onRestore,
   headingRef,
   archiveButtonRef,
+  editAvailabilityButtonRef,
 }: {
   official: OfficialView | null;
   assignmentCount: number;
   windowCount: number;
+  windows?: AvailabilityWindowView[];
+  timeZone?: string;
   canEdit: boolean;
   busy: string | null;
   workspaceOutOfSync?: boolean;
   isArchiveConfirm: boolean;
   onOpenEdit: () => void;
+  onOpenAvailabilityEdit?: () => void;
   onRequestArchive: () => void;
   onConfirmArchive: () => void;
   onCancelArchive: () => void;
   onRestore: () => void;
   headingRef?: RefObject<HTMLHeadingElement | null>;
   archiveButtonRef?: RefObject<HTMLButtonElement | null>;
+  editAvailabilityButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   if (!official) {
     return (
@@ -132,6 +146,53 @@ export function OfficialDetails({
           )}
         </div>
       ) : null}
+
+      <div className={styles.availabilitySection}>
+        <div className={styles.availabilitySectionHeader}>
+          <h4 className={styles.availabilityTitle}>{phase4OfficialsCopy.availabilityTitle}</h4>
+          <span className={styles.timezoneNotice}>{phase4OfficialsCopy.competitionTimezone(timeZone)}</span>
+        </div>
+
+        {official.archived ? (
+          <p className={styles.readOnlyNotice}>{phase4OfficialsCopy.restoreToEditAvailability}</p>
+        ) : null}
+
+        {windows.length === 0 ? (
+          <p className={styles.emptyAvailability}>{phase4OfficialsCopy.noAvailabilityWindows}</p>
+        ) : (
+          <ul className={styles.windowList} role="list">
+            {windows.map((w, idx) => {
+              const formatted = formatWindowDisplay(w.startsAt, w.endsAt, timeZone);
+              return (
+                <li key={`${w.startsAt}_${w.endsAt}_${idx}`} className={styles.windowItem}>
+                  {formatted.crossMidnight ? (
+                    <span className={styles.windowTime}>{formatted.text}</span>
+                  ) : (
+                    <div className={styles.windowRow}>
+                      <span className={styles.windowDate}>{formatted.date}</span>
+                      <span className={styles.windowTime}>{formatted.time}</span>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {canEdit && !official.archived && onOpenAvailabilityEdit ? (
+          <div className={styles.availabilityActions}>
+            <button
+              type="button"
+              ref={editAvailabilityButtonRef}
+              className={styles.secondaryButton}
+              onClick={onOpenAvailabilityEdit}
+              disabled={Boolean(busy) || Boolean(workspaceOutOfSync)}
+            >
+              {phase4OfficialsCopy.editAvailability}
+            </button>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

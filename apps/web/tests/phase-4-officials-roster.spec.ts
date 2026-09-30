@@ -216,3 +216,112 @@ test("officials roster supports view, create, edit, archive and restore flows", 
   ).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Add official" })).toBeEnabled();
 });
+
+test.describe("competition timezone availability in non-host browser timezone", () => {
+  test.use({ timezoneId: "America/Los_Angeles" });
+
+  test("edits official availability in competition timezone and compiles UTC payload", async ({ page }) => {
+    await page.goto(officialsUrl);
+    await dismissConsent(page);
+
+    // Initial official selected is Official A
+    await expect(page.getByRole("heading", { name: "Official A" })).toBeVisible();
+    await expect(page.getByText("Competition timezone: Asia/Singapore")).toBeVisible();
+
+    // Verify initial windows rendered in Asia/Singapore civil time (09:00–13:00, 14:00–18:00)
+    // even though browser timezone is America/Los_Angeles (where 01:00 UTC would be 18:00 previous day)
+    await expect(page.getByText("09:00–13:00")).toBeVisible();
+    await expect(page.getByText("14:00–18:00")).toBeVisible();
+
+    // Click "Edit availability"
+    await page.getByRole("button", { name: "Edit availability" }).click();
+    await expect(page.getByRole("heading", { name: /Edit availability/i })).toBeVisible();
+    await expect(page.getByText("Times are entered in Asia/Singapore.")).toBeVisible();
+
+    // Verify initial inputs are pre-populated in Asia/Singapore civil time
+    await expect(page.getByLabel("Start date").first()).toHaveValue("2026-08-15");
+    await expect(page.getByLabel("Start time").first()).toHaveValue("09:00");
+    await expect(page.getByLabel("End time").first()).toHaveValue("13:00");
+
+    // Test client validation: end time before start time
+    await page.getByLabel("End time").first().fill("08:00");
+    await page.getByRole("button", { name: "Save availability" }).click();
+    await expect(page.locator("#availability-editor-error")).toContainText("End time must be after start time.");
+    await expect(page.getByLabel("End time").first()).toBeFocused();
+    await expect(page.getByLabel("End time").first()).toHaveAttribute("aria-invalid", "true");
+
+    // Set end time to valid: 17:00
+    await page.getByLabel("End time").first().fill("17:00");
+
+    // Remove window 2
+    await page.getByRole("button", { name: "Remove window" }).last().click();
+
+    let savedPayload: { windows: { starts_at: string; ends_at: string }[] } | null = null;
+    await page.route("**/api/phase4/competitions/*/officials/*/availability", async (route) => {
+      if (route.request().method() === "PUT") {
+        const payload = JSON.parse(route.request().postData() || "{}") as {
+          windows: { starts_at: string; ends_at: string }[];
+        };
+        savedPayload = payload;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            windows: payload.windows,
+            bumped_revision: true,
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    const refreshedWorkspace = {
+      officials: [
+        {
+          id: "60000000-0000-4000-8000-000000000001",
+          competition_id: competitionId,
+          name: "Official A",
+          default_role: "Lead Official",
+          archived: false,
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+      availability: {
+        "60000000-0000-4000-8000-000000000001": [
+          { starts_at: "2026-08-15T01:00:00.000Z", ends_at: "2026-08-15T09:00:00.000Z" },
+        ],
+      },
+      assignments: [],
+    };
+
+    await page.route("**/api/phase4/competitions/*/officials/workspace", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(refreshedWorkspace),
+      });
+    });
+
+    await page.getByRole("button", { name: "Save availability" }).click();
+
+    // Verify PUT request payload contains exact UTC ISO strings converted from Asia/Singapore, NOT America/Los_Angeles!
+    // 2026-08-15 09:00 to 17:00 SGT is 01:00 to 09:00 UTC (SGT is UTC+8)
+    expect(savedPayload).not.toBeNull();
+    expect(savedPayload!.windows).toHaveLength(1);
+    expect(savedPayload!.windows[0]).toEqual({
+      starts_at: "2026-08-15T01:00:00.000Z",
+      ends_at: "2026-08-15T09:00:00.000Z",
+    });
+
+    // Success notice displayed
+    await expect(page.getByRole("status").filter({ hasText: "Availability saved." })).toBeVisible();
+
+    // Schedule warning banner is displayed because bumped_revision: true
+    await expect(page.getByText("This official was assigned to a match.")).toBeVisible();
+
+    // Formatted window displayed in details panel in Asia/Singapore civil time
+    await expect(page.getByText("09:00–17:00")).toBeVisible();
+  });
+});

@@ -42,7 +42,13 @@ export default async function OfficialsPage({
       pageEyebrow={result.competition.division?.name ?? result.competition.name}
       syncLabel={phase2Copy.draftSynced}
       syncState={opaqueId("saved")}
-      sectionContent={<OfficialsRosterView document={workspace} scheduleDocument={scheduleDoc} />}
+      sectionContent={
+        <OfficialsRosterView
+          document={workspace}
+          scheduleDocument={scheduleDoc}
+          timeZone={result.competition.timezone}
+        />
+      }
     />
   );
 }

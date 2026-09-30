@@ -21,6 +21,7 @@ export function OfficialRoster({
   onOpenCreate,
   busy,
   workspaceOutOfSync,
+  isSelectionDisabled,
   addOfficialButtonRef,
   activeOfficialsHeadingRef,
 }: {
@@ -35,6 +36,7 @@ export function OfficialRoster({
   onOpenCreate: () => void;
   busy: string | null;
   workspaceOutOfSync?: boolean;
+  isSelectionDisabled?: boolean;
   addOfficialButtonRef?: RefObject<HTMLButtonElement | null>;
   activeOfficialsHeadingRef?: RefObject<HTMLHeadingElement | null>;
 }) {
@@ -63,7 +65,7 @@ export function OfficialRoster({
                 ref={addOfficialButtonRef}
                 className={styles.primaryButton}
                 onClick={onOpenCreate}
-                disabled={Boolean(busy) || Boolean(workspaceOutOfSync)}
+                disabled={Boolean(busy) || Boolean(workspaceOutOfSync) || Boolean(isSelectionDisabled)}
               >
                 {phase4OfficialsCopy.addOfficial}
               </button>
@@ -76,6 +78,7 @@ export function OfficialRoster({
                 className={styles.toggleButton}
                 onClick={onToggleShowArchived}
                 aria-expanded={showArchived}
+                disabled={Boolean(isSelectionDisabled)}
               >
                 {showArchived
                   ? phase4OfficialsCopy.hideArchived
@@ -100,6 +103,7 @@ export function OfficialRoster({
                     className={`${styles.cardButton} ${isSelected ? styles.cardSelected : ""}`}
                     onClick={() => onSelectOfficial(official.id)}
                     aria-pressed={isSelected}
+                    disabled={Boolean(isSelectionDisabled)}
                   >
                     <div className={styles.info}>
                       <div className={styles.nameRow}>
@@ -138,6 +142,7 @@ export function OfficialRoster({
                     className={`${styles.cardButton} ${styles.cardArchived} ${isSelected ? styles.cardSelected : ""}`}
                     onClick={() => onSelectOfficial(official.id)}
                     aria-pressed={isSelected}
+                    disabled={Boolean(isSelectionDisabled)}
                   >
                     <div className={styles.info}>
                       <div className={styles.nameRow}>

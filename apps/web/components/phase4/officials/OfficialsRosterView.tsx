@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import Link from "next/link";
 import { opaqueId } from "@matchday/ui";
 import {
+  isAvailabilityMutationResponse,
   isOfficialMutationResponse,
   isOfficialResponse,
   officialCommandErrorMessage,
@@ -13,18 +14,21 @@ import {
   type OfficialWorkspaceDocument,
 } from "@/lib/phase4-officials";
 import type { ScheduleDocument } from "@/lib/phase4-schedule";
+import { OfficialAvailabilityEditor } from "./OfficialAvailabilityEditor";
 import { OfficialDetails } from "./OfficialDetails";
 import { OfficialForm } from "./OfficialForm";
 import { OfficialRoster } from "./OfficialRoster";
 import styles from "./OfficialsRosterView.module.css";
 
-type WorkspaceMode = "view" | "create" | "edit" | "archive_confirm";
+type WorkspaceMode = "view" | "create" | "edit" | "archive_confirm" | "availability_edit";
 
 export function OfficialsRosterView({
   document: initialDocument,
+  timeZone = phase4OfficialsMachine.defaultTimeZone,
 }: {
   document: OfficialWorkspaceDocument;
   scheduleDocument?: ScheduleDocument;
+  timeZone?: string;
 }) {
   const [workspace, setWorkspace] = useState<OfficialWorkspaceDocument>(initialDocument);
   const [selectedOfficialId, setSelectedOfficialId] = useState<string | null>(
@@ -38,11 +42,13 @@ export function OfficialsRosterView({
   const [workspaceOutOfSync, setWorkspaceOutOfSync] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const archiveButtonRef = useRef<HTMLButtonElement | null>(null);
   const addOfficialButtonRef = useRef<HTMLButtonElement | null>(null);
   const activeOfficialsHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const editAvailabilityButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const selectedOfficial =
     (selectedOfficialId ? workspace.officials.find((o) => o.id === selectedOfficialId) : null) ?? null;
@@ -89,10 +95,12 @@ export function OfficialsRosterView({
   };
 
   const handleSelectOfficial = (id: string) => {
+    if (mode === opaqueId("availability_edit")) return;
     setSelectedOfficialId(id);
     setMode(opaqueId("view"));
     setFormError(null);
     setStatusMessage(null);
+    setAvailabilityError(null);
   };
 
   const handleOpenCreate = () => {
@@ -100,6 +108,7 @@ export function OfficialsRosterView({
     setMode(opaqueId("create"));
     setFormError(null);
     setStatusMessage(null);
+    setAvailabilityError(null);
   };
 
   const handleOpenEdit = () => {
@@ -107,6 +116,7 @@ export function OfficialsRosterView({
     setMode(opaqueId("edit"));
     setFormError(null);
     setStatusMessage(null);
+    setAvailabilityError(null);
   };
 
   const handleCancelForm = () => {
@@ -114,11 +124,89 @@ export function OfficialsRosterView({
     setFormError(null);
   };
 
+  const handleOpenAvailabilityEdit = () => {
+    if (!selectedOfficial || selectedOfficial.archived || !workspace.canEdit || workspaceOutOfSync) return;
+    setMode(opaqueId("availability_edit"));
+    setAvailabilityError(null);
+    setStatusMessage(null);
+  };
+
+  const handleCancelAvailabilityEdit = () => {
+    setMode(opaqueId("view"));
+    setAvailabilityError(null);
+    setTimeout(() => {
+      editAvailabilityButtonRef.current?.focus();
+    }, 0);
+  };
+
+  const handleSaveAvailability = async ({ windows }: { windows: { starts_at: string; ends_at: string }[] }) => {
+    if (!selectedOfficial || workspaceOutOfSync) return;
+
+    setBusy(opaqueId("save_availability"));
+    setAvailabilityError(null);
+    setStatusMessage(null);
+
+    try {
+      const res = await fetch(
+        `/api/phase4/competitions/${encodeURIComponent(workspace.competitionId)}/officials/${encodeURIComponent(selectedOfficial.id)}/availability`,
+        {
+          method: phase4OfficialsMachine.put,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ windows }),
+        },
+      );
+
+      const raw = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setWorkspaceOutOfSync(false);
+        const code = raw?.error?.code ?? null;
+        setAvailabilityError(officialCommandErrorMessage(res.status, code));
+        setBusy(null);
+        return;
+      }
+
+      if (!isAvailabilityMutationResponse(raw)) {
+        setWorkspaceOutOfSync(false);
+        setAvailabilityError(phase4OfficialsCopy.commandResponseInvalid);
+        setBusy(null);
+        return;
+      }
+
+      setMode(opaqueId("view"));
+
+      if (raw.bumped_revision) {
+        setScheduleWarning(true);
+      }
+
+      const refreshed = await refreshWorkspace();
+      if (refreshed) {
+        setWorkspaceOutOfSync(false);
+        setStatusMessage(phase4OfficialsCopy.availabilitySaved);
+        setTimeout(() => {
+          if (editAvailabilityButtonRef.current) {
+            editAvailabilityButtonRef.current.focus();
+          } else {
+            headingRef.current?.focus();
+          }
+        }, 0);
+      } else {
+        setWorkspaceOutOfSync(true);
+      }
+    } catch {
+      setWorkspaceOutOfSync(false);
+      setAvailabilityError(phase4OfficialsCopy.genericMutationError);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handleRequestArchive = () => {
     if (workspaceOutOfSync) return;
     setMode(opaqueId("archive_confirm"));
     setStatusMessage(null);
     setErrorMessage(null);
+    setAvailabilityError(null);
   };
 
   const handleCancelArchive = () => {
@@ -166,7 +254,6 @@ export function OfficialsRosterView({
         setWorkspaceOutOfSync(false);
         setSelectedOfficialId(raw.id);
         setStatusMessage(phase4OfficialsCopy.officialCreated);
-        setScheduleWarning(false);
         setTimeout(() => {
           headingRef.current?.focus();
         }, 0);
@@ -235,7 +322,6 @@ export function OfficialsRosterView({
       if (refreshed) {
         setWorkspaceOutOfSync(false);
         setStatusMessage(phase4OfficialsCopy.officialUpdated);
-        setScheduleWarning(false);
         setTimeout(() => {
           headingRef.current?.focus();
         }, 0);
@@ -287,8 +373,6 @@ export function OfficialsRosterView({
 
       if (raw.bumped_revision) {
         setScheduleWarning(true);
-      } else {
-        setScheduleWarning(false);
       }
 
       const archivedId = selectedOfficial.id;
@@ -391,8 +475,6 @@ export function OfficialsRosterView({
 
       if (raw.bumped_revision) {
         setScheduleWarning(true);
-      } else {
-        setScheduleWarning(false);
       }
 
       const restoredId = selectedOfficial.id;
@@ -476,6 +558,7 @@ export function OfficialsRosterView({
         onOpenCreate={handleOpenCreate}
         busy={busy}
         workspaceOutOfSync={workspaceOutOfSync}
+        isSelectionDisabled={mode === opaqueId("availability_edit")}
         addOfficialButtonRef={addOfficialButtonRef}
         activeOfficialsHeadingRef={activeOfficialsHeadingRef}
       />
@@ -498,22 +581,36 @@ export function OfficialsRosterView({
             busy={busy === opaqueId("save")}
             serverError={formError}
           />
+        ) : mode === opaqueId("availability_edit") && selectedOfficial ? (
+          <OfficialAvailabilityEditor
+            official={selectedOfficial}
+            initialWindows={workspace.availability[selectedOfficial.id] ?? []}
+            timeZone={timeZone}
+            onSubmit={handleSaveAvailability}
+            onCancel={handleCancelAvailabilityEdit}
+            busy={busy === opaqueId("save_availability")}
+            serverError={availabilityError}
+          />
         ) : (
           <OfficialDetails
             official={selectedOfficial}
             assignmentCount={assignmentCount}
             windowCount={windowCount}
+            windows={selectedOfficial ? (workspace.availability[selectedOfficial.id] ?? []) : []}
+            timeZone={timeZone}
             canEdit={workspace.canEdit}
             busy={busy}
             workspaceOutOfSync={workspaceOutOfSync}
             isArchiveConfirm={mode === opaqueId("archive_confirm")}
             onOpenEdit={handleOpenEdit}
+            onOpenAvailabilityEdit={handleOpenAvailabilityEdit}
             onRequestArchive={handleRequestArchive}
             onConfirmArchive={handleArchive}
             onCancelArchive={handleCancelArchive}
             onRestore={handleRestore}
             headingRef={headingRef}
             archiveButtonRef={archiveButtonRef}
+            editAvailabilityButtonRef={editAvailabilityButtonRef}
           />
         )}
       </div>

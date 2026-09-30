@@ -1,3 +1,4 @@
+import { civilMinuteAtEpoch } from "@matchday/domain";
 import type { SurfaceState } from "./phase2";
 
 export const phase4OfficialsCopy = {
@@ -68,7 +69,36 @@ export const phase4OfficialsCopy = {
   originRejected: "Request was rejected due to an invalid origin.",
   commandResponseInvalid: "Received an unexpected response from the server.",
   apiUnavailable: "The service is temporarily unavailable. Please try again later.",
+  competitionTimezone: (tz: string) => `Competition timezone: ${tz}`,
+  timesEnteredIn: (tz: string) => `Times are entered in ${tz}.`,
+  noAvailabilityWindows: "No availability windows set.",
+  restoreToEditAvailability: "Restore this official before changing availability.",
+  editAvailability: "Edit availability",
+  saveAvailability: "Save availability",
+  savingAvailability: "Saving...",
+  availabilityTitle: "Availability",
+  availabilityEditorTitle: "Edit availability",
+  addWindow: "Add availability window",
+  removeWindow: "Remove window",
+  startDateLabel: "Start date",
+  startTimeLabel: "Start time",
+  endDateLabel: "End date",
+  endTimeLabel: "End time",
+  startDateRequired: "Start date is required.",
+  startTimeRequired: "Start time is required.",
+  endDateRequired: "End date is required.",
+  endTimeRequired: "End time is required.",
+  startDateTimeInvalid: "Start date and time must be valid.",
+  endDateTimeInvalid: "End date and time must be valid.",
+  endMustBeAfterStart: "End time must be after start time.",
+  dstGapError: (time: string, tz: string, date: string) =>
+    `${time} does not exist in ${tz} on ${date} because of the daylight-saving time change. Choose another time.`,
+  maxWindowsReached: "Maximum of 512 availability windows reached.",
+  availabilitySaved: "Availability saved.",
+  availabilityInvalid: "Availability windows are invalid. Check dates and times.",
+  officialArchivedError: "This official is archived. Restore the official before making changes.",
   validationFailed: "Please check the information provided and try again.",
+  windowIndex: (idx: number) => `Window ${idx}`,
   errorTitle: "Officials unavailable",
   errorBody: "Unable to load officials at this time.",
 } as const;
@@ -79,6 +109,10 @@ export function officialCommandErrorMessage(status: number, code?: string | null
       return phase4OfficialsCopy.duplicateNameError;
     case "OFFICIAL_NOT_FOUND":
       return phase4OfficialsCopy.officialNotFound;
+    case "OFFICIAL_ARCHIVED":
+      return phase4OfficialsCopy.officialArchivedError;
+    case "OFFICIAL_AVAILABILITY_INVALID":
+      return phase4OfficialsCopy.availabilityInvalid;
     case "VALIDATION_ERROR":
       return phase4OfficialsCopy.validationFailed;
     case "REVISION_CONFLICT":
@@ -112,6 +146,11 @@ export const phase4OfficialsMachine = {
   post: "POST",
   patch: "PATCH",
   put: "PUT",
+  defaultTimeZone: "UTC",
+  startDate: "startDate",
+  startTime: "startTime",
+  endDate: "endDate",
+  endTime: "endTime",
 } as const;
 
 export type OfficialView = {
@@ -128,6 +167,52 @@ export type AvailabilityWindowView = {
   startsAt: string;
   endsAt: string;
 };
+
+export type FormattedAvailabilityWindow = {
+  crossMidnight: boolean;
+  date?: string;
+  time?: string;
+  startDate?: string;
+  endDate?: string;
+  startTime?: string;
+  endTime?: string;
+  text: string;
+};
+
+export function formatWindowDisplay(startsAt: string, endsAt: string, timeZone: string): FormattedAvailabilityWindow {
+  const startEpoch = Date.parse(startsAt);
+  const endEpoch = Date.parse(endsAt);
+  const startCivil = civilMinuteAtEpoch(startEpoch, timeZone);
+  const endCivil = civilMinuteAtEpoch(endEpoch, timeZone);
+
+  const dateFormatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
+  const startDateStr = dateFormatter.format(new Date(startEpoch));
+  const endDateStr = dateFormatter.format(new Date(endEpoch));
+
+  if (startCivil.date === endCivil.date) {
+    return {
+      crossMidnight: false,
+      date: startDateStr,
+      time: `${startCivil.time}–${endCivil.time}`,
+      text: `${startDateStr} ${startCivil.time}–${endCivil.time}`,
+    };
+  }
+
+  return {
+    crossMidnight: true,
+    startDate: startDateStr,
+    endDate: endDateStr,
+    startTime: startCivil.time,
+    endTime: endCivil.time,
+    text: `${startDateStr} ${startCivil.time} – ${endDateStr} ${endCivil.time}`,
+  };
+}
 
 export type MatchOfficialAssignmentView = {
   matchId: string;

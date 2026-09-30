@@ -454,3 +454,125 @@
 .archivedSection {
   margin-top: 1.5rem;
 }
+
+.availabilitySection {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--p2-line-subtle, #ece8df);
+}
+
+.availabilitySectionHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.availabilityTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0;
+  color: var(--p2-text-primary, #111827);
+}
+
+.timezoneNotice {
+  font-size: 0.8125rem;
+  color: var(--p2-text-secondary, #6b7280);
+}
+
+.emptyAvailability {
+  font-size: 0.875rem;
+  color: var(--p2-text-secondary, #6b7280);
+  font-style: italic;
+  margin: 0.5rem 0 1rem;
+}
+
+.windowList {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.windowItem {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--p2-surface-subtle, #f9f8f6);
+  border: 1px solid var(--p2-line-subtle, #ece8df);
+  font-size: 0.875rem;
+}
+
+.windowRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.windowDate {
+  font-weight: 600;
+  color: var(--p2-text-primary, #111827);
+}
+
+.windowTime {
+  color: var(--p2-text-secondary, #4b5563);
+  font-variant-numeric: tabular-nums;
+}
+
+.availabilityActions {
+  margin-top: 1rem;
+}
+
+.editorRows {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.editorRow {
+  padding: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--p2-line-subtle, #ece8df);
+  background: var(--p2-surface-subtle, #f9f8f6);
+  display: grid;
+  gap: 0.75rem;
+}
+
+.rowHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rowTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--p2-text-primary, #374151);
+  margin: 0;
+}
+
+.rowInputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.rowField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rowLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--p2-text-secondary, #4b5563);
+}
+
+.editorRowActions {
+  margin-bottom: 1.25rem;
+}
