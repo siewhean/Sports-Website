@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
-import { SPORT_PACKS } from "@matchday/domain";
+import { createDefaultFormatTemplates, SPORT_PACKS } from "@matchday/domain";
 import { hashSessionSecret, systemClock, type PostgresJsSql } from "@matchday/identity";
 import {
   DomainScheduleOptimizer,
@@ -160,7 +160,19 @@ async function publishCanonicalMultiDivisionSchedule({
   scheduler: SchedulerRuntime;
   accountId: string;
   competitionId: string;
-}): Promise<{ scheduleRevisionId: string; scheduleVersion: number }> {
+}): Promise<{
+  scheduleRevisionId: string;
+  scheduleVersion: number;
+  officialId: string;
+  officialName: string;
+  officialAssignedRole: string;
+  officialTargetMatchId: string;
+  officialTargetMatchCode: string;
+  secondOfficialId: string;
+  secondOfficialName: string;
+  s1Hash: string;
+  s1Matches: Array<{ match_id: string; playing_area_id: string; starts_at: Date; ends_at: Date }>;
+}> {
   const actor = { accountId };
   const created = await phase4.createSetupDraft(actor, competitionId, `phase7-setup-${randomUUID()}`, randomUUID());
   let document = created.document;
@@ -281,6 +293,52 @@ async function publishCanonicalMultiDivisionSchedule({
     await phase4.publishFormat(actor, saved.draft_id, `phase7-publish-format-${saved.draft_id}`, randomUUID());
   }
 
+  // CP 7.1: Seed active competition officials using real Phase 4 runtime methods
+  const officialName = "Gate D Referee";
+  const official = await phase4.createOfficial(
+    actor,
+    competitionId,
+    { name: officialName, default_role: "Referee" },
+    randomUUID(),
+  );
+
+  const secondOfficialName = "Second Referee";
+  const secondOfficial = await phase4.createOfficial(
+    actor,
+    competitionId,
+    { name: secondOfficialName, default_role: "Line Judge" },
+    randomUUID(),
+  );
+
+  // Pick deterministic target match in division 1 (Women Open) so it does not interfere
+  // with division 0 (Men Open) which is used for the Gate D scoring & correction lifecycle.
+  const targetDivisionId = selectedRecommendation.division_formats[1]!.division_id;
+  const [targetMatch] = await sql<{ id: string; code: string }[]>`
+    SELECT id, code FROM matches
+    WHERE competition_id=${competitionId} AND division_id=${targetDivisionId}
+    ORDER BY ordinal, id LIMIT 1
+  `;
+  if (!targetMatch) throw new Error("Phase 7 harness did not find target match for official assignment");
+
+  const officialAssignedRole = "Lead official";
+  await phase4.replaceMatchOfficials(
+    actor,
+    competitionId,
+    targetMatch.id,
+    [{ official_id: official.id, assigned_role: officialAssignedRole }],
+    randomUUID(),
+  );
+
+  // Give broad valid availability in canonical UTC derived from Asia/Singapore timezone (UTC+8).
+  // Tournament is 2026-09-01 to 2026-09-02, so UTC span is 2026-08-31T16:00:00Z to 2026-09-02T16:00:00Z.
+  await phase4.replaceOfficialAvailability(
+    actor,
+    competitionId,
+    official.id,
+    [{ starts_at: "2026-08-31T16:00:00.000Z", ends_at: "2026-09-02T16:00:00.000Z" }],
+    randomUUID(),
+  );
+
   const [competition] = await sql<{ revision: number; capacity_revision: number; area_id: string }[]>`
     SELECT c.revision,c.capacity_revision,a.id AS area_id
     FROM competitions c JOIN playing_areas a ON a.competition_id=c.id
@@ -288,6 +346,8 @@ async function publishCanonicalMultiDivisionSchedule({
   `;
   if (!competition) throw new Error("Phase 7 canonical schedule requires a playing area");
   const ignored = <T>(value: T) => ({ mode: "ignored" as const, value });
+
+  // CP 7.2: Canonical schedule generation with official_availability.mode = "required"
   const generated = await phase4.generateSchedule(
     actor,
     competitionId,
@@ -304,7 +364,7 @@ async function publishCanonicalMultiDivisionSchedule({
           tolerance_minutes: 60,
         }),
         entry_unavailable: ignored({ by_entry_id: {} }),
-        official_availability: ignored({ by_official_id: {} }),
+        official_availability: { mode: "required", value: { by_official_id: {} } },
         featured_playing_area: ignored({ area_id: competition.area_id, match_ids: [] }),
         avoid_consecutive_matches: ignored({ minutes: 0 }),
         balance_early_matches: ignored({ before_local_time: "09:00" }),
@@ -315,6 +375,39 @@ async function publishCanonicalMultiDivisionSchedule({
     },
     randomUUID(),
   );
+
+  // CP 7.2 #4: Assert persisted input_snapshot contains official IDs and availability windows
+  const [jobRow] = await sql<{ input_snapshot: unknown }[]>`
+    SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${generated.job.id}
+  `;
+  const snapshot = (
+    typeof jobRow?.input_snapshot === "string" ? JSON.parse(jobRow.input_snapshot) : jobRow?.input_snapshot
+  ) as {
+    matches?: Array<{ match_id?: string; id?: string; official_ids?: string[] }>;
+    constraints?: {
+      official_availability?: {
+        mode?: string;
+        value?: {
+          by_official_id?: Record<
+            string,
+            Array<{ start_epoch_ms?: number; end_epoch_ms?: number; starts_at?: string; ends_at?: string }>
+          >;
+        };
+      };
+    };
+  } | null;
+  if (!snapshot || !Array.isArray(snapshot.matches)) {
+    throw new Error("Phase 7 schedule job missing input_snapshot matches");
+  }
+  const snapshotTargetMatch = snapshot.matches.find((m) => (m.match_id ?? m.id) === targetMatch.id);
+  if (!snapshotTargetMatch || !snapshotTargetMatch.official_ids?.includes(official.id)) {
+    throw new Error(`Target match ${targetMatch.id} missing assigned official ${official.id} in input_snapshot`);
+  }
+  const snapshotWindows = snapshot.constraints?.official_availability?.value?.by_official_id?.[official.id];
+  if (!Array.isArray(snapshotWindows) || snapshotWindows.length === 0) {
+    throw new Error(`Official ${official.id} availability windows missing in input_snapshot constraints`);
+  }
+
   await scheduler.start();
   await waitForCompletedScheduleJob(phase4, accountId, generated.job.id);
   const completed = await phase4.readScheduleJob(actor, generated.job.id);
@@ -326,6 +419,18 @@ async function publishCanonicalMultiDivisionSchedule({
     { idempotency_key: `phase7-accept-schedule-${randomUUID()}`, expected_job_revision: completed.revision },
     randomUUID(),
   );
+
+  // CP 7.2 #5: Assert real solver satisfaction on accepted revision
+  const acceptedAssignment = accepted.assignments.find((a) => a.match_id === targetMatch.id);
+  if (!acceptedAssignment) throw new Error("Target match assignment missing from accepted schedule option");
+  const validWindowStart = Date.parse("2026-08-31T16:00:00.000Z");
+  const validWindowEnd = Date.parse("2026-09-02T16:00:00.000Z");
+  if (acceptedAssignment.start_epoch_ms < validWindowStart || acceptedAssignment.end_epoch_ms > validWindowEnd) {
+    throw new Error(
+      `Accepted assignment [${acceptedAssignment.start_epoch_ms}, ${acceptedAssignment.end_epoch_ms}] violated official availability window [${validWindowStart}, ${validWindowEnd}]`,
+    );
+  }
+
   document = await phase4.resumeSetupDraft(
     actor,
     competitionId,
@@ -344,13 +449,285 @@ async function publishCanonicalMultiDivisionSchedule({
     randomUUID(),
   );
   if (scheduleSaved.outcome !== "saved") throw new Error("Phase 7 canonical schedule review was not retained");
+
+  const publishKey = `phase7-publish-schedule-${randomUUID()}`;
   const published = await phase4.publishScheduleRevision(
     actor,
     accepted.id,
-    { idempotency_key: `phase7-publish-schedule-${randomUUID()}`, expected_revision: accepted.revision },
+    { idempotency_key: publishKey, expected_revision: accepted.revision },
     randomUUID(),
   );
-  return { scheduleRevisionId: accepted.id, scheduleVersion: published.schedule_version };
+
+  // CP 7.18: Explicit outbox and audit event idempotency assertion on publish replay
+  const [auditBefore] = await sql<{ count: number }[]>`SELECT count(*)::int FROM audit_events`;
+  const [outboxBefore] = await sql<{ count: number }[]>`SELECT count(*)::int FROM outbox_events`;
+  const replayed = await phase4.publishScheduleRevision(
+    actor,
+    accepted.id,
+    { idempotency_key: publishKey, expected_revision: accepted.revision },
+    randomUUID(),
+  );
+  const [auditAfter] = await sql<{ count: number }[]>`SELECT count(*)::int FROM audit_events`;
+  const [outboxAfter] = await sql<{ count: number }[]>`SELECT count(*)::int FROM outbox_events`;
+  if (replayed.schedule_version !== published.schedule_version || replayed.id !== published.id) {
+    throw new Error("Phase 7 publish idempotency returned mismatched publication result");
+  }
+  if (auditAfter!.count !== auditBefore!.count || outboxAfter!.count !== outboxBefore!.count) {
+    throw new Error("Phase 7 publish replay was not idempotent: new audit or outbox events inserted");
+  }
+
+  // Capture S1 historical data for post-Playwright server-side assertion
+  const [s1Row] = await sql<{ assignment_hash: string }[]>`
+    SELECT assignment_hash FROM schedule_revisions WHERE id=${accepted.id}
+  `;
+  const s1Matches = await sql<{ match_id: string; playing_area_id: string; starts_at: Date; ends_at: Date }[]>`
+    SELECT match_id, playing_area_id, starts_at, ends_at
+    FROM scheduled_matches
+    WHERE schedule_revision_id=${accepted.id}
+    ORDER BY match_id
+  `;
+
+  return {
+    scheduleRevisionId: accepted.id,
+    scheduleVersion: published.schedule_version,
+    officialId: official.id,
+    officialName,
+    officialAssignedRole,
+    officialTargetMatchId: targetMatch.id,
+    officialTargetMatchCode: targetMatch.code,
+    secondOfficialId: secondOfficial.id,
+    secondOfficialName,
+    s1Hash: s1Row!.assignment_hash,
+    s1Matches,
+  };
+}
+
+async function setupNoSolutionCompetition({
+  sql,
+  phase2,
+  phase3,
+  phase4,
+  accountId,
+  organisationId,
+}: {
+  sql: Sql;
+  phase2: Phase2Runtime;
+  phase3: Phase3Runtime;
+  phase4: ReliableGateBPhase4Runtime;
+  accountId: string;
+  organisationId: string;
+}): Promise<{
+  competitionId: string;
+  jobId: string;
+  matchId: string;
+  matchCode: string;
+}> {
+  const actor = { accountId };
+
+  const competition = await phase3.createCompetition(
+    actor,
+    {
+      organisationId,
+      name: "Gate D Diagnostic Cup",
+      slug: `phase7-diag-${randomUUID().slice(0, 8)}`,
+      sportCode: "volleyball",
+      venue: "Gate D Diagnostic Arena",
+      address: "2 Diagnostic Way",
+      countryCode: "SG",
+      startsOn: "2026-09-01",
+      endsOn: "2026-09-02",
+      timezone: "Asia/Singapore",
+      locale: "en-SG",
+    },
+    randomUUID(),
+    `phase7-diag-competition-${randomUUID()}`,
+  );
+  const competitionId = String(competition.id);
+  await sql`
+    INSERT INTO competition_publications(competition_id)
+    VALUES(${competitionId}) ON CONFLICT (competition_id) DO NOTHING;
+  `;
+
+  const createdDiv = await phase3.createDivision(
+    actor,
+    competitionId,
+    { name: "Diagnostic Division", code: "DIAG", entryLimit: 8 },
+    randomUUID(),
+    `phase7-diag-division-${randomUUID()}`,
+  );
+  const divisionId = String((createdDiv as Record<string, unknown>).id);
+
+  await phase2.replaceEntries(
+    actor,
+    competitionId,
+    divisionId,
+    Array.from({ length: 8 }, (_, i) => ({ name: `Diag Team ${i + 1}`, seed: i + 1 })),
+    randomUUID(),
+  );
+
+  await sql`
+    UPDATE division_sport_settings
+    SET settings_override=${sql.json({
+      bestOf: 1,
+      regularTargetPoints: 1,
+      decidingTargetPoints: 1,
+      winBy: 1,
+      pointCap: 1,
+    })},revision=revision+1,updated_by=${accountId},updated_at=now()
+    WHERE competition_id=${competitionId};
+  `;
+
+  await phase3.replaceCapacity(
+    actor,
+    competitionId,
+    {
+      revision: 1,
+      areas: [
+        {
+          name: "Diag Court 1",
+          slotMinutes: 30,
+          availability: [
+            { date: "2026-09-01", startTime: "00:00", endTime: "23:30" },
+            { date: "2026-09-02", startTime: "00:00", endTime: "23:30" },
+          ],
+        },
+      ],
+    },
+    randomUUID(),
+  );
+
+  const templates = createDefaultFormatTemplates(8);
+  const template = templates.find((t) => t.strategy === "compact_knockout") ?? templates[0]!;
+  const formatDocument = {
+    schema_version: 1 as const,
+    graph: template.graph,
+    layout: {
+      schema_version: 1 as const,
+      stage_positions: template.graph.stages.map((s, i) => ({ stage_id: s.id, x: 100 * i, y: 100 })),
+    },
+  };
+
+  const saved = await phase4.saveFormatRevision(
+    actor,
+    competitionId,
+    divisionId,
+    {
+      draft_id: null,
+      expected_revision: null,
+      parent_revision_id: null,
+      document: formatDocument,
+      idempotency_key: `phase7-diag-format-${randomUUID()}`,
+    },
+    randomUUID(),
+  );
+
+  const materialised = await phase4.materialiseFormat(
+    actor,
+    saved.draft_id,
+    `phase7-diag-mat-${saved.draft_id}`,
+    randomUUID(),
+  );
+  if (!materialised.match_count || materialised.match_count <= 0) {
+    throw new Error("Phase 7 diagnostic format materialisation produced no matches");
+  }
+  await phase4.publishFormat(actor, saved.draft_id, `phase7-diag-pub-${saved.draft_id}`, randomUUID());
+
+  const [targetMatch] = await sql<{ id: string; code: string }[]>`
+    SELECT id, code FROM matches WHERE competition_id=${competitionId} ORDER BY ordinal, id LIMIT 1
+  `;
+  if (!targetMatch) throw new Error("No match found for diagnostic competition");
+
+  const official = await phase4.createOfficial(
+    actor,
+    competitionId,
+    { name: "Impossible Referee", default_role: "Referee" },
+    randomUUID(),
+  );
+
+  await phase4.replaceMatchOfficials(
+    actor,
+    competitionId,
+    targetMatch.id,
+    [{ official_id: official.id, assigned_role: "Lead official" }],
+    randomUUID(),
+  );
+
+  // Set impossible availability in 2028 (completely outside competition dates in 2026):
+  await phase4.replaceOfficialAvailability(
+    actor,
+    competitionId,
+    official.id,
+    [{ starts_at: "2028-01-01T00:00:00.000Z", ends_at: "2028-01-01T08:00:00.000Z" }],
+    randomUUID(),
+  );
+
+  const [updatedComp] = await sql<{ revision: number; capacity_revision: number }[]>`
+    SELECT revision, capacity_revision FROM competitions WHERE id=${competitionId}
+  `;
+
+  const [area] = await sql<{ id: string }[]>`SELECT id FROM playing_areas WHERE competition_id=${competitionId}`;
+  const ignored = <T>(value: T) => ({ mode: "ignored" as const, value });
+  const generated = await phase4.generateSchedule(
+    actor,
+    competitionId,
+    {
+      idempotency_key: `phase7-diag-generate-${randomUUID()}`,
+      expected_source_revision: updatedComp!.revision,
+      expected_capacity_revision: Number(updatedComp!.capacity_revision),
+      objective: "balanced",
+      constraints: {
+        minimum_rest: ignored({ minutes: 0 }),
+        maximum_matches_per_day: ignored({ matches: 8 }),
+        preferred_final_time: ignored({
+          target_start_epoch_ms: Date.parse("2026-09-01T12:00:00Z"),
+          tolerance_minutes: 60,
+        }),
+        entry_unavailable: ignored({ by_entry_id: {} }),
+        official_availability: { mode: "required", value: { by_official_id: {} } },
+        featured_playing_area: ignored({ area_id: area!.id, match_ids: [] }),
+        avoid_consecutive_matches: ignored({ minutes: 0 }),
+        balance_early_matches: ignored({ before_local_time: "09:00" }),
+        balance_late_matches: ignored({ at_or_after_local_time: "18:00" }),
+        keep_division_together: ignored({ maximum_area_count: 2 }),
+        preserve_existing_schedule: ignored({ maximum_shift_minutes: 0, by_match_id: {} }),
+      },
+    },
+    randomUUID(),
+  );
+
+  // Poll until the job reaches status "no_solution"
+  const deadline = Date.now() + 60_000;
+  let finalStatus = "";
+  while (Date.now() < deadline) {
+    const job = await phase4.readScheduleJob(actor, generated.job.id);
+    finalStatus = job.status;
+    if (job.status === "no_solution") break;
+    if (job.status === "failed" || job.status === "cancelled" || job.status === "completed") {
+      throw new Error(`Diagnostic schedule job ended unexpectedly in status ${job.status}`);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (finalStatus !== "no_solution") {
+    throw new Error(`Timed out waiting for diagnostic schedule job to reach no_solution (last status: ${finalStatus})`);
+  }
+
+  // Assert diagnostics contain official_unavailable
+  const diagnostics = await phase4.readScheduleJobDiagnostics(actor, generated.job.id);
+  const unavailableDiag = diagnostics.diagnostics.find(
+    (d) => d.code === "official_unavailable" && d.match_ids.includes(targetMatch.id),
+  );
+  if (!unavailableDiag) {
+    throw new Error(
+      `Diagnostic job did not produce official_unavailable for target match: ${JSON.stringify(diagnostics)}`,
+    );
+  }
+
+  return {
+    competitionId,
+    jobId: generated.job.id,
+    matchId: targetMatch.id,
+    matchCode: targetMatch.code,
+  };
 }
 
 async function main(): Promise<void> {
@@ -375,6 +752,7 @@ async function main(): Promise<void> {
   let scheduleQueue: ScheduleJobQueue | undefined;
   let scheduler: SchedulerRuntime | undefined;
   let scheduleQueueName: string | undefined;
+  let mainError: unknown = null;
 
   try {
     if ((await redis.ping()) !== "PONG") throw new Error("Phase 7 real E2E requires a healthy Redis instance");
@@ -641,35 +1019,14 @@ async function main(): Promise<void> {
       throw new Error(`Phase 7 canonical publication invariant failure: ${JSON.stringify(publicationInvariant)}`);
     }
 
-    const statePayload = {
-      apiOrigin,
-      competitionId,
-      competitionSlug,
-      publicCompetitionPath: `/competitions/${competitionSlug}`,
-      scorekeeperPath: `/score#access=${encodeURIComponent(pass.token)}`,
-      scoredMatchId: scoreable.id,
-      passToken: pass.token,
-      divisionIds: divisions.map((division) => division.id),
-      divisionNames: divisions.map((division) => division.name),
-      divisionFixtures: divisions.map((division) => {
-        const match = scoreableMatches.find((candidate) => candidate.division_id === division.id);
-        if (!match) throw new Error(`Phase 7 state is missing a fixture for ${division.name}`);
-        return {
-          divisionId: division.id,
-          divisionName: division.name,
-          matchId: match.id,
-          matchCode: match.code,
-          homeName: match.home_name,
-          awayName: match.away_name,
-        };
-      }),
-      scheduleRevisionId: publication.scheduleRevisionId,
-      scheduleVersion: publication.scheduleVersion,
-      organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
-      xssCompetitionPath: `/competitions/${competitionSlug}`,
-      xssMaliciousName: maliciousName,
-    };
-    await writeFile(statePath, JSON.stringify(statePayload, null, 2), { encoding: "utf8", mode: 0o600 });
+    const noSol = await setupNoSolutionCompetition({
+      sql,
+      phase2,
+      phase3,
+      phase4,
+      accountId,
+      organisationId,
+    });
 
     const config = testConfig({
       DATABASE_URL: databaseUrl,
@@ -715,6 +1072,50 @@ async function main(): Promise<void> {
         `Phase 7 public projection schedule version mismatch before browser qualification: ${scheduleHeader}`,
       );
     }
+    const initialPublicEtag = publicProjectionResponse.headers.get("etag") ?? "";
+
+    const statePayload = {
+      apiOrigin,
+      competitionId,
+      competitionSlug,
+      publicCompetitionPath: `/competitions/${competitionSlug}`,
+      scorekeeperPath: `/score#access=${encodeURIComponent(pass.token)}`,
+      scoredMatchId: scoreable.id,
+      passToken: pass.token,
+      divisionIds: divisions.map((division) => division.id),
+      divisionNames: divisions.map((division) => division.name),
+      divisionFixtures: divisions.map((division) => {
+        const match = scoreableMatches.find((candidate) => candidate.division_id === division.id);
+        if (!match) throw new Error(`Phase 7 state is missing a fixture for ${division.name}`);
+        return {
+          divisionId: division.id,
+          divisionName: division.name,
+          matchId: match.id,
+          matchCode: match.code,
+          homeName: match.home_name,
+          awayName: match.away_name,
+        };
+      }),
+      scheduleRevisionId: publication.scheduleRevisionId,
+      scheduleVersion: publication.scheduleVersion,
+      organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
+      xssCompetitionPath: `/competitions/${competitionSlug}`,
+      xssMaliciousName: maliciousName,
+      officialId: publication.officialId,
+      officialName: publication.officialName,
+      officialAssignedRole: publication.officialAssignedRole,
+      officialTargetMatchId: publication.officialTargetMatchId,
+      officialTargetMatchCode: publication.officialTargetMatchCode,
+      secondOfficialId: publication.secondOfficialId,
+      secondOfficialName: publication.secondOfficialName,
+      initialScheduleVersion: publication.scheduleVersion,
+      initialPublicEtag,
+      noSolutionCompetitionId: noSol.competitionId,
+      noSolutionJobId: noSol.jobId,
+      noSolutionMatchId: noSol.matchId,
+      noSolutionMatchCode: noSol.matchCode,
+    };
+    await writeFile(statePath, JSON.stringify(statePayload, null, 2), { encoding: "utf8", mode: 0o600 });
 
     const runtimeEnv: NodeJS.ProcessEnv = {
       APP_ENV: "test",
@@ -741,7 +1142,57 @@ async function main(): Promise<void> {
       PHASE7_E2E_OUTPUT_DIR: playwrightOutput,
     });
 
+    // CP 7.9 #9: Verify historical S1 immutability and publication advance after Playwright S2 publish
+    const [s1Post] = await sql<
+      {
+        status: string;
+        published_at: Date;
+        assignment_hash: string;
+      }[]
+    >`
+      SELECT status, published_at, assignment_hash
+      FROM schedule_revisions
+      WHERE id=${publication.scheduleRevisionId}
+    `;
+    if (!s1Post || s1Post.status !== "superseded") {
+      throw new Error(`Expected S1 status to be 'superseded' after S2 publish, got: ${s1Post?.status}`);
+    }
+    if (s1Post.assignment_hash !== publication.s1Hash) {
+      throw new Error("S1 assignment_hash was mutated!");
+    }
+
+    const s1MatchesPost = await sql<{ match_id: string; playing_area_id: string; starts_at: Date; ends_at: Date }[]>`
+      SELECT match_id, playing_area_id, starts_at, ends_at
+      FROM scheduled_matches
+      WHERE schedule_revision_id=${publication.scheduleRevisionId}
+      ORDER BY match_id
+    `;
+    if (JSON.stringify(s1MatchesPost) !== JSON.stringify(publication.s1Matches)) {
+      throw new Error("S1 scheduled_matches rows were mutated!");
+    }
+
+    const [pubPost] = await sql<
+      {
+        published_schedule_revision_id: string;
+        schedule_version: number;
+      }[]
+    >`
+      SELECT published_schedule_revision_id, schedule_version
+      FROM competition_publications
+      WHERE competition_id=${competitionId}
+    `;
+    if (pubPost?.published_schedule_revision_id === publication.scheduleRevisionId) {
+      throw new Error("Published schedule revision id was not updated to S2");
+    }
+    if (pubPost?.schedule_version !== publication.scheduleVersion + 1) {
+      throw new Error(
+        `Expected schedule_version to advance to ${publication.scheduleVersion + 1}, got ${pubPost?.schedule_version}`,
+      );
+    }
+
     console.log("Phase 7 real browser qualification: PASS");
+  } catch (error) {
+    mainError = error;
   } finally {
     await stopProcesses();
     await Promise.race([app?.close(), new Promise((r) => setTimeout(r, 2000))]).catch(() => undefined);
@@ -754,7 +1205,12 @@ async function main(): Promise<void> {
     await sql.end({ timeout: 2 }).catch(() => undefined);
     await dropTestSchema(databaseUrl, schema).catch(() => undefined);
     await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
-    process.exit();
+    if (mainError) {
+      console.error("Phase 7 real E2E failed:", mainError);
+      process.exit(1);
+    } else {
+      process.exit(0);
+    }
   }
 }
 

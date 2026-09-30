@@ -15,7 +15,7 @@ if (parsedBaseUrl.protocol !== "http:" && parsedBaseUrl.protocol !== "https:") {
 
 export default defineConfig({
   testDir: "./tests",
-  testMatch: /phase-7-(?:multi-division-lifecycle|security-rendering)\.spec\.ts/,
+  testMatch: /phase-7-(?:multi-division-lifecycle|sch006-official-lifecycle|security-rendering)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,
