@@ -20,7 +20,7 @@
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
-  color: var(--text-danger, #dc2626);
+  color: var(--text-danger, #b91c1c);
 }
 
 .disclaimer,
@@ -28,7 +28,7 @@
   margin: 0;
   font-size: 0.82rem;
   line-height: 1.45;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted, #334155);
 }
 
 .diagnosticsList {

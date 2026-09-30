@@ -43,7 +43,7 @@
 
 .readOnlyNotice {
   font-size: 0.875rem;
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
   font-style: italic;
   margin: 0;
 }
@@ -127,7 +127,7 @@
 
 .role {
   font-size: 0.875rem;
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
 }
 
 .metaRow {
@@ -135,7 +135,7 @@
   align-items: center;
   gap: 0.75rem;
   font-size: 0.8125rem;
-  color: var(--p2-text-muted, #9ca3af);
+  color: var(--p2-text-muted, #4b5563);
   flex-wrap: wrap;
 }
 
@@ -479,12 +479,12 @@
 
 .timezoneNotice {
   font-size: 0.8125rem;
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
 }
 
 .emptyAvailability {
   font-size: 0.875rem;
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
   font-style: italic;
   margin: 0.5rem 0 1rem;
 }
@@ -653,7 +653,7 @@
   border-radius: 0.5rem;
   background: var(--p2-surface-subtle, #f9f8f6);
   border: 1px solid var(--p2-line-subtle, #ece8df);
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
   font-size: 0.875rem;
   font-style: italic;
 }
@@ -756,7 +756,7 @@
 
 .assignedRoleText {
   font-size: 0.8125rem;
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
 }
 
 .assignmentEditorForm {
@@ -834,11 +834,11 @@
 
 .roleHelperText {
   font-size: 0.75rem;
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
 }
 
 .emptyNotice {
-  color: var(--p2-text-secondary, #6b7280);
+  color: var(--p2-text-secondary, #4b5563);
   font-size: 0.875rem;
   margin: 0;
   font-style: italic;

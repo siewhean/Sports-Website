@@ -130,8 +130,16 @@ export function OfficialsRosterView({
   };
 
   const handleCancelForm = () => {
+    const wasCreate = mode === opaqueId("create");
     setMode(opaqueId("view"));
     setFormError(null);
+    setTimeout(() => {
+      if (wasCreate) {
+        addOfficialButtonRef.current?.focus();
+      } else {
+        headingRef.current?.focus();
+      }
+    }, 0);
   };
 
   const handleSelectMatch = (matchId: string) => {
