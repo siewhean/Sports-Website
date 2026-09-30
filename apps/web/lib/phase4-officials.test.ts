@@ -173,6 +173,9 @@ describe("phase4-officials read model", () => {
     const officialB = demo.officials.find((o) => o.name === "Official B")!;
     expect(demo.availability[officialB.id]?.length).toBeGreaterThan(0);
     expect(demo.assignments.some((a) => a.officialId === officialB.id)).toBe(true);
+
+    const readOnlyDemo = createDemoOfficialWorkspace("singapore-open", false);
+    expect(readOnlyDemo.canEdit).toBe(false);
   });
 
   it("provides fallback unavailable document", () => {

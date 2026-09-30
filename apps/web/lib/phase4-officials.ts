@@ -19,9 +19,82 @@ export const phase4OfficialsCopy = {
   readOnlyNotice: "Roster is in read-only mode.",
   assignmentsCount: (n: number) => (n === 1 ? "1 assignment" : `${n} assignments`),
   windowsCount: (n: number) => (n === 1 ? "1 window" : `${n} windows`),
+  detailsTitle: "Official details",
+  selectOfficialPrompt: "Select an official to view their details.",
+  editOfficial: "Edit official",
+  archiveOfficial: "Archive official",
+  restoreOfficial: "Restore official",
+  cancel: "Cancel",
+  save: "Save changes",
+  saving: "Saving...",
+  creating: "Creating...",
+  archiving: "Archiving...",
+  restoring: "Restoring...",
+  createTitle: "Add official",
+  editTitle: "Edit official details",
+  nameLabel: "Name",
+  namePlaceholder: "e.g. Aisha Tan",
+  rolePlaceholder: "e.g. Lead official",
+  nameRequired: "Name is required.",
+  nameTooLong: "Name must be 80 characters or fewer.",
+  roleTooLong: "Default role must be 40 characters or fewer.",
+  duplicateNameError: "An active official with this name already exists.",
+  archiveConfirmTitle: (name: string) => `Archive ${name}?`,
+  archiveNoticeGeneral:
+    "Archived officials remain in historical records and existing assignments. They cannot receive new assignments until restored.",
+  archiveNoticeAssignments: (count: number) =>
+    `This official currently has ${count === 1 ? "1 match assignment" : `${count} match assignments`}. Those assignments will remain recorded.`,
+  confirmArchive: "Archive official",
+  officialCreated: "Official added.",
+  officialUpdated: "Official details saved.",
+  officialArchived: "Official archived.",
+  officialRestored: "Official restored.",
+  scheduleInvalidatedNotice:
+    "This official was assigned to a match. Scheduling inputs changed and the schedule must be regenerated or revalidated.",
+  reviewScheduleLink: "Review schedule",
+  genericMutationError: "The official could not be updated. Refresh and try again.",
+  refreshFailed: "Unable to refresh officials. Please reload the page.",
+  statusLabel: "Status notification",
+  errorAlertLabel: "Error alert",
+  selectedOfficialBadge: "Selected",
+  officialNotFound: "The requested official could not be found.",
+  sessionExpired: "Your session has expired. Please sign in again.",
+  accessDenied: "You do not have permission to make changes.",
+  revisionConflict: "The competition has changed. Please refresh the page.",
+  originRejected: "Request was rejected due to an invalid origin.",
+  commandResponseInvalid: "Received an unexpected response from the server.",
+  apiUnavailable: "The service is temporarily unavailable. Please try again later.",
+  validationFailed: "Please check the information provided and try again.",
   errorTitle: "Officials unavailable",
   errorBody: "Unable to load officials at this time.",
 } as const;
+
+export function officialCommandErrorMessage(status: number, code?: string | null): string {
+  switch (code) {
+    case "OFFICIAL_NAME_CONFLICT":
+      return phase4OfficialsCopy.duplicateNameError;
+    case "OFFICIAL_NOT_FOUND":
+      return phase4OfficialsCopy.officialNotFound;
+    case "VALIDATION_ERROR":
+      return phase4OfficialsCopy.validationFailed;
+    case "REVISION_CONFLICT":
+      return phase4OfficialsCopy.revisionConflict;
+    case "AUTH_REQUIRED":
+      return phase4OfficialsCopy.sessionExpired;
+    case "ORIGIN_REJECTED":
+      return phase4OfficialsCopy.originRejected;
+    case "COMMAND_RESPONSE_INVALID":
+      return phase4OfficialsCopy.commandResponseInvalid;
+    case "API_UNAVAILABLE":
+      return phase4OfficialsCopy.apiUnavailable;
+    default:
+      if (status === 401) return phase4OfficialsCopy.sessionExpired;
+      if (status === 403) return phase4OfficialsCopy.accessDenied;
+      if (status === 404) return phase4OfficialsCopy.officialNotFound;
+      if (status === 409) return phase4OfficialsCopy.duplicateNameError;
+      return phase4OfficialsCopy.genericMutationError;
+  }
+}
 
 export const phase4OfficialsMachine = {
   validationError: "VALIDATION_ERROR",
@@ -376,7 +449,7 @@ export function officialWorkspaceUnavailableDocument(
   };
 }
 
-export function createDemoOfficialWorkspace(competitionId: string): OfficialWorkspaceDocument {
+export function createDemoOfficialWorkspace(competitionId: string, canEdit = true): OfficialWorkspaceDocument {
   const officialAId = "60000000-0000-4000-8000-000000000001";
   const officialBId = "60000000-0000-4000-8000-000000000002";
   const officialCId = "60000000-0000-4000-8000-000000000003";
@@ -387,7 +460,7 @@ export function createDemoOfficialWorkspace(competitionId: string): OfficialWork
   return {
     state: "ready",
     competitionId,
-    canEdit: true,
+    canEdit,
     officials: [
       {
         id: officialAId,

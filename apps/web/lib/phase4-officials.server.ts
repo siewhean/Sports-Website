@@ -34,7 +34,7 @@ async function sessionCookieHeader(apiUrl: URL): Promise<string | null> {
 
 export async function getOfficialWorkspace(competitionId: string, canEdit = true): Promise<OfficialWorkspaceDocument> {
   if (demoFixturesEnabled()) {
-    return createDemoOfficialWorkspace(competitionId);
+    return createDemoOfficialWorkspace(competitionId, canEdit);
   }
 
   const base = apiBaseUrl();
