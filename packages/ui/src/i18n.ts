@@ -308,6 +308,11 @@ export const messages = {
       "Matchday detected potential official scheduling conflicts. Resolving these may not guarantee a feasible schedule if other constraints are also tight.",
     officialUnavailableForMatch: "Official unavailable for required match",
     officialOverlapForMatches: "Official assigned to concurrent/overlapping matches",
+    anAffectedMatch: "an affected match",
+    anotherAffectedMatch: "another affected match",
+    oneOrMoreAffectedMatches: "one or more affected matches",
+    overlapAffectedMatchesWithAnother: "{matches} and another affected match",
+    overlapAffectedMatchesWithMore: "{matches} and one or more affected matches",
     noFeasibleScheduleGeneric:
       "No feasible schedule could be found that satisfies all required constraints and playing areas.",
     reviewOfficials: "Review officials",

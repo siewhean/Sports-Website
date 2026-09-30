@@ -342,7 +342,7 @@ describe("production schedule alternative loading", () => {
       expect(document.latestNoSolutionJob?.capacityRevision).toBe(2);
     });
 
-    it("does not recover latestNoSolutionJob when revisions do not match", async () => {
+    it("does not recover latestNoSolutionJob when source revision does not match", async () => {
       const workspace = createWorkspace(5, 2); // competition is at revision 5
       const jobs = [noSolutionJobRecord("job-ns-stale", { sourceRevision: 4, capacityRevision: 2 })]; // job is for revision 4
 
@@ -365,6 +365,115 @@ describe("production schedule alternative loading", () => {
       });
 
       expect(document.latestNoSolutionJob).toBeNull();
+    });
+
+    it("does not recover latestNoSolutionJob when capacity revision does not match", async () => {
+      const workspace = createWorkspace(4, 3); // competition is at capacity revision 3
+      const jobs = [noSolutionJobRecord("job-ns-stale-cap", { sourceRevision: 4, capacityRevision: 2 })];
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (request: URL | RequestInfo) => {
+          const url = String(request);
+          return new Response(JSON.stringify(url.endsWith("/schedule-jobs") ? jobs : workspace), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }),
+      );
+
+      const document = await getScheduleDocument({
+        competitionId: "competition-1",
+        competitionName: "Singapore Open",
+        timeZone: "Asia/Singapore",
+        publicationRevision: "0",
+      });
+
+      expect(document.latestNoSolutionJob).toBeNull();
+    });
+
+    it("does not recover latestNoSolutionJob when raw newest job is malformed even if older valid no_solution exists", async () => {
+      const workspace = createWorkspace(4, 2);
+      const jobs = [
+        { malformed_newest_job: true },
+        noSolutionJobRecord("job-ns-older", { sourceRevision: 4, capacityRevision: 2 }),
+      ];
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (request: URL | RequestInfo) => {
+          const url = String(request);
+          return new Response(JSON.stringify(url.endsWith("/schedule-jobs") ? jobs : workspace), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }),
+      );
+
+      const document = await getScheduleDocument({
+        competitionId: "competition-1",
+        competitionName: "Singapore Open",
+        timeZone: "Asia/Singapore",
+        publicationRevision: "0",
+      });
+
+      expect(document.latestNoSolutionJob).toBeNull();
+    });
+
+    it("does not recover latestNoSolutionJob when raw newest job is malformed even if older completed job exists", async () => {
+      const workspace = createWorkspace(4, 2);
+      const jobs = [{ malformed_newest_job: true }, job("balanced", "job-completed-older", "2026-07-20T04:04:00.000Z")];
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (request: URL | RequestInfo) => {
+          const url = String(request);
+          return new Response(JSON.stringify(url.endsWith("/schedule-jobs") ? jobs : workspace), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }),
+      );
+
+      const document = await getScheduleDocument({
+        competitionId: "competition-1",
+        competitionName: "Singapore Open",
+        timeZone: "Asia/Singapore",
+        publicationRevision: "0",
+      });
+
+      expect(document.latestNoSolutionJob).toBeNull();
+      // Also verify historical option is still loaded from valid historical job
+      expect(document.alternatives.length).toBe(1);
+      expect(document.alternatives[0]?.jobId).toBe("job-completed-older");
+    });
+
+    it("preserves schedule document loading with latestNoSolutionJob null when schedule-jobs request fails", async () => {
+      const workspace = createWorkspace(4, 2);
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (request: URL | RequestInfo) => {
+          const url = String(request);
+          if (url.endsWith("/schedule-jobs")) {
+            return new Response("Service Unavailable", { status: 503 });
+          }
+          return new Response(JSON.stringify(workspace), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }),
+      );
+
+      const document = await getScheduleDocument({
+        competitionId: "competition-1",
+        competitionName: "Singapore Open",
+        timeZone: "Asia/Singapore",
+        publicationRevision: "0",
+      });
+
+      expect(document.latestNoSolutionJob).toBeNull();
+      expect(document.competitionId).toBe("competition-1");
     });
 
     it("does not recover latestNoSolutionJob when a later completed job exists", async () => {

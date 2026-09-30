@@ -117,13 +117,13 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
       .map((job) => parseScheduleJobView(job))
       .filter((job): job is NonNullable<typeof job> => job !== null);
     const comparable = selectComparableScheduleOptions(jobs, parsed.sourceRevision, parsed.capacityRevision);
-    const latestJob = jobs[0] ?? null;
+    const rawLatestJob = jobsPayload[0] ?? null;
+    const parsedLatestJob = rawLatestJob === null ? null : parseScheduleJobView(rawLatestJob);
     const latestNoSolutionJob =
-      latestJob &&
-      latestJob.status === "no_solution" &&
-      latestJob.sourceRevision === parsed.sourceRevision &&
-      latestJob.capacityRevision === parsed.capacityRevision
-        ? latestJob
+      parsedLatestJob?.status === "no_solution" &&
+      parsedLatestJob.sourceRevision === parsed.sourceRevision &&
+      parsedLatestJob.capacityRevision === parsed.capacityRevision
+        ? parsedLatestJob
         : null;
     return { ...parsed, alternatives: comparable, latestNoSolutionJob };
   } catch {

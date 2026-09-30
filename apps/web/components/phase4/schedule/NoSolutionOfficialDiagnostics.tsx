@@ -1,17 +1,50 @@
 import Link from "next/link";
+import { interpolate } from "@matchday/ui";
 import { phase4ScheduleCopy, type ScheduleMatch, type ScheduleOfficialDiagnostic } from "@/lib/phase4-schedule";
 import styles from "./NoSolutionOfficialDiagnostics.module.css";
 
 export function matchLabel(matchId: string, matches: readonly ScheduleMatch[]): string {
   const match = matches.find((m) => m.id === matchId);
-  if (!match) return `Match ${matchId.slice(0, 8)}`;
+  if (!match) return phase4ScheduleCopy.anAffectedMatch;
   if (match.roundLabel) return `${match.code} (${match.roundLabel})`;
   return match.code;
 }
 
 export function matchCode(matchId: string, matches: readonly ScheduleMatch[]): string {
   const match = matches.find((m) => m.id === matchId);
-  return match?.code ?? matchId.slice(0, 8);
+  return match?.code ?? phase4ScheduleCopy.anAffectedMatch;
+}
+
+export function formatOverlapMatchLabels(matchIds: readonly string[], matches: readonly ScheduleMatch[]): string {
+  const knownCodes: string[] = [];
+  let unknownCount = 0;
+
+  for (const id of matchIds) {
+    const match = matches.find((m) => m.id === id);
+    if (match) {
+      knownCodes.push(match.code);
+    } else {
+      unknownCount += 1;
+    }
+  }
+
+  if (unknownCount === 0) {
+    return knownCodes.join(", ");
+  }
+
+  if (knownCodes.length === 0) {
+    return unknownCount > 1 ? phase4ScheduleCopy.oneOrMoreAffectedMatches : phase4ScheduleCopy.anAffectedMatch;
+  }
+
+  if (unknownCount === 1) {
+    return interpolate(phase4ScheduleCopy.overlapAffectedMatchesWithAnother, {
+      matches: knownCodes.join(", "),
+    });
+  }
+
+  return interpolate(phase4ScheduleCopy.overlapAffectedMatchesWithMore, {
+    matches: knownCodes.join(", "),
+  });
 }
 
 export type NoSolutionOfficialDiagnosticsProps = Readonly<{
@@ -50,27 +83,26 @@ export function NoSolutionOfficialDiagnostics({
         {diagnostics.map((diag, index) => {
           if (diag.code === "official_unavailable") {
             const matchId = diag.matchIds[0];
-            const label = matchId ? matchLabel(matchId, matches) : phase4ScheduleCopy.noMatchSelected;
+            const resolvedMatch = matchId ? matches.find((m) => m.id === matchId) : null;
+            const label = resolvedMatch ? matchLabel(resolvedMatch.id, matches) : phase4ScheduleCopy.anAffectedMatch;
+            const reviewHref = resolvedMatch
+              ? `/organiser/competitions/${encodeURIComponent(competitionId)}/officials?match=${encodeURIComponent(resolvedMatch.id)}`
+              : `/organiser/competitions/${encodeURIComponent(competitionId)}/officials`;
             return (
               <li key={`${diag.code}-${index}`} className={styles.diagnosticItem}>
                 <span className={styles.conditionTitle}>{phase4ScheduleCopy.officialUnavailableForMatch}</span>
                 <div className={styles.matchesRow}>
                   <span className={styles.matchLabels}>{label}</span>
-                  {matchId ? (
-                    <Link
-                      className={styles.reviewLink}
-                      href={`/organiser/competitions/${encodeURIComponent(competitionId)}/officials?match=${encodeURIComponent(matchId)}`}
-                    >
-                      {phase4ScheduleCopy.reviewOfficials}
-                    </Link>
-                  ) : null}
+                  <Link className={styles.reviewLink} href={reviewHref}>
+                    {phase4ScheduleCopy.reviewOfficials}
+                  </Link>
                 </div>
               </li>
             );
           }
 
           if (diag.code === "official_overlap") {
-            const labels = diag.matchIds.map((id) => matchCode(id, matches)).join(", ");
+            const labels = formatOverlapMatchLabels(diag.matchIds, matches);
             return (
               <li key={`${diag.code}-${index}`} className={styles.diagnosticItem}>
                 <span className={styles.conditionTitle}>{phase4ScheduleCopy.officialOverlapForMatches}</span>
