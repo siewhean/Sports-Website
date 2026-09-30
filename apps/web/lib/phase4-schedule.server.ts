@@ -6,6 +6,7 @@ import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { requestCanForwardSessionCookie } from "@/lib/phase3-origin";
 import {
   phase4ScheduleCopy,
+  phase4ScheduleMachine,
   parseScheduleJobView,
   parseScheduleRevisionView,
   parseScheduleRevisionComparison,
@@ -36,6 +37,7 @@ type ScheduleInput = Readonly<{
   timeZone: string;
   publicationRevision: string;
   previewState?: string;
+  previewInputState?: string;
 }>;
 
 function apiBaseUrl(): URL | null {
@@ -133,21 +135,25 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
 
 export function parseScheduleWorkspace(value: unknown, input: ScheduleInput): ScheduleDocument | null {
   const root = record(value);
-  if (
-    !root ||
-    !exact(root, [
-      "competition",
-      "generation",
-      "areas",
-      "matches",
-      "active_job",
-      "current_revision",
-      "revisions",
-      "locks",
-      "warnings",
-    ])
-  )
-    return null;
+  const allowedKeysWithoutFreshness = [
+    "competition",
+    "generation",
+    "areas",
+    "matches",
+    "active_job",
+    "current_revision",
+    "revisions",
+    "locks",
+    "warnings",
+  ];
+  const allowedKeysWithFreshness = [...allowedKeysWithoutFreshness, "current_revision_input_state"];
+  if (!root || (!exact(root, allowedKeysWithoutFreshness) && !exact(root, allowedKeysWithFreshness))) return null;
+  const currentRevisionInputState =
+    root.current_revision_input_state === "current" ||
+    root.current_revision_input_state === "stale" ||
+    root.current_revision_input_state === "unknown"
+      ? root.current_revision_input_state
+      : "unknown";
   const competition = record(root.competition);
   const generation = record(root.generation);
   if (
@@ -365,10 +371,11 @@ export function parseScheduleWorkspace(value: unknown, input: ScheduleInput): Sc
     capacityRevision: generation.capacity_revision,
     constraints: generation.constraints as Record<string, unknown>,
     canEdit,
-    canPublish: canEdit && currentRevision?.status === "ready_for_review",
+    canPublish: canEdit && currentRevision?.status === "ready_for_review" && currentRevisionInputState === "current",
     activeJob,
     latestNoSolutionJob: null,
     currentRevision,
+    currentRevisionInputState,
     revisions: revisions as ScheduleRevision[],
     alternatives: activeJob?.currentBest ? [activeJob.currentBest] : [],
     areas,
@@ -833,7 +840,7 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     capacityRevision: 2,
     constraints: scheduleConstraints(),
     canEdit: state === "ready",
-    canPublish: state === "ready",
+    canPublish: state === "ready" && input.previewInputState !== phase4ScheduleMachine.staleInputState,
     activeJob: {
       id: alternatives[1]!.jobId,
       revision: 5,
@@ -854,6 +861,10 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     },
     latestNoSolutionJob: null,
     currentRevision: revision,
+    currentRevisionInputState:
+      input.previewInputState === phase4ScheduleMachine.staleInputState
+        ? phase4ScheduleMachine.staleInputState
+        : phase4ScheduleMachine.currentInputState,
     revisions: [
       revision,
       {

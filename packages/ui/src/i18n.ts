@@ -317,6 +317,8 @@ export const messages = {
       "No feasible schedule could be found that satisfies all required constraints and playing areas.",
     reviewOfficials: "Review officials",
     inputsChanged: "Schedule inputs changed",
+    scheduleInputsChangedGuidance:
+      "Schedule inputs changed after this schedule was generated. Generate a new schedule before moving or publishing matches.",
     bestAvailable: "The current best remains available.",
     selectedUnchanged: "The selected draft remains unchanged.",
     objectiveQuality: "{objective} · quality {quality}",

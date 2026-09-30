@@ -769,4 +769,36 @@ test.describe("safe no_solution official diagnostics (CP 5.6)", () => {
     const regenBtn = page.getByRole("button", { name: /Generate/ }).first();
     await expect(regenBtn).toBeEnabled();
   });
+
+  test("stale schedule input warning disables publish, suppresses move link, and preserves generation", async ({
+    page,
+  }) => {
+    await page.goto(`${scheduleUrl}?input_state=stale`);
+    await dismissConsent(page);
+
+    // 1. Warning banner is visible with test ID
+    const warningBanner = page.getByTestId("stale-schedule-warning");
+    await expect(warningBanner).toBeVisible();
+    await expect(warningBanner).toContainText(
+      "Schedule inputs changed after this schedule was generated. Generate a new schedule before moving or publishing matches.",
+    );
+
+    // 2. Publish button is disabled
+    const publishButton = page.getByRole("button", { name: "Publish schedule" });
+    await expect(publishButton).toBeDisabled();
+
+    // 3. Move link in match inspector is suppressed
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Move match" })).not.toBeVisible();
+
+    // 4. Generate button remains enabled and inspector is interactive
+    const generateButton = page.getByRole("button", { name: /Generate/ }).first();
+    await expect(generateButton).toBeEnabled();
+
+    // Inspector can select another match and remains interactive
+    const matchButton = page.getByRole("button", { name: /M2/ }).first();
+    await matchButton.click();
+    await expect(inspector.getByRole("heading", { name: "M2" })).toBeVisible();
+  });
 });

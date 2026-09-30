@@ -115,6 +115,7 @@ export type {
   ScheduleWorkerMatch,
   ScheduleWorkerSlot,
   IntrinsicScheduleHardConstraint,
+  ScheduleInputFreshness,
 } from "./phase-4-schedule.js";
 export { intrinsicScheduleHardConstraints } from "./phase-4-schedule.js";
 export {

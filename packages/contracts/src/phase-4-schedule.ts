@@ -315,3 +315,5 @@ export type ScheduleJobDiagnosticsResponse = Readonly<{
   status: ScheduleJobStatus;
   diagnostics: readonly ScheduleOfficialDiagnostic[];
 }>;
+
+export type ScheduleInputFreshness = "current" | "stale" | "unknown";

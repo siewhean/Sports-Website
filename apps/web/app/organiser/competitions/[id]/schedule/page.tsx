@@ -12,7 +12,13 @@ export default async function SchedulePage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ state?: string; match?: string; notice?: string; officials_state?: string }>;
+  searchParams: Promise<{
+    state?: string;
+    match?: string;
+    notice?: string;
+    officials_state?: string;
+    input_state?: string;
+  }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -34,6 +40,7 @@ export default async function SchedulePage({
       timeZone: result.competition.timezone,
       publicationRevision: result.competition.publicationRevision,
       ...(query.state ? { previewState: query.state } : {}),
+      ...(query.input_state ? { previewInputState: query.input_state } : {}),
     }),
     getOfficialWorkspace(result.competition.id, result.competition.canEdit ?? false, previewOfficialsState),
   ]);

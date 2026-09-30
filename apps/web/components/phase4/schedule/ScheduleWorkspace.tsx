@@ -355,6 +355,7 @@ export function ScheduleWorkspace({
         setDocument((current) => ({
           ...withRevision(current, revision),
           canPublish: current.canEdit && revision.status !== "expired" && revision.status !== "published",
+          currentRevisionInputState: phase4ScheduleMachine.currentInputState,
         }));
         setMessage(phase4ScheduleCopy.optionSaved);
         focusStatusHeading();
@@ -459,6 +460,15 @@ export function ScheduleWorkspace({
           tone="danger"
         />
       ) : null}
+      {document.currentRevisionInputState === phase4ScheduleMachine.staleInputState ? (
+        <StatusRail
+          testId={phase4ScheduleMachine.staleScheduleWarningTestId}
+          icon={<Warning />}
+          title={phase4ScheduleCopy.inputsChanged}
+          body={phase4ScheduleCopy.scheduleInputsChangedGuidance}
+          tone="warning"
+        />
+      ) : null}
       {document.warnings.map((warning) => (
         <StatusRail
           key={`${warning.code}-${warning.message}`}
@@ -515,7 +525,15 @@ export function ScheduleWorkspace({
           <Link href={`/organiser/competitions/${document.competitionId}/schedule/compare`}>
             {phase4ScheduleCopy.compare}
           </Link>
-          <button type="button" onClick={() => void publish()} disabled={!document.canPublish || disabled}>
+          <button
+            type="button"
+            onClick={() => void publish()}
+            disabled={
+              !document.canPublish ||
+              document.currentRevisionInputState === phase4ScheduleMachine.staleInputState ||
+              disabled
+            }
+          >
             {busy === phase4ScheduleMachine.publishAction ? phase4ScheduleCopy.publishing : phase4ScheduleCopy.publish}
           </button>
         </div>
@@ -939,7 +957,7 @@ function MatchInspector({
             {locked ? <LockKeyOpen /> : <LockKey />}
             {locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}
           </button>
-          {assignment ? (
+          {assignment && document.currentRevisionInputState !== phase4ScheduleMachine.staleInputState ? (
             <Link
               className={styles.moveLink}
               href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
@@ -1111,14 +1129,21 @@ function StatusRail({
   title,
   body,
   tone = phase4ScheduleMachine.neutral,
+  testId,
 }: {
   icon: ReactNode;
   title: string;
   body: string;
   tone?: "neutral" | "warning" | "danger";
+  testId?: string;
 }) {
   return (
-    <div className={styles.statusRail} data-tone={tone} role={tone === "danger" ? "alert" : "note"}>
+    <div
+      className={styles.statusRail}
+      data-tone={tone}
+      role={tone === "danger" ? "alert" : "note"}
+      data-testid={testId}
+    >
       {icon}
       <div>
         <strong>{title}</strong>

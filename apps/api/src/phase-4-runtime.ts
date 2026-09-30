@@ -537,9 +537,13 @@ export class Phase4Runtime {
     await this.scheduleRepo.acquireScheduleLock(competitionId, "phase4-schedule", tx);
   }
 
-  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string, includeLockSnapshot = true): Promise<void> {
+  private async scheduleJobCurrentState(
+    tx: PostgresJsSql,
+    jobId: string,
+    includeLockSnapshot = true,
+  ): Promise<{ current: boolean }> {
     const current = (
-      await tx.unsafe<{ current: boolean }>(
+      await tx.unsafe<{ current: boolean | null }>(
         `SELECT (
           (j.input_snapshot->>'source_revision')::integer=c.revision
           AND (j.input_snapshot->>'capacity_revision')::integer=c.capacity_revision
@@ -592,6 +596,11 @@ export class Phase4Runtime {
         [jobId, includeLockSnapshot],
       )
     )[0]?.current;
+    return { current: Boolean(current) };
+  }
+
+  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string, includeLockSnapshot = true): Promise<void> {
+    const { current } = await this.scheduleJobCurrentState(tx, jobId, includeLockSnapshot);
     if (!current)
       throw new ApiError(
         409,
@@ -4954,6 +4963,15 @@ export class Phase4Runtime {
        ORDER BY warning.emitted_at DESC,warning.id`,
       [competitionId],
     );
+    let currentRevisionInputState: "current" | "stale" | "unknown" = "unknown";
+    if (currentRow?.source_job_id) {
+      try {
+        const { current } = await this.scheduleJobCurrentState(this.sql, currentRow.source_job_id, false);
+        currentRevisionInputState = current ? "current" : "stale";
+      } catch {
+        currentRevisionInputState = "unknown";
+      }
+    }
     return {
       competition: {
         id: competition.id,
@@ -5009,6 +5027,7 @@ export class Phase4Runtime {
           )
         : null,
       current_revision: currentRow ? await this.revisionDetail(this.sql, currentRow.id) : null,
+      current_revision_input_state: currentRevisionInputState,
       revisions: revisionRows.map((row) => this.revisionView(row)),
       locks: locks.map((lock) => ({
         id: lock.id,
@@ -5324,6 +5343,7 @@ export class Phase4Runtime {
     requestId: string,
   ): Promise<{ official: CompetitionOfficial; bumped_revision: boolean }> {
     return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
       await this.competitionAccess(tx, competitionId, actor, true);
       const existing = await this.officialRepo.findById(officialId, competitionId, "for_update", tx);
       if (!existing) {
@@ -5355,6 +5375,7 @@ export class Phase4Runtime {
     requestId: string,
   ): Promise<{ official: CompetitionOfficial; bumped_revision: boolean }> {
     return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
       await this.competitionAccess(tx, competitionId, actor, true);
       const existing = await this.officialRepo.findById(officialId, competitionId, "for_update", tx);
       if (!existing) {
@@ -5423,6 +5444,7 @@ export class Phase4Runtime {
     }
 
     return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
       const access = await this.competitionAccess(tx, competitionId, actor, true);
       const official = await this.officialRepo.findById(officialId, competitionId, "for_update", tx);
       if (!official) {
@@ -5514,6 +5536,7 @@ export class Phase4Runtime {
     }
 
     return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
       const access = await this.competitionAccess(tx, competitionId, actor, true);
       const match = await tx.unsafe<{ id: string }>(`SELECT id FROM matches WHERE id = $1 AND competition_id = $2`, [
         matchId,

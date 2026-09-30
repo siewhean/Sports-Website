@@ -67,6 +67,9 @@ export const phase4ScheduleMachine = {
   slotIdField: "slot_id",
   startEpochField: "start_epoch_ms",
   endEpochField: "end_epoch_ms",
+  currentInputState: "current",
+  staleInputState: "stale",
+  staleScheduleWarningTestId: "stale-schedule-warning",
 } as const;
 
 export type ScheduleSurfaceState = "ready" | "read-only" | "permission" | "offline" | "error" | "loading" | "empty";
@@ -253,6 +256,8 @@ export type ScheduleJobDiagnostics = Readonly<{
   diagnostics: readonly ScheduleOfficialDiagnostic[];
 }>;
 
+export type ScheduleInputFreshness = "current" | "stale" | "unknown";
+
 export type ScheduleDocument = Readonly<{
   state: ScheduleSurfaceState;
   competitionId: string;
@@ -267,6 +272,7 @@ export type ScheduleDocument = Readonly<{
   activeJob: ScheduleJob | null;
   latestNoSolutionJob: ScheduleJob | null;
   currentRevision: ScheduleRevision | null;
+  currentRevisionInputState?: ScheduleInputFreshness;
   revisions: readonly ScheduleRevision[];
   alternatives: readonly ScheduleOption[];
   areas: readonly ScheduleArea[];
