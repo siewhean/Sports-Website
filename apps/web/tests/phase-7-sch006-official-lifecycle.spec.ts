@@ -1,4 +1,4 @@
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { test, expect, type BrowserContext } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
@@ -83,27 +83,6 @@ async function readE2EState(): Promise<Phase7E2EState> {
   return state as Phase7E2EState;
 }
 
-async function sameOriginMutation<T>(
-  page: Page,
-  requestPath: string,
-  method: string,
-  body: unknown,
-): Promise<{ status: number; payload: T }> {
-  const result = await page.evaluate(
-    async ({ path, m, b }) => {
-      const response = await fetch(path, {
-        method: m,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(b),
-        credentials: "same-origin",
-      });
-      return { status: response.status, text: await response.text() };
-    },
-    { path: requestPath, m: method, b: body },
-  );
-  return { status: result.status, payload: JSON.parse(result.text) as T };
-}
-
 async function authenticateOrganiser(context: BrowserContext, cookieHeader: string) {
   const [, organiserCookie] = cookieHeader.split("=", 2);
   if (!organiserCookie) throw new Error("Phase 7 organiser cookie is malformed");
@@ -165,22 +144,46 @@ test.describe("SCH-006 Real Stack End-to-End Integration & Operational Certifica
     const preMutationVersion = publicBeforeMutation.headers()["x-matchday-schedule-version"]!;
     const preMutationBody = await publicBeforeMutation.text();
 
-    // 3. Mutate official availability (bumped_revision=true) (CP 7.6 / CP 7.7)
-    const availResult = await sameOriginMutation<{ bumped_revision: boolean }>(
-      page,
-      `/api/phase4/competitions/${state.competitionId}/officials/${state.officialId}/availability`,
-      "PUT",
-      {
-        windows: [
-          { starts_at: "2026-08-31T16:00:00.000Z", ends_at: "2026-09-02T16:00:00.000Z" },
-          { starts_at: "2026-09-02T17:00:00.000Z", ends_at: "2026-09-02T20:00:00.000Z" },
-        ],
-      },
-    );
-    expect(availResult.status).toBe(200);
-    expect(availResult.payload.bumped_revision).toBe(true);
+    // 3. Navigate via real Manage officials link (Req 2)
+    await manageOfficialsLink.click();
+    await dismissConsent(page);
+    await expect(page).toHaveURL(new RegExp(`/officials\\?match=${encodeURIComponent(state.officialTargetMatchId)}`));
 
-    // 4. Assert public truth invariance before regeneration (If-None-Match conditional request) (CP 7.7)
+    // Select Gate D Referee in roster
+    await page.getByRole("button", { name: new RegExp(state.officialName, "i") }).click();
+
+    // Open actual Edit availability action
+    await page.getByRole("button", { name: "Edit availability" }).click();
+    await expect(
+      page.getByRole("heading", { name: new RegExp(`Edit availability.*${state.officialName}`, "i") }),
+    ).toBeVisible();
+
+    // Modify availability via rendered date/time controls in competition civil time (Asia/Singapore)
+    await page.getByRole("button", { name: "Add availability window" }).click();
+    await page.getByLabel("Start date").nth(1).fill("2026-09-03");
+    await page.getByLabel("Start time").nth(1).fill("08:00");
+    await page.getByLabel("End date").nth(1).fill("2026-09-03");
+    await page.getByLabel("End time").nth(1).fill("18:00");
+
+    // Submit using actual editor Save action & observe response
+    const availabilitySavePromise = page.waitForResponse(
+      (res) => res.url().includes("/availability") && res.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save availability" }).click();
+    const availRes = await availabilitySavePromise;
+    expect(availRes.status()).toBe(200);
+    const availJson = (await availRes.json()) as { bumped_revision: boolean };
+    expect(availJson.bumped_revision).toBe(true);
+
+    // 4. Assert browser-visible evidence that mutation succeeded and canonical refresh completed (Req 3)
+    await expect(
+      page.getByRole("heading", { name: new RegExp(`Edit availability.*${state.officialName}`, "i") }),
+    ).toBeHidden();
+    await expect(page.getByText("Availability saved.")).toBeVisible();
+    await expect(page.getByText("2 windows").first()).toBeVisible();
+    await expect(page.getByText(/could not be refreshed/i)).toBeHidden();
+
+    // Assert public truth invariance before regeneration (If-None-Match conditional request) (Req 4 / CP 7.7)
     const publicConditional = await context.request.get(
       `${state.apiOrigin}/api/v1/public/competitions/${encodeURIComponent(state.competitionSlug)}/current`,
       {
@@ -201,13 +204,13 @@ test.describe("SCH-006 Real Stack End-to-End Integration & Operational Certifica
     expect(publicDirect.headers()["x-matchday-schedule-version"]).toBe(preMutationVersion);
     expect(await publicDirect.text()).toBe(preMutationBody);
 
-    // 5. Reload schedule page and assert staleness (CP 7.6 / CP 7.7)
+    // 5. Navigate to Schedule and assert authoritative state (Req 3 / CP 7.6 / CP 7.7)
     await page.goto(`/organiser/competitions/${state.competitionId}/schedule`);
     await dismissConsent(page);
     await expect(page.locator('[data-testid="stale-schedule-warning"]')).toBeVisible();
     await expect(page.getByText("Schedule inputs changed", { exact: false }).first()).toBeVisible();
 
-    // Move match hidden/absent
+    // Move match unavailable
     await expect(page.getByRole("link", { name: "Move match" })).toBeHidden();
     await expect(page.getByRole("button", { name: "Move match" })).toBeHidden();
 
@@ -215,7 +218,7 @@ test.describe("SCH-006 Real Stack End-to-End Integration & Operational Certifica
     const publishButton = page.getByRole("button", { name: "Publish schedule" });
     await expect(publishButton).toBeDisabled();
 
-    // Generate schedule available
+    // Generate schedule enabled
     const generateBtn = page.getByRole("button", { name: /generate/i }).first();
     await expect(generateBtn).toBeEnabled();
 
@@ -263,40 +266,65 @@ test.describe("SCH-006 Real Stack End-to-End Integration & Operational Certifica
 
     await authenticateOrganiser(context, state.organiserCookie);
 
-    // Navigate to officials page first so origin and window location are initialized
+    // Navigate to officials page with target match selected (Req 6)
     await page.goto(
       `/organiser/competitions/${state.competitionId}/officials?match=${encodeURIComponent(state.officialTargetMatchId)}`,
     );
     await dismissConsent(page);
 
-    // Role-only change on target match: same official ID, modified role -> bumped_revision: false (CP 7.11)
-    const roleOnlyResult = await sameOriginMutation<{ bumped_revision: boolean }>(
-      page,
-      `/api/phase4/competitions/${state.competitionId}/matches/${state.officialTargetMatchId}/officials`,
-      "PUT",
-      {
-        assignments: [{ official_id: state.officialId, assigned_role: "First Referee" }],
-      },
-    );
-    expect(roleOnlyResult.status).toBe(200);
-    expect(roleOnlyResult.payload.bumped_revision).toBe(false);
+    // 1. Real Role-Only UI Control: Open Edit match officials (Req 6)
+    await page.getByRole("button", { name: "Edit match officials" }).click();
 
-    // Membership change on target match: add second official -> bumped_revision: true (CP 7.10)
-    const membershipResult = await sameOriginMutation<{ bumped_revision: boolean }>(
-      page,
-      `/api/phase4/competitions/${state.competitionId}/matches/${state.officialTargetMatchId}/officials`,
-      "PUT",
-      {
-        assignments: [
-          { official_id: state.officialId, assigned_role: "First Referee" },
-          { official_id: state.secondOfficialId, assigned_role: "Second Referee" },
-        ],
-      },
-    );
-    expect(membershipResult.status).toBe(200);
-    expect(membershipResult.payload.bumped_revision).toBe(true);
+    // Keep official membership identical. Change only the first official's assigned role: Lead official -> First Referee
+    const roleInput = page.locator(`#match-role-${state.officialId}`);
+    await roleInput.fill("First Referee");
 
-    // Verify schedule page reflects staleness after membership change
+    // Save through the visible UI and observe response
+    const roleOnlyResponsePromise = page.waitForResponse(
+      (res) => res.url().includes("/officials") && res.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save assignments" }).click();
+    const roleOnlyRes = await roleOnlyResponsePromise;
+    expect(roleOnlyRes.status()).toBe(200);
+    const roleOnlyJson = (await roleOnlyRes.json()) as { bumped_revision: boolean };
+    expect(roleOnlyJson.bumped_revision).toBe(false);
+
+    await expect(page.getByText("Match officials saved.")).toBeVisible();
+
+    // Assert Schedule remains current: no stale-schedule-warning, Move remains available
+    await page.goto(
+      `/organiser/competitions/${state.competitionId}/schedule?match=${encodeURIComponent(state.officialTargetMatchId)}`,
+    );
+    await dismissConsent(page);
+    await expect(page.locator('[data-testid="stale-schedule-warning"]')).toBeHidden();
+    await expect(page.getByRole("link", { name: "Move match" })).toBeVisible();
+
+    // 2. Real Membership UI Mutation: Reopen Edit match officials (Req 7)
+    await page.goto(
+      `/organiser/competitions/${state.competitionId}/officials?match=${encodeURIComponent(state.officialTargetMatchId)}`,
+    );
+    await dismissConsent(page);
+    await page.getByRole("button", { name: "Edit match officials" }).click();
+
+    // Add Second Referee while retaining original official
+    const secondCheckbox = page.locator(`#match-official-${state.secondOfficialId}`);
+    await secondCheckbox.check();
+    const secondRoleInput = page.locator(`#match-role-${state.secondOfficialId}`);
+    await secondRoleInput.fill("Second Referee");
+
+    // Save through the visible UI and observe response
+    const membershipResponsePromise = page.waitForResponse(
+      (res) => res.url().includes("/officials") && res.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save assignments" }).click();
+    const membershipRes = await membershipResponsePromise;
+    expect(membershipRes.status()).toBe(200);
+    const membershipJson = (await membershipRes.json()) as { bumped_revision: boolean };
+    expect(membershipJson.bumped_revision).toBe(true);
+
+    await expect(page.getByText("Match officials saved.")).toBeVisible();
+
+    // Navigate to Schedule and assert stale-schedule-warning visible (Req 7)
     await page.goto(`/organiser/competitions/${state.competitionId}/schedule`);
     await dismissConsent(page);
     await expect(page.locator('[data-testid="stale-schedule-warning"]')).toBeVisible();

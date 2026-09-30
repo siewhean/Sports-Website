@@ -105,7 +105,7 @@ async function stopProcesses(): Promise<void> {
 }
 
 async function deleteOwnedScheduleQueueKeys(redis: Redis, queueName: string): Promise<void> {
-  const patterns = [`bull:${queueName}`, `bull:${queueName}:*`, `matchday:job-cancellation:bull:${queueName}:*`];
+  const patterns = [`bull:${queueName}*`, `matchday:job-cancellation:bull:${queueName}*`];
   for (const pattern of patterns) {
     let cursor = "0";
     do {
@@ -734,6 +734,7 @@ async function main(): Promise<void> {
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "matchday-phase7-e2e-"));
   // The browser state includes a short-lived scoring bearer credential. Keep it in a
   // harness-owned temporary directory; callers must not redirect it into a retained artifact.
+  // SCH-006 added no new secret-bearing fields or raw snapshots to the temporary state payload.
   const statePath = path.join(temporaryDirectory, "state.json");
   const playwrightOutput = path.join(temporaryDirectory, "playwright-output");
   await rm(playwrightOutput, { recursive: true, force: true });
@@ -1187,6 +1188,45 @@ async function main(): Promise<void> {
     if (pubPost?.schedule_version !== publication.scheduleVersion + 1) {
       throw new Error(
         `Expected schedule_version to advance to ${publication.scheduleVersion + 1}, got ${pubPost?.schedule_version}`,
+      );
+    }
+
+    // CP 7A: Assert regenerated S2 job preserved official_availability.mode === "required" and assigned availability
+    const [regeneratedJob] = await sql<
+      {
+        id: string;
+        status: string;
+        input_snapshot: {
+          constraints?: {
+            official_availability?: {
+              mode?: string;
+              value?: {
+                by_official_id?: Record<string, unknown[]>;
+              };
+            };
+          };
+        };
+      }[]
+    >`
+      SELECT id, status, input_snapshot
+      FROM schedule_generation_jobs
+      WHERE competition_id=${competitionId}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    if (!regeneratedJob) {
+      throw new Error("Expected regenerated schedule generation job for S2");
+    }
+    const officialAvailabilityConstraint = regeneratedJob.input_snapshot?.constraints?.official_availability;
+    if (officialAvailabilityConstraint?.mode !== "required") {
+      throw new Error(
+        `Expected regenerated job official_availability.mode to be 'required', got ${officialAvailabilityConstraint?.mode}`,
+      );
+    }
+    const windowsForOfficial = officialAvailabilityConstraint?.value?.by_official_id?.[publication.officialId];
+    if (!windowsForOfficial || windowsForOfficial.length === 0) {
+      throw new Error(
+        `Expected regenerated job input_snapshot to contain availability for official ${publication.officialId}`,
       );
     }
 
