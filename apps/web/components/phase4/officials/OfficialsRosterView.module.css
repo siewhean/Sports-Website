@@ -218,6 +218,27 @@
   text-decoration: underline;
 }
 
+.retryButton {
+  background: #92400e;
+  color: #ffffff;
+  border: none;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.retryButton:hover:not(:disabled) {
+  background: #78350f;
+}
+
+.retryButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .errorAlert {
   padding: 0.875rem 1.25rem;
   border-radius: 0.75rem;

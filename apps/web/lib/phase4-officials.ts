@@ -52,6 +52,10 @@ export const phase4OfficialsCopy = {
   scheduleInvalidatedNotice:
     "This official was assigned to a match. Scheduling inputs changed and the schedule must be regenerated or revalidated.",
   reviewScheduleLink: "Review schedule",
+  reconciliationNotice:
+    "The change was saved, but the officials workspace could not be refreshed. Refresh the workspace before making another change.",
+  retryRefresh: "Retry refresh",
+  retryingRefresh: "Refreshing...",
   genericMutationError: "The official could not be updated. Refresh and try again.",
   refreshFailed: "Unable to refresh officials. Please reload the page.",
   statusLabel: "Status notification",

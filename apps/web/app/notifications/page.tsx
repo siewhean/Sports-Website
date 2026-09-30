@@ -14,20 +14,11 @@ import {
   type Preferences,
 } from "@/lib/notifications";
 
-const sampleNotifications: InAppNotification[] = messages.notifications.sampleAlerts.map((alert, index) => ({
-  id: String(index),
-  category: alert.category as NotificationCategory,
-  heading: alert.heading,
-  content: alert.content,
-  timestamp: alert.timestamp,
-  read: false,
-}));
-
 export default function NotificationsPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [categoryIndex, setCategoryIndex] = useState(0);
-  const [notifications, setNotifications] = useState<InAppNotification[]>(sampleNotifications);
-  const [loading, setLoading] = useState(false);
+  const [notifications, setNotifications] = useState<InAppNotification[]>([]);
+  const [loading, setLoading] = useState(true);
   const [preferences, setPreferences] = useState<Preferences>(emptyPreferences);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [saved, setSaved] = useState(false);

@@ -306,4 +306,94 @@ describe("SCH-006 Checkpoint 5.2 — Editable Officials Roster", () => {
       expect(officialCommandErrorMessage(403)).toBe(phase4OfficialsCopy.accessDenied);
     });
   });
+
+  describe("Reconciliation & Out-Of-Sync Guarding", () => {
+    it("disables add official button in roster when workspaceOutOfSync is true", () => {
+      const doc = createDemoOfficialWorkspace(competitionId, true);
+      const html = renderToString(
+        React.createElement(OfficialRoster, {
+          officials: doc.officials,
+          availability: doc.availability,
+          assignments: doc.assignments,
+          selectedOfficialId: doc.officials[0]!.id,
+          onSelectOfficial: () => {},
+          showArchived: false,
+          onToggleShowArchived: () => {},
+          canEdit: true,
+          onOpenCreate: () => {},
+          busy: null,
+          workspaceOutOfSync: true,
+        }),
+      );
+
+      // Add official button must be disabled when out of sync
+      expect(html).toContain('disabled=""');
+      expect(html).toContain(phase4OfficialsCopy.addOfficial);
+    });
+
+    it("disables edit, archive, and restore actions in details when workspaceOutOfSync is true", () => {
+      const sampleOfficial: OfficialView = {
+        id: "60000000-0000-4000-8000-000000000001",
+        competitionId,
+        name: "Morgan Bailey",
+        defaultRole: "Lead Referee",
+        archived: false,
+        createdAt: "2026-09-29T10:00:00Z",
+        updatedAt: "2026-09-29T10:00:00Z",
+      };
+
+      const html = renderToString(
+        React.createElement(OfficialDetails, {
+          official: sampleOfficial,
+          assignmentCount: 1,
+          windowCount: 1,
+          canEdit: true,
+          busy: null,
+          workspaceOutOfSync: true,
+          isArchiveConfirm: false,
+          onOpenEdit: () => {},
+          onRequestArchive: () => {},
+          onConfirmArchive: () => {},
+          onCancelArchive: () => {},
+          onRestore: () => {},
+        }),
+      );
+
+      expect(html).toContain(phase4OfficialsCopy.editOfficial);
+      expect(html).toContain(phase4OfficialsCopy.archiveOfficial);
+      // Both buttons are disabled
+      const disabledMatches = html.match(/disabled=""/g);
+      expect(disabledMatches?.length).toBe(2);
+    });
+
+    it("has reconciliation and retry copy strings defined", () => {
+      expect(phase4OfficialsCopy.reconciliationNotice).toContain(
+        "The change was saved, but the officials workspace could not be refreshed",
+      );
+      expect(phase4OfficialsCopy.retryRefresh).toBe("Retry refresh");
+      expect(phase4OfficialsCopy.retryingRefresh).toBe("Refreshing...");
+    });
+  });
+
+  describe("Form Role and Field-Level Validation", () => {
+    it("associates aria-describedby with error alert when server error is present", () => {
+      const html = renderToString(
+        React.createElement(OfficialForm, {
+          mode: "create",
+          onSubmit: () => {},
+          onCancel: () => {},
+          busy: false,
+          serverError: phase4OfficialsCopy.duplicateNameError,
+        }),
+      );
+
+      expect(html).toContain('id="official-form-error"');
+      expect(html).toContain('aria-describedby="official-form-error"');
+      expect(html).toContain('id="official-name"');
+      // Name has aria-invalid="true" on server error
+      expect(html).toMatch(/id="official-name"[^>]*aria-invalid="true"/);
+      // Default role does not have aria-invalid="true"
+      expect(html).toMatch(/id="official-role"[^>]*aria-invalid="false"/);
+    });
+  });
 });

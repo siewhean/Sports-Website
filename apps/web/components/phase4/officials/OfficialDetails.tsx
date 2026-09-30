@@ -10,6 +10,7 @@ export function OfficialDetails({
   windowCount,
   canEdit,
   busy,
+  workspaceOutOfSync,
   isArchiveConfirm,
   onOpenEdit,
   onRequestArchive,
@@ -24,6 +25,7 @@ export function OfficialDetails({
   windowCount: number;
   canEdit: boolean;
   busy: string | null;
+  workspaceOutOfSync?: boolean;
   isArchiveConfirm: boolean;
   onOpenEdit: () => void;
   onRequestArchive: () => void;
@@ -100,7 +102,12 @@ export function OfficialDetails({
 
       {canEdit ? (
         <div className={styles.detailActions}>
-          <button type="button" className={styles.secondaryButton} onClick={onOpenEdit} disabled={Boolean(busy)}>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            onClick={onOpenEdit}
+            disabled={Boolean(busy) || Boolean(workspaceOutOfSync)}
+          >
             {phase4OfficialsCopy.editOfficial}
           </button>
           {!official.archived ? (
@@ -109,12 +116,17 @@ export function OfficialDetails({
               ref={archiveButtonRef}
               className={styles.dangerButton}
               onClick={onRequestArchive}
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || Boolean(workspaceOutOfSync)}
             >
               {phase4OfficialsCopy.archiveOfficial}
             </button>
           ) : (
-            <button type="button" className={styles.primaryButton} onClick={onRestore} disabled={Boolean(busy)}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={onRestore}
+              disabled={Boolean(busy) || Boolean(workspaceOutOfSync)}
+            >
               {busy === "restore" ? phase4OfficialsCopy.restoring : phase4OfficialsCopy.restoreOfficial}
             </button>
           )}

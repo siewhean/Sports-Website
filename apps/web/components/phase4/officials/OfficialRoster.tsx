@@ -1,5 +1,6 @@
 "use client";
 
+import type { RefObject } from "react";
 import {
   phase4OfficialsCopy,
   type AvailabilityWindowView,
@@ -19,6 +20,9 @@ export function OfficialRoster({
   canEdit,
   onOpenCreate,
   busy,
+  workspaceOutOfSync,
+  addOfficialButtonRef,
+  activeOfficialsHeadingRef,
 }: {
   officials: OfficialView[];
   availability: Record<string, AvailabilityWindowView[]>;
@@ -30,6 +34,9 @@ export function OfficialRoster({
   canEdit: boolean;
   onOpenCreate: () => void;
   busy: string | null;
+  workspaceOutOfSync?: boolean;
+  addOfficialButtonRef?: RefObject<HTMLButtonElement | null>;
+  activeOfficialsHeadingRef?: RefObject<HTMLHeadingElement | null>;
 }) {
   const activeOfficials = officials.filter((o) => !o.archived);
   const archivedOfficials = officials.filter((o) => o.archived);
@@ -46,10 +53,18 @@ export function OfficialRoster({
     <div className={styles.workspaceColumn}>
       <section className={styles.panel} aria-labelledby="active-officials-heading">
         <div className={styles.header}>
-          <h2 id="active-officials-heading">{phase4OfficialsCopy.activeOfficials}</h2>
+          <h2 id="active-officials-heading" ref={activeOfficialsHeadingRef} tabIndex={-1}>
+            {phase4OfficialsCopy.activeOfficials}
+          </h2>
           <div className={styles.headerActions}>
             {canEdit ? (
-              <button type="button" className={styles.primaryButton} onClick={onOpenCreate} disabled={Boolean(busy)}>
+              <button
+                type="button"
+                ref={addOfficialButtonRef}
+                className={styles.primaryButton}
+                onClick={onOpenCreate}
+                disabled={Boolean(busy) || Boolean(workspaceOutOfSync)}
+              >
                 {phase4OfficialsCopy.addOfficial}
               </button>
             ) : (
