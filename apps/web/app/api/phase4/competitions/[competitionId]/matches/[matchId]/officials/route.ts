@@ -4,7 +4,7 @@ import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { forwardPhase3Mutation, jsonBody } from "@/lib/phase3-settings-command.server";
 import { isMatchOfficialsMutationResponse, phase4OfficialsMachine } from "@/lib/phase4-officials";
 import { validateMatchAssignmentsBody, validationError } from "@/lib/phase4-officials-bff.server";
-import { updateDemoMatchAssignments } from "@/lib/phase4-officials.server";
+import { DEMO_SCOPE_COOKIE, resolveDemoScope, updateDemoMatchAssignments } from "@/lib/phase4-officials.server";
 
 export async function PUT(
   request: NextRequest,
@@ -18,14 +18,21 @@ export async function PUT(
   }
 
   if (demoFixturesEnabled()) {
-    const updated = updateDemoMatchAssignments(competitionId, matchId, validated.body.assignments);
+    const scope = resolveDemoScope(request.cookies.get(DEMO_SCOPE_COOKIE)?.value);
+    const result = updateDemoMatchAssignments(competitionId, matchId, validated.body.assignments, scope);
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: { code: result.errorCode, message: result.message } },
+        { status: result.status },
+      );
+    }
     return NextResponse.json({
-      assignments: updated.map((a) => ({
+      assignments: result.assignments.map((a) => ({
         match_id: a.matchId,
         official_id: a.officialId,
         assigned_role: a.assignedRole,
       })),
-      bumped_revision: true,
+      bumped_revision: result.bumpedRevision,
     });
   }
 

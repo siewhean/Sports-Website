@@ -7,10 +7,25 @@ import {
   createDemoOfficialWorkspace,
   officialWorkspaceUnavailableDocument,
   parseOfficialWorkspaceResponse,
+  phase4OfficialsCopy,
   type MatchOfficialAssignmentView,
   type OfficialWorkspaceDocument,
   type SurfaceState,
 } from "@/lib/phase4-officials";
+
+export const DEMO_SCOPE_COOKIE = "matchday_demo_scope";
+const DEMO_SCOPE_PATTERN = /^[A-Za-z0-9._-]{1,80}$/;
+
+export function resolveDemoScope(value?: string | null): string {
+  if (!value || typeof value !== "string") return "default";
+  const trimmed = value.trim();
+  if (!DEMO_SCOPE_PATTERN.test(trimmed)) return "default";
+  return trimmed;
+}
+
+export function demoScopeKey(scope: string, competitionId: string): string {
+  return `${resolveDemoScope(scope)}:${competitionId}`;
+}
 
 const globalForDemo = globalThis as unknown as {
   __demoOfficialWorkspaces?: Map<string, OfficialWorkspaceDocument>;
@@ -21,49 +36,116 @@ if (!globalForDemo.__demoOfficialWorkspaces) {
   globalForDemo.__demoOfficialWorkspaces = demoWorkspaces;
 }
 
-export function getDemoOfficialWorkspace(competitionId: string, canEdit = true): OfficialWorkspaceDocument {
-  const existing = demoWorkspaces.get(competitionId);
+export function getDemoOfficialWorkspace(
+  competitionId: string,
+  canEdit = true,
+  scope = "default",
+): OfficialWorkspaceDocument {
+  const key = demoScopeKey(scope, competitionId);
+  const existing = demoWorkspaces.get(key);
   if (existing) {
     return { ...existing, canEdit };
   }
   const initial = createDemoOfficialWorkspace(competitionId, canEdit);
-  demoWorkspaces.set(competitionId, initial);
+  demoWorkspaces.set(key, initial);
   return initial;
 }
 
-export function resetDemoOfficialWorkspaces(): void {
-  demoWorkspaces.clear();
+export function resetDemoOfficialWorkspaces(scope?: string): void {
+  if (scope) {
+    const safeScope = resolveDemoScope(scope);
+    const prefix = `${safeScope}:`;
+    for (const key of Array.from(demoWorkspaces.keys())) {
+      if (key.startsWith(prefix)) {
+        demoWorkspaces.delete(key);
+      }
+    }
+  } else {
+    demoWorkspaces.clear();
+  }
 }
+
+export type UpdateDemoAssignmentsResult =
+  | {
+      ok: true;
+      assignments: MatchOfficialAssignmentView[];
+      bumpedRevision: boolean;
+    }
+  | {
+      ok: false;
+      status: number;
+      errorCode: string;
+      message: string;
+    };
 
 export function updateDemoMatchAssignments(
   competitionId: string,
   matchId: string,
   assignments: { official_id: string; assigned_role: string | null }[],
-): MatchOfficialAssignmentView[] {
-  const current = getDemoOfficialWorkspace(competitionId, true);
+  scope = "default",
+): UpdateDemoAssignmentsResult {
+  const current = getDemoOfficialWorkspace(competitionId, true, scope);
+  const existingMatchAssignments = current.assignments.filter((a) => a.matchId === matchId);
+  const existingIds = [...new Set(existingMatchAssignments.map((a) => a.officialId))].sort();
+
+  // 1. Fail-closed: Unknown official ID rejected
+  for (const a of assignments) {
+    const off = current.officials.find((o) => o.id === a.official_id);
+    if (!off) {
+      return {
+        ok: false,
+        status: 404,
+        errorCode: "OFFICIAL_NOT_FOUND",
+        message: phase4OfficialsCopy.officialNotFound,
+      };
+    }
+  }
+
+  // 2. Fail-closed: Newly assigned archived official rejected
+  for (const a of assignments) {
+    const off = current.officials.find((o) => o.id === a.official_id)!;
+    if (off.archived && !existingIds.includes(off.id)) {
+      return {
+        ok: false,
+        status: 400,
+        errorCode: "OFFICIAL_ARCHIVED",
+        message: phase4OfficialsCopy.archivedCannotReassign,
+      };
+    }
+  }
+
+  // 3. Compute membership change (official-ID membership only, ignoring order and roles)
+  const nextIds = [...new Set(assignments.map((a) => a.official_id))].sort();
+  const bumpedRevision =
+    existingIds.length !== nextIds.length || existingIds.some((id, index) => id !== nextIds[index]);
+
   const otherAssignments = current.assignments.filter((a) => a.matchId !== matchId);
   const newAssignments: MatchOfficialAssignmentView[] = assignments.map((a) => {
-    const off = current.officials.find((o) => o.id === a.official_id);
+    const off = current.officials.find((o) => o.id === a.official_id)!;
     return {
       matchId,
       officialId: a.official_id,
       assignedRole: a.assigned_role,
-      official: off
-        ? {
-            id: off.id,
-            name: off.name,
-            defaultRole: off.defaultRole,
-            archived: off.archived,
-          }
-        : undefined,
+      official: {
+        id: off.id,
+        name: off.name,
+        defaultRole: off.defaultRole,
+        archived: off.archived,
+      },
     };
   });
   const updated: OfficialWorkspaceDocument = {
     ...current,
     assignments: [...otherAssignments, ...newAssignments],
   };
-  demoWorkspaces.set(competitionId, updated);
-  return newAssignments;
+  const key = demoScopeKey(scope, competitionId);
+  demoWorkspaces.set(key, updated);
+
+  return {
+    ok: true,
+    assignments: newAssignments,
+    bumpedRevision,
+  };
 }
 
 function apiBaseUrl(): URL | null {
@@ -93,12 +175,17 @@ export async function getOfficialWorkspace(
   canEdit = true,
   previewState?: SurfaceState | null,
 ): Promise<OfficialWorkspaceDocument> {
-  if (previewState && previewState !== "ready") {
-    return officialWorkspaceUnavailableDocument(competitionId, previewState, canEdit);
+  if (demoFixturesEnabled()) {
+    if (previewState && previewState !== "ready") {
+      return officialWorkspaceUnavailableDocument(competitionId, previewState, canEdit);
+    }
+    const cookieStore = await cookies();
+    const scope = resolveDemoScope(cookieStore.get(DEMO_SCOPE_COOKIE)?.value);
+    return getDemoOfficialWorkspace(competitionId, canEdit, scope);
   }
 
-  if (demoFixturesEnabled()) {
-    return getDemoOfficialWorkspace(competitionId, canEdit);
+  if (previewState && previewState !== "ready" && process.env.NODE_ENV !== "production") {
+    return officialWorkspaceUnavailableDocument(competitionId, previewState, canEdit);
   }
 
   const base = apiBaseUrl();

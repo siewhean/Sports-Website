@@ -385,7 +385,20 @@ test.describe("read-only official assignment integration (CP 5.5)", () => {
     await expect(inspector.getByText("No officials assigned")).not.toBeVisible();
   });
 
-  test("fresh return: Schedule reflects updated assignments after editing on Officials page", async ({ page }) => {
+  test("fresh return: Schedule reflects updated assignments after editing on Officials page", async ({
+    page,
+    context,
+  }) => {
+    // Isolate demo state with demo scope cookie
+    await context.addCookies([
+      {
+        name: "matchday_demo_scope",
+        value: "cp55-roundtrip",
+        domain: "127.0.0.1",
+        path: "/",
+      },
+    ]);
+
     // 1. Initial Schedule view: M1 has Official A
     await page.goto(`${scheduleUrl}?match=${match1Id}`);
     await dismissConsent(page);

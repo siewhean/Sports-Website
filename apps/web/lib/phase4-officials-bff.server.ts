@@ -12,7 +12,7 @@ import {
   phase4OfficialsMachine,
   record,
 } from "@/lib/phase4-officials";
-import { getDemoOfficialWorkspace } from "@/lib/phase4-officials.server";
+import { DEMO_SCOPE_COOKIE, getDemoOfficialWorkspace, resolveDemoScope } from "@/lib/phase4-officials.server";
 import { readPhase3Json } from "@/lib/phase3-settings-command.server";
 
 export type ValidationResult<T> = { ok: true; body: T } | { ok: false; message: string };
@@ -23,7 +23,8 @@ export function validationError(message: string) {
 
 export async function forwardWorkspaceGet(request: NextRequest, competitionId: string) {
   if (demoFixturesEnabled()) {
-    const ws = getDemoOfficialWorkspace(competitionId);
+    const scope = resolveDemoScope(request.cookies.get(DEMO_SCOPE_COOKIE)?.value);
+    const ws = getDemoOfficialWorkspace(competitionId, true, scope);
     return NextResponse.json(
       {
         officials: ws.officials.map((o) => ({
