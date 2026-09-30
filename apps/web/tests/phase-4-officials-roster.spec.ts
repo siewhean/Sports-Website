@@ -13,7 +13,7 @@ test("officials roster supports view, create, edit, archive and restore flows", 
 
   // 1. Initial view: active officials, first active official is selected
   await expect(page.getByRole("heading", { name: "Active officials" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Official A" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Official A", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add official" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Edit official" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Archive official" })).toBeVisible();
@@ -225,7 +225,7 @@ test.describe("competition timezone availability in non-host browser timezone", 
     await dismissConsent(page);
 
     // Initial official selected is Official A
-    await expect(page.getByRole("heading", { name: "Official A" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Official A", exact: true })).toBeVisible();
     await expect(page.getByText("Competition timezone: Asia/Singapore")).toBeVisible();
 
     // Verify initial windows rendered in Asia/Singapore civil time (09:00–13:00, 14:00–18:00)
@@ -323,5 +323,367 @@ test.describe("competition timezone availability in non-host browser timezone", 
 
     // Formatted window displayed in details panel in Asia/Singapore civil time
     await expect(page.getByText("09:00–17:00")).toBeVisible();
+  });
+});
+
+test.describe("match official assignments and conflict hints (CP 5.4)", () => {
+  const match1Id = "30000000-0000-4000-8000-000000000001";
+  const match2Id = "30000000-0000-4000-8000-000000000002";
+  const officialAId = "60000000-0000-4000-8000-000000000001";
+  const officialBId = "60000000-0000-4000-8000-000000000002";
+  const officialCId = "60000000-0000-4000-8000-000000000003";
+
+  test("match official assignment journey: selection, edit, conflicts, save, revision bump and sticky warning", async ({
+    page,
+  }) => {
+    // 1. Deep link to match1
+    await page.goto(`${officialsUrl}?match=${match1Id}`);
+    await dismissConsent(page);
+
+    // Verify match1 is selected
+    const matchSelect = page.locator("#match-assignments-heading ~ div select, select#match-selector, select");
+    await expect(matchSelect.first()).toHaveValue(match1Id);
+
+    // Verify scheduled time is visible
+    await expect(page.getByText("Scheduled time:")).toBeVisible();
+
+    // Verify current assigned officials summary
+    await expect(page.getByText("Assigned officials: 1")).toBeVisible();
+    await expect(page.getByTestId("assignment-card").filter({ hasText: "Official A" })).toBeVisible();
+
+    // 2. Enter edit mode
+    await page.getByRole("button", { name: "Edit match officials" }).click();
+    await expect(page.getByRole("heading", { name: "Edit match officials" })).toBeVisible();
+
+    // Official A is checked, Official B is unchecked
+    const checkboxA = page.locator(`#match-official-${officialAId}`);
+    const checkboxB = page.locator(`#match-official-${officialBId}`);
+    await expect(checkboxA).toBeChecked();
+    await expect(checkboxB).not.toBeChecked();
+
+    // Check Official B and fill assigned role
+    await checkboxB.check();
+    await expect(checkboxB).toBeChecked();
+
+    const roleInputB = page.locator(`#match-role-${officialBId}`);
+    await expect(roleInputB).toBeVisible();
+    await roleInputB.fill("Line Judge");
+
+    // Conflict advisory box appears
+    await expect(page.getByText("Current schedule check")).toBeVisible();
+
+    // Setup PUT route intercept
+    let savedPayload: unknown = null;
+    await page.route("**/api/phase4/competitions/*/matches/*/officials", async (route) => {
+      if (route.request().method() === "PUT") {
+        savedPayload = JSON.parse(route.request().postData() || "{}");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            assignments: [
+              {
+                match_id: match1Id,
+                official_id: officialAId,
+                assigned_role: "Lead Official",
+              },
+              {
+                match_id: match1Id,
+                official_id: officialBId,
+                assigned_role: "Line Judge",
+              },
+            ],
+            bumped_revision: true,
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    // Setup refreshed workspace route intercept
+    const twoOfficialsWorkspace = {
+      officials: [
+        {
+          id: officialAId,
+          competition_id: competitionId,
+          name: "Official A",
+          default_role: "Lead Official",
+          archived: false,
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-08-01T00:00:00.000Z",
+        },
+        {
+          id: officialBId,
+          competition_id: competitionId,
+          name: "Official B",
+          default_role: "Line Judge",
+          archived: false,
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-08-01T00:00:00.000Z",
+        },
+        {
+          id: officialCId,
+          competition_id: competitionId,
+          name: "Official C",
+          default_role: null,
+          archived: true,
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+      availability: {},
+      assignments: [
+        {
+          match_id: match1Id,
+          official_id: officialAId,
+          assigned_role: "Lead Official",
+        },
+        {
+          match_id: match1Id,
+          official_id: officialBId,
+          assigned_role: "Line Judge",
+        },
+      ],
+    };
+
+    await page.route("**/api/phase4/competitions/*/officials/workspace", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(twoOfficialsWorkspace),
+      });
+    });
+
+    // Save assignments
+    await page.getByRole("button", { name: "Save assignments" }).click();
+
+    // Verify PUT request
+    expect(savedPayload).toEqual({
+      assignments: [
+        { official_id: officialAId, assigned_role: "Lead Official" },
+        { official_id: officialBId, assigned_role: "Line Judge" },
+      ],
+    });
+
+    // Status banner
+    await expect(page.getByRole("status").filter({ hasText: "Match officials saved." })).toBeVisible();
+
+    // Sticky schedule invalidation warning is visible because bumped_revision: true
+    await expect(page.getByText("This official was assigned to a match.")).toBeVisible();
+
+    // Assignment summary now shows 2 officials
+    await expect(page.getByText("Assigned officials: 2")).toBeVisible();
+    await expect(page.getByTestId("assignment-card").filter({ hasText: "Official B" })).toContainText("Line Judge");
+
+    // 3. Role-only edit: bumped_revision=false leaves schedule warning visible
+    await page.getByRole("button", { name: "Edit match officials" }).click();
+    await expect(page.getByRole("heading", { name: "Edit match officials" })).toBeVisible();
+
+    await page.locator(`#match-role-${officialBId}`).fill("Assistant Referee");
+
+    await page.route("**/api/phase4/competitions/*/matches/*/officials", async (route) => {
+      if (route.request().method() === "PUT") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            assignments: [
+              {
+                match_id: match1Id,
+                official_id: officialAId,
+                assigned_role: "Lead Official",
+              },
+              {
+                match_id: match1Id,
+                official_id: officialBId,
+                assigned_role: "Assistant Referee",
+              },
+            ],
+            bumped_revision: false, // role-only does NOT bump revision
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    const roleUpdatedWorkspace = {
+      ...twoOfficialsWorkspace,
+      assignments: [
+        {
+          match_id: match1Id,
+          official_id: officialAId,
+          assigned_role: "Lead Official",
+        },
+        {
+          match_id: match1Id,
+          official_id: officialBId,
+          assigned_role: "Assistant Referee",
+        },
+      ],
+    };
+
+    await page.route("**/api/phase4/competitions/*/officials/workspace", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(roleUpdatedWorkspace),
+      });
+    });
+
+    await page.getByRole("button", { name: "Save assignments" }).click();
+
+    // Sticky warning remains visible!
+    await expect(page.getByText("This official was assigned to a match.")).toBeVisible();
+    await expect(page.getByTestId("assignment-card").filter({ hasText: "Official B" })).toContainText(
+      "Assistant Referee",
+    );
+  });
+
+  test("archived assigned official is visible, can be unassigned, and cannot be re-assigned", async ({ page }) => {
+    // Fixture with Archived Official C assigned to Match 1
+    const workspaceWithArchived = {
+      officials: [
+        {
+          id: officialAId,
+          competition_id: competitionId,
+          name: "Official A",
+          default_role: "Lead Official",
+          archived: false,
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-08-01T00:00:00.000Z",
+        },
+        {
+          id: officialBId,
+          competition_id: competitionId,
+          name: "Official B",
+          default_role: "Line Judge",
+          archived: false,
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-08-01T00:00:00.000Z",
+        },
+        {
+          id: officialCId,
+          competition_id: competitionId,
+          name: "Archived Official C",
+          default_role: "Timekeeper",
+          archived: true,
+          created_at: "2026-08-01T00:00:00.000Z",
+          updated_at: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+      availability: {},
+      assignments: [
+        {
+          matchId: match1Id,
+          officialId: officialCId,
+          assignedRole: "Timekeeper",
+        },
+      ],
+    };
+
+    await page.route("**/api/phase4/competitions/*/officials/workspace", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(workspaceWithArchived),
+      });
+    });
+
+    await page.goto(`${officialsUrl}?match=${match2Id}`);
+    await dismissConsent(page);
+
+    // Verify archived official is displayed in summary with Archived badge
+    const card = page.getByTestId("assignment-card").filter({ hasText: "Archived Official C" });
+    await expect(card).toBeVisible();
+    await expect(card.getByText("Archived", { exact: true })).toBeVisible();
+
+    // Enter edit mode
+    await page.getByRole("button", { name: "Edit match officials" }).click();
+    await expect(page.getByRole("heading", { name: "Edit match officials" })).toBeVisible();
+
+    // Archived Official C is visible in editor candidate list
+    const checkboxC = page.locator(`#match-official-${officialCId}`);
+    await expect(checkboxC).toBeVisible();
+    await expect(checkboxC).toBeChecked();
+    await expect(checkboxC).toBeEnabled();
+
+    // Uncheck Archived Official C
+    await checkboxC.uncheck();
+    await expect(checkboxC).not.toBeChecked();
+
+    // Once unchecked, checkbox is disabled (cannot re-check archived official)
+    await expect(checkboxC).toBeDisabled();
+  });
+
+  test("reconciliation failure after match assignment save locks mutations with retry", async ({ page }) => {
+    await page.goto(`${officialsUrl}?match=${match1Id}`);
+    await dismissConsent(page);
+
+    await page.getByRole("button", { name: "Edit match officials" }).click();
+    await expect(page.getByRole("heading", { name: "Edit match officials" })).toBeVisible();
+
+    // Mock PUT to succeed with bumped_revision=true
+    await page.route("**/api/phase4/competitions/*/matches/*/officials", async (route) => {
+      if (route.request().method() === "PUT") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            assignments: [],
+            bumped_revision: true,
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    // Mock GET workspace to fail (500)
+    allowConsoleFailure(page, /server responded with a status of 500/);
+    let refreshCount = 0;
+    await page.route("**/api/phase4/competitions/*/officials/workspace", async (route) => {
+      refreshCount += 1;
+      if (refreshCount === 1) {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Fail" }) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          officials: [],
+          availability: {},
+          assignments: [],
+        }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Save assignments" }).click();
+
+    // Editor closes
+    await expect(page.getByRole("heading", { name: "Edit match officials" })).not.toBeVisible();
+
+    // Schedule warning banner is visible
+    await expect(page.getByText("This official was assigned to a match.")).toBeVisible();
+
+    // Reconciliation warning is visible
+    await expect(
+      page.getByText("The change was saved, but the officials workspace could not be refreshed."),
+    ).toBeVisible();
+
+    // Edit button is disabled or suppressed
+    await expect(page.getByRole("button", { name: "Edit match officials" })).not.toBeVisible();
+
+    // Retry refresh button is visible
+    const retryBtn = page.getByRole("button", { name: "Retry refresh" });
+    await expect(retryBtn).toBeVisible();
+
+    // Recover by clicking Retry refresh
+    await retryBtn.click();
+    await expect(
+      page.getByText("The change was saved, but the officials workspace could not be refreshed."),
+    ).not.toBeVisible();
   });
 });

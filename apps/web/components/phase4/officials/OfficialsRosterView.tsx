@@ -5,6 +5,7 @@ import Link from "next/link";
 import { opaqueId } from "@matchday/ui";
 import {
   isAvailabilityMutationResponse,
+  isMatchOfficialsMutationResponse,
   isOfficialMutationResponse,
   isOfficialResponse,
   officialCommandErrorMessage,
@@ -14,26 +15,33 @@ import {
   type OfficialWorkspaceDocument,
 } from "@/lib/phase4-officials";
 import type { ScheduleDocument } from "@/lib/phase4-schedule";
+import { MatchOfficialAssignments } from "./MatchOfficialAssignments";
 import { OfficialAvailabilityEditor } from "./OfficialAvailabilityEditor";
 import { OfficialDetails } from "./OfficialDetails";
 import { OfficialForm } from "./OfficialForm";
 import { OfficialRoster } from "./OfficialRoster";
 import styles from "./OfficialsRosterView.module.css";
 
-type WorkspaceMode = "view" | "create" | "edit" | "archive_confirm" | "availability_edit";
+type WorkspaceMode = "view" | "create" | "edit" | "archive_confirm" | "availability_edit" | "assignment_edit";
 
 export function OfficialsRosterView({
   document: initialDocument,
+  scheduleDocument,
   timeZone = phase4OfficialsMachine.defaultTimeZone,
+  initialMatchId,
 }: {
   document: OfficialWorkspaceDocument;
   scheduleDocument?: ScheduleDocument;
   timeZone?: string;
+  initialMatchId?: string;
 }) {
   const [workspace, setWorkspace] = useState<OfficialWorkspaceDocument>(initialDocument);
   const [selectedOfficialId, setSelectedOfficialId] = useState<string | null>(
     () => initialDocument.officials.find((o) => !o.archived)?.id ?? null,
   );
+  const validInitialMatch = scheduleDocument?.matches.some((m) => m.id === initialMatchId);
+  const defaultMatchId = (validInitialMatch ? initialMatchId : scheduleDocument?.matches[0]?.id) ?? null;
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(defaultMatchId);
   const [showArchived, setShowArchived] = useState(false);
   const [mode, setMode] = useState<WorkspaceMode>(opaqueId("view"));
   const [busy, setBusy] = useState<string | null>(null);
@@ -49,6 +57,8 @@ export function OfficialsRosterView({
   const addOfficialButtonRef = useRef<HTMLButtonElement | null>(null);
   const activeOfficialsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const editAvailabilityButtonRef = useRef<HTMLButtonElement | null>(null);
+  const matchAssignmentsHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const editMatchButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const selectedOfficial =
     (selectedOfficialId ? workspace.officials.find((o) => o.id === selectedOfficialId) : null) ?? null;
@@ -95,7 +105,7 @@ export function OfficialsRosterView({
   };
 
   const handleSelectOfficial = (id: string) => {
-    if (mode === opaqueId("availability_edit")) return;
+    if (mode === opaqueId("availability_edit") || mode === opaqueId("assignment_edit")) return;
     setSelectedOfficialId(id);
     setMode(opaqueId("view"));
     setFormError(null);
@@ -104,7 +114,7 @@ export function OfficialsRosterView({
   };
 
   const handleOpenCreate = () => {
-    if (workspaceOutOfSync) return;
+    if (workspaceOutOfSync || mode === opaqueId("assignment_edit")) return;
     setMode(opaqueId("create"));
     setFormError(null);
     setStatusMessage(null);
@@ -112,7 +122,7 @@ export function OfficialsRosterView({
   };
 
   const handleOpenEdit = () => {
-    if (workspaceOutOfSync) return;
+    if (workspaceOutOfSync || mode === opaqueId("assignment_edit")) return;
     setMode(opaqueId("edit"));
     setFormError(null);
     setStatusMessage(null);
@@ -122,6 +132,91 @@ export function OfficialsRosterView({
   const handleCancelForm = () => {
     setMode(opaqueId("view"));
     setFormError(null);
+  };
+
+  const handleSelectMatch = (matchId: string) => {
+    if (mode === opaqueId("assignment_edit") || mode === opaqueId("availability_edit")) return;
+    setSelectedMatchId(matchId);
+    setStatusMessage(null);
+    setErrorMessage(null);
+  };
+
+  const handleOpenMatchAssignmentsEdit = () => {
+    if (!selectedMatchId || !workspace.canEdit || workspaceOutOfSync) return;
+    setMode(opaqueId("assignment_edit"));
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setFormError(null);
+  };
+
+  const handleCancelMatchAssignmentsEdit = () => {
+    setMode(opaqueId("view"));
+    setTimeout(() => {
+      editMatchButtonRef.current?.focus();
+    }, 0);
+  };
+
+  const handleSaveMatchOfficials = async (assignments: { official_id: string; assigned_role: string | null }[]) => {
+    if (!selectedMatchId || workspaceOutOfSync) return;
+
+    setBusy(opaqueId("save_match_assignments"));
+    setErrorMessage(null);
+    setStatusMessage(null);
+
+    try {
+      const res = await fetch(
+        `/api/phase4/competitions/${encodeURIComponent(workspace.competitionId)}/matches/${encodeURIComponent(selectedMatchId)}/officials`,
+        {
+          method: phase4OfficialsMachine.put,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ assignments }),
+        },
+      );
+
+      const raw = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setWorkspaceOutOfSync(false);
+        const code = raw?.error?.code ?? null;
+        setErrorMessage(officialCommandErrorMessage(res.status, code));
+        setBusy(null);
+        return;
+      }
+
+      if (!isMatchOfficialsMutationResponse(raw)) {
+        setWorkspaceOutOfSync(false);
+        setErrorMessage(phase4OfficialsCopy.commandResponseInvalid);
+        setBusy(null);
+        return;
+      }
+
+      setMode(opaqueId("view"));
+
+      // Monotonic sticky schedule warning: only update to true if bumped_revision is true
+      if (raw.bumped_revision) {
+        setScheduleWarning(true);
+      }
+
+      const refreshed = await refreshWorkspace();
+      if (refreshed) {
+        setWorkspaceOutOfSync(false);
+        setStatusMessage(phase4OfficialsCopy.assignmentsSaved);
+        setTimeout(() => {
+          if (matchAssignmentsHeadingRef.current) {
+            matchAssignmentsHeadingRef.current.focus();
+          } else {
+            headingRef.current?.focus();
+          }
+        }, 0);
+      } else {
+        setWorkspaceOutOfSync(true);
+      }
+    } catch {
+      setWorkspaceOutOfSync(false);
+      setErrorMessage(phase4OfficialsCopy.genericMutationError);
+    } finally {
+      setBusy(null);
+    }
   };
 
   const handleOpenAvailabilityEdit = () => {
@@ -554,11 +649,11 @@ export function OfficialsRosterView({
         onSelectOfficial={handleSelectOfficial}
         showArchived={showArchived}
         onToggleShowArchived={() => setShowArchived((prev) => !prev)}
-        canEdit={workspace.canEdit}
+        canEdit={workspace.canEdit && mode !== opaqueId("assignment_edit")}
         onOpenCreate={handleOpenCreate}
         busy={busy}
         workspaceOutOfSync={workspaceOutOfSync}
-        isSelectionDisabled={mode === opaqueId("availability_edit")}
+        isSelectionDisabled={mode === opaqueId("availability_edit") || mode === opaqueId("assignment_edit")}
         addOfficialButtonRef={addOfficialButtonRef}
         activeOfficialsHeadingRef={activeOfficialsHeadingRef}
       />
@@ -598,7 +693,7 @@ export function OfficialsRosterView({
             windowCount={windowCount}
             windows={selectedOfficial ? (workspace.availability[selectedOfficial.id] ?? []) : []}
             timeZone={timeZone}
-            canEdit={workspace.canEdit}
+            canEdit={workspace.canEdit && mode !== opaqueId("assignment_edit")}
             busy={busy}
             workspaceOutOfSync={workspaceOutOfSync}
             isArchiveConfirm={mode === opaqueId("archive_confirm")}
@@ -614,6 +709,22 @@ export function OfficialsRosterView({
           />
         )}
       </div>
+
+      <MatchOfficialAssignments
+        selectedMatchId={selectedMatchId}
+        onSelectMatch={handleSelectMatch}
+        scheduleDocument={scheduleDocument}
+        timeZone={timeZone}
+        workspace={workspace}
+        isEditing={mode === opaqueId("assignment_edit")}
+        onOpenEdit={handleOpenMatchAssignmentsEdit}
+        onCancelEdit={handleCancelMatchAssignmentsEdit}
+        onSaveAssignments={handleSaveMatchOfficials}
+        busy={busy}
+        workspaceOutOfSync={workspaceOutOfSync}
+        summaryHeadingRef={matchAssignmentsHeadingRef}
+        editButtonRef={editMatchButtonRef}
+      />
     </div>
   );
 }

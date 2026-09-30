@@ -47,6 +47,7 @@ export default async function OfficialsPage({
           document={workspace}
           scheduleDocument={scheduleDoc}
           timeZone={result.competition.timezone}
+          initialMatchId={query.match}
         />
       }
     />

@@ -101,6 +101,35 @@ export const phase4OfficialsCopy = {
   windowIndex: (idx: number) => `Window ${idx}`,
   errorTitle: "Officials unavailable",
   errorBody: "Unable to load officials at this time.",
+  matchAssignmentsTitle: "Match official assignments",
+  selectMatchLabel: "Select match",
+  scheduledTimeLabel: "Scheduled time:",
+  noMatchesAvailable: "No matches available.",
+  matchScheduledSummary: (date: string, time: string, pitch: string) => `${date}, ${time}, ${pitch}`,
+  currentlyUnscheduled: "Currently unscheduled",
+  assignedOfficialsCount: (n: number) => `Assigned officials: ${n}`,
+  noAssignedOfficials: "No officials assigned to this match.",
+  editMatchOfficials: "Edit match officials",
+  saveAssignments: "Save assignments",
+  savingAssignments: "Saving...",
+  assignmentsSaved: "Match officials saved.",
+  assignedRoleFor: (name: string) => `Assigned role for ${name}`,
+  assignedRoleLabel: "Assigned role",
+  rolePlaceholderShort: "e.g. Lead official",
+  defaultRoleHelper: (role: string) => `Default role: ${role}`,
+  noDefaultRoleHelper: "No default role",
+  maxAssignmentsReached: "Maximum of 64 match assignments allowed.",
+  duplicateOfficialAssignment: "Duplicate official assignments are not allowed.",
+  roleTooLongAssignment: "Assigned role must be 40 characters or fewer.",
+  archivedCannotReassign: "Archived officials cannot be assigned to new matches.",
+  matchNotFound: "The match could not be found.",
+  currentScheduleCheckTitle: "Current schedule check",
+  currentScheduleCheckNotice:
+    "These warnings are based on the current schedule. You can still save assignments and regenerate the schedule afterward.",
+  scheduleMatchForConflictsNotice: "Schedule this match to check its current-time official conflicts.",
+  conflictOfficialUnavailable: (name: string) => `${name} is not available for this match's current scheduled time.`,
+  conflictOfficialOverlap: (name: string, matchCode: string) =>
+    `${name} is also assigned to ${matchCode} at this time.`,
 } as const;
 
 export function officialCommandErrorMessage(status: number, code?: string | null): string {
@@ -113,6 +142,8 @@ export function officialCommandErrorMessage(status: number, code?: string | null
       return phase4OfficialsCopy.officialArchivedError;
     case "OFFICIAL_AVAILABILITY_INVALID":
       return phase4OfficialsCopy.availabilityInvalid;
+    case "MATCH_NOT_FOUND":
+      return phase4OfficialsCopy.matchNotFound;
     case "VALIDATION_ERROR":
       return phase4OfficialsCopy.validationFailed;
     case "REVISION_CONFLICT":
@@ -151,6 +182,8 @@ export const phase4OfficialsMachine = {
   startTime: "startTime",
   endDate: "endDate",
   endTime: "endTime",
+  assignmentEdit: "assignment_edit",
+  saveMatchAssignments: "save_match_assignments",
 } as const;
 
 export type OfficialView = {
@@ -619,6 +652,17 @@ export function createDemoOfficialWorkspace(competitionId: string, canEdit = tru
           name: "Official B",
           defaultRole: "Line Judge",
           archived: false,
+        },
+      },
+      {
+        matchId: match2Id,
+        officialId: officialCId,
+        assignedRole: "Timekeeper",
+        official: {
+          id: officialCId,
+          name: "Archived Official C",
+          defaultRole: "Timekeeper",
+          archived: true,
         },
       },
     ],
