@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isExpectedFrameworkWarning,
+  isExpectedPublicEventSourceCancellation,
   isExpectedRscNavigationCancellation,
   isExpectedTeardownFontCancellation,
   isExpectedTeardownIdentityCancellation,
@@ -173,5 +174,33 @@ describe("identity teardown page error", () => {
     "TypeError: undefined is not an object",
   ])("keeps other page errors observable", (message) => {
     expect(isExpectedTeardownIdentityPageError(message)).toBe(false);
+  });
+});
+
+describe("public EventSource teardown cancellation", () => {
+  const input = {
+    failure: "net::ERR_ABORTED",
+    pageUrl: "http://localhost:3103/competitions/safe-public",
+    requestUrl: "http://localhost:3103/api/v1/public/competitions/safe-public/versions",
+    resourceType: "eventsource",
+  };
+  it.each(["net::ERR_ABORTED", "cancelled", "Load request cancelled", "NS_BINDING_ABORTED", "NS_BASE_STREAM_CLOSED"])(
+    "accepts an exact same-origin public stream cancellation: %s",
+    (failure) => {
+      expect(isExpectedPublicEventSourceCancellation({ ...input, failure })).toBe(true);
+    },
+  );
+  it.each([
+    { ...input, failure: "net::ERR_CONNECTION_REFUSED" },
+    { ...input, failure: "net::ERR_FAILED" },
+    { ...input, failure: "404" },
+    { ...input, resourceType: "fetch" },
+    { ...input, requestUrl: "https://other.test/api/v1/public/competitions/safe-public/versions" },
+    { ...input, requestUrl: "http://localhost:3103/api/v1/competitions/private/versions" },
+    { ...input, requestUrl: "http://localhost:3103/api/v1/public/competitions/safe-public/current" },
+    { ...input, requestUrl: input.requestUrl + "?unexpected=1" },
+    { ...input, pageUrl: "about:blank" },
+  ])("retains HTTP/connection errors and unrelated cancellation", (value) => {
+    expect(isExpectedPublicEventSourceCancellation(value)).toBe(false);
   });
 });

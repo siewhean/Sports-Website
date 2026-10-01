@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
-import { dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+import { assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 
 type RealState = {
   apiOrigin: string;
@@ -25,10 +25,14 @@ async function readState(): Promise<RealState> {
   return state;
 }
 
+test.afterEach(async ({ page }, testInfo) => {
+  await assertConsoleGuard(page, testInfo);
+});
+
 test("guest creates a real game, host scores, viewer observes, and invalid host token cannot mutate", async ({
   page,
   browser,
-}) => {
+}, testInfo) => {
   await readState();
   await installConsoleGuard(page);
   await page.goto("/play");
@@ -49,8 +53,8 @@ test("guest creates a real game, host scores, viewer observes, and invalid host 
   await expect(homePoint).toBeVisible();
 
   const viewerContext = await browser.newContext();
+  const viewer = await viewerContext.newPage();
   try {
-    const viewer = await viewerContext.newPage();
     await installConsoleGuard(viewer);
     await viewer.goto(
       new URL(`/play/${id}/watch?viewer_token=${encodeURIComponent(body.viewer_token)}`, page.url()).href,
@@ -91,16 +95,56 @@ test("guest creates a real game, host scores, viewer observes, and invalid host 
     expect(afterBody.home_score).toBe(1);
     expect(afterBody.away_score).toBe(0);
   } finally {
-    await viewerContext.close();
+    try {
+      await assertConsoleGuard(viewer, testInfo);
+    } finally {
+      await viewerContext.close();
+    }
   }
 });
 
 test("published competition renders without login and serves conditional public ETags", async ({ page, request }) => {
   const state = await readState();
   await installConsoleGuard(page);
+  // Observe the application's real EventSource without synthesising events or replacing transport.
+  await page.addInitScript(() => {
+    const observed = window as Window & {
+      publicHeartbeatReceipts?: Array<{ url: string; data: string; trusted: boolean }>;
+    };
+    observed.publicHeartbeatReceipts = [];
+    const NativeEventSource = window.EventSource;
+    window.EventSource = class extends NativeEventSource {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options);
+        this.addEventListener("heartbeat", (event) => {
+          observed.publicHeartbeatReceipts!.push({ url: this.url, data: event.data, trusted: event.isTrusted });
+        });
+      }
+    };
+  });
+  const streamPath = `/api/v1/public/competitions/${encodeURIComponent(state.competitionSlug)}/versions`;
+  const streamResponse = page.waitForResponse((response) => new URL(response.url()).pathname === streamPath);
   await page.goto(state.publicCompetitionPath);
+  const stream = await streamResponse;
+  expect(stream.status()).toBe(200);
+  expect(stream.headers()["content-type"]).toContain("text/event-stream");
+  await expect
+    .poll(
+      async () =>
+        page.evaluate((expectedPath) => {
+          const observed = window as Window & {
+            publicHeartbeatReceipts?: Array<{ url: string; data: string; trusted: boolean }>;
+          };
+          return (observed.publicHeartbeatReceipts ?? []).some(
+            (receipt) => new URL(receipt.url).pathname === expectedPath && receipt.trusted && receipt.data === "{}",
+          );
+        }, streamPath),
+      { timeout: 10_000, message: "real public EventSource must receive its server heartbeat" },
+    )
+    .toBe(true);
   await dismissConsent(page);
   await expect(page).toHaveURL(new RegExp(state.publicCompetitionPath));
+  await expect(page.locator('[data-connection="connected"]')).toBeVisible();
   for (const division of state.divisionNames)
     await expect(page.getByText(division, { exact: true }).first()).toBeVisible();
   const endpoint = `${state.apiOrigin}/api/v1/public/competitions/${encodeURIComponent(state.competitionSlug)}/current`;

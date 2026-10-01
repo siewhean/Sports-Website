@@ -42,6 +42,26 @@ const standardCancellationFailures = [
   "NS_BASE_STREAM_CLOSED",
 ];
 
+export function isExpectedPublicEventSourceCancellation(input: {
+  failure: string;
+  pageUrl: string;
+  requestUrl: string;
+  resourceType: string;
+}): boolean {
+  if (!standardCancellationFailures.includes(input.failure) || input.resourceType !== "eventsource") return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return (
+      pageUrl.origin === requestUrl.origin &&
+      /^\/api\/v1\/public\/competitions\/[^/]+\/versions$/u.test(requestUrl.pathname) &&
+      !requestUrl.search
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isExpectedTeardownFontCancellation(input: {
   failure: string;
   pageUrl: string;
@@ -175,6 +195,15 @@ export function installConsoleGuard(page: Page) {
     if (isExpectedTeardownIdentityCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
     if (
       isExpectedTeardownStaticAssetCancellation({
+        failure,
+        pageUrl: page.url(),
+        requestUrl: url,
+        resourceType: request.resourceType(),
+      })
+    )
+      return;
+    if (
+      isExpectedPublicEventSourceCancellation({
         failure,
         pageUrl: page.url(),
         requestUrl: url,

@@ -84,6 +84,7 @@ describe("public live connection", () => {
     source.emit("reconnect");
     expect(hooks.setConnection).toHaveBeenLastCalledWith("reconnecting");
     source.emit("unavailable");
+    expect(source.close).toHaveBeenCalledTimes(1);
     expect(hooks.setConnection).toHaveBeenLastCalledWith("stale");
     source.onerror!();
     online!();

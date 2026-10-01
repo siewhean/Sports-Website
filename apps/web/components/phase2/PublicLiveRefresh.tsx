@@ -30,7 +30,10 @@ export function PublicLiveRefresh({ slug }: { slug: string }) {
     source.addEventListener("version", onVersion as EventListener);
     source.addEventListener("heartbeat", onContact);
     source.addEventListener("reconnect", () => setConnection(opaqueId("reconnecting")));
-    source.addEventListener("unavailable", () => setConnection(opaqueId("stale")));
+    source.addEventListener("unavailable", () => {
+      source.close();
+      setConnection(opaqueId("stale"));
+    });
     source.onerror = () => setConnection(opaqueId("reconnecting"));
     const poll = window.setInterval(() => {
       if (Date.now() - lastContact > 12_000) {
