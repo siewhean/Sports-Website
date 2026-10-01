@@ -248,7 +248,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await expect(page.getByTestId("phase4-assisted-setup")).toBeVisible();
   await expect(page.getByLabel("Competition name")).toHaveValue("Phase 4 Browser Verified Cup");
   await expect(page.getByLabel("Sport")).toHaveValue("canoe_polo");
-  const currentSetupStep = page.getByTestId("phase4-assisted-setup").locator("li[data-current='true'] strong");
+  const currentSetupStep = page.getByTestId("phase4-assisted-setup").locator("li[data-current='true'] > button strong");
   for (const next of [
     { label: "capacity", step: "capacity" },
     { label: "settings", step: "settings" },
