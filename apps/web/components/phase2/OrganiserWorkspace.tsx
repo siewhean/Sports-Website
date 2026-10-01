@@ -41,6 +41,10 @@ function sectionMeta(competition: CompetitionView, section: OrganiserSection): {
       title: t("prototype.675eeee2578b"),
       intro: t("prototype.db67c10aa708"),
     },
+    officials: {
+      title: phase2Copy.officialsTitle,
+      intro: phase2Copy.officialsIntro,
+    },
     schedule: {
       title: phase2Copy.scheduleTitle,
       intro: t("prototype.e94338d24608"),
@@ -198,6 +202,8 @@ function SectionContent({
       return <Capacity competition={competition} />;
     case "format":
       return <Format competition={competition} />;
+    case "officials":
+      return <SurfaceStatePanel state={phase2Machine.empty} />;
     case "schedule":
       return <Schedule competition={competition} />;
     case "results":

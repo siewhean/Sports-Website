@@ -32,6 +32,7 @@ import {
   phase4ScheduleCopy,
   phase4ScheduleMachine,
   scheduleConflictForMatch,
+  parseScheduleJobDiagnostics,
   parseScheduleJobEnvelope,
   parseScheduleJobView,
   parseScheduleLockResponse,
@@ -43,8 +44,12 @@ import {
   type ScheduleJobStatus,
   type ScheduleMatch,
   type ScheduleObjective,
+  type ScheduleOfficialDiagnostic,
   type ScheduleOption,
 } from "@/lib/phase4-schedule";
+import type { ScheduleOfficialsProjection } from "@/lib/phase4-officials";
+import { MatchOfficialsSummary } from "./MatchOfficialsSummary";
+import { NoSolutionOfficialDiagnostics } from "./NoSolutionOfficialDiagnostics";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -76,13 +81,21 @@ function withRevision(document: ScheduleDocument, revision: NonNullable<Schedule
   };
 }
 
+type DiagnosticsState =
+  | { kind: "idle" }
+  | { kind: "loading"; jobId: string }
+  | { kind: "ready"; jobId: string; diagnostics: readonly ScheduleOfficialDiagnostic[] }
+  | { kind: "error"; jobId: string };
+
 export function ScheduleWorkspace({
   document: initialDocument,
+  officials,
   initialSelectedMatchId = null,
   initialNotice = null,
 }: {
   advanced?: boolean;
   document: ScheduleDocument;
+  officials?: ScheduleOfficialsProjection;
   initialSelectedMatchId?: string | null;
   initialNotice?: typeof phase4ScheduleMachine.moveNotice | null;
 }) {
@@ -92,7 +105,9 @@ export function ScheduleWorkspace({
     () => true,
     () => false,
   );
-  const [job, setJob] = useState(document.activeJob);
+  const [job, setJob] = useState(document.activeJob ?? document.latestNoSolutionJob);
+  const [diagnosticsState, setDiagnosticsState] = useState<DiagnosticsState>({ kind: "idle" });
+  const fetchedDiagnosticsJobIdRef = useRef<string | null>(null);
   const [retainedAlternatives, setRetainedAlternatives] = useState(document.alternatives);
   const [objective, setObjective] = useState<ScheduleObjective>(job?.objective ?? "balanced");
   const [selectedMatchId, setSelectedMatchId] = useState(
@@ -125,6 +140,7 @@ export function ScheduleWorkspace({
   const disabled = !hydrated || !document.canEdit || expired || busy !== null;
   const polledJobId = job?.id;
   const polledJobStatus = job?.status;
+  const diagnosticsJobId = job?.status === "no_solution" ? job.id : null;
 
   function focusStatusHeading() {
     window.requestAnimationFrame(() => statusHeadingRef.current?.focus({ preventScroll: true }));
@@ -180,6 +196,48 @@ export function ScheduleWorkspace({
     };
   }, [polledJobId, polledJobStatus]);
 
+  useEffect(() => {
+    if (!diagnosticsJobId) return;
+    if (fetchedDiagnosticsJobIdRef.current === diagnosticsJobId) return;
+
+    fetchedDiagnosticsJobIdRef.current = diagnosticsJobId;
+    setDiagnosticsState({ kind: "loading", jobId: diagnosticsJobId });
+    let live = true;
+
+    const fetchDiagnostics = async () => {
+      try {
+        const response = await fetch(`/api/phase4/schedule/jobs/${encodeURIComponent(diagnosticsJobId)}/diagnostics`, {
+          cache: phase4ScheduleMachine.noStore,
+        });
+        const payload: unknown = await response.json().catch(() => null);
+        if (!live) return;
+        if (!response.ok) {
+          setDiagnosticsState({ kind: "error", jobId: diagnosticsJobId });
+          return;
+        }
+        const parsed = parseScheduleJobDiagnostics(payload);
+        if (!parsed) {
+          setDiagnosticsState({ kind: "error", jobId: diagnosticsJobId });
+          return;
+        }
+        setDiagnosticsState({
+          kind: "ready",
+          jobId: diagnosticsJobId,
+          diagnostics: parsed.diagnostics,
+        });
+      } catch {
+        if (live) {
+          setDiagnosticsState({ kind: "error", jobId: diagnosticsJobId });
+        }
+      }
+    };
+
+    void fetchDiagnostics();
+    return () => {
+      live = false;
+    };
+  }, [diagnosticsJobId]);
+
   async function command(
     name: string,
     url: string,
@@ -217,6 +275,8 @@ export function ScheduleWorkspace({
   }
 
   async function generate() {
+    fetchedDiagnosticsJobIdRef.current = null;
+    setDiagnosticsState({ kind: "idle" });
     if (job?.currentBest) setRetainedAlternatives((current) => withRetainedAlternative(current, job.currentBest!));
     await command(
       phase4ScheduleMachine.generateAction,
@@ -295,6 +355,7 @@ export function ScheduleWorkspace({
         setDocument((current) => ({
           ...withRevision(current, revision),
           canPublish: current.canEdit && revision.status !== "expired" && revision.status !== "published",
+          currentRevisionInputState: phase4ScheduleMachine.currentInputState,
         }));
         setMessage(phase4ScheduleCopy.optionSaved);
         focusStatusHeading();
@@ -399,6 +460,24 @@ export function ScheduleWorkspace({
           tone="danger"
         />
       ) : null}
+      {document.currentRevisionInputState === phase4ScheduleMachine.staleInputState ? (
+        <StatusRail
+          testId={phase4ScheduleMachine.staleScheduleWarningTestId}
+          icon={<Warning />}
+          title={phase4ScheduleCopy.inputsChanged}
+          body={phase4ScheduleCopy.scheduleInputsChangedGuidance}
+          tone="warning"
+        />
+      ) : null}
+      {document.currentRevisionInputState === phase4ScheduleMachine.unknownInputState ? (
+        <StatusRail
+          testId={phase4ScheduleMachine.unknownScheduleWarningTestId}
+          icon={<Warning />}
+          title={phase4ScheduleCopy.freshnessUnverified}
+          body={phase4ScheduleCopy.scheduleFreshnessUnverifiedGuidance}
+          tone="warning"
+        />
+      ) : null}
       {document.warnings.map((warning) => (
         <StatusRail
           key={`${warning.code}-${warning.message}`}
@@ -413,6 +492,16 @@ export function ScheduleWorkspace({
           <ShieldWarning aria-hidden="true" />
           {commandError}
         </div>
+      ) : null}
+
+      {job?.status === "no_solution" ? (
+        <NoSolutionOfficialDiagnostics
+          competitionId={document.competitionId}
+          matches={document.matches}
+          diagnostics={diagnosticsState.kind === "ready" ? diagnosticsState.diagnostics : null}
+          loading={diagnosticsState.kind === "loading"}
+          error={diagnosticsState.kind === "error"}
+        />
       ) : null}
 
       <section className={styles.commandBar} aria-labelledby="strategy-title">
@@ -445,7 +534,15 @@ export function ScheduleWorkspace({
           <Link href={`/organiser/competitions/${document.competitionId}/schedule/compare`}>
             {phase4ScheduleCopy.compare}
           </Link>
-          <button type="button" onClick={() => void publish()} disabled={!document.canPublish || disabled}>
+          <button
+            type="button"
+            onClick={() => void publish()}
+            disabled={
+              !document.canPublish ||
+              document.currentRevisionInputState !== phase4ScheduleMachine.currentInputState ||
+              disabled
+            }
+          >
             {busy === phase4ScheduleMachine.publishAction ? phase4ScheduleCopy.publishing : phase4ScheduleCopy.publish}
           </button>
         </div>
@@ -470,6 +567,7 @@ export function ScheduleWorkspace({
             locked={Boolean(selectedLock)}
             onToggleLock={toggleLock}
             disabled={disabled || !assignment}
+            officials={officials}
           />
         </div>
       ) : (
@@ -791,12 +889,14 @@ function MatchInspector({
   locked,
   onToggleLock,
   disabled,
+  officials,
 }: {
   document: ScheduleDocument;
   match: ScheduleMatch | null;
   locked: boolean;
   onToggleLock: () => Promise<void>;
   disabled: boolean;
+  officials?: ScheduleOfficialsProjection;
 }) {
   const assignment = match ? assignmentForMatch(document.currentRevision, match.id) : null;
   return (
@@ -857,11 +957,16 @@ function MatchInspector({
               <p>{phase4ScheduleCopy.noDependencies}</p>
             )}
           </section>
+          <MatchOfficialsSummary
+            competitionId={document.competitionId}
+            matchId={match.id}
+            officialsProjection={officials}
+          />
           <button className={styles.lockButton} type="button" disabled={disabled} onClick={() => void onToggleLock()}>
             {locked ? <LockKeyOpen /> : <LockKey />}
             {locked ? phase4ScheduleCopy.unlock : phase4ScheduleCopy.lock}
           </button>
-          {assignment ? (
+          {assignment && document.currentRevisionInputState === phase4ScheduleMachine.currentInputState ? (
             <Link
               className={styles.moveLink}
               href={`/organiser/competitions/${document.competitionId}/schedule/revisions/${document.currentRevision!.id}/matches/${match.id}/move`}
@@ -1033,14 +1138,21 @@ function StatusRail({
   title,
   body,
   tone = phase4ScheduleMachine.neutral,
+  testId,
 }: {
   icon: ReactNode;
   title: string;
   body: string;
   tone?: "neutral" | "warning" | "danger";
+  testId?: string;
 }) {
   return (
-    <div className={styles.statusRail} data-tone={tone} role={tone === "danger" ? "alert" : "note"}>
+    <div
+      className={styles.statusRail}
+      data-tone={tone}
+      role={tone === "danger" ? "alert" : "note"}
+      data-testid={testId}
+    >
       {icon}
       <div>
         <strong>{title}</strong>

@@ -8,6 +8,7 @@ describe("V1 organiser navigation", () => {
       "entries",
       "capacity",
       "format",
+      "officials",
       "schedule",
       "results",
       "publish",

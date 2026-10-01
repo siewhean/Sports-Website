@@ -4,6 +4,7 @@ import {
   createDefaultFormatTemplates,
   assertResolvedMatchParticipants,
   deriveSchedulingMatches,
+  diagnoseScheduleInfeasibility,
   evaluateScheduleQuality,
   generateConstraintAwareSchedule,
   generateScheduleCandidates,
@@ -710,5 +711,223 @@ describe("Phase 4 golden schedule oracles", () => {
       oracle.multi_division.expected_assignment_order,
     );
     expect(validateSchedule(input, generated).valid).toBe(true);
+  });
+
+  describe("SCH-006: Official Availability & Overlap Constraint Activation", () => {
+    it("enforces hard official availability violations and prunes unavailable candidate slots", () => {
+      const match = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-alpha"] });
+      const available = slots(3, 1, 30); // 3 slots at T+0, T+30, T+60
+      // Official is only available at T+60..T+90
+      const configured = constraints({
+        officialAvailability: setting("required", {
+          byOfficialId: {
+            "official-alpha": [{ startEpochMs: START + 60 * MINUTE_MS, endEpochMs: START + 90 * MINUTE_MS }],
+          },
+        }),
+      });
+      const input = problem([match], available, configured);
+
+      // Manual invalid placement at T+0 fails validation
+      const invalidValidation = validateSchedule(input, [assignment(match, available[0]!)]);
+      expect(invalidValidation.valid).toBe(false);
+      expect(invalidValidation.violations).toContainEqual(
+        expect.objectContaining({
+          code: "official_unavailable",
+          severity: "required",
+          matchIds: ["m1"],
+        }),
+      );
+
+      // Solver prunes T+0 and T+30, generating match in the only valid slot at T+60
+      const generated = generateConstraintAwareSchedule(input);
+      expect(generated).toHaveLength(1);
+      expect(generated[0]!.slotId).toBe(available[2]!.id);
+      expect(generated[0]!.startEpochMs).toBe(START + 60 * MINUTE_MS);
+      expect(validateSchedule(input, generated).valid).toBe(true);
+    });
+
+    it("detects official overlap on simultaneous matches across different areas and prunes overlapping candidates", () => {
+      // 2 matches both assigned to official-beta
+      const m1 = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-beta"] });
+      const m2 = simpleMatch("m2", ["t3", "t4"], [], { officialIds: ["official-beta"] });
+      // 2 areas with 2 timeslots (4 slots total)
+      const available = slots(4, 2, 30);
+      const configured = constraints();
+      const input = problem([m1, m2], available, configured);
+
+      // Simultaneous placement: m1 on area-1 at T+0, m2 on area-2 at T+0
+      const simultaneous = [assignment(m1, available[0]!), assignment(m2, available[1]!)];
+      const overlapValidation = validateSchedule(input, simultaneous);
+      expect(overlapValidation.valid).toBe(false);
+      expect(overlapValidation.violations).toContainEqual(
+        expect.objectContaining({
+          code: "official_overlap",
+          severity: "hard",
+        }),
+      );
+
+      // Solver must place m1 and m2 at distinct non-overlapping times
+      const generated = generateConstraintAwareSchedule(input);
+      expect(generated).toHaveLength(2);
+      const time1 = generated.find((a) => a.matchId === "m1")!.startEpochMs;
+      const time2 = generated.find((a) => a.matchId === "m2")!.startEpochMs;
+      expect(time1).not.toBe(time2);
+      expect(validateSchedule(input, generated).valid).toBe(true);
+    });
+
+    it("allows valid adjacent/back-to-back matches for the same official", () => {
+      const m1 = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-gamma"] });
+      const m2 = simpleMatch("m2", ["t3", "t4"], [], { officialIds: ["official-gamma"] });
+      // 2 slots sequentially on the same area: T+0..T+30 and T+30..T+60
+      const available = slots(2, 1, 30);
+      const input = problem([m1, m2], available, constraints());
+
+      const sequential = [assignment(m1, available[0]!), assignment(m2, available[1]!)];
+      const validation = validateSchedule(input, sequential);
+      expect(validation.valid).toBe(true);
+      expect(validation.violations.filter((v) => v.code === "official_overlap")).toEqual([]);
+    });
+
+    it("scores preferred availability penalties and ranks compliant candidates higher", () => {
+      const match = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-delta"] });
+      // 2 sequential slots: slot 1 (T+0..T+30), slot 2 (T+30..T+60)
+      const available = slots(2, 1, 30);
+      // Official prefers slot 1
+      const weight = 8;
+      const configured = constraints({
+        officialAvailability: setting(
+          "preferred",
+          {
+            byOfficialId: {
+              "official-delta": [{ startEpochMs: START, endEpochMs: START + 30 * MINUTE_MS }],
+            },
+          },
+          weight,
+        ),
+      });
+      const input = problem([match], available, configured);
+
+      // Slot 2 assignment incurs preferred violation
+      const nonCompliant = [assignment(match, available[1]!)];
+      const nonCompliantValidation = validateSchedule(input, nonCompliant);
+      expect(nonCompliantValidation.valid).toBe(true);
+      expect(nonCompliantValidation.violations).toContainEqual(
+        expect.objectContaining({
+          code: "official_unavailable",
+          severity: "preferred",
+        }),
+      );
+
+      const nonCompliantQuality = evaluateScheduleQuality(input, nonCompliant);
+      const officialComponent = nonCompliantQuality.components.find((c) => c.key === "official_availability");
+      expect(officialComponent).toBeDefined();
+      expect(officialComponent!.score).toBeLessThan(100);
+      expect(nonCompliantQuality.preferredPenalty).toBeGreaterThan(0);
+
+      // Slot 1 assignment is fully compliant
+      const compliant = [assignment(match, available[0]!)];
+      const compliantValidation = validateSchedule(input, compliant);
+      expect(compliantValidation.valid).toBe(true);
+      expect(compliantValidation.violations.filter((v) => v.code === "official_unavailable")).toEqual([]);
+
+      const compliantQuality = evaluateScheduleQuality(input, compliant);
+      const compliantOfficialComp = compliantQuality.components.find((c) => c.key === "official_availability");
+      expect(compliantOfficialComp!.score).toBe(100);
+      expect(compliantQuality.score).toBeGreaterThan(nonCompliantQuality.score);
+
+      // Solver selects the compliant slot
+      const generated = generateConstraintAwareSchedule(input);
+      expect(generated[0]!.slotId).toBe(available[0]!.id);
+    });
+
+    it("ignores official availability completely when mode is ignored", () => {
+      const match = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-epsilon"] });
+      const available = slots(1, 1, 30);
+      // Window is at T+60..T+90 while the only slot is at T+0..T+30
+      const configured = constraints({
+        officialAvailability: setting("ignored", {
+          byOfficialId: {
+            "official-epsilon": [{ startEpochMs: START + 60 * MINUTE_MS, endEpochMs: START + 90 * MINUTE_MS }],
+          },
+        }),
+      });
+      const input = problem([match], available, configured);
+
+      const validation = validateSchedule(input, [assignment(match, available[0]!)]);
+      expect(validation.valid).toBe(true);
+      expect(validation.violations.filter((v) => v.code === "official_unavailable")).toEqual([]);
+
+      const quality = evaluateScheduleQuality(input, [assignment(match, available[0]!)]);
+      expect(quality.valid).toBe(true);
+      expect(quality.preferredPenalty).toBe(0);
+
+      const generated = generateConstraintAwareSchedule(input);
+      expect(generated).toHaveLength(1);
+    });
+
+    it("handles unsatisfiable official constraints with clear conflict attribution", () => {
+      // 2 matches require the same official, but only 1 slot exists in total across 2 areas (simultaneous)
+      const m1 = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-zeta"] });
+      const m2 = simpleMatch("m2", ["t3", "t4"], [], { officialIds: ["official-zeta"] });
+      // Only 2 simultaneous slots at T+0..T+30 on 2 areas
+      const simultaneousOnlySlots = slots(2, 2, 30);
+      const input = problem([m1, m2], simultaneousOnlySlots, constraints());
+
+      // Attempting to generate schedule throws with clear message
+      expect(() => generateConstraintAwareSchedule(input)).toThrow(/No valid slot remains/);
+
+      // Required availability with no overlapping slots also throws
+      const m3 = simpleMatch("m3", ["t1", "t2"], [], { officialIds: ["official-eta"] });
+      const slotT0 = slots(1, 1, 30);
+      const impossibleAvailability = problem(
+        [m3],
+        slotT0,
+        constraints({
+          officialAvailability: setting("required", {
+            byOfficialId: {
+              "official-eta": [{ startEpochMs: START + 120 * MINUTE_MS, endEpochMs: START + 150 * MINUTE_MS }],
+            },
+          }),
+        }),
+      );
+      expect(() => generateConstraintAwareSchedule(impossibleAvailability)).toThrow(/No valid slot remains/);
+    });
+
+    it("diagnoses impossible official constraints into structured violations", () => {
+      // 1. Official unavailable diagnosis
+      const m1 = simpleMatch("m1", ["t1", "t2"], [], { officialIds: ["official-eta"] });
+      const slotT0 = slots(1, 1, 30);
+      const impossibleAvailability = problem(
+        [m1],
+        slotT0,
+        constraints({
+          officialAvailability: setting("required", {
+            byOfficialId: {
+              "official-eta": [{ startEpochMs: START + 120 * MINUTE_MS, endEpochMs: START + 150 * MINUTE_MS }],
+            },
+          }),
+        }),
+      );
+      const diag1 = diagnoseScheduleInfeasibility(impossibleAvailability);
+      expect(diag1).toHaveLength(1);
+      expect(diag1[0]).toMatchObject({
+        code: "official_unavailable",
+        severity: "required",
+        matchIds: ["m1"],
+      });
+
+      // 2. Official overlap / over-allocation diagnosis
+      const m2 = simpleMatch("m2", ["t1", "t2"], [], { officialIds: ["official-zeta"] });
+      const m3 = simpleMatch("m3", ["t3", "t4"], [], { officialIds: ["official-zeta"] });
+      const simultaneousOnlySlots = slots(2, 2, 30); // 2 slots on 2 areas at same time -> 1 sequential slot max
+      const overAllocated = problem([m2, m3], simultaneousOnlySlots, constraints());
+      const diag2 = diagnoseScheduleInfeasibility(overAllocated);
+      expect(diag2).toHaveLength(1);
+      expect(diag2[0]).toMatchObject({
+        code: "official_overlap",
+        severity: "hard",
+        matchIds: ["m2", "m3"],
+      });
+    });
   });
 });

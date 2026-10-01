@@ -21,6 +21,7 @@ import {
   SetupRepository,
   FormatRepository,
   ScheduleRepository,
+  OfficialRepository,
 } from "./repositories/index.js";
 import { CreateCompetitionCommand, CreateCompetitionHandler } from "./commands/index.js";
 
@@ -156,6 +157,7 @@ export class Phase3Runtime {
   private readonly setupRepo: SetupRepository;
   private readonly formatRepo: FormatRepository;
   private readonly scheduleRepo: ScheduleRepository;
+  private readonly officialRepo: OfficialRepository;
   private readonly createCompetitionHandler: CreateCompetitionHandler;
 
   constructor(
@@ -169,6 +171,7 @@ export class Phase3Runtime {
     this.setupRepo = new SetupRepository(sql);
     this.formatRepo = new FormatRepository(sql);
     this.scheduleRepo = new ScheduleRepository(sql);
+    this.officialRepo = new OfficialRepository(sql);
     this.createCompetitionHandler = new CreateCompetitionHandler(this.competitionRepo);
   }
 
@@ -180,6 +183,7 @@ export class Phase3Runtime {
       setup: this.setupRepo,
       format: this.formatRepo,
       schedule: this.scheduleRepo,
+      official: this.officialRepo,
     };
   }
 

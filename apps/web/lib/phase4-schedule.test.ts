@@ -4,6 +4,7 @@ import {
   isScheduleMoveValidation,
   isScheduleUnlockResponse,
   moveSlotsForMatch,
+  parseScheduleJobDiagnostics,
   parseScheduleJobEnvelope,
   parseScheduleJobView,
   parseScheduleOptionView,
@@ -300,6 +301,7 @@ describe("phase 4 schedule boundary parsers", () => {
       canEdit: true,
       canPublish: false,
       activeJob: null,
+      latestNoSolutionJob: null,
       currentRevision: {
         id: "revision-1",
         revision: 1,
@@ -393,5 +395,207 @@ describe("phase 4 schedule boundary parsers", () => {
       expect.objectContaining({ available: false, disabledReason: "This match is already in this slot." }),
       expect.objectContaining({ available: false, disabledReason: "Another match already uses this playing area." }),
     ]);
+  });
+
+  describe("parseScheduleJobDiagnostics", () => {
+    const validJobId = "550e8400-e29b-41d4-a716-446655440000";
+    const matchId1 = "660e8400-e29b-41d4-a716-446655440001";
+    const matchId2 = "660e8400-e29b-41d4-a716-446655440002";
+
+    it("parses valid diagnostics payload with multiple diagnostics", () => {
+      const payload = {
+        job_id: validJobId,
+        status: "no_solution",
+        diagnostics: [
+          {
+            code: "official_unavailable",
+            severity: "required",
+            match_ids: [matchId1],
+          },
+          {
+            code: "official_overlap",
+            severity: "hard",
+            match_ids: [matchId1, matchId2],
+          },
+        ],
+      };
+
+      const result = parseScheduleJobDiagnostics(payload);
+      expect(result).toEqual({
+        jobId: validJobId,
+        status: "no_solution",
+        diagnostics: [
+          {
+            code: "official_unavailable",
+            severity: "required",
+            matchIds: [matchId1],
+          },
+          {
+            code: "official_overlap",
+            severity: "hard",
+            matchIds: [matchId1, matchId2],
+          },
+        ],
+      });
+    });
+
+    it("parses valid empty diagnostics array", () => {
+      const payload = {
+        job_id: validJobId,
+        status: "no_solution",
+        diagnostics: [],
+      };
+
+      const result = parseScheduleJobDiagnostics(payload);
+      expect(result).toEqual({
+        jobId: validJobId,
+        status: "no_solution",
+        diagnostics: [],
+      });
+    });
+
+    it("parses non-no_solution job with empty diagnostics", () => {
+      const payload = {
+        job_id: validJobId,
+        status: "completed",
+        diagnostics: [],
+      };
+
+      const result = parseScheduleJobDiagnostics(payload);
+      expect(result).toEqual({
+        jobId: validJobId,
+        status: "completed",
+        diagnostics: [],
+      });
+    });
+
+    it("rejects non-object or null payloads", () => {
+      expect(parseScheduleJobDiagnostics(null)).toBeNull();
+      expect(parseScheduleJobDiagnostics(undefined)).toBeNull();
+      expect(parseScheduleJobDiagnostics("string")).toBeNull();
+      expect(parseScheduleJobDiagnostics(42)).toBeNull();
+      expect(parseScheduleJobDiagnostics([])).toBeNull();
+    });
+
+    it("rejects extra keys in root payload", () => {
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "no_solution",
+          diagnostics: [],
+          input_snapshot: {},
+        }),
+      ).toBeNull();
+
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "no_solution",
+          diagnostics: [],
+          extra: "bad",
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects invalid job_id", () => {
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: "not-a-uuid",
+          status: "no_solution",
+          diagnostics: [],
+        }),
+      ).toBeNull();
+
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: "",
+          status: "no_solution",
+          diagnostics: [],
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects invalid status", () => {
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "invalid_status",
+          diagnostics: [],
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects non-array diagnostics", () => {
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "no_solution",
+          diagnostics: "not-an-array",
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects diagnostic objects with extra keys (like message or official_id)", () => {
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_unavailable",
+              severity: "required",
+              match_ids: [matchId1],
+              message: "Leaked solver message",
+            },
+          ],
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects diagnostic with invalid code or severity", () => {
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "unknown_code",
+              severity: "required",
+              match_ids: [matchId1],
+            },
+          ],
+        }),
+      ).toBeNull();
+
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_unavailable",
+              severity: "soft",
+              match_ids: [matchId1],
+            },
+          ],
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects diagnostic with non-UUID match_ids", () => {
+      expect(
+        parseScheduleJobDiagnostics({
+          job_id: validJobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_unavailable",
+              severity: "required",
+              match_ids: ["not-a-uuid"],
+            },
+          ],
+        }),
+      ).toBeNull();
+    });
   });
 });

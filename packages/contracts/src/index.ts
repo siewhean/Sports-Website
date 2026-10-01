@@ -100,7 +100,10 @@ export type {
   ScheduleJobResult,
   ScheduleJobStatus,
   ScheduleJobView,
+  ScheduleJobDiagnosticsResponse,
   ScheduleObjective,
+  ScheduleOfficialDiagnostic,
+  ScheduleOfficialDiagnosticCode,
   ScheduleOptionView,
   ScheduleQuality,
   ScheduleQualityComponent,
@@ -112,6 +115,7 @@ export type {
   ScheduleWorkerMatch,
   ScheduleWorkerSlot,
   IntrinsicScheduleHardConstraint,
+  ScheduleInputFreshness,
 } from "./phase-4-schedule.js";
 export { intrinsicScheduleHardConstraints } from "./phase-4-schedule.js";
 export {
@@ -218,3 +222,4 @@ export type {
   CompetitionSponsor,
 } from "./billing.js";
 export type { BillingSummary, BillingWebhookPayload } from "./billing.js";
+export * from "./officials.js";

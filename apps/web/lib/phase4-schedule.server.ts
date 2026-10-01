@@ -6,6 +6,7 @@ import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { requestCanForwardSessionCookie } from "@/lib/phase3-origin";
 import {
   phase4ScheduleCopy,
+  phase4ScheduleMachine,
   parseScheduleJobView,
   parseScheduleRevisionView,
   parseScheduleRevisionComparison,
@@ -36,6 +37,7 @@ type ScheduleInput = Readonly<{
   timeZone: string;
   publicationRevision: string;
   previewState?: string;
+  previewInputState?: string;
 }>;
 
 function apiBaseUrl(): URL | null {
@@ -73,6 +75,7 @@ export function scheduleUnavailableDocument(input: ScheduleInput, state: Schedul
     canEdit: false,
     canPublish: false,
     activeJob: null,
+    latestNoSolutionJob: null,
     currentRevision: null,
     revisions: [],
     alternatives: [],
@@ -116,7 +119,15 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
       .map((job) => parseScheduleJobView(job))
       .filter((job): job is NonNullable<typeof job> => job !== null);
     const comparable = selectComparableScheduleOptions(jobs, parsed.sourceRevision, parsed.capacityRevision);
-    return { ...parsed, alternatives: comparable };
+    const rawLatestJob = jobsPayload[0] ?? null;
+    const parsedLatestJob = rawLatestJob === null ? null : parseScheduleJobView(rawLatestJob);
+    const latestNoSolutionJob =
+      parsedLatestJob?.status === "no_solution" &&
+      parsedLatestJob.sourceRevision === parsed.sourceRevision &&
+      parsedLatestJob.capacityRevision === parsed.capacityRevision
+        ? parsedLatestJob
+        : null;
+    return { ...parsed, alternatives: comparable, latestNoSolutionJob };
   } catch {
     return scheduleUnavailableDocument(input, "offline");
   }
@@ -124,21 +135,25 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
 
 export function parseScheduleWorkspace(value: unknown, input: ScheduleInput): ScheduleDocument | null {
   const root = record(value);
-  if (
-    !root ||
-    !exact(root, [
-      "competition",
-      "generation",
-      "areas",
-      "matches",
-      "active_job",
-      "current_revision",
-      "revisions",
-      "locks",
-      "warnings",
-    ])
-  )
-    return null;
+  const allowedKeysWithoutFreshness = [
+    "competition",
+    "generation",
+    "areas",
+    "matches",
+    "active_job",
+    "current_revision",
+    "revisions",
+    "locks",
+    "warnings",
+  ];
+  const allowedKeysWithFreshness = [...allowedKeysWithoutFreshness, "current_revision_input_state"];
+  if (!root || (!exact(root, allowedKeysWithoutFreshness) && !exact(root, allowedKeysWithFreshness))) return null;
+  const currentRevisionInputState =
+    root.current_revision_input_state === "current" ||
+    root.current_revision_input_state === "stale" ||
+    root.current_revision_input_state === "unknown"
+      ? root.current_revision_input_state
+      : "unknown";
   const competition = record(root.competition);
   const generation = record(root.generation);
   if (
@@ -356,9 +371,11 @@ export function parseScheduleWorkspace(value: unknown, input: ScheduleInput): Sc
     capacityRevision: generation.capacity_revision,
     constraints: generation.constraints as Record<string, unknown>,
     canEdit,
-    canPublish: canEdit && currentRevision?.status === "ready_for_review",
+    canPublish: canEdit && currentRevision?.status === "ready_for_review" && currentRevisionInputState === "current",
     activeJob,
+    latestNoSolutionJob: null,
     currentRevision,
+    currentRevisionInputState,
     revisions: revisions as ScheduleRevision[],
     alternatives: activeJob?.currentBest ? [activeJob.currentBest] : [],
     areas,
@@ -823,7 +840,9 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     capacityRevision: 2,
     constraints: scheduleConstraints(),
     canEdit: state === "ready",
-    canPublish: state === "ready",
+    canPublish:
+      state === "ready" &&
+      (input.previewInputState ? input.previewInputState === phase4ScheduleMachine.currentInputState : true),
     activeJob: {
       id: alternatives[1]!.jobId,
       revision: 5,
@@ -842,7 +861,14 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
       createdAt: "2026-07-20T04:20:00.000Z",
       updatedAt: "2026-07-20T04:22:00.000Z",
     },
+    latestNoSolutionJob: null,
     currentRevision: revision,
+    currentRevisionInputState:
+      input.previewInputState === phase4ScheduleMachine.staleInputState
+        ? phase4ScheduleMachine.staleInputState
+        : input.previewInputState === phase4ScheduleMachine.unknownInputState
+          ? phase4ScheduleMachine.unknownInputState
+          : phase4ScheduleMachine.currentInputState,
     revisions: [
       revision,
       {

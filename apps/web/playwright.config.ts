@@ -31,6 +31,7 @@ export default defineConfig({
     // by the ordinary browser CI job. These specs have their own fail-closed
     // production-backed config (playwright.gate-d.config.ts).
     "**/phase-7-multi-division-lifecycle.spec.ts",
+    "**/phase-7-sch006-official-lifecycle.spec.ts",
     "**/phase-7-security-rendering.spec.ts",
   ],
   fullyParallel: true,

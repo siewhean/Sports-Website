@@ -301,3 +301,19 @@ export type ScheduleCandidateRequest = {
   max_iterations?: number;
   seed_assignments?: readonly ScheduleAssignment[];
 };
+
+export type ScheduleOfficialDiagnosticCode = "official_unavailable" | "official_overlap";
+
+export type ScheduleOfficialDiagnostic = Readonly<{
+  code: ScheduleOfficialDiagnosticCode;
+  severity: "required" | "hard";
+  match_ids: readonly string[];
+}>;
+
+export type ScheduleJobDiagnosticsResponse = Readonly<{
+  job_id: string;
+  status: ScheduleJobStatus;
+  diagnostics: readonly ScheduleOfficialDiagnostic[];
+}>;
+
+export type ScheduleInputFreshness = "current" | "stale" | "unknown";

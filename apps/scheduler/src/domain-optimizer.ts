@@ -170,7 +170,7 @@ async function runSolverThread<Result>(
   });
 }
 
-function toProblem(input: ScheduleJobInput): ScheduleProblem {
+export function toProblem(input: ScheduleJobInput): ScheduleProblem {
   const constraints: SchedulingConstraints = {
     minimumRest: setting(input.constraints.minimum_rest, { minutes: input.constraints.minimum_rest.value.minutes }),
     maximumMatchesPerDay: setting(input.constraints.maximum_matches_per_day, {

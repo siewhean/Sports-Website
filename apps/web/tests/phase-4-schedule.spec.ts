@@ -317,3 +317,539 @@ test("schedule state routes remain truthful and non-mutating", async ({ page }) 
   await expect(page.getByText("Schedule is read only", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish schedule" })).toBeDisabled();
 });
+
+test.describe("read-only official assignment integration (CP 5.5)", () => {
+  const match1Id = "30000000-0000-4000-8000-000000000001";
+  const match2Id = "30000000-0000-4000-8000-000000000002";
+  const match3Id = "30000000-0000-4000-8000-000000000003";
+
+  test("assigned official visible in MatchInspector and deep links to Officials page", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match1Id}`);
+    await dismissConsent(page);
+
+    // Inspector shows Officials section with Official A and assigned role
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+
+    const officialItem = inspector.getByTestId("schedule-assigned-official").filter({ hasText: "Official A" });
+    await expect(officialItem).toBeVisible();
+    await expect(officialItem).toContainText("Lead Official");
+
+    // Manage officials link is present and points to Officials page with ?match=
+    const manageLink = inspector.getByRole("link", { name: "Manage officials" });
+    await expect(manageLink).toBeVisible();
+    await expect(manageLink).toHaveAttribute("href", new RegExp(`/officials\\?match=${match1Id}$`));
+
+    // Click Manage officials and verify navigation + preselection
+    await manageLink.click();
+    await expect(page).toHaveURL(new RegExp(`/officials\\?match=${match1Id}$`));
+    await expect(page.getByRole("heading", { name: "Match official assignments" })).toBeVisible();
+
+    // Verify M1 is selected in Officials page match selector
+    const matchSelect = page.locator("select").filter({ has: page.locator(`option[value="${match1Id}"]`) });
+    await expect(matchSelect).toHaveValue(match1Id);
+  });
+
+  test("displays empty state when match has no assigned officials", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match3Id}`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+    await expect(inspector.getByText("No officials assigned")).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Manage officials" })).toHaveAttribute(
+      "href",
+      new RegExp(`/officials\\?match=${match3Id}$`),
+    );
+  });
+
+  test("displays archived badge for archived assigned official", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match2Id}`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+
+    const archivedItem = inspector.getByTestId("schedule-assigned-official").filter({ hasText: "Archived Official C" });
+    await expect(archivedItem).toBeVisible();
+    await expect(archivedItem.getByText("Archived", { exact: true })).toBeVisible();
+  });
+
+  test("displays temporary unavailable notice when officials workspace cannot load", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?match=${match1Id}&officials_state=error`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByRole("heading", { name: "Officials" })).toBeVisible();
+    await expect(inspector.getByText("Official assignments are temporarily unavailable.")).toBeVisible();
+    await expect(inspector.getByText("No officials assigned")).not.toBeVisible();
+  });
+
+  test("fresh return: Schedule reflects updated assignments after editing on Officials page", async ({
+    page,
+    context,
+  }) => {
+    // Isolate demo state with demo scope cookie
+    await context.addCookies([
+      {
+        name: "matchday_demo_scope",
+        value: "cp55-roundtrip",
+        domain: "127.0.0.1",
+        path: "/",
+      },
+    ]);
+
+    // 1. Initial Schedule view: M1 has Official A
+    await page.goto(`${scheduleUrl}?match=${match1Id}`);
+    await dismissConsent(page);
+
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector.getByTestId("schedule-assigned-official").filter({ hasText: "Official A" })).toBeVisible();
+
+    // 2. Click Manage officials to navigate
+    await inspector.getByRole("link", { name: "Manage officials" }).click();
+    await expect(page).toHaveURL(new RegExp(`/officials\\?match=${match1Id}$`));
+
+    // 3. Edit assignments on Officials page
+    await page.getByRole("button", { name: "Edit match officials" }).click();
+
+    // Check Official B and uncheck Official A
+    const checkboxA = page.locator(`#match-official-60000000-0000-4000-8000-000000000001`);
+    const checkboxB = page.locator(`#match-official-60000000-0000-4000-8000-000000000002`);
+    await checkboxA.uncheck();
+    await checkboxB.check();
+    await page.locator(`#match-role-60000000-0000-4000-8000-000000000002`).fill("Line Judge");
+
+    // Save
+    await page.getByRole("button", { name: "Save assignments" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Match officials saved." })).toBeVisible();
+
+    // 4. Return to Schedule
+    await page.goto(`${scheduleUrl}?match=${match1Id}`);
+
+    // Inspector now shows Official B and does not show Official A
+    const inspectorAfter = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(
+      inspectorAfter.getByTestId("schedule-assigned-official").filter({ hasText: "Official B" }),
+    ).toBeVisible();
+    await expect(
+      inspectorAfter.getByTestId("schedule-assigned-official").filter({ hasText: "Official A" }),
+    ).not.toBeVisible();
+  });
+});
+
+test.describe("safe no_solution official diagnostics (CP 5.6)", () => {
+  const jobId = "60000000-0000-4000-8000-000000000020";
+  const match1Id = "30000000-0000-4000-8000-000000000001";
+  const match2Id = "30000000-0000-4000-8000-000000000002";
+
+  function queuedJob(id = jobId) {
+    return {
+      id,
+      competition_id: "00000000-0000-4000-8000-000000000001",
+      revision: 1,
+      source_revision: 1,
+      capacity_revision: 1,
+      capacity_hash: "cap-hash",
+      status: "queued",
+      objective: "balanced",
+      continued_from_job_id: null,
+      current_best_option_id: null,
+      current_best: null,
+      progress_iteration: null,
+      explored_candidates: 0,
+      progress_updated_at: null,
+      cancellation_requested_at: null,
+      started_at: null,
+      completed_at: null,
+      failure_class: null,
+      created_at: "2026-08-15T00:00:00.000Z",
+      updated_at: "2026-08-15T00:00:00.000Z",
+    };
+  }
+
+  function noSolutionJob(id = jobId) {
+    return {
+      id,
+      competition_id: "00000000-0000-4000-8000-000000000001",
+      revision: 1,
+      source_revision: 1,
+      capacity_revision: 1,
+      capacity_hash: "cap-hash",
+      status: "no_solution",
+      objective: "balanced",
+      continued_from_job_id: null,
+      current_best_option_id: null,
+      current_best: null,
+      progress_iteration: null,
+      explored_candidates: 12,
+      progress_updated_at: null,
+      cancellation_requested_at: null,
+      started_at: "2026-08-15T00:00:00.000Z",
+      completed_at: "2026-08-15T00:01:00.000Z",
+      failure_class: null,
+      created_at: "2026-08-15T00:00:00.000Z",
+      updated_at: "2026-08-15T00:01:00.000Z",
+    };
+  }
+
+  test("terminal no_solution transition fetches diagnostics exactly once", async ({ page }) => {
+    let diagnosticsCalls = 0;
+    let pollCount = 0;
+
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      pollCount += 1;
+      const job = pollCount === 1 ? queuedJob() : noSolutionJob();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(job),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      diagnosticsCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_unavailable",
+              severity: "required",
+              match_ids: [match1Id],
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    const generateBtn = page.getByRole("button", { name: /Generate/ }).first();
+    await generateBtn.click();
+
+    const diagnosticsContainer = page.getByTestId("no-solution-diagnostics");
+    await expect(diagnosticsContainer).toBeVisible();
+    expect(diagnosticsCalls).toBe(1);
+
+    await page.waitForTimeout(500);
+    expect(diagnosticsCalls).toBe(1);
+  });
+
+  test("displays official overlap diagnostics with review officials link", async ({ page }) => {
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_overlap",
+              severity: "hard",
+              match_ids: [match1Id, match2Id],
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const diagnosticsContainer = page.getByTestId("no-solution-diagnostics");
+    await expect(diagnosticsContainer).toBeVisible();
+    await expect(diagnosticsContainer.getByText("Official conflicts detected")).toBeVisible();
+    await expect(diagnosticsContainer.getByText("Official assigned to concurrent/overlapping matches")).toBeVisible();
+    const reviewLink = diagnosticsContainer.getByRole("link", { name: "Review officials" });
+    await expect(reviewLink).toBeVisible();
+    await expect(reviewLink).toHaveAttribute("href", new RegExp(`/officials$`));
+  });
+
+  test("displays official unavailable diagnostics with match deep-link", async ({ page }) => {
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [
+            {
+              code: "official_unavailable",
+              severity: "required",
+              match_ids: [match1Id],
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const diagnosticsContainer = page.getByTestId("no-solution-diagnostics");
+    await expect(diagnosticsContainer).toBeVisible();
+    await expect(diagnosticsContainer.getByText("Official unavailable for required match")).toBeVisible();
+    const reviewLink = diagnosticsContainer.getByRole("link", { name: /Review officials/ });
+    await expect(reviewLink).toBeVisible();
+    await expect(reviewLink).toHaveAttribute("href", new RegExp(`/officials\\?match=${match1Id}$`));
+  });
+
+  test("displays generic notice when diagnostics array is empty", async ({ page }) => {
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_id: jobId,
+          status: "no_solution",
+          diagnostics: [],
+        }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const genericNotice = page.getByTestId("no-solution-generic");
+    await expect(genericNotice).toBeVisible();
+    await expect(
+      genericNotice.getByText(
+        "No feasible schedule could be found that satisfies all required constraints and playing areas.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByTestId("no-solution-diagnostics")).not.toBeVisible();
+  });
+
+  test("degrades gracefully on 503 error and allows regeneration", async ({ page }) => {
+    allowConsoleFailure(page, /^console\.error: Failed to load resource: the server responded with a status of 503/);
+
+    await page.route("**/api/phase4/competitions/*/schedule/jobs", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job: queuedJob(),
+          enqueued: true,
+          recoverable: true,
+          idempotent_replay: false,
+        }),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(noSolutionJob()),
+      });
+    });
+
+    await page.route(`**/api/phase4/schedule/jobs/${jobId}/diagnostics`, async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "SERVICE_UNAVAILABLE" } }),
+      });
+    });
+
+    await page.goto(scheduleUrl);
+    await dismissConsent(page);
+
+    await page
+      .getByRole("button", { name: /Generate/ })
+      .first()
+      .click();
+
+    const genericNotice = page.getByTestId("no-solution-generic");
+    await expect(genericNotice).toBeVisible();
+    await expect(
+      genericNotice.getByText(
+        "No feasible schedule could be found that satisfies all required constraints and playing areas.",
+      ),
+    ).toBeVisible();
+
+    const regenBtn = page.getByRole("button", { name: /Generate/ }).first();
+    await expect(regenBtn).toBeEnabled();
+  });
+
+  test("stale schedule input warning disables publish, suppresses move link, and preserves generation", async ({
+    page,
+  }) => {
+    await page.goto(`${scheduleUrl}?input_state=stale`);
+    await dismissConsent(page);
+
+    // 1. Warning banner is visible with test ID
+    const warningBanner = page.getByTestId("stale-schedule-warning");
+    await expect(warningBanner).toBeVisible();
+    await expect(warningBanner).toContainText(
+      "Schedule inputs changed after this schedule was generated. Generate a new schedule before moving or publishing matches.",
+    );
+
+    // 2. Publish button is disabled
+    const publishButton = page.getByRole("button", { name: "Publish schedule" });
+    await expect(publishButton).toBeDisabled();
+
+    // 3. Move link in match inspector is suppressed
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Move match" })).not.toBeVisible();
+
+    // 4. Generate button remains enabled and inspector is interactive
+    const generateButton = page.getByRole("button", { name: /Generate/ }).first();
+    await expect(generateButton).toBeEnabled();
+
+    // Inspector can select another match and remains interactive
+    const matchButton = page.getByRole("button", { name: /M2/ }).first();
+    await matchButton.click();
+    await expect(inspector.getByRole("heading", { name: "M2" })).toBeVisible();
+  });
+
+  test("unknown schedule input warning disables publish, suppresses move link, and preserves generation", async ({
+    page,
+  }) => {
+    await page.goto(`${scheduleUrl}?input_state=unknown`);
+    await dismissConsent(page);
+
+    // 1. Warning banner is visible with test ID and specific unverified copy
+    const warningBanner = page.getByTestId("unknown-schedule-warning");
+    await expect(warningBanner).toBeVisible();
+    await expect(warningBanner).toContainText(
+      "Schedule freshness could not be verified. Refresh or generate a new schedule before moving or publishing matches.",
+    );
+    await expect(page.getByTestId("stale-schedule-warning")).not.toBeVisible();
+
+    // 2. Publish button is disabled
+    const publishButton = page.getByRole("button", { name: "Publish schedule" });
+    await expect(publishButton).toBeDisabled();
+
+    // 3. Move link in match inspector is suppressed
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Move match" })).not.toBeVisible();
+
+    // 4. Generate button remains enabled and inspector is interactive
+    const generateButton = page.getByRole("button", { name: /Generate/ }).first();
+    await expect(generateButton).toBeEnabled();
+
+    // Inspector can select another match and remains interactive
+    const matchButton = page.getByRole("button", { name: /M2/ }).first();
+    await matchButton.click();
+    await expect(inspector.getByRole("heading", { name: "M2" })).toBeVisible();
+  });
+
+  test("current schedule input freshness has no warning, permits publish, and renders move link", async ({ page }) => {
+    await page.goto(`${scheduleUrl}?input_state=current`);
+    await dismissConsent(page);
+
+    // 1. No freshness warnings visible
+    await expect(page.getByTestId("stale-schedule-warning")).not.toBeVisible();
+    await expect(page.getByTestId("unknown-schedule-warning")).not.toBeVisible();
+
+    // 2. Publish button is enabled
+    const publishButton = page.getByRole("button", { name: "Publish schedule" });
+    await expect(publishButton).toBeEnabled();
+
+    // 3. Move link in match inspector is available
+    const inspector = page.locator("aside").filter({ hasText: "Selected match" });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("link", { name: "Move match" })).toBeVisible();
+  });
+});

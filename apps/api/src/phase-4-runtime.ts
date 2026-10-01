@@ -22,15 +22,24 @@ import type {
   Phase4SetupValues,
   ScheduleAssignment,
   ScheduleConstraints,
+  ScheduleJobDiagnosticsResponse,
   ScheduleJobView,
   ScheduleObjective,
+  ScheduleOfficialDiagnostic,
   ScheduleOptionView,
   ScheduleQuality,
   ScheduleRevisionView,
+  CompetitionOfficial,
+  OfficialAvailabilityWindow,
+  MatchOfficialAssignment,
+  OfficialWorkspaceResponse,
+  ScheduleInterval,
 } from "@matchday/contracts";
 import {
+  canonicaliseIntervals,
   deriveAssistedSetupProgress,
   deriveSchedulingMatches,
+  diagnoseScheduleInfeasibility,
   evaluateScheduleQuality,
   materialiseFormatGraph,
   recommendCompetitionFormats,
@@ -55,6 +64,8 @@ import {
   SetupRepository,
   FormatRepository,
   ScheduleRepository,
+  OfficialRepository,
+  type OfficialRecord,
   type ScheduleOptionRecord,
   type ScheduleRevisionRecord,
 } from "./repositories/index.js";
@@ -162,6 +173,9 @@ function mapPgError(error: unknown): never {
     throw new ApiError(409, ErrorCode.SCHEDULE_LOCK_CONFLICT, "Resource lock conflict; retry operation");
   }
   if (pgCode === "23505") {
+    if (constraint === "competition_officials_active_name_uidx") {
+      throw new ApiError(409, ErrorCode.OFFICIAL_NAME_CONFLICT, "An active official with this name already exists");
+    }
     if (constraint.includes("schedule_generation_jobs") || /schedule_generation_jobs/i.test(message)) {
       throw new ApiError(409, ErrorCode.ACTIVE_SCHEDULE_JOB, "A schedule job is already active");
     }
@@ -179,6 +193,15 @@ function mapPgError(error: unknown): never {
     throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "The resource changed; refresh and retry");
   if (/archived format templates/i.test(message))
     throw new ApiError(409, ErrorCode.TEMPLATE_ARCHIVED, "Archived format templates cannot be applied");
+  if (/archived official|official.*archived|cannot assign archived official/i.test(message))
+    throw new ApiError(409, ErrorCode.OFFICIAL_ARCHIVED, "Archived official cannot be assigned");
+  if (/official not found/i.test(message)) throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, "Official not found");
+  if (/duplicate official/i.test(message))
+    throw new ApiError(400, ErrorCode.OFFICIAL_ASSIGNMENT_INVALID, "Duplicate official assignment");
+  if (/availability.*duration|availability.*window/i.test(message))
+    throw new ApiError(400, ErrorCode.OFFICIAL_AVAILABILITY_INVALID, "Invalid availability window");
+  if (/official.*name.*exists|official name conflict/i.test(message))
+    throw new ApiError(409, ErrorCode.OFFICIAL_NAME_CONFLICT, "An active official with this name already exists");
   if (/archived/i.test(message))
     throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
   if (/permission|access|active member|tenant/i.test(message))
@@ -186,6 +209,18 @@ function mapPgError(error: unknown): never {
   if (/invalid|requires|must|cannot|stale/i.test(message))
     throw new ApiError(422, ErrorCode.DOMAIN_VALIDATION_FAILED, "Request violates the current competition state");
   throw error;
+}
+
+function formatOfficial(row: OfficialRecord): CompetitionOfficial {
+  return {
+    id: row.id,
+    competition_id: row.competition_id,
+    name: row.name,
+    default_role: row.default_role ?? null,
+    archived: row.archived_at !== null,
+    created_at: new Date(row.created_at).toISOString(),
+    updated_at: new Date(row.updated_at).toISOString(),
+  };
 }
 
 function wireDocumentToDomain(document: Phase4FormatBuilderDocument): FormatBuilderDocument {
@@ -414,6 +449,7 @@ export class Phase4Runtime {
   private readonly setupRepo: SetupRepository;
   private readonly formatRepo: FormatRepository;
   private readonly scheduleRepo: ScheduleRepository;
+  private readonly officialRepo: OfficialRepository;
 
   constructor(
     private readonly sql: PostgresJsSql,
@@ -430,6 +466,7 @@ export class Phase4Runtime {
     this.setupRepo = repos.setup;
     this.formatRepo = repos.format;
     this.scheduleRepo = repos.schedule;
+    this.officialRepo = repos.official ?? new OfficialRepository(sql);
   }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -456,6 +493,7 @@ export class Phase4Runtime {
     );
     const access = first(rows, ErrorCode.COMPETITION_ACCESS_DENIED, "Competition access denied");
     access.capacity_revision = Number(access.capacity_revision);
+    access.revision = Number(access.revision);
     if (!Number.isSafeInteger(access.capacity_revision) || access.capacity_revision < 1)
       throw new ApiError(500, ErrorCode.INVALID_CAPACITY_REVISION, "Competition capacity revision is invalid");
     if (mutable && access.status === "archived")
@@ -502,9 +540,13 @@ export class Phase4Runtime {
     await this.scheduleRepo.acquireScheduleLock(competitionId, "phase4-schedule", tx);
   }
 
-  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string, includeLockSnapshot = true): Promise<void> {
+  private async scheduleJobCurrentState(
+    tx: PostgresJsSql,
+    jobId: string,
+    includeLockSnapshot = true,
+  ): Promise<{ current: boolean }> {
     const current = (
-      await tx.unsafe<{ current: boolean }>(
+      await tx.unsafe<{ current: boolean | null }>(
         `SELECT (
           (j.input_snapshot->>'source_revision')::integer=c.revision
           AND (j.input_snapshot->>'capacity_revision')::integer=c.capacity_revision
@@ -557,6 +599,11 @@ export class Phase4Runtime {
         [jobId, includeLockSnapshot],
       )
     )[0]?.current;
+    return { current: Boolean(current) };
+  }
+
+  private async assertScheduleJobCurrent(tx: PostgresJsSql, jobId: string, includeLockSnapshot = true): Promise<void> {
+    const { current } = await this.scheduleJobCurrentState(tx, jobId, includeLockSnapshot);
     if (!current)
       throw new ApiError(
         409,
@@ -3348,6 +3395,69 @@ export class Phase4Runtime {
         });
       }
     }
+
+    const assignmentRows = await tx.unsafe<{ match_id: string; official_id: string }>(
+      `SELECT match_id, official_id FROM match_official_assignments
+       WHERE competition_id = $1
+       ORDER BY match_id, official_id`,
+      [competition.id],
+    );
+    const assignmentsByMatch = new Map<string, string[]>();
+    for (const row of assignmentRows) {
+      const list = assignmentsByMatch.get(row.match_id) ?? [];
+      list.push(row.official_id);
+      assignmentsByMatch.set(row.match_id, list);
+    }
+
+    const matchesWithOfficials = matches.map((match) => ({
+      ...match,
+      officialIds: (assignmentsByMatch.get(match.id) ?? []).slice().sort(),
+    }));
+
+    const assignedOfficialIds = new Set(matchesWithOfficials.flatMap((m) => m.officialIds));
+
+    const officialAvailabilityWindows: Record<string, ScheduleInterval[]> = {};
+    if (assignedOfficialIds.size > 0) {
+      const windowRows = await tx.unsafe<{
+        official_id: string;
+        starts_at: Date | string;
+        ends_at: Date | string;
+      }>(
+        `SELECT official_id, starts_at, ends_at FROM official_availability_windows
+         WHERE competition_id = $1 AND official_id = ANY($2::uuid[])
+         ORDER BY official_id, starts_at, ends_at`,
+        [competition.id, [...assignedOfficialIds]],
+      );
+      const rawByOfficial = new Map<string, Array<{ startsAt: Date | string; endsAt: Date | string }>>();
+      for (const row of windowRows) {
+        const list = rawByOfficial.get(row.official_id) ?? [];
+        list.push({ startsAt: row.starts_at, endsAt: row.ends_at });
+        rawByOfficial.set(row.official_id, list);
+      }
+
+      for (const officialId of [...assignedOfficialIds].sort()) {
+        const raw = rawByOfficial.get(officialId) ?? [];
+        const canonical = canonicaliseIntervals(raw);
+        officialAvailabilityWindows[officialId] = canonical.map((w) => ({
+          start_epoch_ms: w.startEpochMs,
+          end_epoch_ms: w.endEpochMs,
+        }));
+      }
+    }
+
+    const effectiveConstraints: ScheduleConstraints = {
+      ...constraints,
+      official_availability: {
+        mode: constraints.official_availability?.mode ?? "ignored",
+        value: {
+          by_official_id: officialAvailabilityWindows,
+        },
+        ...(constraints.official_availability?.weight !== undefined
+          ? { weight: constraints.official_availability.weight }
+          : {}),
+      },
+    };
+
     const locks = await tx.unsafe<{
       match_id: string;
       playing_area_id: string;
@@ -3356,7 +3466,7 @@ export class Phase4Runtime {
     }>(`SELECT match_id,playing_area_id,starts_at,ends_at FROM schedule_assignment_locks WHERE competition_id=$1`, [
       competition.id,
     ]);
-    const fixedMatches = matches.map((match) => {
+    const fixedMatches = matchesWithOfficials.map((match) => {
       const lock = locks.find((candidate) => candidate.match_id === match.id);
       if (!lock) return match;
       const startEpochMs = new Date(lock.starts_at).getTime();
@@ -3385,7 +3495,7 @@ export class Phase4Runtime {
       objective,
       matches: fixedMatches,
       slots,
-      constraints: this.domainConstraints(constraints),
+      constraints: this.domainConstraints(effectiveConstraints),
     };
     // Executes full shape/business validation without trusting a client score.
     toScheduleJobInput(problem, {
@@ -3592,6 +3702,55 @@ export class Phase4Runtime {
     );
     await this.competitionAccess(this.sql, row.competition_id, actor, false);
     return this.jobView(this.sql, jobId);
+  }
+
+  async readScheduleJobDiagnostics(actor: Phase3Actor, jobId: string): Promise<ScheduleJobDiagnosticsResponse> {
+    const job = await this.readScheduleJob(actor, jobId);
+    if (job.status !== "no_solution") {
+      return {
+        job_id: jobId,
+        status: job.status,
+        diagnostics: [],
+      };
+    }
+
+    const row = first(
+      await this.sql.unsafe<{ input_snapshot: JsonObject | string }>(
+        `SELECT input_snapshot FROM schedule_generation_jobs WHERE id=$1`,
+        [jobId],
+      ),
+      ErrorCode.SCHEDULE_JOB_NOT_FOUND,
+      "Schedule job not found",
+    );
+
+    const problem = this.problemFromSnapshot(row.input_snapshot);
+    const violations = diagnoseScheduleInfeasibility(problem);
+
+    const diagnosticsMap = new Map<string, ScheduleOfficialDiagnostic>();
+    for (const v of violations) {
+      if (v.code === "official_unavailable" || v.code === "official_overlap") {
+        const sortedMatchIds = [...v.matchIds].sort();
+        const key = `${v.code}:${sortedMatchIds.join(",")}`;
+        if (!diagnosticsMap.has(key)) {
+          diagnosticsMap.set(key, {
+            code: v.code,
+            severity: v.severity === "required" ? "required" : "hard",
+            match_ids: sortedMatchIds,
+          });
+        }
+      }
+    }
+
+    const sortedDiagnostics = Array.from(diagnosticsMap.values()).sort((a, b) => {
+      if (a.code !== b.code) return a.code.localeCompare(b.code);
+      return a.match_ids.join(",").localeCompare(b.match_ids.join(","));
+    });
+
+    return {
+      job_id: jobId,
+      status: job.status,
+      diagnostics: sortedDiagnostics,
+    };
   }
 
   async listScheduleJobs(actor: Phase3Actor, competitionId: string) {
@@ -4807,6 +4966,15 @@ export class Phase4Runtime {
        ORDER BY warning.emitted_at DESC,warning.id`,
       [competitionId],
     );
+    let currentRevisionInputState: "current" | "stale" | "unknown" = "unknown";
+    if (currentRow?.source_job_id) {
+      try {
+        const { current } = await this.scheduleJobCurrentState(this.sql, currentRow.source_job_id, false);
+        currentRevisionInputState = current ? "current" : "stale";
+      } catch {
+        currentRevisionInputState = "unknown";
+      }
+    }
     return {
       competition: {
         id: competition.id,
@@ -4862,6 +5030,7 @@ export class Phase4Runtime {
           )
         : null,
       current_revision: currentRow ? await this.revisionDetail(this.sql, currentRow.id) : null,
+      current_revision_input_state: currentRevisionInputState,
       revisions: revisionRows.map((row) => this.revisionView(row)),
       locks: locks.map((lock) => ({
         id: lock.id,
@@ -5051,6 +5220,418 @@ export class Phase4Runtime {
         idempotent_replay: Boolean(receipt),
       };
     });
+  }
+
+  async listOfficials(
+    actor: Phase3Actor,
+    competitionId: string,
+    options?: { includeArchived?: boolean },
+  ): Promise<{ items: readonly CompetitionOfficial[] }> {
+    await this.competitionAccess(this.sql, competitionId, actor, false);
+    const rows = await this.officialRepo.listByCompetitionId(competitionId, {
+      includeArchived: options?.includeArchived ?? false,
+    });
+    return { items: rows.map(formatOfficial) };
+  }
+
+  async getOfficial(actor: Phase3Actor, competitionId: string, officialId: string): Promise<CompetitionOfficial> {
+    await this.competitionAccess(this.sql, competitionId, actor, false);
+    const official = await this.officialRepo.findById(officialId, competitionId, "none");
+    if (!official) {
+      throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, "Official not found");
+    }
+    return formatOfficial(official);
+  }
+
+  async createOfficial(
+    actor: Phase3Actor,
+    competitionId: string,
+    input: { name: string; default_role?: string | null },
+    requestId: string,
+  ): Promise<CompetitionOfficial> {
+    const trimmedName = input.name.trim();
+    if (!trimmedName || trimmedName.length > 80) {
+      throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Official name must be between 1 and 80 characters");
+    }
+    const defaultRole = input.default_role ? input.default_role.trim() : null;
+    if (defaultRole && defaultRole.length > 40) {
+      throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Default role must not exceed 40 characters");
+    }
+
+    return this.transaction(async (tx) => {
+      const access = await this.competitionAccess(tx, competitionId, actor, true);
+      const duplicate = await tx.unsafe<{ id: string }>(
+        `SELECT id FROM competition_officials
+         WHERE competition_id = $1 AND lower(trim(name)) = lower($2) AND archived_at IS NULL`,
+        [competitionId, trimmedName],
+      );
+      if (duplicate[0]) {
+        throw new ApiError(409, ErrorCode.OFFICIAL_NAME_CONFLICT, "An active official with this name already exists");
+      }
+
+      const created = await this.officialRepo.createOfficial(
+        {
+          competitionId,
+          organisationId: access.organisation_id,
+          name: trimmedName,
+          defaultRole,
+          actorId: actor.accountId,
+          requestId,
+        },
+        tx,
+      );
+      return formatOfficial(created);
+    });
+  }
+
+  async updateOfficial(
+    actor: Phase3Actor,
+    competitionId: string,
+    officialId: string,
+    input: { name?: string; default_role?: string | null },
+    requestId: string,
+  ): Promise<CompetitionOfficial> {
+    let trimmedName: string | undefined;
+    if (input.name !== undefined) {
+      trimmedName = input.name.trim();
+      if (!trimmedName || trimmedName.length > 80) {
+        throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Official name must be between 1 and 80 characters");
+      }
+    }
+    let defaultRole: string | null | undefined;
+    if (input.default_role !== undefined) {
+      defaultRole = input.default_role ? input.default_role.trim() : null;
+      if (defaultRole && defaultRole.length > 40) {
+        throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Default role must not exceed 40 characters");
+      }
+    }
+
+    return this.transaction(async (tx) => {
+      await this.competitionAccess(tx, competitionId, actor, true);
+      const existing = await this.officialRepo.findById(officialId, competitionId, "for_update", tx);
+      if (!existing) {
+        throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, "Official not found");
+      }
+
+      if (trimmedName && trimmedName.toLowerCase() !== existing.name.trim().toLowerCase()) {
+        const duplicate = await tx.unsafe<{ id: string }>(
+          `SELECT id FROM competition_officials
+           WHERE competition_id = $1 AND lower(trim(name)) = lower($2) AND archived_at IS NULL AND id <> $3`,
+          [competitionId, trimmedName, officialId],
+        );
+        if (duplicate[0]) {
+          throw new ApiError(409, ErrorCode.OFFICIAL_NAME_CONFLICT, "An active official with this name already exists");
+        }
+      }
+
+      const updated = await this.officialRepo.updateOfficialMetadata(
+        {
+          competitionId,
+          officialId,
+          name: trimmedName,
+          defaultRole,
+          actorId: actor.accountId,
+          requestId,
+        },
+        tx,
+      );
+      return formatOfficial(updated!);
+    });
+  }
+
+  async archiveOfficial(
+    actor: Phase3Actor,
+    competitionId: string,
+    officialId: string,
+    requestId: string,
+  ): Promise<{ official: CompetitionOfficial; bumped_revision: boolean }> {
+    return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
+      await this.competitionAccess(tx, competitionId, actor, true);
+      const existing = await this.officialRepo.findById(officialId, competitionId, "for_update", tx);
+      if (!existing) {
+        throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, "Official not found");
+      }
+      if (existing.archived_at !== null) {
+        throw new ApiError(409, ErrorCode.OFFICIAL_ARCHIVED, "Official is already archived");
+      }
+      const result = await this.officialRepo.archiveOfficial(
+        {
+          competitionId,
+          officialId,
+          actorId: actor.accountId,
+          requestId,
+        },
+        tx,
+      );
+      return {
+        official: formatOfficial(result.official!),
+        bumped_revision: result.bumpedRevision,
+      };
+    });
+  }
+
+  async restoreOfficial(
+    actor: Phase3Actor,
+    competitionId: string,
+    officialId: string,
+    requestId: string,
+  ): Promise<{ official: CompetitionOfficial; bumped_revision: boolean }> {
+    return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
+      await this.competitionAccess(tx, competitionId, actor, true);
+      const existing = await this.officialRepo.findById(officialId, competitionId, "for_update", tx);
+      if (!existing) {
+        throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, "Official not found");
+      }
+      const duplicate = await tx.unsafe<{ id: string }>(
+        `SELECT id FROM competition_officials
+         WHERE competition_id = $1 AND lower(trim(name)) = lower($2) AND archived_at IS NULL AND id <> $3`,
+        [competitionId, existing.name.trim(), officialId],
+      );
+      if (duplicate[0]) {
+        throw new ApiError(409, ErrorCode.OFFICIAL_NAME_CONFLICT, "An active official with this name already exists");
+      }
+      const result = await this.officialRepo.restoreOfficial(
+        {
+          competitionId,
+          officialId,
+          actorId: actor.accountId,
+          requestId,
+        },
+        tx,
+      );
+      return {
+        official: formatOfficial(result.official!),
+        bumped_revision: result.bumpedRevision,
+      };
+    });
+  }
+
+  async getOfficialAvailability(
+    actor: Phase3Actor,
+    competitionId: string,
+    officialId: string,
+  ): Promise<{ windows: readonly OfficialAvailabilityWindow[] }> {
+    await this.competitionAccess(this.sql, competitionId, actor, false);
+    const official = await this.officialRepo.findById(officialId, competitionId, "none");
+    if (!official) {
+      throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, "Official not found");
+    }
+    const rows = await this.officialRepo.listAvailability(competitionId, officialId);
+    return {
+      windows: rows.map((w) => ({
+        starts_at: new Date(w.starts_at).toISOString(),
+        ends_at: new Date(w.ends_at).toISOString(),
+      })),
+    };
+  }
+
+  async replaceOfficialAvailability(
+    actor: Phase3Actor,
+    competitionId: string,
+    officialId: string,
+    windows: ReadonlyArray<{ starts_at: string; ends_at: string }>,
+    requestId: string,
+  ): Promise<{ windows: readonly OfficialAvailabilityWindow[]; bumped_revision: boolean }> {
+    for (const w of windows) {
+      const start = new Date(w.starts_at).getTime();
+      const end = new Date(w.ends_at).getTime();
+      if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+        throw new ApiError(
+          400,
+          ErrorCode.OFFICIAL_AVAILABILITY_INVALID,
+          "Availability window must have positive duration (endsAt > startsAt)",
+        );
+      }
+    }
+
+    return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
+      const access = await this.competitionAccess(tx, competitionId, actor, true);
+      const official = await this.officialRepo.findById(officialId, competitionId, "for_update", tx);
+      if (!official) {
+        throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, "Official not found");
+      }
+
+      const result = await this.officialRepo.replaceAvailability(
+        {
+          competitionId,
+          organisationId: access.organisation_id,
+          officialId,
+          windows: windows.map((w) => ({ startsAt: w.starts_at, endsAt: w.ends_at })),
+          actorId: actor.accountId,
+          requestId,
+        },
+        tx,
+      );
+
+      return {
+        windows: result.windows.map((w) => ({
+          starts_at: new Date(w.starts_at).toISOString(),
+          ends_at: new Date(w.ends_at).toISOString(),
+        })),
+        bumped_revision: result.bumpedRevision,
+      };
+    });
+  }
+
+  async getMatchOfficials(
+    actor: Phase3Actor,
+    competitionId: string,
+    matchId: string,
+  ): Promise<{ assignments: readonly MatchOfficialAssignment[] }> {
+    await this.competitionAccess(this.sql, competitionId, actor, false);
+    const match = await this.sql.unsafe<{ id: string }>(
+      `SELECT id FROM matches WHERE id = $1 AND competition_id = $2`,
+      [matchId, competitionId],
+    );
+    if (!match[0]) {
+      throw new ApiError(404, ErrorCode.MATCH_NOT_FOUND, "Match not found");
+    }
+
+    const assignments = await this.officialRepo.listMatchAssignments(competitionId, matchId);
+    if (assignments.length === 0) {
+      return { assignments: [] };
+    }
+
+    const officialRows = await this.officialRepo.listByCompetitionId(competitionId, { includeArchived: true });
+    const officialMap = new Map(officialRows.map((o) => [o.id, o]));
+
+    return {
+      assignments: assignments.map((a) => {
+        const off = officialMap.get(a.official_id);
+        return {
+          match_id: a.match_id,
+          official_id: a.official_id,
+          assigned_role: a.assigned_role ?? null,
+          ...(off
+            ? {
+                official: {
+                  id: off.id,
+                  name: off.name,
+                  default_role: off.default_role ?? null,
+                  archived: off.archived_at !== null,
+                },
+              }
+            : {}),
+        };
+      }),
+    };
+  }
+
+  async replaceMatchOfficials(
+    actor: Phase3Actor,
+    competitionId: string,
+    matchId: string,
+    assignments: ReadonlyArray<{ official_id: string; assigned_role?: string | null }>,
+    requestId: string,
+  ): Promise<{ assignments: readonly MatchOfficialAssignment[]; bumped_revision: boolean }> {
+    const seen = new Set<string>();
+    for (const a of assignments) {
+      if (seen.has(a.official_id)) {
+        throw new ApiError(400, ErrorCode.OFFICIAL_ASSIGNMENT_INVALID, "Duplicate official assignment for match");
+      }
+      seen.add(a.official_id);
+      if (a.assigned_role && a.assigned_role.trim().length > 40) {
+        throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Assigned role must not exceed 40 characters");
+      }
+    }
+
+    return this.transaction(async (tx) => {
+      await this.lockScheduleMutation(tx, competitionId);
+      const access = await this.competitionAccess(tx, competitionId, actor, true);
+      const match = await tx.unsafe<{ id: string }>(`SELECT id FROM matches WHERE id = $1 AND competition_id = $2`, [
+        matchId,
+        competitionId,
+      ]);
+      if (!match[0]) {
+        throw new ApiError(404, ErrorCode.MATCH_NOT_FOUND, "Match not found");
+      }
+
+      const existingAssignments = await this.officialRepo.listMatchAssignments(competitionId, matchId, tx);
+      const existingOfficialIds = new Set(existingAssignments.map((assignment) => assignment.official_id));
+
+      for (const a of assignments) {
+        const official = await this.officialRepo.findById(a.official_id, competitionId, "none", tx);
+        if (!official) {
+          throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, `Official not found: ${a.official_id}`);
+        }
+        if (official.archived_at !== null && !existingOfficialIds.has(official.id)) {
+          throw new ApiError(
+            409,
+            ErrorCode.OFFICIAL_ARCHIVED,
+            `Cannot assign archived official to match: ${a.official_id}`,
+          );
+        }
+      }
+
+      const result = await this.officialRepo.replaceMatchAssignments(
+        {
+          competitionId,
+          organisationId: access.organisation_id,
+          matchId,
+          assignments: assignments.map((a) => ({
+            officialId: a.official_id,
+            assignedRole: a.assigned_role,
+          })),
+          actorId: actor.accountId,
+          requestId,
+        },
+        tx,
+      );
+
+      return {
+        assignments: result.assignments.map((a) => ({
+          match_id: a.match_id,
+          official_id: a.official_id,
+          assigned_role: a.assigned_role ?? null,
+        })),
+        bumped_revision: result.bumpedRevision,
+      };
+    });
+  }
+
+  async getOfficialWorkspace(actor: Phase3Actor, competitionId: string): Promise<OfficialWorkspaceResponse> {
+    await this.competitionAccess(this.sql, competitionId, actor, false);
+    const officials = await this.officialRepo.listByCompetitionId(competitionId, { includeArchived: true });
+    const windows = await this.officialRepo.listAvailability(competitionId);
+    const assignments = await this.officialRepo.listMatchAssignments(competitionId);
+
+    const availability: Record<string, OfficialAvailabilityWindow[]> = {};
+    for (const w of windows) {
+      const list = availability[w.official_id] ?? [];
+      list.push({
+        starts_at: new Date(w.starts_at).toISOString(),
+        ends_at: new Date(w.ends_at).toISOString(),
+      });
+      availability[w.official_id] = list;
+    }
+
+    const officialMap = new Map(officials.map((o) => [o.id, o]));
+
+    return {
+      officials: officials.map(formatOfficial),
+      availability,
+      assignments: assignments.map((a) => {
+        const off = officialMap.get(a.official_id);
+        return {
+          match_id: a.match_id,
+          official_id: a.official_id,
+          assigned_role: a.assigned_role ?? null,
+          ...(off
+            ? {
+                official: {
+                  id: off.id,
+                  name: off.name,
+                  default_role: off.default_role ?? null,
+                  archived: off.archived_at !== null,
+                },
+              }
+            : {}),
+        };
+      }),
+    };
   }
 
   async runScheduleMaintenance(requestId: string) {

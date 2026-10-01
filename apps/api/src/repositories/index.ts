@@ -10,3 +10,4 @@ export * from "./identity.repository.js";
 export * from "./repair.repository.js";
 export * from "./publication.repository.js";
 export * from "./public-projection.repository.js";
+export * from "./official.repository.js";

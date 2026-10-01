@@ -6,6 +6,7 @@ import type { IdentityApiRuntime } from "./identity-runtime.js";
 import type { Phase4FormatBuilderDocument } from "@matchday/contracts";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
+import { registerPhase4OfficialRoutes } from "./phase-4-official-routes.js";
 
 const Id = Type.String({ format: "uuid" });
 const IdempotencyKey = Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" });
@@ -913,6 +914,11 @@ export async function registerPhase4Routes(
     { schema: { ...read, params: strict({ jobId: Id }), tags: ["phase4-schedules"] } },
     async (request) => options.runtime.listScheduleOptions(await readActor(request), request.params.jobId),
   );
+  app.get<{ Params: { jobId: string } }>(
+    "/api/v1/schedule-jobs/:jobId/diagnostics",
+    { schema: { ...read, params: strict({ jobId: Id }), tags: ["phase4-schedules"] } },
+    async (request) => options.runtime.readScheduleJobDiagnostics(await readActor(request), request.params.jobId),
+  );
   const JobMutationBody = strict({ idempotency_key: IdempotencyKey, expected_revision: Type.Integer({ minimum: 1 }) });
   app.post<{ Params: { jobId: string }; Body: Static<typeof JobMutationBody> }>(
     "/api/v1/schedule-jobs/:jobId/continue",
@@ -1150,4 +1156,6 @@ export async function registerPhase4Routes(
       return { ...maintenance, queue_recovery: queueRecovery };
     },
   );
+
+  await registerPhase4OfficialRoutes(app, options);
 }

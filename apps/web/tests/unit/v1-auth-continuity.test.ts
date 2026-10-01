@@ -34,7 +34,7 @@ describe("V1 authenticated competition continuity", () => {
     const signInSource = await readFile(new URL("../../app/sign-in/page.tsx", import.meta.url), "utf8");
 
     expect(identitySource).toContain('fetch("/api/identity/current"');
-    expect(identitySource).toContain('credentials: "same-origin"');
+    expect(identitySource).toContain("identityStatusRequest");
     expect(identitySource).toContain('data-identity-state="authenticated"');
     expect(chromeSource).toContain("<IdentityStatus");
     expect(shellSource).toContain("<IdentityStatus");
