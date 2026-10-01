@@ -14,7 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { gateCOfflineQueueLimit, gateCOfflineQueueWarningCount } from "@matchday/contracts";
 import type { SportId } from "@matchday/domain";
-import { translate as t } from "@matchday/ui";
+import { opaqueId, translate as t } from "@matchday/ui";
 import { phase2Copy, phase2Machine, type ScoringEventCommand, type ScoringSessionView } from "@/lib/phase2";
 import { FiveSportScoreControls, type FiveSportScoreControlsCopy } from "@/components/phase5/FiveSportScoreControls";
 import { buildFiveSportScorecardDefinition } from "@/lib/five-sport-scorecard";
@@ -201,6 +201,7 @@ export function PhoneScoring({
   const signOutDialogRef = useRef<HTMLDialogElement>(null);
   const endSessionButtonRef = useRef<HTMLButtonElement>(null);
   const actionReturnTargetRef = useRef<HTMLButtonElement | null>(null);
+  const actionDialogViewportRef = useRef<{ left: number; top: number } | null>(null);
   const scorerInputRef = useRef<HTMLInputElement>(null);
   const actionDialogTitleRef = useRef<HTMLHeadingElement>(null);
   const scoreControlsRef = useRef<HTMLDivElement>(null);
@@ -684,11 +685,14 @@ export function PhoneScoring({
   useEffect(() => {
     if ((!pendingAction && !reversalTarget) || !actionDialogRef.current) return;
     const dialog = actionDialogRef.current;
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      actionDialogViewportRef.current = { left: window.scrollX, top: window.scrollY };
+      dialog.showModal();
+    }
     const focusFrame = window.requestAnimationFrame(() => {
       const needsParticipant = Boolean(reversalTarget) || pendingAction?.control.participantAttribution !== "none";
-      if (needsParticipant) scorerInputRef.current?.focus();
-      else actionDialogTitleRef.current?.focus();
+      if (needsParticipant) scorerInputRef.current?.focus({ preventScroll: true });
+      else actionDialogTitleRef.current?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(focusFrame);
   }, [pendingAction, reversalTarget]);
@@ -1056,7 +1060,14 @@ export function PhoneScoring({
     setScorerError("");
     const returnTarget = actionReturnTargetRef.current;
     actionReturnTargetRef.current = null;
-    window.requestAnimationFrame(() => returnTarget?.focus({ preventScroll: true }));
+    const viewport = actionDialogViewportRef.current;
+    actionDialogViewportRef.current = null;
+    window.requestAnimationFrame(() => {
+      returnTarget?.focus({ preventScroll: true });
+      // Recording changes the score controls and event log behind the modal.
+      // Restore the viewport after that layout settles, including scroll anchoring.
+      if (viewport) window.scrollTo({ ...viewport, behavior: opaqueId("instant") });
+    });
   };
 
   const handleSheetTouchStart = (event: React.TouchEvent<HTMLDialogElement>) => {
