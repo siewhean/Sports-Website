@@ -65,7 +65,7 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
   });
   expect(browserStorage.cookie).not.toContain(scoringCookies[0]?.name ?? "__missing_scoring_cookie__");
 
-  await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
+  await page.getByRole("checkbox", { name: /I have checked this fixture and am ready to score\./i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
   await page.getByRole("button", { name: `Goal ${state.homeName}` }).click();
   const confirmation = page.getByRole("dialog", { name: "Confirm goal" });

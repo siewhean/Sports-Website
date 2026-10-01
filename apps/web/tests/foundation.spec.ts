@@ -67,7 +67,10 @@ test("public home keeps its headline wide and preserves reduced-motion behavior"
   });
   expect(lineCount).toBeGreaterThanOrEqual(2);
   expect(lineCount).toBeLessThanOrEqual(3);
-  await expect(page.locator("[data-marquee-track]")).toHaveCSS("transform", "none");
+  await expect(page.getByRole("list", { name: "Supported launch sports" }).locator("..")).toHaveCSS(
+    "transform",
+    "none",
+  );
 });
 
 test("the MATCHDAY sign-in action starts the server-owned identity flow", async ({ page }) => {

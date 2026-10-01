@@ -185,7 +185,7 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
     "The production web BFF must exchange the rendered pass with the separate API origin",
   ).toBe(200);
   await expect(page).toHaveURL(`${seed.webOrigin}/score`);
-  await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
+  await page.getByRole("checkbox", { name: /I have checked this fixture and am ready to score\./i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
   const goal = page.getByRole("button", { name: /Goal / }).first();
   const goalName = await goal.getAttribute("aria-label");
@@ -193,12 +193,13 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
   const confirmation = page.getByRole("dialog", { name: "Confirm goal" });
   await confirmation.getByLabel("Scorer or participant name").fill("Aisha Tan");
   await confirmation.getByRole("button", { name: /Record goal/ }).click();
-  await page.locator("summary").filter({ hasText: "Match actions" }).click();
-  await page.getByRole("button", { name: "Period change" }).click();
-  const periodChange = page.getByRole("dialog", { name: "Record event: Period change" });
-  await periodChange.getByLabel("period").selectOption("2");
-  await periodChange.getByLabel("Event time").fill("10:00");
-  await periodChange.getByRole("button", { name: "Record event" }).click();
+  const periodTransition = page.waitForResponse(
+    (response) => response.url().endsWith("/api/scoring/events") && response.request().method() === "POST",
+  );
+  await page.getByLabel("Period", { exact: true }).selectOption("2");
+  const periodResponse = await periodTransition;
+  expect(periodResponse.status(), await periodResponse.text()).toBe(200);
+  await expect(page.getByLabel("Period", { exact: true })).toHaveValue("2");
   await page.getByRole("button", { name: "Review final score" }).click();
   const finalisation = page.waitForResponse(
     (candidate) =>

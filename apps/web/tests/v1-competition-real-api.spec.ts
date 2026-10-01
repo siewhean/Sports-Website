@@ -172,8 +172,10 @@ async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
   );
   await page.goto(accessUrl);
   expect((await exchange).status(), "The rendered pass must exchange through the production web BFF").toBe(200);
-  await expect(page.getByRole("checkbox", { name: /ready to score this fixture/i })).toBeVisible();
-  await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
+  await expect(
+    page.getByRole("checkbox", { name: /I have checked this fixture and am ready to score\./i }),
+  ).toBeVisible();
+  await page.getByRole("checkbox", { name: /I have checked this fixture and am ready to score\./i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
   const goal = page.getByRole("button", { name: /Goal / }).first();
   await goal.click();
@@ -182,12 +184,13 @@ async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
   await confirm.getByRole("button", { name: /Record goal/ }).click();
   // Canoe Polo has two required periods. Complete the scorer's rendered
   // period-transition control before asking the server to finalise.
-  await page.locator("summary").filter({ hasText: "Match actions" }).click();
-  await page.getByRole("button", { name: "Period change" }).click();
-  const periodChange = page.getByRole("dialog", { name: "Record event: Period change" });
-  await periodChange.getByLabel("period").selectOption("2");
-  await periodChange.getByLabel("Event time").fill("10:00");
-  await periodChange.getByRole("button", { name: "Record event" }).click();
+  const periodTransition = page.waitForResponse(
+    (response) => response.url().endsWith("/api/scoring/events") && response.request().method() === "POST",
+  );
+  await page.getByLabel("Period", { exact: true }).selectOption("2");
+  const periodResponse = await periodTransition;
+  expect(periodResponse.status(), await periodResponse.text()).toBe(200);
+  await expect(page.getByLabel("Period", { exact: true })).toHaveValue("2");
   const finalise = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" && new URL(response.url()).pathname === "/api/scoring/finalise",

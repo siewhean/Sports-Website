@@ -241,6 +241,7 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0061_phase6_reject_organisation_event_pass.sql",
           "0062_phase4_dag_aware_daily_match_limits.sql",
           "0063_sch006_competition_officials.sql",
+          "0064_casual_games.sql",
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,

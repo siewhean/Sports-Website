@@ -1,36 +1,5 @@
-import type { SportId } from "@matchday/domain";
-
-export type CasualGame = {
-  id: string;
-  sport_id: SportId;
-  home_name: string;
-  away_name: string;
-  home_score: number;
-  away_score: number;
-  home_sets: number;
-  away_sets: number;
-  current_set: number;
-  sets: { home: number; away: number }[];
-  target_points: number | null;
-  best_of_sets: number | null;
-  period_minutes: number | null;
-  elapsed_seconds: number;
-  timer_running: boolean;
-  status: "live" | "finished" | string;
-  version: number;
-  updated_at: string;
-  observed_at: string;
-  viewer_token?: string;
-};
-
-export type CasualSettings = {
-  sport_id: SportId;
-  home_name: string;
-  away_name: string;
-  target_points?: number;
-  best_of_sets?: number;
-  period_minutes?: number;
-};
+import type { CasualGame, CasualGameSettings as CasualSettings } from "@matchday/contracts";
+export type { CasualGame, CasualGameSettings as CasualSettings } from "@matchday/contracts";
 
 const base = "/api/v1/casual";
 const hostKey = (id: string) => `matchday:casual:host:${id}`;

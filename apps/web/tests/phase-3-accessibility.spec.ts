@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { assertNoWcagAOrAaViolations } from "./helpers/accessibility";
-import { allowConsoleFailure, assertConsoleGuard, dismissConsent, installConsoleGuard } from "./helpers/console-guard";
+import {
+  allowConsoleFailureCount,
+  assertConsoleGuard,
+  dismissConsent,
+  installConsoleGuard,
+} from "./helpers/console-guard";
 
 test.use({ serviceWorkers: "block" });
 
@@ -49,7 +54,11 @@ test("@a11y division and entry controls meet WCAG A/AA requirements", async ({ p
 });
 
 test("@a11y competition creation preserves recovery context and strict WCAG A/AA", async ({ page }) => {
-  allowConsoleFailure(page, /^console\.error: Failed to load resource: the server responded with a status of 503/);
+  allowConsoleFailureCount(
+    page,
+    /^console\.error: Failed to load resource: the server responded with a status of 503/,
+    1,
+  );
   let organisationReads = 0;
   await page.route("**/api/phase3/competitions", async (route) => {
     if (route.request().method() !== "GET") {
@@ -81,11 +90,14 @@ test("@a11y competition creation preserves recovery context and strict WCAG A/AA
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
   await page.getByLabel("Competition name").fill("National Open");
-  await expect(page.getByRole("alert").filter({ hasText: "Your organisations could not be loaded" })).toBeVisible();
+  const recovery = page.getByRole("status").filter({ hasText: "We will use your default organiser workspace" });
+  await expect(recovery).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
+  await assertNoWcagAOrAaViolations(page);
   await page.getByRole("button", { name: "Retry organisation list" }).click();
-  const organisation = page.getByLabel("Organisation");
-  await expect(organisation).toBeEnabled();
-  await organisation.selectOption({ label: "National Sports · Organiser" });
+  await expect.poll(() => organisationReads).toBe(2);
+  await expect(recovery).toHaveCount(0);
+  await expect(page.getByLabel("Organisation")).toHaveCount(0);
   await expect(page.getByLabel("Competition name")).toHaveValue("National Open");
 
   // Continue without selecting sport — should focus Sport field (slug auto-derived from name)

@@ -8,7 +8,10 @@ export type CasualGameSettings = {
   best_of_sets?: number;
   period_minutes?: number;
 };
-export type CasualGame = CasualGameSettings & {
+export type CasualGame = Omit<CasualGameSettings, "target_points" | "best_of_sets" | "period_minutes"> & {
+  target_points: number | null;
+  best_of_sets: number | null;
+  period_minutes: number | null;
   id: string;
   home_score: number;
   away_score: number;
@@ -22,6 +25,7 @@ export type CasualGame = CasualGameSettings & {
   status: "live" | "final";
   version: number;
   updated_at: string;
+  observed_at: string;
 };
 export type CasualGameCreated = { game: CasualGame; host_token: string; viewer_token: string };
 export type CasualScoreAction = { side: "home" | "away"; points?: 1 | 2 | 3 };

@@ -1044,6 +1044,7 @@ async function main(): Promise<void> {
     };
     app = await buildApp({
       config,
+      casualSql: sql,
       probes: {
         database: databaseProbe,
         queue: databaseProbe,

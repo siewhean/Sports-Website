@@ -401,16 +401,18 @@ export async function registerGateCC4PublicTruthRoutes(
       if (!first) throw new ApiError(404, ErrorCode.PUBLIC_COMPETITION_NOT_FOUND, "Competition not found");
       let lastVersion = `${first.freshness.schedule_version}:${first.freshness.result_version}:${first.freshness.projection_version}`;
       let checking = false;
+      let finished = false;
       const stream = new Readable({ read() {} });
       const sendVersion = (version: string) => stream.push(`event: version\ndata: ${JSON.stringify(version)}\n\n`);
       sendVersion(lastVersion);
       const timer = setInterval(async () => {
-        if (checking || stream.destroyed) return;
+        if (checking || finished || stream.destroyed) return;
         checking = true;
         try {
           const version = runtime.version
             ? await runtime.version(request.params.slug)
             : (await runtime.read(request.params.slug))?.freshness;
+          if (finished || stream.destroyed) return;
           const currentVersion =
             typeof version === "string"
               ? version
@@ -419,22 +421,31 @@ export async function registerGateCC4PublicTruthRoutes(
                 : null;
           if (!currentVersion) {
             stream.push("event: unavailable\ndata: {}\n\n");
-            stream.push(null);
+            finish();
           } else if (currentVersion !== lastVersion) {
             lastVersion = currentVersion;
             sendVersion(lastVersion);
           } else {
-            stream.push(": keepalive\n\n");
+            stream.push("event: heartbeat\ndata: {}\n\n");
           }
         } catch {
+          if (finished || stream.destroyed) return;
           stream.push("event: reconnect\ndata: {}\n\n");
-          stream.push(null);
+          finish();
         } finally {
           checking = false;
         }
       }, 2_000);
-      const lifetime = setTimeout(() => stream.push(null), 28_000);
+      const lifetime = setTimeout(finish, 28_000);
+      function finish() {
+        if (finished) return;
+        finished = true;
+        clearInterval(timer);
+        clearTimeout(lifetime);
+        stream.push(null);
+      }
       stream.on("close", () => {
+        finished = true;
         clearInterval(timer);
         clearTimeout(lifetime);
       });

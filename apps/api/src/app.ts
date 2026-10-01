@@ -254,6 +254,10 @@ export async function buildApp(options: BuildAppOptions) {
             in: "cookie",
             name: options.config.identity.sessionCookieName,
           },
+          casualHost: { type: "apiKey", in: "header", name: "x-casual-host-token" },
+          casualViewerHeader: { type: "apiKey", in: "header", name: "x-casual-viewer-token" },
+          casualViewerQuery: { type: "apiKey", in: "query", name: "viewer_token" },
+          csrfToken: { type: "apiKey", in: "header", name: "x-csrf-token" },
           providerEventSignature: {
             type: "apiKey",
             in: "header",

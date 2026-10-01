@@ -43,6 +43,17 @@ type State = Pick<
   | "timer_started_at"
   | "status"
 >;
+const HostSecurity = [{ casualHost: [] }];
+const AccountReadSecurity = [{ sessionCookie: [] }];
+const AccountMutationSecurity = [{ sessionCookie: [], csrfToken: [] }];
+const ClaimSecurity = [{ sessionCookie: [], csrfToken: [], casualHost: [] }];
+const GameReadSecurity = [
+  { casualHost: [] },
+  { casualViewerHeader: [] },
+  { casualViewerQuery: [] },
+  { sessionCookie: [] },
+];
+
 const Sport = Type.Union([
   Type.Literal("canoe_polo"),
   Type.Literal("badminton"),
@@ -147,6 +158,13 @@ export async function registerCasualRoutes(
   options: { sql: postgres.Sql; identityRequests?: IdentityRequestContext },
 ) {
   const sql = options.sql;
+  app.addHook("onSend", async (request, reply) => {
+    if (request.routeOptions.url?.startsWith("/api/v1/casual/")) {
+      reply.header("Cache-Control", "private, no-store");
+      reply.header("Pragma", "no-cache");
+      reply.header("Vary", "Origin, Cookie");
+    }
+  });
   const readGame = async (id: string, hash: string, host = false): Promise<GameRow> => {
     const rows = await sql<
       GameRow[]
@@ -160,7 +178,7 @@ export async function registerCasualRoutes(
   };
   app.post<{ Body: Settings }>(
     "/api/v1/casual/games",
-    { schema: { body: SettingsBody, tags: ["casual-games"] } },
+    { schema: { body: SettingsBody, tags: ["casual-games"], security: [] } },
     async (request, reply) => {
       const settings = normalizeCasualSettings(request.body);
       const host_token = freshToken(),
@@ -177,6 +195,7 @@ export async function registerCasualRoutes(
     {
       schema: {
         params: IdParams,
+        security: GameReadSecurity,
         querystring: Type.Object({ viewer_token: Type.Optional(Type.String()) }),
         tags: ["casual-games"],
       },
@@ -212,6 +231,10 @@ export async function registerCasualRoutes(
       const row = rows[0];
       if (!row) throw notFound();
       if (row.status === "final" && kind !== "undo") throw new ApiError(409, ErrorCode.CONFLICT, "Game is finished");
+      if (row.status === "final" && kind === "undo") {
+        const finished = await tx`SELECT 1 FROM casual_game_actions WHERE game_id=${id} AND kind='finish' LIMIT 1`;
+        if (finished.length) throw new ApiError(409, ErrorCode.CONFLICT, "Game is finished");
+      }
       let lastScoreVersion: number | undefined;
       const before = state(row);
       const next: State = { ...before, sets: [...row.sets] };
@@ -226,7 +249,9 @@ export async function registerCasualRoutes(
           const winBy = SPORT_PACKS[row.sport_id].matchStructure.winBy ?? 1;
           const high = Math.max(next.home_score, next.away_score),
             low = Math.min(next.home_score, next.away_score);
-          const pointCap = SPORT_PACKS[row.sport_id].matchStructure.pointCap;
+          const configuredCap = SPORT_PACKS[row.sport_id].matchStructure.pointCap;
+          // A custom target above the standard cap must remain attainable.
+          const pointCap = configuredCap != null && row.target_points <= configuredCap ? configuredCap : null;
           if (
             (high >= row.target_points && high - low >= winBy) ||
             (pointCap !== null && pointCap !== undefined && high >= pointCap)
@@ -295,6 +320,7 @@ export async function registerCasualRoutes(
     "/api/v1/casual/games/:id/actions",
     {
       schema: {
+        security: HostSecurity,
         params: IdParams,
         body: Type.Object({
           side: Type.Union([Type.Literal("home"), Type.Literal("away")]),
@@ -307,22 +333,29 @@ export async function registerCasualRoutes(
   );
   app.post<{ Params: { id: string } }>(
     "/api/v1/casual/games/:id/undo",
-    { schema: { params: IdParams, tags: ["casual-games"] } },
+    { schema: { security: HostSecurity, params: IdParams, tags: ["casual-games"] } },
     async (request) => mutate(request.params.id, requireHost(request), "undo", {}),
   );
   app.post<{ Params: { id: string }; Body: { running: boolean } }>(
     "/api/v1/casual/games/:id/timer",
-    { schema: { params: IdParams, body: Type.Object({ running: Type.Boolean() }), tags: ["casual-games"] } },
+    {
+      schema: {
+        security: HostSecurity,
+        params: IdParams,
+        body: Type.Object({ running: Type.Boolean() }),
+        tags: ["casual-games"],
+      },
+    },
     async (request) => mutate(request.params.id, requireHost(request), "timer", request.body),
   );
   app.post<{ Params: { id: string } }>(
     "/api/v1/casual/games/:id/finish",
-    { schema: { params: IdParams, tags: ["casual-games"] } },
+    { schema: { security: HostSecurity, params: IdParams, tags: ["casual-games"] } },
     async (request) => mutate(request.params.id, requireHost(request), "finish", {}),
   );
   app.post<{ Params: { id: string } }>(
     "/api/v1/casual/games/:id/claim",
-    { schema: { params: IdParams, tags: ["casual-games"] } },
+    { schema: { security: ClaimSecurity, params: IdParams, tags: ["casual-games"] } },
     async (request) => {
       const accountId = await account(request);
       const hash = requireHost(request);
@@ -333,21 +366,30 @@ export async function registerCasualRoutes(
       return presentation(rows[0]);
     },
   );
-  app.get("/api/v1/casual/me/games", { schema: { tags: ["casual-games"] } }, async (request) => {
-    const accountId = await account(request, false);
-    const rows = await sql<
-      GameRow[]
-    >`SELECT * FROM casual_games WHERE owner_account_id=${accountId} ORDER BY created_at DESC LIMIT 100`;
-    return rows.map(presentation);
-  });
-  app.get("/api/v1/casual/me/presets", { schema: { tags: ["casual-games"] } }, async (request) => {
-    const accountId = await account(request, false);
-    return sql`SELECT id,name,settings,created_at FROM casual_game_presets WHERE owner_account_id=${accountId} ORDER BY created_at DESC LIMIT 100`;
-  });
+  app.get(
+    "/api/v1/casual/me/games",
+    { schema: { tags: ["casual-games"], security: AccountReadSecurity } },
+    async (request) => {
+      const accountId = await account(request, false);
+      const rows = await sql<
+        GameRow[]
+      >`SELECT * FROM casual_games WHERE owner_account_id=${accountId} ORDER BY created_at DESC LIMIT 100`;
+      return rows.map(presentation);
+    },
+  );
+  app.get(
+    "/api/v1/casual/me/presets",
+    { schema: { tags: ["casual-games"], security: AccountReadSecurity } },
+    async (request) => {
+      const accountId = await account(request, false);
+      return sql`SELECT id,name,settings,created_at FROM casual_game_presets WHERE owner_account_id=${accountId} ORDER BY created_at DESC LIMIT 100`;
+    },
+  );
   app.post<{ Body: { name: string; settings: Settings } }>(
     "/api/v1/casual/me/presets",
     {
       schema: {
+        security: AccountMutationSecurity,
         body: Type.Object({ name: Type.String({ minLength: 1, maxLength: 60 }), settings: SettingsBody }),
         tags: ["casual-games"],
       },
@@ -361,18 +403,27 @@ export async function registerCasualRoutes(
       return rows[0];
     },
   );
-  app.get("/api/v1/casual/friends", { schema: { tags: ["casual-games"] } }, async (request) => {
-    const accountId = await account(request, false);
-    return sql`SELECT a.id,a.display_name FROM casual_friend_requests f JOIN accounts a ON a.id=CASE WHEN f.sender_id=${accountId} THEN f.recipient_id ELSE f.sender_id END WHERE (f.sender_id=${accountId} OR f.recipient_id=${accountId}) AND f.status='accepted' ORDER BY a.display_name`;
-  });
-  app.get("/api/v1/casual/friends/requests", { schema: { tags: ["casual-games"] } }, async (request) => {
-    const accountId = await account(request, false);
-    return sql`SELECT f.id,f.sender_id,f.recipient_id,f.status,f.created_at,a.display_name AS sender_name FROM casual_friend_requests f JOIN accounts a ON a.id=f.sender_id WHERE f.recipient_id=${accountId} AND f.status='pending' ORDER BY f.created_at DESC`;
-  });
+  app.get(
+    "/api/v1/casual/friends",
+    { schema: { tags: ["casual-games"], security: AccountReadSecurity } },
+    async (request) => {
+      const accountId = await account(request, false);
+      return sql`SELECT a.id,a.display_name FROM casual_friend_requests f JOIN accounts a ON a.id=CASE WHEN f.sender_id=${accountId} THEN f.recipient_id ELSE f.sender_id END WHERE (f.sender_id=${accountId} OR f.recipient_id=${accountId}) AND f.status='accepted' ORDER BY a.display_name`;
+    },
+  );
+  app.get(
+    "/api/v1/casual/friends/requests",
+    { schema: { tags: ["casual-games"], security: AccountReadSecurity } },
+    async (request) => {
+      const accountId = await account(request, false);
+      return sql`SELECT f.id,f.sender_id,f.recipient_id,f.status,f.created_at,a.display_name AS sender_name FROM casual_friend_requests f JOIN accounts a ON a.id=f.sender_id WHERE f.recipient_id=${accountId} AND f.status='pending' ORDER BY f.created_at DESC`;
+    },
+  );
   app.post<{ Body: { recipient_email: string } }>(
     "/api/v1/casual/friends/requests",
     {
       schema: {
+        security: AccountMutationSecurity,
         body: Type.Object({ recipient_email: Type.String({ format: "email", maxLength: 254 }) }),
         tags: ["casual-games"],
       },
@@ -395,7 +446,7 @@ export async function registerCasualRoutes(
   );
   app.post<{ Params: { id: string } }>(
     "/api/v1/casual/friends/requests/:id/accept",
-    { schema: { params: IdParams, tags: ["casual-games"] } },
+    { schema: { security: AccountMutationSecurity, params: IdParams, tags: ["casual-games"] } },
     async (request) => {
       const accountId = await account(request);
       const rows =
@@ -408,6 +459,7 @@ export async function registerCasualRoutes(
     "/api/v1/casual/games/:id/share",
     {
       schema: {
+        security: AccountMutationSecurity,
         params: IdParams,
         body: Type.Object({ friend_account_id: Type.String({ format: "uuid" }) }),
         tags: ["casual-games"],
@@ -425,11 +477,15 @@ export async function registerCasualRoutes(
       return { shared: true };
     },
   );
-  app.get("/api/v1/casual/friends/shared-games", { schema: { tags: ["casual-games"] } }, async (request) => {
-    const accountId = await account(request, false);
-    const rows = await sql<
-      GameRow[]
-    >`SELECT g.* FROM casual_game_shares s JOIN casual_games g ON g.id=s.game_id WHERE s.recipient_id=${accountId} ORDER BY s.shared_at DESC LIMIT 100`;
-    return rows.map(presentation);
-  });
+  app.get(
+    "/api/v1/casual/friends/shared-games",
+    { schema: { tags: ["casual-games"], security: AccountReadSecurity } },
+    async (request) => {
+      const accountId = await account(request, false);
+      const rows = await sql<
+        GameRow[]
+      >`SELECT g.* FROM casual_game_shares s JOIN casual_games g ON g.id=s.game_id WHERE s.recipient_id=${accountId} ORDER BY s.shared_at DESC LIMIT 100`;
+      return rows.map(presentation);
+    },
+  );
 }

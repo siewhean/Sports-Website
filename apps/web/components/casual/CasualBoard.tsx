@@ -103,7 +103,7 @@ export function CasualBoard({ id, mode, viewerToken }: { id: string; mode: "host
   }
 
   async function copyViewerLink() {
-    const token = game?.viewer_token ?? viewerTokenFor(id);
+    const token = viewerTokenFor(id);
     if (!token) return setMessage(c.missingViewingLink);
     const url = new URL(casualViewerHref(id, token), window.location.origin).toString();
     try {

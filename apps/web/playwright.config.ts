@@ -32,6 +32,7 @@ export default defineConfig({
     // production-backed config (playwright.gate-d.config.ts).
     "**/phase-7-multi-division-lifecycle.spec.ts",
     "**/phase-7-sch006-official-lifecycle.spec.ts",
+    "**/phase-7-casual-public-lifecycle.spec.ts",
     "**/phase-7-security-rendering.spec.ts",
   ],
   fullyParallel: true,

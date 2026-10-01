@@ -1,3 +1,4 @@
+import type postgres from "postgres";
 import { parseConfig } from "@matchday/config";
 import { buildApp } from "../src/app.js";
 import { IdentityApiRuntime, UnavailableIdentityProvider } from "../src/identity-runtime.js";
@@ -94,6 +95,7 @@ export async function generateOpenApiDocument() {
     gateCC4Lifecycle: new GateCC4LifecycleOperations(sql as unknown as PostgresJsSql),
     gateCC4PublicTruthRuntime: new GateCC4PublicTruthRuntime(sql as unknown as PostgresJsSql),
     scoringAccessHmacKeySql: sql as unknown as PostgresJsSql,
+    casualSql: sql as unknown as postgres.Sql,
   });
   try {
     return `${JSON.stringify(app.swagger(), null, 2)}\n`;
