@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { messages, opaqueId } from "@matchday/ui";
 import {
@@ -143,6 +143,13 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
+  const previousStepRef = useRef(activeStep);
+
+  useLayoutEffect(() => {
+    if (previousStepRef.current === activeStep) return;
+    previousStepRef.current = activeStep;
+    stepHeadingRef.current?.focus();
+  }, [activeStep]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -220,7 +227,6 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     if (!validateStep(activeStep)) return;
     setCommandError("");
     setActiveStep((current) => Math.min(current + 1, createSteps.length - 1));
-    requestAnimationFrame(() => stepHeadingRef.current?.focus());
   }
 
   function focusField(field: CompetitionCreateField) {

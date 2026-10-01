@@ -7,6 +7,9 @@ import {
   installConsoleGuard,
 } from "./helpers/console-guard";
 
+// Requests are mocked here; keep service-worker fetches from bypassing page routes.
+test.use({ serviceWorkers: "block" });
+
 const organisationId = "79685f62-e0f7-4c41-a329-5532bf41cfa2";
 const competitionId = "4dc85811-e715-40f4-8609-2523f7516e5a";
 
@@ -297,4 +300,63 @@ test("an unauthenticated organiser can start the MATCHDAY sign-in flow from comp
     )}`,
   );
   await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
+});
+
+test("step changes settle heading focus before the next field accepts immediate typing", async ({ page }, testInfo) => {
+  await page.route("**/api/phase3/competitions", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
+  await page.goto("/organiser/competitions/new");
+  await dismissConsent(page);
+  await page.getByLabel("Competition name").fill("National Open");
+  await page.getByLabel("Sport").selectOption("badminton");
+  // Hold post-click animation frames so the regression exercises immediate typing
+  // before deferred focus work, without adding input delays or retries.
+  await page.evaluate(() => {
+    const nativeFrame = window.requestAnimationFrame.bind(window);
+    const deferredFrames: FrameRequestCallback[] = [];
+    let holdFrames = false;
+    document.addEventListener(
+      "click",
+      () => {
+        holdFrames = true;
+      },
+      { capture: true, once: true },
+    );
+    window.requestAnimationFrame = (callback) => {
+      if (holdFrames) {
+        deferredFrames.push(callback);
+        return -deferredFrames.length;
+      }
+      return nativeFrame(callback);
+    };
+    Object.defineProperty(window, "flushDeferredFocus", {
+      value: () => {
+        holdFrames = false;
+        const callbacks = deferredFrames.splice(0);
+        const before = document.activeElement?.id;
+        callbacks.forEach((callback) => callback(performance.now()));
+        return {
+          callbackSources: callbacks.map((callback) => callback.toString()),
+          before,
+          after: document.activeElement?.id,
+        };
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
+  const venue = page.getByLabel("Venue name");
+  await venue.focus();
+  const focusState = await page.evaluate(() => Reflect.get(window, "flushDeferredFocus")());
+  await testInfo.attach("step-focus-interleaving", {
+    body: JSON.stringify(focusState),
+    contentType: "application/json",
+  });
+  await expect(venue).toBeFocused();
+  await page.keyboard.insertText("Immediate venue");
+  await expect(venue).toHaveValue("Immediate venue");
+  await page.getByLabel("Address", { exact: true }).fill("1 Arena Road");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Dates and time" })).toBeVisible();
 });
