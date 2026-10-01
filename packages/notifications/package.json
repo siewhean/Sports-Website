@@ -17,7 +17,7 @@
     "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
-    "nodemailer": "^9.1.0",
+    "nodemailer": "10.0.9",
     "postgres": "3.4.9",
     "redis": "6.1.0"
   },
