@@ -13,8 +13,8 @@ CREATE TABLE competition_officials (
   FOREIGN KEY (competition_id, organisation_id) REFERENCES competitions(id, organisation_id) ON DELETE CASCADE
 );
 
-CREATE INDEX competition_officials_competition_active_idx
-ON competition_officials(competition_id)
+CREATE UNIQUE INDEX competition_officials_active_name_uidx
+ON competition_officials(competition_id, lower(trim(name)))
 WHERE archived_at IS NULL;
 
 CREATE INDEX competition_officials_competition_all_idx

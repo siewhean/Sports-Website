@@ -1074,6 +1074,95 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
     });
   });
 
+  describe("CP 8A: Archived assignment retention", () => {
+    it("retains archived membership, allows role edits and removal, then rejects re-addition", async () => {
+      const [match] = await client<{ id: string }[]>`
+        SELECT id FROM matches WHERE competition_id=${comp1Id} ORDER BY ordinal ASC LIMIT 1 OFFSET 2`;
+      const assignmentUrl = `/api/v1/phase4/competitions/${comp1Id}/matches/${match!.id}/officials`;
+      const createOfficial = async (name: string) => {
+        const response = await app.inject({
+          method: "POST",
+          url: `/api/v1/phase4/competitions/${comp1Id}/officials`,
+          headers: ownerHeaders(),
+          body: { name },
+        });
+        expect(response.statusCode).toBe(201);
+        return JSON.parse(response.body).id as string;
+      };
+      const archivedId = await createOfficial("CP8A Retained Archived");
+      const activeId = await createOfficial("CP8A Added Active");
+      const replace = (assignments: Array<{ official_id: string; assigned_role?: string }>) =>
+        app.inject({
+          method: "PUT",
+          url: assignmentUrl,
+          headers: ownerHeaders(),
+          body: { assignments },
+        });
+      const revision = async () =>
+        (
+          await client<{ revision: number }[]>`
+        SELECT revision FROM competitions WHERE id=${comp1Id}`
+        )[0]!.revision;
+
+      try {
+        expect((await replace([{ official_id: archivedId, assigned_role: "Lead" }])).statusCode).toBe(200);
+        const archived = await app.inject({
+          method: "POST",
+          url: `/api/v1/phase4/competitions/${comp1Id}/officials/${archivedId}/archive`,
+          headers: ownerHeaders(),
+        });
+        expect(archived.statusCode).toBe(200);
+
+        const beforeAdd = await revision();
+        const retained = await replace([
+          { official_id: archivedId, assigned_role: "Lead" },
+          { official_id: activeId, assigned_role: "Assistant" },
+        ]);
+        expect(retained.statusCode).toBe(200);
+        expect(JSON.parse(retained.body)).toMatchObject({ bumped_revision: true });
+        expect(
+          JSON.parse(retained.body)
+            .assignments.map((a: { official_id: string }) => a.official_id)
+            .sort(),
+        ).toEqual([archivedId, activeId].sort());
+        expect(await revision()).toBe(beforeAdd + 1);
+
+        const beforeRoles = await revision();
+        const roles = await replace([
+          { official_id: archivedId, assigned_role: "Supervisor" },
+          { official_id: activeId, assigned_role: "Scorer" },
+        ]);
+        expect(roles.statusCode).toBe(200);
+        expect(JSON.parse(roles.body)).toMatchObject({ bumped_revision: false });
+        expect(JSON.parse(roles.body).assignments).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ official_id: archivedId, assigned_role: "Supervisor" }),
+            expect.objectContaining({ official_id: activeId, assigned_role: "Scorer" }),
+          ]),
+        );
+        expect(await revision()).toBe(beforeRoles);
+
+        const removed = await replace([{ official_id: activeId, assigned_role: "Scorer" }]);
+        expect(removed.statusCode).toBe(200);
+        expect(JSON.parse(removed.body)).toMatchObject({ bumped_revision: true });
+        expect(JSON.parse(removed.body).assignments).toHaveLength(1);
+        expect(await revision()).toBe(beforeRoles + 1);
+
+        const beforeReadd = await revision();
+        const readded = await replace([{ official_id: archivedId }, { official_id: activeId }]);
+        expect(readded.statusCode).toBe(409);
+        expect(JSON.parse(readded.body).error.code).toBe(ErrorCode.OFFICIAL_ARCHIVED);
+        expect(await revision()).toBe(beforeReadd);
+        const persisted = await client<{ official_id: string; assigned_role: string }[]>`
+          SELECT official_id, assigned_role FROM match_official_assignments WHERE match_id=${match!.id}`;
+        expect(persisted).toEqual([{ official_id: activeId, assigned_role: "Scorer" }]);
+        expect((await replace([])).statusCode).toBe(200);
+      } finally {
+        await replace([]);
+      }
+    });
+  });
+
   describe("Suite 6: Official Workspace Endpoint", () => {
     it("returns complete official workspace in a single round-trip", async () => {
       const res = await app.inject({

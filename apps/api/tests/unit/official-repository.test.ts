@@ -220,6 +220,7 @@ describe("OfficialRepository (Unit)", () => {
 
     // Duplicate official in same match replacement
     mockUnsafe.mockResolvedValueOnce([{ id: matchId }]); // match exists
+    mockUnsafe.mockResolvedValueOnce([]); // existing assignments
     mockUnsafe.mockResolvedValueOnce([{ id: officialId, competition_id: competitionId }]); // official exists
     await expect(
       repo.replaceMatchAssignments({
@@ -232,8 +233,8 @@ describe("OfficialRepository (Unit)", () => {
 
     // Success replacement
     mockUnsafe.mockResolvedValueOnce([{ id: matchId }]); // match exists
-    mockUnsafe.mockResolvedValueOnce([{ id: officialId, competition_id: competitionId }]); // official exists
     mockUnsafe.mockResolvedValueOnce([]); // existing assignments
+    mockUnsafe.mockResolvedValueOnce([{ id: officialId, competition_id: competitionId }]); // official exists
     mockUnsafe.mockResolvedValueOnce([{ revision: 7 }]); // increment revision
     mockUnsafe.mockResolvedValueOnce([]); // DELETE match_official_assignments
     mockUnsafe.mockResolvedValueOnce([

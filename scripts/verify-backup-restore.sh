@@ -224,6 +224,17 @@ postgres_dump "$SOURCE_DB"
 postgres_createdb "$RESTORE_DB"
 postgres_restore "$RESTORE_DB"
 
+if [[ "$(postgres_psql "$SOURCE_DB" -At -c "SELECT to_regclass('public.competition_officials') IS NOT NULL;")" == "t" ]]; then
+  official_name_index_query="SELECT pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid=to_regclass('public.competition_officials_active_name_uidx') AND indisunique AND indpred IS NOT NULL;"
+  source_official_name_index="$(postgres_psql "$SOURCE_DB" -At -c "$official_name_index_query")"
+  restore_official_name_index="$(postgres_psql "$RESTORE_DB" -At -c "$official_name_index_query")"
+  if [[ -z "$source_official_name_index" || "$source_official_name_index" != "$restore_official_name_index" ]]; then
+    echo "Backup restore verification failed: active official-name unique index is missing or changed" >&2
+    exit 1
+  fi
+  echo "Active official-name partial unique index verified after migration and restore."
+fi
+
 source_count="$(postgres_psql "$SOURCE_DB" -At -c "SELECT count(*) FROM accounts;")"
 restore_count="$(postgres_psql "$RESTORE_DB" -At -c "SELECT count(*) FROM accounts;")"
 source_fingerprint="$(postgres_psql "$SOURCE_DB" -At -c "SELECT md5(string_agg(id::text || ':' || primary_email, ',' ORDER BY id)) FROM accounts;")"

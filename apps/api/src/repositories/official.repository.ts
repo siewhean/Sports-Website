@@ -410,6 +410,9 @@ export class OfficialRepository {
       throw new Error(`Match not found in competition: ${params.matchId}`);
     }
 
+    const existingAssignments = await this.listMatchAssignments(params.competitionId, params.matchId, executor);
+    const existingOfficialIds = new Set(existingAssignments.map((assignment) => assignment.official_id));
+
     const uniqueOfficialIds = new Set<string>();
     for (const a of params.assignments) {
       if (uniqueOfficialIds.has(a.officialId)) {
@@ -420,15 +423,13 @@ export class OfficialRepository {
       if (!official) {
         throw new Error(`Official not found in competition: ${a.officialId}`);
       }
-      if (official.archived_at) {
+      if (official.archived_at && !existingOfficialIds.has(official.id)) {
         throw new Error(`Cannot assign archived official to match: ${a.officialId}`);
       }
       if (a.assignedRole && a.assignedRole.trim().length > 40) {
         throw new Error("Assigned role must not exceed 40 characters");
       }
     }
-
-    const existingAssignments = await this.listMatchAssignments(params.competitionId, params.matchId, executor);
 
     const existingMap = new Map<string, string | null>(
       existingAssignments.map((a) => [a.official_id, a.assigned_role ?? null]),

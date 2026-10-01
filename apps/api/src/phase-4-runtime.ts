@@ -173,6 +173,9 @@ function mapPgError(error: unknown): never {
     throw new ApiError(409, ErrorCode.SCHEDULE_LOCK_CONFLICT, "Resource lock conflict; retry operation");
   }
   if (pgCode === "23505") {
+    if (constraint === "competition_officials_active_name_uidx") {
+      throw new ApiError(409, ErrorCode.OFFICIAL_NAME_CONFLICT, "An active official with this name already exists");
+    }
     if (constraint.includes("schedule_generation_jobs") || /schedule_generation_jobs/i.test(message)) {
       throw new ApiError(409, ErrorCode.ACTIVE_SCHEDULE_JOB, "A schedule job is already active");
     }
@@ -5546,12 +5549,15 @@ export class Phase4Runtime {
         throw new ApiError(404, ErrorCode.MATCH_NOT_FOUND, "Match not found");
       }
 
+      const existingAssignments = await this.officialRepo.listMatchAssignments(competitionId, matchId, tx);
+      const existingOfficialIds = new Set(existingAssignments.map((assignment) => assignment.official_id));
+
       for (const a of assignments) {
         const official = await this.officialRepo.findById(a.official_id, competitionId, "none", tx);
         if (!official) {
           throw new ApiError(404, ErrorCode.OFFICIAL_NOT_FOUND, `Official not found: ${a.official_id}`);
         }
-        if (official.archived_at !== null) {
+        if (official.archived_at !== null && !existingOfficialIds.has(official.id)) {
           throw new ApiError(
             409,
             ErrorCode.OFFICIAL_ARCHIVED,
