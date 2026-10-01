@@ -111,7 +111,7 @@ test("an existing writable organisation is selected and bootstrap is not called"
 
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
-  await expect(page.getByLabel("Organisation")).toHaveValue(organisationId);
+  await expect(page.getByLabel("Organisation")).toHaveCount(0);
   await fillCompetition(page);
   await page.getByRole("button", { name: "Create competition" }).click();
 
@@ -120,24 +120,76 @@ test("an existing writable organisation is selected and bootstrap is not called"
   await expect(page).toHaveURL(new RegExp(`/organiser/competitions/${competitionId}/setup`));
 });
 
-test("an unavailable organisation service keeps creation disabled and offers retry", async ({ page }) => {
+test("an unavailable organisation list uses the default workspace on creation", async ({ page }) => {
   allowConsoleFailure(page, /server responded with a status of 503/);
-  await page.route("**/api/phase3/competitions", async (route) => {
+  let competitionCalls = 0;
+  await page.route("**/api/phase3/organisations/bootstrap", async (route) => {
     await route.fulfill({
-      status: 503,
+      status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ error: { code: "API_UNAVAILABLE", message: "Unavailable" } }),
+      body: JSON.stringify({
+        id: organisationId,
+        name: "Organiser workspace",
+        role: "owner",
+        created: false,
+      }),
     });
   });
-
+  await page.route("**/api/phase3/competitions", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "API_UNAVAILABLE", message: "Unavailable" } }),
+      });
+      return;
+    }
+    competitionCalls += 1;
+    expect(route.request().postDataJSON()).toMatchObject({ organisation_id: organisationId });
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: competitionId,
+        status: "draft",
+        sport_code: "badminton",
+        revision: 1,
+        account_default_applied: false,
+      }),
+    });
+  });
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
+  await expect(page.getByLabel("Organisation")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
+  await fillCompetition(page);
+  await page.getByRole("button", { name: "Create competition" }).click();
+  await expect.poll(() => competitionCalls).toBe(1);
+  await expect(page).toHaveURL(new RegExp(`/organiser/competitions/${competitionId}/setup`));
+});
 
-  await expect(
-    page.getByText("Your organisations could not be loaded. Try again before creating a competition."),
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Retry organisation list" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
+test("multiple writable organisations still require an explicit ownership choice", async ({ page }) => {
+  const secondOrganisationId = "ed3a2fc8-c8c2-4819-a2f1-d4bb8c915c2a";
+  await page.route("**/api/phase3/competitions", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        { id: organisationId, name: "National Sports", role: "owner" },
+        { id: secondOrganisationId, name: "Community Sports", role: "organiser" },
+      ]),
+    });
+  });
+  await page.goto("/organiser/competitions/new");
+  await dismissConsent(page);
+  await expect(page.getByLabel("Organisation")).toBeVisible();
+  await page.getByLabel("Competition name").fill("National Open");
+  await page.getByLabel("Sport").selectOption("badminton");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByLabel("Organisation")).toBeFocused();
+  await page.getByLabel("Organisation").selectOption(secondOrganisationId);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByLabel("Venue name")).toBeVisible();
 });
 
 test("an unauthenticated organiser can start the MATCHDAY sign-in flow from competition creation", async ({ page }) => {

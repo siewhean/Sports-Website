@@ -1,0 +1,106 @@
+.banner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  align-self: end;
+  border-top: 1px solid #75846b;
+  background: var(--signal);
+  color: #15190e;
+}
+.viewport {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.track {
+  display: flex;
+  width: max-content;
+  animation: sports-scroll 32s linear infinite;
+}
+.sports {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: space-around;
+  gap: clamp(28px, 4vw, 64px);
+  min-width: 100vw;
+  margin: 0;
+  padding: 20px 32px;
+  list-style: none;
+}
+.sports li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: clamp(0.9rem, 1.4vw, 1.1rem);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.sports svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.control {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 64px;
+  border: 0;
+  border-left: 1px solid #75846b;
+  background: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.control svg {
+  width: 22px;
+  height: 22px;
+}
+.control:hover {
+  background: #b2d85d;
+}
+.control:focus-visible {
+  outline: 3px solid #15190e;
+  outline-offset: -6px;
+}
+.banner[data-paused="true"] .track,
+.banner:hover .track,
+.banner:focus-within .track {
+  animation-play-state: paused;
+}
+@keyframes sports-scroll {
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (max-width: 760px) {
+  .sports {
+    padding-block: 16px;
+  }
+  .control {
+    width: 52px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .track {
+    width: 100%;
+    animation: none;
+  }
+  .sports {
+    min-width: 0;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 14px 24px;
+    padding: 20px 16px;
+  }
+  .sports[aria-hidden="true"],
+  .control {
+    display: none;
+  }
+}

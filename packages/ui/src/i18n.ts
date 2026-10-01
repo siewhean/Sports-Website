@@ -87,6 +87,8 @@ export const messages = {
     visualAlt: "Competition venue and schedule lines converging on a live match",
     marqueeItems: ["Canoe Polo", "Badminton", "Table Tennis", "Volleyball", "Basketball"],
     marqueeLabel: "Supported launch sports",
+    pauseSportsBanner: "Pause sports banner",
+    resumeSportsBanner: "Resume sports banner",
     finalTitle: "Make your next competition unforgettable.",
     finalBody: "Start with capacity. Finish with a result everyone can trust.",
     finalAction: "Create a competition",
@@ -134,7 +136,13 @@ export const messages = {
     organisation: "Organisation",
     loadingOrganisations: "Loading organisations",
     chooseOrganisation: "Choose an organisation",
-    organisationsFailed: "Your organisations could not be loaded. Try again before creating a competition.",
+    organisationsFailed: "Sign in to create a competition. Your saved details will stay here.",
+    organisationsAutomaticFallback:
+      "You can continue entering competition details. We will use your default organiser workspace, or create one if needed, when you create the competition.",
+    organisationsSetupFailed:
+      "We could not prepare your organiser workspace. Your details are saved. Try creating the competition again.",
+    organisationsSignInRequired:
+      "Sign in to prepare your organiser workspace, then try creating the competition again. Your details are saved.",
     noWritableOrganisation: "You need owner or organiser access to create a competition.",
     retryOrganisations: "Retry organisation list",
     signInToLoadOrganisations: "Sign in to load organisations",

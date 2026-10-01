@@ -4,6 +4,7 @@ import { ArrowUpRight, Broadcast, CalendarDots } from "@phosphor-icons/react/dis
 import { messages } from "@matchday/ui";
 import type { CompetitionSummaryView } from "@/lib/phase2";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
+import { SportsBanner } from "./SportsBanner";
 import styles from "./MarketingHome.module.css";
 
 export function MarketingHome({
@@ -49,6 +50,7 @@ export function MarketingHome({
           <div className={styles.heroVisual} aria-hidden="true">
             <Image src="/images/venue-arc.svg" alt="" fill priority sizes="(max-width: 760px) 100vw, 52vw" />
           </div>
+          <SportsBanner />
         </section>
 
         <section className={styles.section} aria-labelledby="journey-title">

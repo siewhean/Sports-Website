@@ -46,7 +46,10 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", credentials: "same-origin", ...init });
   const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
   if (!response.ok) {
-    const message = body && (body.message ?? body.error);
+    const nestedError = body?.error;
+    const message =
+      body?.message ??
+      (nestedError && typeof nestedError === "object" ? (nestedError as Record<string, unknown>).message : nestedError);
     throw new Error(typeof message === "string" ? message : `Request failed (${response.status}).`);
   }
   return body as T;
