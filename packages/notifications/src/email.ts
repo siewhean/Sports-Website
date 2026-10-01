@@ -14,7 +14,7 @@ export interface EmailProvider {
 export function requireSingleEmailMailbox(value: string): string {
   if (/[\r\n]/.test(value)) throw new Error("Email recipient must be exactly one mailbox");
   const parsed = addressparser(value, { flatten: true });
-  const mailbox = parsed[0]?.address.trim();
+  const mailbox = parsed[0]?.address?.trim();
   if (parsed.length !== 1 || mailbox === undefined || mailbox === "") {
     throw new Error("Email recipient must be exactly one mailbox");
   }
