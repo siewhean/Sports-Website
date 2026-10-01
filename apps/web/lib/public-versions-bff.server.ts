@@ -21,22 +21,73 @@ export async function forwardPublicVersionStream(request: Request): Promise<Resp
     process.env.RENDER_API_ORIGIN?.trim() || process.env.MATCHDAY_API_BASE_URL?.trim(),
   );
   if (!backend || backend === incoming.origin) return failure(503);
+  const upstreamAbort = new AbortController();
+  let closeDownstream: (() => void) | undefined;
+  const onAbort = () => {
+    closeDownstream?.();
+    // Next can abort with a generic destination-closed Error. Normalize that
+    // expected downstream cancellation before it reaches the upstream reader.
+    upstreamAbort.abort(new DOMException("Client disconnected", "AbortError"));
+  };
+  const cleanup = () => request.signal.removeEventListener("abort", onAbort);
+  request.signal.addEventListener("abort", onAbort, { once: true });
+  if (request.signal.aborted) onAbort();
   try {
     const upstream = await fetch(new URL(incoming.pathname, backend), {
       headers: { accept: "text/event-stream" },
       cache: "no-store",
       redirect: "manual",
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(35_000)]),
+      signal: AbortSignal.any([upstreamAbort.signal, AbortSignal.timeout(35_000)]),
     });
     if (upstream.status !== 200) {
+      cleanup();
       await upstream.body?.cancel();
       return failure([401, 403, 404].includes(upstream.status) ? upstream.status : 502);
     }
     if (!upstream.body || !/^text\/event-stream(?:;|$)/iu.test(upstream.headers.get("content-type") ?? "")) {
+      cleanup();
       await upstream.body?.cancel();
       return failure(502);
     }
-    return new Response(upstream.body, {
+    const reader = upstream.body.getReader();
+    let ended = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        closeDownstream = () => {
+          if (ended) return;
+          ended = true;
+          cleanup();
+          controller.close();
+        };
+        if (request.signal.aborted) onAbort();
+      },
+      async pull(controller) {
+        try {
+          const result = await reader.read();
+          if (ended) return;
+          if (result.done) closeDownstream?.();
+          else controller.enqueue(result.value);
+        } catch (error) {
+          if (ended) return;
+          ended = true;
+          cleanup();
+          // Only a real downstream abort is a normal close. Timeout, network
+          // failure and malformed upstream streams remain observable errors.
+          if (request.signal.aborted) controller.close();
+          else controller.error(error);
+        }
+      },
+      async cancel() {
+        ended = true;
+        cleanup();
+        try {
+          await reader.cancel();
+        } finally {
+          upstreamAbort.abort(new DOMException("Client disconnected", "AbortError"));
+        }
+      },
+    });
+    return new Response(body, {
       headers: {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-store",
@@ -44,6 +95,7 @@ export async function forwardPublicVersionStream(request: Request): Promise<Resp
       },
     });
   } catch {
+    cleanup();
     return failure(503);
   }
 }

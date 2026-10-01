@@ -71,9 +71,37 @@ describe("same-origin public version stream", () => {
     const response = await GET(new Request(`http://localhost:3103${path}`, { signal: controller.signal }));
     const reader = response.body!.getReader();
     await reader.read();
-    controller.abort();
-    await expect(reader.read()).rejects.toThrow();
+    controller.abort(new Error("The destination stream closed early."));
+    expect((await reader.read()).done).toBe(true);
     await closed;
+  });
+
+  it("cancels the upstream reader when the response consumer closes", async () => {
+    let closed!: Promise<unknown[]>;
+    await fixture((_incoming, reply) => {
+      reply.writeHead(200, { "content-type": "text/event-stream" });
+      reply.write('event: version\ndata: "1:1:1"\n\n');
+      closed = once(reply, "close");
+    });
+    const response = await GET(request());
+    const reader = response.body!.getReader();
+    await reader.read();
+    await expect(reader.cancel()).resolves.toBeUndefined();
+    await closed;
+  });
+
+  it("preserves genuine upstream stream errors instead of treating them as navigation aborts", async () => {
+    let fail!: () => void;
+    await fixture((_incoming, reply) => {
+      reply.writeHead(200, { "content-type": "text/event-stream" });
+      reply.write('event: version\ndata: "1:1:1"\n\n');
+      fail = () => reply.destroy(new Error("Upstream connection failed"));
+    });
+    const response = await GET(request());
+    const reader = response.body!.getReader();
+    await reader.read();
+    fail();
+    await expect(reader.read()).rejects.toThrow();
   });
 
   it.each([
