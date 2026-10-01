@@ -92,19 +92,29 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
   const slug = `v1-browser-${seed.fixtureKey}`;
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
-  await page.getByLabel("Organisation").selectOption(seed.organisationId);
+  await expect(page.getByLabel("Organisation", { exact: true })).toHaveCount(0);
   await page.getByLabel("Competition name").fill("V1 Browser Cup");
   await page.getByLabel("Public address").fill(slug);
   await page.getByLabel("Sport").selectOption("canoe_polo");
-  await page.getByLabel("Venue").fill("V1 Arena");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
+  await page.getByLabel("Venue name").fill("V1 Arena");
   await page.getByLabel("Address", { exact: true }).fill("1 Matchday Road");
-  await page.getByLabel("Locality").fill("Singapore");
+  await page.getByLabel("City or locality (optional)").fill("Singapore");
   await page.getByLabel("Country code").fill("SG");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Dates and time" })).toBeVisible();
   await page.getByLabel("Start date").fill("2027-08-01");
   await page.getByLabel("End date").fill("2027-08-02");
-  await page.getByLabel("Time zone").selectOption("Asia/Singapore");
+  await page.getByLabel("Time zone").fill("Asia/Singapore");
   await page.getByLabel("Locale").fill("en-SG");
-  await submit(page, page.getByRole("button", { name: "Create competition" }), "POST", "/api/phase3/competitions");
+  const creationResponse = await submit(
+    page,
+    page.getByRole("button", { name: "Create competition" }),
+    "POST",
+    "/api/phase3/competitions",
+  );
+  expect(creationResponse.request().postDataJSON()).toMatchObject({ organisation_id: seed.organisationId });
   await page.waitForURL(/\/organiser\/competitions\/[0-9a-f-]+\/setup$/);
   const competitionId = /\/competitions\/([0-9a-f-]+)\//.exec(page.url())?.[1];
   if (!competitionId) throw new Error(`Missing competition id from ${page.url()}`);

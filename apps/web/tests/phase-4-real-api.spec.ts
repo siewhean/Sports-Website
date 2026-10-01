@@ -157,8 +157,10 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
 
-  // Step 0: Organisation, Name, Public address, Sport
-  await page.getByLabel("Organisation").selectOption(seed.organisationId);
+  // The single writable organisation is resolved without a selector.
+  await expect(page.getByLabel("Organisation", { exact: true })).toHaveCount(0);
+
+  // Step 0: Name, Public address, Sport
   await page.getByLabel("Competition name").fill("Phase 4 Browser Verified Cup");
   await page.getByLabel("Public address").fill(slug);
   await page.getByLabel("Sport").selectOption("canoe_polo");
@@ -178,12 +180,13 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await page.getByLabel("End date").fill("2027-08-02");
   await page.getByLabel("Time zone").fill("Asia/Singapore");
   await page.getByLabel("Locale").fill("en-SG");
-  await submitAndWait(
+  const creationResponse = await submitAndWait(
     page,
     page.getByRole("button", { name: "Create competition" }),
     "POST",
     "/api/phase3/competitions",
   );
+  expect(creationResponse.request().postDataJSON()).toMatchObject({ organisation_id: seed.organisationId });
   await page.waitForURL(/\/organiser\/competitions\/[0-9a-f-]+\/setup$/);
   const competitionId = /\/competitions\/([0-9a-f-]+)\//.exec(page.url())?.[1];
   if (!competitionId) throw new Error(`Could not read created competition id from ${page.url()}`);
