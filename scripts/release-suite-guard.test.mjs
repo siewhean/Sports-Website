@@ -42,6 +42,15 @@ describe("release-suite-guard — Nonzero-Test & Configuration Protection", () =
       expect(parseNonzeroTestCount(playwrightOutput)).toBe(12);
     });
 
+    it("extracts task counts from Turborepo runner output", () => {
+      const turboOutput = `
+      Tasks:    28 successful, 28 total
+      Cached:   28 cached, 28 total
+      Time:     20ms >>> FULL TURBO
+      `;
+      expect(parseNonzeroTestCount(turboOutput)).toBe(28);
+    });
+
     it("returns 0 when no tests ran or output is empty / failed closed", () => {
       expect(parseNonzeroTestCount("")).toBe(0);
       expect(parseNonzeroTestCount("No tests found")).toBe(0);
