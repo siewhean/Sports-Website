@@ -3,6 +3,8 @@ import { messages, type ShellKind } from "@matchday/ui";
 import { BrandLink } from "./Primitives";
 import { NotificationBell } from "./NotificationBell";
 import { IdentityStatus } from "./IdentityStatus";
+import { JourneyNavigation } from "./SiteChrome";
+import { ThemeControl } from "./ThemeControl";
 
 const organiserLinks = messages.organiser.sections.map((label, index) => ({
   label,
@@ -45,9 +47,11 @@ export function ProductionShell({
         <div className="production-shell__actions">
           {showNotifications ? <NotificationBell /> : null}
           {utility}
+          <ThemeControl />
           <IdentityStatus className="site-header__access" />
         </div>
       </header>
+      <JourneyNavigation className="production-shell__journeys" />
       <div className="production-shell__body">
         <nav className="production-shell__rail" aria-label={navLabel}>
           {links.map((link, index) => (

@@ -1,6 +1,10 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowRight, CalendarDots } from "@phosphor-icons/react/dist/ssr";
-import { translate as t } from "@matchday/ui";
+import { opaqueId, translate as t } from "@matchday/ui";
 import { InlineNotice } from "@/components/foundation/Primitives";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 import { phase2Copy, type CompetitionSummaryView } from "@/lib/phase2";
@@ -25,6 +29,25 @@ export function PublicCompetitionsList({
   competitions: CompetitionSummaryView[];
   viewer?: PublicCompetitionsViewer | null;
 }) {
+  const router = useRouter();
+  const [filter, setFilter] = useState<"all" | "live" | "upcoming" | "final">(opaqueId("all"));
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden) router.refresh();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [router]);
+  const visible = useMemo(
+    () =>
+      competitions.filter((competition) => {
+        if (filter === opaqueId("all")) return true;
+        if (filter === opaqueId("live")) return competition.status === "live";
+        if (filter === opaqueId("upcoming"))
+          return competition.status === "active" || competition.status === "published";
+        return competition.status === "completed" || competition.status === "archived";
+      }),
+    [competitions, filter],
+  );
   return (
     <div className={styles.page}>
       <a className="skip-link" href="#public-list-main">
@@ -53,13 +76,28 @@ export function PublicCompetitionsList({
           </dl>
         </header>
 
-        {competitions.length === 0 ? (
+        <div className={styles.filters} role="group" aria-label={opaqueId("Filter competitions")}>
+          {([opaqueId("all"), opaqueId("live"), opaqueId("upcoming"), opaqueId("final")] as const).map((option) => (
+            <button key={option} type="button" aria-pressed={filter === option} onClick={() => setFilter(option)}>
+              {option === opaqueId("all")
+                ? opaqueId("All")
+                : option === opaqueId("live")
+                  ? opaqueId("Live")
+                  : option === opaqueId("upcoming")
+                    ? opaqueId("Upcoming")
+                    : opaqueId("Final")}
+            </button>
+          ))}
+        </div>
+        {visible.length === 0 ? (
           <div className={styles.empty}>
-            <InlineNotice title={phase2Copy.emptyTitle}>{phase2Copy.publicListEmptyBody}</InlineNotice>
+            <InlineNotice title={phase2Copy.emptyTitle}>
+              {competitions.length ? opaqueId("No competitions match this filter.") : phase2Copy.publicListEmptyBody}
+            </InlineNotice>
           </div>
         ) : (
           <ol className={styles.board}>
-            {competitions.map((competition, index) => (
+            {visible.map((competition, index) => (
               <li key={competition.id}>
                 <Link
                   className={styles.row}

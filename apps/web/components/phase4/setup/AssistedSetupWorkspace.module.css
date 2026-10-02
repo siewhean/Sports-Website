@@ -1,6 +1,6 @@
 .workspace {
   display: grid;
-  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 250px) minmax(0, 1fr);
   min-height: calc(100dvh - 76px);
   margin: -34px -20px -100px;
   background: var(--surface);
@@ -10,13 +10,13 @@
 .stepRail {
   display: flex;
   flex-direction: column;
-  padding: 34px 18px 26px;
+  padding: 34px 16px 26px;
   border-right: 1px solid var(--hairline);
   background: var(--canvas);
 }
 
 .stepRail > p,
-.heading > p {
+.heading > div > p {
   margin: 0 10px 22px;
   color: var(--ink-muted);
   font-family: var(--font-mono);
@@ -29,20 +29,55 @@
 .stepRail ol {
   position: relative;
   display: grid;
-  gap: 2px;
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .stepRail ol::before {
-  position: absolute;
-  top: 24px;
-  bottom: 24px;
-  left: 24px;
-  width: 1px;
+  content: none;
+}
+
+.milestone {
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  padding: 8px 6px;
+}
+
+.milestone[data-current="true"] {
+  border-color: var(--hairline);
+  background: var(--surface);
+}
+
+.milestoneHeading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 8px 7px;
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+
+.milestoneHeading > span {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  height: 24px;
+  border-radius: 50%;
   background: var(--hairline);
-  content: "";
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.milestone[data-current="true"] .milestoneHeading > span {
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+
+.milestone > ol {
+  gap: 0;
 }
 
 .stepRail li {
@@ -50,13 +85,7 @@
 }
 
 .stepRail li::before {
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: -18px;
-  width: 4px;
-  background: transparent;
-  content: "";
+  content: none;
 }
 
 .stepRail li[data-current="true"]::before {
@@ -64,10 +93,10 @@
 }
 .stepRail button {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;
   width: 100%;
-  min-height: 58px;
+  min-height: 48px;
   padding: 5px;
   border: 0;
   background: transparent;
@@ -98,21 +127,21 @@
   gap: 2px;
 }
 .stepRail strong {
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 650;
 }
 .stepRail small {
   font-size: 0.68rem;
 }
-.stepRail li[data-current="true"] button {
+.milestone > ol > li[data-current="true"] button {
   color: var(--ink);
 }
-.stepRail li[data-current="true"] button > span:first-child {
+.milestone > ol > li[data-current="true"] button > span:first-child {
   border-color: var(--signal-strong);
   background: var(--signal-strong);
   color: var(--surface);
 }
-.stepRail li[data-complete="true"] button > span:first-child {
+.milestone > ol > li[data-complete="true"] button > span:first-child {
   border-color: var(--signal-strong);
   color: #668100;
 }
@@ -139,18 +168,22 @@
 .main {
   position: relative;
   min-width: 0;
-  padding: clamp(38px, 5vw, 76px) clamp(26px, 6vw, 86px) 108px;
+  padding: clamp(30px, 4vw, 60px) clamp(24px, 4vw, 60px) 108px;
 }
 .heading {
-  max-width: 900px;
-  margin-bottom: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 250px);
+  gap: 28px;
+  align-items: start;
+  max-width: 1120px;
+  margin-bottom: 36px;
 }
-.heading > p {
+.heading > div > p {
   margin: 0 0 14px;
 }
 .heading h1 {
   margin: 0;
-  font-size: clamp(2.4rem, 5vw, 4.5rem);
+  font-size: clamp(2.1rem, 4vw, 3.65rem);
   font-weight: 590;
   letter-spacing: -0.06em;
   line-height: 0.98;
@@ -158,12 +191,36 @@
 .heading h1:focus {
   outline: none;
 }
-.heading > span {
+.heading > div > span {
   display: block;
   max-width: 720px;
   margin-top: 16px;
   color: var(--ink-muted);
   line-height: 1.55;
+}
+.contextHelp {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--canvas);
+  line-height: 1.45;
+}
+.contextHelp strong {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.contextHelp p {
+  margin: 0 !important;
+  font-size: 1rem;
+  font-weight: 700;
+}
+.contextHelp span {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
 }
 .mobileProgress {
   display: none;
@@ -759,6 +816,12 @@
   .summaryRail {
     max-width: 420px;
   }
+  .heading {
+    grid-template-columns: 1fr;
+  }
+  .contextHelp {
+    max-width: 640px;
+  }
   .preferences {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -794,16 +857,21 @@
     height: 3px;
     accent-color: var(--signal-strong);
   }
+  .mobileProgress small {
+    grid-column: 1 / -1;
+    color: var(--ink-muted);
+  }
   .heading {
     margin-bottom: 30px;
   }
-  .heading > p {
+  .heading > div > p,
+  .contextHelp {
     display: none;
   }
   .heading h1 {
     font-size: clamp(2rem, 11vw, 3rem);
   }
-  .heading > span {
+  .heading > div > span {
     font-size: 0.86rem;
   }
   .basicsLayout,

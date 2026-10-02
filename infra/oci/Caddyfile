@@ -6,7 +6,9 @@ matchday.poladex.shop {
   }
   @api path /api/v1/* /health/live /health/ready /health/version /openapi.json /docs /docs/*
   handle @api {
-    reverse_proxy 172.31.0.11:4000
+    reverse_proxy 172.31.0.11:4000 {
+      trusted_proxies 172.31.0.12
+    }
   }
   handle {
     reverse_proxy 172.31.0.12:3000
@@ -21,7 +23,9 @@ c5-drill.poladex.shop {
   }
   @api path /api/v1/* /health/live /health/ready /health/version /openapi.json /docs /docs/*
   handle @api {
-    reverse_proxy 172.30.0.11:4000
+    reverse_proxy 172.30.0.11:4000 {
+      trusted_proxies 172.30.0.12
+    }
   }
   handle {
     reverse_proxy 172.30.0.12:3000

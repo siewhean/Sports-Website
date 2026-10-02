@@ -1,18 +1,20 @@
 .form {
   display: grid;
-  gap: 1.25rem;
-  max-width: 54rem;
+  gap: clamp(1.25rem, 2.5vw, 2rem);
+  width: 100%;
+  max-width: 68rem;
+  margin-inline: auto;
 }
 
 .intro {
   max-width: 64ch;
-  color: var(--foundation-ink-muted, #475569);
+  color: var(--ink-muted);
 }
 
 .progress {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
+  gap: 0.75rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -22,11 +24,13 @@
   display: flex;
   gap: 0.55rem;
   align-items: center;
-  min-height: 3rem;
-  padding: 0.5rem 0.65rem;
-  border-bottom: 2px solid #cbd5e1;
-  color: #475569;
-  font-size: 0.875rem;
+  min-height: 4rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--hairline, #cbd5e1);
+  border-radius: 0.8rem;
+  background: var(--surface, #fff);
+  color: var(--ink-muted, #475569);
+  font-size: 0.9rem;
 }
 
 .progress span {
@@ -40,48 +44,51 @@
 }
 
 .progress li[data-current="true"] {
-  border-color: #172554;
-  color: #172554;
+  border-color: var(--signal-strong, #6f8907);
+  background: color-mix(in srgb, var(--signal, #c9f31d) 13%, var(--surface, #fff));
+  color: var(--ink, #0f172a);
 }
 
 .progress li[data-current="true"] span,
 .progress li[data-complete="true"] span {
-  background: #172554;
-  color: #fff;
+  background: var(--ink, #0f172a);
+  color: var(--surface, #fff);
 }
 
 .step {
   display: grid;
   gap: 1.25rem;
-  padding: 1.5rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 0.75rem;
-  background: #fff;
+  padding: clamp(1.25rem, 3vw, 2.5rem);
+  border: 1px solid var(--hairline, #cbd5e1);
+  border-radius: 1.1rem;
+  background: var(--surface, #fff);
+  box-shadow: 0 18px 52px rgb(26 28 24 / 5%);
 }
 
 .stepHeading p {
   margin: 0 0 0.25rem;
-  color: #475569;
+  color: var(--ink-muted);
   font-size: 0.8rem;
   font-weight: 700;
 }
 
 .stepHeading h2 {
   margin: 0;
-  color: #0f172a;
-  font-size: 1.35rem;
+  color: var(--ink);
+  font-size: clamp(1.6rem, 2.8vw, 2.4rem);
+  letter-spacing: -0.035em;
 }
 
 .stepHeading span {
   display: block;
   margin-top: 0.35rem;
-  color: #475569;
+  color: var(--ink-muted);
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 1.4rem 1.6rem;
 }
 
 .field,
@@ -104,12 +111,12 @@
 .field select,
 .wide input {
   width: 100%;
-  min-height: 2.75rem;
-  border: 1px solid #94a3b8;
+  min-height: 3rem;
+  border: 1px solid var(--hairline);
   border-radius: 0.5rem;
   padding: 0.65rem 0.75rem;
-  color: #0f172a;
-  background: #fff;
+  color: var(--ink);
+  background: var(--surface);
   font: inherit;
 }
 
@@ -117,37 +124,37 @@
 .field select:focus-visible,
 .wide input:focus-visible,
 .submit:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
 .hint {
   margin: 0;
-  color: #475569;
+  color: var(--ink-muted);
   font-size: 0.875rem;
 }
 
 .error {
   margin: 0;
-  color: #9f1239;
+  color: var(--danger);
   font-weight: 650;
 }
 
 .summary {
-  border-left: 0.3rem solid #be123c;
+  border-left: 0.3rem solid var(--danger);
   padding: 0.75rem 1rem;
-  color: #881337;
-  background: #fff1f2;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
 }
 
 .submit {
   justify-self: start;
-  min-height: 2.75rem;
+  min-height: 3rem;
   border: 0;
   border-radius: 999px;
   padding: 0.7rem 1.2rem;
-  color: #fff;
-  background: #172554;
+  color: var(--signal-ink, #172554);
+  background: var(--signal, #c9f31d);
   font: inherit;
   font-weight: 750;
   cursor: pointer;
@@ -160,28 +167,28 @@
 }
 
 .back {
-  min-height: 2.75rem;
-  border: 1px solid #64748b;
+  min-height: 3rem;
+  border: 1px solid var(--hairline);
   border-radius: 999px;
   padding: 0.7rem 1.2rem;
-  color: #172554;
-  background: #fff;
+  color: var(--ink);
+  background: var(--surface);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
 }
 
 .back:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
 .nextSteps {
   max-width: 54rem;
   padding: 1rem 1.1rem;
-  border-left: 0.3rem solid #0f766e;
-  background: #f0fdfa;
-  color: #134e4a;
+  border-left: 0.3rem solid var(--signal-strong);
+  background: color-mix(in srgb, var(--signal) 11%, var(--surface));
+  color: var(--ink);
 }
 
 .nextSteps p {
@@ -201,7 +208,7 @@
   justify-self: start;
   border: 0;
   padding: 0;
-  color: #172554;
+  color: var(--ink);
   background: transparent;
   font: inherit;
   font-weight: 750;
@@ -210,7 +217,7 @@
 }
 
 .retry:focus-visible {
-  outline: 3px solid #f59e0b;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -225,7 +232,28 @@
 
 @media (max-width: 44rem) {
   .progress {
-    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+  .progress li {
+    justify-content: center;
+    min-height: 3rem;
+    padding: 0.4rem;
+  }
+  .progress li strong {
+    display: none;
+  }
+  .progress li[data-current="true"] strong {
+    display: inline;
+    font-size: 0.78rem;
+  }
+  .actions {
+    flex-wrap: wrap;
+  }
+  .actions button {
+    min-width: 0;
+  }
+  .actions .submit {
+    flex: 1;
   }
 
   .grid {

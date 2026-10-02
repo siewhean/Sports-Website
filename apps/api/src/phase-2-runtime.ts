@@ -5428,10 +5428,11 @@ export class Phase2Runtime {
             away_score: number;
             state: "final" | "corrected";
             created_at: Date | string;
+            snapshot: unknown;
           }>(
             `SELECT DISTINCT ON (m.id) m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
-                  s.home_score,s.away_score,s.state,s.created_at
+                  s.home_score,s.away_score,s.state,s.created_at,s.snapshot
            FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
            JOIN division_entries home ON home.id=m.home_entry_id
            JOIN division_entries away ON away.id=m.away_entry_id
@@ -5441,6 +5442,35 @@ export class Phase2Runtime {
             [competitionId, resultVersion],
           )
         : [];
+    const publicScoreDetails = (
+      raw: unknown,
+    ): Pick<PublicMatchResult, "current_segment" | "segments" | "recorded_time_seconds"> => {
+      const state =
+        typeof raw === "string" ? jsonValue<Record<string, unknown>>(raw) : (raw as Record<string, unknown> | null);
+      if (!state || typeof state !== "object") return {};
+      const current = state.currentSegment;
+      const segments = Array.isArray(state.segments) ? state.segments : [];
+      const actions = Array.isArray(state.actions) ? state.actions : [];
+      const lastTimed = [...actions]
+        .reverse()
+        .find(
+          (action) =>
+            action && typeof action === "object" && !action.reversed && Number.isInteger(action.manualTimeSeconds),
+        );
+      return {
+        ...(Number.isInteger(current) && (current as number) >= 1 ? { current_segment: current as number } : {}),
+        segments: segments.flatMap((item) =>
+          item &&
+          typeof item === "object" &&
+          Number.isInteger(item.number) &&
+          Number.isInteger(item.home) &&
+          Number.isInteger(item.away)
+            ? [{ number: item.number as number, home: item.home as number, away: item.away as number }]
+            : [],
+        ),
+        recorded_time_seconds: lastTimed ? (lastTimed.manualTimeSeconds as number) : null,
+      };
+    };
     const persistedPublicResults: Array<PublicMatchResult & { division_id: string }> = results.map((match) => ({
       division_id: match.division_id,
       id: match.id,
@@ -5452,6 +5482,7 @@ export class Phase2Runtime {
       away_score: match.away_score,
       state: match.state,
       updated_at: serializedDate(match.created_at),
+      ...publicScoreDetails(match.snapshot),
     }));
     const liveMatches = await tx.unsafe<{
       id: string;
@@ -5477,14 +5508,9 @@ export class Phase2Runtime {
     const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
     for (const match of liveMatches) {
       const knownScore = options.liveScores?.get(match.id);
-      const homeScore =
-        knownScore !== undefined
-          ? knownScore.home
-          : (await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true })).state.score.home;
-      const awayScore =
-        knownScore !== undefined
-          ? knownScore.away
-          : (await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true })).state.score.away;
+      const canonical = await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true });
+      const homeScore = knownScore !== undefined ? knownScore.home : canonical.state.score.home;
+      const awayScore = knownScore !== undefined ? knownScore.away : canonical.state.score.away;
       liveResults.push({
         division_id: match.division_id,
         id: match.id,
@@ -5496,6 +5522,7 @@ export class Phase2Runtime {
         away_score: awayScore,
         state: "in_progress",
         updated_at: serializedDate(match.stream_updated_at),
+        ...publicScoreDetails(canonical.state),
       });
     }
     const liveMatchIds = new Set(liveResults.map((result) => result.id));
@@ -5754,6 +5781,7 @@ export class Phase2Runtime {
         await tx.unsafe<{
           id: string;
           competition_slug: string;
+          competition_name: string;
           code: string;
           stage: string;
           state: ScoringSessionState["match"]["state"];
@@ -5762,12 +5790,24 @@ export class Phase2Runtime {
           home_name: string | null;
           away_name: string | null;
           sport_code: SportId;
+          area_name: string | null;
+          starts_at: Date | string | null;
+          schedule_revision: number | null;
+          competition_period_minutes: number | null;
         }>(
-          `SELECT m.id,c.slug AS competition_slug,c.sport_code,m.code,m.stage,m.state,m.home_entry_id,m.away_entry_id,
-                  home.name AS home_name,away.name AS away_name
+          `SELECT m.id,c.slug AS competition_slug,c.name AS competition_name,c.sport_code,m.code,m.stage,m.state,m.home_entry_id,m.away_entry_id,
+                  home.name AS home_name,away.name AS away_name,
+                  pa.name AS area_name,sm.starts_at,sr.revision AS schedule_revision,
+                  competition_settings.period_minutes AS competition_period_minutes
            FROM matches m JOIN competitions c ON c.id=m.competition_id
+           LEFT JOIN competition_sport_settings competition_settings ON competition_settings.competition_id=c.id
            LEFT JOIN division_entries home ON home.id=m.home_entry_id
-           LEFT JOIN division_entries away ON away.id=m.away_entry_id WHERE m.id=$1`,
+           LEFT JOIN division_entries away ON away.id=m.away_entry_id
+           LEFT JOIN competition_publications publication ON publication.competition_id=c.id
+           LEFT JOIN schedule_revisions sr ON sr.id=publication.published_schedule_revision_id
+           LEFT JOIN scheduled_matches sm ON sm.schedule_revision_id=sr.id AND sm.match_id=m.id
+           LEFT JOIN playing_areas pa ON pa.id=sm.playing_area_id
+           WHERE m.id=$1`,
           [session.match_id],
         ),
         "Match not found",
@@ -5807,13 +5847,30 @@ export class Phase2Runtime {
           )
         : [];
       return {
-        competition: { slug: match.competition_slug, sport_code: match.sport_code },
-        sport: { pack_version: currentContext.pack_version, settings: currentContext.settings },
+        competition: { slug: match.competition_slug, name: match.competition_name, sport_code: match.sport_code },
+        sport: {
+          pack_version: currentContext.pack_version,
+          settings: currentContext.settings,
+          period_duration_minutes:
+            match.sport_code === "canoe_polo"
+              ? match.competition_period_minutes
+              : typeof currentContext.settings.periodDurationMinutes === "number"
+                ? currentContext.settings.periodDurationMinutes
+                : null,
+        },
         match: {
           id: match.id,
           code: match.code,
           stage: match.stage,
           state: match.state,
+          schedule:
+            match.schedule_revision === null
+              ? null
+              : {
+                  area_name: match.area_name,
+                  starts_at: match.starts_at ? serializedDate(match.starts_at) : null,
+                  revision: match.schedule_revision,
+                },
           home: { id: match.home_entry_id, name: match.home_name },
           away: { id: match.away_entry_id, name: match.away_name },
         },

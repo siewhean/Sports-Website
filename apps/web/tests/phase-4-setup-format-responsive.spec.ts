@@ -10,8 +10,17 @@ test("assisted setup reflows without horizontal overflow", async ({ page }, test
   const mobileProgress = page.getByTestId("setup-mobile-progress");
   if (testInfo.project.name.includes("phone")) {
     await expect(mobileProgress).toBeVisible();
-    await expect(mobileProgress.getByText("Step 2 of 8", { exact: true })).toBeVisible();
-  } else await expect(mobileProgress).toBeHidden();
+    await expect(mobileProgress.getByText("Milestone 2 of 5", { exact: true })).toBeVisible();
+    await expect(mobileProgress.getByText("Capacity and rules", { exact: true })).toBeVisible();
+    await expect(mobileProgress.getByRole("progressbar", { name: "Milestone 2 of 5" })).toHaveAttribute("max", "5");
+    await expect(mobileProgress.getByRole("progressbar", { name: "Milestone 2 of 5" })).toHaveAttribute("value", "2");
+    await expect(mobileProgress.locator("small")).toContainText("Capacity");
+  } else {
+    await expect(mobileProgress).toBeHidden();
+    await expect(page.getByRole("complementary", { name: "Assisted setup progress" }).getByRole("button")).toHaveCount(
+      8,
+    );
+  }
   await expect(page.getByRole("button", { name: /Continue to settings/ })).toBeVisible();
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

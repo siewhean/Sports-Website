@@ -24,7 +24,7 @@ async function openScoring(page: Page, sportId: string) {
   await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();
-  await page.getByRole("checkbox", { name: "I am at Match 12 and ready to score this fixture." }).check();
+  await page.getByRole("checkbox", { name: "I have checked this fixture and am ready to score." }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
   await expect(page.getByRole("heading", { name: "Scoring controls" })).toBeVisible();
 }
@@ -69,7 +69,7 @@ for (const sport of sports) {
     await expect(page.getByRole("heading", { name: "Recent canonical events" })).toBeVisible();
     expect(await page.evaluate(() => window.scrollY)).toBe(scrollBeforeClose);
 
-    const reverse = page.getByRole("button", { name: "Reverse event" });
+    const reverse = page.getByRole("button", { name: "Reverse event", exact: true });
     await reverse.click();
     const reversal = page.getByRole("dialog", { name: "Reverse recorded event" });
     await expect(reversal.getByLabel("Reversal reason")).toBeFocused();

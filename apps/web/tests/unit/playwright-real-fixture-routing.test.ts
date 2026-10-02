@@ -22,6 +22,7 @@ const gateDSpecs = [
   "phase-7-multi-division-lifecycle.spec.ts",
   "phase-7-sch006-official-lifecycle.spec.ts",
   "phase-7-security-rendering.spec.ts",
+  "phase-7-casual-public-lifecycle.spec.ts",
 ];
 
 it("collects Gate D real-stack specs only in their production-backed runner", async () => {
@@ -46,5 +47,5 @@ it("collects Gate D real-stack specs only in their production-backed runner", as
     expect(gateD).toContain(spec);
   }
   expect(gateD.match(/phase-7-sch006-official-lifecycle\.spec\.ts:/g)).toHaveLength(3);
-  expect(gateD).toContain("Total: 5 tests in 3 files");
+  expect(gateD).toContain("Total: 7 tests in 4 files");
 }, 30_000);

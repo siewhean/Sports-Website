@@ -237,7 +237,7 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     await page.goto(`/score#access=${encodeURIComponent(state.passToken)}`);
     await dismissConsent(page);
     await expect(page.locator('#score-main[data-scoring-phase="confirm"]')).toBeVisible();
-    await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
+    await page.getByRole("checkbox", { name: /I have checked this fixture and am ready to score\./i }).check();
     await page.getByRole("button", { name: "Start scoring" }).click();
     await expect(page.locator('#score-main[data-scoring-phase="live"]')).toBeVisible();
 
@@ -342,7 +342,9 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
       baselinePointActions + 1,
     );
 
-    // QA-006: complete the real Volleyball segment and finalise through the scorer UI.
+    // QA-006: expand the secondary Segment controls, complete the real
+    // Volleyball segment, and finalise through the scorer UI.
+    await page.locator("summary").filter({ hasText: "Segment" }).click();
     const completionResponsePromise = page.waitForResponse(
       (response) => response.url().endsWith("/api/scoring/events") && response.request().method() === "POST",
     );

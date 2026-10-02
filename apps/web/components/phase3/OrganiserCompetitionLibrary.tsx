@@ -1,10 +1,13 @@
 import Link from "next/link";
+import { ArrowRight, Lightning } from "@phosphor-icons/react/dist/ssr";
+import { opaqueId } from "@matchday/ui";
 import {
   organiserCompetitionDateRange,
   organiserCompetitionGroups,
   organiserCompetitionLibraryCopy,
   organiserCompetitionPhaseCopy,
   organiserCompetitionPrimaryAction,
+  organiserCompetitionPhase,
   organiserCompetitionRoleLabel,
   organiserCompetitionSportName,
   organiserCompetitionUpdatedLabel,
@@ -29,8 +32,26 @@ export function OrganiserCompetitionLibrary({
     );
   }
 
+  const priority = { live: 0, draft: 1, upcoming: 2, completed: 3 } as const;
+  const nextCompetition = [...competitions].sort(
+    (left, right) => priority[organiserCompetitionPhase(left)] - priority[organiserCompetitionPhase(right)],
+  )[0]!;
+  const nextAction = organiserCompetitionPrimaryAction(nextCompetition);
+
   return (
     <div className={styles.library}>
+      <section className={styles.nextAction} aria-labelledby="organiser-next-action">
+        <div>
+          <span className={styles.nextEyebrow}>
+            <Lightning aria-hidden="true" /> {opaqueId("Your next action")}
+          </span>
+          <h2 id="organiser-next-action">{nextCompetition.name}</h2>
+          <p>{organiserCompetitionPhaseCopy(organiserCompetitionPhase(nextCompetition)).description}</p>
+        </div>
+        <Link className={styles.primaryAction} href={nextAction.href}>
+          {nextAction.label} <ArrowRight aria-hidden="true" />
+        </Link>
+      </section>
       <div className={styles.toolbar}>
         <Link className={styles.primaryAction} href="/organiser/competitions/new">
           {organiserCompetitionLibraryCopy.createCompetition}

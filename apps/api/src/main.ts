@@ -196,6 +196,7 @@ const app = await buildApp({
   exportRuntime,
   adminRuntime,
   notificationService,
+  casualSql: postgresClient,
   scoringAccessHmacKeySql: identitySql,
   scoringFallbackHmacKeySql: identitySql,
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,

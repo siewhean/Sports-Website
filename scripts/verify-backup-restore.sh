@@ -220,6 +220,23 @@ export LOG_LEVEL=silent
 postgres_psql "$SOURCE_DB" -v ON_ERROR_STOP=1 -c \
   "INSERT INTO accounts (id, primary_email, display_name, status) VALUES ('00000000-0000-4000-8000-000000000001', 'restore-check@example.test', 'Restore Check', 'active');" >/dev/null
 
+# These are disposable fixture rows, never production backup evidence.
+postgres_psql "$SOURCE_DB" -v ON_ERROR_STOP=1 -c "$(cat <<'SQL'
+INSERT INTO accounts(id,primary_email,display_name,status)
+VALUES('00000000-0000-4000-8000-000000000003','casual-friend@example.test','Casual Friend','active');
+INSERT INTO casual_games(id,owner_account_id,sport_id,home_name,away_name,host_token_hash,viewer_token_hash)
+VALUES('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000001','badminton','Home','Away','restore-host','restore-viewer');
+INSERT INTO casual_game_actions(game_id,version,kind,before_state,after_state)
+VALUES('00000000-0000-4000-8000-000000000010',2,'score','{}','{"home_score":1}');
+INSERT INTO casual_game_presets(owner_account_id,name,settings)
+VALUES('00000000-0000-4000-8000-000000000001','Regular','{"sport_id":"badminton"}');
+INSERT INTO casual_friend_requests(sender_id,recipient_id)
+VALUES('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000003');
+INSERT INTO casual_game_shares(game_id,recipient_id)
+VALUES('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000003');
+SQL
+)" >/dev/null
+
 postgres_dump "$SOURCE_DB"
 postgres_createdb "$RESTORE_DB"
 postgres_restore "$RESTORE_DB"
@@ -234,6 +251,57 @@ if [[ "$(postgres_psql "$SOURCE_DB" -At -c "SELECT to_regclass('public.competiti
   fi
   echo "Active official-name partial unique index verified after migration and restore."
 fi
+
+migration_ledger_query="SELECT count(*)::text || ':' || md5(string_agg(name || ':' || coalesce(checksum, ''), ',' ORDER BY name)) FROM public.schema_migrations;"
+source_migration_ledger="$(postgres_psql "$SOURCE_DB" -At -c "$migration_ledger_query")"
+restore_migration_ledger="$(postgres_psql "$RESTORE_DB" -At -c "$migration_ledger_query")"
+if [[ "$source_migration_ledger" != "$restore_migration_ledger" ]]; then
+  echo "Backup restore verification failed: migration ledger differs" >&2
+  exit 1
+fi
+
+for casual_table in casual_games casual_game_actions casual_game_presets casual_friend_requests casual_game_shares; do
+  casual_fingerprint_query="SELECT count(*)::text || ':' || md5(coalesce(string_agg(to_jsonb(row_value)::text, ',' ORDER BY to_jsonb(row_value)::text), '')) FROM public.${casual_table} row_value;"
+  source_casual_fingerprint="$(postgres_psql "$SOURCE_DB" -At -c "$casual_fingerprint_query")"
+  restore_casual_fingerprint="$(postgres_psql "$RESTORE_DB" -At -c "$casual_fingerprint_query")"
+  if [[ "$source_casual_fingerprint" != 1:* || "$source_casual_fingerprint" != "$restore_casual_fingerprint" ]]; then
+    echo "Backup restore verification failed: ${casual_table} rows differ" >&2
+    exit 1
+  fi
+  casual_constraint_query="SELECT string_agg(conname || ':' || convalidated::text || ':' || pg_get_constraintdef(oid), ',' ORDER BY conname) FROM pg_constraint WHERE conrelid='public.${casual_table}'::regclass;"
+  source_casual_constraints="$(postgres_psql "$SOURCE_DB" -At -c "$casual_constraint_query")"
+  restore_casual_constraints="$(postgres_psql "$RESTORE_DB" -At -c "$casual_constraint_query")"
+  if [[ -z "$source_casual_constraints" || "$source_casual_constraints" != "$restore_casual_constraints" ]]; then
+    echo "Backup restore verification failed: ${casual_table} constraints differ" >&2
+    exit 1
+  fi
+done
+
+postgres_psql "$RESTORE_DB" -v ON_ERROR_STOP=1 -c "$(cat <<'SQL'
+DO $verification$
+BEGIN
+  BEGIN
+    UPDATE casual_games SET home_score=-1 WHERE id='00000000-0000-4000-8000-000000000010';
+    RAISE EXCEPTION 'Restored casual score constraint did not reject invalid score';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO casual_game_actions(game_id,version,kind,before_state,after_state)
+    VALUES('00000000-0000-4000-8000-000000000010',2,'score','{}','{}');
+    RAISE EXCEPTION 'Restored action version uniqueness did not reject duplicate';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO casual_game_shares(game_id,recipient_id)
+    VALUES('00000000-0000-4000-8000-000000000099','00000000-0000-4000-8000-000000000003');
+    RAISE EXCEPTION 'Restored game share foreign key did not reject orphan';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+END
+$verification$;
+SQL
+)" >/dev/null
+echo "Disposable casual rows, fingerprints and constraints verified after restore."
 
 source_count="$(postgres_psql "$SOURCE_DB" -At -c "SELECT count(*) FROM accounts;")"
 restore_count="$(postgres_psql "$RESTORE_DB" -At -c "SELECT count(*) FROM accounts;")"

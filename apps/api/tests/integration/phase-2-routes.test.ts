@@ -46,16 +46,18 @@ function routeRuntime() {
     scoringSessionState: vi.fn(
       async () =>
         ({
-          competition: { slug: "singapore-open", sport_code: "canoe_polo" },
+          competition: { slug: "singapore-open", name: "Singapore Open", sport_code: "canoe_polo" },
           sport: {
             pack_version: "phase2-canoe-polo-v1",
             settings: { period_count: 2, period_duration_minutes: 10 },
+            period_duration_minutes: 10,
           },
           match: {
             id: randomUUID(),
             code: "group-A-r1-m1",
             stage: "group",
             state: "in_progress",
+            schedule: null,
             home: { id: randomUUID(), name: "Marina Blue" },
             away: { id: randomUUID(), name: "Harbour Gold" },
           },
@@ -343,8 +345,9 @@ describe("Phase 2 Fastify route boundaries", () => {
     expect(scoring.statusCode).toBe(200);
     expect(scoring.headers["cache-control"]).toBe("no-store, private");
     expect(scoring.json()).toMatchObject({
-      competition: { slug: "singapore-open", sport_code: "canoe_polo" },
-      sport: { pack_version: "phase2-canoe-polo-v1" },
+      competition: { slug: "singapore-open", name: "Singapore Open", sport_code: "canoe_polo" },
+      sport: { pack_version: "phase2-canoe-polo-v1", period_duration_minutes: 10 },
+      match: { schedule: null },
       aggregate_version: 2,
     });
 

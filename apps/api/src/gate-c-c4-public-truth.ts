@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
 import { Type, type TSchema } from "@sinclair/typebox";
 import type { FastifyInstance } from "fastify";
 import type { PublicCompetitionSummary, PublicProjectionFreshness } from "@matchday/contracts";
@@ -185,6 +186,30 @@ export class GateCC4PublicTruthRuntime {
     }));
   }
 
+  async version(slug: string): Promise<string | null> {
+    const rows = await this.sql.unsafe<{
+      schedule_version: number;
+      result_version: number;
+      projection_version: number;
+    }>(
+      `SELECT publication.schedule_version, publication.result_version,
+              COALESCE((SELECT max(version.projection_version)
+                        FROM public_projection_versions version
+                        WHERE version.competition_id=competition.id
+                          AND version.schedule_version=publication.schedule_version
+                          AND version.result_version=publication.result_version),1)::integer AS projection_version
+       FROM competitions competition
+       JOIN competition_publications publication ON publication.competition_id=competition.id
+       JOIN public_competition_projections projection ON projection.competition_id=competition.id
+         AND projection.schedule_version=publication.schedule_version
+         AND projection.result_version=publication.result_version
+       WHERE competition.slug=$1 AND competition.status IN ('active','published','live','completed','archived')`,
+      [slug],
+    );
+    const current = rows[0];
+    return current ? `${current.schedule_version}:${current.result_version}:${current.projection_version}` : null;
+  }
+
   async read(
     slug: string,
     selectedDivisionId?: string,
@@ -265,7 +290,8 @@ export class GateCC4PublicTruthRuntime {
   }
 }
 
-type PublicTruthRuntime = Pick<GateCC4PublicTruthRuntime, "list" | "read">;
+type PublicTruthRuntime = Pick<GateCC4PublicTruthRuntime, "list" | "read"> &
+  Partial<Pick<GateCC4PublicTruthRuntime, "version">>;
 
 export async function registerGateCC4PublicTruthRoutes(
   app: FastifyInstance,
@@ -359,4 +385,74 @@ export async function registerGateCC4PublicTruthRoutes(
     Querystring: { division_id?: string; division?: string };
     Headers: { "if-none-match"?: string; "if-modified-since"?: string };
   }>("/api/v1/public/competitions/:slug/current", { schema }, handler as never);
+
+  // The event contains a version only. The browser must refetch /current to
+  // display the privacy-checked, atomic public projection.
+  app.get<{ Params: { slug: string } }>(
+    "/api/v1/public/competitions/:slug/versions",
+    {
+      schema: {
+        tags: ["public"],
+        params: strict({ slug: Type.String({ minLength: 1, maxLength: 100 }) }),
+      },
+    },
+    async (request, reply) => {
+      const first = await runtime.read(request.params.slug);
+      if (!first) throw new ApiError(404, ErrorCode.PUBLIC_COMPETITION_NOT_FOUND, "Competition not found");
+      let lastVersion = `${first.freshness.schedule_version}:${first.freshness.result_version}:${first.freshness.projection_version}`;
+      let checking = false;
+      let finished = false;
+      const stream = new Readable({ read() {} });
+      const sendVersion = (version: string) => stream.push(`event: version\ndata: ${JSON.stringify(version)}\n\n`);
+      sendVersion(lastVersion);
+      const timer = setInterval(async () => {
+        if (checking || finished || stream.destroyed) return;
+        checking = true;
+        try {
+          const version = runtime.version
+            ? await runtime.version(request.params.slug)
+            : (await runtime.read(request.params.slug))?.freshness;
+          if (finished || stream.destroyed) return;
+          const currentVersion =
+            typeof version === "string"
+              ? version
+              : version
+                ? `${version.schedule_version}:${version.result_version}:${version.projection_version}`
+                : null;
+          if (!currentVersion) {
+            stream.push("event: unavailable\ndata: {}\n\n");
+            finish();
+          } else if (currentVersion !== lastVersion) {
+            lastVersion = currentVersion;
+            sendVersion(lastVersion);
+          } else {
+            stream.push("event: heartbeat\ndata: {}\n\n");
+          }
+        } catch {
+          if (finished || stream.destroyed) return;
+          stream.push("event: reconnect\ndata: {}\n\n");
+          finish();
+        } finally {
+          checking = false;
+        }
+      }, 2_000);
+      const lifetime = setTimeout(finish, 28_000);
+      function finish() {
+        if (finished) return;
+        finished = true;
+        clearInterval(timer);
+        clearTimeout(lifetime);
+        stream.push(null);
+      }
+      stream.on("close", () => {
+        finished = true;
+        clearInterval(timer);
+        clearTimeout(lifetime);
+      });
+      reply.header("Content-Type", "text/event-stream; charset=utf-8");
+      reply.header("Cache-Control", "no-store");
+      reply.header("X-Accel-Buffering", "no");
+      return reply.send(stream);
+    },
+  );
 }

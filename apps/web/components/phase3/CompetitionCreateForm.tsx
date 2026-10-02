@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { messages, opaqueId } from "@matchday/ui";
 import {
@@ -143,6 +143,13 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
+  const previousStepRef = useRef(activeStep);
+
+  useLayoutEffect(() => {
+    if (previousStepRef.current === activeStep) return;
+    previousStepRef.current = activeStep;
+    stepHeadingRef.current?.focus();
+  }, [activeStep]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -159,7 +166,11 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
         const options = response.ok ? parseCompetitionOrganisationOptions(payload) : null;
         if (!options) {
           setOrganisationsAuthRequired(response.status === 401 || response.status === 403);
-          setOrganisationsError(messages.organiserCreate.organisationsFailed);
+          setOrganisationsError(
+            response.status === 401 || response.status === 403
+              ? messages.organiserCreate.organisationsFailed
+              : messages.organiserCreate.organisationsAutomaticFallback,
+          );
           return;
         }
         setOrganisations(options);
@@ -174,7 +185,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
         });
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setOrganisationsError(messages.organiserCreate.organisationsFailed);
+          setOrganisationsError(messages.organiserCreate.organisationsAutomaticFallback);
         }
       } finally {
         if (!controller.signal.aborted) setOrganisationsLoading(false);
@@ -199,10 +210,11 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   }
 
   function validateStep(stepIndex: number) {
-    const bootstrapRequired = organisations.length === 0 && !draft.organisation_id;
+    const bootstrapRequired = organisations.length === 0;
     const invalidField = createSteps[stepIndex]?.find(
       (fieldName) =>
-        !(fieldName === "organisation_id" && bootstrapRequired) && !competitionCreateFieldIsValid(fieldName, draft),
+        !(fieldName === "organisation_id" && (bootstrapRequired || organisationsLoading)) &&
+        !competitionCreateFieldIsValid(fieldName, draft),
     );
     if (!invalidField) return true;
     setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
@@ -215,7 +227,6 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     if (!validateStep(activeStep)) return;
     setCommandError("");
     setActiveStep((current) => Math.min(current + 1, createSteps.length - 1));
-    requestAnimationFrame(() => stepHeadingRef.current?.focus());
   }
 
   function focusField(field: CompetitionCreateField) {
@@ -225,12 +236,15 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || organisationsLoading || organisationsError) return;
-    const bootstrapRequired = organisations.length === 0 && !draft.organisation_id;
-    const invalidField = firstInvalidCompetitionCreateField(draft, {
+    if (busy || organisationsLoading || organisationsAuthRequired) return;
+    const bootstrapRequired = organisations.length === 0;
+    const validatedDraft = bootstrapRequired ? { ...draft, organisation_id: "" } : draft;
+    const invalidField = firstInvalidCompetitionCreateField(validatedDraft, {
       allowOrganisationBootstrap: bootstrapRequired,
     });
     if (invalidField) {
+      const invalidStep = createSteps.findIndex((fields) => fields.some((field) => field === invalidField));
+      if (invalidStep >= 0) setActiveStep(invalidStep);
       setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
       setCommandError(messages.organiserCreate.validationSummary);
       requestAnimationFrame(() => focusField(invalidField));
@@ -251,7 +265,12 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
           ? parseCompetitionOrganisationBootstrapReceipt(bootstrapPayload)
           : null;
         if (!bootstrapReceipt) {
-          setCommandError(upstreamMessage(bootstrapPayload, messages.organiserCreate.commandFailed));
+          setCommandError(
+            bootstrapResponse.status === 401 || bootstrapResponse.status === 403
+              ? messages.organiserCreate.organisationsSignInRequired
+              : messages.organiserCreate.organisationsSetupFailed,
+          );
+          setOrganisationsAuthRequired(bootstrapResponse.status === 401 || bootstrapResponse.status === 403);
           setAnnouncement("");
           requestAnimationFrame(() => errorRef.current?.focus());
           return;
@@ -347,7 +366,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     );
   };
 
-  const showOrganisationSelector = organisationsLoading || organisations.length > 0 || Boolean(organisationsError);
+  const showOrganisationSelector = organisations.length > 1;
 
   return (
     <form ref={formRef} className={styles.form} noValidate onSubmit={submit}>
@@ -364,6 +383,23 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
         <div ref={errorRef} className={styles.summary} role="alert" tabIndex={-1}>
           {commandError}
         </div>
+      ) : null}
+      {organisationsError ? (
+        <div className={styles.summary} role={organisationsAuthRequired ? "alert" : "status"}>
+          <p>{organisationsError}</p>
+          <button
+            className={styles.retry}
+            type="button"
+            onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
+          >
+            {messages.organiserCreate.retryOrganisations}
+          </button>
+        </div>
+      ) : null}
+      {organisationsAuthRequired ? (
+        <a className={styles.retry} href={signInHref}>
+          {messages.organiserCreate.signInToLoadOrganisations}
+        </a>
       ) : null}
       <section className={styles.step} aria-labelledby={`create-step-${activeStep}`}>
         <header className={styles.stepHeading}>
@@ -412,34 +448,11 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
                   </option>
                 ))}
               </select>
-              {fieldErrors.organisation_id || organisationsError ? (
-                <p
-                  id={`${phase3CompetitionCreateMachine.fields.organisationId}-error`}
-                  className={styles.error}
-                  role={organisationsError ? "alert" : undefined}
-                >
-                  {fieldErrors.organisation_id ?? organisationsError}
+              {fieldErrors.organisation_id ? (
+                <p id={`${phase3CompetitionCreateMachine.fields.organisationId}-error`} className={styles.error}>
+                  {fieldErrors.organisation_id}
                 </p>
               ) : null}
-              {organisationsError ? (
-                <>
-                  <button
-                    className={styles.retry}
-                    type="button"
-                    onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
-                  >
-                    {messages.organiserCreate.retryOrganisations}
-                  </button>
-                  {organisationsAuthRequired ? (
-                    <a className={styles.retry} href={signInHref}>
-                      {messages.organiserCreate.signInToLoadOrganisations}
-                    </a>
-                  ) : null}
-                </>
-              ) : null}
-              <p className={styles.live} role="status">
-                {organisationsLoading ? messages.organiserCreate.loadingOrganisations : ""}
-              </p>
             </div>
           ) : null}
           {activeStep === 0 &&
@@ -536,19 +549,14 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
           </button>
         ) : null}
         {activeStep < createSteps.length - 1 ? (
-          <button
-            className={styles.submit}
-            type="button"
-            disabled={organisationsLoading || Boolean(organisationsError)}
-            onClick={continueStep}
-          >
+          <button className={styles.submit} type="button" disabled={organisationsAuthRequired} onClick={continueStep}>
             {messages.organiserCreate.next}
           </button>
         ) : (
           <button
             className={styles.submit}
             type="submit"
-            disabled={busy || organisationsLoading || Boolean(organisationsError)}
+            disabled={busy || organisationsLoading || organisationsAuthRequired}
             data-busy={busy}
           >
             {busy ? messages.organiserCreate.saving : messages.organiserCreate.submit}

@@ -84,7 +84,7 @@ describe("public competition server adapter", () => {
     expect(JSON.stringify(view.publicDivisions?.[0])).not.toContain("Women Team");
     expect(JSON.stringify(view.publicDivisions?.[1])).not.toContain("Open Team");
 
-    const markup = renderToStaticMarkup(createElement(PublicCompetition, { competition: view }));
+    const markup = renderToStaticMarkup(createElement(PublicCompetition, { competition: view, liveUpdates: false }));
     expect(markup).toContain('id="results-open"');
     expect(markup).toContain('id="results-women"');
     expect(markup).toContain('id="table-open"');
@@ -152,7 +152,7 @@ describe("public competition server adapter", () => {
       ]),
     );
 
-    const markup = renderToStaticMarkup(createElement(PublicCompetition, { competition: view }));
+    const markup = renderToStaticMarkup(createElement(PublicCompetition, { competition: view, liveUpdates: false }));
     expect(markup).toContain("Open Team Home");
     expect(markup).toContain("Open Team Away");
     expect(markup).not.toContain("04:12");

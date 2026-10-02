@@ -3,6 +3,69 @@
   gap: clamp(28px, 4vw, 48px);
 }
 
+.nextAction {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px;
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid var(--hairline);
+  border-radius: 20px;
+  background: var(--surface-subtle);
+}
+
+.nextAction > div {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nextEyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.nextEyebrow svg {
+  width: 18px;
+  height: 18px;
+  color: var(--signal-strong);
+}
+
+.nextAction h2,
+.nextAction p {
+  margin: 0;
+}
+
+.nextAction h2 {
+  overflow-wrap: anywhere;
+  font-size: clamp(1.5rem, 3vw, 2.4rem);
+  letter-spacing: -0.04em;
+}
+
+.nextAction p {
+  max-width: 60ch;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+.nextAction > a {
+  flex: 0 0 auto;
+  min-height: 48px;
+  gap: 12px;
+}
+
+.nextAction > a svg {
+  width: 18px;
+  height: 18px;
+}
+
 .toolbar {
   display: flex;
   justify-content: flex-end;
@@ -226,6 +289,12 @@
 }
 
 @media (max-width: 620px) {
+  .nextAction {
+    display: grid;
+  }
+  .nextAction > a {
+    width: 100%;
+  }
   .toolbar {
     justify-content: stretch;
   }

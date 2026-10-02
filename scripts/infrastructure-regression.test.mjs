@@ -211,3 +211,52 @@ test("10. Deployment scripts do not require manual network mutations", async () 
     "deploy-prod.sh must automatically connect Caddy if not already connected",
   );
 });
+
+test("11. Caddyfile and environment enforce explicit trusted proxy chain for Web BFF and Caddy ingress", async () => {
+  const caddyfile = await readFile(path.join(root, "infra/oci/Caddyfile"), "utf8");
+  const prodEnvSample = await readFile(path.join(root, "infra/oci/.env.prod.example"), "utf8");
+  const stagingEnvSample = await readFile(path.join(root, "infra/oci/.env.oci.example"), "utf8");
+  const prodEnv = parseEnvContent(prodEnvSample);
+  const stagingEnv = parseEnvContent(stagingEnvSample);
+
+  // Production Caddy block: API reverse proxy must trust production Web service only
+  const prodMatch = caddyfile.match(/matchday\.poladex\.shop\s*\{([\s\S]*?)\n\}/);
+  assert.ok(prodMatch, "matchday.poladex.shop block must exist");
+  assert.ok(
+    prodMatch[1].includes("trusted_proxies 172.31.0.12"),
+    "Production @api reverse_proxy must specify 'trusted_proxies 172.31.0.12'",
+  );
+
+  // Staging Caddy block: API reverse proxy must trust staging Web service only
+  const stagingMatch = caddyfile.match(/c5-drill\.poladex\.shop\s*\{([\s\S]*?)\n\}/);
+  assert.ok(stagingMatch, "c5-drill.poladex.shop block must exist");
+  assert.ok(
+    stagingMatch[1].includes("trusted_proxies 172.30.0.12"),
+    "Staging @api reverse_proxy must specify 'trusted_proxies 172.30.0.12'",
+  );
+
+  // Web blocks must not trust downstream proxies (browser X-Forwarded-For must be stripped by Caddy ingress)
+  const webBlocks = caddyfile.match(/handle\s*\{[\s\S]*?reverse_proxy\s+172\.\d+\.0\.12:3000[\s\S]*?\}/g);
+  assert.ok(webBlocks && webBlocks.length >= 2, "Web reverse_proxy blocks must exist");
+  for (const block of webBlocks) {
+    assert.equal(
+      block.includes("trusted_proxies"),
+      false,
+      "Web reverse_proxy blocks must NOT have trusted_proxies (ingress Caddy must strip client XFF)",
+    );
+  }
+
+  // API_TRUSTED_PROXIES in production must trust Caddy (172.31.0.10) and Web (172.31.0.12)
+  assert.equal(
+    prodEnv.API_TRUSTED_PROXIES,
+    "172.31.0.10,172.31.0.12",
+    "Production API_TRUSTED_PROXIES must configure both Caddy and Web IPs",
+  );
+
+  // API_TRUSTED_PROXIES in staging must trust Caddy (172.30.0.10) and Web (172.30.0.12)
+  assert.equal(
+    stagingEnv.API_TRUSTED_PROXIES,
+    "172.30.0.10,172.30.0.12",
+    "Staging API_TRUSTED_PROXIES must configure both Caddy and Web IPs",
+  );
+});

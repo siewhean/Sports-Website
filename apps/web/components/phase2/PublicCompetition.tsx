@@ -1,16 +1,22 @@
 import Link from "next/link";
+import { opaqueId } from "@matchday/ui";
 import { ArrowRight, CalendarDots, Clock, Trophy } from "@phosphor-icons/react/dist/ssr";
 import { ConnectivityStatus } from "@/components/foundation/ConnectivityStatus";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 import { DoubleEliminationBracket } from "@/components/phase2/DoubleEliminationBracket";
+import { PublicLiveRefresh } from "@/components/phase2/PublicLiveRefresh";
+import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { phase2Copy, type CompetitionView, type PublicDivisionView } from "@/lib/phase2";
+import styles from "./PublicCompetition.module.css";
 
 export function PublicCompetition({
   competition,
   viewer = null,
+  liveUpdates = true,
 }: {
   competition: CompetitionView;
   viewer?: { displayName: string } | null;
+  liveUpdates?: boolean;
 }) {
   const publicationVersion = publicPublicationVersion(competition.publicationRevision);
   const publicDivisions =
@@ -48,7 +54,11 @@ export function PublicCompetition({
             {phase2Copy.updated}
           </p>
         </header>
-        <ConnectivityStatus />
+        <div className={styles.liveBar}>
+          {liveUpdates && !demoFixturesEnabled() ? <PublicLiveRefresh slug={competition.slug} /> : null}
+          <ConnectivityStatus />
+          <span>{competition.lastUpdated}</span>
+        </div>
         <nav className="p2-public__nav" aria-label={phase2Copy.competitionContext}>
           {hasMultipleDivisions ? (
             publicDivisions.map(({ division }) => (
@@ -72,6 +82,7 @@ export function PublicCompetition({
             publicationVersion={publicationVersion}
             publicationRevision={competition.publicationRevision}
             uniqueIds={hasMultipleDivisions}
+            slug={competition.slug}
           />
         ))}
         <footer className="p2-public-version">
@@ -96,11 +107,13 @@ function PublicDivisionSections({
   publicationVersion,
   publicationRevision,
   uniqueIds,
+  slug,
 }: {
   value: PublicDivisionView;
   publicationVersion: string;
   publicationRevision: string;
   uniqueIds: boolean;
+  slug: string;
 }) {
   const { division, matches, standings, bracket } = value;
   const finalMatch = matches.find((match) => match.status === "final");
@@ -121,7 +134,10 @@ function PublicDivisionSections({
           {uniqueIds ? `${division.name} ${phase2Copy.results}` : phase2Copy.results}
         </h2>
         {liveMatch ? (
-          <div className="p2-public-score p2-public-score--live">
+          <Link
+            href={`/competitions/${slug}/matches/${liveMatch.id}`}
+            className={`p2-public-score p2-public-score--live ${styles.scoreLink}`}
+          >
             <header>
               <span>
                 <i />
@@ -140,10 +156,13 @@ function PublicDivisionSections({
               <strong>{liveMatch.awayScore}</strong>
             </div>
             <small>{phase2Copy.updated}</small>
-          </div>
+          </Link>
         ) : null}
         {finalMatch ? (
-          <div className="p2-public-score p2-public-score--final">
+          <Link
+            href={`/competitions/${slug}/matches/${finalMatch.id}`}
+            className={`p2-public-score p2-public-score--final ${styles.scoreLink}`}
+          >
             <header>
               <span>{phase2Copy.publicFinal}</span>
               <strong>
@@ -162,8 +181,39 @@ function PublicDivisionSections({
               <strong>{finalMatch.awayScore}</strong>
             </div>
             <small>{publicationRevision}</small>
-          </div>
+          </Link>
         ) : null}
+      </section>
+      <section className={styles.allMatches} aria-label={division.name}>
+        <header>
+          <p>{division.name}</p>
+          <h2>{opaqueId("Matches")}</h2>
+        </header>
+        <div className={styles.matchGrid}>
+          {matches.map((match) => (
+            <Link
+              key={match.id}
+              href={`/competitions/${slug}/matches/${match.id}`}
+              className={styles.matchCard}
+              data-status={match.status}
+            >
+              <span>
+                {match.status === "live" ? opaqueId("Live") : match.status === "final" ? opaqueId("Final") : match.time}
+              </span>
+              <strong>
+                {match.home}
+                <b>{match.homeScore ?? "—"}</b>
+              </strong>
+              <strong>
+                {match.away}
+                <b>{match.awayScore ?? "—"}</b>
+              </strong>
+              <small>
+                {match.stage} · {match.area}
+              </small>
+            </Link>
+          ))}
+        </div>
       </section>
       <section
         className="p2-public-section"

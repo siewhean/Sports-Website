@@ -30,25 +30,46 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export const VALID_PHASES = new Set(["ALL", "A", "B", "C"]);
 
-export function parseNonzeroTestCount(output) {
-  if (!output || typeof output !== "string") return 0;
+export function parseNonzeroTestCount(rawOutput) {
+  if (!rawOutput || typeof rawOutput !== "string") return 0;
+  const output = rawOutput.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+
+  const counts = [];
 
   // Vitest: "Tests  251 passed (251)" or "✓  (25 tests)"
-  const vitestMatch = output.match(/Tests\s+(\d+)\s+passed/i) || output.match(/(\d+)\s+passed\s+\(\d+\)/i);
-  if (vitestMatch && vitestMatch[1]) {
-    return parseInt(vitestMatch[1], 10);
+  for (const match of output.matchAll(/Tests\s+(\d+)\s+passed/gi)) {
+    const n = parseInt(match[1], 10);
+    if (n > 0) counts.push(n);
+  }
+  for (const match of output.matchAll(/(\d+)\s+passed\s+\(\d+\)/gi)) {
+    const n = parseInt(match[1], 10);
+    if (n > 0) counts.push(n);
   }
 
   // Node.js --test: "ℹ pass 19" or "✔ ... (19)"
-  const nodeTestMatch = output.match(/ℹ\s+pass\s+(\d+)/i) || output.match(/✔[^\n]+\((\d+)\s+tests?\)/i);
-  if (nodeTestMatch && nodeTestMatch[1]) {
-    return parseInt(nodeTestMatch[1], 10);
+  for (const match of output.matchAll(/ℹ\s+pass\s+(\d+)/gi)) {
+    const n = parseInt(match[1], 10);
+    if (n > 0) counts.push(n);
+  }
+  for (const match of output.matchAll(/✔[^\n]+\((\d+)\s+tests?\)/gi)) {
+    const n = parseInt(match[1], 10);
+    if (n > 0) counts.push(n);
   }
 
   // Playwright: "12 passed (1.2s)"
-  const playwrightMatch = output.match(/(\d+)\s+passed\b/i);
-  if (playwrightMatch && playwrightMatch[1]) {
-    return parseInt(playwrightMatch[1], 10);
+  for (const match of output.matchAll(/(\d+)\s+passed\b/gi)) {
+    const n = parseInt(match[1], 10);
+    if (n > 0) counts.push(n);
+  }
+
+  // Turborepo: "Tasks:    28 successful, 28 total"
+  for (const match of output.matchAll(/Tasks:\s+(\d+)\s+successful,\s+\d+\s+total/gi)) {
+    const n = parseInt(match[1], 10);
+    if (n > 0) counts.push(n);
+  }
+
+  if (counts.length > 0) {
+    return Math.max(...counts);
   }
 
   // Fixture / OpenAPI / Load benchmark validation custom scripts

@@ -172,8 +172,10 @@ async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
   );
   await page.goto(accessUrl);
   expect((await exchange).status(), "The rendered pass must exchange through the production web BFF").toBe(200);
-  await expect(page.getByRole("checkbox", { name: /ready to score this fixture/i })).toBeVisible();
-  await page.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
+  await expect(
+    page.getByRole("checkbox", { name: /I have checked this fixture and am ready to score\./i }),
+  ).toBeVisible();
+  await page.getByRole("checkbox", { name: /I have checked this fixture and am ready to score\./i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
   const goal = page.getByRole("button", { name: /Goal / }).first();
   await goal.click();
@@ -182,12 +184,13 @@ async function scoreAndFinalise(page: Page, accessUrl: string, scorer: string) {
   await confirm.getByRole("button", { name: /Record goal/ }).click();
   // Canoe Polo has two required periods. Complete the scorer's rendered
   // period-transition control before asking the server to finalise.
-  await page.locator("summary").filter({ hasText: "Match actions" }).click();
-  await page.getByRole("button", { name: "Period change" }).click();
-  const periodChange = page.getByRole("dialog", { name: "Record event: Period change" });
-  await periodChange.getByLabel("period").selectOption("2");
-  await periodChange.getByLabel("Event time").fill("10:00");
-  await periodChange.getByRole("button", { name: "Record event" }).click();
+  const periodTransition = page.waitForResponse(
+    (response) => response.url().endsWith("/api/scoring/events") && response.request().method() === "POST",
+  );
+  await page.getByLabel("Period", { exact: true }).selectOption("2");
+  const periodResponse = await periodTransition;
+  expect(periodResponse.status(), await periodResponse.text()).toBe(200);
+  await expect(page.getByLabel("Period", { exact: true })).toHaveValue("2");
   const finalise = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" && new URL(response.url()).pathname === "/api/scoring/finalise",
@@ -218,19 +221,29 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   const slug = `v1-championship-${seed.fixtureKey}`;
   await page.goto("/organiser/competitions/new");
   await dismissConsent(page);
-  await page.getByLabel("Organisation").selectOption(seed.organisationId);
+  await expect(page.getByLabel("Organisation", { exact: true })).toHaveCount(0);
   await page.getByLabel("Competition name").fill("V1 Sixteen Team Knockout");
   await page.getByLabel("Public address").fill(slug);
   await page.getByLabel("Sport").selectOption("canoe_polo");
-  await page.getByLabel("Venue").fill("V1 Championship Arena");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
+  await page.getByLabel("Venue name").fill("V1 Championship Arena");
   await page.getByLabel("Address", { exact: true }).fill("8 Matchday Road");
-  await page.getByLabel("Locality").fill("Singapore");
+  await page.getByLabel("City or locality (optional)").fill("Singapore");
   await page.getByLabel("Country code").fill("SG");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Dates and time" })).toBeVisible();
   await page.getByLabel("Start date").fill("2027-08-01");
   await page.getByLabel("End date").fill("2027-08-02");
-  await page.getByLabel("Time zone").selectOption("Asia/Singapore");
+  await page.getByLabel("Time zone").fill("Asia/Singapore");
   await page.getByLabel("Locale").fill("en-SG");
-  await submit(page, page.getByRole("button", { name: "Create competition" }), "POST", "/api/phase3/competitions");
+  const creationResponse = await submit(
+    page,
+    page.getByRole("button", { name: "Create competition" }),
+    "POST",
+    "/api/phase3/competitions",
+  );
+  expect(creationResponse.request().postDataJSON()).toMatchObject({ organisation_id: seed.organisationId });
   await page.waitForURL(/\/organiser\/competitions\/[0-9a-f-]+\/setup$/);
   const competitionId = /\/competitions\/([0-9a-f-]+)\//.exec(page.url())?.[1];
   if (!competitionId) throw new Error(`Missing competition id from ${page.url()}`);

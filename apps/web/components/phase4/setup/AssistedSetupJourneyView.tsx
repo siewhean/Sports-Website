@@ -81,7 +81,24 @@ const copy = {
   warningInfeasible: opaqueId("This format cannot be scheduled with the current entries, rules, and capacity."),
   warningGeneric: opaqueId("Review this format before selecting it."),
   planCapacity: opaqueId("Plan capacity"),
+  milestone: opaqueId("Milestone"),
+  of: opaqueId("of"),
+  currentTask: opaqueId("Current task"),
+  nextTask: opaqueId("Next task"),
+  readyToPublish: opaqueId("Review the evidence before publishing."),
+  tasksComplete: opaqueId("tasks complete"),
 } as const;
+
+const setupMilestones: ReadonlyArray<{ label: string; steps: readonly Phase4SetupStepId[] }> = [
+  { label: opaqueId("Event basics"), steps: [opaqueId("basics")] },
+  { label: opaqueId("Capacity and rules"), steps: [opaqueId("capacity"), opaqueId("settings")] },
+  { label: opaqueId("Teams and divisions"), steps: [opaqueId("entries")] },
+  {
+    label: opaqueId("Format and schedule"),
+    steps: [opaqueId("format_preferences"), opaqueId("format_recommendations"), opaqueId("schedule_review")],
+  },
+  { label: opaqueId("Review and publish"), steps: [opaqueId("review_publish")] },
+];
 
 export function AssistedSetupJourneyView({
   document,
@@ -174,6 +191,12 @@ export function AssistedSetupJourneyView({
   const foundIndex = assistedSetupSteps.findIndex((step) => step.id === setup.current_step);
   const currentIndex = foundIndex >= 0 ? foundIndex : 0;
   const currentStep = assistedSetupSteps[currentIndex] ?? assistedSetupSteps[0]!;
+  const milestoneIndex = Math.max(
+    0,
+    setupMilestones.findIndex((milestone) => milestone.steps.includes(setup.current_step)),
+  );
+  const currentMilestone = setupMilestones[milestoneIndex]!;
+  const nextStep = assistedSetupSteps[currentIndex + 1];
   const readOnly = setup.read_only || setup.permission !== "write" || viewState === "read-only";
   const disabled = readOnly || commandBusy;
   const currentErrors = setup.steps.find((step) => step.id === setup.current_step)?.errors ?? [];
@@ -183,21 +206,37 @@ export function AssistedSetupJourneyView({
       <aside className={styles.stepRail} aria-label={t("prototype.310d3ee8fdc8")}>
         <p>{t("prototype.fe48ad8a445f")}</p>
         <ol>
-          {assistedSetupSteps.map((step, index) => {
-            const complete = setup.completed_steps.includes(step.id);
-            const reachable = index <= currentIndex || complete;
-            return (
-              <li key={step.id} data-current={step.id === setup.current_step} data-complete={complete}>
-                <button type="button" onClick={() => onGoTo(step.id)} disabled={readOnly || commandBusy || !reachable}>
-                  <span>{complete ? <Check aria-hidden="true" /> : index + 1}</span>
-                  <span>
-                    <strong>{step.label}</strong>
-                    <small>{step.short}</small>
-                  </span>
-                </button>
-              </li>
-            );
-          })}
+          {setupMilestones.map((milestone, groupIndex) => (
+            <li className={styles.milestone} key={milestone.label} data-current={groupIndex === milestoneIndex}>
+              <div className={styles.milestoneHeading}>
+                <span>{groupIndex + 1}</span>
+                <strong>{milestone.label}</strong>
+              </div>
+              <ol>
+                {milestone.steps.map((stepId) => {
+                  const step = assistedSetupSteps.find((item) => item.id === stepId)!;
+                  const index = assistedSetupSteps.findIndex((item) => item.id === stepId);
+                  const complete = setup.completed_steps.includes(stepId);
+                  const reachable = index <= currentIndex || complete;
+                  return (
+                    <li key={step.id} data-current={step.id === setup.current_step} data-complete={complete}>
+                      <button
+                        type="button"
+                        onClick={() => onGoTo(step.id)}
+                        disabled={readOnly || commandBusy || !reachable}
+                      >
+                        <span>{complete ? <Check aria-hidden="true" /> : index + 1}</span>
+                        <span>
+                          <strong>{step.label}</strong>
+                          <small>{step.short}</small>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </li>
+          ))}
         </ol>
         <div className={styles.railNote}>
           <Info aria-hidden="true" />
@@ -208,21 +247,39 @@ export function AssistedSetupJourneyView({
       <section className={styles.main}>
         <div className={styles.mobileProgress} data-testid="setup-mobile-progress">
           <span>
-            {t("prototype.8e6a6cca7aae")} {currentIndex + 1} {t("prototype.988a89fbb78c")}
+            {copy.milestone} {milestoneIndex + 1} {copy.of} {setupMilestones.length}
           </span>
-          <strong>{currentStep.label}</strong>
+          <strong>{currentMilestone.label}</strong>
           <progress
-            value={currentIndex + 1}
-            max={assistedSetupSteps.length}
-            aria-label={t("prototype.e56312ff3945", { value1: currentIndex + 1 })}
+            value={milestoneIndex + 1}
+            max={setupMilestones.length}
+            aria-label={`${copy.milestone} ${milestoneIndex + 1} ${copy.of} ${setupMilestones.length}`}
           />
+          <small>
+            {currentStep.label} · {setup.completed_steps.length} {copy.tasksComplete}
+          </small>
         </div>
         <header className={styles.heading}>
-          <p>{currentStep.short}</p>
-          <h1 ref={headingRef} tabIndex={-1}>
-            {stepTitle(setup.current_step)}
-          </h1>
-          <span>{stepIntro(setup.current_step)}</span>
+          <div>
+            <p>
+              {currentMilestone.label} / {currentStep.short}
+            </p>
+            <h1 ref={headingRef} tabIndex={-1}>
+              {stepTitle(setup.current_step)}
+            </h1>
+            <span>{stepIntro(setup.current_step)}</span>
+          </div>
+          <aside className={styles.contextHelp} aria-label={copy.currentTask}>
+            <strong>{copy.currentTask}</strong>
+            <p>{currentStep.label}</p>
+            <span>
+              {currentErrors.length
+                ? currentErrors[0]!.message
+                : nextStep
+                  ? `${copy.nextTask}: ${nextStep.label}`
+                  : copy.readyToPublish}
+            </span>
+          </aside>
         </header>
 
         {readOnly ? (

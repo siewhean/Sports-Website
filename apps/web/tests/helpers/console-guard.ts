@@ -42,6 +42,26 @@ const standardCancellationFailures = [
   "NS_BASE_STREAM_CLOSED",
 ];
 
+export function isExpectedPublicEventSourceCancellation(input: {
+  failure: string;
+  pageUrl: string;
+  requestUrl: string;
+  resourceType: string;
+}): boolean {
+  if (!standardCancellationFailures.includes(input.failure) || input.resourceType !== "eventsource") return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return (
+      pageUrl.origin === requestUrl.origin &&
+      /^\/api\/v1\/public\/competitions\/[^/]+\/versions$/u.test(requestUrl.pathname) &&
+      !requestUrl.search
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isExpectedTeardownFontCancellation(input: {
   failure: string;
   pageUrl: string;
@@ -182,6 +202,15 @@ export function installConsoleGuard(page: Page) {
       })
     )
       return;
+    if (
+      isExpectedPublicEventSourceCancellation({
+        failure,
+        pageUrl: page.url(),
+        requestUrl: url,
+        resourceType: request.resourceType(),
+      })
+    )
+      return;
     state.failures.push(`requestfailed: ${request.method()} ${url} (${failure})`);
   });
 
@@ -257,7 +286,7 @@ export async function openPhase2Scorekeeper(page: Page) {
   await dismissConsent(page);
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();
-  await page.getByRole("checkbox", { name: "I am at Match 12 and ready to score this fixture." }).check();
+  await page.getByRole("checkbox", { name: /ready to score/i }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
   await expect(page.getByRole("heading", { name: "Match 12" })).toBeVisible();
 }

@@ -75,9 +75,8 @@ export function FiveSportScoreControls({
       </div>
 
       <div className={styles.groups}>
-        {groups.map((group) => (
-          <fieldset className={styles.group} disabled={disabled} key={group.kind}>
-            <legend>{copy.groupLabels[group.kind]}</legend>
+        {groups.map((group) => {
+          const actions = (
             <div className={styles.actions}>
               {group.actions.map((action) => {
                 const target = sideLabel(action.side);
@@ -90,6 +89,7 @@ export function FiveSportScoreControls({
                     data-control-id={action.control.id}
                     data-control-kind={action.group}
                     data-side={action.side ?? "global"}
+                    disabled={disabled}
                     onClick={(event) => onActivate(action, event.currentTarget)}
                   >
                     <span>{action.control.label}</span>
@@ -98,8 +98,21 @@ export function FiveSportScoreControls({
                 );
               })}
             </div>
-          </fieldset>
-        ))}
+          );
+          return group.kind === "score" ? (
+            <fieldset className={`${styles.group} ${styles.primaryGroup}`} key={group.kind}>
+              <legend>{copy.groupLabels[group.kind]}</legend>
+              {actions}
+            </fieldset>
+          ) : (
+            <details className={styles.secondaryGroup} key={group.kind}>
+              <summary>
+                {copy.groupLabels[group.kind]} <span>{group.actions.length}</span>
+              </summary>
+              {actions}
+            </details>
+          );
+        })}
       </div>
     </section>
   );

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { MarketingHome } from "@/components/marketing/MarketingHome";
 import { messages } from "@matchday/ui";
 import { readCurrentIdentitySession } from "@/lib/identity-session.server";
+import { getCompetitionListing } from "@/lib/phase2-public.server";
 
 export const metadata: Metadata = {
   title: messages.metadata.homeTitle,
@@ -14,6 +15,8 @@ export const metadata: Metadata = {
 };
 
 export default async function Home() {
-  const session = await readCurrentIdentitySession();
-  return <MarketingHome viewer={session.status === "authenticated" ? session.identity : null} />;
+  const [session, competitions] = await Promise.all([readCurrentIdentitySession(), getCompetitionListing()]);
+  return (
+    <MarketingHome viewer={session.status === "authenticated" ? session.identity : null} competitions={competitions} />
+  );
 }

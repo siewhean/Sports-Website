@@ -1,0 +1,95 @@
+.scoringPage {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 1280px);
+  min-width: 0;
+  padding-bottom: max(2rem, env(safe-area-inset-bottom));
+  color: #f5f7f2;
+}
+
+.matchHeader {
+  min-height: 62px;
+  padding-block: 0.5rem;
+}
+.matchHeader h1 {
+  font-size: clamp(1.125rem, 4vw, 1.5rem);
+}
+
+.eventControls {
+  padding: 0.75rem clamp(1rem, 3vw, 2.5rem);
+}
+.eventControls > :global(div[tabindex="-1"]) {
+  margin-top: 0.5rem;
+}
+.eventControls :global(.p2-event-context) {
+  gap: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+.eventControls :global(.p2-event-context > div) {
+  gap: 0.5rem;
+}
+.eventControls :global(.p2-event-context select),
+.eventControls :global(.p2-event-context input) {
+  min-height: 48px;
+}
+.eventControls :global(.p2-segment-score) {
+  margin-bottom: 0.5rem;
+}
+.eventControls :global(.p2-segment-score > div) {
+  padding: 0.5rem;
+}
+
+.timeEntry {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 0.5rem;
+}
+.timeEntry label {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+.timeEntry small {
+  grid-column: 1 / -1;
+  color: #d5ddca;
+  font-size: 0.75rem;
+}
+.quickUndo {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 0.625rem;
+  overflow-wrap: anywhere;
+}
+
+.secondaryNotice {
+  order: 5;
+}
+.deviceDetails {
+  order: 5;
+}
+
+@media (max-width: 640px) {
+  .matchHeader {
+    gap: 0.5rem;
+  }
+  .matchHeader :global(.p2-writer) {
+    min-height: 40px;
+    padding: 0.25rem 0.5rem;
+  }
+  .matchHeader :global(.p2-writer small) {
+    display: none;
+  }
+  .eventControls :global(.p2-event-context > div) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+  .timeEntry {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 340px) {
+  .eventControls :global(.p2-event-context > div) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

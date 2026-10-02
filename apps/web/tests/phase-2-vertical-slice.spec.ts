@@ -21,7 +21,7 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
     ["/organiser/competitions/singapore-open/schedule", "Schedule", "Playing-area timeline"],
     ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
-    ["/score", "Marina Blue", "Validate access"],
+    ["/score", "Use the match-specific code from the organiser.", "Validate access"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Results"],
     ["/organiser/competitions/singapore-open/audit", "Audit log", "Finalised Match 12"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Bracket"],
@@ -46,7 +46,7 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
 
   await page.getByLabel("Scoring code").fill("POLO-12");
   await page.getByRole("button", { name: "Validate access" }).click();
-  await page.getByRole("checkbox", { name: "I am at Match 12 and ready to score this fixture." }).check();
+  await page.getByRole("checkbox", { name: "I have checked this fixture and am ready to score." }).check();
   await page.getByRole("button", { name: "Start scoring" }).click();
 
   await page.getByRole("button", { name: "Goal Marina Blue" }).click();

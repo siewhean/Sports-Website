@@ -13,6 +13,12 @@ import {
   ScheduleJobQueue,
   SchedulerRuntime,
 } from "@matchday/scheduler";
+import {
+  EmailTemplateRegistry,
+  NoopNotificationRateLimiter,
+  NotificationService,
+  PostgresNotificationRepository,
+} from "@matchday/notifications";
 import { Redis } from "ioredis";
 import postgres, { type Sql } from "postgres";
 import { buildApp } from "../src/app.js";
@@ -1080,6 +1086,13 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     const gateCC4Operations = new GateCC4Operations(identitySql, webOrigin);
     const gateCC4Lifecycle = new GateCC4LifecycleOperations(identitySql);
     const gateCC4PublicTruthRuntime = new GateCC4PublicTruthRuntime(identitySql);
+    const notificationRepository = new PostgresNotificationRepository(sql);
+    const notificationService = new NotificationService(
+      notificationRepository,
+      notificationRepository,
+      new EmailTemplateRegistry(),
+      { createId: randomUUID, now: () => new Date(), rateLimiter: new NoopNotificationRateLimiter() },
+    );
     app = await buildApp({
       config,
       probes: {
@@ -1097,6 +1110,7 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
       gateCC4Operations,
       gateCC4Lifecycle,
       gateCC4PublicTruthRuntime,
+      notificationService,
     });
     await app.listen({ host: "127.0.0.1", port: apiPort });
     await waitFor(`${apiOrigin}/health/ready`, "Phase 4 API");
