@@ -1,10 +1,12 @@
+export const MAX_MANUAL_TIME_SECONDS = 3_599;
+
 export function parseRecordedTime(value: string): number | null {
   const match = /^(\d{1,2}):([0-5]\d)$/.exec(value.trim());
   const compact = /^(\d{1,2})([0-5]\d)$/.exec(value.trim());
   const parts = match ?? compact;
   if (!parts) return null;
   const total = Number(parts[1]) * 60 + Number(parts[2]);
-  return total <= 3_600 ? total : null;
+  return total <= MAX_MANUAL_TIME_SECONDS ? total : null;
 }
 
 export function recordedElapsedSeconds(
@@ -17,7 +19,8 @@ export function recordedElapsedSeconds(
   if (periodDurationMinutes === null) return mode === "elapsed" ? seconds : null;
   const duration = periodDurationMinutes * 60;
   if (seconds > duration) return null;
-  return mode === "remaining" ? duration - seconds : seconds;
+  const elapsed = mode === "remaining" ? duration - seconds : seconds;
+  return elapsed <= MAX_MANUAL_TIME_SECONDS ? elapsed : null;
 }
 
 export function formatRecordedTime(seconds: number): string {

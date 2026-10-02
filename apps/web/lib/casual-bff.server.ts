@@ -1,10 +1,32 @@
 import "server-only";
+import { isIP } from "node:net";
 
 function unavailable(): Response {
   return Response.json(
     { message: "Casual games are temporarily unavailable. Please try again shortly." },
     { status: 503, headers: { "cache-control": "no-store" } },
   );
+}
+
+export function extractTrustedClientIp(request: Request): string {
+  const xff = request.headers.get("x-forwarded-for");
+  if (xff) {
+    const parts = xff.split(",").map((p) => p.trim());
+    // In Caddy -> web, Caddy appends the connecting client's IP to the end of X-Forwarded-For.
+    // If a browser passes forged IPs, Caddy appends the real IP after them.
+    // Traversing from right to left selects the authentic client IP appended by the trusted ingress proxy.
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const candidate = parts[i];
+      if (candidate && isIP(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  const realIp = request.headers.get("x-real-ip")?.trim();
+  if (realIp && isIP(realIp)) {
+    return realIp;
+  }
+  return "127.0.0.1";
 }
 
 export async function forwardCasualRequest(request: Request): Promise<Response> {
@@ -34,6 +56,8 @@ export async function forwardCasualRequest(request: Request): Promise<Response> 
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  const clientIp = extractTrustedClientIp(request);
+  headers.set("x-forwarded-for", clientIp);
   try {
     const upstream = await fetch(target, {
       method: request.method,

@@ -41,8 +41,9 @@ export function PublicCompetitionsList({
     () =>
       competitions.filter((competition) => {
         if (filter === opaqueId("all")) return true;
-        if (filter === opaqueId("live")) return competition.status === "live" || competition.status === "active";
-        if (filter === opaqueId("upcoming")) return competition.status === "published";
+        if (filter === opaqueId("live")) return competition.status === "live";
+        if (filter === opaqueId("upcoming"))
+          return competition.status === "active" || competition.status === "published";
         return competition.status === "completed" || competition.status === "archived";
       }),
     [competitions, filter],
