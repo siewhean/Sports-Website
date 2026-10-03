@@ -236,6 +236,7 @@ describe("foundation migrations", () => {
         "0059_phase6_shared_ai_credits.sql",
         "0060_phase6_event_pass_competition_scope.sql",
         "0061_phase6_reject_organisation_event_pass.sql",
+        "0065_cp9a1_restore_search_path_safety.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {

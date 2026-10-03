@@ -94,6 +94,51 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
             public.phase3_canonical_sport_pack_jsonb(${sql.json(input)}), 'UTF8')), 'hex') AS sport_hash`;
         expect(after).toEqual({ generic: expected, sport: expected, hash: expectedHash, sport_hash: expectedHash });
       }
+      // Custom migration schemas must repair their own helpers without replacing public functions.
+      const publicBefore = await sql`SELECT oid,proname,pg_get_functiondef(oid) AS definition,xmin::text AS version
+        FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN
+          ('phase3_canonical_jsonb','phase3_canonical_sport_pack_jsonb','phase4_json_object_without_forbidden_keys')
+        ORDER BY proname`;
+      const schema = `test_cp9a1_custom_${randomUUID().replaceAll("-", "")}`;
+      await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+      const publicAfter = await sql`SELECT oid,proname,pg_get_functiondef(oid) AS definition,xmin::text AS version
+        FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN
+          ('phase3_canonical_jsonb','phase3_canonical_sport_pack_jsonb','phase4_json_object_without_forbidden_keys')
+        ORDER BY proname`;
+      expect(publicAfter).toEqual(publicBefore);
+      const customDefinitions = await sql`SELECT proname,prosrc,provolatile,proisstrict FROM pg_proc
+        WHERE pronamespace=${schema}::regnamespace AND proname IN
+          ('phase3_canonical_jsonb','phase3_canonical_sport_pack_jsonb','phase4_json_object_without_forbidden_keys')`;
+      expect(customDefinitions).toHaveLength(3);
+      for (const definition of customDefinitions) {
+        const isGuard = definition.proname === "phase4_json_object_without_forbidden_keys";
+        const source = isGuard ? guardHistorical : historical;
+        const type = isGuard ? "boolean" : "text";
+        const previousBody = source
+          .split(`FUNCTION ${definition.proname}(value jsonb) RETURNS ${type} AS $$`)[1]
+          ?.split("$$ LANGUAGE")[0];
+        expect(definition.prosrc.replaceAll(`${schema}.${definition.proname}(`, `${definition.proname}(`)).toBe(
+          previousBody,
+        );
+        expect(definition.provolatile).toBe("i");
+        expect(definition.proisstrict).toBe(isGuard);
+      }
+      await sql`SET search_path = ''`;
+      for (const input of [nested, reordered]) {
+        const [customResult] = await sql`SELECT
+          ${sql(schema)}.phase3_canonical_jsonb(${sql.json(input)}) AS generic,
+          ${sql(schema)}.phase3_canonical_sport_pack_jsonb(${sql.json(input)}) AS sport,
+          ${sql(schema)}.phase4_sha256_json(${sql.json(input)}) AS hash,
+          ${sql(schema)}.phase4_json_object_without_forbidden_keys(${sql.json(input)}) AS allowed,
+          ${sql(schema)}.phase4_json_object_without_forbidden_keys(${sql.json({ nested: [{ secret: "synthetic" }] })}) AS forbidden`;
+        expect(customResult).toEqual({
+          generic: expected,
+          sport: expected,
+          hash: expectedHash,
+          allowed: true,
+          forbidden: false,
+        });
+      }
     } finally {
       await sql.end({ timeout: 2 });
       try {
