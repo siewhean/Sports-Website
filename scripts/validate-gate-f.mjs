@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadProductionBackupEvidence } from "./run-gate-f-backup-restore-audit.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHA_PATTERN = /^[0-9a-f]{40}$/iu;
@@ -51,6 +53,42 @@ async function readJson(file) {
   return JSON.parse(await readFile(file, "utf8"));
 }
 
+async function validateProductionBackup(cert, expectedSha, artifactsDir, certFile) {
+  const declared = requireObject(cert.backup_restore, "Gate F backup_restore");
+  requireExact(declared.conclusion, "PASS", "Gate F backup_restore.conclusion");
+  requireExact(declared.production_operator_review, "PASS", "Gate F backup_restore.production_operator_review");
+  const evidenceFile = path.resolve(
+    path.dirname(certFile),
+    requireString(declared.evidence_reference, "Gate F backup evidence_reference"),
+  );
+  const inputHash = requireHash(declared.evidence_sha256, "Gate F backup evidence_sha256");
+  const receipt = requireObject(
+    await readJson(path.join(artifactsDir, "gate-f-backup-restore.json")),
+    "Backup receipt",
+  );
+  requireSha(receipt.candidate_sha, "Backup candidate_sha", expectedSha);
+  requireExact(receipt.verdict, "PASS", "Backup verdict");
+  requireExact(receipt.evidence_scope, "production_backup_and_isolated_restore", "Backup evidence_scope");
+  requireExact(receipt.input_evidence_sha256, inputHash, "Backup input_evidence_sha256");
+  const receiptEvidenceFile = path.resolve(
+    artifactsDir,
+    requireString(receipt.evidence_reference, "Backup evidence_reference"),
+  );
+  requireExact(receiptEvidenceFile, evidenceFile, "Backup evidence reference binding");
+  const { receipt_sha256: receiptHash, ...payload } = receipt;
+  const actualReceiptHash = createHash("sha256")
+    .update(JSON.stringify(payload, null, 2))
+    .digest("hex");
+  requireExact(requireHash(receiptHash, "Backup receipt_sha256"), actualReceiptHash, "Backup receipt checksum");
+  const generatedAt = Date.parse(receipt.generated_at);
+  if (!Number.isFinite(generatedAt) || generatedAt > Date.now() || Date.now() - generatedAt > 24 * 60 * 60 * 1000)
+    throw new Error("Backup receipt generated_at must be within the last 24 hours");
+  const validated = await loadProductionBackupEvidence({ candidateSha: expectedSha, evidenceFile });
+  if (validated.errors.length > 0)
+    throw new Error(`Production backup evidence invalid: ${validated.errors.join(", ")}`);
+  requireExact(validated.evidenceSha256, inputHash, "Production backup evidence checksum");
+}
+
 export async function validateGateF(candidateSha, options = {}) {
   const expectedSha = requireSha(candidateSha, "candidate SHA");
   const artifactsDir = options.artifactsDir ?? path.join(root, "artifacts");
@@ -87,9 +125,18 @@ export async function validateGateF(candidateSha, options = {}) {
 
   requireExact(cert.legal_approval, "DEFERRED_TO_FIRST_COMMERCIAL_RELEASE", "Gate F legal approval disposition");
 
+  if (
+    sim.production_certification === false ||
+    cert.simulation?.production_certification === false ||
+    (typeof sim.simulation_environment === "string" && /simulation|staging|local/iu.test(sim.simulation_environment)) ||
+    sim.pending_reasons?.includes?.("simulation_is_not_production_certification")
+  )
+    throw new Error("Simulation-only evidence cannot certify production");
   requireExact(sim.verdict, "PASS", "Simulation verdict");
   requireSha(sim.candidate_sha, "Simulation candidate_sha", expectedSha);
   requireHash(sim.receipt_sha256, "Simulation receipt_sha256");
+
+  await validateProductionBackup(cert, expectedSha, artifactsDir, certFile);
 
   return {
     valid: true,
