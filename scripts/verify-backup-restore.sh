@@ -237,9 +237,56 @@ VALUES('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000
 SQL
 )" >/dev/null
 
+# Exercise the same generated-column/check dependency as schedule_generation_jobs
+# without bypassing its application provenance guards. This table and nested
+# fixture exist only in the guarded disposable database and its temporary dump.
+# pg_restore COPY evaluates these expressions with its restricted search_path.
+postgres_psql "$SOURCE_DB" -v ON_ERROR_STOP=1 -c "$(cat <<'SQL'
+CREATE TABLE public.backup_restore_schedule_hash_fixture (
+  id integer PRIMARY KEY,
+  input_snapshot jsonb NOT NULL,
+  input_hash text NOT NULL CHECK (input_hash=public.phase4_sha256_json(input_snapshot)),
+  problem_hash text GENERATED ALWAYS AS (public.phase4_schedule_problem_hash(input_snapshot)) STORED,
+  metadata jsonb NOT NULL CHECK (public.phase4_json_object_without_forbidden_keys(metadata))
+);
+INSERT INTO public.backup_restore_schedule_hash_fixture(id,input_snapshot,input_hash,metadata)
+VALUES (1,'{"z":[{"b":2,"a":[1,null,true]}],"a":{"nested":"restore"}}',
+  'f7623cf1069aa80481b171bed1234fbe37b38e08e9010f2b190fc3cc2ada43b8',
+  '{"nested":[{"label":"restore","items":[{"count":1}]}]}');
+SQL
+)" >/dev/null
+
 postgres_dump "$SOURCE_DB"
 postgres_createdb "$RESTORE_DB"
 postgres_restore "$RESTORE_DB"
+
+schedule_hash_query="SELECT count(*)::text || ':' || min(input_hash) || ':' || min(problem_hash) FROM public.backup_restore_schedule_hash_fixture;"
+schedule_hash_expected="1:f7623cf1069aa80481b171bed1234fbe37b38e08e9010f2b190fc3cc2ada43b8:f7623cf1069aa80481b171bed1234fbe37b38e08e9010f2b190fc3cc2ada43b8"
+source_schedule_hash="$(postgres_psql "$SOURCE_DB" -At -c "$schedule_hash_query")"
+restore_schedule_hash="$(postgres_psql "$RESTORE_DB" -At -c "$schedule_hash_query")"
+if [[ "$source_schedule_hash" != "$schedule_hash_expected" || "$restore_schedule_hash" != "$schedule_hash_expected" ]]; then
+  echo "Backup restore verification failed: nested schedule fixture hashes differ" >&2
+  exit 1
+fi
+echo "Disposable nested schedule hash generated column and check verified through pg_dump/pg_restore."
+postgres_psql "$RESTORE_DB" -v ON_ERROR_STOP=1 -c "$(cat <<'SQL'
+DO $verification$
+BEGIN
+  IF (SELECT metadata FROM public.backup_restore_schedule_hash_fixture WHERE id=1)
+     <> '{"nested":[{"label":"restore","items":[{"count":1}]}]}'::jsonb THEN
+    RAISE EXCEPTION 'Restored nested metadata differs';
+  END IF;
+  BEGIN
+    UPDATE public.backup_restore_schedule_hash_fixture
+      SET metadata='{"nested":[{"secret":"must-reject"}]}' WHERE id=1;
+    RAISE EXCEPTION 'Restored nested metadata check did not reject forbidden key';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+END
+$verification$;
+SQL
+)" >/dev/null
+echo "Disposable nested metadata and forbidden-key check verified after restore."
 
 if [[ "$(postgres_psql "$SOURCE_DB" -At -c "SELECT to_regclass('public.competition_officials') IS NOT NULL;")" == "t" ]]; then
   official_name_index_query="SELECT pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid=to_regclass('public.competition_officials_active_name_uidx') AND indisunique AND indpred IS NOT NULL;"

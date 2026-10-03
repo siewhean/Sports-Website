@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,10 @@ describeInfrastructure("casual migration upgrade", () => {
     const sql = postgres(databaseUrl, { max: 1, onnotice: () => undefined, connection: { search_path: schema } });
     try {
       await cp(migrationsDirectory, directory, { recursive: true });
-      await rm(path.join(directory, "0064_casual_games.sql"));
+      const upgradeMigrations = (await readdir(directory))
+        .filter((name) => name >= "0064" && name.endsWith(".sql"))
+        .sort();
+      await Promise.all(upgradeMigrations.map((name) => rm(path.join(directory, name))));
       const baseline = await migrateDatabase({ databaseUrl, migrationsDirectory: directory, schema });
       expect(baseline.current).toHaveLength(63);
       const account = randomUUID();
@@ -39,8 +42,8 @@ describeInfrastructure("casual migration upgrade", () => {
         FROM pg_index WHERE indexrelid=to_regclass(${`${schema}.competition_officials_active_name_uidx`})`;
 
       const upgraded = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
-      expect(upgraded.applied).toEqual(["0064_casual_games.sql"]);
-      expect(upgraded.current).toHaveLength(64);
+      expect(upgraded.applied).toEqual(upgradeMigrations);
+      expect(upgraded.current).toHaveLength(63 + upgradeMigrations.length);
       expect(await sql`SELECT * FROM accounts ORDER BY id`).toEqual(accountsBefore);
       expect(await sql`SELECT name,checksum FROM schema_migrations WHERE name < '0064' ORDER BY name`).toEqual(
         ledgerBefore,

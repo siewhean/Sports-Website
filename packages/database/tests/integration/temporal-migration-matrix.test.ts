@@ -195,14 +195,14 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
   // ---------------------------------------------------------------------------
   // Scenario 1: Empty DB
   // ---------------------------------------------------------------------------
-  it("Scenario 1: Empty DB - applies all 64 migrations idempotently from clean state", async () => {
+  it("Scenario 1: Empty DB - applies the complete migration chain idempotently from clean state", async () => {
     const schema = await createIsolatedSchema("s1_empty");
     const allExpectedMigrations = (await readdir(migrationsDirectory))
       .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
       .sort();
-    expect(allExpectedMigrations).toHaveLength(64);
+    expect(allExpectedMigrations).toContain("0065_cp9a1_restore_search_path_safety.sql");
 
-    // 1st run: all 64 migrations apply
+    // 1st run: all migrations apply
     const firstRun = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
     expect(firstRun.applied).toEqual(allExpectedMigrations);
     expect(firstRun.current).toEqual(allExpectedMigrations);
@@ -223,11 +223,11 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       `;
       expect(extension).toEqual({ namespace: "public" });
 
-      // Verify schema_migrations table has all 64 migrations with valid SHA256 checksums
+      // Verify the complete migration ledger has valid SHA256 checksums
       const recordedMigrations = await sql<{ name: string; checksum: string }[]>`
         SELECT name, checksum FROM schema_migrations ORDER BY name
       `;
-      expect(recordedMigrations).toHaveLength(64);
+      expect(recordedMigrations).toHaveLength(allExpectedMigrations.length);
       expect(recordedMigrations.map((r) => r.name)).toEqual(allExpectedMigrations);
       expect(recordedMigrations.every((r) => /^[0-9a-f]{64}$/u.test(r.checksum))).toBe(true);
 
@@ -466,7 +466,7 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
   // ---------------------------------------------------------------------------
   // Scenario 3: Current-main DB (0032–0035 with unseeded entries & identity assurance)
   // ---------------------------------------------------------------------------
-  it("Scenario 3: Current-main DB - upgrades populated 0035 state forward through 0036..0064", async () => {
+  it("Scenario 3: Current-main DB - upgrades populated 0035 state through the complete forward chain", async () => {
     const schema = await createIsolatedSchema("s3_currentmain");
     const { directory: copiedDir, allMigrations } = await copyMigrationsThrough(
       "0035_identity_authentication_assurance.sql",
@@ -580,9 +580,10 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       `;
       expect(assuranceRows).toHaveLength(3);
 
-      // 4. Now copy and apply forward Gate C and Phase 6 migrations 0036..0064
+      // 4. Now copy and apply all migrations after the verified 0035 baseline
       const forwardGateCMigrations = allMigrations.filter((name) => name >= "0036_gate_c_offline_replay.sql");
-      expect(forwardGateCMigrations).toHaveLength(29);
+      expect(forwardGateCMigrations).toHaveLength(allMigrations.length - initialMigrate.current.length);
+      expect(forwardGateCMigrations).toContain("0065_cp9a1_restore_search_path_safety.sql");
       await copyMigrationFiles(copiedDir, forwardGateCMigrations);
 
       const upgradeResult = await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });
