@@ -32,7 +32,7 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
   const rollback = await runGateFRollbackDrill(sha, { artifactsDir });
 
   console.log(`[simulation] 3. Executing backup and restore verification...`);
-  const backup = await runGateFBackupRestoreAudit(sha, { artifactsDir });
+  const backup = await runGateFBackupRestoreAudit(sha, { artifactsDir, evidenceFile: options.backupEvidenceFile });
 
   console.log(`[simulation] 4. Executing CDN / edge cache purge audit...`);
   const cache = await runGateFCachePurgeAudit(sha, { artifactsDir });
@@ -47,7 +47,12 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
     qa_item: "GATE-F-PRODUCTION-SIMULATION",
     candidate_sha: sha,
     simulation_environment: "isolated_staging_simulation_stack",
-    verdict: "PASS",
+    verdict: "PENDING",
+    production_certification: false,
+    pending_reasons: [
+      "simulation_is_not_production_certification",
+      ...(backup.verdict === "PASS" ? [] : ["production_backup_evidence_pending"]),
+    ],
     components: {
       migration_expand_contract: migrations.verdict,
       zero_downtime_rollback: rollback.verdict,
@@ -78,7 +83,10 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
   runGateFProductionSimulation(sha)
-    .then((r) => console.log(`✓ Gate F production simulation COMPLETED: ${r.verdict}`))
+    .then((r) => {
+      console.log(`Gate F production simulation COMPLETED: ${r.verdict}`);
+      if (r.verdict !== "PASS") process.exitCode = 1;
+    })
     .catch((e) => {
       console.error(e.message);
       process.exit(1);

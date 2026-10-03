@@ -21,7 +21,18 @@
       "gate-d-real-e2e": "PENDING"
     }
   },
+  "backup_restore": {
+    "conclusion": "PENDING",
+    "evidence_reference": null,
+    "evidence_sha256": null,
+    "production_operator_review": "PENDING"
+  },
+  "disaster_recovery": {
+    "conclusion": "PENDING",
+    "independent_evidence_reference": null
+  },
   "simulation": {
+    "production_certification": false,
     "conclusion": "PENDING",
     "receipts": {
       "migration_expand_contract": "PENDING",
