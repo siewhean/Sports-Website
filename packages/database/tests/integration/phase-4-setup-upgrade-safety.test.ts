@@ -242,6 +242,9 @@ describeInfrastructure("Phase 4 Assisted Setup upgrade safety", () => {
           "0062_phase4_dag_aware_daily_match_limits.sql",
           "0063_sch006_competition_officials.sql",
           "0064_casual_games.sql",
+          ...(await readdir(migrationsDirectory))
+            .filter((name) => name > "0064_casual_games.sql" && /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+            .sort(),
         ]);
         upgradeSql = postgres(databaseUrl, {
           max: 1,
