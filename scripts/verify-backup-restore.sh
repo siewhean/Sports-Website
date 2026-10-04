@@ -256,6 +256,20 @@ VALUES (1,'{"z":[{"b":2,"a":[1,null,true]}],"a":{"nested":"restore"}}',
 SQL
 )" >/dev/null
 
+
+# Exercise the exact schedule_generation_jobs input-snapshot CHECK dependency.
+# This disposable fixture forces pg_restore COPY to evaluate the validator with
+# the same restricted search_path used for the real production restore.
+postgres_psql "$SOURCE_DB" -v ON_ERROR_STOP=1 -c "$(cat <<'SQL'
+CREATE TABLE public.backup_restore_schedule_input_fixture (
+  id integer PRIMARY KEY,
+  input_snapshot jsonb NOT NULL CHECK (public.phase4_schedule_input_valid(input_snapshot))
+);
+INSERT INTO public.backup_restore_schedule_input_fixture(id,input_snapshot)
+VALUES (1,'{"schema_version":1,"job_id":"00000000-0000-4000-8000-000000000101","competition_id":"00000000-0000-4000-8000-000000000102","source_revision":1,"time_zone":"UTC","objective":"balanced","capacity_revision":1,"capacity_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","matches":[{"match_id":"00000000-0000-4000-8000-000000000103","division_id":"00000000-0000-4000-8000-000000000104","duration_minutes":30,"dependency_match_ids":[],"possible_entry_ids":["00000000-0000-4000-8000-000000000105","00000000-0000-4000-8000-000000000106"],"official_ids":[],"is_championship_final":false}],"slots":[{"slot_id":"slot-1","interval_id":"00000000-0000-4000-8000-000000000107","area_id":"00000000-0000-4000-8000-000000000108","start_epoch_ms":1000,"end_epoch_ms":2000}],"constraints":{"minimum_rest":{"mode":"preferred","value":{"minutes":15},"weight":1},"maximum_matches_per_day":{"mode":"required","value":{"matches":3}},"preferred_final_time":{"mode":"preferred","value":{"target_start_epoch_ms":1000,"tolerance_minutes":30},"weight":1},"entry_unavailable":{"mode":"ignored","value":{"by_entry_id":{}}},"official_availability":{"mode":"ignored","value":{"by_official_id":{}}},"featured_playing_area":{"mode":"ignored","value":{"area_id":"00000000-0000-4000-8000-000000000108","match_ids":["00000000-0000-4000-8000-000000000103"]}},"avoid_consecutive_matches":{"mode":"preferred","value":{"minutes":5},"weight":1},"balance_early_matches":{"mode":"preferred","value":{"before_local_time":"09:00"},"weight":1},"balance_late_matches":{"mode":"preferred","value":{"at_or_after_local_time":"18:00"},"weight":1},"keep_division_together":{"mode":"preferred","value":{"maximum_area_count":1},"weight":1},"preserve_existing_schedule":{"mode":"ignored","value":{"maximum_shift_minutes":0,"by_match_id":{}}}}}'::jsonb);
+SQL
+)" >/dev/null
+
 postgres_dump "$SOURCE_DB"
 postgres_createdb "$RESTORE_DB"
 postgres_restore "$RESTORE_DB"
@@ -287,6 +301,23 @@ $verification$;
 SQL
 )" >/dev/null
 echo "Disposable nested metadata and forbidden-key check verified after restore."
+
+schedule_input_query="SELECT count(*)::text || ':' || bool_and(public.phase4_schedule_input_valid(input_snapshot))::text FROM public.backup_restore_schedule_input_fixture;"
+schedule_input_expected="1:true"
+source_schedule_input="$(postgres_psql "$SOURCE_DB" -At -c "$schedule_input_query")"
+restore_schedule_input="$(postgres_psql "$RESTORE_DB" -At -c "$schedule_input_query")"
+if [[ "$source_schedule_input" != "$schedule_input_expected" || "$restore_schedule_input" != "$schedule_input_expected" ]]; then
+  echo "Backup restore verification failed: schedule-input validator fixture differs" >&2
+  exit 1
+fi
+schedule_input_constraint_query="SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.schedule_generation_jobs'::regclass AND conname='schedule_generation_jobs_input_snapshot_check';"
+source_schedule_input_constraint="$(postgres_psql "$SOURCE_DB" -At -c "$schedule_input_constraint_query")"
+restore_schedule_input_constraint="$(postgres_psql "$RESTORE_DB" -At -c "$schedule_input_constraint_query")"
+if [[ -z "$source_schedule_input_constraint" || "$source_schedule_input_constraint" != "$restore_schedule_input_constraint" || "$source_schedule_input_constraint" != *phase4_schedule_input_valid* ]]; then
+  echo "Backup restore verification failed: schedule_generation_jobs input-snapshot CHECK changed" >&2
+  exit 1
+fi
+echo "Disposable schedule-input validator check verified through pg_dump/pg_restore."
 
 if [[ "$(postgres_psql "$SOURCE_DB" -At -c "SELECT to_regclass('public.competition_officials') IS NOT NULL;")" == "t" ]]; then
   official_name_index_query="SELECT pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid=to_regclass('public.competition_officials_active_name_uidx') AND indisunique AND indpred IS NOT NULL;"
