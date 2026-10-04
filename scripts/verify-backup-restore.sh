@@ -256,9 +256,47 @@ VALUES (1,'{"z":[{"b":2,"a":[1,null,true]}],"a":{"nested":"restore"}}',
 SQL
 )" >/dev/null
 
+# A complete schedule snapshot exercises the actual validator CHECK during COPY.
+# Its identities, times and settings are synthetic; no production dump is used.
+# The fixture table avoids application provenance triggers; the production table
+# CHECK is separately verified below and is never weakened or disabled.
+schedule_input_fixture="$(cat "$ROOT_DIR/packages/database/tests/fixtures/cp9a1-schedule-input.json")"
+postgres_psql "$SOURCE_DB" -v ON_ERROR_STOP=1 -c "
+CREATE TABLE public.backup_restore_schedule_input_fixture (
+  id integer PRIMARY KEY,
+  input_snapshot jsonb NOT NULL CHECK (public.phase4_schedule_input_valid(input_snapshot)),
+  input_hash text NOT NULL CHECK (input_hash=public.phase4_sha256_json(input_snapshot)),
+  problem_hash text GENERATED ALWAYS AS (public.phase4_schedule_problem_hash(input_snapshot)) STORED
+);
+INSERT INTO public.backup_restore_schedule_input_fixture(id,input_snapshot,input_hash)
+VALUES (1, \$snapshot\$${schedule_input_fixture}\$snapshot\$::jsonb,
+  public.phase4_sha256_json(\$snapshot\$${schedule_input_fixture}\$snapshot\$::jsonb));
+" >/dev/null
+
 postgres_dump "$SOURCE_DB"
 postgres_createdb "$RESTORE_DB"
 postgres_restore "$RESTORE_DB"
+
+schedule_shape_query="SELECT count(*)=1 AND bool_and((SELECT count(*)=11 FROM jsonb_object_keys(input_snapshot)) AND (SELECT count(*)=11 FROM jsonb_object_keys(input_snapshot->'constraints')) AND jsonb_array_length(input_snapshot->'matches')=36 AND jsonb_array_length(input_snapshot->'slots')=72 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(input_snapshot->'matches') match_value WHERE jsonb_typeof(match_value->'official_ids') IS DISTINCT FROM 'array')) FROM public.backup_restore_schedule_input_fixture;"
+if [[ "$(postgres_psql "$RESTORE_DB" -qAt -c "$schedule_shape_query")" != "t" ]]; then
+  echo "Backup restore verification failed: complete synthetic schedule fixture shape changed" >&2
+  exit 1
+fi
+schedule_input_query="SELECT count(*)::text || ':' || bool_and(public.phase4_schedule_input_valid(input_snapshot))::text || ':' || min(input_hash) || ':' || min(problem_hash) FROM public.backup_restore_schedule_input_fixture;"
+source_schedule_input="$(postgres_psql "$SOURCE_DB" -qAt -c "SET search_path = ''; $schedule_input_query")"
+restore_schedule_input="$(postgres_psql "$RESTORE_DB" -qAt -c "SET search_path = ''; $schedule_input_query")"
+if [[ "$source_schedule_input" != 1:true:* || "$source_schedule_input" != "$restore_schedule_input" ]]; then
+  echo "Backup restore verification failed: full schedule-input validator or hashes differ" >&2
+  exit 1
+fi
+schedule_check_query="SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.schedule_generation_jobs'::regclass AND conname='schedule_generation_jobs_input_snapshot_check' AND convalidated;"
+source_schedule_check="$(postgres_psql "$SOURCE_DB" -qAt -c "SET search_path = ''; $schedule_check_query")"
+restore_schedule_check="$(postgres_psql "$RESTORE_DB" -qAt -c "SET search_path = ''; $schedule_check_query")"
+if [[ "$source_schedule_check" != 'CHECK (public.phase4_schedule_input_valid(input_snapshot))' || "$source_schedule_check" != "$restore_schedule_check" ]]; then
+  echo "Backup restore verification failed: schedule_generation_jobs input CHECK changed" >&2
+  exit 1
+fi
+echo "Complete schedule snapshot (11 settings, 36 matches, 72 slots) validated after restricted-search-path restore; production-table CHECK unchanged."
 
 schedule_hash_query="SELECT count(*)::text || ':' || min(input_hash) || ':' || min(problem_hash) FROM public.backup_restore_schedule_hash_fixture;"
 schedule_hash_expected="1:f7623cf1069aa80481b171bed1234fbe37b38e08e9010f2b190fc3cc2ada43b8:f7623cf1069aa80481b171bed1234fbe37b38e08e9010f2b190fc3cc2ada43b8"

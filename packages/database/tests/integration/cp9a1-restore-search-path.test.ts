@@ -11,6 +11,7 @@ import { migrateDatabase } from "../../src/migrations.js";
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 const repair = "0065_cp9a1_restore_search_path_safety.sql";
+const validatorRepair = "0066_cp9a1_restore_validator_search_path_safety.sql";
 const nested = { z: { b: 2, a: 1 }, a: [{ b: true, A: null }, [3, "x"]] };
 const reordered = { a: [{ A: null, b: true }, [3, "x"]], z: { a: 1, b: 2 } };
 const expected = '{"a":[{"A":null,"b":true},[3,"x"]],"z":{"a":1,"b":2}}';
@@ -33,6 +34,7 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       await admin.unsafe(`CREATE DATABASE "${database}"`);
       await cp(migrationsDirectory, directory, { recursive: true });
       await rm(path.join(directory, repair));
+      await rm(path.join(directory, validatorRepair));
       await migrateDatabase({ databaseUrl, migrationsDirectory: directory });
       const historical = await readFile(
         path.join(migrationsDirectory, "0050_phase3_sport_pack_hash_scope_fence.sql"),
@@ -53,7 +55,8 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
         });
       }
       await sql`SET search_path = public`;
-      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([repair]);
+      await cp(path.join(migrationsDirectory, repair), path.join(directory, repair));
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory: directory })).applied).toEqual([repair]);
       const definitions = await sql`SELECT proname,prosrc,provolatile FROM pg_proc
         WHERE oid IN ('public.phase3_canonical_jsonb(jsonb)'::regprocedure,
           'public.phase3_canonical_sport_pack_jsonb(jsonb)'::regprocedure)`;
@@ -139,6 +142,158 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
           forbidden: false,
         });
       }
+    } finally {
+      await sql.end({ timeout: 2 });
+      try {
+        await admin.unsafe(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      } finally {
+        await admin.end({ timeout: 2 });
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  }, 30_000);
+
+  it("repairs schedule validators without changing semantics or other schemas", async () => {
+    const sourceUrl = new URL(parseConfig(process.env).databaseUrl);
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(sourceUrl.hostname)) {
+      throw new Error("Restore regression requires a loopback disposable PostgreSQL server");
+    }
+    const database = `test_cp9a1_validators_${randomUUID().replaceAll("-", "")}`;
+    const admin = postgres(sourceUrl.toString(), { max: 1, onnotice: () => undefined });
+    const directory = await mkdtemp(path.join(os.tmpdir(), "matchday-restore-validators-"));
+    sourceUrl.pathname = `/${database}`;
+    const databaseUrl = sourceUrl.toString();
+    const sql = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
+    type Snapshot = Record<string, postgres.JSONValue> & {
+      constraints: Record<string, { mode: string; value: postgres.JSONValue; weight: number }>;
+      matches: Record<string, postgres.JSONValue>[];
+      slots: Record<string, postgres.JSONValue>[];
+    };
+    const snapshot = JSON.parse(
+      await readFile(path.resolve(migrationsDirectory, "../tests/fixtures/cp9a1-schedule-input.json"), "utf8"),
+    ) as Snapshot;
+    const intervals = [{ start_epoch_ms: 1_800_000_000_000, end_epoch_ms: 1_800_003_600_000 }];
+    const helpers = [
+      "phase4_json_exact_keys",
+      "phase4_json_nonnegative_integer",
+      "phase3_json_positive_integer",
+      "phase4_schedule_intervals_valid",
+      "phase4_schedule_constraint_value_valid",
+    ];
+    const names = [
+      "phase4_schedule_intervals_valid",
+      "phase4_schedule_constraint_value_valid",
+      "phase4_schedule_input_valid",
+    ];
+    const historical = await readFile(path.join(migrationsDirectory, "0013_phase4_organiser_alpha.sql"), "utf8");
+    const originalBody = (name: string) =>
+      historical.split(`CREATE FUNCTION ${name}(`)[1]?.split("AS $$")[1]?.split("$$ LANGUAGE")[0];
+    const validate = async (schema: string, valid: boolean) => {
+      const [interval] =
+        await sql`SELECT ${sql(schema)}.phase4_schedule_intervals_valid(${sql.json(intervals)}) AS valid`;
+      expect(interval?.valid).toBe(valid);
+      expect(Object.keys(snapshot.constraints)).toHaveLength(11);
+      for (const [key, setting] of Object.entries(snapshot.constraints)) {
+        const [constraint] =
+          await sql`SELECT ${sql(schema)}.phase4_schedule_constraint_value_valid(${key},${sql.json(setting.value)}) AS valid`;
+        expect(constraint?.valid, key).toBe(valid);
+      }
+      const [input] = await sql`SELECT ${sql(schema)}.phase4_schedule_input_valid(${sql.json(snapshot)}) AS valid`;
+      expect(input?.valid).toBe(valid);
+    };
+    const invalid = async (schema: string) => {
+      for (const value of [[{ start_epoch_ms: 2, end_epoch_ms: 1 }], [{ start_epoch_ms: 1 }], {}]) {
+        const [row] = await sql`SELECT ${sql(schema)}.phase4_schedule_intervals_valid(${sql.json(value)}) AS valid`;
+        expect(row?.valid).toBe(false);
+      }
+      for (const key of [...Object.keys(snapshot.constraints), "unsupported"]) {
+        const [row] =
+          await sql`SELECT ${sql(schema)}.phase4_schedule_constraint_value_valid(${key},'{}'::jsonb) AS valid`;
+        expect(row?.valid, key).toBe(false);
+      }
+      const missingOfficials = structuredClone(snapshot);
+      delete missingOfficials.matches[0]!.official_ids;
+      for (const value of [{}, { ...snapshot, schema_version: 2 }, { ...snapshot, slots: [] }, missingOfficials]) {
+        const [row] = await sql`SELECT ${sql(schema)}.phase4_schedule_input_valid(${sql.json(value)}) AS valid`;
+        expect(row?.valid).toBe(false);
+      }
+    };
+    const definitions = (schema: string) => sql`SELECT oid,proname,prosrc,provolatile,proisstrict,
+      pg_get_functiondef(oid) AS definition,xmin::text AS version FROM pg_proc
+      WHERE pronamespace=${schema}::regnamespace AND proname=ANY(${names}) ORDER BY proname`;
+    const publicState = async () => ({
+      functions: await sql`SELECT oid,pg_get_functiondef(oid) AS definition,xmin::text AS version
+        FROM pg_proc WHERE pronamespace='public'::regnamespace ORDER BY oid`,
+      migrations: await sql`SELECT name,checksum,xmin::text AS version FROM public.schema_migrations ORDER BY name`,
+    });
+    try {
+      await admin.unsafe(`CREATE DATABASE "${database}"`);
+      await cp(migrationsDirectory, directory, { recursive: true });
+      await rm(path.join(directory, validatorRepair));
+      const beforeMigration = await migrateDatabase({ databaseUrl, migrationsDirectory: directory });
+      expect(beforeMigration.current).toHaveLength(65);
+      expect(beforeMigration.current.at(-1)).toBe(repair);
+      expect(Object.keys(snapshot)).toHaveLength(11);
+      expect(snapshot.matches).toHaveLength(36);
+      expect(snapshot.slots).toHaveLength(72);
+      expect(snapshot.matches.every((match) => Array.isArray(match.official_ids))).toBe(true);
+      const beforeDefinitions = await definitions("public");
+      await validate("public", true);
+      await invalid("public");
+      await sql`CREATE TABLE public.cp9a1_existing_schedule_input (
+        input_snapshot jsonb NOT NULL CHECK (public.phase4_schedule_input_valid(input_snapshot)),
+        input_hash text NOT NULL CHECK (input_hash=public.phase4_sha256_json(input_snapshot))
+      )`;
+      await sql`INSERT INTO public.cp9a1_existing_schedule_input(input_snapshot,input_hash)
+        VALUES (${sql.json(snapshot)},public.phase4_sha256_json(${sql.json(snapshot)}))`;
+      const existingBefore = await sql`SELECT input_snapshot,input_hash,xmin::text AS version
+        FROM public.cp9a1_existing_schedule_input`;
+      await sql`SET search_path = ''`;
+      await validate("public", false);
+      await sql`SET search_path = public`;
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([validatorRepair]);
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([]);
+      const afterDefinitions = await definitions("public");
+      expect(afterDefinitions).toHaveLength(3);
+      for (const definition of afterDefinitions) {
+        const before = beforeDefinitions.find((item) => item.proname === definition.proname);
+        expect(definition.oid).toBe(before?.oid);
+        expect(definition.provolatile).toBe(before?.provolatile);
+        expect(definition.proisstrict).toBe(before?.proisstrict);
+        let normalized = definition.prosrc as string;
+        for (const helper of helpers) normalized = normalized.replaceAll(`public.${helper}(`, `${helper}(`);
+        expect(normalized).toBe(originalBody(definition.proname as string));
+      }
+      await sql`SET search_path = ''`;
+      await validate("public", true);
+      await invalid("public");
+      expect(
+        await sql`SELECT input_snapshot,input_hash,xmin::text AS version
+        FROM public.cp9a1_existing_schedule_input`,
+      ).toEqual(existingBefore);
+      const [existingValidation] = await sql`SELECT
+        public.phase4_schedule_input_valid(input_snapshot) AS valid,
+        input_hash=public.phase4_sha256_json(input_snapshot) AS hash_unchanged
+        FROM public.cp9a1_existing_schedule_input`;
+      expect(existingValidation).toEqual({ valid: true, hash_unchanged: true });
+      const publicBefore = await publicState();
+      const schema = `test_cp9a1_validators_${randomUUID().replaceAll("-", "")}`;
+      const custom = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+      expect(custom.current).toHaveLength(66);
+      expect(await publicState()).toEqual(publicBefore);
+      const customDefinitions = await definitions(schema);
+      expect(customDefinitions).toHaveLength(3);
+      for (const definition of customDefinitions) {
+        let normalized = definition.prosrc as string;
+        expect(normalized).not.toContain("public.");
+        for (const helper of helpers) normalized = normalized.replaceAll(`${schema}.${helper}(`, `${helper}(`);
+        expect(normalized).toBe(originalBody(definition.proname as string));
+        expect(definition.provolatile).toBe("i");
+        expect(definition.proisstrict).toBe(false);
+      }
+      await sql`SET search_path = ''`;
+      await validate(schema, true);
+      await invalid(schema);
     } finally {
       await sql.end({ timeout: 2 });
       try {
