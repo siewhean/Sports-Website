@@ -240,6 +240,14 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       const beforeDefinitions = await definitions("public");
       await validate("public", true);
       await invalid("public");
+      await sql`CREATE TABLE public.cp9a1_existing_schedule_input (
+        input_snapshot jsonb NOT NULL CHECK (public.phase4_schedule_input_valid(input_snapshot)),
+        input_hash text NOT NULL CHECK (input_hash=public.phase4_sha256_json(input_snapshot))
+      )`;
+      await sql`INSERT INTO public.cp9a1_existing_schedule_input(input_snapshot,input_hash)
+        VALUES (${sql.json(snapshot)},public.phase4_sha256_json(${sql.json(snapshot)}))`;
+      const existingBefore = await sql`SELECT input_snapshot,input_hash,xmin::text AS version
+        FROM public.cp9a1_existing_schedule_input`;
       await sql`SET search_path = ''`;
       await validate("public", false);
       await sql`SET search_path = public`;
@@ -259,6 +267,15 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       await sql`SET search_path = ''`;
       await validate("public", true);
       await invalid("public");
+      expect(
+        await sql`SELECT input_snapshot,input_hash,xmin::text AS version
+        FROM public.cp9a1_existing_schedule_input`,
+      ).toEqual(existingBefore);
+      const [existingValidation] = await sql`SELECT
+        public.phase4_schedule_input_valid(input_snapshot) AS valid,
+        input_hash=public.phase4_sha256_json(input_snapshot) AS hash_unchanged
+        FROM public.cp9a1_existing_schedule_input`;
+      expect(existingValidation).toEqual({ valid: true, hash_unchanged: true });
       const publicBefore = await publicState();
       const schema = `test_cp9a1_validators_${randomUUID().replaceAll("-", "")}`;
       const custom = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
