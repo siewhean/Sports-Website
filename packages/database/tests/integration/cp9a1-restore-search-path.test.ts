@@ -11,6 +11,7 @@ import { migrateDatabase } from "../../src/migrations.js";
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 const repair = "0065_cp9a1_restore_search_path_safety.sql";
+const validatorRepair = "0066_cp9a1_restore_validator_search_path_safety.sql";
 const nested = { z: { b: 2, a: 1 }, a: [{ b: true, A: null }, [3, "x"]] };
 const reordered = { a: [{ A: null, b: true }, [3, "x"]], z: { a: 1, b: 2 } };
 const expected = '{"a":[{"A":null,"b":true},[3,"x"]],"z":{"a":1,"b":2}}';
@@ -33,6 +34,7 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       await admin.unsafe(`CREATE DATABASE "${database}"`);
       await cp(migrationsDirectory, directory, { recursive: true });
       await rm(path.join(directory, repair));
+      await rm(path.join(directory, validatorRepair));
       await migrateDatabase({ databaseUrl, migrationsDirectory: directory });
       const historical = await readFile(
         path.join(migrationsDirectory, "0050_phase3_sport_pack_hash_scope_fence.sql"),
@@ -53,7 +55,8 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
         });
       }
       await sql`SET search_path = public`;
-      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([repair]);
+      await cp(path.join(migrationsDirectory, repair), path.join(directory, repair));
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory: directory })).applied).toEqual([repair]);
       const definitions = await sql`SELECT proname,prosrc,provolatile FROM pg_proc
         WHERE oid IN ('public.phase3_canonical_jsonb(jsonb)'::regprocedure,
           'public.phase3_canonical_sport_pack_jsonb(jsonb)'::regprocedure)`;
