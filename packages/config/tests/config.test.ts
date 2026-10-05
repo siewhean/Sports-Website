@@ -177,6 +177,13 @@ describe("configuration", () => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
       }).telemetry.enabled,
     ).toBe(true);
+    expect(
+      parseConfig({
+        ...production,
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+      }).telemetry.endpoint,
+    ).toBe("http://otel-collector:4318");
     expect(() =>
       parseConfig({
         ...production,
@@ -189,7 +196,7 @@ describe("configuration", () => {
         OTEL_ENABLED: "true",
         OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector.internal:4318",
       }),
-    ).toThrow("Production OTLP endpoints must use HTTPS");
+    ).toThrow("Production OTLP endpoints must use HTTPS unless they use the exact internal collector");
     expect(() =>
       parseConfig({
         ...production,

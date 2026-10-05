@@ -84,6 +84,25 @@ Post-deploy topology verification:
 ./infra/oci/verify-production-topology.sh matchday.poladex.shop c5-drill.poladex.shop "$CANDIDATE_SHA"
 ```
 
+### Production telemetry
+
+Production telemetry is disabled by default. When enabled, both the API and worker send OTLP/HTTP only to the
+`otel-collector` service on the private `matchday-prod_backend` network. The collector is the only service that
+receives the external provider credential and forwards traces and metrics to the configured HTTPS OTLP endpoint.
+
+Before enabling telemetry, set these values in the mode-600 `infra/oci/.env.prod` file:
+
+- `OTEL_ENABLED=true`
+- `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`
+- `OTEL_COLLECTOR_IMAGE` to a reviewed collector image pinned by a full `@sha256:...` digest
+- `OTEL_BETTER_STACK_ENDPOINT` to the Better Stack OTLP HTTPS origin
+- `OTEL_BETTER_STACK_TOKEN_FILE` to an absolute path under `/opt/matchday/secrets/`
+
+The source token file must be `root:root`, mode `600`, outside Git. It contains only the raw provider source token.
+`deploy-prod.sh` refuses to enable telemetry when the file ownership or mode is weaker. The token is mounted only
+into the collector and is consumed by the collector bearer-token authentication extension; API and worker containers
+never receive it. No collector port is published on the host.
+
 ## Operations
 
 ```sh

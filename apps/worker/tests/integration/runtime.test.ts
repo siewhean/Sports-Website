@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { getObservabilityContext } from "@matchday/observability";
+import {
+  TraceSpanKind,
+  getObservabilityContext,
+  type SpanLike,
+  type StartSpanOptions,
+  type TracingRuntime,
+} from "@matchday/observability";
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkerRuntime, type WorkerMetrics } from "../../src/index.js";
@@ -73,11 +79,13 @@ describe("WorkerRuntime with Redis", () => {
     const healthStates: string[] = [];
     const handled = vi.fn();
     const metrics = metricsSpy();
+    const tracing = tracingSpy();
     const runtime = new WorkerRuntime({
       queueName: `matchday-worker-test-${randomUUID()}`,
       redisUrl: process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/14",
       concurrency: 1,
       metrics,
+      tracing,
       hooks: {
         onHealthChange: ({ status }) => healthStates.push(status),
       },
@@ -116,6 +124,17 @@ describe("WorkerRuntime with Redis", () => {
     );
     expect(metrics.jobStarted).toHaveBeenCalledTimes(1);
     expect(metrics.jobCompleted).toHaveBeenCalledTimes(1);
+    expect(tracing.withSpan).toHaveBeenCalledWith(
+      "worker.job foundation.probe",
+      expect.objectContaining({
+        kind: TraceSpanKind.Consumer,
+        attributes: {
+          "messaging.operation.name": "foundation.probe",
+          "messaging.operation.type": "process",
+        },
+      }),
+      expect.any(Function),
+    );
 
     await runtime.stop();
     expect(runtime.getHealth().status).toBe("stopped");
@@ -218,6 +237,30 @@ function metricsSpy(): WorkerMetrics {
     jobFailed: vi.fn(),
     jobDeadLettered: vi.fn(),
     activeJobs: vi.fn(),
+  };
+}
+
+function tracingSpy(): TracingRuntime {
+  const span: SpanLike = {
+    setAttribute() {
+      return this;
+    },
+    setAttributes() {
+      return this;
+    },
+    addEvent() {
+      return this;
+    },
+    setStatus() {
+      return this;
+    },
+    recordException() {},
+    spanContext: () => ({ traceId: "a".repeat(32), spanId: "b".repeat(16), traceFlags: 1 }),
+    end() {},
+  };
+  return {
+    startSpan: vi.fn(() => span),
+    withSpan: vi.fn(<T>(_name: string, _options: StartSpanOptions, callback: (span: SpanLike) => T): T => callback(span)),
   };
 }
 

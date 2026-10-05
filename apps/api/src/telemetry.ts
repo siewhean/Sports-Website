@@ -12,19 +12,16 @@ import {
   type Histogram,
   type Span,
 } from "@opentelemetry/api";
-import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import { PeriodicExportingMetricReader, type PushMetricExporter } from "@opentelemetry/sdk-metrics";
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { AppConfig } from "@matchday/config";
 import {
   createErrorReporter,
   runWithObservabilityContext,
+  startOpenTelemetryRuntime,
   type ErrorReporter,
   type ErrorReporterProvider,
   type ObservabilityContext,
+  type OpenTelemetryRuntime,
+  type StartOpenTelemetryRuntimeOptions,
 } from "@matchday/observability";
 
 const serviceName = "matchday-api";
@@ -50,11 +47,9 @@ export interface ApiTelemetry {
   shutdown(): Promise<void>;
 }
 
-export interface StartApiTelemetryOptions {
-  traceExporter?: SpanExporter;
-  metricExporter?: PushMetricExporter;
-  metricExportIntervalMs?: number;
-}
+export type StartApiTelemetryOptions = Partial<
+  Pick<StartOpenTelemetryRuntimeOptions, "traceExporter" | "metricExporter" | "metricExportIntervalMs">
+>;
 
 class DisabledRequestTelemetry implements RequestTelemetryHandle {
   readonly correlation: Readonly<ObservabilityContext>;
@@ -80,10 +75,6 @@ class DisabledApiTelemetry implements ApiTelemetry {
 
 export function createDisabledApiTelemetry(): ApiTelemetry {
   return new DisabledApiTelemetry();
-}
-
-function appendSignalPath(endpoint: string, signalPath: string): string {
-  return `${endpoint.replace(/\/$/, "")}${signalPath}`;
 }
 
 function createSpanErrorReporter(): ErrorReporter {
@@ -213,11 +204,11 @@ class OpenTelemetryApiTelemetry implements ApiTelemetry {
       description: "Inbound HTTP request duration",
       unit: "ms",
     });
-  readonly #sdk: NodeSDK;
+  readonly #runtime: OpenTelemetryRuntime;
   #shutdown: Promise<void> | undefined;
 
-  constructor(sdk: NodeSDK) {
-    this.#sdk = sdk;
+  constructor(runtime: OpenTelemetryRuntime) {
+    this.#runtime = runtime;
   }
 
   startRequest(input: RequestTelemetryInput): RequestTelemetryHandle {
@@ -233,7 +224,7 @@ class OpenTelemetryApiTelemetry implements ApiTelemetry {
   }
 
   shutdown(): Promise<void> {
-    this.#shutdown ??= this.#sdk.shutdown();
+    this.#shutdown ??= this.#runtime.shutdown();
     return this.#shutdown;
   }
 }
@@ -247,26 +238,14 @@ export async function startApiTelemetry(
     throw new Error("Telemetry endpoint is required when telemetry is enabled");
   }
 
-  const traceExporter =
-    options.traceExporter ??
-    new OTLPTraceExporter({
-      url: appendSignalPath(config.telemetry.endpoint, "/v1/traces"),
-    });
-  const metricExporter =
-    options.metricExporter ??
-    new OTLPMetricExporter({
-      url: appendSignalPath(config.telemetry.endpoint, "/v1/metrics"),
-    });
-  const metricReader = new PeriodicExportingMetricReader({
-    exporter: metricExporter,
-    exportIntervalMillis: options.metricExportIntervalMs ?? config.telemetry.metricExportIntervalMs,
-  });
-  const sdk = new NodeSDK({
-    metricReaders: [metricReader],
+  const runtime = await startOpenTelemetryRuntime({
+    enabled: true,
+    endpoint: config.telemetry.endpoint,
+    metricExportIntervalMs: options.metricExportIntervalMs ?? config.telemetry.metricExportIntervalMs,
     serviceName,
-    textMapPropagator: new W3CTraceContextPropagator(),
-    traceExporter,
+    serviceVersion,
+    ...(options.metricExporter === undefined ? {} : { metricExporter: options.metricExporter }),
+    ...(options.traceExporter === undefined ? {} : { traceExporter: options.traceExporter }),
   });
-  sdk.start();
-  return new OpenTelemetryApiTelemetry(sdk);
+  return new OpenTelemetryApiTelemetry(runtime);
 }
