@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { getObservabilityContext } from "@matchday/observability";
+import { getObservabilityContext, initializeTracing, TraceSpanKind, type SpanLike } from "@matchday/observability";
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkerRuntime, type WorkerMetrics } from "../../src/index.js";
@@ -73,11 +73,38 @@ describe("WorkerRuntime with Redis", () => {
     const healthStates: string[] = [];
     const handled = vi.fn();
     const metrics = metricsSpy();
+    const spanEnd = vi.fn();
+    const startSpan = vi.fn(
+      (): SpanLike => ({
+        setAttribute() {
+          return this;
+        },
+        setAttributes() {
+          return this;
+        },
+        addEvent() {
+          return this;
+        },
+        setStatus() {
+          return this;
+        },
+        recordException: vi.fn(),
+        spanContext: () => ({ traceId: "a".repeat(32), spanId: "b".repeat(16), traceFlags: 1 }),
+        end: spanEnd,
+      }),
+    );
+    const tracing = initializeTracing({
+      serviceName: "matchday-worker",
+      provider: {
+        getTracer: () => ({ startSpan }),
+      },
+    });
     const runtime = new WorkerRuntime({
       queueName: `matchday-worker-test-${randomUUID()}`,
       redisUrl: process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? "redis://127.0.0.1:6379/14",
       concurrency: 1,
       metrics,
+      tracing,
       hooks: {
         onHealthChange: ({ status }) => healthStates.push(status),
       },
@@ -111,11 +138,22 @@ describe("WorkerRuntime with Redis", () => {
         context: {
           correlationId,
           jobId: first.id,
+          spanId: "b".repeat(16),
+          traceId: "a".repeat(32),
         },
       }),
     );
     expect(metrics.jobStarted).toHaveBeenCalledTimes(1);
     expect(metrics.jobCompleted).toHaveBeenCalledTimes(1);
+    expect(startSpan).toHaveBeenCalledWith(
+      "job foundation.probe",
+      {
+        attributes: { "job.name": "foundation.probe" },
+        kind: TraceSpanKind.Consumer,
+      },
+      undefined,
+    );
+    expect(spanEnd).toHaveBeenCalledOnce();
 
     await runtime.stop();
     expect(runtime.getHealth().status).toBe("stopped");
