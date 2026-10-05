@@ -1,0 +1,36 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+  batch: {}
+
+exporters:
+  otlphttp/betterstack:
+    endpoint: https://${env:BETTERSTACK_INGESTING_HOST}
+    auth:
+      authenticator: bearertokenauth/betterstack
+    compression: gzip
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  bearertokenauth/betterstack:
+    filename: /run/secrets/betterstack_source_token
+
+service:
+  extensions: [health_check, bearertokenauth/betterstack]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/betterstack]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/betterstack]
