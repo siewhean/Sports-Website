@@ -12,7 +12,7 @@
     "dev:api": "pnpm --filter @matchday/api dev",
     "build": "turbo run build",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier --write . && git diff --no-color -- apps/worker/tests/integration/runtime.test.ts packages/config/src/index.ts packages/observability/src/runtime.ts scripts/infrastructure-regression.test.mjs scripts/validate-production-config.test.mjs && false",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "pnpm test:unit && pnpm test:integration",
