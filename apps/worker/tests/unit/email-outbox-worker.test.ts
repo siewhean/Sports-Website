@@ -31,6 +31,23 @@ describe("EmailOutboxPollingWorker", () => {
     await Promise.all([started, stopped]);
   });
 
+  it("stops scheduling new email polls immediately when shutdown intake is requested", async () => {
+    vi.useFakeTimers();
+    const processDue = vi.fn().mockResolvedValue({ claimed: 0, delivered: 0, retried: 0, deadLettered: 0 });
+    const worker = new EmailOutboxPollingWorker({
+      processor: { processDue },
+      pollIntervalMs: 1_000,
+      batchSize: 10,
+    });
+
+    await worker.start();
+    worker.requestStop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(processDue).toHaveBeenCalledOnce();
+    await worker.stop();
+    vi.useRealTimers();
+  });
+
   it("reports polling errors and keeps the worker alive", async () => {
     vi.useFakeTimers();
     const onError = vi.fn();
@@ -115,5 +132,31 @@ describe("EmailOutboxPollingWorker", () => {
     });
     expect(handle.worker).toBeInstanceOf(EmailOutboxPollingWorker);
     await handle.close();
+
+    expect(() =>
+      createProductionEmailOutboxWorker({
+        databaseUrl: "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        smtp: {
+          host: "127.0.0.1",
+          port: 1025,
+          secure: false,
+          from: "Matchday <no-reply@matchday.test>",
+        },
+        databaseConnectTimeoutSeconds: 0,
+      }),
+    ).toThrow("connect timeout");
+
+    expect(() =>
+      createProductionEmailOutboxWorker({
+        databaseUrl: "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        smtp: {
+          host: "127.0.0.1",
+          port: 1025,
+          secure: false,
+          from: "Matchday <no-reply@matchday.test>",
+        },
+        databaseStatementTimeoutMs: 999,
+      }),
+    ).toThrow("statement timeout");
   });
 });
