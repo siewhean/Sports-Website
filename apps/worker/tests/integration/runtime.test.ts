@@ -260,8 +260,8 @@ function tracingSpy(): TracingRuntime {
   };
   return {
     startSpan: vi.fn(() => span),
-    withSpan: vi.fn(
-      <T>(_name: string, _options: StartSpanOptions, callback: (span: SpanLike) => T): T => callback(span),
+    withSpan: vi.fn(<T>(_name: string, _options: StartSpanOptions, callback: (span: SpanLike) => T): T =>
+      callback(span),
     ),
   };
 }

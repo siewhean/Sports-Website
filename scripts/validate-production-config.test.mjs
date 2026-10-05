@@ -165,10 +165,7 @@ test("validateProductionConfig rejects telemetry that bypasses the internal coll
     OTEL_BETTER_STACK_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
   };
 
-  assert.throws(
-    () => validateProductionConfig(invalid),
-    /must be exactly http:\/\/otel-collector:4318/,
-  );
+  assert.throws(() => validateProductionConfig(invalid), /must be exactly http:\/\/otel-collector:4318/);
 });
 
 test("validateProductionConfig rejects localhost loopback OTEL endpoint", () => {
