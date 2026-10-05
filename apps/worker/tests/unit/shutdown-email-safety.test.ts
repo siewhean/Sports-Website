@@ -55,7 +55,11 @@ async function seededStore(): Promise<InMemoryEmailOutboxStore> {
   return store;
 }
 
-function processor(store: EmailOutboxStore, provider: EmailProvider, leaseToken: string): EmailOutboxProcessor {
+function processor(
+  store: EmailOutboxStore,
+  provider: EmailProvider,
+  leaseToken: string,
+): EmailOutboxProcessor {
   return new EmailOutboxProcessor(store, provider, {
     now: () => new Date(NOW),
     createLeaseToken: () => leaseToken,
@@ -105,9 +109,7 @@ describe("email shutdown safety", () => {
     try {
       const store = await seededStore();
       const send = vi.fn(() => new Promise<EmailDeliveryReceipt>(() => undefined));
-      const processDue = vi.fn((limit: number) =>
-        processor(store, { send }, "smtp-stall-lease").processDue(limit),
-      );
+      const processDue = vi.fn((limit: number) => processor(store, { send }, "smtp-stall-lease").processDue(limit));
       const worker = new EmailOutboxPollingWorker({
         processor: { processDue },
         pollIntervalMs: 1_000,
