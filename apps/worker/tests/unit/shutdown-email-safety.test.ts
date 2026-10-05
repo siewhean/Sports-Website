@@ -138,8 +138,8 @@ describe("email shutdown safety", () => {
     try {
       const base = await seededStore();
       const markDelivered = vi.fn(() => new Promise<EmailOutboxItem>(() => undefined));
-      const markFailed = vi.fn(
-        (...args: Parameters<InMemoryEmailOutboxStore["markFailed"]>) => base.markFailed(...args),
+      const markFailed = vi.fn((...args: Parameters<InMemoryEmailOutboxStore["markFailed"]>) =>
+        base.markFailed(...args),
       );
       const store: EmailOutboxStore = {
         enqueue: base.enqueue.bind(base),
