@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  createWorkerShutdown,
-  createWorkerSignalShutdown,
-  startWorkerTelemetry,
-} from "../../src/telemetry.js";
+import { createWorkerShutdown, createWorkerSignalShutdown, startWorkerTelemetry } from "../../src/telemetry.js";
 
 const options = {
   enabled: true,
