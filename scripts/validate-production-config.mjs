@@ -74,35 +74,54 @@ export function validateProductionConfig(env) {
       errors.push("Production POSTGRES_DB and POSTGRES_USER must be isolated from staging (got matchday)");
     }
 
-    // OTEL validation in production:
-    // If OTEL_ENABLED is true, require non-localhost HTTPS endpoint.
-    // If OTEL_ENABLED is false, reject fake localhost loopback endpoints.
-    const otelEnabled = env.OTEL_ENABLED === "true";
-    if (otelEnabled) {
-      if (!env.OTEL_EXPORTER_OTLP_ENDPOINT || env.OTEL_EXPORTER_OTLP_ENDPOINT.trim() === "") {
-        errors.push("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED is true");
-      } else {
-        try {
-          const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
-          if (otelUrl.protocol !== "https:") {
-            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS");
-          }
-          if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
-            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT cannot use local loopback");
-          }
-        } catch {
-          errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL");
-        }
-      }
-    } else if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    if (env.OTEL_ENABLED !== undefined && !["true", "false"].includes(env.OTEL_ENABLED)) {
+      errors.push("OTEL_ENABLED must be true or false");
+    }
+    const internalEndpoint = "http://otel-collector:4318";
+    const validateEndpoint = (value, label, allowInternal) => {
       try {
-        const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
-        if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
-          errors.push("Production configuration must not specify localhost loopback OTEL_EXPORTER_OTLP_ENDPOINT");
+        const url = new URL(value);
+        const loopback =
+          url.hostname === "localhost" ||
+          url.hostname.endsWith(".localhost") ||
+          url.hostname === "localhost." ||
+          url.hostname.startsWith("127.") ||
+          ["[::1]", "[::]", "0.0.0.0"].includes(url.hostname) ||
+          url.hostname.startsWith("[::ffff:7f");
+        if (loopback) {
+          errors.push(
+            env.OTEL_ENABLED === "false"
+              ? `Production configuration must not specify localhost loopback ${label}`
+              : `Production ${label} cannot use local loopback`,
+          );
+        }
+        if (url.protocol !== "https:" && !(allowInternal && value === internalEndpoint)) {
+          errors.push(
+            `Production ${label} must use HTTPS${allowInternal ? " or the exact internal collector endpoint" : ""}`,
+          );
+        }
+        if (url.username || url.password || url.search || url.hash) {
+          errors.push(`Production ${label} must not include credentials, query, or fragment`);
         }
       } catch {
-        errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL if present");
+        errors.push(`Production ${label} must be a valid URL`);
       }
+    };
+    if (env.OTEL_ENABLED === "true" && !env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+      errors.push("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED is true");
+    }
+    if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+      validateEndpoint(env.OTEL_EXPORTER_OTLP_ENDPOINT, "OTEL_EXPORTER_OTLP_ENDPOINT", true);
+    }
+    if (env.OTEL_COLLECTOR_EXTERNAL_ENDPOINT) {
+      validateEndpoint(env.OTEL_COLLECTOR_EXTERNAL_ENDPOINT, "OTEL_COLLECTOR_EXTERNAL_ENDPOINT", false);
+    }
+    if (
+      env.OTEL_ENABLED === "true" &&
+      env.OTEL_EXPORTER_OTLP_ENDPOINT === internalEndpoint &&
+      !env.OTEL_COLLECTOR_EXTERNAL_ENDPOINT
+    ) {
+      errors.push("OTEL_COLLECTOR_EXTERNAL_ENDPOINT is required for enabled internal collector telemetry");
     }
   }
 

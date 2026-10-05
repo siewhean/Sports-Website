@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import nodemailer from "nodemailer";
 import {
+  createNodemailerSmtpEmailProvider,
   EmailTemplateNotFoundError,
   EmailTemplateRegistry,
   MAILPIT_SMTP_DEFAULTS,
+  resolveSmtpTransportTimeouts,
   SmtpEmailProvider,
   type SmtpTransport,
 } from "../src/index.js";
@@ -52,6 +55,36 @@ describe("EmailTemplateRegistry", () => {
 });
 
 describe("SmtpEmailProvider", () => {
+  it("wires finite timeout defaults into the real Nodemailer transport", () => {
+    const createTransport = vi.spyOn(nodemailer, "createTransport");
+    try {
+      createNodemailerSmtpEmailProvider(MAILPIT_SMTP_DEFAULTS);
+      expect(createTransport).toHaveBeenCalledExactlyOnceWith({
+        host: "127.0.0.1",
+        port: 1025,
+        secure: false,
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 15_000,
+        dnsTimeout: 10_000,
+      });
+    } finally {
+      createTransport.mockRestore();
+    }
+  });
+
+  it("uses finite SMTP transport bounds and rejects unsafe timeout overrides", () => {
+    expect(resolveSmtpTransportTimeouts(MAILPIT_SMTP_DEFAULTS)).toEqual({
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 15_000,
+      dnsTimeout: 10_000,
+    });
+    expect(() => resolveSmtpTransportTimeouts({ ...MAILPIT_SMTP_DEFAULTS, socketTimeoutMs: 0 })).toThrow(
+      "SMTP socket timeout",
+    );
+  });
+
   it("maps a rendered message to an injected Mailpit-compatible SMTP transport", async () => {
     const sendMail = vi.fn<SmtpTransport["sendMail"]>().mockResolvedValue({
       messageId: "mailpit-message-1",

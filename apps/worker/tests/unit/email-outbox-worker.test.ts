@@ -31,6 +31,23 @@ describe("EmailOutboxPollingWorker", () => {
     await Promise.all([started, stopped]);
   });
 
+  it("stops scheduling new email polls immediately when shutdown intake is requested", async () => {
+    vi.useFakeTimers();
+    const processDue = vi.fn().mockResolvedValue({ claimed: 0, delivered: 0, retried: 0, deadLettered: 0 });
+    const worker = new EmailOutboxPollingWorker({
+      processor: { processDue },
+      pollIntervalMs: 1_000,
+      batchSize: 10,
+    });
+
+    await worker.start();
+    worker.requestStop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(processDue).toHaveBeenCalledOnce();
+    await worker.stop();
+    vi.useRealTimers();
+  });
+
   it("reports polling errors and keeps the worker alive", async () => {
     vi.useFakeTimers();
     const onError = vi.fn();
@@ -50,6 +67,30 @@ describe("EmailOutboxPollingWorker", () => {
     vi.useRealTimers();
   });
 
+  it("rejects shutdown when the batch it waits for fails without stopping normal error recovery", async () => {
+    let rejectBatch: ((error: Error) => void) | undefined;
+    const onError = vi.fn();
+    const worker = new EmailOutboxPollingWorker({
+      processor: {
+        processDue: () =>
+          new Promise((_, reject) => {
+            rejectBatch = reject;
+          }),
+      },
+      pollIntervalMs: 1_000,
+      batchSize: 1,
+      onError,
+    });
+    const started = worker.start();
+    const stopped = worker.stop();
+    const error = new Error("database acknowledgement unavailable");
+    rejectBatch?.(error);
+
+    await expect(stopped).rejects.toThrow("Email outbox batch failed during shutdown");
+    await expect(started).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledWith(error);
+  });
+
   it("rejects unbounded polling settings", () => {
     expect(
       () =>
@@ -59,6 +100,52 @@ describe("EmailOutboxPollingWorker", () => {
           batchSize: 25,
         }),
     ).toThrow("at least 1000ms");
+  });
+
+  it("retains a batch failure after intake stops even if queue drain delays background closure", async () => {
+    let rejectBatch: ((error: Error) => void) | undefined;
+    const worker = new EmailOutboxPollingWorker({
+      processor: {
+        processDue: () =>
+          new Promise((_, reject) => {
+            rejectBatch = reject;
+          }),
+      },
+      pollIntervalMs: 1_000,
+      batchSize: 1,
+    });
+    const started = worker.start();
+    worker.requestStop();
+    rejectBatch?.(new Error("database acknowledgement unavailable"));
+    await started;
+
+    // Production closes background handles only after main queue drain.
+    // Repeated signals must not overwrite the completed failure outcome.
+    worker.requestStop();
+    await expect(worker.stop()).rejects.toThrow("Email outbox batch failed during shutdown");
+    await expect(worker.stop()).rejects.toThrow("Email outbox batch failed during shutdown");
+  });
+
+  it("closes database handles once and retains application failure when email drain rejects", async () => {
+    const handle = createProductionEmailOutboxWorker({
+      databaseUrl: "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+      smtp: {
+        host: "127.0.0.1",
+        port: 1025,
+        secure: false,
+        from: "Matchday <no-reply@matchday.test>",
+      },
+    });
+    const stop = vi.spyOn(handle.worker, "stop").mockRejectedValue(new Error("batch acknowledgement failed"));
+    const close = vi.spyOn(handle.sql, "end").mockResolvedValue(undefined);
+
+    const first = handle.close();
+    expect(handle.close()).toBe(first);
+    await expect(first).rejects.toThrow("batch acknowledgement failed");
+    expect(stop).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledExactlyOnceWith({ timeout: 5 });
+    close.mockRestore();
+    await handle.sql.end({ timeout: 1 });
   });
 
   it("composes production worker and rejects invalid SMTP configuration fail-closed", async () => {
@@ -114,6 +201,34 @@ describe("EmailOutboxPollingWorker", () => {
       batchSize: 10,
     });
     expect(handle.worker).toBeInstanceOf(EmailOutboxPollingWorker);
+    expect(handle.sql.options.connect_timeout).toBe(5);
+    expect(handle.sql.options.connection.statement_timeout).toBe(10_000);
     await handle.close();
+
+    expect(() =>
+      createProductionEmailOutboxWorker({
+        databaseUrl: "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        smtp: {
+          host: "127.0.0.1",
+          port: 1025,
+          secure: false,
+          from: "Matchday <no-reply@matchday.test>",
+        },
+        databaseConnectTimeoutSeconds: 0,
+      }),
+    ).toThrow("connect timeout");
+
+    expect(() =>
+      createProductionEmailOutboxWorker({
+        databaseUrl: "postgres://matchday:matchday@127.0.0.1:5432/matchday",
+        smtp: {
+          host: "127.0.0.1",
+          port: 1025,
+          secure: false,
+          from: "Matchday <no-reply@matchday.test>",
+        },
+        databaseStatementTimeoutMs: 999,
+      }),
+    ).toThrow("statement timeout");
   });
 });

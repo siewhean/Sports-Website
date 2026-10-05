@@ -1,0 +1,67 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+    path: /health
+  bearertokenauth/provider:
+    filename: /run/secrets/otel-bearer-token
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 192
+    spike_limit_mib: 48
+  resource/production:
+    attributes:
+      - key: deployment.environment.name
+        value: production
+        action: upsert
+      - key: service.namespace
+        value: matchday
+        action: upsert
+  batch:
+    timeout: 5s
+    send_batch_size: 256
+    send_batch_max_size: 512
+
+exporters:
+  otlp_http/provider:
+    endpoint: ${env:OTEL_COLLECTOR_EXTERNAL_ENDPOINT}
+    auth:
+      authenticator: bearertokenauth/provider
+    tls:
+      insecure: false
+      insecure_skip_verify: false
+      min_version: "1.2"
+    timeout: 5s
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 128
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 30s
+
+service:
+  extensions: [health_check, bearertokenauth/provider]
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/production, batch]
+      exporters: [otlp_http/provider]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/production, batch]
+      exporters: [otlp_http/provider]

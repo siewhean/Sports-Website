@@ -39,13 +39,47 @@ export interface SmtpTransport {
   sendMail(message: SmtpTransportMessage): Promise<SmtpTransportReceipt>;
 }
 
+export const DEFAULT_SMTP_CONNECTION_TIMEOUT_MS = 10_000;
+export const DEFAULT_SMTP_GREETING_TIMEOUT_MS = 10_000;
+export const DEFAULT_SMTP_SOCKET_TIMEOUT_MS = 15_000;
+export const DEFAULT_SMTP_DNS_TIMEOUT_MS = 10_000;
+
 export type SmtpEmailProviderConfig = {
   host: string;
   port: number;
   secure: boolean;
   from: string;
   auth?: { username: string; password: string };
+  connectionTimeoutMs?: number;
+  greetingTimeoutMs?: number;
+  socketTimeoutMs?: number;
+  dnsTimeoutMs?: number;
 };
+
+function positiveTimeout(value: number | undefined, fallback: number, label: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 1_000 || resolved > 120_000) {
+    throw new Error(`${label} must be an integer between 1000ms and 120000ms`);
+  }
+  return resolved;
+}
+
+export function resolveSmtpTransportTimeouts(config: SmtpEmailProviderConfig) {
+  return {
+    connectionTimeout: positiveTimeout(
+      config.connectionTimeoutMs,
+      DEFAULT_SMTP_CONNECTION_TIMEOUT_MS,
+      "SMTP connection timeout",
+    ),
+    greetingTimeout: positiveTimeout(
+      config.greetingTimeoutMs,
+      DEFAULT_SMTP_GREETING_TIMEOUT_MS,
+      "SMTP greeting timeout",
+    ),
+    socketTimeout: positiveTimeout(config.socketTimeoutMs, DEFAULT_SMTP_SOCKET_TIMEOUT_MS, "SMTP socket timeout"),
+    dnsTimeout: positiveTimeout(config.dnsTimeoutMs, DEFAULT_SMTP_DNS_TIMEOUT_MS, "SMTP DNS timeout"),
+  };
+}
 
 export const MAILPIT_SMTP_DEFAULTS: SmtpEmailProviderConfig = {
   host: "127.0.0.1",
@@ -109,10 +143,12 @@ export class NodemailerSmtpTransport implements SmtpTransport {
 }
 
 export function createNodemailerSmtpEmailProvider(config: SmtpEmailProviderConfig): SmtpEmailProvider {
+  const timeouts = resolveSmtpTransportTimeouts(config);
   const transporter = nodemailer.createTransport({
     host: config.host,
     port: config.port,
     secure: config.secure,
+    ...timeouts,
     ...(config.auth === undefined ? {} : { auth: { user: config.auth.username, pass: config.auth.password } }),
   });
   return new SmtpEmailProvider(new NodemailerSmtpTransport(transporter), config);

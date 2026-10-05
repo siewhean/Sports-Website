@@ -113,6 +113,42 @@ describe("EmailOutboxProcessor", () => {
     );
   });
 
+  it("does not mark an accepted delivery failed when database acknowledgement fails", async () => {
+    const now = () => new Date("2026-07-17T08:00:00.000Z");
+    const base = new InMemoryEmailOutboxStore();
+    await new EmailOutboxService(base, { createId: () => "outbox-1", now }).enqueue(MESSAGE);
+    let markFailedCalls = 0;
+    const store = {
+      enqueue: base.enqueue.bind(base),
+      findByIdempotencyKey: base.findByIdempotencyKey.bind(base),
+      claimDue: base.claimDue.bind(base),
+      markDelivered: async () => {
+        throw new Error("database acknowledgement unavailable");
+      },
+      markFailed: async (...args: Parameters<InMemoryEmailOutboxStore["markFailed"]>) => {
+        markFailedCalls += 1;
+        return base.markFailed(...args);
+      },
+    };
+    const provider: EmailProvider = {
+      async send() {
+        return { providerMessageId: "provider-accepted-1", accepted: [MESSAGE.to] };
+      },
+    };
+    const processor = new EmailOutboxProcessor(store, provider, {
+      now,
+      createLeaseToken: () => "lease-accepted",
+      leaseMs: 60_000,
+    });
+
+    await expect(processor.processDue()).rejects.toThrow("database acknowledgement unavailable");
+    expect(markFailedCalls).toBe(0);
+    expect(await base.findByIdempotencyKey("email-1")).toMatchObject({
+      status: "processing",
+      leaseToken: "lease-accepted",
+    });
+  });
+
   it("dead-letters a provider response that accepts no recipient", async () => {
     const now = () => new Date("2026-07-17T08:00:00.000Z");
     const store = new InMemoryEmailOutboxStore();

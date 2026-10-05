@@ -177,6 +177,30 @@ describe("configuration", () => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
       }).telemetry.enabled,
     ).toBe(true);
+    expect(
+      parseConfig({ ...production, OTEL_ENABLED: "true", OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318" })
+        .telemetry.endpoint,
+    ).toBe("http://otel-collector:4318");
+    for (const endpoint of [
+      "http://otel-collector:4319",
+      "http://otel-collector:4318/path",
+      "http://otel-collector:4318/",
+      "http://other-collector:4318",
+      "https://127.0.0.2:4318",
+      "https://[::1]:4318",
+      "https://localhost.:4318",
+      "https://user:private@collector.example",
+      "https://collector.example?token=private",
+      "https://collector.example#private",
+      "not-a-url",
+    ]) {
+      expect(() =>
+        parseConfig({ ...production, OTEL_ENABLED: "true", OTEL_EXPORTER_OTLP_ENDPOINT: endpoint }),
+      ).toThrow();
+      expect(() =>
+        parseConfig({ ...production, OTEL_ENABLED: "false", OTEL_EXPORTER_OTLP_ENDPOINT: endpoint }),
+      ).toThrow();
+    }
     expect(() =>
       parseConfig({
         ...production,

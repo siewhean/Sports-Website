@@ -251,16 +251,10 @@ export class EmailOutboxProcessor {
     const result = { claimed: claimed.length, delivered: 0, retried: 0, deadLettered: 0 };
 
     for (const item of claimed) {
+      let receipt: Awaited<ReturnType<EmailProvider["send"]>>;
       try {
-        const receipt = await this.provider.send(item.message);
+        receipt = await this.provider.send(item.message);
         if (receipt.accepted.length === 0) throw new EmailRecipientRejectedError();
-        await this.store.markDelivered(
-          item.id,
-          leaseToken,
-          this.options.now().toISOString(),
-          receipt.providerMessageId,
-        );
-        result.delivered += 1;
       } catch (error) {
         const classification = classifyEmailDeliveryError(error);
         const completedAttempts = item.attempts + 1;
@@ -276,7 +270,15 @@ export class EmailOutboxProcessor {
         await this.store.markFailed(item.id, leaseToken, classification, failureMessage, availableAt);
         if (shouldRetry) result.retried += 1;
         else result.deadLettered += 1;
+        continue;
       }
+
+      // Once the provider has accepted the message, a database acknowledgement
+      // failure is an ambiguous crash window. Never convert that into a delivery
+      // failure: leave the durable lease intact and let expiry/retry semantics
+      // recover it exactly as they would after a process crash.
+      await this.store.markDelivered(item.id, leaseToken, this.options.now().toISOString(), receipt.providerMessageId);
+      result.delivered += 1;
     }
 
     return result;

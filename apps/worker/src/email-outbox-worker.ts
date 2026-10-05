@@ -8,6 +8,10 @@ import {
 } from "@matchday/notifications";
 import postgres, { type Sql } from "postgres";
 
+export const EMAIL_DATABASE_CONNECT_TIMEOUT_SECONDS = 5;
+export const EMAIL_DATABASE_STATEMENT_TIMEOUT_MS = 10_000;
+export const EMAIL_DATABASE_CLOSE_TIMEOUT_SECONDS = 5;
+
 export type EmailOutboxProcessorPort = {
   processDue(limit: number): Promise<EmailOutboxProcessingResult>;
 };
@@ -33,7 +37,8 @@ export class EmailOutboxPollingWorker {
   readonly #onError?: ((error: unknown) => void) | undefined;
   #timer: NodeJS.Timeout | undefined;
   #stopping = false;
-  #inFlight: Promise<void> | undefined;
+  #inFlight: Promise<{ failed: boolean }> | undefined;
+  #stoppingBatch: Promise<{ failed: boolean }> | undefined;
 
   constructor(options: EmailOutboxPollingWorkerOptions) {
     if (!Number.isInteger(options.pollIntervalMs) || options.pollIntervalMs < 1_000) {
@@ -54,21 +59,37 @@ export class EmailOutboxPollingWorker {
     await this.#processAndSchedule();
   }
 
-  async stop(): Promise<void> {
+  requestStop(): void {
+    if (this.#stopping) return;
+    // Preserve the batch present at the intake boundary. It may finish while
+    // the main queue drains, before closeBackground reaches stop().
+    this.#stoppingBatch = this.#inFlight;
     this.#stopping = true;
     if (this.#timer !== undefined) {
       clearTimeout(this.#timer);
       this.#timer = undefined;
     }
-    await this.#inFlight;
+  }
+
+  async stop(): Promise<void> {
+    this.requestStop();
+    const result = await this.#stoppingBatch;
+    if (result?.failed) {
+      // Polling failures remain recoverable during normal operation. A batch
+      // that fails while shutdown is waiting cannot certify a clean drain,
+      // particularly after provider acceptance but before durable acknowledgement.
+      throw new Error("Email outbox batch failed during shutdown; durable leases govern recovery");
+    }
   }
 
   #processAndSchedule(): Promise<void> {
     const run = (async () => {
+      let failed = false;
       try {
         const result = await this.#processor.processDue(this.#batchSize);
         this.#onProcessed?.(result);
       } catch (error) {
+        failed = true;
         this.#onError?.(error);
       } finally {
         this.#inFlight = undefined;
@@ -80,9 +101,10 @@ export class EmailOutboxPollingWorker {
         }, this.#pollIntervalMs);
         this.#timer.unref();
       }
+      return { failed };
     })();
     this.#inFlight = run;
-    return run;
+    return run.then(() => undefined);
   }
 }
 
@@ -93,6 +115,8 @@ export type ProductionEmailOutboxWorkerOptions = {
   batchSize?: number | undefined;
   maxAttempts?: number | undefined;
   leaseMs?: number | undefined;
+  databaseConnectTimeoutSeconds?: number | undefined;
+  databaseStatementTimeoutMs?: number | undefined;
   onProcessed?: ((result: EmailOutboxProcessingResult) => void) | undefined;
   onError?: ((error: unknown) => void) | undefined;
 };
@@ -106,9 +130,19 @@ export type ProductionEmailOutboxWorkerHandle = {
 export function createProductionEmailOutboxWorker(
   options: ProductionEmailOutboxWorkerOptions,
 ): ProductionEmailOutboxWorkerHandle {
+  const connectTimeoutSeconds = options.databaseConnectTimeoutSeconds ?? EMAIL_DATABASE_CONNECT_TIMEOUT_SECONDS;
+  const statementTimeoutMs = options.databaseStatementTimeoutMs ?? EMAIL_DATABASE_STATEMENT_TIMEOUT_MS;
+  if (!Number.isInteger(connectTimeoutSeconds) || connectTimeoutSeconds < 1 || connectTimeoutSeconds > 30) {
+    throw new Error("Email database connect timeout must be an integer between 1s and 30s");
+  }
+  if (!Number.isInteger(statementTimeoutMs) || statementTimeoutMs < 1_000 || statementTimeoutMs > 30_000) {
+    throw new Error("Email database statement timeout must be an integer between 1000ms and 30000ms");
+  }
   const sql = postgres(options.databaseUrl, {
     max: 2,
     idle_timeout: 30,
+    connect_timeout: connectTimeoutSeconds,
+    connection: { statement_timeout: statementTimeoutMs },
     onnotice: () => undefined,
   });
   const store = new PostgresNotificationRepository(sql);
@@ -126,13 +160,22 @@ export function createProductionEmailOutboxWorker(
     ...(options.onProcessed !== undefined ? { onProcessed: options.onProcessed } : {}),
     ...(options.onError !== undefined ? { onError: options.onError } : {}),
   });
+  let closing: Promise<void> | undefined;
 
   return {
     worker,
     sql,
-    close: async () => {
-      await worker.stop();
-      await sql.end({ timeout: 5 });
+    close: () => {
+      closing ??= (async () => {
+        try {
+          await worker.stop();
+        } finally {
+          // Close client handles even when the batch acknowledgement failed.
+          // This does not release or rewrite any durable outbox lease.
+          await sql.end({ timeout: EMAIL_DATABASE_CLOSE_TIMEOUT_SECONDS });
+        }
+      })();
+      return closing;
     },
   };
 }

@@ -552,10 +552,19 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
     }
     if (parsed.APP_ENV === "production") {
-      if (url.protocol !== "https:") {
-        throw new Error("Production OTLP endpoints must use HTTPS");
+      if (url.protocol !== "https:" && parsed.OTEL_EXPORTER_OTLP_ENDPOINT !== "http://otel-collector:4318") {
+        throw new Error("Production OTLP endpoints must use HTTPS or the exact internal collector endpoint");
       }
-      if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") {
+      if (
+        url.hostname === "localhost" ||
+        url.hostname.endsWith(".localhost") ||
+        url.hostname === "localhost." ||
+        url.hostname.startsWith("127.") ||
+        url.hostname === "[::1]" ||
+        url.hostname === "[::]" ||
+        url.hostname === "0.0.0.0" ||
+        url.hostname.startsWith("[::ffff:7f")
+      ) {
         throw new Error("Production OTLP endpoints must not use local loopback");
       }
     }

@@ -97,3 +97,28 @@ docker compose --env-file infra/oci/.env.oci -f infra/oci/compose.yaml logs --ta
 ```
 
 Back up the PostgreSQL volume before destructive maintenance. Rotate the `.env.prod` and `.env.oci` secrets through the configured secret-handling process, then redeploy a new exact SHA. Keep database and Redis ports strictly internal to their respective Docker bridge networks.
+
+## G3 production telemetry collector (source support only)
+
+Telemetry remains disabled by default. API and worker send OTLP HTTP to the exact internal endpoint `http://otel-collector:4318`; other production endpoints require HTTPS and reject loopback, embedded credentials, query strings and fragments. The optional `observability` profile adds the pinned ARM64-compatible collector on `matchday-prod_backend` only (`172.31.0.14`). It publishes no host ports. This profile does not change the official deployment script or enable current production telemetry.
+
+A later separately authorized rollout must configure `OTEL_ENABLED=true`, the internal application endpoint and a validated `OTEL_COLLECTOR_EXTERNAL_ENDPOINT=https://...` in `infra/oci/.env.prod`. The latter is a non-secret base OTLP ingest URL; the collector appends `/v1/traces` and `/v1/metrics`. Keep all provider credentials out of that environment file and out of API/worker environments. The operator must provision `/etc/matchday/secrets/otel-bearer-token` outside Git, owned by root with mode `600`, containing only the provider token. The collector alone mounts it read-only and uses the bearer-token authenticator to generate authenticated outbound HTTPS headers. It runs as root solely to read this root-only file, with all Linux capabilities dropped, no new privileges and a read-only filesystem. Missing token files fail closed rather than creating directories.
+
+For that future rollout, validate production configuration first. This preflight is mandatory: the pinned collector accepts an HTTP endpoint at startup, so its successful startup alone does not prove HTTPS enforcement. The production validator rejects external HTTP, loopback, credentials, query strings and fragments. Every production Compose command must explicitly load the established environment file:
+
+```sh
+node scripts/validate-production-config.mjs infra/oci/.env.prod
+docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile observability config --quiet
+# Only after separate production authorization:
+docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile observability up -d otel-collector
+# Internal health check through the existing application container; no public listener:
+docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T api node -e "fetch('http://otel-collector:13133/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+```
+
+The health extension proves collector process readiness, not provider delivery. Future certification must independently confirm traces and both API/worker metrics arriving at the provider. The collector caps memory at 256 MiB, limits pipeline memory to 192 MiB, batches 256 records (maximum 512), uses a bounded sending queue and retries within 30 seconds. Under prolonged outage telemetry may be dropped; application requests/jobs remain independent. Resource metadata adds only the production environment and Matchday namespace, preserving application service names; there is no SQL, log-body, header or host-resource receiver.
+
+Worker shutdown stops email intake, drains queue work, closes background email handles, then flushes and shuts down telemetry. Concurrent signals share one lifecycle. A 60-second watchdog exits nonzero if application draining cannot finish; the declarative worker stop grace is 70 seconds. Unacknowledged provider acceptance retains its durable lease and follows existing crash-equivalent recovery, with possible duplicate delivery. See [worker shutdown and acknowledgement](../../docs/operations/WORKER_SHUTDOWN.md) for the timeout hierarchy, startup coverage and recovery limits.
+
+Rollback in a separately authorized checkpoint disables application telemetry, recreates API/worker using the official exact-SHA workflow (which retains `--env-file infra/oci/.env.prod`) and stops the optional collector. No database, Redis, Caddy or routing change is required. Never run `docker compose config` without `--quiet` against real production secrets or print the token. Source rendering tests use only a disposable repository copy and synthetic `.env.prod` values.
+
+Implementation references: [collector configuration](https://opentelemetry.io/docs/collector/configuration/), [file-backed bearer-token authenticator](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.161.0/extension/bearertokenauthextension/README.md), [OTLP HTTP exporter](https://github.com/open-telemetry/opentelemetry-collector/blob/v0.161.0/exporter/otlphttpexporter/README.md).

@@ -1,10 +1,17 @@
 import { loadConfig } from "@matchday/config";
-import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
+import { createLogger } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
 import { createProductionEmailOutboxWorker } from "./email-outbox-worker.js";
 import { resolveWorkerQueuePrefix } from "./queue-configuration.js";
-import { WorkerRuntime, type WorkerMetrics } from "./runtime.js";
+import { WorkerRuntime } from "./runtime.js";
+import {
+  createWorkerShutdown,
+  createWorkerSignalShutdown,
+  startWorkerApplication,
+  startWorkerTelemetry,
+  WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS,
+} from "./telemetry.js";
 import { workerServiceName } from "./service.js";
 
 const config = loadConfig();
@@ -13,14 +20,19 @@ const logger = createLogger({
   level: config.logLevel,
   service: workerServiceName,
 });
-const metricsRuntime = initializeMetrics({ serviceName: workerServiceName });
+const { telemetry, metrics } = await startWorkerTelemetry({
+  ...config.telemetry,
+  environment: config.environment,
+  serviceName: workerServiceName,
+  serviceVersion: "0.1.0",
+});
 const edgeCache = createWorkerEdgeCachePurgePort(config);
 const queuePrefix = resolveWorkerQueuePrefix(process.env);
 const runtime = new WorkerRuntime({
   queueName: "matchday-foundation",
   redisUrl: config.redisUrl,
   ...(queuePrefix === undefined ? {} : { queuePrefix }),
-  metrics: createWorkerMetrics(metricsRuntime),
+  metrics,
   hooks: {
     onHealthChange: (health) => logger.info({ health }, "worker health changed"),
     onJobDeadLettered: (event) => logger.error({ event }, "worker job dead-lettered"),
@@ -43,61 +55,49 @@ const emailWorkerHandle = createProductionEmailOutboxWorker({
       logger.info({ result }, "processed email outbox batch");
     }
   },
-  onError: (error) => {
-    logger.error({ error }, "email outbox processing error");
+  onError: () => {
+    logger.error("email outbox processing error");
   },
 });
 
-await runtime.start();
-await emailWorkerHandle.worker.start();
+const stop = createWorkerShutdown({
+  stopBackgroundIntake: () => emailWorkerHandle.worker.requestStop(),
+  drain: () => runtime.stop(),
+  closeBackground: () => emailWorkerHandle.close(),
+  telemetry,
+});
 
 let shuttingDown = false;
-const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  logger.info({ signal }, "worker shutdown requested");
-  let forceExit = false;
-  try {
-    await runtime.stop();
-    await emailWorkerHandle.close();
-    logger.info("worker stopped");
-  } catch (error: unknown) {
-    logger.error({ error }, "worker shutdown failed");
-    process.exitCode = 1;
-    forceExit = true;
-  } finally {
-    logger.flush();
-    // OpenTelemetry or a logger transport may retain event-loop handles after
-    // the queue has shut down. A worker that has completed its bounded
-    // shutdown must terminate, otherwise an orchestrator cannot distinguish a
-    // drained worker from one still accepting jobs.
-    process.exit(forceExit ? 1 : 0);
-  }
-};
+const shutdown = createWorkerSignalShutdown({
+  stop,
+  deadlineMs: WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS,
+  onRequested: (signal) => {
+    shuttingDown = true;
+    logger.info({ signal }, "worker shutdown requested");
+  },
+  onStopped: () => logger.info("worker stopped"),
+  onFailed: () => logger.error("worker shutdown failed; durable leases will govern unresolved work"),
+  onDeadlineExceeded: (signal, deadlineMs) =>
+    logger.error(
+      { signal, deadlineMs },
+      "worker shutdown deadline exceeded; terminating with crash-equivalent lease recovery",
+    ),
+  flushLogger: () => logger.flush(),
+  exit: (code) => {
+    process.exitCode = code;
+    process.exit(code);
+  },
+});
 
-process.once("SIGTERM", () => void shutdown("SIGTERM"));
-process.once("SIGINT", () => void shutdown("SIGINT"));
+// Install before either startup await: an initial database claim or SMTP send
+// can stall just as an ordinary polling batch can. Repeated signals share the
+// same lifecycle rather than reverting to Node's default signal termination.
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
-function createWorkerMetrics(runtimeMetrics: MetricsRuntime): WorkerMetrics {
-  const started = runtimeMetrics.counter("worker.jobs.started");
-  const completed = runtimeMetrics.counter("worker.jobs.completed");
-  const failed = runtimeMetrics.counter("worker.jobs.failed");
-  const deadLettered = runtimeMetrics.counter("worker.jobs.dead_lettered");
-  const duration = runtimeMetrics.histogram("worker.job.duration", {
-    unit: "ms",
-  });
-  const active = runtimeMetrics.upDownCounter("worker.jobs.active");
-  return {
-    jobStarted: (name) => started.add(1, { job: name }),
-    jobCompleted: (name, durationMs) => {
-      completed.add(1, { job: name });
-      duration.record(durationMs, { job: name, outcome: "completed" });
-    },
-    jobFailed: (name, durationMs) => {
-      failed.add(1, { job: name });
-      duration.record(durationMs, { job: name, outcome: "failed" });
-    },
-    jobDeadLettered: (name) => deadLettered.add(1, { job: name }),
-    activeJobs: (delta) => active.add(delta),
-  };
-}
+await startWorkerApplication({
+  startRuntime: () => runtime.start(),
+  startBackground: () => emailWorkerHandle.worker.start(),
+  isStopping: () => shuttingDown,
+  waitForShutdown: () => shutdown("SIGTERM"),
+});
