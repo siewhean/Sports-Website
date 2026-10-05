@@ -34,6 +34,38 @@ export BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
 echo "[deploy-prod] Pre-deploy: validating production configuration..."
 node scripts/validate-production-config.mjs infra/oci/.env.prod
 
+prod_env_value() {
+  node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const { parseEnvContent } = await import("./scripts/validate-production-config.mjs");
+    const env = parseEnvContent(readFileSync("infra/oci/.env.prod", "utf8"));
+    process.stdout.write(env[process.argv[1]] ?? "");
+  ' "$1"
+}
+
+sudo_compose_prod() {
+  sudo --preserve-env=CANDIDATE_SHA,BUILD_TIMESTAMP,OCI_PUBLIC_HOSTNAME,OCI_PROD_ENV_FILE \
+    docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml "$@"
+}
+
+otel_enabled="$(prod_env_value OTEL_ENABLED)"
+if [ "$otel_enabled" = "true" ]; then
+  betterstack_source_token_file="$(prod_env_value BETTERSTACK_SOURCE_TOKEN_FILE)"
+  if ! sudo test -f "$betterstack_source_token_file"; then
+    echo "BETTERSTACK_SOURCE_TOKEN_FILE does not exist: $betterstack_source_token_file" >&2
+    exit 1
+  fi
+  token_mode="$(sudo stat -c '%a' "$betterstack_source_token_file" 2>/dev/null || sudo stat -f '%Lp' "$betterstack_source_token_file")"
+  token_owner="$(sudo stat -c '%U:%G' "$betterstack_source_token_file" 2>/dev/null || sudo stat -f '%Su:%Sg' "$betterstack_source_token_file")"
+  if [ "$token_mode" != "600" ] || [ "$token_owner" != "root:root" ]; then
+    echo "BETTERSTACK_SOURCE_TOKEN_FILE must be root:root mode 600 (got $token_owner $token_mode)" >&2
+    exit 1
+  fi
+elif [ "$otel_enabled" != "false" ]; then
+  echo "OTEL_ENABLED must be exactly true or false in production" >&2
+  exit 1
+fi
+
 echo "[deploy-prod] Pre-deploy: checking migration safety..."
 node scripts/certify-gate-f-migrations.mjs "$CANDIDATE_SHA"
 
@@ -55,7 +87,33 @@ fi
 echo "[deploy-prod] Building and rolling out production stack..."
 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml build --pull api web worker migrate
 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d --remove-orphans api web worker
+
+if [ "$otel_enabled" = "true" ]; then
+  echo "[deploy-prod] Pulling and starting the private production telemetry collector..."
+  sudo_compose_prod --profile telemetry pull otel-collector
+  sudo_compose_prod --profile telemetry up -d otel-collector
+
+  echo "[deploy-prod] Awaiting internal telemetry collector health..."
+  for attempt in $(seq 1 30); do
+    if curl --connect-timeout 2 --max-time 3 --fail --silent --show-error "http://172.31.0.14:13133/" >/dev/null 2>&1; then
+      break
+    fi
+    if [ "$attempt" -eq 30 ]; then
+      echo "Production telemetry collector failed health probe" >&2
+      sudo_compose_prod --profile telemetry ps otel-collector
+      exit 1
+    fi
+    sleep 2
+  done
+
+  sudo_compose_prod --profile telemetry up -d --remove-orphans otel-collector api web worker
+else
+  docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d --remove-orphans api web worker
+  if docker ps -a --format '{{.Names}}' | grep -qx 'matchday-prod-otel-collector-1'; then
+    echo "[deploy-prod] Removing disabled production telemetry collector..."
+    sudo_compose_prod --profile telemetry rm -sf otel-collector
+  fi
+fi
 
 # Reload Caddy reverse proxy; fail closed if reload fails
 if [ -n "$caddy_container" ]; then
@@ -100,6 +158,22 @@ api_id="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.pro
 api_label_sha="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$api_id")"
 test "$api_label_sha" = "$CANDIDATE_SHA"
 
+if [ "$otel_enabled" = "true" ]; then
+  collector_id="$(sudo_compose_prod --profile telemetry ps -q otel-collector)"
+  test -n "$collector_id"
+  collector_state="$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' "$collector_id")"
+  if test "$collector_state" != "running 0"; then
+    echo "OCI production telemetry collector failed stability check: $collector_state" >&2
+    exit 1
+  fi
+  if ! docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T api \
+    node -e "fetch('http://otel-collector:13133/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+  then
+    echo "API cannot reach the private production telemetry collector" >&2
+    exit 1
+  fi
+fi
+
 echo "[deploy-prod] Verifying public Caddy ingress..."
 curl --connect-timeout 5 --max-time 10 --fail --silent --show-error "https://${OCI_PUBLIC_HOSTNAME}/health/ready" >/dev/null
 public_sha="$(curl --connect-timeout 5 --max-time 10 --fail --silent --show-error "https://${OCI_PUBLIC_HOSTNAME}/api/v1/meta/build" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const b=JSON.parse(d);process.stdout.write(b.git_sha||"");});')"
@@ -117,6 +191,7 @@ echo "  Worker SHA:          $worker_sha"
 echo "  Build Timestamp:     $BUILD_TIMESTAMP"
 echo "  API Image:           $api_image_digest"
 echo "  Worker Image:        $worker_image_digest"
+echo "  Telemetry Enabled:   $otel_enabled"
 echo "  Hostname:            https://${OCI_PUBLIC_HOSTNAME}"
 echo "=================================================="
 
