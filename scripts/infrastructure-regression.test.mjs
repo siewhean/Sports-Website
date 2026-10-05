@@ -260,3 +260,106 @@ test("11. Caddyfile and environment enforce explicit trusted proxy chain for Web
     "Staging API_TRUSTED_PROXIES must configure both Caddy and Web IPs",
   );
 });
+
+test("12. Production telemetry collector is private and owns the Better Stack credential boundary", async () => {
+  const composeProd = await readFile(path.join(root, "infra/oci/compose.prod.yaml"), "utf8");
+  const collectorConfig = await readFile(path.join(root, "infra/oci/otel-collector.prod.yaml"), "utf8");
+
+  const collectorBlock = composeProd.split("\n  otel-collector:")[1]?.split("\n  migrate:")[0];
+  assert.ok(collectorBlock, "Production otel-collector service must exist");
+  assert.ok(collectorBlock.includes('profiles: ["telemetry"]'), "Collector must remain opt-in");
+  assert.ok(collectorBlock.includes("ipv4_address: 172.31.0.14"), "Collector must use the reserved private address");
+  assert.ok(collectorBlock.includes('expose: ["4318", "13133"]'), "Collector endpoints must be internal-only");
+  assert.equal(collectorBlock.includes("ports:"), false, "Collector must not publish OTLP or health ports to the host");
+  assert.ok(
+    collectorBlock.includes("/opt/matchday/secrets/g3-otel/source-token"),
+    "Collector must bind the root-owned provider token from outside Git",
+  );
+  assert.ok(collectorBlock.includes("read_only: true"), "Collector filesystem and token bind must be read-only");
+  assert.ok(collectorBlock.includes('cap_drop: ["ALL"]'), "Root-readable token access must retain zero Linux capabilities");
+  assert.ok(collectorBlock.includes("no-new-privileges:true"), "Collector must forbid privilege escalation");
+
+  assert.ok(
+    collectorConfig.includes('endpoint: https://${env:BETTERSTACK_INGESTING_HOST}'),
+    "Collector must use TLS for provider export",
+  );
+  assert.ok(
+    collectorConfig.includes("authenticator: bearertokenauth/betterstack"),
+    "Collector must authenticate outbound Better Stack OTLP",
+  );
+  assert.ok(
+    collectorConfig.includes("filename: /run/secrets/betterstack_source_token"),
+    "Collector must read the provider token from the mounted file",
+  );
+  assert.equal(
+    collectorConfig.includes("Authorization:"),
+    false,
+    "Collector config must not embed an authorization credential",
+  );
+
+  for (const service of ["api", "worker"]) {
+    const serviceBlock = composeProd.split(`\n  ${service}:`)[1]?.split(/\n  [a-z][a-z0-9-]+:/u)[0];
+    assert.ok(serviceBlock, `${service} service block must exist`);
+    assert.equal(
+      serviceBlock.includes("betterstack_source_token"),
+      false,
+      `${service} must never receive the Better Stack source token`,
+    );
+  }
+});
+
+test("13. Production telemetry deployment preserves the proven env-file and collector readiness gates", async () => {
+  const deployScript = await readFile(path.join(root, "infra/oci/deploy-prod.sh"), "utf8");
+
+  const productionComposeLines = deployScript
+    .split("\n")
+    .filter((line) => line.includes("docker compose") && line.includes("compose.prod.yaml"));
+  assert.ok(productionComposeLines.length > 0, "Production deployment must invoke compose.prod.yaml");
+  for (const line of productionComposeLines) {
+    assert.ok(
+      line.includes("--env-file infra/oci/.env.prod"),
+      `Production Compose invocation must load .env.prod: ${line}`,
+    );
+  }
+
+  assert.ok(
+    deployScript.includes('token_owner" != "root:root"') && deployScript.includes('token_mode" != "600"'),
+    "Telemetry deployment must reject a non-root or non-0600 Better Stack token file",
+  );
+  assert.ok(
+    deployScript.includes('sudo_compose_prod --profile telemetry up -d otel-collector'),
+    "Telemetry deployment must start the collector before application rollout",
+  );
+  assert.ok(
+    deployScript.includes("http://172.31.0.14:13133/"),
+    "Telemetry deployment must fail closed on collector health",
+  );
+  assert.ok(
+    deployScript.includes("http://otel-collector:13133/"),
+    "API network reachability to the collector must be verified",
+  );
+});
+
+test("14. Production telemetry configuration is collector-only and provider-secret-free", async () => {
+  const prodEnvSample = await readFile(path.join(root, "infra/oci/.env.prod.example"), "utf8");
+  const prodEnv = parseEnvContent(prodEnvSample);
+
+  assert.equal(prodEnv.OTEL_ENABLED, "false", "Production telemetry must remain opt-in by default");
+  assert.equal(prodEnv.OTEL_EXPORTER_OTLP_ENDPOINT, "", "Disabled production telemetry must not advertise an endpoint");
+  assert.equal(
+    prodEnv.BETTERSTACK_SOURCE_TOKEN_FILE,
+    "/opt/matchday/secrets/g3-otel/source-token",
+    "Provider credential location must stay outside the repository",
+  );
+  assert.equal(
+    /(?:token|secret)[^=]*=[^\n]*[A-Za-z0-9]{20,}/iu.test(
+      prodEnvSample
+        .split("\n")
+        .filter((line) => line.startsWith("BETTERSTACK_"))
+        .join("\n"),
+    ),
+    false,
+    "Better Stack sample configuration must never contain credential material",
+  );
+});
+
