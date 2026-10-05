@@ -277,12 +277,7 @@ export class EmailOutboxProcessor {
       // failure is an ambiguous crash window. Never convert that into a delivery
       // failure: leave the durable lease intact and let expiry/retry semantics
       // recover it exactly as they would after a process crash.
-      await this.store.markDelivered(
-        item.id,
-        leaseToken,
-        this.options.now().toISOString(),
-        receipt.providerMessageId,
-      );
+      await this.store.markDelivered(item.id, leaseToken, this.options.now().toISOString(), receipt.providerMessageId);
       result.delivered += 1;
     }
 
