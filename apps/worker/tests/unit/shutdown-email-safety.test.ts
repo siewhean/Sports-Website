@@ -94,9 +94,7 @@ describe("email shutdown safety", () => {
     vi.useFakeTimers();
     try {
       const base = await seededStore();
-      const markDelivered = vi.fn(
-        () => new Promise<EmailOutboxItem>(() => undefined),
-      );
+      const markDelivered = vi.fn(() => new Promise<EmailOutboxItem>(() => undefined));
       const markFailed = vi.fn(
         (...args: Parameters<InMemoryEmailOutboxStore["markFailed"]>) => base.markFailed(...args),
       );
