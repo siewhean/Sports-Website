@@ -55,11 +55,7 @@ async function seededStore(): Promise<InMemoryEmailOutboxStore> {
   return store;
 }
 
-function processor(
-  store: EmailOutboxStore,
-  provider: EmailProvider,
-  leaseToken: string,
-): EmailOutboxProcessor {
+function processor(store: EmailOutboxStore, provider: EmailProvider, leaseToken: string): EmailOutboxProcessor {
   return new EmailOutboxProcessor(store, provider, {
     now: () => new Date(NOW),
     createLeaseToken: () => leaseToken,
