@@ -186,8 +186,7 @@ test("validateProductionConfig rejects malformed collector image references befo
   assert.equal(
     validateProductionConfig(
       telemetryProductionConfig({
-        OTEL_COLLECTOR_IMAGE:
-          `registry.example.test:5000/otel/collector:0.153.0@sha256:${digest}`,
+        OTEL_COLLECTOR_IMAGE: `registry.example.test:5000/otel/collector:0.153.0@sha256:${digest}`,
       }),
     ).valid,
     true,
