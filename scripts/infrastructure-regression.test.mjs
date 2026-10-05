@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, mkdir, writeFile, copyFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnvContent, validateProductionConfig } from "./validate-production-config.mjs";
@@ -259,4 +261,94 @@ test("11. Caddyfile and environment enforce explicit trusted proxy chain for Web
     "172.30.0.10,172.30.0.12",
     "Staging API_TRUSTED_PROXIES must configure both Caddy and Web IPs",
   );
+});
+
+test("12. Collector production topology renders with the explicit env-file and isolates credentials", async (t) => {
+  const temporary = await mkdtemp(path.join(tmpdir(), "matchday-g3-compose-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  await mkdir(path.join(temporary, "infra/oci"), { recursive: true });
+  await copyFile(path.join(root, "infra/oci/compose.prod.yaml"), path.join(temporary, "infra/oci/compose.prod.yaml"));
+  await copyFile(
+    path.join(root, "infra/oci/otel-collector.yaml"),
+    path.join(temporary, "infra/oci/otel-collector.yaml"),
+  );
+  const sample = await readFile(path.join(root, "infra/oci/.env.prod.example"), "utf8");
+  const synthetic =
+    sample.replaceAll(/CHANGE_ME[A-Z0-9_]*/g, "synthetic-fixture-only") +
+    "\nCANDIDATE_SHA=" +
+    "a".repeat(40) +
+    "\nBUILD_TIMESTAMP=2026-10-05T00:00:00.000Z\n";
+  await writeFile(path.join(temporary, "infra/oci/.env.prod"), synthetic, { mode: 0o600 });
+  const render = spawnSync(
+    "docker",
+    [
+      "compose",
+      "--env-file",
+      "infra/oci/.env.prod",
+      "-f",
+      "infra/oci/compose.prod.yaml",
+      "--profile",
+      "observability",
+      "--profile",
+      "migration",
+      "config",
+      "--format",
+      "json",
+    ],
+    {
+      cwd: temporary,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
+    },
+  );
+  assert.equal(render.status, 0, render.stderr);
+  const disabled = spawnSync(
+    "docker",
+    ["compose", "--env-file", "infra/oci/.env.prod", "-f", "infra/oci/compose.prod.yaml", "config", "--format", "json"],
+    {
+      cwd: temporary,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
+    },
+  );
+  assert.equal(disabled.status, 0, disabled.stderr);
+  assert.equal(JSON.parse(disabled.stdout).services["otel-collector"], undefined);
+  const rendered = JSON.parse(render.stdout);
+  const collector = rendered.services["otel-collector"];
+  assert.deepEqual(Object.keys(collector.networks), ["backend"]);
+  assert.equal(collector.networks.backend.ipv4_address, "172.31.0.14");
+  assert.equal(rendered.networks.backend.name, "matchday-prod_backend");
+  assert.equal(collector.ports, undefined);
+  assert.equal(collector.network_mode, undefined);
+  assert.match(collector.image, /^otel\/opentelemetry-collector-contrib:0\.\d+\.\d+@sha256:[a-f0-9]{64}$/);
+  assert.equal(collector.user, "0:0");
+  assert.equal(collector.read_only, true);
+  assert.deepEqual(collector.cap_drop, ["ALL"]);
+  assert.equal(Number(collector.mem_limit), 256 * 1024 * 1024);
+  const token = collector.volumes.find((volume) => volume.target === "/run/secrets/otel-bearer-token");
+  assert.equal(token.source, "/etc/matchday/secrets/otel-bearer-token");
+  assert.equal(token.read_only, true);
+  assert.equal(token.bind.create_host_path, false);
+  for (const name of ["api", "worker", "web", "migrate"]) {
+    assert.equal(rendered.services[name].volumes?.some((volume) => volume.target === token.target) ?? false, false);
+    for (const key of Object.keys(rendered.services[name].environment)) {
+      assert.equal(/BETTER_STACK|OTEL.*TOKEN|OTEL.*HEADERS/i.test(key), false);
+    }
+  }
+  const configuration = await readFile(path.join(root, "infra/oci/otel-collector.yaml"), "utf8");
+  assert.match(configuration, /filename: \/run\/secrets\/otel-bearer-token/);
+  assert.match(configuration, /authenticator: bearertokenauth\/provider/);
+  assert.match(configuration, /insecure: false/);
+  assert.match(configuration, /insecure_skip_verify: false/);
+  assert.match(configuration, /endpoint: 0.0.0.0:13133/);
+  assert.match(configuration, /processors: \[memory_limiter, resource\/production, batch\]/);
+  assert.equal(/Authorization:|Bearer [A-Za-z0-9]|token:\s*[^#\n]|debug:|logging:/.test(configuration), false);
+  const deployment = await readFile(path.join(root, "infra/oci/deploy-prod.sh"), "utf8");
+  for (const line of deployment
+    .split("\n")
+    .filter((line) => line.includes("docker compose") && line.includes("compose.prod.yaml"))) {
+    assert.match(line, /docker compose --env-file infra\/oci\/\.env\.prod/);
+  }
 });

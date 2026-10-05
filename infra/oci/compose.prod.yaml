@@ -1,6 +1,35 @@
 name: matchday-prod
 
 services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+    profiles: [observability]
+    restart: unless-stopped
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 0.25
+    environment:
+      OTEL_COLLECTOR_EXTERNAL_ENDPOINT: ${OTEL_COLLECTOR_EXTERNAL_ENDPOINT:-}
+      GOMEMLIMIT: 192MiB
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - type: bind
+        source: ./otel-collector.yaml
+        target: /etc/otelcol/config.yaml
+        read_only: true
+      - type: bind
+        source: /etc/matchday/secrets/otel-bearer-token
+        target: /run/secrets/otel-bearer-token
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      backend:
+        ipv4_address: 172.31.0.14
+
   postgres:
     image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     restart: unless-stopped

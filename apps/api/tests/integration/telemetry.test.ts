@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { AggregationTemporality, InMemoryMetricExporter, type MetricData } from "@opentelemetry/sdk-metrics";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
-import { trace } from "@opentelemetry/api";
+import { context, metrics, propagation, trace } from "@opentelemetry/api";
 import { getObservabilityContext } from "@matchday/observability";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { startApiTelemetry } from "../../src/telemetry.js";
 import { healthyProbes, testConfig } from "../helpers.js";
@@ -15,6 +16,66 @@ function exportedMetrics(exporter: InMemoryMetricExporter): MetricData[] {
 }
 
 describe("API OpenTelemetry integration", () => {
+  afterEach(() => {
+    metrics.disable();
+    trace.disable();
+    context.disable();
+    propagation.disable();
+  });
+  it("keeps normal requests available during export failure without exporting sensitive request data", async () => {
+    const traceExporter = new InMemorySpanExporter();
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const traceShutdown = vi.spyOn(traceExporter, "shutdown").mockResolvedValue();
+    const traceExport = vi
+      .spyOn(traceExporter, "export")
+      .mockImplementation((_spans, callback) => callback({ code: 1, error: new Error("unavailable") }));
+    vi.spyOn(metricExporter, "export").mockImplementation((_metrics, callback) =>
+      callback({ code: 1, error: new Error("unavailable") }),
+    );
+    const config = testConfig({ OTEL_ENABLED: "true", OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318" });
+    const telemetry = await startApiTelemetry(config, { traceExporter, metricExporter });
+    const app = await buildApp({ config, probes: healthyProbes, telemetry });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/status",
+          headers: { authorization: "Bearer private", cookie: "token=private" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/scoring/private-access-token",
+          headers: { "x-request-id": "scoringtoken123456789" },
+        })
+      ).statusCode,
+    ).toBe(404);
+    const handle = telemetry.startRequest({
+      method: "GET",
+      path: "/scoring/private-access",
+      route: "/scoring/:access",
+      requestId: "person@example.com",
+      headers: { authorization: "Bearer private" },
+    });
+    await handle.reportError(new Error("offline grant private fallback-code=private person@example.com"));
+    handle.finish(200, "/scoring/:access");
+    await app.close();
+    await telemetry.shutdown();
+    expect(traceExport).toHaveBeenCalled();
+    const captured = JSON.stringify(
+      traceExport.mock.calls.map(([spans]) =>
+        spans.map((span) => ({ attributes: span.attributes, events: span.events })),
+      ),
+    );
+    expect(captured).not.toContain("scoringtoken123456789");
+    expect(captured).not.toContain("private");
+    expect(captured).not.toContain("person@example.com");
+    expect(captured).not.toContain("url.path");
+    expect(traceShutdown).toHaveBeenCalledOnce();
+  });
   it("exports parented request spans, correlated metrics, sanitized exceptions, and shuts down", async () => {
     const traceExporter = new InMemorySpanExporter();
     const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
@@ -75,8 +136,12 @@ describe("API OpenTelemetry integration", () => {
     await telemetry.shutdown();
 
     const spans = traceExporter.getFinishedSpans();
-    const successSpan = spans.find((span) => span.attributes["request.id"] === successRequestId);
-    const failedSpan = spans.find((span) => span.attributes["request.id"] === failedRequestId);
+    const successSpan = spans.find(
+      (span) => span.attributes["request.id"] === createHash("sha256").update(successRequestId).digest("hex"),
+    );
+    const failedSpan = spans.find(
+      (span) => span.attributes["request.id"] === createHash("sha256").update(failedRequestId).digest("hex"),
+    );
     expect(
       successSpan,
       JSON.stringify(spans.map((span) => ({ attributes: span.attributes, name: span.name }))),
@@ -88,7 +153,7 @@ describe("API OpenTelemetry integration", () => {
     expect(failedSpan?.attributes).toMatchObject({
       "error.handled": true,
       "error.severity": "error",
-      "request.id": failedRequestId,
+      "request.id": createHash("sha256").update(failedRequestId).digest("hex"),
     });
     expect(runtimeProbe).toEqual({
       activeSpan: true,
@@ -97,8 +162,7 @@ describe("API OpenTelemetry integration", () => {
       traceId: failedSpan?.spanContext().traceId,
     });
     const exceptionText = JSON.stringify(failedSpan?.events);
-    expect(exceptionText).toContain("[REDACTED_EMAIL]");
-    expect(exceptionText).toContain("[REDACTED]");
+    expect(exceptionText).toContain("Application request failed");
     expect(exceptionText).not.toContain("person@example.com");
     expect(exceptionText).not.toContain("token=private");
     expect(exceptionText).not.toContain('"password":"secret"');
@@ -121,6 +185,7 @@ describe("API OpenTelemetry integration", () => {
       ]),
     );
     expect(requestDuration?.dataPoints).toHaveLength(2);
+    expect(spans.every((span) => span.attributes["url.path"] === undefined)).toBe(true);
     expect(traceShutdown).toHaveBeenCalledOnce();
     expect(metricShutdown).toHaveBeenCalledOnce();
   });

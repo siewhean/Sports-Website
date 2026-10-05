@@ -40,7 +40,6 @@
     "@opentelemetry/exporter-metrics-otlp-http": "0.220.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.220.0",
     "@opentelemetry/sdk-metrics": "2.9.0",
-    "@opentelemetry/sdk-node": "0.220.0",
     "@sinclair/typebox": "0.34.41",
     "fastify": "5.12.5",
     "ioredis": "5.11.1",

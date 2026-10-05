@@ -177,8 +177,7 @@ export async function buildApp(options: BuildAppOptions) {
         : createIdentityRequestContext(options.identityRuntime, options.config.identity.sessionCookieName);
   }
 
-  const requestRoute = (request: FastifyRequest): string =>
-    request.routeOptions.url || request.url.split("?", 1)[0] || "unknown";
+  const requestRoute = (request: FastifyRequest): string => request.routeOptions.url || "/unmatched";
 
   app.addHook("preParsing", async (request, _reply, payload) => {
     if (request.url.startsWith("/api/v1/billing/webhook")) {

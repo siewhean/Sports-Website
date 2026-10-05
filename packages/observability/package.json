@@ -17,6 +17,14 @@
   },
   "dependencies": {
     "@opentelemetry/api": "1.9.1",
-    "pino": "10.1.0"
+    "pino": "10.1.0",
+    "@opentelemetry/context-async-hooks": "2.9.0",
+    "@opentelemetry/core": "2.9.0",
+    "@opentelemetry/resources": "2.9.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "0.220.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.220.0",
+    "@opentelemetry/sdk-metrics": "2.9.0",
+    "@opentelemetry/sdk-trace-base": "2.9.0",
+    "@opentelemetry/sdk-trace-node": "2.9.0"
   }
 }

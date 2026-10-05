@@ -1,10 +1,11 @@
 import { loadConfig } from "@matchday/config";
-import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
+import { createLogger } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
 import { createProductionEmailOutboxWorker } from "./email-outbox-worker.js";
 import { resolveWorkerQueuePrefix } from "./queue-configuration.js";
-import { WorkerRuntime, type WorkerMetrics } from "./runtime.js";
+import { WorkerRuntime } from "./runtime.js";
+import { createWorkerShutdown, startWorkerTelemetry } from "./telemetry.js";
 import { workerServiceName } from "./service.js";
 
 const config = loadConfig();
@@ -13,14 +14,19 @@ const logger = createLogger({
   level: config.logLevel,
   service: workerServiceName,
 });
-const metricsRuntime = initializeMetrics({ serviceName: workerServiceName });
+const { telemetry, metrics } = await startWorkerTelemetry({
+  ...config.telemetry,
+  environment: config.environment,
+  serviceName: workerServiceName,
+  serviceVersion: "0.1.0",
+});
 const edgeCache = createWorkerEdgeCachePurgePort(config);
 const queuePrefix = resolveWorkerQueuePrefix(process.env);
 const runtime = new WorkerRuntime({
   queueName: "matchday-foundation",
   redisUrl: config.redisUrl,
   ...(queuePrefix === undefined ? {} : { queuePrefix }),
-  metrics: createWorkerMetrics(metricsRuntime),
+  metrics,
   hooks: {
     onHealthChange: (health) => logger.info({ health }, "worker health changed"),
     onJobDeadLettered: (event) => logger.error({ event }, "worker job dead-lettered"),
@@ -51,6 +57,12 @@ const emailWorkerHandle = createProductionEmailOutboxWorker({
 await runtime.start();
 await emailWorkerHandle.worker.start();
 
+const stop = createWorkerShutdown({
+  drain: () => runtime.stop(),
+  closeBackground: () => emailWorkerHandle.close(),
+  telemetry,
+});
+
 let shuttingDown = false;
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   if (shuttingDown) return;
@@ -58,8 +70,7 @@ const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   logger.info({ signal }, "worker shutdown requested");
   let forceExit = false;
   try {
-    await runtime.stop();
-    await emailWorkerHandle.close();
+    await stop();
     logger.info("worker stopped");
   } catch (error: unknown) {
     logger.error({ error }, "worker shutdown failed");
@@ -77,27 +88,3 @@ const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
 
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
-
-function createWorkerMetrics(runtimeMetrics: MetricsRuntime): WorkerMetrics {
-  const started = runtimeMetrics.counter("worker.jobs.started");
-  const completed = runtimeMetrics.counter("worker.jobs.completed");
-  const failed = runtimeMetrics.counter("worker.jobs.failed");
-  const deadLettered = runtimeMetrics.counter("worker.jobs.dead_lettered");
-  const duration = runtimeMetrics.histogram("worker.job.duration", {
-    unit: "ms",
-  });
-  const active = runtimeMetrics.upDownCounter("worker.jobs.active");
-  return {
-    jobStarted: (name) => started.add(1, { job: name }),
-    jobCompleted: (name, durationMs) => {
-      completed.add(1, { job: name });
-      duration.record(durationMs, { job: name, outcome: "completed" });
-    },
-    jobFailed: (name, durationMs) => {
-      failed.add(1, { job: name });
-      duration.record(durationMs, { job: name, outcome: "failed" });
-    },
-    jobDeadLettered: (name) => deadLettered.add(1, { job: name }),
-    activeJobs: (delta) => active.add(delta),
-  };
-}
