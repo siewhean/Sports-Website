@@ -47,12 +47,23 @@ services:
     mem_limit: 512m
     cpus: 0.25
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
     environment:
       BETTERSTACK_INGESTING_HOST: ${BETTERSTACK_INGESTING_HOST:-}
     volumes:
       - ./otel-collector.prod.yaml:/etc/otelcol-contrib/config.yaml:ro
-    secrets:
-      - betterstack_source_token
+      - type: bind
+        source: ${BETTERSTACK_SOURCE_TOKEN_FILE:-/opt/matchday/secrets/g3-otel/source-token}
+        target: /run/secrets/betterstack_source_token
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
     expose: ["4318", "13133"]
     networks:
       backend:
@@ -194,10 +205,6 @@ services:
 volumes:
   matchday-prod-postgres:
   matchday-prod-redis:
-
-secrets:
-  betterstack_source_token:
-    file: ${BETTERSTACK_SOURCE_TOKEN_FILE:-/opt/matchday/secrets/g3-otel/source-token}
 
 networks:
   backend:
