@@ -8,6 +8,7 @@ import { WorkerRuntime } from "./runtime.js";
 import {
   createWorkerShutdown,
   createWorkerSignalShutdown,
+  startWorkerApplication,
   startWorkerTelemetry,
   WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS,
 } from "./telemetry.js";
@@ -54,13 +55,10 @@ const emailWorkerHandle = createProductionEmailOutboxWorker({
       logger.info({ result }, "processed email outbox batch");
     }
   },
-  onError: (error) => {
-    logger.error({ error }, "email outbox processing error");
+  onError: () => {
+    logger.error("email outbox processing error");
   },
 });
-
-await runtime.start();
-await emailWorkerHandle.worker.start();
 
 const stop = createWorkerShutdown({
   stopBackgroundIntake: () => emailWorkerHandle.worker.requestStop(),
@@ -69,10 +67,14 @@ const stop = createWorkerShutdown({
   telemetry,
 });
 
+let shuttingDown = false;
 const shutdown = createWorkerSignalShutdown({
   stop,
   deadlineMs: WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS,
-  onRequested: (signal) => logger.info({ signal }, "worker shutdown requested"),
+  onRequested: (signal) => {
+    shuttingDown = true;
+    logger.info({ signal }, "worker shutdown requested");
+  },
   onStopped: () => logger.info("worker stopped"),
   onFailed: () => logger.error("worker shutdown failed; durable leases will govern unresolved work"),
   onDeadlineExceeded: (signal, deadlineMs) =>
@@ -87,5 +89,15 @@ const shutdown = createWorkerSignalShutdown({
   },
 });
 
-process.once("SIGTERM", () => void shutdown("SIGTERM"));
-process.once("SIGINT", () => void shutdown("SIGINT"));
+// Install before either startup await: an initial database claim or SMTP send
+// can stall just as an ordinary polling batch can. Repeated signals share the
+// same lifecycle rather than reverting to Node's default signal termination.
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+
+await startWorkerApplication({
+  startRuntime: () => runtime.start(),
+  startBackground: () => emailWorkerHandle.worker.start(),
+  isStopping: () => shuttingDown,
+  waitForShutdown: () => shutdown("SIGTERM"),
+});

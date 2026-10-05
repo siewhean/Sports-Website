@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import nodemailer from "nodemailer";
 import {
+  createNodemailerSmtpEmailProvider,
   EmailTemplateNotFoundError,
   EmailTemplateRegistry,
   MAILPIT_SMTP_DEFAULTS,
@@ -53,6 +55,24 @@ describe("EmailTemplateRegistry", () => {
 });
 
 describe("SmtpEmailProvider", () => {
+  it("wires finite timeout defaults into the real Nodemailer transport", () => {
+    const createTransport = vi.spyOn(nodemailer, "createTransport");
+    try {
+      createNodemailerSmtpEmailProvider(MAILPIT_SMTP_DEFAULTS);
+      expect(createTransport).toHaveBeenCalledExactlyOnceWith({
+        host: "127.0.0.1",
+        port: 1025,
+        secure: false,
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 15_000,
+        dnsTimeout: 10_000,
+      });
+    } finally {
+      createTransport.mockRestore();
+    }
+  });
+
   it("uses finite SMTP transport bounds and rejects unsafe timeout overrides", () => {
     expect(resolveSmtpTransportTimeouts(MAILPIT_SMTP_DEFAULTS)).toEqual({
       connectionTimeout: 10_000,

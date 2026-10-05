@@ -14,5 +14,9 @@ describe("worker process shutdown", () => {
     expect(source).toContain("crash-equivalent lease recovery");
     expect(source).toContain("logger.flush()");
     expect(source).toContain("process.exit(code)");
+    expect(source.indexOf('process.on("SIGTERM"')).toBeLessThan(source.indexOf("await startWorkerApplication("));
+    expect(source.indexOf('process.on("SIGINT"')).toBeLessThan(source.indexOf("await startWorkerApplication("));
+    expect(source).toContain("isStopping: () => shuttingDown");
+    expect(source).toContain('waitForShutdown: () => shutdown("SIGTERM")');
   });
 });

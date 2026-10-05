@@ -11,7 +11,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { EmailOutboxPollingWorker } from "../../src/email-outbox-worker.js";
-import { createWorkerSignalShutdown } from "../../src/telemetry.js";
+import { createWorkerShutdown, createWorkerSignalShutdown } from "../../src/telemetry.js";
 
 const NOW = new Date("2026-10-05T12:00:00.000Z");
 const MESSAGE: EmailMessage = {
@@ -177,6 +177,63 @@ describe("email shutdown safety", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reports non-zero when acknowledgement rejects during shutdown after provider acceptance", async () => {
+    const base = await seededStore();
+    let rejectAcknowledgement!: (error: Error) => void;
+    const markFailed = vi.fn(base.markFailed.bind(base));
+    const store: EmailOutboxStore = {
+      enqueue: base.enqueue.bind(base),
+      findByIdempotencyKey: base.findByIdempotencyKey.bind(base),
+      claimDue: base.claimDue.bind(base),
+      markDelivered: () =>
+        new Promise<EmailOutboxItem>((_resolve, reject) => {
+          rejectAcknowledgement = reject;
+        }),
+      markFailed,
+    };
+    const send = vi.fn(async () => ({ providerMessageId: "accepted-before-ack-rejection", accepted: [MESSAGE.to] }));
+    const worker = new EmailOutboxPollingWorker({
+      processor: processor(store, { send }, "ack-rejection-lease"),
+      pollIntervalMs: 1000,
+      batchSize: 1,
+    });
+    const initialBatch = worker.start();
+    await flushMicrotasks();
+    let releaseDrain!: () => void;
+    const drain = new Promise<void>((resolve) => {
+      releaseDrain = resolve;
+    });
+    const closeBackground = vi.fn(() => worker.stop());
+    const flush = vi.fn(async () => undefined);
+    const shutdown = vi.fn(async () => undefined);
+    const stop = createWorkerShutdown({
+      stopBackgroundIntake: () => worker.requestStop(),
+      drain: () => drain,
+      closeBackground,
+      telemetry: { flush, shutdown },
+    });
+    const exit = vi.fn<(code: 0 | 1) => void>();
+    const pending = deadlineShutdown(stop, exit)("SIGTERM");
+    rejectAcknowledgement(new Error("Acknowledgement failed"));
+    // The email batch fully finishes (and clears active work) while the main
+    // queue is still draining. Its shutdown-boundary failure must be retained.
+    await initialBatch;
+    expect(closeBackground).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+    releaseDrain();
+    await pending;
+    expect(flush).toHaveBeenCalledOnce();
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(markFailed).not.toHaveBeenCalled();
+    expect(await base.findByIdempotencyKey(MESSAGE.idempotencyKey)).toMatchObject({
+      status: "processing",
+      leaseToken: "ack-rejection-lease",
+      deliveredAt: null,
+    });
   });
 
   it("bounds a stalled database claim and never sends without a valid claim", async () => {

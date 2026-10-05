@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createWorkerShutdown, createWorkerSignalShutdown, startWorkerTelemetry } from "../../src/telemetry.js";
+import {
+  createWorkerShutdown,
+  createWorkerSignalShutdown,
+  startWorkerApplication,
+  startWorkerTelemetry,
+} from "../../src/telemetry.js";
 
 const options = {
   enabled: true,
@@ -242,4 +247,136 @@ describe("worker telemetry", () => {
     expect(closeBackground).toHaveBeenCalledTimes(2);
     expect(shutdown).toHaveBeenCalledTimes(2);
   });
+});
+
+describe("shutdown observer isolation", () => {
+  it.each(["onRequested", "onStopped", "onFailed", "onDeadlineExceeded", "flushLogger"] as const)(
+    "still exits non-zero when %s throws",
+    async (failing) => {
+      vi.useFakeTimers();
+      try {
+        const exit = vi.fn();
+        const observer = (name: string) => () => {
+          if (name === failing) throw new Error("observer failure");
+        };
+        const shutdown = createWorkerSignalShutdown({
+          stop:
+            failing === "onDeadlineExceeded"
+              ? () => new Promise<void>(() => undefined)
+              : failing === "onFailed"
+                ? () => {
+                    throw new Error("synchronous drain failure");
+                  }
+                : async () => undefined,
+          deadlineMs: 1000,
+          onRequested: observer("onRequested"),
+          onStopped: observer("onStopped"),
+          onFailed: observer("onFailed"),
+          onDeadlineExceeded: observer("onDeadlineExceeded"),
+          flushLogger: observer("flushLogger"),
+          exit,
+        });
+        const pending = shutdown("SIGTERM");
+        await vi.advanceTimersByTimeAsync(1000);
+        await pending;
+        expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("publishes signal lifecycle ownership before an observer reenters it", async () => {
+    const stop = vi.fn(async () => undefined);
+    const exit = vi.fn();
+    let reentered: Promise<void> | undefined;
+    const shutdown = createWorkerSignalShutdown({
+      stop,
+      onRequested: () => {
+        reentered = shutdown("SIGINT");
+      },
+      onStopped: () => undefined,
+      onFailed: () => undefined,
+      onDeadlineExceeded: () => undefined,
+      flushLogger: () => undefined,
+      exit,
+    });
+    const first = shutdown("SIGTERM");
+    expect(reentered).toBe(first);
+    await first;
+    expect(stop).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+});
+
+it("publishes application shutdown ownership before intake observers reenter", async () => {
+  const drain = vi.fn(async () => undefined);
+  const closeBackground = vi.fn(async () => undefined);
+  const flush = vi.fn(async () => undefined);
+  const shutdown = vi.fn(async () => undefined);
+  let reentered: Promise<void> | undefined;
+  const stop = createWorkerShutdown({
+    stopBackgroundIntake: () => {
+      reentered = stop();
+    },
+    drain,
+    closeBackground,
+    telemetry: { flush, shutdown },
+  });
+  const first = stop();
+  expect(reentered).toBe(first);
+  await first;
+  for (const operation of [drain, closeBackground, flush, shutdown]) {
+    expect(operation).toHaveBeenCalledOnce();
+  }
+});
+
+it("waits for shared shutdown when closing startup rejects, without starting email intake", async () => {
+  let rejectStartup!: (error: Error) => void;
+  let releaseShutdown!: () => void;
+  const startup = new Promise<void>((_resolve, reject) => {
+    rejectStartup = reject;
+  });
+  const shutdown = new Promise<void>((resolve) => {
+    releaseShutdown = resolve;
+  });
+  let stopping = false;
+  const startBackground = vi.fn(async () => undefined);
+  const waitForShutdown = vi.fn(() => shutdown);
+  let finished = false;
+  const starting = startWorkerApplication({
+    startRuntime: () => startup,
+    startBackground,
+    isStopping: () => stopping,
+    waitForShutdown,
+  }).then(() => {
+    finished = true;
+  });
+  stopping = true;
+  rejectStartup(new Error("Queue closed during startup"));
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(waitForShutdown).toHaveBeenCalledOnce();
+  expect(startBackground).not.toHaveBeenCalled();
+  expect(finished).toBe(false);
+  releaseShutdown();
+  await starting;
+  expect(finished).toBe(true);
+});
+
+it("retains normal startup rejection rather than reporting successful shutdown", async () => {
+  const startBackground = vi.fn(async () => undefined);
+  const waitForShutdown = vi.fn(async () => undefined);
+  await expect(
+    startWorkerApplication({
+      startRuntime: async () => {
+        throw new Error("Startup failed");
+      },
+      startBackground,
+      isStopping: () => false,
+      waitForShutdown,
+    }),
+  ).rejects.toThrow("Startup failed");
+  expect(startBackground).not.toHaveBeenCalled();
+  expect(waitForShutdown).not.toHaveBeenCalled();
 });

@@ -37,7 +37,8 @@ export class EmailOutboxPollingWorker {
   readonly #onError?: ((error: unknown) => void) | undefined;
   #timer: NodeJS.Timeout | undefined;
   #stopping = false;
-  #inFlight: Promise<void> | undefined;
+  #inFlight: Promise<{ failed: boolean }> | undefined;
+  #stoppingBatch: Promise<{ failed: boolean }> | undefined;
 
   constructor(options: EmailOutboxPollingWorkerOptions) {
     if (!Number.isInteger(options.pollIntervalMs) || options.pollIntervalMs < 1_000) {
@@ -59,6 +60,10 @@ export class EmailOutboxPollingWorker {
   }
 
   requestStop(): void {
+    if (this.#stopping) return;
+    // Preserve the batch present at the intake boundary. It may finish while
+    // the main queue drains, before closeBackground reaches stop().
+    this.#stoppingBatch = this.#inFlight;
     this.#stopping = true;
     if (this.#timer !== undefined) {
       clearTimeout(this.#timer);
@@ -68,15 +73,23 @@ export class EmailOutboxPollingWorker {
 
   async stop(): Promise<void> {
     this.requestStop();
-    await this.#inFlight;
+    const result = await this.#stoppingBatch;
+    if (result?.failed) {
+      // Polling failures remain recoverable during normal operation. A batch
+      // that fails while shutdown is waiting cannot certify a clean drain,
+      // particularly after provider acceptance but before durable acknowledgement.
+      throw new Error("Email outbox batch failed during shutdown; durable leases govern recovery");
+    }
   }
 
   #processAndSchedule(): Promise<void> {
     const run = (async () => {
+      let failed = false;
       try {
         const result = await this.#processor.processDue(this.#batchSize);
         this.#onProcessed?.(result);
       } catch (error) {
+        failed = true;
         this.#onError?.(error);
       } finally {
         this.#inFlight = undefined;
@@ -88,9 +101,10 @@ export class EmailOutboxPollingWorker {
         }, this.#pollIntervalMs);
         this.#timer.unref();
       }
+      return { failed };
     })();
     this.#inFlight = run;
-    return run;
+    return run.then(() => undefined);
   }
 }
 
@@ -146,13 +160,22 @@ export function createProductionEmailOutboxWorker(
     ...(options.onProcessed !== undefined ? { onProcessed: options.onProcessed } : {}),
     ...(options.onError !== undefined ? { onError: options.onError } : {}),
   });
+  let closing: Promise<void> | undefined;
 
   return {
     worker,
     sql,
-    close: async () => {
-      await worker.stop();
-      await sql.end({ timeout: EMAIL_DATABASE_CLOSE_TIMEOUT_SECONDS });
+    close: () => {
+      closing ??= (async () => {
+        try {
+          await worker.stop();
+        } finally {
+          // Close client handles even when the batch acknowledgement failed.
+          // This does not release or rewrite any durable outbox lease.
+          await sql.end({ timeout: EMAIL_DATABASE_CLOSE_TIMEOUT_SECONDS });
+        }
+      })();
+      return closing;
     },
   };
 }
