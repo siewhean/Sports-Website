@@ -62,7 +62,7 @@ describe("configuration", () => {
         DEEP_HEALTH_TOKEN: "a".repeat(32),
         IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
         OTEL_ENABLED: "true",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
         GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: "750",
         ...edgeCacheConfig,
         ...oidcConfig,
@@ -79,7 +79,7 @@ describe("configuration", () => {
       DEEP_HEALTH_TOKEN: "a".repeat(32),
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
       OTEL_ENABLED: "true",
-      OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
       ...edgeCacheConfig,
       ...oidcConfig,
     };
@@ -174,36 +174,35 @@ describe("configuration", () => {
       parseConfig({
         ...production,
         OTEL_ENABLED: "true",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
-      }).telemetry.enabled,
-    ).toBe(true);
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+      }).telemetry,
+    ).toEqual({
+      enabled: true,
+      endpoint: "http://otel-collector:4318",
+      metricExportIntervalMs: 10_000,
+    });
     expect(() =>
       parseConfig({
         ...production,
         OTEL_ENABLED: "true",
       }),
     ).toThrow("OTEL_EXPORTER_OTLP_ENDPOINT");
-    expect(() =>
-      parseConfig({
-        ...production,
-        OTEL_ENABLED: "true",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector.internal:4318",
-      }),
-    ).toThrow("Production OTLP endpoints must use HTTPS");
-    expect(() =>
-      parseConfig({
-        ...production,
-        OTEL_ENABLED: "true",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "https://127.0.0.1:4318",
-      }),
-    ).toThrow("Production OTLP endpoints must not use local loopback");
-    expect(() =>
-      parseConfig({
-        ...production,
-        OTEL_ENABLED: "true",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "https://localhost:4318",
-      }),
-    ).toThrow("Production OTLP endpoints must not use local loopback");
+    for (const endpoint of [
+      "http://collector.internal:4318",
+      "https://collector.internal:4318",
+      "http://otel-collector:4317",
+      "http://otel-collector:4318/v1/traces",
+      "http://127.0.0.1:4318",
+      "http://localhost:4318",
+    ]) {
+      expect(() =>
+        parseConfig({
+          ...production,
+          OTEL_ENABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+        }),
+      ).toThrow("Production OTLP endpoint must be the internal collector");
+    }
   });
 
   it("requires a private CSRF secret and __Host cookie outside local/test", () => {

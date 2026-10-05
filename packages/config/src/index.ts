@@ -551,16 +551,20 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTP or HTTPS");
     }
-    if (parsed.APP_ENV === "production") {
-      if (url.protocol !== "https:") {
-        throw new Error("Production OTLP endpoints must use HTTPS");
-      }
-      if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") {
-        throw new Error("Production OTLP endpoints must not use local loopback");
-      }
-    }
     if (url.username || url.password || url.search || url.hash) {
       throw new Error("OTEL_EXPORTER_OTLP_ENDPOINT must not include credentials, query, or fragment");
+    }
+    if (parsed.APP_ENV === "production") {
+      const internalCollector =
+        url.protocol === "http:" &&
+        url.hostname === "otel-collector" &&
+        url.port === "4318" &&
+        url.pathname === "/";
+      if (!internalCollector) {
+        throw new Error(
+          "Production OTLP endpoint must be the internal collector http://otel-collector:4318",
+        );
+      }
     }
     telemetryEndpoint = url.toString().replace(/\/$/, "");
   }

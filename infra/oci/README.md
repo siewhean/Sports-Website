@@ -84,6 +84,32 @@ Post-deploy topology verification:
 ./infra/oci/verify-production-topology.sh matchday.poladex.shop c5-drill.poladex.shop "$CANDIDATE_SHA"
 ```
 
+### Production OpenTelemetry collector
+
+Production telemetry is opt-in and routes through the private `otel-collector` service at
+`172.31.0.14`. The API and worker send unauthenticated OTLP/HTTP only over the private
+`matchday-prod_backend` network. The collector alone authenticates to Better Stack over
+HTTPS.
+
+Keep the Better Stack source token outside Git at
+`/opt/matchday/secrets/g3-otel/source-token`, owned by `root:root` with mode `600`.
+The collector receives that file as a read-only bind mount; the API and worker never mount
+the provider credential. Before enabling telemetry, configure these non-secret values in
+`infra/oci/.env.prod`:
+
+```dotenv
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+BETTERSTACK_INGESTING_HOST=sSOURCE.REGION.betterstackdata.com
+BETTERSTACK_SOURCE_TOKEN_FILE=/opt/matchday/secrets/g3-otel/source-token
+```
+
+`deploy-prod.sh` validates the provider hostname and root-only token file, starts and
+health-checks the collector before recreating telemetry-enabled application services, and
+uses `--env-file infra/oci/.env.prod` for every production Compose invocation. The
+collector exports traces and metrics; structured application logs remain on the existing
+JSON logging path and are not claimed as OTLP log ingestion.
+
 ## Operations
 
 ```sh

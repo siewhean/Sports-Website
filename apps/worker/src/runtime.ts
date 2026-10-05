@@ -6,7 +6,7 @@ import {
   type JobDeadLetteredEvent,
   type JobExecutionContext,
 } from "@matchday/jobs";
-import { runWithObservabilityContext } from "@matchday/observability";
+import { runWithObservabilityContext, TraceSpanKind, type TracingRuntime } from "@matchday/observability";
 
 import type { FoundationProbePayload, FoundationProbeResult, WorkerJobRegistry } from "./jobs.js";
 
@@ -40,6 +40,7 @@ export interface WorkerRuntimeOptions {
   concurrency?: number;
   hooks?: WorkerRuntimeHooks;
   metrics?: WorkerMetrics;
+  tracing?: TracingRuntime;
   queueDefaults?: Pick<DurableJobQueueOptions, "defaultAttempts" | "defaultBackoff">;
   shutdownTimeoutMs?: number;
   handleEdgePurge?(payload: EdgePurgeRequest, context: JobExecutionContext): Promise<EdgePurgeResult>;
@@ -144,29 +145,14 @@ export class WorkerRuntime {
     payload: FoundationProbePayload,
     context: JobExecutionContext,
   ): Promise<FoundationProbeResult> {
-    const startedAt = performance.now();
-    const jobName = "foundation.probe";
-    this.callMetric((metrics) => metrics.jobStarted(jobName));
-    this.callMetric((metrics) => metrics.activeJobs(1));
-
-    return runWithObservabilityContext({ correlationId: payload.correlationId, jobId: context.jobId }, async () => {
-      try {
-        const result = this.#options.handleProbe
-          ? await this.#options.handleProbe(payload, context)
-          : {
-              correlationId: payload.correlationId,
-              handledAt: new Date().toISOString(),
-            };
-        this.callMetric((metrics) => metrics.jobCompleted(jobName, performance.now() - startedAt));
-        if (this.#health.status === "degraded") this.setHealth("ready");
-        return result;
-      } catch (error: unknown) {
-        this.callMetric((metrics) => metrics.jobFailed(jobName, performance.now() - startedAt));
-        throw error;
-      } finally {
-        this.callMetric((metrics) => metrics.activeJobs(-1));
-      }
-    });
+    return this.executeObservedJob("foundation.probe", payload.correlationId, context, () =>
+      this.#options.handleProbe
+        ? this.#options.handleProbe(payload, context)
+        : Promise.resolve({
+            correlationId: payload.correlationId,
+            handledAt: new Date().toISOString(),
+          }),
+    );
   }
 
   private async executeEdgePurge(payload: EdgePurgeRequest, context: JobExecutionContext): Promise<EdgePurgeResult> {
@@ -187,18 +173,34 @@ export class WorkerRuntime {
     const startedAt = performance.now();
     this.callMetric((metrics) => metrics.jobStarted(jobName));
     this.callMetric((metrics) => metrics.activeJobs(1));
-    return runWithObservabilityContext({ correlationId, jobId: context.jobId }, async () => {
-      try {
-        const result = await operation();
-        this.callMetric((metrics) => metrics.jobCompleted(jobName, performance.now() - startedAt));
-        if (this.#health.status === "degraded") this.setHealth("ready");
-        return result;
-      } catch (error: unknown) {
-        this.callMetric((metrics) => metrics.jobFailed(jobName, performance.now() - startedAt));
-        throw error;
-      } finally {
-        this.callMetric((metrics) => metrics.activeJobs(-1));
-      }
+
+    return runWithObservabilityContext({ correlationId, jobId: context.jobId }, () => {
+      const execute = async (): Promise<Result> => {
+        try {
+          const result = await operation();
+          this.callMetric((metrics) => metrics.jobCompleted(jobName, performance.now() - startedAt));
+          if (this.#health.status === "degraded") this.setHealth("ready");
+          return result;
+        } catch (error: unknown) {
+          this.callMetric((metrics) => metrics.jobFailed(jobName, performance.now() - startedAt));
+          throw error;
+        } finally {
+          this.callMetric((metrics) => metrics.activeJobs(-1));
+        }
+      };
+
+      const tracing = this.#options.tracing;
+      if (!tracing) return execute();
+      return tracing.withSpan(
+        `job ${jobName}`,
+        {
+          kind: TraceSpanKind.Consumer,
+          attributes: {
+            "job.name": jobName,
+          },
+        },
+        () => execute(),
+      );
     });
   }
 

@@ -105,7 +105,7 @@ test("validateProductionConfig accepts OTEL_ENABLED=false without endpoint", () 
   assert.equal(res.valid, true);
 });
 
-test("validateProductionConfig accepts OTEL_ENABLED=true with HTTPS non-loopback endpoint", () => {
+test("validateProductionConfig accepts collector-backed production telemetry", () => {
   const valid = {
     OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
     APP_ENV: "production",
@@ -126,15 +126,17 @@ test("validateProductionConfig accepts OTEL_ENABLED=true with HTTPS non-loopback
     SMTP_HOST: "smtp.resend.com",
     SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
     OTEL_ENABLED: "true",
-    OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel-collector.internal:4318",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+    BETTERSTACK_INGESTING_HOST: "s2784263.us-west-2a.betterstackdata.com",
+    BETTERSTACK_SOURCE_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
   };
 
   const res = validateProductionConfig(valid);
   assert.equal(res.valid, true);
 });
 
-test("validateProductionConfig rejects localhost loopback OTEL endpoint", () => {
-  const invalidEnabled = {
+test("validateProductionConfig rejects collector bypasses and unsafe provider secret paths", () => {
+  const base = {
     OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
     APP_ENV: "production",
     NODE_ENV: "production",
@@ -154,16 +156,48 @@ test("validateProductionConfig rejects localhost loopback OTEL endpoint", () => 
     SMTP_HOST: "smtp.resend.com",
     SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
     OTEL_ENABLED: "true",
-    OTEL_EXPORTER_OTLP_ENDPOINT: "https://127.0.0.1:4318",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+    BETTERSTACK_INGESTING_HOST: "s2784263.us-west-2a.betterstackdata.com",
+    BETTERSTACK_SOURCE_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
   };
 
-  assert.throws(() => validateProductionConfig(invalidEnabled), /cannot use local loopback/);
+  for (const endpoint of [
+    "https://collector.internal:4318",
+    "http://127.0.0.1:4318",
+    "http://otel-collector:4317",
+    "http://otel-collector:4318/v1/traces",
+  ]) {
+    assert.throws(
+      () => validateProductionConfig({ ...base, OTEL_EXPORTER_OTLP_ENDPOINT: endpoint }),
+      /must be exactly http:\/\/otel-collector:4318/,
+    );
+  }
 
-  const invalidDisabledWithLoopback = {
-    ...invalidEnabled,
-    OTEL_ENABLED: "false",
-    OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318",
-  };
+  assert.throws(
+    () => validateProductionConfig({ ...base, BETTERSTACK_INGESTING_HOST: "https://telemetry.betterstack.com" }),
+    /bare betterstackdata\.com hostname/,
+  );
+  assert.throws(
+    () => validateProductionConfig({ ...base, BETTERSTACK_SOURCE_TOKEN_FILE: "/tmp/source-token" }),
+    /under \/opt\/matchday\/secrets\//,
+  );
+  assert.throws(
+    () =>
+      validateProductionConfig({
+        ...base,
+        BETTERSTACK_SOURCE_TOKEN_FILE: "/opt/matchday/secrets/../source-token",
+      }),
+    /under \/opt\/matchday\/secrets\//,
+  );
 
-  assert.throws(() => validateProductionConfig(invalidDisabledWithLoopback), /must not specify localhost loopback/);
+  assert.throws(
+    () =>
+      validateProductionConfig({
+        ...base,
+        OTEL_ENABLED: "false",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+      }),
+    /must be empty when production telemetry is disabled/,
+  );
 });
+

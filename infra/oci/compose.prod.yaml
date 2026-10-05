@@ -40,6 +40,37 @@ services:
       backend:
         ipv4_address: 172.31.0.3
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.153.0
+    profiles: ["telemetry"]
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.25
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      BETTERSTACK_INGESTING_HOST: ${BETTERSTACK_INGESTING_HOST:-}
+    volumes:
+      - ./otel-collector.prod.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - type: bind
+        source: ${BETTERSTACK_SOURCE_TOKEN_FILE:-/opt/matchday/secrets/g3-otel/source-token}
+        target: /run/secrets/betterstack_source_token
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    expose: ["4318", "13133"]
+    networks:
+      backend:
+        ipv4_address: 172.31.0.14
+        aliases:
+          - otel-collector
+
   migrate:
     build:
       context: ../..

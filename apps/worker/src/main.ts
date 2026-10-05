@@ -1,5 +1,5 @@
 import { loadConfig } from "@matchday/config";
-import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
+import { createLogger, startOpenTelemetryRuntime, type MetricsRuntime } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
 import { createProductionEmailOutboxWorker } from "./email-outbox-worker.js";
@@ -13,7 +13,14 @@ const logger = createLogger({
   level: config.logLevel,
   service: workerServiceName,
 });
-const metricsRuntime = initializeMetrics({ serviceName: workerServiceName });
+const telemetry = await startOpenTelemetryRuntime({
+  enabled: config.telemetry.enabled,
+  endpoint: config.telemetry.endpoint,
+  metricExportIntervalMs: config.telemetry.metricExportIntervalMs,
+  serviceName: workerServiceName,
+  serviceVersion: "0.1.0",
+});
+const metricsRuntime = telemetry.metrics;
 const edgeCache = createWorkerEdgeCachePurgePort(config);
 const queuePrefix = resolveWorkerQueuePrefix(process.env);
 const runtime = new WorkerRuntime({
@@ -21,6 +28,7 @@ const runtime = new WorkerRuntime({
   redisUrl: config.redisUrl,
   ...(queuePrefix === undefined ? {} : { queuePrefix }),
   metrics: createWorkerMetrics(metricsRuntime),
+  tracing: telemetry.tracing,
   hooks: {
     onHealthChange: (health) => logger.info({ health }, "worker health changed"),
     onJobDeadLettered: (event) => logger.error({ event }, "worker job dead-lettered"),
@@ -60,6 +68,11 @@ const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   try {
     await runtime.stop();
     await emailWorkerHandle.close();
+    try {
+      await telemetry.shutdown();
+    } catch (error: unknown) {
+      logger.warn({ error }, "worker telemetry shutdown failed");
+    }
     logger.info("worker stopped");
   } catch (error: unknown) {
     logger.error({ error }, "worker shutdown failed");
