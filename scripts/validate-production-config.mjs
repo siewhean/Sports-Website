@@ -74,35 +74,35 @@ export function validateProductionConfig(env) {
       errors.push("Production POSTGRES_DB and POSTGRES_USER must be isolated from staging (got matchday)");
     }
 
-    // OTEL validation in production:
-    // If OTEL_ENABLED is true, require non-localhost HTTPS endpoint.
-    // If OTEL_ENABLED is false, reject fake localhost loopback endpoints.
+    // Production applications export only to the private Collector. Provider
+    // credentials stay in a root-owned Docker secret consumed by the Collector.
     const otelEnabled = env.OTEL_ENABLED === "true";
     if (otelEnabled) {
-      if (!env.OTEL_EXPORTER_OTLP_ENDPOINT || env.OTEL_EXPORTER_OTLP_ENDPOINT.trim() === "") {
-        errors.push("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED is true");
-      } else {
-        try {
-          const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
-          if (otelUrl.protocol !== "https:") {
-            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS");
-          }
-          if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
-            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT cannot use local loopback");
-          }
-        } catch {
-          errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL");
-        }
+      if (env.OTEL_EXPORTER_OTLP_ENDPOINT !== "http://otel-collector:4318") {
+        errors.push(
+          "Production OTEL_EXPORTER_OTLP_ENDPOINT must be exactly http://otel-collector:4318 when telemetry is enabled",
+        );
+      }
+
+      const ingestingHost = env.BETTERSTACK_INGESTING_HOST ?? "";
+      if (
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.betterstackdata\.com$/u.test(
+          ingestingHost,
+        )
+      ) {
+        errors.push("BETTERSTACK_INGESTING_HOST must be a bare betterstackdata.com hostname");
+      }
+
+      const sourceTokenFile = env.BETTERSTACK_SOURCE_TOKEN_FILE ?? "";
+      if (
+        !sourceTokenFile.startsWith("/opt/matchday/secrets/") ||
+        sourceTokenFile.includes("..") ||
+        sourceTokenFile.endsWith("/")
+      ) {
+        errors.push("BETTERSTACK_SOURCE_TOKEN_FILE must be an absolute file under /opt/matchday/secrets/");
       }
     } else if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
-      try {
-        const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
-        if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
-          errors.push("Production configuration must not specify localhost loopback OTEL_EXPORTER_OTLP_ENDPOINT");
-        }
-      } catch {
-        errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL if present");
-      }
+      errors.push("OTEL_EXPORTER_OTLP_ENDPOINT must be empty when production telemetry is disabled");
     }
   }
 
