@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createWorkerShutdown, startWorkerTelemetry } from "../../src/telemetry.js";
+import {
+  createWorkerShutdown,
+  createWorkerSignalShutdown,
+  startWorkerTelemetry,
+} from "../../src/telemetry.js";
 
 const options = {
   enabled: true,
@@ -85,6 +89,9 @@ describe("worker telemetry", () => {
     const events: string[] = [];
     let release: (() => void) | undefined;
     const stop = createWorkerShutdown({
+      stopBackgroundIntake: () => {
+        events.push("intake");
+      },
       drain: async () => {
         events.push("drain");
         await new Promise<void>((resolve) => {
@@ -105,11 +112,63 @@ describe("worker telemetry", () => {
     });
     const first = stop();
     expect(stop()).toBe(first);
-    expect(events).toEqual(["drain"]);
+    expect(events).toEqual(["intake", "drain"]);
     release?.();
     await first;
     await stop();
-    expect(events).toEqual(["drain", "background", "flush", "shutdown"]);
+    expect(events).toEqual(["intake", "drain", "background", "flush", "shutdown"]);
+  });
+
+  it("shares concurrent signals and exits exactly once after clean shutdown", async () => {
+    const events: string[] = [];
+    let release: (() => void) | undefined;
+    const exit = vi.fn();
+    const shutdown = createWorkerSignalShutdown({
+      stop: () =>
+        new Promise<void>((resolve) => {
+          events.push("stop");
+          release = resolve;
+        }),
+      deadlineMs: 5_000,
+      onRequested: (signal) => events.push(`requested:${signal}`),
+      onStopped: () => events.push("stopped"),
+      onFailed: () => events.push("failed"),
+      onDeadlineExceeded: () => events.push("deadline"),
+      flushLogger: () => events.push("logger"),
+      exit,
+    });
+
+    const first = shutdown("SIGTERM");
+    const second = shutdown("SIGINT");
+    expect(second).toBe(first);
+    expect(events).toEqual(["requested:SIGTERM", "stop"]);
+    release?.();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["requested:SIGTERM", "stop", "stopped", "logger"]);
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("enforces a non-zero crash-equivalent whole-process deadline for stalled email work", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const exit = vi.fn();
+    const shutdown = createWorkerSignalShutdown({
+      stop: async () => new Promise<void>(() => undefined),
+      deadlineMs: 2_000,
+      onRequested: () => events.push("requested"),
+      onStopped: () => events.push("stopped"),
+      onFailed: () => events.push("failed"),
+      onDeadlineExceeded: () => events.push("deadline"),
+      flushLogger: () => events.push("logger"),
+      exit,
+    });
+    const pending = shutdown("SIGTERM");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+    expect(events).toEqual(["requested", "deadline", "logger"]);
+    expect(exit).toHaveBeenCalledWith(1);
+    vi.useRealTimers();
   });
 
   it("bounds stalled telemetry after application handles drain and close", async () => {
