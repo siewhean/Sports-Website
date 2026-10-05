@@ -9,6 +9,18 @@ import { parseEnvContent, validateProductionConfig } from "./validate-production
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+function assertTokenMountDoesNotCreateHostPath(composeSource, token) {
+  // compose-go v2 encodes this bool with json:",omitempty", so explicit false
+  // can disappear from rendered JSON. Require it in the exact source mount,
+  // then reject any rendered true value instead of relying on serialization.
+  assert.match(
+    composeSource,
+    /source: \/etc\/matchday\/secrets\/otel-bearer-token\n\s+target: \/run\/secrets\/otel-bearer-token\n\s+read_only: true\n\s+bind:\n\s+create_host_path: false(?:\n|$)/,
+    "Collector token mount must explicitly disable host-path creation in source",
+  );
+  assert.equal(token.bind.create_host_path ?? false, false);
+}
+
 test("1. Caddyfile rejects ambiguous reverse_proxy api:4000 upstream", async () => {
   const caddyfile = await readFile(path.join(root, "infra/oci/Caddyfile"), "utf8");
 
@@ -330,7 +342,8 @@ test("12. Collector production topology renders with the explicit env-file and i
   const token = collector.volumes.find((volume) => volume.target === "/run/secrets/otel-bearer-token");
   assert.equal(token.source, "/etc/matchday/secrets/otel-bearer-token");
   assert.equal(token.read_only, true);
-  assert.equal(token.bind.create_host_path, false);
+  const composeSource = await readFile(path.join(root, "infra/oci/compose.prod.yaml"), "utf8");
+  assertTokenMountDoesNotCreateHostPath(composeSource, token);
   for (const name of ["api", "worker", "web", "migrate"]) {
     assert.equal(rendered.services[name].volumes?.some((volume) => volume.target === token.target) ?? false, false);
     for (const key of Object.keys(rendered.services[name].environment)) {
@@ -351,4 +364,19 @@ test("12. Collector production topology renders with the explicit env-file and i
     .filter((line) => line.includes("docker compose") && line.includes("compose.prod.yaml"))) {
     assert.match(line, /docker compose --env-file infra\/oci\/\.env\.prod/);
   }
+});
+
+test("13. Collector token mount rejects host-path creation even when Compose omits false", async () => {
+  const source = await readFile(path.join(root, "infra/oci/compose.prod.yaml"), "utf8");
+  assertTokenMountDoesNotCreateHostPath(source, { bind: {} });
+  assertTokenMountDoesNotCreateHostPath(source, { bind: { create_host_path: false } });
+  assert.throws(() => assertTokenMountDoesNotCreateHostPath(source, { bind: { create_host_path: true } }));
+  const unsafeSource = source.replace("create_host_path: false", "create_host_path: true");
+  assert.notEqual(unsafeSource, source);
+  assert.throws(() => assertTokenMountDoesNotCreateHostPath(unsafeSource, { bind: {} }), /must explicitly disable/);
+  assert.throws(
+    () =>
+      assertTokenMountDoesNotCreateHostPath(source.replace("          create_host_path: false\n", ""), { bind: {} }),
+    /must explicitly disable/,
+  );
 });
