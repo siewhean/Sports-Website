@@ -258,12 +258,14 @@ function tracingSpy(): TracingRuntime {
     spanContext: () => ({ traceId: "a".repeat(32), spanId: "b".repeat(16), traceFlags: 1 }),
     end() {},
   };
-  return {
+  const tracing: TracingRuntime = {
     startSpan: vi.fn(() => span),
-    withSpan: vi.fn(<T>(_name: string, _options: StartSpanOptions, callback: (span: SpanLike) => T): T =>
-      callback(span),
-    ),
+    withSpan<T>(_name: string, _options: StartSpanOptions, callback: (span: SpanLike) => T): T {
+      return callback(span);
+    },
   };
+  vi.spyOn(tracing, "withSpan");
+  return tracing;
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
