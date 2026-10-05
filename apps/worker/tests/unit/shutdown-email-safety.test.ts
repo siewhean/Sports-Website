@@ -2,6 +2,7 @@ import {
   EmailOutboxProcessor,
   InMemoryEmailOutboxStore,
   createEmailOutboxItem,
+  type EmailDeliveryReceipt,
   type EmailMessage,
   type EmailOutboxItem,
   type EmailOutboxStore,
@@ -55,6 +56,48 @@ async function seededStore(): Promise<InMemoryEmailOutboxStore> {
 }
 
 describe("email shutdown safety", () => {
+  it("waits for provider acceptance and delivery acknowledgement before clean exit", async () => {
+    const store = await seededStore();
+    let accept: ((receipt: EmailDeliveryReceipt) => void) | undefined;
+    const send = vi.fn<EmailProvider["send"]>(
+      () =>
+        new Promise<EmailDeliveryReceipt>((resolve) => {
+          accept = resolve;
+        }),
+    );
+    const processor = new EmailOutboxProcessor(store, { send }, {
+      now: () => new Date(NOW),
+      createLeaseToken: () => "normal-delivery-lease",
+    });
+    const worker = new EmailOutboxPollingWorker({
+      processor,
+      pollIntervalMs: 1_000,
+      batchSize: 1,
+    });
+
+    void worker.start();
+    await flushMicrotasks();
+    expect(send).toHaveBeenCalledOnce();
+
+    const exit = vi.fn();
+    const shuttingDown = deadlineShutdown(() => worker.stop(), exit)("SIGTERM");
+    await flushMicrotasks();
+    expect(exit).not.toHaveBeenCalled();
+
+    accept?.({
+      providerMessageId: "provider-normal-delivery",
+      accepted: [MESSAGE.to],
+    });
+    await shuttingDown;
+
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(await store.findByIdempotencyKey(MESSAGE.idempotencyKey)).toMatchObject({
+      status: "delivered",
+      leaseToken: null,
+      providerMessageId: "provider-normal-delivery",
+    });
+  });
+
   it("uses the non-zero whole-process deadline when SMTP never returns", async () => {
     vi.useFakeTimers();
     try {
