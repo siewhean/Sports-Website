@@ -127,7 +127,8 @@ test("validateProductionConfig accepts OTEL_ENABLED=true with the pinned interna
     SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
     OTEL_ENABLED: "true",
     OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
-    OTEL_COLLECTOR_IMAGE: "otel/opentelemetry-collector-contrib:0.153.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    OTEL_COLLECTOR_IMAGE:
+      "otel/opentelemetry-collector-contrib:0.153.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     OTEL_BETTER_STACK_ENDPOINT: "https://telemetry.example.test",
     OTEL_BETTER_STACK_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
   };
@@ -158,7 +159,8 @@ test("validateProductionConfig rejects telemetry that bypasses the internal coll
     SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
     OTEL_ENABLED: "true",
     OTEL_EXPORTER_OTLP_ENDPOINT: "https://telemetry.example.test",
-    OTEL_COLLECTOR_IMAGE: "otel/opentelemetry-collector-contrib:0.153.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    OTEL_COLLECTOR_IMAGE:
+      "otel/opentelemetry-collector-contrib:0.153.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     OTEL_BETTER_STACK_ENDPOINT: "https://telemetry.example.test",
     OTEL_BETTER_STACK_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
   };
