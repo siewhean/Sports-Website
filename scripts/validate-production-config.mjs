@@ -22,6 +22,23 @@ export function parseEnvContent(content) {
   return env;
 }
 
+function isLoopbackHostname(hostname) {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "::1" ||
+    normalized === "0:0:0:0:0:0:0:1" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(normalized)
+  );
+}
+
+function isPinnedCollectorImageReference(value) {
+  return /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*)(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[a-f0-9]{64}$/u.test(
+    value,
+  );
+}
+
 export function validateProductionConfig(env) {
   const errors = [];
 
@@ -87,8 +104,8 @@ export function validateProductionConfig(env) {
 
       if (!env.OTEL_COLLECTOR_IMAGE || env.OTEL_COLLECTOR_IMAGE.trim() === "") {
         errors.push("OTEL_COLLECTOR_IMAGE is required when OTEL_ENABLED is true");
-      } else if (/\s/u.test(env.OTEL_COLLECTOR_IMAGE) || !/@sha256:[a-f0-9]{64}$/u.test(env.OTEL_COLLECTOR_IMAGE)) {
-        errors.push("OTEL_COLLECTOR_IMAGE must be pinned by a full sha256 digest");
+      } else if (!isPinnedCollectorImageReference(env.OTEL_COLLECTOR_IMAGE)) {
+        errors.push("OTEL_COLLECTOR_IMAGE must be a valid full image reference pinned by a sha256 digest");
       }
 
       if (!env.OTEL_BETTER_STACK_ENDPOINT || env.OTEL_BETTER_STACK_ENDPOINT.trim() === "") {
@@ -108,6 +125,9 @@ export function validateProductionConfig(env) {
               "OTEL_BETTER_STACK_ENDPOINT must be one HTTPS origin without credentials, path, query, or fragment",
             );
           }
+          if (isLoopbackHostname(exporterUrl.hostname)) {
+            errors.push("OTEL_BETTER_STACK_ENDPOINT must not use local loopback");
+          }
         } catch {
           errors.push("OTEL_BETTER_STACK_ENDPOINT must be a valid HTTPS URL");
         }
@@ -124,7 +144,7 @@ export function validateProductionConfig(env) {
     } else if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
       try {
         const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
-        if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
+        if (isLoopbackHostname(otelUrl.hostname)) {
           errors.push("Production configuration must not specify localhost loopback OTEL_EXPORTER_OTLP_ENDPOINT");
         }
       } catch {
