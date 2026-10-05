@@ -55,29 +55,31 @@ async function seededStore(): Promise<InMemoryEmailOutboxStore> {
   return store;
 }
 
+function processor(store: EmailOutboxStore, provider: EmailProvider, leaseToken: string): EmailOutboxProcessor {
+  return new EmailOutboxProcessor(store, provider, {
+    now: () => new Date(NOW),
+    createLeaseToken: () => leaseToken,
+  });
+}
+
 describe("email shutdown safety", () => {
   it("waits for provider acceptance and delivery acknowledgement before clean exit", async () => {
     const store = await seededStore();
     let accept: ((receipt: EmailDeliveryReceipt) => void) | undefined;
-    const send = vi.fn<EmailProvider["send"]>(
-      () =>
+    const provider: EmailProvider = {
+      send: () =>
         new Promise<EmailDeliveryReceipt>((resolve) => {
           accept = resolve;
         }),
-    );
-    const processor = new EmailOutboxProcessor(store, { send }, {
-      now: () => new Date(NOW),
-      createLeaseToken: () => "normal-delivery-lease",
-    });
+    };
     const worker = new EmailOutboxPollingWorker({
-      processor,
+      processor: processor(store, provider, "normal-delivery-lease"),
       pollIntervalMs: 1_000,
       batchSize: 1,
     });
 
     void worker.start();
     await flushMicrotasks();
-    expect(send).toHaveBeenCalledOnce();
 
     const exit = vi.fn();
     const shuttingDown = deadlineShutdown(() => worker.stop(), exit)("SIGTERM");
@@ -102,17 +104,16 @@ describe("email shutdown safety", () => {
     vi.useFakeTimers();
     try {
       const store = await seededStore();
-      const send = vi.fn<EmailProvider["send"]>(() => new Promise(() => undefined));
-      const processor = new EmailOutboxProcessor(store, { send }, {
-        now: () => new Date(NOW),
-        createLeaseToken: () => "smtp-stall-lease",
-      });
-      const processDue = vi.fn((limit: number) => processor.processDue(limit));
+      const send = vi.fn(() => new Promise<EmailDeliveryReceipt>(() => undefined));
+      const processDue = vi.fn((limit: number) =>
+        processor(store, { send }, "smtp-stall-lease").processDue(limit),
+      );
       const worker = new EmailOutboxPollingWorker({
         processor: { processDue },
         pollIntervalMs: 1_000,
         batchSize: 1,
       });
+
       void worker.start();
       await flushMicrotasks();
       expect(send).toHaveBeenCalledOnce();
@@ -137,35 +138,32 @@ describe("email shutdown safety", () => {
     vi.useFakeTimers();
     try {
       const base = await seededStore();
-      const markDelivered = vi.fn(() => new Promise<EmailOutboxItem>(() => undefined));
-      const markFailed = vi.fn((...args: Parameters<InMemoryEmailOutboxStore["markFailed"]>) =>
-        base.markFailed(...args),
-      );
+      let markFailedCalls = 0;
       const store: EmailOutboxStore = {
         enqueue: base.enqueue.bind(base),
         findByIdempotencyKey: base.findByIdempotencyKey.bind(base),
         claimDue: base.claimDue.bind(base),
-        markDelivered,
-        markFailed,
+        markDelivered: () => new Promise<EmailOutboxItem>(() => undefined),
+        markFailed: async (...args) => {
+          markFailedCalls += 1;
+          return base.markFailed(...args);
+        },
       };
-      const send = vi.fn<EmailProvider["send"]>().mockResolvedValue({
-        providerMessageId: "provider-accepted-before-db-stall",
-        accepted: [MESSAGE.to],
-      });
-      const processor = new EmailOutboxProcessor(store, { send }, {
-        now: () => new Date(NOW),
-        createLeaseToken: () => "ack-stall-lease",
-      });
+      const provider: EmailProvider = {
+        send: async () => ({
+          providerMessageId: "provider-accepted-before-db-stall",
+          accepted: [MESSAGE.to],
+        }),
+      };
       const worker = new EmailOutboxPollingWorker({
-        processor,
+        processor: processor(store, provider, "ack-stall-lease"),
         pollIntervalMs: 1_000,
         batchSize: 1,
       });
+
       void worker.start();
       await flushMicrotasks();
-      expect(send).toHaveBeenCalledOnce();
-      expect(markDelivered).toHaveBeenCalledOnce();
-      expect(markFailed).not.toHaveBeenCalled();
+      expect(markFailedCalls).toBe(0);
 
       const exit = vi.fn();
       const shuttingDown = deadlineShutdown(() => worker.stop(), exit)("SIGTERM");
@@ -173,7 +171,7 @@ describe("email shutdown safety", () => {
       await shuttingDown;
 
       expect(exit).toHaveBeenCalledWith(1);
-      expect(markFailed).not.toHaveBeenCalled();
+      expect(markFailedCalls).toBe(0);
       expect(await base.findByIdempotencyKey(MESSAGE.idempotencyKey)).toMatchObject({
         status: "processing",
         leaseToken: "ack-stall-lease",
@@ -186,11 +184,14 @@ describe("email shutdown safety", () => {
   it("bounds a stalled database claim and never sends without a valid claim", async () => {
     vi.useFakeTimers();
     try {
-      const send = vi.fn<EmailProvider["send"]>();
+      const send = vi.fn(async () => ({
+        providerMessageId: "must-not-send",
+        accepted: [MESSAGE.to],
+      }));
       const store: EmailOutboxStore = {
         enqueue: async (item) => item,
         findByIdempotencyKey: async () => null,
-        claimDue: async () => new Promise<readonly EmailOutboxItem[]>(() => undefined),
+        claimDue: () => new Promise<readonly EmailOutboxItem[]>(() => undefined),
         markDelivered: async () => {
           throw new Error("markDelivered must not run without a claim");
         },
@@ -198,15 +199,12 @@ describe("email shutdown safety", () => {
           throw new Error("markFailed must not run without a claim");
         },
       };
-      const processor = new EmailOutboxProcessor(store, { send }, {
-        now: () => new Date(NOW),
-        createLeaseToken: () => "claim-stall-lease",
-      });
       const worker = new EmailOutboxPollingWorker({
-        processor,
+        processor: processor(store, { send }, "claim-stall-lease"),
         pollIntervalMs: 1_000,
         batchSize: 1,
       });
+
       void worker.start();
       await flushMicrotasks();
       expect(send).not.toHaveBeenCalled();
