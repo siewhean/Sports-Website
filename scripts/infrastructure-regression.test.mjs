@@ -380,3 +380,18 @@ test("13. Collector token mount rejects host-path creation even when Compose omi
     /must explicitly disable/,
   );
 });
+
+
+test("14. Production worker stop grace exceeds its absolute shutdown deadline", async () => {
+  const compose = await readFile(path.join(root, "infra/oci/compose.prod.yaml"), "utf8");
+  const shutdownSource = await readFile(path.join(root, "apps/worker/src/telemetry.ts"), "utf8");
+  const worker = compose.match(/\n  worker:\n([\s\S]*?)(?=\nvolumes:)/);
+  assert.ok(worker, "Production worker service must exist");
+  const grace = worker[1].match(/stop_grace_period:\s*(\d+)s/);
+  assert.ok(grace, "Production worker must declare an explicit stop_grace_period");
+  const deadline = shutdownSource.match(/WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS\s*=\s*([\d_]+)/);
+  assert.ok(deadline, "Worker must declare an absolute whole-process shutdown deadline");
+  const deadlineMs = Number(deadline[1].replaceAll("_", ""));
+  const graceMs = Number(grace[1]) * 1_000;
+  assert.ok(graceMs > deadlineMs, "Container stop grace must exceed the worker process deadline");
+});
