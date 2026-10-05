@@ -5,7 +5,12 @@ import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
 import { createProductionEmailOutboxWorker } from "./email-outbox-worker.js";
 import { resolveWorkerQueuePrefix } from "./queue-configuration.js";
 import { WorkerRuntime } from "./runtime.js";
-import { createWorkerShutdown, startWorkerTelemetry } from "./telemetry.js";
+import {
+  createWorkerShutdown,
+  createWorkerSignalShutdown,
+  startWorkerTelemetry,
+  WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS,
+} from "./telemetry.js";
 import { workerServiceName } from "./service.js";
 
 const config = loadConfig();
@@ -58,33 +63,29 @@ await runtime.start();
 await emailWorkerHandle.worker.start();
 
 const stop = createWorkerShutdown({
+  stopBackgroundIntake: () => emailWorkerHandle.worker.requestStop(),
   drain: () => runtime.stop(),
   closeBackground: () => emailWorkerHandle.close(),
   telemetry,
 });
 
-let shuttingDown = false;
-const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  logger.info({ signal }, "worker shutdown requested");
-  let forceExit = false;
-  try {
-    await stop();
-    logger.info("worker stopped");
-  } catch (error: unknown) {
-    logger.error({ error }, "worker shutdown failed");
-    process.exitCode = 1;
-    forceExit = true;
-  } finally {
-    logger.flush();
-    // OpenTelemetry or a logger transport may retain event-loop handles after
-    // the queue has shut down. A worker that has completed its bounded
-    // shutdown must terminate, otherwise an orchestrator cannot distinguish a
-    // drained worker from one still accepting jobs.
-    process.exit(forceExit ? 1 : 0);
-  }
-};
+const shutdown = createWorkerSignalShutdown({
+  stop,
+  deadlineMs: WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS,
+  onRequested: (signal) => logger.info({ signal }, "worker shutdown requested"),
+  onStopped: () => logger.info("worker stopped"),
+  onFailed: () => logger.error("worker shutdown failed; durable leases will govern unresolved work"),
+  onDeadlineExceeded: (signal, deadlineMs) =>
+    logger.error(
+      { signal, deadlineMs },
+      "worker shutdown deadline exceeded; terminating with crash-equivalent lease recovery",
+    ),
+  flushLogger: () => logger.flush(),
+  exit: (code) => {
+    process.exitCode = code;
+    process.exit(code);
+  },
+});
 
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
