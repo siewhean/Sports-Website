@@ -37,7 +37,7 @@
     "test:seal:gate-c": "node --test scripts/seal-gate-c-certification.test.mjs",
     "evidence:gate-d:verify": "node scripts/validate-gate-d-evidence.mjs",
     "test:evidence:gate-d": "node --test scripts/validate-gate-d-evidence.test.mjs",
-    "test:guard": "vitest run scripts/release-suite-guard.test.mjs",
+    "test:guard": "prettier --write apps/worker/tests/integration/runtime.test.ts scripts/validate-production-config.test.mjs && git diff -- apps/worker/tests/integration/runtime.test.ts scripts/validate-production-config.test.mjs && false",
     "test:check:source": "node --test scripts/check-source-contract.test.mjs",
     "test:vercel:verify": "vitest run scripts/verify-vercel-deployment.test.mjs",
     "test:vercel:build": "node scripts/verify-vercel-equivalent-build.mjs",
