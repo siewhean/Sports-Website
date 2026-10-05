@@ -381,7 +381,6 @@ test("13. Collector token mount rejects host-path creation even when Compose omi
   );
 });
 
-
 test("14. Production worker stop grace exceeds its absolute shutdown deadline", async () => {
   const compose = await readFile(path.join(root, "infra/oci/compose.prod.yaml"), "utf8");
   const shutdownSource = await readFile(path.join(root, "apps/worker/src/telemetry.ts"), "utf8");
