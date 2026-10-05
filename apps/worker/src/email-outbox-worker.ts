@@ -8,6 +8,10 @@ import {
 } from "@matchday/notifications";
 import postgres, { type Sql } from "postgres";
 
+export const EMAIL_DATABASE_CONNECT_TIMEOUT_SECONDS = 5;
+export const EMAIL_DATABASE_STATEMENT_TIMEOUT_MS = 10_000;
+export const EMAIL_DATABASE_CLOSE_TIMEOUT_SECONDS = 5;
+
 export type EmailOutboxProcessorPort = {
   processDue(limit: number): Promise<EmailOutboxProcessingResult>;
 };
@@ -54,12 +58,16 @@ export class EmailOutboxPollingWorker {
     await this.#processAndSchedule();
   }
 
-  async stop(): Promise<void> {
+  requestStop(): void {
     this.#stopping = true;
     if (this.#timer !== undefined) {
       clearTimeout(this.#timer);
       this.#timer = undefined;
     }
+  }
+
+  async stop(): Promise<void> {
+    this.requestStop();
     await this.#inFlight;
   }
 
@@ -93,6 +101,8 @@ export type ProductionEmailOutboxWorkerOptions = {
   batchSize?: number | undefined;
   maxAttempts?: number | undefined;
   leaseMs?: number | undefined;
+  databaseConnectTimeoutSeconds?: number | undefined;
+  databaseStatementTimeoutMs?: number | undefined;
   onProcessed?: ((result: EmailOutboxProcessingResult) => void) | undefined;
   onError?: ((error: unknown) => void) | undefined;
 };
@@ -106,9 +116,19 @@ export type ProductionEmailOutboxWorkerHandle = {
 export function createProductionEmailOutboxWorker(
   options: ProductionEmailOutboxWorkerOptions,
 ): ProductionEmailOutboxWorkerHandle {
+  const connectTimeoutSeconds = options.databaseConnectTimeoutSeconds ?? EMAIL_DATABASE_CONNECT_TIMEOUT_SECONDS;
+  const statementTimeoutMs = options.databaseStatementTimeoutMs ?? EMAIL_DATABASE_STATEMENT_TIMEOUT_MS;
+  if (!Number.isInteger(connectTimeoutSeconds) || connectTimeoutSeconds < 1 || connectTimeoutSeconds > 30) {
+    throw new Error("Email database connect timeout must be an integer between 1s and 30s");
+  }
+  if (!Number.isInteger(statementTimeoutMs) || statementTimeoutMs < 1_000 || statementTimeoutMs > 30_000) {
+    throw new Error("Email database statement timeout must be an integer between 1000ms and 30000ms");
+  }
   const sql = postgres(options.databaseUrl, {
     max: 2,
     idle_timeout: 30,
+    connect_timeout: connectTimeoutSeconds,
+    connection: { statement_timeout: statementTimeoutMs },
     onnotice: () => undefined,
   });
   const store = new PostgresNotificationRepository(sql);
@@ -132,7 +152,7 @@ export function createProductionEmailOutboxWorker(
     sql,
     close: async () => {
       await worker.stop();
-      await sql.end({ timeout: 5 });
+      await sql.end({ timeout: EMAIL_DATABASE_CLOSE_TIMEOUT_SECONDS });
     },
   };
 }
