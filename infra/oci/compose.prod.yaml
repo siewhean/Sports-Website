@@ -173,6 +173,7 @@ services:
           - matchday-prod-web
 
   worker:
+    stop_grace_period: 70s
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
