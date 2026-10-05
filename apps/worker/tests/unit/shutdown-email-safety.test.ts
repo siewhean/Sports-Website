@@ -30,7 +30,7 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-function deadlineShutdown(stop: () => Promise<void>, exit: ReturnType<typeof vi.fn>) {
+function deadlineShutdown(stop: () => Promise<void>, exit: (code: 0 | 1) => void) {
   return createWorkerSignalShutdown({
     stop,
     deadlineMs: 1_000,
@@ -81,7 +81,7 @@ describe("email shutdown safety", () => {
     void worker.start();
     await flushMicrotasks();
 
-    const exit = vi.fn();
+    const exit = vi.fn<(code: 0 | 1) => void>();
     const shuttingDown = deadlineShutdown(() => worker.stop(), exit)("SIGTERM");
     await flushMicrotasks();
     expect(exit).not.toHaveBeenCalled();
@@ -116,7 +116,7 @@ describe("email shutdown safety", () => {
       await flushMicrotasks();
       expect(send).toHaveBeenCalledOnce();
 
-      const exit = vi.fn();
+      const exit = vi.fn<(code: 0 | 1) => void>();
       const shuttingDown = deadlineShutdown(() => worker.stop(), exit)("SIGTERM");
       await vi.advanceTimersByTimeAsync(1_000);
       await shuttingDown;
@@ -163,7 +163,7 @@ describe("email shutdown safety", () => {
       await flushMicrotasks();
       expect(markFailedCalls).toBe(0);
 
-      const exit = vi.fn();
+      const exit = vi.fn<(code: 0 | 1) => void>();
       const shuttingDown = deadlineShutdown(() => worker.stop(), exit)("SIGTERM");
       await vi.advanceTimersByTimeAsync(1_000);
       await shuttingDown;
@@ -207,7 +207,7 @@ describe("email shutdown safety", () => {
       await flushMicrotasks();
       expect(send).not.toHaveBeenCalled();
 
-      const exit = vi.fn();
+      const exit = vi.fn<(code: 0 | 1) => void>();
       const shuttingDown = deadlineShutdown(() => worker.stop(), exit)("SIGINT");
       await vi.advanceTimersByTimeAsync(1_000);
       await shuttingDown;
