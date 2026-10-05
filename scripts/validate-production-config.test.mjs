@@ -2,6 +2,36 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseEnvContent, validateProductionConfig } from "./validate-production-config.mjs";
 
+function telemetryProductionConfig(overrides = {}) {
+  return {
+    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    APP_ENV: "production",
+    NODE_ENV: "production",
+    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    SCORING_SESSION_SEAL_KEY: "a".repeat(43),
+    POSTGRES_DB: "matchday_prod",
+    POSTGRES_USER: "matchday_prod",
+    POSTGRES_PASSWORD: "secretpassword123",
+    REDIS_PASSWORD: "redispassword123",
+    DEEP_HEALTH_TOKEN: "b".repeat(32),
+    IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+    IDENTITY_FLOW_SEAL_KEY: "d".repeat(43),
+    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "e".repeat(32),
+    SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "f".repeat(32),
+    EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
+    SMTP_HOST: "smtp.resend.com",
+    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    OTEL_ENABLED: "true",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+    OTEL_COLLECTOR_IMAGE:
+      "otel/opentelemetry-collector-contrib:0.153.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    OTEL_BETTER_STACK_ENDPOINT: "https://telemetry.example.test",
+    OTEL_BETTER_STACK_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
+    ...overrides,
+  };
+}
+
 test("validateProductionConfig accepts valid production configuration", () => {
   const valid = {
     OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
@@ -105,7 +135,7 @@ test("validateProductionConfig accepts OTEL_ENABLED=false without endpoint", () 
   assert.equal(res.valid, true);
 });
 
-test("validateProductionConfig accepts OTEL_ENABLED=true with HTTPS non-loopback endpoint", () => {
+test("validateProductionConfig accepts OTEL_ENABLED=true with the pinned internal collector contract", () => {
   const valid = {
     OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
     APP_ENV: "production",
@@ -126,11 +156,89 @@ test("validateProductionConfig accepts OTEL_ENABLED=true with HTTPS non-loopback
     SMTP_HOST: "smtp.resend.com",
     SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
     OTEL_ENABLED: "true",
-    OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel-collector.internal:4318",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+    OTEL_COLLECTOR_IMAGE:
+      "otel/opentelemetry-collector-contrib:0.153.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    OTEL_BETTER_STACK_ENDPOINT: "https://telemetry.example.test",
+    OTEL_BETTER_STACK_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
   };
 
   const res = validateProductionConfig(valid);
   assert.equal(res.valid, true);
+});
+
+test("validateProductionConfig rejects malformed collector image references before Compose", () => {
+  const digest = "a".repeat(64);
+  const invalidImages = [
+    `@sha256:${digest}`,
+    `bad@@sha256:${digest}`,
+    `bad image@sha256:${digest}`,
+    "otel/opentelemetry-collector-contrib:0.153.0",
+  ];
+
+  for (const image of invalidImages) {
+    assert.throws(
+      () => validateProductionConfig(telemetryProductionConfig({ OTEL_COLLECTOR_IMAGE: image })),
+      /must be a valid full image reference pinned by a sha256 digest/,
+    );
+  }
+
+  assert.equal(
+    validateProductionConfig(
+      telemetryProductionConfig({
+        OTEL_COLLECTOR_IMAGE: `registry.example.test:5000/otel/collector:0.153.0@sha256:${digest}`,
+      }),
+    ).valid,
+    true,
+  );
+});
+
+test("validateProductionConfig rejects loopback Better Stack exporter origins", () => {
+  const loopbackOrigins = [
+    "https://localhost",
+    "https://collector.localhost",
+    "https://127.0.0.1",
+    "https://127.42.0.9",
+    "https://[::1]",
+  ];
+
+  for (const endpoint of loopbackOrigins) {
+    assert.throws(
+      () => validateProductionConfig(telemetryProductionConfig({ OTEL_BETTER_STACK_ENDPOINT: endpoint })),
+      /OTEL_BETTER_STACK_ENDPOINT must not use local loopback/,
+    );
+  }
+});
+
+test("validateProductionConfig rejects telemetry that bypasses the internal collector", () => {
+  const invalid = {
+    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    APP_ENV: "production",
+    NODE_ENV: "production",
+    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    SCORING_SESSION_SEAL_KEY: "a".repeat(43),
+    POSTGRES_DB: "matchday_prod",
+    POSTGRES_USER: "matchday_prod",
+    POSTGRES_PASSWORD: "secretpassword123",
+    REDIS_PASSWORD: "redispassword123",
+    DEEP_HEALTH_TOKEN: "b".repeat(32),
+    IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+    IDENTITY_FLOW_SEAL_KEY: "d".repeat(43),
+    SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "e".repeat(32),
+    SCORING_ACCESS_FALLBACK_CODE_HMAC_SECRET: "f".repeat(32),
+    EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
+    SMTP_HOST: "smtp.resend.com",
+    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    OTEL_ENABLED: "true",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "https://telemetry.example.test",
+    OTEL_COLLECTOR_IMAGE:
+      "otel/opentelemetry-collector-contrib:0.153.0@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    OTEL_BETTER_STACK_ENDPOINT: "https://telemetry.example.test",
+    OTEL_BETTER_STACK_TOKEN_FILE: "/opt/matchday/secrets/g3-otel/source-token",
+  };
+
+  assert.throws(() => validateProductionConfig(invalid), /must be exactly http:\/\/otel-collector:4318/);
 });
 
 test("validateProductionConfig rejects localhost loopback OTEL endpoint", () => {
@@ -157,7 +265,7 @@ test("validateProductionConfig rejects localhost loopback OTEL endpoint", () => 
     OTEL_EXPORTER_OTLP_ENDPOINT: "https://127.0.0.1:4318",
   };
 
-  assert.throws(() => validateProductionConfig(invalidEnabled), /cannot use local loopback/);
+  assert.throws(() => validateProductionConfig(invalidEnabled), /must be exactly http:\/\/otel-collector:4318/);
 
   const invalidDisabledWithLoopback = {
     ...invalidEnabled,

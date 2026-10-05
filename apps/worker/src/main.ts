@@ -1,5 +1,5 @@
 import { loadConfig } from "@matchday/config";
-import { createLogger, initializeMetrics, type MetricsRuntime } from "@matchday/observability";
+import { createLogger, startOpenTelemetryRuntime, type MetricsRuntime } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
 import { createProductionEmailOutboxWorker } from "./email-outbox-worker.js";
@@ -13,7 +13,14 @@ const logger = createLogger({
   level: config.logLevel,
   service: workerServiceName,
 });
-const metricsRuntime = initializeMetrics({ serviceName: workerServiceName });
+const telemetry = await startOpenTelemetryRuntime({
+  enabled: config.telemetry.enabled,
+  metricExportIntervalMs: config.telemetry.metricExportIntervalMs,
+  serviceName: workerServiceName,
+  serviceVersion: "0.1.0",
+  ...(config.telemetry.endpoint === undefined ? {} : { endpoint: config.telemetry.endpoint }),
+});
+const metricsRuntime = telemetry.metrics;
 const edgeCache = createWorkerEdgeCachePurgePort(config);
 const queuePrefix = resolveWorkerQueuePrefix(process.env);
 const runtime = new WorkerRuntime({
@@ -21,6 +28,7 @@ const runtime = new WorkerRuntime({
   redisUrl: config.redisUrl,
   ...(queuePrefix === undefined ? {} : { queuePrefix }),
   metrics: createWorkerMetrics(metricsRuntime),
+  tracing: telemetry.tracing,
   hooks: {
     onHealthChange: (health) => logger.info({ health }, "worker health changed"),
     onJobDeadLettered: (event) => logger.error({ event }, "worker job dead-lettered"),
@@ -66,9 +74,14 @@ const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     process.exitCode = 1;
     forceExit = true;
   } finally {
+    try {
+      await telemetry.shutdown();
+    } catch (error: unknown) {
+      logger.warn({ error }, "worker telemetry shutdown failed");
+    }
     logger.flush();
-    // OpenTelemetry or a logger transport may retain event-loop handles after
-    // the queue has shut down. A worker that has completed its bounded
+    // A logger transport may retain event-loop handles after the queue and
+    // telemetry SDK have shut down. A worker that has completed its bounded
     // shutdown must terminate, otherwise an orchestrator cannot distinguish a
     // drained worker from one still accepting jobs.
     process.exit(forceExit ? 1 : 0);

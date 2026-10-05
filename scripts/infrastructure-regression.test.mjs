@@ -81,6 +81,42 @@ test("4. Production compose and configuration do not require localhost loopback 
   );
 });
 
+test("4a. Production telemetry uses a private collector and file-backed provider credential", async () => {
+  const composeProd = await readFile(path.join(root, "infra/oci/compose.prod.yaml"), "utf8");
+  const collector = await readFile(path.join(root, "infra/oci/otel-collector.prod.yaml"), "utf8");
+
+  assert.ok(composeProd.includes('profiles: ["telemetry"]'), "Collector must remain opt-in");
+  assert.ok(composeProd.includes("ipv4_address: 172.31.0.14"), "Collector must use the production private subnet");
+  const collectorBlock = composeProd.match(/  otel-collector:[\s\S]*?\n  api:/u);
+  assert.ok(collectorBlock, "Production collector service must exist");
+  assert.equal(collectorBlock[0].includes("\n    ports:"), false, "Production collector must not publish host ports");
+  assert.ok(
+    collector.includes("bearertokenauth/betterstack") &&
+      collector.includes("filename: /run/secrets/betterstack-source-token"),
+    "Collector must load the provider token from the mounted secret file",
+  );
+  assert.ok(
+    collector.includes("endpoint: ${env:BETTERSTACK_OTLP_ENDPOINT}"),
+    "Collector exporter endpoint must come from non-secret production configuration",
+  );
+  assert.equal(collector.includes("s2784263"), false, "Collector config must not hardcode account-specific endpoints");
+});
+
+test("4b. Production deployment validates collector secret ownership before telemetry rollout", async () => {
+  const deployScript = await readFile(path.join(root, "infra/oci/deploy-prod.sh"), "utf8");
+
+  assert.ok(deployScript.includes("telemetry_token_mode"), "Deploy script must validate telemetry token mode");
+  assert.ok(deployScript.includes("root:root"), "Deploy script must require root ownership for telemetry token");
+  assert.ok(
+    deployScript.includes("--profile telemetry up -d otel-collector"),
+    "Deploy script must start the collector explicitly when telemetry is enabled",
+  );
+  assert.ok(
+    deployScript.includes("http://otel-collector:13133/"),
+    "Deploy script must prove API-to-collector network reachability",
+  );
+});
+
 test("5. APP_ENV=production passes configuration validation cleanly without fake telemetry", async () => {
   const validProduction = {
     OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",

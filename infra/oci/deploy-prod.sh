@@ -37,6 +37,38 @@ node scripts/validate-production-config.mjs infra/oci/.env.prod
 echo "[deploy-prod] Pre-deploy: checking migration safety..."
 node scripts/certify-gate-f-migrations.mjs "$CANDIDATE_SHA"
 
+read_prod_env() {
+  node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    import { parseEnvContent } from "./scripts/validate-production-config.mjs";
+    const env = parseEnvContent(readFileSync("infra/oci/.env.prod", "utf8"));
+    process.stdout.write(env[process.argv[1]] ?? "");
+  ' "$1"
+}
+
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    sudo -n "$@"
+  fi
+}
+
+telemetry_enabled="$(read_prod_env OTEL_ENABLED)"
+if [ "$telemetry_enabled" = "true" ]; then
+  telemetry_token_file="$(read_prod_env OTEL_BETTER_STACK_TOKEN_FILE)"
+  if ! as_root test -f "$telemetry_token_file"; then
+    echo "Production telemetry token file is missing or cannot be inspected as root" >&2
+    exit 1
+  fi
+  telemetry_token_mode="$(as_root stat -c '%a' "$telemetry_token_file")"
+  telemetry_token_owner="$(as_root stat -c '%U:%G' "$telemetry_token_file")"
+  if [ "$telemetry_token_mode" != "600" ] || [ "$telemetry_token_owner" != "root:root" ]; then
+    echo "Production telemetry token file must be root:root mode 600" >&2
+    exit 1
+  fi
+fi
+
 # Ensure production backend network exists deterministically
 if ! docker network inspect matchday-prod_backend >/dev/null 2>&1; then
   echo "[deploy-prod] Creating matchday-prod_backend network (172.31.0.0/24)..."
@@ -55,7 +87,25 @@ fi
 echo "[deploy-prod] Building and rolling out production stack..."
 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml build --pull api web worker migrate
 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d --remove-orphans api web worker
+if [ "$telemetry_enabled" = "true" ]; then
+  echo "[deploy-prod] Starting production OpenTelemetry Collector..."
+  docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile telemetry up -d otel-collector
+  for attempt in $(seq 1 30); do
+    if curl --silent --show-error --fail --max-time 3 http://172.31.0.14:13133/ >/dev/null 2>&1; then
+      break
+    fi
+    if [ "$attempt" -eq 30 ]; then
+      echo "Production OpenTelemetry Collector failed health probe" >&2
+      docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile telemetry ps
+      exit 1
+    fi
+    sleep 1
+  done
+  docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile telemetry up -d --remove-orphans api web worker
+else
+  docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile telemetry rm -sf otel-collector >/dev/null 2>&1
+  docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d --remove-orphans api web worker
+fi
 
 # Reload Caddy reverse proxy; fail closed if reload fails
 if [ -n "$caddy_container" ]; then
@@ -75,6 +125,13 @@ for attempt in $(seq 1 30); do
   fi
   sleep 2
 done
+
+if [ "$telemetry_enabled" = "true" ]; then
+  if ! docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T api node -e "fetch('http://otel-collector:13133/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
+    echo "Production API cannot reach the OpenTelemetry Collector health endpoint" >&2
+    exit 1
+  fi
+fi
 
 echo "[deploy-prod] Verifying release identities..."
 actual_sha="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T api node -e 'fetch("http://127.0.0.1:4000/api/v1/meta/build").then((r) => r.json()).then((b) => process.stdout.write(b.git_sha ?? "")).catch(() => process.exit(1))' | tr -d '\r\n')"

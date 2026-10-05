@@ -22,6 +22,23 @@ export function parseEnvContent(content) {
   return env;
 }
 
+function isLoopbackHostname(hostname) {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "::1" ||
+    normalized === "0:0:0:0:0:0:0:1" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(normalized)
+  );
+}
+
+function isPinnedCollectorImageReference(value) {
+  return /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*)(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[a-f0-9]{64}$/u.test(
+    value,
+  );
+}
+
 export function validateProductionConfig(env) {
   const errors = [];
 
@@ -74,30 +91,60 @@ export function validateProductionConfig(env) {
       errors.push("Production POSTGRES_DB and POSTGRES_USER must be isolated from staging (got matchday)");
     }
 
-    // OTEL validation in production:
-    // If OTEL_ENABLED is true, require non-localhost HTTPS endpoint.
-    // If OTEL_ENABLED is false, reject fake localhost loopback endpoints.
+    // Production telemetry is collector-only. Application containers send
+    // unauthenticated OTLP on the isolated Docker bridge; only the collector
+    // receives the provider token and exports over HTTPS.
     const otelEnabled = env.OTEL_ENABLED === "true";
     if (otelEnabled) {
-      if (!env.OTEL_EXPORTER_OTLP_ENDPOINT || env.OTEL_EXPORTER_OTLP_ENDPOINT.trim() === "") {
-        errors.push("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED is true");
+      if (env.OTEL_EXPORTER_OTLP_ENDPOINT !== "http://otel-collector:4318") {
+        errors.push(
+          "Production OTEL_EXPORTER_OTLP_ENDPOINT must be exactly http://otel-collector:4318 when telemetry is enabled",
+        );
+      }
+
+      if (!env.OTEL_COLLECTOR_IMAGE || env.OTEL_COLLECTOR_IMAGE.trim() === "") {
+        errors.push("OTEL_COLLECTOR_IMAGE is required when OTEL_ENABLED is true");
+      } else if (!isPinnedCollectorImageReference(env.OTEL_COLLECTOR_IMAGE)) {
+        errors.push("OTEL_COLLECTOR_IMAGE must be a valid full image reference pinned by a sha256 digest");
+      }
+
+      if (!env.OTEL_BETTER_STACK_ENDPOINT || env.OTEL_BETTER_STACK_ENDPOINT.trim() === "") {
+        errors.push("OTEL_BETTER_STACK_ENDPOINT is required when OTEL_ENABLED is true");
       } else {
         try {
-          const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
-          if (otelUrl.protocol !== "https:") {
-            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS");
+          const exporterUrl = new URL(env.OTEL_BETTER_STACK_ENDPOINT);
+          if (
+            exporterUrl.protocol !== "https:" ||
+            exporterUrl.username ||
+            exporterUrl.password ||
+            exporterUrl.search ||
+            exporterUrl.hash ||
+            exporterUrl.pathname !== "/"
+          ) {
+            errors.push(
+              "OTEL_BETTER_STACK_ENDPOINT must be one HTTPS origin without credentials, path, query, or fragment",
+            );
           }
-          if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
-            errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT cannot use local loopback");
+          if (isLoopbackHostname(exporterUrl.hostname)) {
+            errors.push("OTEL_BETTER_STACK_ENDPOINT must not use local loopback");
           }
         } catch {
-          errors.push("Production OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL");
+          errors.push("OTEL_BETTER_STACK_ENDPOINT must be a valid HTTPS URL");
         }
+      }
+
+      if (!env.OTEL_BETTER_STACK_TOKEN_FILE || env.OTEL_BETTER_STACK_TOKEN_FILE.trim() === "") {
+        errors.push("OTEL_BETTER_STACK_TOKEN_FILE is required when OTEL_ENABLED is true");
+      } else if (
+        !env.OTEL_BETTER_STACK_TOKEN_FILE.startsWith("/opt/matchday/secrets/") ||
+        env.OTEL_BETTER_STACK_TOKEN_FILE.includes("..")
+      ) {
+        errors.push("OTEL_BETTER_STACK_TOKEN_FILE must be an absolute path under /opt/matchday/secrets/");
       }
     } else if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
       try {
         const otelUrl = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT);
-        if (otelUrl.hostname === "127.0.0.1" || otelUrl.hostname === "localhost" || otelUrl.hostname === "::1") {
+        if (isLoopbackHostname(otelUrl.hostname)) {
           errors.push("Production configuration must not specify localhost loopback OTEL_EXPORTER_OTLP_ENDPOINT");
         }
       } catch {
@@ -105,7 +152,6 @@ export function validateProductionConfig(env) {
       }
     }
   }
-
   if (errors.length > 0) {
     throw new Error(`Production configuration validation failed:\n- ${errors.join("\n- ")}`);
   }
