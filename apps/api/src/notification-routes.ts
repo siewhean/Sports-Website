@@ -18,8 +18,8 @@ export async function registerNotificationRoutes(
   options: {
     notificationService: NotificationService;
     identityRequests: IdentityRequestContext;
-    emailWebhookSecret?: string;
-    metrics?: EmailDeliveryEventMetricRecorder;
+    emailWebhookSecret?: string | undefined;
+    metrics?: EmailDeliveryEventMetricRecorder | undefined;
   },
 ) {
   const readActor = async (request: FastifyRequest) => {

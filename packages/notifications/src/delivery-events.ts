@@ -146,13 +146,13 @@ export function mapResendEventTypeToNeutral(resendType: string): {
 
 export function parseResendDeliveryEvent(
   headers: {
-    msgId?: string;
-    timestamp?: string;
-    signature?: string;
+    msgId?: string | undefined;
+    timestamp?: string | undefined;
+    signature?: string | undefined;
   },
   rawBody: string,
   secret: string | undefined,
-  nowSeconds?: number,
+  nowSeconds?: number | undefined,
 ): RecordEmailDeliveryEventInput {
   const verified = verifyWebhookSignature({
     rawBody,
