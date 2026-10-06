@@ -87,6 +87,8 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
 
   const seoPassed =
     seoEvidence.errors.length === 0 &&
+    (seoEvidence.evidence?.production_origin === "https://matchday.poladex.shop" ||
+      seoEvidence.evidence?.hostname === "matchday.poladex.shop") &&
     seoEvidence.evidence?.robots_txt_status === "PASS" &&
     seoEvidence.evidence?.sitemap_status === "PASS";
 
@@ -117,6 +119,8 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
 
   const emailPassed =
     emailEvidence.errors.length === 0 &&
+    emailEvidence.evidence?.provider === "resend_transactional" &&
+    emailEvidence.evidence?.domain === "matchday.poladex.shop" &&
     emailEvidence.evidence?.spf === "PASS" &&
     emailEvidence.evidence?.dkim === "PASS" &&
     emailEvidence.evidence?.dmarc === "PASS" &&
