@@ -4,6 +4,8 @@ import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadAndValidateEvidence } from "./validate-external-evidence.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function requireSha(value) {
@@ -20,15 +22,31 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   await mkdir(artifactsDir, { recursive: true });
 
   // 1. DNS & TLS (OPS-014, Gate F Section 5)
+  // Requires PRODUCTION_LIVE_PROBE or PROVIDER_RECEIPT
+  const dnsTlsEvidence = await loadAndValidateEvidence(sha, options.dnsTlsEvidenceFile, {
+    allowedEvidenceClasses: ["PRODUCTION_LIVE_PROBE", "PROVIDER_RECEIPT"],
+    requireProductionEnvironment: true,
+  });
+
+  const dnsTlsPassed =
+    dnsTlsEvidence.errors.length === 0 &&
+    dnsTlsEvidence.evidence?.hostname === "matchday.poladex.shop" &&
+    dnsTlsEvidence.evidence?.tls_version === "TLS 1.3" &&
+    dnsTlsEvidence.evidence?.auto_renewal === "caddy_acme_letsencrypt" &&
+    dnsTlsEvidence.evidence?.hsts_configured === true &&
+    dnsTlsEvidence.evidence?.redirect_http_to_https === true;
+
   const dnsTls = {
     qa_item: "OPS-014",
     candidate_sha: sha,
     hostname: "matchday.poladex.shop",
-    tls_version: "TLS 1.3",
-    auto_renewal: "caddy_acme_letsencrypt",
-    hsts_configured: true,
-    redirect_http_to_https: true,
-    verdict: "PASS",
+    tls_version: dnsTlsPassed ? "TLS 1.3" : "PENDING_VERIFICATION",
+    auto_renewal: dnsTlsPassed ? "caddy_acme_letsencrypt" : "PENDING_VERIFICATION",
+    hsts_configured: dnsTlsPassed ? true : false,
+    redirect_http_to_https: dnsTlsPassed ? true : false,
+    verdict: dnsTlsPassed ? "PASS" : "PENDING",
+    evidence_status: dnsTlsPassed ? "VERIFIED" : "PENDING_PRODUCTION_EVIDENCE",
+    pending_reasons: dnsTlsPassed ? [] : dnsTlsEvidence.errors,
     generated_at: new Date().toISOString(),
   };
   dnsTls.receipt_sha256 = createHash("sha256")
@@ -37,6 +55,7 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   await writeFile(path.join(artifactsDir, "gate-f-dns-tls.json"), JSON.stringify(dnsTls, null, 2));
 
   // 2. Security Recertification (Section 21)
+  // Static code / CI automated scope passes, manual pentest is waived per ADR
   const security = {
     qa_item: "GATE-F-SECURITY",
     candidate_sha: sha,
@@ -60,14 +79,29 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   await writeFile(path.join(artifactsDir, "gate-f-security.json"), JSON.stringify(security, null, 2));
 
   // 3. SEO Recertification (Section 23)
+  // Requires PRODUCTION_LIVE_PROBE or PROVIDER_RECEIPT
+  const seoEvidence = await loadAndValidateEvidence(sha, options.seoEvidenceFile, {
+    allowedEvidenceClasses: ["PRODUCTION_LIVE_PROBE", "PROVIDER_RECEIPT"],
+    requireProductionEnvironment: true,
+  });
+
+  const seoPassed =
+    seoEvidence.errors.length === 0 &&
+    (seoEvidence.evidence?.production_origin === "https://matchday.poladex.shop" ||
+      seoEvidence.evidence?.hostname === "matchday.poladex.shop") &&
+    seoEvidence.evidence?.robots_txt_status === "PASS" &&
+    seoEvidence.evidence?.sitemap_status === "PASS";
+
   const seo = {
     qa_item: "GATE-F-SEO",
     candidate_sha: sha,
     production_origin: "https://matchday.poladex.shop",
-    robots_txt_status: "PASS",
-    sitemap_status: "PASS",
+    robots_txt_status: seoPassed ? "PASS" : "PENDING_LIVE_PROBE",
+    sitemap_status: seoPassed ? "PASS" : "PENDING_LIVE_PROBE",
     staging_leakage_detected: false,
-    verdict: "PASS",
+    verdict: seoPassed ? "PASS" : "PENDING",
+    evidence_status: seoPassed ? "VERIFIED" : "PENDING_PRODUCTION_EVIDENCE",
+    pending_reasons: seoPassed ? [] : seoEvidence.errors,
     generated_at: new Date().toISOString(),
   };
   seo.receipt_sha256 = createHash("sha256")
@@ -76,16 +110,37 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   await writeFile(path.join(artifactsDir, "gate-f-seo.json"), JSON.stringify(seo, null, 2));
 
   // 4. Email Recertification (OPS-017, Section 24)
+  // Requires PROVIDER_RECEIPT (Resend) or PRODUCTION_LIVE_PROBE
+  // Note: Bounce handling is also pending implementation in packages/notifications
+  const emailEvidence = await loadAndValidateEvidence(sha, options.emailEvidenceFile, {
+    allowedEvidenceClasses: ["PROVIDER_RECEIPT", "PRODUCTION_LIVE_PROBE"],
+    requireProductionEnvironment: true,
+  });
+
+  const emailPassed =
+    emailEvidence.errors.length === 0 &&
+    emailEvidence.evidence?.provider === "resend_transactional" &&
+    emailEvidence.evidence?.domain === "matchday.poladex.shop" &&
+    emailEvidence.evidence?.spf === "PASS" &&
+    emailEvidence.evidence?.dkim === "PASS" &&
+    emailEvidence.evidence?.dmarc === "PASS" &&
+    emailEvidence.evidence?.bounce_handling === "PASS";
+
   const email = {
     qa_item: "OPS-017",
     candidate_sha: sha,
     provider: "resend_transactional",
     domain: "matchday.poladex.shop",
-    spf: "PASS",
-    dkim: "PASS",
-    dmarc: "PASS",
+    spf: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
+    dkim: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
+    dmarc: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
+    bounce_handling: emailPassed ? "PASS" : "PENDING_IMPLEMENTATION",
     template_tests: "PASS",
-    verdict: "PASS",
+    verdict: emailPassed ? "PASS" : "PENDING",
+    evidence_status: emailPassed ? "VERIFIED" : "PENDING_PRODUCTION_EVIDENCE",
+    pending_reasons: emailPassed
+      ? []
+      : [...emailEvidence.errors, "bounce_handling_not_implemented_in_packages_notifications"],
     generated_at: new Date().toISOString(),
   };
   email.receipt_sha256 = createHash("sha256")
@@ -135,7 +190,12 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
   runGateFRecertifications(sha)
-    .then(() => console.log("✓ Gate F recertifications completed: DNS/TLS, Security, SEO, Email, A11y, Legal"))
+    .then((res) => {
+      console.log("✓ Gate F recertifications completed: DNS/TLS, Security, SEO, Email, A11y, Legal");
+      if (res.dnsTls.verdict !== "PASS" || res.seo.verdict !== "PASS" || res.email.verdict !== "PASS") {
+        process.exitCode = 1;
+      }
+    })
     .catch((e) => {
       console.error(e.message);
       process.exit(1);

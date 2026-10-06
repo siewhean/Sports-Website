@@ -29,19 +29,50 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
   const migrations = await certifyGateFMigrations(sha, { artifactsDir });
 
   console.log(`[simulation] 2. Executing automated rollback drill...`);
-  const rollback = await runGateFRollbackDrill(sha, { artifactsDir });
+  const rollback = await runGateFRollbackDrill(sha, {
+    artifactsDir,
+    evidenceFile: options.rollbackEvidenceFile,
+  });
 
   console.log(`[simulation] 3. Executing backup and restore verification...`);
-  const backup = await runGateFBackupRestoreAudit(sha, { artifactsDir, evidenceFile: options.backupEvidenceFile });
+  const backup = await runGateFBackupRestoreAudit(sha, {
+    artifactsDir,
+    evidenceFile: options.backupEvidenceFile,
+  });
 
   console.log(`[simulation] 4. Executing CDN / edge cache purge audit...`);
-  const cache = await runGateFCachePurgeAudit(sha, { artifactsDir });
+  const cache = await runGateFCachePurgeAudit(sha, {
+    artifactsDir,
+    evidenceFile: options.cachePurgeEvidenceFile,
+  });
 
   console.log(`[simulation] 5. Executing operations, monitoring, and alert routing drill...`);
-  const ops = await runGateFOpsAudit(sha, { artifactsDir });
+  const ops = await runGateFOpsAudit(sha, {
+    artifactsDir,
+    sloEvidenceFile: options.sloEvidenceFile,
+    alertEvidenceFile: options.alertEvidenceFile,
+    costEvidenceFile: options.costEvidenceFile,
+  });
 
   console.log(`[simulation] 6. Executing production recertifications (DNS/TLS, Security, SEO, Email, A11y, Legal)...`);
-  const recerts = await runGateFRecertifications(sha, { artifactsDir });
+  const recerts = await runGateFRecertifications(sha, {
+    artifactsDir,
+    dnsTlsEvidenceFile: options.dnsTlsEvidenceFile,
+    seoEvidenceFile: options.seoEvidenceFile,
+    emailEvidenceFile: options.emailEvidenceFile,
+  });
+
+  const pendingReasons = ["simulation_is_not_production_certification"];
+  if (backup.verdict !== "PASS") pendingReasons.push("production_backup_evidence_pending");
+  if (rollback.verdict !== "PASS") pendingReasons.push("production_rollback_evidence_pending");
+  if (cache.verdict !== "PASS") pendingReasons.push("production_cache_purge_evidence_pending");
+  if (ops.sloBaseline.verdict !== "PASS") pendingReasons.push("slo_baseline_evidence_pending");
+  if (ops.alertRouting.verdict !== "PASS") pendingReasons.push("alert_routing_evidence_pending");
+  if (ops.costControls.verdict !== "PASS") pendingReasons.push("cost_controls_evidence_pending");
+  if (ops.featureFlags.verdict !== "PASS") pendingReasons.push("feature_flags_implementation_pending");
+  if (recerts.dnsTls.verdict !== "PASS") pendingReasons.push("dns_tls_evidence_pending");
+  if (recerts.seo.verdict !== "PASS") pendingReasons.push("seo_evidence_pending");
+  if (recerts.email.verdict !== "PASS") pendingReasons.push("email_evidence_pending");
 
   const summary = {
     qa_item: "GATE-F-PRODUCTION-SIMULATION",
@@ -49,10 +80,7 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
     simulation_environment: "isolated_staging_simulation_stack",
     verdict: "PENDING",
     production_certification: false,
-    pending_reasons: [
-      "simulation_is_not_production_certification",
-      ...(backup.verdict === "PASS" ? [] : ["production_backup_evidence_pending"]),
-    ],
+    pending_reasons: pendingReasons,
     components: {
       migration_expand_contract: migrations.verdict,
       zero_downtime_rollback: rollback.verdict,

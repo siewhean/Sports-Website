@@ -138,6 +138,19 @@ export async function validateGateF(candidateSha, options = {}) {
 
   await validateProductionBackup(cert, expectedSha, artifactsDir, certFile);
 
+  // Validate that simulation receipts match expected results and simulation cannot certify production
+  if (cert.simulation?.receipts) {
+    const receipts = cert.simulation.receipts;
+    for (const [key, val] of Object.entries(receipts)) {
+      if (cert.simulation.conclusion === "PASS") {
+        const allowedSuccess = ["PASS", "PASS_AUTOMATED_SCOPE", "PASS_TECHNICAL_PACKAGE_WITH_DEFERMENT"];
+        if (!allowedSuccess.includes(val)) {
+          throw new Error(`Gate F simulation declared PASS but component ${key} has nonpassing status: ${val}`);
+        }
+      }
+    }
+  }
+
   return {
     valid: true,
     gate: "F",
