@@ -29,6 +29,11 @@ import {
   noopScoringAccessHmacMetrics,
   type ScoringAccessHmacMetricRecorder,
 } from "./scoring-access-hmac-metrics.js";
+import {
+  createEmailDeliveryEventMetrics,
+  noopEmailDeliveryEventMetrics,
+  type EmailDeliveryEventMetricRecorder,
+} from "./email-delivery-metrics.js";
 
 const serviceName = "matchday-api";
 const serviceVersion = "0.1.0";
@@ -50,6 +55,7 @@ export interface RequestTelemetryHandle {
 
 export interface ApiTelemetry {
   readonly scoringAccessHmacMetrics: ScoringAccessHmacMetricRecorder;
+  readonly emailDeliveryEventMetrics: EmailDeliveryEventMetricRecorder;
   startRequest(input: RequestTelemetryInput): RequestTelemetryHandle;
   shutdown(): Promise<void>;
 }
@@ -72,6 +78,7 @@ class DisabledRequestTelemetry implements RequestTelemetryHandle {
 
 class DisabledApiTelemetry implements ApiTelemetry {
   readonly scoringAccessHmacMetrics = noopScoringAccessHmacMetrics;
+  readonly emailDeliveryEventMetrics = noopEmailDeliveryEventMetrics;
   startRequest(input: RequestTelemetryInput): RequestTelemetryHandle {
     return new DisabledRequestTelemetry(input.requestId);
   }
@@ -204,6 +211,7 @@ class OpenTelemetryRequest implements RequestTelemetryHandle {
 
 class OpenTelemetryApiTelemetry implements ApiTelemetry {
   readonly scoringAccessHmacMetrics: ScoringAccessHmacMetricRecorder;
+  readonly emailDeliveryEventMetrics: EmailDeliveryEventMetricRecorder;
   readonly #errorReporter = createSpanErrorReporter();
   readonly #requestCount: Counter;
   readonly #requestDuration: Histogram;
@@ -216,6 +224,7 @@ class OpenTelemetryApiTelemetry implements ApiTelemetry {
     this.#tracer = runtime.tracerProvider.getTracer(serviceName, serviceVersion);
     const meter = runtime.meterProvider.getMeter(serviceName, serviceVersion);
     this.scoringAccessHmacMetrics = createScoringAccessHmacMetrics(meter);
+    this.emailDeliveryEventMetrics = createEmailDeliveryEventMetrics(meter);
     this.#requestCount = meter.createCounter("http.server.request.count", {
       description: "Completed inbound HTTP requests",
       unit: "{request}",

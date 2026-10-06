@@ -2,7 +2,8 @@ import { Type } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
-import type { NotificationService } from "@matchday/notifications";
+import { parseResendDeliveryEvent, type NotificationService } from "@matchday/notifications";
+import type { EmailDeliveryEventMetricRecorder } from "./email-delivery-metrics.js";
 
 const Json = Type.Unknown();
 const ErrorResponse = Type.Object(
@@ -17,6 +18,8 @@ export async function registerNotificationRoutes(
   options: {
     notificationService: NotificationService;
     identityRequests: IdentityRequestContext;
+    emailWebhookSecret?: string;
+    metrics?: EmailDeliveryEventMetricRecorder;
   },
 ) {
   const readActor = async (request: FastifyRequest) => {
@@ -113,6 +116,70 @@ export async function registerNotificationRoutes(
         inAppEnabled: request.body.in_app_enabled,
         emailEnabled: request.body.email_enabled,
       });
+    },
+  );
+
+  // Transactional Email Delivery Webhook (Resend)
+  app.post(
+    "/api/v1/notifications/webhooks/resend",
+    {
+      schema: {
+        response: { 200: Json, ...MutationErrors },
+        tags: ["notifications"],
+      },
+    },
+    async (request) => {
+      const secret = options.emailWebhookSecret ?? process.env.EMAIL_PROVIDER_WEBHOOK_SECRET;
+      if (!secret || secret.trim() === "") {
+        options.metrics?.recordRejection("resend", "unconfigured_secret");
+        throw new ApiError(503, ErrorCode.SERVICE_UNAVAILABLE, "Email provider webhook authentication not configured");
+      }
+
+      const msgId = request.headers["svix-id"] as string | undefined;
+      const timestamp = request.headers["svix-timestamp"] as string | undefined;
+      const signature = request.headers["svix-signature"] as string | undefined;
+
+      const rawBody = (request as unknown as { rawBody?: string }).rawBody ?? JSON.stringify(request.body);
+
+      let eventInput;
+      try {
+        eventInput = parseResendDeliveryEvent({ msgId, timestamp, signature }, rawBody, secret);
+      } catch (err: unknown) {
+        options.metrics?.recordRejection("resend", "auth_or_parse_failure");
+        throw new ApiError(
+          401,
+          ErrorCode.AUTHENTICATION_REQUIRED,
+          (err as Error).message || "Invalid webhook signature or payload",
+        );
+      }
+
+      let result;
+      try {
+        result = await options.notificationService.recordDeliveryEvent(eventInput);
+      } catch (err: unknown) {
+        request.log.error({ err }, "recordDeliveryEvent error");
+        console.error("DEBUG recordDeliveryEvent failed:", err);
+        throw err;
+      }
+
+      if (result.isDuplicate) {
+        options.metrics?.recordEvent(eventInput.provider, eventInput.eventType, "duplicate");
+      } else {
+        options.metrics?.recordEvent(eventInput.provider, eventInput.eventType, "processed");
+        if (eventInput.eventType === "bounced") {
+          options.metrics?.recordBounce(eventInput.provider, eventInput.bounceType ?? "unknown");
+        } else if (eventInput.eventType === "complained") {
+          options.metrics?.recordComplaint(eventInput.provider);
+        }
+      }
+
+      return {
+        received: true,
+        event_id: result.event.id,
+        provider_event_id: result.event.providerEventId,
+        is_duplicate: result.isDuplicate,
+        outbox_updated: result.outboxItem !== null,
+      };
     },
   );
 }

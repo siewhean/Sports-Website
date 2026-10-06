@@ -135,6 +135,16 @@ export function validateProductionConfig(env) {
     ) {
       errors.push("OTEL_COLLECTOR_EXTERNAL_ENDPOINT is required for enabled internal collector telemetry");
     }
+
+    if (env.EMAIL_BOUNCE_HANDLING_ENABLED === "true") {
+      if (!env.EMAIL_PROVIDER_WEBHOOK_SECRET || env.EMAIL_PROVIDER_WEBHOOK_SECRET.trim() === "") {
+        errors.push(
+          "EMAIL_PROVIDER_WEBHOOK_SECRET is required in production when EMAIL_BOUNCE_HANDLING_ENABLED is true",
+        );
+      } else if (env.EMAIL_PROVIDER_WEBHOOK_SECRET.includes("CHANGE_ME")) {
+        errors.push("EMAIL_PROVIDER_WEBHOOK_SECRET contains unresolved placeholder CHANGE_ME");
+      }
+    }
   }
 
   if (errors.length > 0) {

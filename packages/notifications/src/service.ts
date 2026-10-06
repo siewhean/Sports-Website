@@ -125,4 +125,13 @@ export class NotificationService {
     requireNonEmpty(input.notificationType, "Notification type");
     return this.store.setPreference({ ...input, updatedAt: this.options.now().toISOString() });
   }
+
+  async recordDeliveryEvent(
+    input: import("./types.js").RecordEmailDeliveryEventInput,
+  ): Promise<import("./types.js").RecordEmailDeliveryEventResult> {
+    if (!this.store.recordDeliveryEvent) {
+      throw new Error("Underlying notification store does not support recording email delivery events");
+    }
+    return this.store.recordDeliveryEvent(input);
+  }
 }

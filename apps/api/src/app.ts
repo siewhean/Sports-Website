@@ -180,7 +180,10 @@ export async function buildApp(options: BuildAppOptions) {
   const requestRoute = (request: FastifyRequest): string => request.routeOptions.url || "/unmatched";
 
   app.addHook("preParsing", async (request, _reply, payload) => {
-    if (request.url.startsWith("/api/v1/billing/webhook")) {
+    if (
+      request.url.startsWith("/api/v1/billing/webhook") ||
+      request.url.startsWith("/api/v1/notifications/webhooks/resend")
+    ) {
       const chunks: Buffer[] = [];
       for await (const chunk of payload) {
         chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
@@ -666,6 +669,8 @@ export async function buildApp(options: BuildAppOptions) {
       await registerNotificationRoutes(app as unknown as FastifyInstance, {
         notificationService: options.notificationService,
         identityRequests,
+        emailWebhookSecret: options.config.emailWebhookSecret,
+        metrics: telemetry.emailDeliveryEventMetrics,
       });
     }
   }

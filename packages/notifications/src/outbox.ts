@@ -40,6 +40,13 @@ export interface EmailOutboxStore {
     message: string,
     availableAt: string | null,
   ): Promise<EmailOutboxItem>;
+  findByProviderMessageId(providerMessageId: string): Promise<EmailOutboxItem | null>;
+  updateStatusByProviderMessageId(
+    providerMessageId: string,
+    status: EmailOutboxStatus,
+    error?: string | null,
+    classification?: DeliveryFailureClassification | null,
+  ): Promise<EmailOutboxItem | null>;
 }
 
 function cloneItem(item: EmailOutboxItem): EmailOutboxItem {
@@ -139,6 +146,36 @@ export class InMemoryEmailOutboxStore implements EmailOutboxStore {
     };
     this.#items.set(id, updated);
     return cloneItem(updated);
+  }
+
+  async findByProviderMessageId(providerMessageId: string): Promise<EmailOutboxItem | null> {
+    for (const item of this.#items.values()) {
+      if (item.providerMessageId === providerMessageId) {
+        return cloneItem(item);
+      }
+    }
+    return null;
+  }
+
+  async updateStatusByProviderMessageId(
+    providerMessageId: string,
+    status: EmailOutboxStatus,
+    error?: string | null,
+    classification?: DeliveryFailureClassification | null,
+  ): Promise<EmailOutboxItem | null> {
+    for (const [id, item] of this.#items.entries()) {
+      if (item.providerMessageId === providerMessageId) {
+        const updated: EmailOutboxItem = {
+          ...item,
+          status,
+          ...(error !== undefined ? { lastError: error } : {}),
+          ...(classification !== undefined ? { lastFailureClassification: classification } : {}),
+        };
+        this.#items.set(id, updated);
+        return cloneItem(updated);
+      }
+    }
+    return null;
   }
 
   #require(id: string): EmailOutboxItem {
