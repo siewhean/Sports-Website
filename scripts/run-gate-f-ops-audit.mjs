@@ -154,6 +154,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.log(`  Alert Routing (OPS-005): ${res.alertRouting.verdict}`);
       console.log(`  Feature Flags (OPS-018): ${res.featureFlags.verdict}`);
       console.log(`  Cost Controls (OPS-016): ${res.costControls.verdict}`);
+      if (
+        res.sloBaseline.verdict !== "PASS" ||
+        res.alertRouting.verdict !== "PASS" ||
+        res.featureFlags.verdict !== "PASS" ||
+        res.costControls.verdict !== "PASS"
+      ) {
+        process.exitCode = 1;
+      }
     })
     .catch((e) => {
       console.error(e.message);

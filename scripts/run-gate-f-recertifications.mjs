@@ -28,7 +28,14 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
     requireProductionEnvironment: true,
   });
 
-  const dnsTlsPassed = dnsTlsEvidence.errors.length === 0 && dnsTlsEvidence.evidence?.tls_version === "TLS 1.3";
+  const dnsTlsPassed =
+    dnsTlsEvidence.errors.length === 0 &&
+    dnsTlsEvidence.evidence?.hostname === "matchday.poladex.shop" &&
+    dnsTlsEvidence.evidence?.tls_version === "TLS 1.3" &&
+    dnsTlsEvidence.evidence?.auto_renewal === "caddy_acme_letsencrypt" &&
+    dnsTlsEvidence.evidence?.hsts_configured === true &&
+    dnsTlsEvidence.evidence?.redirect_http_to_https === true;
+
   const dnsTls = {
     qa_item: "OPS-014",
     candidate_sha: sha,
@@ -179,7 +186,12 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
   runGateFRecertifications(sha)
-    .then(() => console.log("✓ Gate F recertifications completed: DNS/TLS, Security, SEO, Email, A11y, Legal"))
+    .then((res) => {
+      console.log("✓ Gate F recertifications completed: DNS/TLS, Security, SEO, Email, A11y, Legal");
+      if (res.dnsTls.verdict !== "PASS" || res.seo.verdict !== "PASS" || res.email.verdict !== "PASS") {
+        process.exitCode = 1;
+      }
+    })
     .catch((e) => {
       console.error(e.message);
       process.exit(1);
