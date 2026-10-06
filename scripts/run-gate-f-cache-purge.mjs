@@ -31,7 +31,13 @@ export async function runGateFCachePurgeAudit(candidateSha, options = {}) {
     requireProductionEnvironment: true,
   });
 
-  const isPass = validation.errors.length === 0;
+  const hasSpecificProof =
+    validation.errors.length === 0 &&
+    Boolean(validation.evidence?.purge_id) &&
+    Boolean(validation.evidence?.purge_scope) &&
+    (validation.evidence?.purge_result === "SUCCESS" || validation.evidence?.purge_status === "COMPLETED");
+
+  const isPass = hasSpecificProof;
 
   const receipt = {
     qa_item: "OPS-009",

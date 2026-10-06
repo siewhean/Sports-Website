@@ -32,7 +32,12 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
     allowedEvidenceClasses: ["PRODUCTION_LIVE_PROBE", "PROVIDER_RECEIPT", "OPERATOR_CAPTURE"],
     requireProductionEnvironment: true,
   });
-  const isSloPass = sloValidation.errors.length === 0;
+  const isSloPass =
+    sloValidation.errors.length === 0 &&
+    Boolean(sloValidation.evidence?.probe_id) &&
+    sloValidation.evidence?.availability_observed_percent >= 99.9 &&
+    sloValidation.evidence?.scoring_p95_observed_ms <= 500 &&
+    sloValidation.evidence?.public_read_p95_observed_ms <= 2500;
 
   const sloBaseline = {
     qa_item: "OPS-004",
@@ -68,7 +73,11 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
     allowedEvidenceClasses: ["PROVIDER_RECEIPT", "OPERATOR_CAPTURE"],
     requireProductionEnvironment: true,
   });
-  const isAlertPass = alertValidation.errors.length === 0;
+  const isAlertPass =
+    alertValidation.errors.length === 0 &&
+    Boolean(alertValidation.evidence?.alert_drill_id) &&
+    alertValidation.evidence?.all_routes_verified === true &&
+    alertValidation.evidence?.delivery_acknowledged === true;
 
   const alertRouting = {
     qa_item: "OPS-005",
@@ -117,7 +126,11 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
     allowedEvidenceClasses: ["PROVIDER_RECEIPT", "OPERATOR_CAPTURE"],
     requireProductionEnvironment: true,
   });
-  const isCostPass = costValidation.errors.length === 0;
+  const isCostPass =
+    costValidation.errors.length === 0 &&
+    Boolean(costValidation.evidence?.billing_account_id) &&
+    costValidation.evidence?.budget_alerts_configured === true &&
+    costValidation.evidence?.anomaly_detection_active === true;
 
   const costControls = {
     qa_item: "OPS-016",

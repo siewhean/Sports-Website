@@ -309,6 +309,7 @@ test("cache purge audit returns PENDING without external evidence and validates 
       provider: "fastly_or_cloudflare",
       purge_id: "purge_12345",
       purge_scope: "surrogate_keys",
+      purge_result: "SUCCESS",
     };
     const evidenceFile = path.join(artifactsDir, "purge-evidence.json");
     await writeFile(evidenceFile, JSON.stringify(validEvidence));

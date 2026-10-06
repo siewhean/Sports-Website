@@ -31,7 +31,13 @@ export async function runGateFRollbackDrill(candidateSha, options = {}) {
     requireProductionEnvironment: true,
   });
 
-  const isPass = validation.errors.length === 0;
+  const hasSpecificProof =
+    validation.errors.length === 0 &&
+    Boolean(validation.evidence?.rollback_drill_id) &&
+    validation.evidence?.simulated_or_observed_result === "PASS" &&
+    validation.evidence?.scoring_availability === "PRESERVED";
+
+  const isPass = hasSpecificProof;
 
   // Simulation steps for component testing/tracing
   const drillSteps = [
