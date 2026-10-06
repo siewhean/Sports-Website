@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import type { PostgresJsSql } from "@matchday/identity";
 import { Redis } from "ioredis";
+import { AggregationTemporality, InMemoryMetricExporter } from "@opentelemetry/sdk-metrics";
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+import { startApiTelemetry } from "../../src/telemetry.js";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
@@ -160,6 +163,17 @@ describeInfra("scoring access HMAC key lifecycle", () => {
       ),
     ).rejects.toThrow("active access-attempt retention");
 
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const telemetryConfig = testConfig({
+      DATABASE_URL: databaseUrl,
+      OTEL_ENABLED: "true",
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318",
+    });
+    const telemetry = await startApiTelemetry(telemetryConfig, {
+      metricExporter,
+      traceExporter: new InMemorySpanExporter(),
+      metricExportIntervalMs: 60_000,
+    });
     const withAdditionalPrevious = await reconcileScoringAccessHmacKeyring(
       sql as unknown as PostgresJsSql,
       {
@@ -170,6 +184,7 @@ describeInfra("scoring access HMAC key lifecycle", () => {
         ],
       },
       clock,
+      telemetry.scoringAccessHmacMetrics,
     );
     expect(withAdditionalPrevious.registeredVersions).toContainEqual({ version: "v0", status: "verification_only" });
     await reconcileScoringAccessHmacKeyring(
@@ -207,7 +222,8 @@ describeInfra("scoring access HMAC key lifecycle", () => {
       ),
     } as unknown as IdentityApiRuntime;
     const app = await buildApp({
-      config: testConfig({ DATABASE_URL: databaseUrl }),
+      config: telemetryConfig,
+      telemetry,
       probes: healthyProbes,
       identityRuntime,
       scoringAccessHmacKeySql: sql as unknown as PostgresJsSql,
@@ -293,6 +309,16 @@ describeInfra("scoring access HMAC key lifecycle", () => {
     } finally {
       await app.close();
     }
+    const lifecycle = metricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics)
+      .find((metric) => metric.descriptor.name === "scoring_access_hmac_key_lifecycle_total");
+    expect(lifecycle?.dataPoints.map((point) => point.attributes)).toEqual([
+      { "scoring_access.hmac.key_version": "v0", "scoring_access.hmac.lifecycle_action": "verification_only" },
+      { "scoring_access.hmac.key_version": "v0", "scoring_access.hmac.lifecycle_action": "retired" },
+    ]);
+    expect(JSON.stringify(lifecycle)).not.toContain("c5-earlier-rate-limit-hmac-secret-material");
     await expect(sql`
       INSERT INTO scoring_access_attempts(
         credential_kind,outcome,credential_hmac,ip_hmac,hmac_key_version,request_id,rate_limit_state_expires_at

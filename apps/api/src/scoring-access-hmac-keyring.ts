@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError } from "./errors.js";
-import { productionScoringAccessHmacMetrics } from "./scoring-access-hmac-metrics.js";
+import { noopScoringAccessHmacMetrics } from "./scoring-access-hmac-metrics.js";
 import type { ScoringAccessHmacMetricRecorder } from "./scoring-access-hmac-metrics.js";
 import type { ScoringAccessRateLimitHmacKeyring } from "./scoring-access-rate-limit.js";
 
@@ -160,7 +160,7 @@ export async function reconcileScoringAccessHmacKeyring(
   sql: PostgresJsSql,
   keyring: ScoringAccessRateLimitHmacKeyring,
   now = new Date(),
-  hmacMetrics: ScoringAccessHmacMetricRecorder = productionScoringAccessHmacMetrics,
+  hmacMetrics: ScoringAccessHmacMetricRecorder = noopScoringAccessHmacMetrics,
 ): Promise<ScoringAccessHmacKeyringSnapshot> {
   const metricEvents: { keyVersion: string; action: "activated" | "verification_only" }[] = [];
   const result = await requireTransaction(sql)(async (tx) => {
@@ -263,7 +263,7 @@ export async function retireScoringAccessHmacKeyVersion(
   sql: PostgresJsSql,
   input: { keyVersion: string; accountId: string; requestId: string; reason: string },
   now = new Date(),
-  hmacMetrics: ScoringAccessHmacMetricRecorder = productionScoringAccessHmacMetrics,
+  hmacMetrics: ScoringAccessHmacMetricRecorder = noopScoringAccessHmacMetrics,
 ): Promise<void> {
   await requireTransaction(sql)(async (tx) => {
     const platformAdmin = await tx.unsafe<{ account_id: string }>(

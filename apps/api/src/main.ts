@@ -103,7 +103,12 @@ const identityRuntime = new IdentityAssuranceRuntime(
   systemClock,
   assurancePolicy,
 );
-await reconcileScoringAccessHmacKeyring(identitySql, config.scoringAccess.rateLimitHmacKeyring);
+await reconcileScoringAccessHmacKeyring(
+  identitySql,
+  config.scoringAccess.rateLimitHmacKeyring,
+  undefined,
+  telemetry.scoringAccessHmacMetrics,
+);
 await reconcileScoringFallbackHmacKeyring(identitySql, config.scoringAccess.fallbackCodeHmacKeyring);
 const notificationRepo = new PostgresNotificationRepository(postgresClient);
 const notificationService = new NotificationService(notificationRepo, notificationRepo, new EmailTemplateRegistry(), {
@@ -120,6 +125,8 @@ const phase2Runtime = new FallbackKeyringPhase2Runtime(
     rateLimitRedis,
     config.scoringAccess.rateLimitHmacKeyring,
     `matchday:${config.environment}:scoring-access:`,
+    undefined,
+    telemetry.scoringAccessHmacMetrics,
   ),
   undefined,
   undefined,

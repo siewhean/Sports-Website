@@ -1,9 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { Redis } from "ioredis";
-import {
-  productionScoringAccessHmacMetrics,
-  type ScoringAccessHmacMetricRecorder,
-} from "./scoring-access-hmac-metrics.js";
+import { noopScoringAccessHmacMetrics, type ScoringAccessHmacMetricRecorder } from "./scoring-access-hmac-metrics.js";
 
 const WINDOW_SECONDS = 10 * 60;
 const COOLDOWN_SECONDS = 15 * 60;
@@ -150,7 +147,7 @@ export class RedisScoringAccessRateLimiter implements ScoringAccessRateLimiter {
     keyring: ScoringAccessRateLimitHmacKeyring | string,
     private readonly namespace = "matchday:scoring-access:",
     private readonly policy: ScoringAccessRateLimitPolicy = productionPolicy,
-    private readonly hmacMetrics: ScoringAccessHmacMetricRecorder = productionScoringAccessHmacMetrics,
+    private readonly hmacMetrics: ScoringAccessHmacMetricRecorder = noopScoringAccessHmacMetrics,
   ) {
     this.keyring = normalizeKeyring(keyring);
   }
