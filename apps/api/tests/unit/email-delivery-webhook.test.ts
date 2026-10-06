@@ -9,6 +9,7 @@ import {
   NotificationService,
 } from "@matchday/notifications";
 import { buildApp } from "../../src/app.js";
+import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const WEBHOOK_SECRET = "whsec_dGVzdC1zZWNyZXQtMzItYnl0ZXMtc3ZpeC1rZXk=";
@@ -33,7 +34,7 @@ async function createTestApp(options: { webhookSecret?: string } = {}) {
   const mockIdentity = {
     authenticate: vi.fn(),
     rateLimitAccountId: vi.fn().mockResolvedValue(null),
-  };
+  } as unknown as IdentityApiRuntime;
 
   const app = await buildApp({
     config: testConfig({
@@ -41,7 +42,7 @@ async function createTestApp(options: { webhookSecret?: string } = {}) {
     }),
     probes: healthyProbes,
     notificationService,
-    identityRuntime: mockIdentity as any,
+    identityRuntime: mockIdentity,
   });
 
   return { app, notificationService, emailOutbox, notifications };
@@ -119,6 +120,29 @@ describe("POST /api/v1/notifications/webhooks/resend", () => {
   it("handles duplicate webhook replay idempotently without state transition", async () => {
     const { app, emailOutbox } = await createTestApp({ webhookSecret: WEBHOOK_SECRET });
 
+    await emailOutbox.enqueue({
+      id: "outbox-2",
+      message: {
+        to: "user@example.test",
+        subject: "Verification",
+        text: "Hi",
+        html: "<p>Hi</p>",
+        idempotencyKey: "email-idem-2",
+        notificationId: "notif-2",
+        template: { id: "test", version: 1 },
+      },
+      status: "delivered",
+      attempts: 1,
+      createdAt: new Date().toISOString(),
+      availableAt: new Date().toISOString(),
+      lockedUntil: null,
+      leaseToken: null,
+      deliveredAt: new Date().toISOString(),
+      providerMessageId: "resend-msg-200",
+      lastError: null,
+      lastFailureClassification: null,
+    });
+
     const bodyObj = {
       type: "email.delivered",
       created_at: new Date(now * 1000).toISOString(),
@@ -158,6 +182,9 @@ describe("POST /api/v1/notifications/webhooks/resend", () => {
     });
     expect(second.statusCode).toBe(200);
     expect(second.json().is_duplicate).toBe(true);
+
+    const outboxItem = await emailOutbox.findByProviderMessageId("resend-msg-200");
+    expect(outboxItem?.status).toBe("delivered");
   });
 
   it("rejects missing signature with 401", async () => {

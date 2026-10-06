@@ -107,7 +107,7 @@ export class InMemoryNotificationStore implements NotificationStore {
     let outboxItem: { id: string; status: string; previousStatus: string } | null = null;
     let outboxId: string | null = null;
 
-    if (this.#emailOutbox) {
+    if (this.#emailOutbox && this.#emailOutbox.findByProviderMessageId) {
       const existingOutbox = await this.#emailOutbox.findByProviderMessageId(input.providerMessageId);
       if (existingOutbox) {
         outboxId = existingOutbox.id;
@@ -133,7 +133,10 @@ export class InMemoryNotificationStore implements NotificationStore {
           updateError = "Spam complaint recorded for recipient";
         }
 
-        if (newStatus !== previousStatus || updateError !== null) {
+        if (
+          (newStatus !== previousStatus || updateError !== null) &&
+          this.#emailOutbox.updateStatusByProviderMessageId
+        ) {
           const updated = await this.#emailOutbox.updateStatusByProviderMessageId(
             input.providerMessageId,
             newStatus,

@@ -40,8 +40,8 @@ export interface EmailOutboxStore {
     message: string,
     availableAt: string | null,
   ): Promise<EmailOutboxItem>;
-  findByProviderMessageId(providerMessageId: string): Promise<EmailOutboxItem | null>;
-  updateStatusByProviderMessageId(
+  findByProviderMessageId?(providerMessageId: string): Promise<EmailOutboxItem | null>;
+  updateStatusByProviderMessageId?(
     providerMessageId: string,
     status: EmailOutboxStatus,
     error?: string | null,

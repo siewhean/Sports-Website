@@ -55,7 +55,7 @@ export interface RequestTelemetryHandle {
 
 export interface ApiTelemetry {
   readonly scoringAccessHmacMetrics: ScoringAccessHmacMetricRecorder;
-  readonly emailDeliveryEventMetrics: EmailDeliveryEventMetricRecorder;
+  readonly emailDeliveryEventMetrics?: EmailDeliveryEventMetricRecorder;
   startRequest(input: RequestTelemetryInput): RequestTelemetryHandle;
   shutdown(): Promise<void>;
 }
