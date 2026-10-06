@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseEnvContent, validateProductionConfig } from "./validate-production-config.mjs";
+import { startTelemetryRuntime } from "../packages/observability/src/runtime.ts";
 
 test("validateProductionConfig accepts valid production configuration", () => {
   const valid = {
@@ -191,6 +192,88 @@ const telemetryProduction = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
   OTEL_COLLECTOR_EXTERNAL_ENDPOINT: "https://ingest.example.com",
 };
+
+const applicationHeaderKeys = [
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+];
+
+for (const key of applicationHeaderKeys) {
+  test(`production preflight rejects ${key} without exposing its value`, () => {
+    const header = "authorization=synthetic-header-must-not-appear";
+    for (const enabled of ["true", "false"]) {
+      assert.throws(
+        () => validateProductionConfig({ ...telemetryProduction, OTEL_ENABLED: enabled, [key]: header }),
+        (error) => {
+          assert.match(error.message, new RegExp(key));
+          assert.match(error.message, /authentication belongs at the collector boundary/);
+          assert.equal(error.message.includes(header), false);
+          return true;
+        },
+      );
+    }
+  });
+}
+
+test("production preflight rejects all populated application header variables", () => {
+  const headers = Object.fromEntries(applicationHeaderKeys.map((key) => [key, "authorization=synthetic-only"]));
+  assert.throws(
+    () => validateProductionConfig({ ...telemetryProduction, ...headers }),
+    (error) => {
+      for (const key of applicationHeaderKeys) assert.match(error.message, new RegExp(key));
+      assert.equal(error.message.includes("authorization=synthetic-only"), false);
+      return true;
+    },
+  );
+});
+
+test("production preflight accepts unset, empty and whitespace application headers", () => {
+  for (const enabled of ["true", "false"]) {
+    assert.equal(validateProductionConfig({ ...telemetryProduction, OTEL_ENABLED: enabled }).valid, true);
+    for (const value of ["", " \t "]) {
+      const headers = Object.fromEntries(applicationHeaderKeys.map((key) => [key, value]));
+      assert.equal(validateProductionConfig({ ...telemetryProduction, OTEL_ENABLED: enabled, ...headers }).valid, true);
+    }
+  }
+});
+
+test("production preflight agrees with the actual enabled runtime on application headers", async () => {
+  const previous = Object.fromEntries(applicationHeaderKeys.map((key) => [key, process.env[key]]));
+  const config = {
+    enabled: true,
+    endpoint: telemetryProduction.OTEL_EXPORTER_OTLP_ENDPOINT,
+    environment: "production",
+    serviceName: "matchday-config-alignment-test",
+    metricExportIntervalMs: 60_000,
+  };
+  const fakeExporter = () => ({
+    export: (_data, callback) => callback({ code: 0 }),
+    forceFlush: async () => undefined,
+    shutdown: async () => undefined,
+  });
+  const exporters = { traceExporter: fakeExporter(), metricExporter: fakeExporter() };
+  try {
+    for (const key of applicationHeaderKeys) delete process.env[key];
+    assert.equal(validateProductionConfig(telemetryProduction).valid, true);
+    const runtime = await startTelemetryRuntime(config, exporters);
+    await runtime.shutdown();
+    for (const key of applicationHeaderKeys) {
+      process.env[key] = "authorization=synthetic-alignment-only";
+      assert.throws(
+        () => validateProductionConfig({ ...telemetryProduction, [key]: process.env[key] }),
+        /collector boundary/,
+      );
+      await assert.rejects(startTelemetryRuntime(config, exporters), /collector boundary/);
+      delete process.env[key];
+    }
+  } finally {
+    for (const key of applicationHeaderKeys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+});
 
 test("internal collector is an exact named exception and outbound is always HTTPS", () => {
   assert.equal(validateProductionConfig(telemetryProduction).valid, true);

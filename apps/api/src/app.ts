@@ -628,6 +628,7 @@ export async function buildApp(options: BuildAppOptions) {
         identityRuntime: options.identityRuntime,
         identityRequests,
         allowedOrigins: options.config.api.allowedOrigins,
+        hmacMetrics: telemetry.scoringAccessHmacMetrics,
       });
     }
     if (options.scoringFallbackHmacKeySql && options.scoringFallbackHmacKeyring) {

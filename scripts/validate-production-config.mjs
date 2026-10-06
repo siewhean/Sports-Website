@@ -77,6 +77,18 @@ export function validateProductionConfig(env) {
     if (env.OTEL_ENABLED !== undefined && !["true", "false"].includes(env.OTEL_ENABLED)) {
       errors.push("OTEL_ENABLED must be true or false");
     }
+    // Reject latent application credentials even while telemetry is disabled.
+    for (const key of [
+      "OTEL_EXPORTER_OTLP_HEADERS",
+      "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+      "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    ]) {
+      if (env[key]?.trim()) {
+        errors.push(
+          `Production application telemetry must not configure ${key}; authentication belongs at the collector boundary`,
+        );
+      }
+    }
     const internalEndpoint = "http://otel-collector:4318";
     const validateEndpoint = (value, label, allowInternal) => {
       try {

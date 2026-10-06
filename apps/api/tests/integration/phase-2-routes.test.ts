@@ -311,6 +311,7 @@ describe("Phase 2 Fastify route boundaries", () => {
     const retainedLogLines: string[] = [];
     const telemetryInputs: unknown[] = [];
     const telemetry = {
+      scoringAccessHmacMetrics: { rateLimit() {}, lifecycle() {} },
       startRequest: vi.fn((input: unknown) => {
         telemetryInputs.push(input);
         return {

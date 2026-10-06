@@ -6,6 +6,8 @@ import type { IdentityApiRuntime } from "./identity-runtime.js";
 import { ApiError } from "./errors.js";
 import { retireScoringAccessHmacKeyVersion } from "./scoring-access-hmac-keyring.js";
 
+import type { ScoringAccessHmacMetricRecorder } from "./scoring-access-hmac-metrics.js";
+
 const ErrorResponse = Type.Object({
   error: Type.Object({ code: Type.String(), message: Type.String(), request_id: Type.String() }),
 });
@@ -31,6 +33,7 @@ export async function registerScoringAccessHmacKeyringRoutes(
     identityRuntime: IdentityApiRuntime;
     identityRequests: IdentityRequestContext;
     allowedOrigins: readonly string[];
+    hmacMetrics: ScoringAccessHmacMetricRecorder;
   },
 ): Promise<void> {
   const platformAdminActor = async (request: FastifyRequest): Promise<string> => {
@@ -74,12 +77,17 @@ export async function registerScoringAccessHmacKeyringRoutes(
       },
     },
     async (request, reply) => {
-      await retireScoringAccessHmacKeyVersion(options.sql, {
-        keyVersion: request.params.keyVersion,
-        accountId: await platformAdminActor(request),
-        requestId: request.id,
-        reason: request.body.reason,
-      });
+      await retireScoringAccessHmacKeyVersion(
+        options.sql,
+        {
+          keyVersion: request.params.keyVersion,
+          accountId: await platformAdminActor(request),
+          requestId: request.id,
+          reason: request.body.reason,
+        },
+        undefined,
+        options.hmacMetrics,
+      );
       return reply.code(204).send();
     },
   );
