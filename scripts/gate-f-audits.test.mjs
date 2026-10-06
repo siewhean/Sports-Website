@@ -31,10 +31,11 @@ test("certifyGateFMigrations verifies expand-contract compliance", async () => {
   });
 });
 
-test("runGateFRollbackDrill verifies automated rollback steps", async () => {
+test("runGateFRollbackDrill verifies automated rollback steps but stays PENDING without external evidence", async () => {
   await withArtifacts(async (artifactsDir) => {
     const res = await runGateFRollbackDrill(SHA, { artifactsDir });
-    assert.equal(res.verdict, "PASS");
+    assert.equal(res.verdict, "PENDING");
+    assert.equal(res.simulation_result, "SIMULATION_PASS");
     assert.equal(res.scoring_availability, "PRESERVED");
   });
 });
@@ -262,7 +263,7 @@ test("runGateFProductionSimulation executes all components", async () => {
     assert.equal(res.verdict, "PENDING");
     assert.equal(res.production_certification, false);
     assert.equal(res.components.migration_expand_contract, "PASS");
-    assert.equal(res.components.zero_downtime_rollback, "PASS");
+    assert.equal(res.components.zero_downtime_rollback, "PENDING");
     assert.equal(res.components.backup_restore, "PENDING");
   });
 });
@@ -292,4 +293,107 @@ test("backup audit rejects symlink and hard-link aliases of the same physical ev
       assert.ok(receipt.pending_reasons.includes("distinct_physical_evidence_file.restore"));
     });
   }
+});
+
+test("cache purge audit returns PENDING without external evidence and validates external provider receipts", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const unverified = await runGateFCachePurgeAudit(SHA, { artifactsDir });
+    assert.equal(unverified.verdict, "PENDING");
+
+    const validEvidence = {
+      schema_version: "2026.09.edge-purge-v1",
+      evidence_class: "PROVIDER_RECEIPT",
+      candidate_sha: SHA,
+      environment: "production",
+      observed_at: new Date().toISOString(),
+      provider: "fastly_or_cloudflare",
+      purge_id: "purge_12345",
+      purge_scope: "surrogate_keys",
+    };
+    const evidenceFile = path.join(artifactsDir, "purge-evidence.json");
+    await writeFile(evidenceFile, JSON.stringify(validEvidence));
+
+    const verified = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(verified.verdict, "PASS");
+  });
+});
+
+test("ops audit returns PENDING for SLO, alert routing, cost controls and PENDING_IMPLEMENTATION for feature flags", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const res = await runGateFOpsAudit(SHA, { artifactsDir });
+    assert.equal(res.sloBaseline.verdict, "PENDING");
+    assert.equal(res.alertRouting.verdict, "PENDING");
+    assert.equal(res.costControls.verdict, "PENDING");
+    assert.equal(res.featureFlags.verdict, "PENDING_IMPLEMENTATION");
+    assert.equal(res.featureFlags.admin_ui_present, false);
+  });
+});
+
+test("recertifications audit returns PENDING for DNS/TLS, SEO, Email when external evidence is absent", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const res = await runGateFRecertifications(SHA, { artifactsDir });
+    assert.equal(res.dnsTls.verdict, "PENDING");
+    assert.equal(res.seo.verdict, "PENDING");
+    assert.equal(res.email.verdict, "PENDING");
+    assert.equal(res.security.verdict, "PASS_AUTOMATED_SCOPE");
+    assert.equal(res.a11y.verdict, "PASS_AUTOMATED_SCOPE");
+    assert.equal(res.legal.verdict, "PASS_TECHNICAL_PACKAGE_WITH_DEFERMENT");
+  });
+});
+
+test("evidence validator rejects synthetic markers, wrong SHA, wrong env, and stale timestamps", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    // 1. Synthetic marker
+    const syntheticEvidence = {
+      schema_version: "v1",
+      evidence_class: "PROVIDER_RECEIPT",
+      candidate_sha: SHA,
+      environment: "production",
+      observed_at: new Date().toISOString(),
+      synthetic: true,
+    };
+    const synFile = path.join(artifactsDir, "syn.json");
+    await writeFile(synFile, JSON.stringify(syntheticEvidence));
+    const synResult = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile: synFile });
+    assert.equal(synResult.verdict, "PENDING");
+
+    // 2. Wrong SHA
+    const wrongShaEvidence = {
+      schema_version: "v1",
+      evidence_class: "PROVIDER_RECEIPT",
+      candidate_sha: "a".repeat(40),
+      environment: "production",
+      observed_at: new Date().toISOString(),
+    };
+    const shaFile = path.join(artifactsDir, "wrong-sha.json");
+    await writeFile(shaFile, JSON.stringify(wrongShaEvidence));
+    const shaResult = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile: shaFile });
+    assert.equal(shaResult.verdict, "PENDING");
+
+    // 3. Staging/non-production environment
+    const stagingEvidence = {
+      schema_version: "v1",
+      evidence_class: "PROVIDER_RECEIPT",
+      candidate_sha: SHA,
+      environment: "staging",
+      observed_at: new Date().toISOString(),
+    };
+    const stgFile = path.join(artifactsDir, "staging.json");
+    await writeFile(stgFile, JSON.stringify(stagingEvidence));
+    const stgResult = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile: stgFile });
+    assert.equal(stgResult.verdict, "PENDING");
+
+    // 4. Stale timestamp (older than 24 hours)
+    const staleEvidence = {
+      schema_version: "v1",
+      evidence_class: "PROVIDER_RECEIPT",
+      candidate_sha: SHA,
+      environment: "production",
+      observed_at: "2020-01-01T00:00:00.000Z",
+    };
+    const staleFile = path.join(artifactsDir, "stale.json");
+    await writeFile(staleFile, JSON.stringify(staleEvidence));
+    const staleResult = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile: staleFile });
+    assert.equal(staleResult.verdict, "PENDING");
+  });
 });

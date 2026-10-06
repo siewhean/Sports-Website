@@ -138,6 +138,16 @@ export async function validateGateF(candidateSha, options = {}) {
 
   await validateProductionBackup(cert, expectedSha, artifactsDir, certFile);
 
+  // Validate that simulation receipts match expected results and simulation cannot certify production
+  if (cert.simulation?.receipts) {
+    const receipts = cert.simulation.receipts;
+    for (const [key, val] of Object.entries(receipts)) {
+      if (val === "PENDING" && cert.simulation.conclusion === "PASS") {
+        throw new Error(`Gate F simulation declared PASS but component ${key} is PENDING`);
+      }
+    }
+  }
+
   return {
     valid: true,
     gate: "F",
