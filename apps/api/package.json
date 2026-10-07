@@ -30,6 +30,7 @@
     "@matchday/contracts": "workspace:*",
     "@matchday/database": "workspace:*",
     "@matchday/domain": "workspace:*",
+    "@matchday/feature-flags": "workspace:*",
     "@matchday/identity": "workspace:*",
     "@matchday/jobs": "workspace:*",
     "@matchday/notifications": "workspace:*",
