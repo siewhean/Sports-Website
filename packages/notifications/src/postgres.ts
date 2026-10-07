@@ -1,15 +1,45 @@
+import { randomUUID } from "node:crypto";
 import type { Sql, TransactionSql } from "postgres";
 import type { DeliveryFailureClassification } from "./email.js";
-import { StaleEmailOutboxLeaseError, type EmailOutboxItem, type EmailOutboxStore } from "./outbox.js";
+import {
+  StaleEmailOutboxLeaseError,
+  type EmailOutboxItem,
+  type EmailOutboxStatus,
+  type EmailOutboxStore,
+} from "./outbox.js";
 import type { CreateNotificationInput, NotificationStore } from "./store.js";
 import type {
   PersistNotificationDeliveryInput,
   PersistNotificationDeliveryResult,
   NotificationUnitOfWork,
 } from "./unit-of-work.js";
-import type { NotificationPage, NotificationPreference, NotificationRecord } from "./types.js";
+import type {
+  EmailBounceType,
+  EmailDeliveryEvent,
+  EmailDeliveryEventType,
+  NotificationPage,
+  NotificationPreference,
+  NotificationRecord,
+  RecordEmailDeliveryEventInput,
+  RecordEmailDeliveryEventResult,
+} from "./types.js";
 
 type Timestamp = Date | string;
+
+type EmailDeliveryEventRow = {
+  id: string;
+  provider: string;
+  provider_event_id: string;
+  provider_message_id: string;
+  outbox_id: string | null;
+  event_type: EmailDeliveryEventType;
+  bounce_type: EmailBounceType | null;
+  bounce_sub_type: string | null;
+  occurred_at: Timestamp;
+  received_at: Timestamp;
+  recipient_reference: string | null;
+  diagnostic_code: string | null;
+};
 
 type NotificationRow = {
   id: string;
@@ -99,6 +129,23 @@ function mapEmailOutbox(row: EmailOutboxRow): EmailOutboxItem {
     providerMessageId: row.provider_message_id,
     lastError: row.last_error,
     lastFailureClassification: row.last_failure_classification,
+  };
+}
+
+function mapDeliveryEvent(row: EmailDeliveryEventRow): EmailDeliveryEvent {
+  return {
+    id: row.id,
+    provider: row.provider,
+    providerEventId: row.provider_event_id,
+    providerMessageId: row.provider_message_id,
+    outboxId: row.outbox_id,
+    eventType: row.event_type,
+    bounceType: row.bounce_type,
+    bounceSubType: row.bounce_sub_type,
+    occurredAt: iso(row.occurred_at),
+    receivedAt: iso(row.received_at),
+    recipientReference: row.recipient_reference,
+    diagnosticCode: row.diagnostic_code,
   };
 }
 
@@ -324,5 +371,143 @@ export class PostgresNotificationRepository implements NotificationStore, Notifi
     const row = rows[0];
     if (row === undefined) throw new StaleEmailOutboxLeaseError(id);
     return mapEmailOutbox(row);
+  }
+
+  async findByProviderMessageId(providerMessageId: string): Promise<EmailOutboxItem | null> {
+    const rows = await this.sql<EmailOutboxRow[]>`
+      SELECT * FROM notification_email_outbox
+      WHERE provider_message_id = ${providerMessageId}
+      LIMIT 1
+    `;
+    return rows[0] === undefined ? null : mapEmailOutbox(rows[0]);
+  }
+
+  async updateStatusByProviderMessageId(
+    providerMessageId: string,
+    status: EmailOutboxStatus,
+    error?: string | null,
+    classification?: DeliveryFailureClassification | null,
+  ): Promise<EmailOutboxItem | null> {
+    const rows = await this.sql<EmailOutboxRow[]>`
+      UPDATE notification_email_outbox
+      SET status = ${status},
+          last_error = COALESCE(${error ?? null}, last_error),
+          last_failure_classification = COALESCE(${classification ?? null}, last_failure_classification)
+      WHERE provider_message_id = ${providerMessageId}
+      RETURNING *
+    `;
+    return rows[0] === undefined ? null : mapEmailOutbox(rows[0]);
+  }
+
+  async recordDeliveryEvent(input: RecordEmailDeliveryEventInput): Promise<RecordEmailDeliveryEventResult> {
+    const execute = async (tx: PostgresNotificationSql): Promise<RecordEmailDeliveryEventResult> => {
+      // 1. Check if event is already recorded (idempotency by provider + provider_event_id)
+      const existingEvents = await tx<EmailDeliveryEventRow[]>`
+        SELECT * FROM notification_email_delivery_events
+        WHERE provider = ${input.provider} AND provider_event_id = ${input.providerEventId}
+        LIMIT 1
+      `;
+      if (existingEvents[0] !== undefined) {
+        return {
+          event: mapDeliveryEvent(existingEvents[0]),
+          isDuplicate: true,
+          outboxItem: null,
+        };
+      }
+
+      // 2. Correlate with outbox item if one exists
+      const outboxRows = await tx<EmailOutboxRow[]>`
+        SELECT * FROM notification_email_outbox
+        WHERE provider_message_id = ${input.providerMessageId}
+        FOR UPDATE
+        LIMIT 1
+      `;
+      const outbox = outboxRows[0];
+      const outboxId = outbox?.id ?? null;
+
+      // 3. Insert the immutable delivery event
+      const eventId = randomUUID();
+      const eventRows = await tx<EmailDeliveryEventRow[]>`
+        INSERT INTO notification_email_delivery_events (
+          id, provider, provider_event_id, provider_message_id, outbox_id,
+          event_type, bounce_type, bounce_sub_type, occurred_at, recipient_reference, diagnostic_code
+        ) VALUES (
+          ${eventId}, ${input.provider}, ${input.providerEventId}, ${input.providerMessageId}, ${outboxId},
+          ${input.eventType}, ${input.bounceType ?? null}, ${input.bounceSubType ?? null},
+          ${input.occurredAt}, ${input.recipientReference ?? null}, ${input.diagnosticCode ?? null}
+        )
+        ON CONFLICT (provider, provider_event_id) DO NOTHING
+        RETURNING *
+      `;
+      if (eventRows[0] === undefined) {
+        // Concurrently inserted duplicate
+        const concurrent = await tx<EmailDeliveryEventRow[]>`
+          SELECT * FROM notification_email_delivery_events
+          WHERE provider = ${input.provider} AND provider_event_id = ${input.providerEventId}
+          LIMIT 1
+        `;
+        return {
+          event: mapDeliveryEvent(concurrent[0]!),
+          isDuplicate: true,
+          outboxItem: null,
+        };
+      }
+
+      const recordedEvent = mapDeliveryEvent(eventRows[0]);
+      let updatedOutboxItem: RecordEmailDeliveryEventResult["outboxItem"] = null;
+
+      // 4. If outbox item exists, apply allowed state transition
+      if (outbox !== undefined) {
+        const previousStatus = outbox.status;
+        let newStatus: EmailOutboxStatus = previousStatus;
+        let updateError: string | null = null;
+        let updateClassification: DeliveryFailureClassification | null = null;
+
+        if (input.eventType === "bounced") {
+          // If hard bounce, mark dead_letter. If soft bounce, dead_letter if terminal or keep delivered
+          if (input.bounceType === "hard" || !input.bounceType || input.bounceType === "general") {
+            newStatus = "dead_letter";
+            updateError = input.diagnosticCode ?? "Email delivery hard bounced by recipient mail server";
+            updateClassification = "permanent";
+          } else {
+            // soft bounce: keep status or record error
+            updateError = input.diagnosticCode ?? "Email delivery soft bounced";
+            updateClassification = "transient";
+          }
+        } else if (input.eventType === "delivery_failed") {
+          newStatus = "dead_letter";
+          updateError = input.diagnosticCode ?? "Email delivery failed";
+          updateClassification = "permanent";
+        } else if (input.eventType === "complained") {
+          updateError = "Spam complaint recorded for recipient";
+        }
+
+        if (newStatus !== previousStatus || updateError !== null) {
+          const updated = await tx<EmailOutboxRow[]>`
+            UPDATE notification_email_outbox
+            SET status = ${newStatus},
+                last_error = COALESCE(${updateError}, last_error),
+                last_failure_classification = COALESCE(${updateClassification}, last_failure_classification)
+            WHERE id = ${outbox.id}
+            RETURNING *
+          `;
+          if (updated[0] !== undefined) {
+            updatedOutboxItem = {
+              id: outbox.id,
+              status: updated[0].status,
+              previousStatus,
+            };
+          }
+        }
+      }
+
+      return {
+        event: recordedEvent,
+        isDuplicate: false,
+        outboxItem: updatedOutboxItem,
+      };
+    };
+
+    return typeof (this.sql as Sql).begin === "function" ? (this.sql as Sql).begin(execute) : execute(this.sql);
   }
 }

@@ -124,6 +124,10 @@ const rawConfigSchema = z.object({
   SMTP_FROM: z.string().min(1).default("Matchday <no-reply@matchday.test>"),
   SMTP_AUTH_USER: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(512).optional()),
   SMTP_AUTH_PASS: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(4_096).optional()),
+  EMAIL_PROVIDER_WEBHOOK_SECRET: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(16).max(4_096).optional(),
+  ),
 });
 
 export type AppEnvironment = z.infer<typeof environmentSchema>;
@@ -190,6 +194,7 @@ export type AppConfig = {
       password: string;
     };
   };
+  emailWebhookSecret?: string;
 };
 
 function requireProductionValue(
@@ -545,6 +550,25 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     }
   }
 
+  if (parsed.EMAIL_PROVIDER_WEBHOOK_SECRET) {
+    const webhookSecret = parsed.EMAIL_PROVIDER_WEBHOOK_SECRET;
+    if (parsed.SMTP_AUTH_PASS && webhookSecret === parsed.SMTP_AUTH_PASS) {
+      throw new Error("Email provider webhook secret and SMTP password must be different");
+    }
+    if (parsed.IDENTITY_CSRF_HMAC_SECRET && webhookSecret === parsed.IDENTITY_CSRF_HMAC_SECRET) {
+      throw new Error("Email provider webhook secret and identity CSRF key must be different");
+    }
+    if (parsed.DEEP_HEALTH_TOKEN && webhookSecret === parsed.DEEP_HEALTH_TOKEN) {
+      throw new Error("Email provider webhook secret and deep health token must be different");
+    }
+    if (fallbackSecrets.includes(webhookSecret)) {
+      throw new Error("Email provider webhook secret and fallback-code HMAC secret must be different");
+    }
+    if (rateLimitSecrets.includes(webhookSecret)) {
+      throw new Error("Email provider webhook secret and rate-limit HMAC secret must be different");
+    }
+  }
+
   let telemetryEndpoint: string | undefined;
   if (parsed.OTEL_EXPORTER_OTLP_ENDPOINT) {
     const url = new URL(parsed.OTEL_EXPORTER_OTLP_ENDPOINT);
@@ -645,6 +669,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       ...(telemetryEndpoint ? { endpoint: telemetryEndpoint } : {}),
     },
     smtp,
+    ...(parsed.EMAIL_PROVIDER_WEBHOOK_SECRET ? { emailWebhookSecret: parsed.EMAIL_PROVIDER_WEBHOOK_SECRET } : {}),
   };
 }
 
@@ -716,6 +741,7 @@ export function safeConfigSummary(config: AppConfig) {
       from: config.smtp.from,
       authConfigured: Boolean(config.smtp.auth),
     },
+    emailWebhookSecretConfigured: Boolean(config.emailWebhookSecret),
   };
 }
 

@@ -60,3 +60,44 @@ export type PublishNotificationResult = {
   emailOutboxId: string | null;
   suppressedChannels: readonly NotificationChannel[];
 };
+
+export type EmailDeliveryEventType = "delivered" | "bounced" | "complained" | "delivery_delayed" | "delivery_failed";
+
+export type EmailBounceType = "hard" | "soft" | "general";
+
+export type EmailDeliveryEvent = {
+  id: string;
+  provider: string;
+  providerEventId: string;
+  providerMessageId: string;
+  outboxId: string | null;
+  eventType: EmailDeliveryEventType;
+  bounceType: EmailBounceType | null;
+  bounceSubType: string | null;
+  occurredAt: string;
+  receivedAt: string;
+  recipientReference: string | null;
+  diagnosticCode: string | null;
+};
+
+export type RecordEmailDeliveryEventInput = {
+  provider: string;
+  providerEventId: string;
+  providerMessageId: string;
+  eventType: EmailDeliveryEventType;
+  bounceType?: EmailBounceType | null;
+  bounceSubType?: string | null;
+  occurredAt: string;
+  recipientReference?: string | null;
+  diagnosticCode?: string | null;
+};
+
+export type RecordEmailDeliveryEventResult = {
+  event: EmailDeliveryEvent;
+  isDuplicate: boolean;
+  outboxItem: {
+    id: string;
+    status: string;
+    previousStatus: string;
+  } | null;
+};

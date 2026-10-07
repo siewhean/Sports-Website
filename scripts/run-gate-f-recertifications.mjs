@@ -134,13 +134,14 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
     spf: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
     dkim: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
     dmarc: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
-    bounce_handling: emailPassed ? "PASS" : "PENDING_IMPLEMENTATION",
+    bounce_handling: emailPassed ? "PASS" : "IMPLEMENTED_SOURCE_UNCERTIFIED",
+    source_implementation: "PASS",
     template_tests: "PASS",
     verdict: emailPassed ? "PASS" : "PENDING",
     evidence_status: emailPassed ? "VERIFIED" : "PENDING_PRODUCTION_EVIDENCE",
     pending_reasons: emailPassed
       ? []
-      : [...emailEvidence.errors, "bounce_handling_not_implemented_in_packages_notifications"],
+      : [...emailEvidence.errors, "provider_webhook_and_dns_production_evidence_pending"],
     generated_at: new Date().toISOString(),
   };
   email.receipt_sha256 = createHash("sha256")

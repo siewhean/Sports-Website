@@ -10,6 +10,9 @@ export interface NotificationStore {
   markAllRead(accountId: string, readAt: string): Promise<number>;
   getPreference(accountId: string, notificationType: string): Promise<NotificationPreference | null>;
   setPreference(preference: NotificationPreference): Promise<NotificationPreference>;
+  recordDeliveryEvent?(
+    input: import("./types.js").RecordEmailDeliveryEventInput,
+  ): Promise<import("./types.js").RecordEmailDeliveryEventResult>;
 }
 
 function cloneRecord(record: NotificationRecord): NotificationRecord {
@@ -82,5 +85,90 @@ export class InMemoryNotificationStore implements NotificationStore {
     const stored = { ...preference };
     this.#preferences.set(`${preference.accountId}:${preference.notificationType}`, stored);
     return { ...stored };
+  }
+
+  readonly #emailOutbox: import("./outbox.js").EmailOutboxStore | undefined;
+
+  constructor(emailOutbox?: import("./outbox.js").EmailOutboxStore) {
+    this.#emailOutbox = emailOutbox;
+  }
+
+  readonly #deliveryEvents = new Map<string, import("./types.js").EmailDeliveryEvent>();
+
+  async recordDeliveryEvent(
+    input: import("./types.js").RecordEmailDeliveryEventInput,
+  ): Promise<import("./types.js").RecordEmailDeliveryEventResult> {
+    const key = `${input.provider}:${input.providerEventId}`;
+    const existing = this.#deliveryEvents.get(key);
+    if (existing !== undefined) {
+      return { event: { ...existing }, isDuplicate: true, outboxItem: null };
+    }
+
+    let outboxItem: { id: string; status: string; previousStatus: string } | null = null;
+    let outboxId: string | null = null;
+
+    if (this.#emailOutbox && this.#emailOutbox.findByProviderMessageId) {
+      const existingOutbox = await this.#emailOutbox.findByProviderMessageId(input.providerMessageId);
+      if (existingOutbox) {
+        outboxId = existingOutbox.id;
+        const previousStatus = existingOutbox.status;
+        let newStatus = previousStatus;
+        let updateError: string | null = null;
+        let updateClassification: import("./email.js").DeliveryFailureClassification | null = null;
+
+        if (input.eventType === "bounced") {
+          if (input.bounceType === "hard" || !input.bounceType || input.bounceType === "general") {
+            newStatus = "dead_letter";
+            updateError = input.diagnosticCode ?? "Email delivery hard bounced by recipient mail server";
+            updateClassification = "permanent";
+          } else {
+            updateError = input.diagnosticCode ?? "Email delivery soft bounced";
+            updateClassification = "transient";
+          }
+        } else if (input.eventType === "delivery_failed") {
+          newStatus = "dead_letter";
+          updateError = input.diagnosticCode ?? "Email delivery failed";
+          updateClassification = "permanent";
+        } else if (input.eventType === "complained") {
+          updateError = "Spam complaint recorded for recipient";
+        }
+
+        if (
+          (newStatus !== previousStatus || updateError !== null) &&
+          this.#emailOutbox.updateStatusByProviderMessageId
+        ) {
+          const updated = await this.#emailOutbox.updateStatusByProviderMessageId(
+            input.providerMessageId,
+            newStatus,
+            updateError,
+            updateClassification,
+          );
+          if (updated) {
+            outboxItem = {
+              id: existingOutbox.id,
+              status: updated.status,
+              previousStatus,
+            };
+          }
+        }
+      }
+    }
+
+    const event: import("./types.js").EmailDeliveryEvent = {
+      id: `evt-${this.#deliveryEvents.size + 1}`,
+      provider: input.provider,
+      providerEventId: input.providerEventId,
+      providerMessageId: input.providerMessageId,
+      outboxId,
+      eventType: input.eventType,
+      bounceType: input.bounceType ?? null,
+      bounceSubType: input.bounceSubType ?? null,
+      occurredAt: input.occurredAt,
+      receivedAt: new Date().toISOString(),
+      recipientReference: input.recipientReference ?? null,
+      diagnosticCode: input.diagnosticCode ?? null,
+    };
+    this.#deliveryEvents.set(key, event);
+    return { event: { ...event }, isDuplicate: false, outboxItem };
   }
 }

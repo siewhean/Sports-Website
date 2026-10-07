@@ -319,3 +319,31 @@ test("internal collector is an exact named exception and outbound is always HTTP
   );
   assert.throws(() => validateProductionConfig({ ...telemetryProduction, OTEL_ENABLED: "yes" }), /OTEL_ENABLED must/);
 });
+
+test("validateProductionConfig fails closed when EMAIL_BOUNCE_HANDLING_ENABLED=true without secret", () => {
+  const invalid = {
+    ...telemetryProduction,
+    EMAIL_BOUNCE_HANDLING_ENABLED: "true",
+  };
+  assert.throws(
+    () => validateProductionConfig(invalid),
+    /EMAIL_PROVIDER_WEBHOOK_SECRET is required in production when EMAIL_BOUNCE_HANDLING_ENABLED is true/,
+  );
+
+  const placeholder = {
+    ...telemetryProduction,
+    EMAIL_BOUNCE_HANDLING_ENABLED: "true",
+    EMAIL_PROVIDER_WEBHOOK_SECRET: "CHANGE_ME_WEBHOOK_SECRET",
+  };
+  assert.throws(
+    () => validateProductionConfig(placeholder),
+    /EMAIL_PROVIDER_WEBHOOK_SECRET contains unresolved placeholder CHANGE_ME/,
+  );
+
+  const valid = {
+    ...telemetryProduction,
+    EMAIL_BOUNCE_HANDLING_ENABLED: "true",
+    EMAIL_PROVIDER_WEBHOOK_SECRET: "a".repeat(32),
+  };
+  assert.equal(validateProductionConfig(valid).valid, true);
+});

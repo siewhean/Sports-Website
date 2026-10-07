@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -230,6 +230,8 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       await admin.unsafe(`CREATE DATABASE "${database}"`);
       await cp(migrationsDirectory, directory, { recursive: true });
       await rm(path.join(directory, validatorRepair));
+      const forwardMigrations = (await readdir(directory)).filter((name) => name > "0066" && name.endsWith(".sql"));
+      await Promise.all(forwardMigrations.map((name) => rm(path.join(directory, name))));
       const beforeMigration = await migrateDatabase({ databaseUrl, migrationsDirectory: directory });
       expect(beforeMigration.current).toHaveLength(65);
       expect(beforeMigration.current.at(-1)).toBe(repair);
@@ -251,8 +253,11 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       await sql`SET search_path = ''`;
       await validate("public", false);
       await sql`SET search_path = public`;
-      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([validatorRepair]);
-      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([]);
+      await cp(path.join(migrationsDirectory, validatorRepair), path.join(directory, validatorRepair));
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory: directory })).applied).toEqual([
+        validatorRepair,
+      ]);
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory: directory })).applied).toEqual([]);
       const afterDefinitions = await definitions("public");
       expect(afterDefinitions).toHaveLength(3);
       for (const definition of afterDefinitions) {
@@ -278,7 +283,7 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       expect(existingValidation).toEqual({ valid: true, hash_unchanged: true });
       const publicBefore = await publicState();
       const schema = `test_cp9a1_validators_${randomUUID().replaceAll("-", "")}`;
-      const custom = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+      const custom = await migrateDatabase({ databaseUrl, migrationsDirectory: directory, schema });
       expect(custom.current).toHaveLength(66);
       expect(await publicState()).toEqual(publicBefore);
       const customDefinitions = await definitions(schema);
