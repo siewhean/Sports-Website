@@ -1,11 +1,73 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 import { type SubscriptionTier, ErrorCode } from "@matchday/contracts";
+import {
+  featureFlags,
+  FeatureFlagEvaluator,
+  PostgresFeatureFlagStorage,
+  type FeatureFlagContext,
+  type FeatureFlagKey,
+  type FeatureFlagMutationOptions,
+  type FeatureFlagQueryExecutor,
+  type FeatureFlagQueryPort,
+  type FeatureFlagScope,
+  type FeatureFlagStorage,
+  type MatchdayFeatureFlags,
+} from "@matchday/feature-flags";
 import { ApiError } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 
+function makeQueryPort(
+  sql: PostgresJsSql,
+  inTransaction: <T>(callback: (tx: PostgresJsSql) => Promise<T>) => Promise<T>,
+): FeatureFlagQueryPort {
+  return {
+    async query<Row extends Record<string, unknown>>(
+      text: string,
+      parameters: readonly (boolean | number | string | null | Record<string, unknown>)[],
+    ): Promise<readonly Row[]> {
+      const result = await sql.unsafe(text, parameters as never[]);
+      return result as unknown as readonly Row[];
+    },
+    async transaction<Result>(operation: (transaction: FeatureFlagQueryExecutor) => Promise<Result>): Promise<Result> {
+      return inTransaction(async (tx) => {
+        const executor: FeatureFlagQueryExecutor = {
+          async query<Row extends Record<string, unknown>>(
+            text: string,
+            parameters: readonly (boolean | number | string | null | Record<string, unknown>)[],
+          ): Promise<readonly Row[]> {
+            const result = await tx.unsafe(text, parameters as never[]);
+            return result as unknown as readonly Row[];
+          },
+        };
+        return operation(executor);
+      });
+    },
+  };
+}
+
 export class AdminRuntime {
-  constructor(protected readonly sql: PostgresJsSql) {}
+  protected readonly featureFlagStorage: FeatureFlagStorage<MatchdayFeatureFlags>;
+  protected readonly featureFlagEvaluator: FeatureFlagEvaluator<MatchdayFeatureFlags>;
+
+  constructor(
+    protected readonly sql: PostgresJsSql,
+    featureFlagStorage?: FeatureFlagStorage<MatchdayFeatureFlags>,
+  ) {
+    this.featureFlagStorage =
+      featureFlagStorage ??
+      new PostgresFeatureFlagStorage({
+        registry: featureFlags,
+        queryPort: makeQueryPort(sql, (cb) => this.inTransaction(cb)),
+        getWriteContext: () => {
+          throw new Error("Context provider must be overridden in mutation call");
+        },
+      });
+    this.featureFlagEvaluator = new FeatureFlagEvaluator({
+      registry: featureFlags,
+      storage: this.featureFlagStorage,
+    });
+  }
 
   protected async inTransaction<T>(callback: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
     const sqlInstance = this.sql as unknown as {
@@ -475,5 +537,244 @@ export class AdminRuntime {
       ...r,
       created_at: r.created_at.toISOString(),
     }));
+  }
+
+  // --- OPS-018: Feature Flag Administration ---
+
+  async listFeatureFlags(actor: Phase3Actor) {
+    await this.assertPlatformAdmin(actor);
+    const overrides = (await this.featureFlagStorage.listOverrides?.()) ?? [];
+    const flags = Object.entries(featureFlags).map(([key, def]) => {
+      const flagOverrides = overrides.filter((o) => o.key === key);
+      return {
+        key,
+        description: def.description,
+        default_value: def.defaultValue,
+        value_type: typeof def.defaultValue,
+        overrides: flagOverrides.map((o) => ({
+          id: o.id,
+          scope: o.scope,
+          value: o.value,
+          reason: o.reason,
+          updated_by: o.updatedBy,
+          updated_at: o.updatedAt,
+        })),
+      };
+    });
+    return { flags };
+  }
+
+  async getFeatureFlag(actor: Phase3Actor, flagKey: string) {
+    await this.assertPlatformAdmin(actor);
+    if (!Object.prototype.hasOwnProperty.call(featureFlags, flagKey)) {
+      throw new ApiError(404, ErrorCode.FEATURE_FLAG_NOT_FOUND, `Feature flag ${flagKey} not found in registry`);
+    }
+    const def = featureFlags[flagKey as FeatureFlagKey<MatchdayFeatureFlags>];
+    const overrides = (await this.featureFlagStorage.listOverrides?.(flagKey)) ?? [];
+    return {
+      key: flagKey,
+      description: def.description,
+      default_value: def.defaultValue,
+      value_type: typeof def.defaultValue,
+      overrides: overrides.map((o) => ({
+        id: o.id,
+        scope: o.scope,
+        value: o.value,
+        reason: o.reason,
+        updated_by: o.updatedBy,
+        updated_at: o.updatedAt,
+      })),
+    };
+  }
+
+  async getEffectiveFeatureFlag(actor: Phase3Actor, flagKey: string, context: FeatureFlagContext) {
+    await this.assertPlatformAdmin(actor);
+    if (!Object.prototype.hasOwnProperty.call(featureFlags, flagKey)) {
+      throw new ApiError(404, ErrorCode.FEATURE_FLAG_NOT_FOUND, `Feature flag ${flagKey} not found in registry`);
+    }
+    const evaluation = await this.featureFlagEvaluator.evaluate(
+      flagKey as FeatureFlagKey<MatchdayFeatureFlags>,
+      context,
+    );
+    return {
+      key: flagKey,
+      effective_value: evaluation.value,
+      source: evaluation.source,
+      scope: evaluation.scope ?? null,
+      context,
+    };
+  }
+
+  async setFeatureFlagOverride(
+    actor: Phase3Actor,
+    flagKey: string,
+    input: {
+      scope: FeatureFlagScope;
+      value: boolean;
+      reason: string;
+      expected_updated_at?: string;
+    },
+    requestId: string,
+  ) {
+    await this.assertPlatformAdmin(actor);
+    if (!Object.prototype.hasOwnProperty.call(featureFlags, flagKey)) {
+      throw new ApiError(404, ErrorCode.FEATURE_FLAG_NOT_FOUND, `Feature flag ${flagKey} not found in registry`);
+    }
+    const def = featureFlags[flagKey as FeatureFlagKey<MatchdayFeatureFlags>];
+    if (!def.isValid(input.value) || typeof input.value !== "boolean") {
+      throw new ApiError(400, ErrorCode.FEATURE_FLAG_INVALID, `Invalid value for feature flag ${flagKey}`);
+    }
+    const trimmedReason = input.reason?.trim();
+    if (!trimmedReason || trimmedReason.length < 3) {
+      throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "A non-empty reason of at least 3 characters is required");
+    }
+
+    await this.validateScopeExistence(input.scope);
+
+    const scopedStorage = new PostgresFeatureFlagStorage({
+      registry: featureFlags,
+      queryPort: makeQueryPort(this.sql, (cb) => this.inTransaction(cb)),
+      getWriteContext: () => ({
+        actor: { type: "platform_admin", accountId: actor.accountId },
+        requestId,
+        reason: trimmedReason,
+      }),
+    });
+
+    try {
+      const mutationOpts: FeatureFlagMutationOptions | undefined = input.expected_updated_at
+        ? { expectedUpdatedAt: input.expected_updated_at }
+        : undefined;
+      await scopedStorage.setOverride(
+        flagKey as FeatureFlagKey<MatchdayFeatureFlags>,
+        input.scope,
+        input.value,
+        mutationOpts,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("Conflict:")) {
+        throw new ApiError(409, ErrorCode.FEATURE_FLAG_CONFLICT, msg);
+      }
+      throw err;
+    }
+
+    const updated = await scopedStorage.getOverrideRecord(flagKey, input.scope);
+    return {
+      success: true,
+      override: updated,
+    };
+  }
+
+  async deleteFeatureFlagOverride(
+    actor: Phase3Actor,
+    flagKey: string,
+    input: {
+      scope: FeatureFlagScope;
+      reason: string;
+      expected_updated_at?: string;
+    },
+    requestId: string,
+  ) {
+    await this.assertPlatformAdmin(actor);
+    if (!Object.prototype.hasOwnProperty.call(featureFlags, flagKey)) {
+      throw new ApiError(404, ErrorCode.FEATURE_FLAG_NOT_FOUND, `Feature flag ${flagKey} not found in registry`);
+    }
+    const trimmedReason = input.reason?.trim();
+    if (!trimmedReason || trimmedReason.length < 3) {
+      throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "A non-empty reason of at least 3 characters is required");
+    }
+
+    await this.validateScopeExistence(input.scope);
+
+    const scopedStorage = new PostgresFeatureFlagStorage({
+      registry: featureFlags,
+      queryPort: makeQueryPort(this.sql, (cb) => this.inTransaction(cb)),
+      getWriteContext: () => ({
+        actor: { type: "platform_admin", accountId: actor.accountId },
+        requestId,
+        reason: trimmedReason,
+      }),
+    });
+
+    try {
+      const mutationOpts: FeatureFlagMutationOptions | undefined = input.expected_updated_at
+        ? { expectedUpdatedAt: input.expected_updated_at }
+        : undefined;
+      await scopedStorage.deleteOverride(flagKey as FeatureFlagKey<MatchdayFeatureFlags>, input.scope, mutationOpts);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("Conflict:")) {
+        throw new ApiError(409, ErrorCode.FEATURE_FLAG_CONFLICT, msg);
+      }
+      throw err;
+    }
+
+    return {
+      success: true,
+      key: flagKey,
+      scope: input.scope,
+    };
+  }
+
+  async getFeatureFlagAudit(actor: Phase3Actor, flagKey: string, limit?: number) {
+    await this.assertPlatformAdmin(actor);
+    if (!Object.prototype.hasOwnProperty.call(featureFlags, flagKey)) {
+      throw new ApiError(404, ErrorCode.FEATURE_FLAG_NOT_FOUND, `Feature flag ${flagKey} not found in registry`);
+    }
+    const effectiveLimit = Math.min(Math.max(1, limit ?? 50), 200);
+    const rows = await this.sql.unsafe<{
+      id: string;
+      request_id: string;
+      actor_account_id: string | null;
+      actor_type: string;
+      organisation_id: string | null;
+      action: string;
+      target_type: string;
+      target_id: string;
+      reason: string | null;
+      before_state: unknown;
+      after_state: unknown;
+      metadata: unknown;
+      created_at: Date;
+    }>(
+      `SELECT id, request_id, actor_account_id, actor_type, organisation_id,
+              action, target_type, target_id, reason, before_state, after_state, metadata,
+              occurred_at AS created_at
+         FROM audit_events
+        WHERE target_type = 'feature_flag'
+          AND target_id LIKE $1
+        ORDER BY occurred_at DESC
+        LIMIT $2`,
+      [`${flagKey}:%`, effectiveLimit],
+    );
+
+    return {
+      flag_key: flagKey,
+      events: rows.map((r) => ({
+        ...r,
+        created_at: r.created_at.toISOString(),
+      })),
+    };
+  }
+
+  private async validateScopeExistence(scope: FeatureFlagScope): Promise<void> {
+    if (scope.kind === "global") return;
+    if (scope.kind === "organization") {
+      const org = await this.sql.unsafe<{ id: string }>(`SELECT id FROM organisations WHERE id = $1::uuid`, [scope.id]);
+      if (!org[0]) {
+        throw new ApiError(404, ErrorCode.ORGANISATION_ACCESS_DENIED, `Organisation ${scope.id} does not exist`);
+      }
+    } else if (scope.kind === "competition") {
+      const comp = await this.sql.unsafe<{ id: string }>(`SELECT id FROM competitions WHERE id = $1::uuid`, [scope.id]);
+      if (!comp[0]) {
+        throw new ApiError(404, ErrorCode.COMPETITION_NOT_FOUND, `Competition ${scope.id} does not exist`);
+      }
+    } else if (scope.kind === "account") {
+      const acc = await this.sql.unsafe<{ id: string }>(`SELECT id FROM accounts WHERE id = $1::uuid`, [scope.id]);
+      if (!acc[0]) {
+        throw new ApiError(404, ErrorCode.NOT_FOUND, `Account ${scope.id} does not exist`);
+      }
+    }
   }
 }

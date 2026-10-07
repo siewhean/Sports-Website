@@ -16,6 +16,8 @@ export type {
   FeatureFlagEvaluation,
   FeatureFlagEvaluationSource,
   FeatureFlagKey,
+  FeatureFlagMutationOptions,
+  FeatureFlagOverrideRecord,
   FeatureFlagReader,
   FeatureFlagRegistryConstraint,
   FeatureFlagScope,

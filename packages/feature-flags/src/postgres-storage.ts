@@ -1,6 +1,8 @@
 import type {
   FeatureFlagDefinition,
   FeatureFlagKey,
+  FeatureFlagMutationOptions,
+  FeatureFlagOverrideRecord,
   FeatureFlagRegistryConstraint,
   FeatureFlagScope,
   FeatureFlagStorage,
@@ -72,10 +74,50 @@ export class PostgresFeatureFlagStorage<
     return rows[0]?.enabled;
   }
 
+  async getOverrideRecord(flagKey: string, scope: FeatureFlagScope): Promise<FeatureFlagOverrideRecord | null> {
+    this.definitionFor(flagKey as FeatureFlagKey<Registry>);
+    const databaseScope = toDatabaseScope(scope);
+    const rows = await this.options.queryPort.query<OverrideRow>(
+      `SELECT id, key, scope_type, scope_id, enabled, reason,
+              updated_by, updated_at::text
+         FROM feature_flag_overrides
+        WHERE key = $1
+          AND scope_type = $2
+          AND scope_id IS NOT DISTINCT FROM $3::uuid`,
+      [flagKey, databaseScope.type, databaseScope.id],
+    );
+    const row = rows[0];
+    return row ? toOverrideRecord(row) : null;
+  }
+
+  async listOverrides(flagKey?: string): Promise<FeatureFlagOverrideRecord[]> {
+    if (flagKey) {
+      this.definitionFor(flagKey as FeatureFlagKey<Registry>);
+      const rows = await this.options.queryPort.query<OverrideRow>(
+        `SELECT id, key, scope_type, scope_id, enabled, reason,
+                updated_by, updated_at::text
+           FROM feature_flag_overrides
+          WHERE key = $1
+          ORDER BY key ASC, scope_type ASC, scope_id ASC NULLS FIRST`,
+        [flagKey],
+      );
+      return rows.map(toOverrideRecord);
+    }
+    const rows = await this.options.queryPort.query<OverrideRow>(
+      `SELECT id, key, scope_type, scope_id, enabled, reason,
+              updated_by, updated_at::text
+         FROM feature_flag_overrides
+        ORDER BY key ASC, scope_type ASC, scope_id ASC NULLS FIRST`,
+      [],
+    );
+    return rows.map(toOverrideRecord);
+  }
+
   async setOverride<Key extends FeatureFlagKey<Registry>>(
     flagKey: Key,
     scope: FeatureFlagScope,
     value: FeatureFlagValue<Registry, Key>,
+    mutationOptions?: FeatureFlagMutationOptions,
   ): Promise<void> {
     const definition = this.definitionFor(flagKey);
     if (!definition.isValid(value) || typeof value !== "boolean") {
@@ -93,6 +135,16 @@ export class PostgresFeatureFlagStorage<
     await this.options.queryPort.transaction(async (transaction) => {
       await acquireMutationLock(transaction, targetId);
       const before = await selectOverride(transaction, flagKey, databaseScope);
+
+      if (mutationOptions?.expectedUpdatedAt !== undefined) {
+        if (!before && mutationOptions.expectedUpdatedAt !== "") {
+          throw new Error("Conflict: feature flag override does not exist but expectedUpdatedAt was provided");
+        }
+        if (before && before.updated_at !== mutationOptions.expectedUpdatedAt) {
+          throw new Error(`Conflict: feature flag override modified since ${mutationOptions.expectedUpdatedAt}`);
+        }
+      }
+
       const rows = await transaction.query<OverrideRow>(
         `INSERT INTO feature_flag_overrides
            (key, scope_type, scope_id, enabled, reason, updated_by)
@@ -119,7 +171,11 @@ export class PostgresFeatureFlagStorage<
     });
   }
 
-  async deleteOverride<Key extends FeatureFlagKey<Registry>>(flagKey: Key, scope: FeatureFlagScope): Promise<void> {
+  async deleteOverride<Key extends FeatureFlagKey<Registry>>(
+    flagKey: Key,
+    scope: FeatureFlagScope,
+    mutationOptions?: FeatureFlagMutationOptions,
+  ): Promise<void> {
     this.definitionFor(flagKey);
     const context = await this.validatedContext({
       flagKey,
@@ -132,6 +188,14 @@ export class PostgresFeatureFlagStorage<
     await this.options.queryPort.transaction(async (transaction) => {
       await acquireMutationLock(transaction, targetId);
       const before = await selectOverride(transaction, flagKey, databaseScope);
+      if (mutationOptions?.expectedUpdatedAt !== undefined) {
+        if (!before) {
+          throw new Error("Conflict: feature flag override does not exist but expectedUpdatedAt was provided");
+        }
+        if (before.updated_at !== mutationOptions.expectedUpdatedAt) {
+          throw new Error(`Conflict: feature flag override modified since ${mutationOptions.expectedUpdatedAt}`);
+        }
+      }
       if (before === undefined) return;
       await transaction.query(
         `DELETE FROM feature_flag_overrides
@@ -185,6 +249,34 @@ function toDatabaseScope(scope: FeatureFlagScope): {
     case "account":
       return { type: "account", id: scope.id };
   }
+}
+
+function fromDatabaseScope(scopeType: DatabaseScopeType, scopeId: string | null): FeatureFlagScope {
+  switch (scopeType) {
+    case "platform":
+      return { kind: "global" };
+    case "organisation":
+      if (!scopeId) throw new Error("Missing scope_id for organisation scope");
+      return { kind: "organization", id: scopeId };
+    case "competition":
+      if (!scopeId) throw new Error("Missing scope_id for competition scope");
+      return { kind: "competition", id: scopeId };
+    case "account":
+      if (!scopeId) throw new Error("Missing scope_id for account scope");
+      return { kind: "account", id: scopeId };
+  }
+}
+
+function toOverrideRecord(row: OverrideRow): FeatureFlagOverrideRecord {
+  return {
+    id: row.id,
+    key: row.key,
+    scope: fromDatabaseScope(row.scope_type, row.scope_id),
+    value: row.enabled,
+    reason: row.reason,
+    updatedBy: row.updated_by,
+    updatedAt: row.updated_at,
+  };
 }
 
 function actorAccountId(actor: FeatureFlagAuditActor): string | null {

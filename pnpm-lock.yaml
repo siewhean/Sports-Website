@@ -82,6 +82,9 @@ importers:
       '@matchday/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@matchday/feature-flags':
+        specifier: workspace:*
+        version: link:../../packages/feature-flags
       '@matchday/identity':
         specifier: workspace:*
         version: link:../../packages/identity

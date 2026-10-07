@@ -25,6 +25,20 @@ export interface FeatureFlagContext {
   accountId?: string;
 }
 
+export interface FeatureFlagOverrideRecord {
+  id: string;
+  key: string;
+  scope: FeatureFlagScope;
+  value: unknown;
+  reason: string;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+export interface FeatureFlagMutationOptions {
+  expectedUpdatedAt?: string;
+}
+
 export interface FeatureFlagReader {
   getOverride(flagKey: string, scope: FeatureFlagScope): Promise<unknown | undefined>;
 }
@@ -32,12 +46,19 @@ export interface FeatureFlagReader {
 export interface FeatureFlagStorage<
   Registry = Record<string, FeatureFlagDefinition<unknown>>,
 > extends FeatureFlagReader {
+  getOverrideRecord?(flagKey: string, scope: FeatureFlagScope): Promise<FeatureFlagOverrideRecord | null>;
+  listOverrides?(flagKey?: string): Promise<FeatureFlagOverrideRecord[]>;
   setOverride<Key extends FeatureFlagKey<Registry>>(
     flagKey: Key,
     scope: FeatureFlagScope,
     value: FeatureFlagValue<Registry, Key>,
+    options?: FeatureFlagMutationOptions,
   ): Promise<void>;
-  deleteOverride<Key extends FeatureFlagKey<Registry>>(flagKey: Key, scope: FeatureFlagScope): Promise<void>;
+  deleteOverride<Key extends FeatureFlagKey<Registry>>(
+    flagKey: Key,
+    scope: FeatureFlagScope,
+    options?: FeatureFlagMutationOptions,
+  ): Promise<void>;
 }
 
 export type FeatureFlagEvaluationSource = FeatureFlagScope["kind"] | "default";
