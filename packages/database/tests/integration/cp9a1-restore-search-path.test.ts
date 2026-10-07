@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -230,6 +230,8 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       await admin.unsafe(`CREATE DATABASE "${database}"`);
       await cp(migrationsDirectory, directory, { recursive: true });
       await rm(path.join(directory, validatorRepair));
+      const forwardMigrations = (await readdir(directory)).filter((name) => name > "0066" && name.endsWith(".sql"));
+      await Promise.all(forwardMigrations.map((name) => rm(path.join(directory, name))));
       const beforeMigration = await migrateDatabase({ databaseUrl, migrationsDirectory: directory });
       expect(beforeMigration.current).toHaveLength(65);
       expect(beforeMigration.current.at(-1)).toBe(repair);
