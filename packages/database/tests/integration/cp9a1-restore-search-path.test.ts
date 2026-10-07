@@ -253,8 +253,11 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       await sql`SET search_path = ''`;
       await validate("public", false);
       await sql`SET search_path = public`;
-      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([validatorRepair]);
-      expect((await migrateDatabase({ databaseUrl, migrationsDirectory })).applied).toEqual([]);
+      await cp(path.join(migrationsDirectory, validatorRepair), path.join(directory, validatorRepair));
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory: directory })).applied).toEqual([
+        validatorRepair,
+      ]);
+      expect((await migrateDatabase({ databaseUrl, migrationsDirectory: directory })).applied).toEqual([]);
       const afterDefinitions = await definitions("public");
       expect(afterDefinitions).toHaveLength(3);
       for (const definition of afterDefinitions) {
@@ -280,7 +283,7 @@ describeInfrastructure("CP9A.1 restore search-path safety", () => {
       expect(existingValidation).toEqual({ valid: true, hash_unchanged: true });
       const publicBefore = await publicState();
       const schema = `test_cp9a1_validators_${randomUUID().replaceAll("-", "")}`;
-      const custom = await migrateDatabase({ databaseUrl, migrationsDirectory, schema });
+      const custom = await migrateDatabase({ databaseUrl, migrationsDirectory: directory, schema });
       expect(custom.current).toHaveLength(66);
       expect(await publicState()).toEqual(publicBefore);
       const customDefinitions = await definitions(schema);
