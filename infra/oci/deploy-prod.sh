@@ -30,6 +30,56 @@ test "$(git status --porcelain=v1 --untracked-files=all)" = ""
 export CANDIDATE_SHA OCI_PUBLIC_HOSTNAME
 export OCI_PROD_ENV_FILE=.env.prod
 export BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+BUILD_TIMESTAMP_SANITIZED="$(printf '%s' "$BUILD_TIMESTAMP" | tr -c 'A-Za-z0-9_' '_')"
+export DEPLOY_PID=$$
+
+# Timeout classes (seconds, configurable via environment for deterministic test execution)
+DOCKER_INSPECT_TIMEOUT="${MATCHDAY_INSPECT_TIMEOUT:-10}"
+CADDY_RELOAD_TIMEOUT="${MATCHDAY_CADDY_RELOAD_TIMEOUT:-15}"
+CADDY_VALIDATION_TIMEOUT="${MATCHDAY_CADDY_VALIDATION_TIMEOUT:-30}"
+SERVICE_CONTROL_TIMEOUT="${MATCHDAY_SERVICE_CONTROL_TIMEOUT:-30}"
+MIGRATION_TIMEOUT="${MATCHDAY_MIGRATION_TIMEOUT:-180}"
+BUILD_TIMEOUT="${MATCHDAY_BUILD_TIMEOUT:-600}"
+
+# Pinned Caddy container image contract
+CADDY_IMAGE="caddy:2.10-alpine"
+CADDY_IMAGE_DIGEST="sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+PINNED_CADDY_IMAGE="${CADDY_IMAGE}@${CADDY_IMAGE_DIGEST}"
+CADDY_CONTAINER_TARGET="/etc/caddy/Caddyfile"
+
+# Bounded external command execution runner
+run_bounded() {
+  local timeout_sec="$1"
+  shift
+  python3 -c '
+import sys, subprocess, os, signal
+timeout_sec = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    p = subprocess.Popen(cmd, start_new_session=True)
+    try:
+        ret = p.wait(timeout=timeout_sec)
+        sys.exit(ret)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        cmd_full = " ".join(cmd) if cmd else "command"
+        sys.stderr.write(f"[deploy-prod] ERROR: Command timed out after {timeout_sec}s: {cmd_full}\n")
+        sys.exit(124)
+    except KeyboardInterrupt:
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        sys.exit(130)
+except Exception as e:
+    cmd_name = os.path.basename(cmd[0]) if cmd else "command"
+    sys.stderr.write(f"[deploy-prod] ERROR: Failed to execute {cmd_name}: {e}\n")
+    sys.exit(1)
+' "$timeout_sec" "$@"
+}
 
 # Deployment lock file
 DEPLOY_LOCK_FILE="${MATCHDAY_DEPLOY_LOCK_FILE:-/tmp/matchday-deploy.lock}"
@@ -51,6 +101,9 @@ STATE_FILE="${MATCHDAY_ACTIVE_SLOT_FILE:-/var/lib/matchday/deploy/active-slot.en
 SOURCE_CADDY_TEMPLATE="infra/oci/Caddyfile"
 RUNTIME_CADDYFILE_PATH="${MATCHDAY_RUNTIME_CADDYFILE_PATH:-/etc/matchday/caddy/Caddyfile}"
 
+# Export runtime Caddyfile path to ensure Compose propagates it
+export MATCHDAY_RUNTIME_CADDYFILE_PATH="$RUNTIME_CADDYFILE_PATH"
+
 mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
 mkdir -p "$(dirname "$RUNTIME_CADDYFILE_PATH")" 2>/dev/null || true
 
@@ -58,6 +111,7 @@ mkdir -p "$(dirname "$RUNTIME_CADDYFILE_PATH")" 2>/dev/null || true
 if [ ! -f "$RUNTIME_CADDYFILE_PATH" ]; then
   if [ -f "$SOURCE_CADDY_TEMPLATE" ]; then
     cp "$SOURCE_CADDY_TEMPLATE" "$RUNTIME_CADDYFILE_PATH"
+    chmod 600 "$RUNTIME_CADDYFILE_PATH" 2>/dev/null || true
   fi
 fi
 
@@ -154,11 +208,17 @@ fi
 
 echo "[deploy-prod] Deployment starting: Active Slot=$ACTIVE_SLOT, Candidate Slot=$CANDIDATE_SLOT, Candidate SHA=$CANDIDATE_SHA"
 
+# Phase and State tracking
+PHASE="PREFLIGHT"
 PROMOTED=0
 ACTIVE_WORKER_STOPPED=0
 WORKER_HANDOVER_STARTED=0
-PREVIOUS_RUNTIME_CADDYFILE="${RUNTIME_CADDYFILE_PATH}.prev.$BUILD_TIMESTAMP"
-CANDIDATE_RUNTIME_CADDYFILE="${RUNTIME_CADDYFILE_PATH}.candidate.$BUILD_TIMESTAMP"
+ROLLBACK_IN_PROGRESS=0
+DEPLOYMENT_COMMITTED=0
+
+TARGET_CADDY_DIR="$(dirname "$RUNTIME_CADDYFILE_PATH")"
+PREVIOUS_RUNTIME_CADDYFILE="${TARGET_CADDY_DIR}/.Caddyfile.previous.${BUILD_TIMESTAMP_SANITIZED}_$$"
+CANDIDATE_RUNTIME_CADDYFILE="${TARGET_CADDY_DIR}/.Caddyfile.candidate.${BUILD_TIMESTAMP_SANITIZED}_$$"
 
 caddy_env_file="infra/oci/.env.oci"
 if [ ! -f "$caddy_env_file" ] && [ -f "infra/oci/.env.prod" ]; then
@@ -237,35 +297,39 @@ emit_receipt() {
 
 cleanup_and_rollback() {
   local reason="$1"
+  if [ "$ROLLBACK_IN_PROGRESS" -eq 1 ]; then
+    return
+  fi
+  ROLLBACK_IN_PROGRESS=1
   echo "[deploy-prod] Automatic rollback initiated. Reason: $reason" >&2
   local rollback_result="COMPLETED"
 
   if [ "$PROMOTED" -eq 1 ]; then
     echo "[deploy-prod] Reverting Caddy routing to active slot $ACTIVE_SLOT ($ACTIVE_API_IP / $ACTIVE_WEB_IP)..." >&2
     if [ -f "$PREVIOUS_RUNTIME_CADDYFILE" ]; then
-      cat "$PREVIOUS_RUNTIME_CADDYFILE" > "$RUNTIME_CADDYFILE_PATH"
+      mv -f "$PREVIOUS_RUNTIME_CADDYFILE" "$RUNTIME_CADDYFILE_PATH" 2>/dev/null || true
     fi
-    caddy_container="$(docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy 2>/dev/null || true)"
+    caddy_container="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy 2>/dev/null || true)"
     if [ -n "$caddy_container" ]; then
-      if ! docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
+      if ! run_bounded "$CADDY_RELOAD_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
         echo "[deploy-prod] FATAL: Caddy reload failed during rollback!" >&2
         rollback_result="FAILED_CADDY_RELOAD"
       fi
     fi
   fi
 
-  if [ "$ACTIVE_WORKER_STOPPED" -eq 1 ]; then
+  if [ "$ACTIVE_WORKER_STOPPED" -eq 1 ] || [ "$WORKER_HANDOVER_STARTED" -eq 1 ]; then
     echo "[deploy-prod] Restoring previous active worker ($ACTIVE_WORKER_SERVICE)..." >&2
-    if ! docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d "$ACTIVE_WORKER_SERVICE"; then
+    if ! run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d "$ACTIVE_WORKER_SERVICE"; then
       echo "[deploy-prod] FATAL: Failed to restart previous active worker ($ACTIVE_WORKER_SERVICE) during rollback!" >&2
       rollback_result="FAILED_WORKER_RESTORE"
     else
-      active_worker_id="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$ACTIVE_WORKER_SERVICE" 2>/dev/null || true)"
+      active_worker_id="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$ACTIVE_WORKER_SERVICE" 2>/dev/null || true)"
       if [ -z "$active_worker_id" ]; then
         echo "[deploy-prod] FATAL: Restored active worker container ID not found!" >&2
         rollback_result="FAILED_WORKER_RESTORE"
       else
-        active_worker_state="$(docker inspect --format '{{.State.Status}}' "$active_worker_id" 2>/dev/null || echo "unknown")"
+        active_worker_state="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{.State.Status}}' "$active_worker_id" 2>/dev/null || echo "unknown")"
         if [ "$active_worker_state" != "running" ]; then
           echo "[deploy-prod] FATAL: Restored active worker is not running (status: $active_worker_state)!" >&2
           rollback_result="FAILED_WORKER_RESTORE"
@@ -275,8 +339,8 @@ cleanup_and_rollback() {
   fi
 
   echo "[deploy-prod] Stopping candidate slot services ($CANDIDATE_API_SERVICE $CANDIDATE_WEB_SERVICE $CANDIDATE_WORKER_SERVICE)..." >&2
-  docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml stop "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" 2>/dev/null || true
-  docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml rm -f "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" 2>/dev/null || true
+  run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml stop "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" 2>/dev/null || true
+  run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml rm -f "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" 2>/dev/null || true
 
   rm -f "$PREVIOUS_RUNTIME_CADDYFILE" "$CANDIDATE_RUNTIME_CADDYFILE" 2>/dev/null || true
 
@@ -291,40 +355,110 @@ cleanup_and_rollback() {
   exit 1
 }
 
+# Signal traps
+handle_signal() {
+  local sig="$1"
+  echo "[deploy-prod] CAUGHT SIGNAL $sig during phase $PHASE" >&2
+  if [ "$DEPLOYMENT_COMMITTED" -eq 1 ]; then
+    echo "[deploy-prod] Deployment already committed. Exiting." >&2
+    exit 0
+  fi
+  cleanup_and_rollback "Deployment interrupted by signal $sig during phase $PHASE"
+}
+
+trap 'handle_signal SIGINT' INT
+trap 'handle_signal SIGTERM' TERM
+trap 'handle_signal SIGHUP' HUP
+
+handle_exit() {
+  local exit_code=$?
+  if [ "$DEPLOYMENT_COMMITTED" -eq 1 ] || [ "$ROLLBACK_IN_PROGRESS" -eq 1 ]; then
+    return
+  fi
+  if [ "$exit_code" -ne 0 ] && [ "$PHASE" != "PREFLIGHT" ]; then
+    cleanup_and_rollback "Process exited unexpectedly with code $exit_code during phase $PHASE"
+  fi
+}
+trap handle_exit EXIT
+
 echo "[deploy-prod] Pre-deploy: validating production configuration..."
-node scripts/validate-production-config.mjs infra/oci/.env.prod
+run_bounded 30 node scripts/validate-production-config.mjs infra/oci/.env.prod
 
 echo "[deploy-prod] Pre-deploy: checking migration safety..."
-node scripts/certify-gate-f-migrations.mjs "$CANDIDATE_SHA"
+run_bounded 30 node scripts/certify-gate-f-migrations.mjs "$CANDIDATE_SHA"
 
 # Ensure production backend network exists deterministically
-if ! docker network inspect matchday-prod_backend >/dev/null 2>&1; then
+if ! run_bounded "$SERVICE_CONTROL_TIMEOUT" docker network inspect matchday-prod_backend >/dev/null 2>&1; then
   echo "[deploy-prod] Creating matchday-prod_backend network (172.31.0.0/24)..."
-  docker network create --subnet 172.31.0.0/24 matchday-prod_backend
+  run_bounded "$SERVICE_CONTROL_TIMEOUT" docker network create --subnet 172.31.0.0/24 matchday-prod_backend
 fi
 
-# Ensure Caddy is attached to the production backend network
-caddy_container="$(docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy 2>/dev/null || true)"
-if [ -n "$caddy_container" ]; then
-  if ! docker inspect "$caddy_container" --format '{{json .NetworkSettings.Networks}}' 2>/dev/null | grep -q "matchday-prod_backend"; then
-    echo "[deploy-prod] Attaching Caddy to matchday-prod_backend..."
-    docker network connect matchday-prod_backend "$caddy_container"
-  fi
+# Verify Caddy container and its bind mount configuration before building or launching candidate
+if ! caddy_container="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy)"; then
+  cleanup_and_rollback "Failed querying Caddy container ID within timeout"
 fi
+if [ -z "$caddy_container" ]; then
+  cleanup_and_rollback "Caddy container is not running"
+fi
+
+if ! caddy_network="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{json .NetworkSettings.Networks}}')"; then
+  cleanup_and_rollback "Failed inspecting Caddy container networks within timeout"
+fi
+if ! echo "$caddy_network" | grep -q "matchday-prod_backend"; then
+  echo "[deploy-prod] Attaching Caddy to matchday-prod_backend..."
+  run_bounded "$SERVICE_CONTROL_TIMEOUT" docker network connect matchday-prod_backend "$caddy_container"
+fi
+
+echo "[deploy-prod] Verifying Caddy container mount configuration..."
+if ! caddy_mount_info="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{println .Source .Destination .RW}}{{end}}{{end}}')"; then
+  cleanup_and_rollback "Failed inspecting Caddy container mounts within timeout"
+fi
+if [ -z "$caddy_mount_info" ]; then
+  cleanup_and_rollback "Caddy container is missing required bind mount for /etc/caddy/Caddyfile"
+fi
+
+caddy_mount_valid="$(python3 -c "
+import sys, os
+mount_line = sys.argv[1].strip()
+expected_host = os.path.realpath(sys.argv[2])
+parts = mount_line.split()
+if len(parts) >= 3:
+    source, dest, rw = parts[0], parts[1], parts[2]
+    source_real = os.path.realpath(source)
+    if source_real == expected_host and dest == '/etc/caddy/Caddyfile' and rw.lower() == 'false':
+        print('VALID')
+    else:
+        sys.stderr.write(f'Mount mismatch: source={source_real} (expected {expected_host}), dest={dest}, rw={rw}\n')
+        print('INVALID')
+else:
+    print('INVALID')
+" "$caddy_mount_info" "$RUNTIME_CADDYFILE_PATH")"
+
+if [ "$caddy_mount_valid" != "VALID" ]; then
+  cleanup_and_rollback "Caddy container bind mount does not match expected runtime Caddyfile ($RUNTIME_CADDYFILE_PATH)"
+fi
+
+PHASE="CANDIDATE_START"
 
 echo "[deploy-prod] Building candidate slot ($CANDIDATE_API_SERVICE, $CANDIDATE_WEB_SERVICE, $CANDIDATE_WORKER_SERVICE)..."
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml build --pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate
+if ! run_bounded "$BUILD_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml build --pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate; then
+  cleanup_and_rollback "Failed building candidate services within timeout"
+fi
 
 echo "[deploy-prod] Running database migrations..."
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate
+if ! run_bounded "$MIGRATION_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate; then
+  cleanup_and_rollback "Database migrations failed or timed out"
+fi
 
 echo "[deploy-prod] Starting candidate serving slot ($CANDIDATE_API_SERVICE, $CANDIDATE_WEB_SERVICE) alongside active slot $ACTIVE_SLOT..."
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE"
+if ! run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE"; then
+  cleanup_and_rollback "Failed starting candidate serving slot services"
+fi
 
 echo "[deploy-prod] Probing candidate API readiness on internal IP ($CANDIDATE_API_IP:4000)..."
 candidate_api_ready=0
 for attempt in $(seq 1 30); do
-  if docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e "fetch('http://127.0.0.1:4000/health/ready').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
+  if run_bounded 5 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e "fetch('http://127.0.0.1:4000/health/ready').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
     candidate_api_ready=1
     break
   fi
@@ -336,23 +470,23 @@ if [ "$candidate_api_ready" -ne 1 ]; then
 fi
 
 echo "[deploy-prod] Probing candidate API liveness..."
-if ! docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e "fetch('http://127.0.0.1:4000/health/live').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
+if ! run_bounded 5 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e "fetch('http://127.0.0.1:4000/health/live').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
   cleanup_and_rollback "Candidate API failed internal liveness probe"
 fi
 
 echo "[deploy-prod] Verifying candidate API build identity..."
-actual_sha="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e 'fetch("http://127.0.0.1:4000/api/v1/meta/build").then((r) => r.json()).then((b) => process.stdout.write(b.git_sha ?? "")).catch(() => process.exit(1))' 2>/dev/null | tr -d '\r\n')"
+actual_sha="$(run_bounded 5 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e 'fetch("http://127.0.0.1:4000/api/v1/meta/build").then((r) => r.json()).then((b) => process.stdout.write(b.git_sha ?? "")).catch(() => process.exit(1))' 2>/dev/null | tr -d '\r\n')"
 if [ "$actual_sha" != "$CANDIDATE_SHA" ]; then
   cleanup_and_rollback "Candidate API reported git_sha '$actual_sha' which does not match candidate '$CANDIDATE_SHA'"
 fi
 
-api_env="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e 'fetch("http://127.0.0.1:4000/api/v1/meta/build").then((r) => r.json()).then((b) => process.stdout.write(b.environment ?? "")).catch(() => process.exit(1))' 2>/dev/null | tr -d '\r\n')"
+api_env="$(run_bounded 5 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_API_SERVICE" node -e 'fetch("http://127.0.0.1:4000/api/v1/meta/build").then((r) => r.json()).then((b) => process.stdout.write(b.environment ?? "")).catch(() => process.exit(1))' 2>/dev/null | tr -d '\r\n')"
 if [ "$api_env" != "production" ]; then
   cleanup_and_rollback "Candidate API environment is '$api_env', expected 'production'"
 fi
 
-candidate_api_id="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$CANDIDATE_API_SERVICE")"
-candidate_label_sha="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_api_id" 2>/dev/null || true)"
+candidate_api_id="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$CANDIDATE_API_SERVICE")"
+candidate_label_sha="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_api_id" 2>/dev/null || true)"
 if [ "$candidate_label_sha" != "$CANDIDATE_SHA" ]; then
   cleanup_and_rollback "Candidate API image revision label '$candidate_label_sha' does not match '$CANDIDATE_SHA'"
 fi
@@ -361,7 +495,7 @@ fi
 echo "[deploy-prod] Probing candidate Web readiness on internal port ($CANDIDATE_WEB_IP:3000)..."
 candidate_web_ready=0
 for attempt in $(seq 1 30); do
-  if docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_WEB_SERVICE" node -e "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
+  if run_bounded 5 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_WEB_SERVICE" node -e "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
     candidate_web_ready=1
     break
   fi
@@ -373,19 +507,19 @@ if [ "$candidate_web_ready" -ne 1 ]; then
 fi
 
 echo "[deploy-prod] Verifying candidate Web build identity..."
-candidate_web_build_id="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_WEB_SERVICE" node -e "fetch('http://127.0.0.1:3000/').then(r => process.stdout.write(r.headers.get('x-matchday-build-id') || '')).catch(() => process.exit(1))" 2>/dev/null | tr -d '\r\n')"
+candidate_web_build_id="$(run_bounded 5 docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T "$CANDIDATE_WEB_SERVICE" node -e "fetch('http://127.0.0.1:3000/').then(r => process.stdout.write(r.headers.get('x-matchday-build-id') || '')).catch(() => process.exit(1))" 2>/dev/null | tr -d '\r\n')"
 if [ "$candidate_web_build_id" != "$CANDIDATE_SHA" ]; then
   cleanup_and_rollback "Candidate Web reported build ID '$candidate_web_build_id' which does not match candidate '$CANDIDATE_SHA'"
 fi
 
-candidate_web_id="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$CANDIDATE_WEB_SERVICE")"
+candidate_web_id="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$CANDIDATE_WEB_SERVICE")"
 if [ -z "$candidate_web_id" ]; then
   cleanup_and_rollback "Candidate Web container ID not found"
 fi
 
-# Atomic Traffic Promotion via Runtime Caddyfile
+# Atomic Traffic Promotion via Same-Filesystem Rename
 echo "[deploy-prod] Generating candidate runtime Caddy configuration..."
-cp "$RUNTIME_CADDYFILE_PATH" "$PREVIOUS_RUNTIME_CADDYFILE"
+cp -p "$RUNTIME_CADDYFILE_PATH" "$PREVIOUS_RUNTIME_CADDYFILE"
 
 python3 -c "
 with open('$RUNTIME_CADDYFILE_PATH', 'r') as f:
@@ -394,24 +528,24 @@ updated = content.replace('$ACTIVE_API_IP:4000', '$CANDIDATE_API_IP:4000').repla
 with open('$CANDIDATE_RUNTIME_CADDYFILE', 'w') as f:
     f.write(updated)
 "
+chmod 600 "$CANDIDATE_RUNTIME_CADDYFILE" 2>/dev/null || true
 
-# Validate candidate runtime Caddyfile
-if command -v caddy >/dev/null 2>&1; then
-  if ! caddy validate --adapter caddyfile --config "$CANDIDATE_RUNTIME_CADDYFILE" >/dev/null 2>&1; then
-    cleanup_and_rollback "Candidate runtime Caddyfile failed syntax validation"
-  fi
+# Mandatory validation of candidate Caddyfile using pinned container image
+echo "[deploy-prod] Validating candidate runtime Caddy configuration using pinned Caddy image ($PINNED_CADDY_IMAGE)..."
+if ! run_bounded "$CADDY_VALIDATION_TIMEOUT" docker run --rm --network none -v "$CANDIDATE_RUNTIME_CADDYFILE":/etc/caddy/Caddyfile:ro "$PINNED_CADDY_IMAGE" caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile; then
+  cleanup_and_rollback "Candidate runtime Caddyfile failed syntax validation"
 fi
 
-# Atomically replace runtime Caddyfile
-cat "$CANDIDATE_RUNTIME_CADDYFILE" > "$RUNTIME_CADDYFILE_PATH"
-rm -f "$CANDIDATE_RUNTIME_CADDYFILE"
+# Atomic rename onto target runtime Caddyfile
+if ! mv -f "$CANDIDATE_RUNTIME_CADDYFILE" "$RUNTIME_CADDYFILE_PATH"; then
+  cleanup_and_rollback "Failed atomic rename of candidate runtime Caddyfile"
+fi
 PROMOTED=1
+PHASE="PROMOTED"
 
-if [ -n "$caddy_container" ]; then
-  echo "[deploy-prod] Reloading Caddy configuration..."
-  if ! docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
-    cleanup_and_rollback "Caddy reload failed during traffic promotion"
-  fi
+echo "[deploy-prod] Reloading Caddy configuration..."
+if ! run_bounded "$CADDY_RELOAD_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
+  cleanup_and_rollback "Caddy reload failed during traffic promotion"
 fi
 
 # Post-Promotion Routed Health Checks
@@ -438,38 +572,43 @@ if [ "$public_web_build_id" != "$CANDIDATE_SHA" ]; then
 fi
 
 # Sequential Worker Handover
+PHASE="WORKER_HANDOVER"
 echo "[deploy-prod] Performing sequential worker handover..."
 WORKER_HANDOVER_STARTED=1
 echo "[deploy-prod] Stopping previous worker ($ACTIVE_WORKER_SERVICE)..."
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml stop "$ACTIVE_WORKER_SERVICE"
+if ! run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml stop "$ACTIVE_WORKER_SERVICE"; then
+  cleanup_and_rollback "Failed stopping previous worker within timeout"
+fi
 ACTIVE_WORKER_STOPPED=1
 
 echo "[deploy-prod] Starting candidate worker ($CANDIDATE_WORKER_SERVICE)..."
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d "$CANDIDATE_WORKER_SERVICE"
+if ! run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d "$CANDIDATE_WORKER_SERVICE"; then
+  cleanup_and_rollback "Failed starting candidate worker within timeout"
+fi
 
-candidate_worker_id="$(docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$CANDIDATE_WORKER_SERVICE")"
+candidate_worker_id="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$CANDIDATE_WORKER_SERVICE")"
 if [ -z "$candidate_worker_id" ]; then
   cleanup_and_rollback "Candidate worker container ID not found"
 fi
 
-worker_state="$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' "$candidate_worker_id" 2>/dev/null || echo "unknown")"
+worker_state="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{.State.Status}} {{.RestartCount}}' "$candidate_worker_id" 2>/dev/null || echo "unknown")"
 if [ "$worker_state" != "running 0" ]; then
   cleanup_and_rollback "Candidate worker failed stability check: $worker_state"
 fi
 
-worker_sha="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$candidate_worker_id" 2>/dev/null | awk -F= '$1 == "GIT_SHA" { print $2 }')"
+worker_sha="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$candidate_worker_id" 2>/dev/null | awk -F= '$1 == "GIT_SHA" { print $2 }')"
 if [ "$worker_sha" != "$CANDIDATE_SHA" ]; then
   cleanup_and_rollback "Candidate worker GIT_SHA '$worker_sha' does not match candidate '$CANDIDATE_SHA'"
 fi
 
-worker_label_sha="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_worker_id" 2>/dev/null || true)"
+worker_label_sha="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_worker_id" 2>/dev/null || true)"
 if [ "$worker_label_sha" != "$CANDIDATE_SHA" ]; then
   cleanup_and_rollback "Candidate worker revision label '$worker_label_sha' does not match '$CANDIDATE_SHA'"
 fi
 
 echo "[deploy-prod] Retiring previous serving slot ($ACTIVE_API_SERVICE, $ACTIVE_WEB_SERVICE)..."
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml stop "$ACTIVE_API_SERVICE" "$ACTIVE_WEB_SERVICE" 2>/dev/null || true
-docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml rm -f "$ACTIVE_API_SERVICE" "$ACTIVE_WEB_SERVICE" 2>/dev/null || true
+run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml stop "$ACTIVE_API_SERVICE" "$ACTIVE_WEB_SERVICE" 2>/dev/null || true
+run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml rm -f "$ACTIVE_API_SERVICE" "$ACTIVE_WEB_SERVICE" 2>/dev/null || true
 
 # Persist active slot state atomically
 tmp_state="${STATE_FILE}.tmp.$$"
@@ -479,13 +618,16 @@ mv -f "$tmp_state" "$STATE_FILE"
 
 rm -f "$PREVIOUS_RUNTIME_CADDYFILE" 2>/dev/null || true
 
-api_image_digest="$(docker inspect --format '{{.Image}}' "$candidate_api_id" 2>/dev/null || echo "unknown")"
-worker_image_digest="$(docker inspect --format '{{.Image}}' "$candidate_worker_id" 2>/dev/null || echo "unknown")"
+api_image_digest="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{.Image}}' "$candidate_api_id" 2>/dev/null || echo "unknown")"
+worker_image_digest="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{.Image}}' "$candidate_worker_id" 2>/dev/null || echo "unknown")"
 
 if ! emit_receipt "SUCCESS" "$CANDIDATE_SLOT" "" ""; then
   echo "[deploy-prod] FATAL: Failed to write deployment receipt" >&2
   exit 1
 fi
+
+DEPLOYMENT_COMMITTED=1
+PHASE="COMMITTED"
 
 echo "=================================================="
 echo "PRODUCTION DEPLOYMENT SUCCESSFUL"
