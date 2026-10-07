@@ -240,4 +240,166 @@ export async function registerAdminRoutes(
       });
     },
   );
+
+  // --- OPS-018: Feature Flag Admin Endpoints ---
+
+  const FeatureFlagScopeSchema = Type.Union([
+    Type.Object({ kind: Type.Literal("global") }),
+    Type.Object({ kind: Type.Literal("organization"), id: Id }),
+    Type.Object({ kind: Type.Literal("competition"), id: Id }),
+    Type.Object({ kind: Type.Literal("account"), id: Id }),
+  ]);
+
+  // List all feature flags and active overrides
+  app.get(
+    "/api/v1/admin/feature-flags",
+    {
+      schema: {
+        response: { 200: Json, ...ReadResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await readActor(request);
+      return options.runtime.listFeatureFlags(actor);
+    },
+  );
+
+  // Get specific feature flag and its overrides
+  app.get<{
+    Params: { key: string };
+  }>(
+    "/api/v1/admin/feature-flags/:key",
+    {
+      schema: {
+        params: Type.Object({ key: Type.String({ minLength: 1 }) }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await readActor(request);
+      return options.runtime.getFeatureFlag(actor, request.params.key);
+    },
+  );
+
+  // Evaluate effective feature flag value for given context
+  app.get<{
+    Params: { key: string };
+    Querystring: {
+      organization_id?: string;
+      competition_id?: string;
+      account_id?: string;
+    };
+  }>(
+    "/api/v1/admin/feature-flags/:key/effective",
+    {
+      schema: {
+        params: Type.Object({ key: Type.String({ minLength: 1 }) }),
+        querystring: Type.Object({
+          organization_id: Type.Optional(Id),
+          competition_id: Type.Optional(Id),
+          account_id: Type.Optional(Id),
+        }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await readActor(request);
+      return options.runtime.getEffectiveFeatureFlag(actor, request.params.key, {
+        ...(request.query.organization_id ? { organizationId: request.query.organization_id } : {}),
+        ...(request.query.competition_id ? { competitionId: request.query.competition_id } : {}),
+        ...(request.query.account_id ? { accountId: request.query.account_id } : {}),
+      });
+    },
+  );
+
+  // Get audit events for a feature flag
+  app.get<{
+    Params: { key: string };
+    Querystring: { limit?: number };
+  }>(
+    "/api/v1/admin/feature-flags/:key/audit",
+    {
+      schema: {
+        params: Type.Object({ key: Type.String({ minLength: 1 }) }),
+        querystring: Type.Object({
+          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+        }),
+        response: { 200: Json, ...ReadResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await readActor(request);
+      return options.runtime.getFeatureFlagAudit(actor, request.params.key, request.query.limit);
+    },
+  );
+
+  // Set or update feature flag override
+  app.put<{
+    Params: { key: string };
+    Body: {
+      scope: {
+        kind: "global" | "organization" | "competition" | "account";
+        id?: string;
+      };
+      value: boolean;
+      reason: string;
+      expected_updated_at?: string;
+    };
+  }>(
+    "/api/v1/admin/feature-flags/:key/override",
+    {
+      schema: {
+        params: Type.Object({ key: Type.String({ minLength: 1 }) }),
+        body: Type.Object({
+          scope: FeatureFlagScopeSchema,
+          value: Type.Boolean(),
+          reason: Type.String({ minLength: 3 }),
+          expected_updated_at: Type.Optional(Type.String()),
+        }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await mutationActor(request);
+      const requestId = request.id;
+      return options.runtime.setFeatureFlagOverride(actor, request.params.key, request.body as never, requestId);
+    },
+  );
+
+  // Delete feature flag override
+  app.delete<{
+    Params: { key: string };
+    Body: {
+      scope: {
+        kind: "global" | "organization" | "competition" | "account";
+        id?: string;
+      };
+      reason: string;
+      expected_updated_at?: string;
+    };
+  }>(
+    "/api/v1/admin/feature-flags/:key/override",
+    {
+      schema: {
+        params: Type.Object({ key: Type.String({ minLength: 1 }) }),
+        body: Type.Object({
+          scope: FeatureFlagScopeSchema,
+          reason: Type.String({ minLength: 3 }),
+          expected_updated_at: Type.Optional(Type.String()),
+        }),
+        response: { 200: Json, ...MutationResponses },
+        tags: ["admin"],
+      },
+    },
+    async (request) => {
+      const actor = await mutationActor(request);
+      const requestId = request.id;
+      return options.runtime.deleteFeatureFlagOverride(actor, request.params.key, request.body as never, requestId);
+    },
+  );
 }
