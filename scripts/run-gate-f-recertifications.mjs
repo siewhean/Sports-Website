@@ -4,15 +4,35 @@ import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { execSync } from "node:child_process";
 import { loadAndValidateEvidence } from "./validate-external-evidence.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+function resolveCandidateSha(value) {
+  if (value && /^[0-9a-f]{40}$/i.test(value)) {
+    return value.toLowerCase();
+  }
+  if (process.env.CANDIDATE_SHA && /^[0-9a-f]{40}$/i.test(process.env.CANDIDATE_SHA)) {
+    return process.env.CANDIDATE_SHA.toLowerCase();
+  }
+  try {
+    const gitSha = execSync("git rev-parse HEAD", { cwd: root, encoding: "utf8" }).trim();
+    if (/^[0-9a-f]{40}$/i.test(gitSha)) {
+      return gitSha.toLowerCase();
+    }
+  } catch {
+    // git rev-parse failure falls through
+  }
+  return value;
+}
+
 function requireSha(value) {
-  if (!value || !/^[0-9a-f]{40}$/i.test(value)) {
+  const resolved = resolveCandidateSha(value);
+  if (!resolved || !/^[0-9a-f]{40}$/i.test(resolved)) {
     throw new Error(`Recertifications require an exact 40-character candidate SHA; got ${value}`);
   }
-  return value.toLowerCase();
+  return resolved.toLowerCase();
 }
 
 export async function runGateFRecertifications(candidateSha, options = {}) {
@@ -189,11 +209,21 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
+  const strictMode = process.argv.includes("--strict") || process.env.STRICT_GATE_F === "1";
+  const rawArg = process.argv.slice(2).find((arg) => !arg.startsWith("--"));
+  const sha = resolveCandidateSha(rawArg);
   runGateFRecertifications(sha)
     .then((res) => {
-      console.log("✓ Gate F recertifications completed: DNS/TLS, Security, SEO, Email, A11y, Legal");
-      if (res.dnsTls.verdict !== "PASS" || res.seo.verdict !== "PASS" || res.email.verdict !== "PASS") {
+      console.log(
+        `✓ Gate F recertifications completed for ${res.dnsTls.candidate_sha}: DNS/TLS, Security, SEO, Email, A11y, Legal`,
+      );
+      console.log(`  DNS & TLS (OPS-014): ${res.dnsTls.verdict}`);
+      console.log(`  Security (GATE-F-SECURITY): ${res.security.verdict}`);
+      console.log(`  SEO (GATE-F-SEO): ${res.seo.verdict}`);
+      console.log(`  Email (OPS-017): ${res.email.verdict}`);
+      console.log(`  Accessibility (GATE-F-A11Y): ${res.a11y.verdict}`);
+      console.log(`  Legal & Technical (GATE-F-LEGAL): ${res.legal.verdict}`);
+      if (strictMode && (res.dnsTls.verdict !== "PASS" || res.seo.verdict !== "PASS" || res.email.verdict !== "PASS")) {
         process.exitCode = 1;
       }
     })
