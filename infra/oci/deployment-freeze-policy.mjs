@@ -532,28 +532,21 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
       };
     }
 
-    // Authorized override granted under policy control
+    // A caller-supplied "delivered" payload is NOT independently authenticated
+    // evidence of organiser notification. This code has no trusted delivery-provider
+    // lookup, authority-bound expiry/scope verification, or replay-protected nonce
+    // ledger. Do not enable forward-deployment exceptions until those exist.
+    // OPS-002's internal emergency rollback remains a separate control path.
     return {
-      disposition: "POLICY_CONTROLLED",
-      status: "ALLOW",
-      code: "EXPLICIT_AUTHORISED_OVERRIDE",
-      reason: `Deployment freeze override authorized with verified credentials and organiser notification (${notification_id}): ${overrideReason}`,
-      allowed: true,
-      overrideApplied: true,
+      disposition: "BLOCK",
+      status: "BLOCK",
+      code: "OVERRIDE_EVIDENCE_NOT_VERIFIABLE",
+      reason:
+        "Forward deployment override disabled: notification delivery and replay-safe authorization are not independently verifiable",
+      allowed: false,
+      overrideApplied: false,
       timestamp: new Date().toISOString(),
-      details: {
-        operator_id: operatorId,
-        overrideReason,
-        scope: overrideScope,
-        authorization_reference: authObj?.nonce || `auth-${Date.now()}`,
-        notification_id,
-        competition_id,
-        recipient_or_organiser_reference,
-        delivery_status: delivery_or_acknowledgement_status,
-        evidence_source,
-        activeCompetitions,
-        scoringMatches,
-      },
+      details: { activeCompetitions, scoringMatches },
     };
   }
 

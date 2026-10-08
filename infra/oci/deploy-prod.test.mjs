@@ -1261,7 +1261,7 @@ test("71. Unauthorised deployment freeze override attempt is rejected fail-close
   assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
 });
 
-test("72. Explicit authorised deployment freeze override allows deployment during active competition under policy control", (t) => {
+test("72. Forged delivery JSON with a matching token cannot promote during an active competition", (t) => {
   const f = createFixture(t, { initialSlot: "blue" });
   const authPayload = JSON.stringify({
     operator_id: "ops-lead-01",
@@ -1284,8 +1284,12 @@ test("72. Explicit authorised deployment freeze override allows deployment durin
     DEPLOY_FREEZE_AUTHORIZATION: authPayload,
     DEPLOY_FREEZE_NOTIFICATION_EVIDENCE: notifEvidence,
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Promoted Slot:\s+green/);
+  assert.notEqual(result.status, 0, "Self-asserted delivery evidence cannot authorize candidate promotion");
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+  const calls = existsSync(f.log)
+    ? readFileSync(f.log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  assert.equal(calls.some((entry) => entry.tool === "docker" && entry.args.includes("build")), false);
 });
 
 test("73. Normal forward deployment with MATCHDAY_EMERGENCY_ROLLBACK=1 during active competition blocks fail-closed", (t) => {

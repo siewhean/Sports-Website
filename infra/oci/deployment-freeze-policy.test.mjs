@@ -384,7 +384,7 @@ test("13. INVALID_NOTIFICATION_EVIDENCE blocks on unconfirmed or malformed notif
   assert.equal(resOldNotif.code, "INVALID_NOTIFICATION_EVIDENCE");
 });
 
-test("14. EXPLICIT_AUTHORISED_OVERRIDE allows deployment under policy control when verified", async () => {
+test("14. Matching credentials and self-declared delivered notification cannot override an active competition", async () => {
   const provider = createMockProvider({
     timestamp: new Date().toISOString(),
     activeCompetitions: [{ id: "comp-1", name: "National Canoe Polo League", status: "active" }],
@@ -402,14 +402,12 @@ test("14. EXPLICIT_AUTHORISED_OVERRIDE allows deployment under policy control wh
     provider,
   );
 
-  assert.equal(result.disposition, "POLICY_CONTROLLED");
-  assert.equal(result.status, "ALLOW");
-  assert.equal(result.code, "EXPLICIT_AUTHORISED_OVERRIDE");
-  assert.equal(result.allowed, true);
-  assert.equal(result.overrideApplied, true);
-  assert.match(result.reason, /Deployment freeze override authorized/);
-  assert.equal(result.details.operator_id, "operator:siewhean");
-  assert.equal(result.details.notification_id, "notif-delivery-1001");
+  assert.equal(result.disposition, "BLOCK");
+  assert.equal(result.status, "BLOCK");
+  assert.equal(result.code, "OVERRIDE_EVIDENCE_NOT_VERIFIABLE");
+  assert.equal(result.allowed, false);
+  assert.equal(result.overrideApplied, false);
+  assert.match(result.reason, /not independently verifiable/);
 });
 
 test("15. Scoring HMAC secret is REJECTED as deployment authorization credential", async () => {
@@ -517,4 +515,56 @@ test("18. Adversarial test: caller-supplied MATCHDAY_FREEZE_SNAPSHOT or MOCK_* c
   // it MUST fail closed (exit 1) rather than accepting the fake snapshot!
   assert.equal(res.status, 1);
   assert.match(res.stderr, /FATAL: Deployment blocked by freeze policy: FREEZE_PROVIDER_UNAVAILABLE/);
+});
+
+test("19. Forged delivered notification and reused authorization nonce fail closed repeatedly", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    competitions: [{ id: "comp-1", name: "Test competition", status: "active" }],
+    scoringMatches: [],
+  });
+  const authorization = createValidAuthorization({ nonce: "replayable-nonce" });
+  const notificationEvidence = createValidNotificationEvidence({
+    notification_id: "unverified-delivery-claim",
+    delivery_or_acknowledgement_status: "delivered",
+    evidence_source: "email_delivery_webhook",
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await evaluateDeploymentFreeze(
+      {
+        overrideRequested: true,
+        parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+        authorization,
+        notificationEvidence,
+      },
+      provider,
+    );
+    assert.equal(result.code, "OVERRIDE_EVIDENCE_NOT_VERIFIABLE");
+    assert.equal(result.allowed, false);
+    assert.equal(result.overrideApplied, false);
+  }
+});
+
+test("20. Missing authorization expiry and implicit global scope can never grant deployment override", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    competitions: [{ id: "comp-1", name: "Test competition", status: "active" }],
+    scoringMatches: [],
+  });
+  const result = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization({
+        valid_until: undefined,
+        scope: undefined,
+        nonce: undefined,
+      }),
+      notificationEvidence: createValidNotificationEvidence(),
+    },
+    provider,
+  );
+  assert.equal(result.code, "OVERRIDE_EVIDENCE_NOT_VERIFIABLE");
+  assert.equal(result.status, "BLOCK");
+  assert.equal(result.allowed, false);
 });
