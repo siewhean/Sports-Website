@@ -332,14 +332,19 @@ test("cache purge audit returns PENDING without external evidence and validates 
   });
 });
 
-test("ops audit returns PENDING for SLO, alert routing, cost controls and PENDING_IMPLEMENTATION for feature flags", async () => {
+test("ops audit preserves live PENDING evidence and detects merged OPS-018 admin UI source", async () => {
   await withArtifacts(async (artifactsDir) => {
     const res = await runGateFOpsAudit(SHA, { artifactsDir });
     assert.equal(res.sloBaseline.verdict, "PENDING");
     assert.equal(res.alertRouting.verdict, "PENDING");
     assert.equal(res.costControls.verdict, "PENDING");
-    assert.equal(res.featureFlags.verdict, "PENDING_IMPLEMENTATION");
-    assert.equal(res.featureFlags.admin_ui_present, false);
+    assert.equal(res.featureFlags.admin_ui_present, true);
+    assert.equal(res.featureFlags.source_status, "SOURCE_COMPLETE");
+    assert.equal(res.featureFlags.operational_status, "PRODUCTION_EVIDENCE_PENDING");
+    assert.equal(res.featureFlags.verdict, "PENDING");
+    assert.ok(
+      res.featureFlags.pending_reasons.includes("production_feature_flag_admin_operational_verification_pending"),
+    );
   });
 });
 
