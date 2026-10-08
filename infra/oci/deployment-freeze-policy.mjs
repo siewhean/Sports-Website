@@ -357,23 +357,21 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
     options.overrideRequested === true || env.DEPLOY_FREEZE_OVERRIDE === "1" || env.DEPLOY_FREEZE_OVERRIDE === "true";
 
   if (overrideRequested) {
+    // Expected secret MUST be sourced exclusively from trusted server configuration.
+    // Never fall back to env or process.env to prevent circular self-validation attacks.
     const expectedSecret =
       options.expectedOverrideSecret ||
       options.parsedEnv?.DEPLOY_FREEZE_OVERRIDE_SECRET ||
-      options.parsedEnv?.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET ||
-      options.env?.DEPLOY_FREEZE_OVERRIDE_EXPECTED_SECRET ||
-      env.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET ||
-      env.DEPLOY_FREEZE_OVERRIDE_SECRET;
+      options.parsedEnv?.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET;
 
+    // Provided secret MUST be sourced exclusively from caller input parameters.
+    // Never fall back to env which may inherit .env.prod contents.
     const providedSecret =
       options.overrideSecret ||
       options.overrideToken ||
       process.env.DEPLOY_FREEZE_OVERRIDE_TOKEN ||
       process.env.DEPLOY_FREEZE_OVERRIDE_SECRET_TOKEN ||
-      env.DEPLOY_FREEZE_OVERRIDE_TOKEN ||
-      env.DEPLOY_FREEZE_OVERRIDE_SECRET_TOKEN ||
-      process.env.DEPLOY_FREEZE_OVERRIDE_SECRET ||
-      env.DEPLOY_FREEZE_OVERRIDE_SECRET;
+      process.env.DEPLOY_FREEZE_OVERRIDE_SECRET;
 
     const overrideReason = (options.overrideReason || env.DEPLOY_FREEZE_OVERRIDE_REASON || "").trim();
 
@@ -382,7 +380,10 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
       env.DEPLOY_FREEZE_ORGANISER_NOTIFIED === "true" ||
       env.DEPLOY_FREEZE_ORGANISER_NOTIFIED === "1";
 
-    const secretValid = timingSafeEqualStrings(expectedSecret, providedSecret);
+    const hasExpectedSecret = Boolean(typeof expectedSecret === "string" && expectedSecret.trim().length > 0);
+    const hasProvidedSecret = Boolean(typeof providedSecret === "string" && providedSecret.trim().length > 0);
+    const secretValid =
+      hasExpectedSecret && hasProvidedSecret && timingSafeEqualStrings(expectedSecret, providedSecret);
     const reasonValid = overrideReason.length >= 8;
     const notificationValid = organiserNotified === true;
 

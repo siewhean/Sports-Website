@@ -238,6 +238,36 @@ test("8. UNAUTHORISED_OVERRIDE blocks deployment when override token, reason, or
   assert.equal(resNoNotification.code, "UNAUTHORISED_OVERRIDE");
   assert.equal(resNoNotification.allowed, false);
   assert.match(resNoNotification.reason, /organiser notification not affirmed/);
+
+  // 8d. Secretless override attempt with trusted secret configured fails closed
+  const resSecretless = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      expectedOverrideSecret: "valid-production-secret-9999",
+      overrideReason: "Emergency bugfix approved by organisers",
+      organiserNotified: true,
+    },
+    provider,
+  );
+  assert.equal(resSecretless.disposition, "BLOCK");
+  assert.equal(resSecretless.code, "UNAUTHORISED_OVERRIDE");
+  assert.equal(resSecretless.allowed, false);
+  assert.match(resSecretless.reason, /invalid or missing override secret/);
+
+  // 8e. Arbitrary injected secret when no trusted secret is configured fails closed
+  const resNoExpected = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      overrideSecret: "arbitrary-attacker-secret",
+      overrideReason: "Emergency bugfix approved by organisers",
+      organiserNotified: true,
+    },
+    provider,
+  );
+  assert.equal(resNoExpected.disposition, "BLOCK");
+  assert.equal(resNoExpected.code, "UNAUTHORISED_OVERRIDE");
+  assert.equal(resNoExpected.allowed, false);
+  assert.match(resNoExpected.reason, /invalid or missing override secret/);
 });
 
 test("9. EXPLICIT_AUTHORISED_OVERRIDE allows deployment under policy control when verified", async () => {
@@ -375,4 +405,59 @@ test("12. CLI execution exits 0 on ALLOW and 1 on BLOCK with receipt emitted", (
   });
   assert.equal(runRollback.status, 0, runRollback.stderr);
   assert.match(runRollback.stdout, /ALLOWED_SAFELY \(EMERGENCY_ROLLBACK\)/);
+});
+
+test("13. Secretless override attempt with .env.prod configured fails closed (exit 1)", (t) => {
+  const tmpDir = mkdtempSync(path.join(tmpdir(), "matchday-freeze-sec1-"));
+  t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
+
+  const envFile = path.join(tmpDir, ".env.prod");
+  writeFileSync(
+    envFile,
+    "POSTGRES_USER=test\nPOSTGRES_DB=test\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-1234\n",
+  );
+
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.DEPLOY_FREEZE_OVERRIDE_SECRET;
+  delete cleanEnv.DEPLOY_FREEZE_OVERRIDE_TOKEN;
+  delete cleanEnv.DEPLOY_FREEZE_OVERRIDE_SECRET_TOKEN;
+
+  const res = spawnSync("node", [policyScriptPath, envFile], {
+    env: {
+      ...cleanEnv,
+      MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
+      DEPLOY_FREEZE_OVERRIDE: "1",
+      DEPLOY_FREEZE_OVERRIDE_REASON: "Attempting secretless override",
+      DEPLOY_FREEZE_ORGANISER_NOTIFIED: "1",
+    },
+    encoding: "utf8",
+  });
+
+  assert.equal(res.status, 1, `Expected exit 1 but got ${res.status}: ${res.stdout}`);
+  assert.match(res.stderr, /Deployment blocked by freeze policy: UNAUTHORISED_OVERRIDE/);
+  assert.match(res.stderr, /invalid or missing override secret/);
+});
+
+test("14. Arbitrary injected secret when .env.prod has no override secret fails closed (exit 1)", (t) => {
+  const tmpDir = mkdtempSync(path.join(tmpdir(), "matchday-freeze-sec2-"));
+  t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
+
+  const envFile = path.join(tmpDir, ".env.prod");
+  writeFileSync(envFile, "POSTGRES_USER=test\nPOSTGRES_DB=test\n");
+
+  const res = spawnSync("node", [policyScriptPath, envFile], {
+    env: {
+      ...process.env,
+      MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
+      DEPLOY_FREEZE_OVERRIDE: "1",
+      DEPLOY_FREEZE_OVERRIDE_SECRET: "attacker_secret_999",
+      DEPLOY_FREEZE_OVERRIDE_REASON: "Attempting arbitrary injected secret",
+      DEPLOY_FREEZE_ORGANISER_NOTIFIED: "1",
+    },
+    encoding: "utf8",
+  });
+
+  assert.equal(res.status, 1, `Expected exit 1 but got ${res.status}: ${res.stdout}`);
+  assert.match(res.stderr, /Deployment blocked by freeze policy: UNAUTHORISED_OVERRIDE/);
+  assert.match(res.stderr, /invalid or missing override secret/);
 });
