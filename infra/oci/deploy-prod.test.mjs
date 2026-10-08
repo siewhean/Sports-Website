@@ -1287,9 +1287,13 @@ test("72. Forged delivery JSON with a matching token cannot promote during an ac
   assert.notEqual(result.status, 0, "Self-asserted delivery evidence cannot authorize candidate promotion");
   assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
   const calls = existsSync(f.log)
-    ? readFileSync(f.log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    ? readFileSync(f.log, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
     : [];
-  assert.equal(calls.some((entry) => entry.tool === "docker" && entry.args.includes("build")), false);
+  const buildCalls = calls.filter((entry) => entry.tool === "docker" && entry.args.includes("build"));
+  assert.equal(buildCalls.length, 0, "Unverified notification evidence must not reach candidate build");
 });
 
 test("73. Normal forward deployment with MATCHDAY_EMERGENCY_ROLLBACK=1 during active competition blocks fail-closed", (t) => {
