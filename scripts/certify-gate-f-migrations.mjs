@@ -120,7 +120,9 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
 
   const isExpandContractCompliant = migrationReports.every((m) => m.safe_expand_contract);
   const isDataPreservationCompliant = isExpandContractCompliant;
-  const isRepeatabilityVerified = true;
+  // Static inspection cannot prove that applying or rerunning migrations is idempotent.
+  // Reserve repeatability_verified for an actual isolated execution/replay audit.
+  const isRepeatabilityVerified = false;
   const isSchemaVersionVerified = isSequenceContiguous && files.length > 0;
   const isBackwardCompatible = isExpandContractCompliant && isDataPreservationCompliant;
 
@@ -150,7 +152,10 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
     destructive_violations_count: totalDestructiveViolations,
     expand_contract_compliant: isExpandContractCompliant,
     data_preservation_compliant: isDataPreservationCompliant,
+    data_preservation_scope: "STATIC_DESTRUCTIVE_PATTERN_SCREENING_ONLY",
     repeatability_verified: isRepeatabilityVerified,
+    repeatability_scope: "NOT_EXECUTED_BY_STATIC_CERTIFIER",
+    backward_compatibility_scope: "STATIC_HEURISTIC_ONLY",
     schema_version_verified: isSchemaVersionVerified,
     backward_compatible: isBackwardCompatible,
     verdict: passesAll ? "PASS" : "FAIL",

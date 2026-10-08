@@ -429,7 +429,10 @@ test("certifyGateFMigrations outputs complete receipt and verifies contiguous 00
     assert.deepEqual(res.sequence_errors, []);
     assert.equal(res.expand_contract_compliant, true);
     assert.equal(res.data_preservation_compliant, true);
-    assert.equal(res.repeatability_verified, true);
+    assert.equal(res.repeatability_verified, false);
+    assert.equal(res.repeatability_scope, "NOT_EXECUTED_BY_STATIC_CERTIFIER");
+    assert.equal(res.data_preservation_scope, "STATIC_DESTRUCTIVE_PATTERN_SCREENING_ONLY");
+    assert.equal(res.backward_compatibility_scope, "STATIC_HEURISTIC_ONLY");
     assert.equal(res.schema_version_verified, true);
     assert.equal(res.backward_compatible, true);
     assert.equal(res.destructive_violations_count, 0);
