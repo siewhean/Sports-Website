@@ -220,7 +220,8 @@ fi
 echo "[deploy-prod] Deployment starting: Active Slot=$ACTIVE_SLOT, Candidate Slot=$CANDIDATE_SLOT, Candidate SHA=$CANDIDATE_SHA"
 
 # Phase and State tracking
-PHASE="PREFLIGHT"
+export MATCHDAY_DEPLOY_PHASE="PREFLIGHT"
+export PHASE="PREFLIGHT"
 PROMOTED=0
 ACTIVE_WORKER_STOPPED=0
 WORKER_HANDOVER_STARTED=0
@@ -526,6 +527,18 @@ run_bounded 30 node scripts/validate-production-config.mjs infra/oci/.env.prod
 echo "[deploy-prod] Pre-deploy: checking migration safety..."
 run_bounded 30 node scripts/certify-gate-f-migrations.mjs "$CANDIDATE_SHA"
 
+if [ "${MATCHDAY_EMERGENCY_ROLLBACK:-0}" = "1" ] || [ "${ROLLBACK_IN_PROGRESS:-0}" = "1" ]; then
+  echo "[deploy-prod] WARNING: Emergency rollback flag detected during forward candidate deployment; forward promotion remains strictly subject to freeze policy." >&2
+  ROLLBACK_IN_PROGRESS=0
+fi
+
+# Check deployment freeze policy (OPS-015 preflight check)
+echo "[deploy-prod] Pre-deploy: checking deployment freeze policy (OPS-015 preflight check)..."
+if ! run_bounded 30 node infra/oci/deployment-freeze-policy.mjs infra/oci/.env.prod; then
+  echo "[deploy-prod] FATAL: Deployment blocked by OPS-015 deployment freeze policy" >&2
+  exit 1
+fi
+
 # Ensure production backend network exists deterministically
 if ! run_bounded 10 docker network inspect matchday-prod_backend >/dev/null 2>&1; then
   echo "[deploy-prod] Creating matchday-prod_backend network (172.31.0.0/24)..."
@@ -693,6 +706,14 @@ fi
 candidate_web_id="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$CANDIDATE_WEB_SERVICE")"
 if [ -z "$candidate_web_id" ]; then
   cleanup_and_rollback "Candidate Web container ID not found"
+fi
+
+# OPS-015 TOCTOU Pre-Promotion Freeze Recheck
+echo "[deploy-prod] Pre-promotion: rechecking deployment freeze policy (OPS-015 TOCTOU guard)..."
+export MATCHDAY_DEPLOY_PHASE="PRE_PROMOTION"
+export PHASE="PRE_PROMOTION"
+if ! run_bounded 30 node infra/oci/deployment-freeze-policy.mjs infra/oci/.env.prod; then
+  cleanup_and_rollback "Deployment freeze policy recheck failed before promotion"
 fi
 
 # Atomic Traffic Promotion via Same-Filesystem Rename
