@@ -4,7 +4,7 @@
 **Status:** ACTIVE GOVERNANCE CATALOG  
 **Target Event:** MATCHDAY Singapore Launch  
 **Assurance Profile:** `automated-only-owner-waived-v2` (ADR 0005)  
-**Evaluation Baseline:** Commit `6e1723b33360738a8764a60fc218d2e23c022d72` (origin/main)
+**Evaluation Baseline:** Commit `3bbe7cc59dba2eb77808e6a04e0ffefc8ccccc1a` (PR #66 merged; no production certification)
 
 ---
 
@@ -18,19 +18,19 @@ Each blocker is tracked with an authoritative ID (`BLK-01` through `BLK-11`), se
 
 ## 2. Launch Blocker Summary Ledger
 
-| ID         | Title                                             | Severity | Owning Workstream    | Category               | Current Status                       |
-| ---------- | ------------------------------------------------- | -------- | -------------------- | ---------------------- | ------------------------------------ |
-| **BLK-01** | Production Caddy Directory Mount Not Migrated     | **P0**   | Workstream D / Infra | Ingress Infrastructure | Blocked (Pending Maintenance Window) |
-| **BLK-02** | OPS-015 Deployment Freeze Not Merged to Main      | **P0**   | Workstream A         | Deployment Safety      | Ready for PR Merge                   |
-| **BLK-03** | Production Backup & DR Evidence Pending           | **P0**   | Workstream B / Ops   | Data Reliability       | Pending Operator Capture             |
-| **BLK-04** | Live SLO Baseline External Evidence Pending       | **P0**   | Workstream C / QA    | Performance & SLO      | Pending Probe Execution              |
-| **BLK-05** | Alert Routing Drill External Evidence Pending     | **P0**   | Workstream C / Ops   | Operations & Incident  | Pending Alert Drill                  |
-| **BLK-06** | Edge CDN Cache Purge External Evidence Pending    | **P0**   | Workstream C / Infra | Ingress & Edge CDN     | Pending Provider Drill               |
-| **BLK-07** | Feature Flag Admin UI Not Implemented             | **P0**   | Workstream C / Web   | Operations Management  | Pending UI Implementation            |
-| **BLK-08** | Cloud Cost Budget Alert External Evidence Pending | **P1**   | Workstream C / Ops   | Governance & Finance   | Pending OCI Receipt                  |
-| **BLK-09** | Production DNS/TLS & SEO Live Probes Pending      | **P0**   | Workstream C / Web   | Security & Search      | Pending Live Probe                   |
-| **BLK-10** | Email SPF/DKIM/DMARC & Bounce Webhook Pending     | **P0**   | Workstream C / Comms | Email Communications   | Pending DNS / Webhook Run            |
-| **BLK-11** | Gate F Final Production Certification Pending     | **P0**   | Central Coordination | Release Gate           | Blocked by BLK-01..10                |
+| ID         | Title                                                 | Severity | Owning Workstream    | Category               | Current Status                       |
+| ---------- | ----------------------------------------------------- | -------- | -------------------- | ---------------------- | ------------------------------------ |
+| **BLK-01** | Production Caddy Directory Mount Not Migrated         | **P0**   | Workstream D / Infra | Ingress Infrastructure | Blocked (Pending Maintenance Window) |
+| **BLK-02** | OPS-015 Source Merge Completed; Prod Evidence Pending | **P0**   | Workstream A / Ops   | Deployment Safety      | Source Resolved; Prod Pending        |
+| **BLK-03** | Production Backup & DR Evidence Pending               | **P0**   | Workstream B / Ops   | Data Reliability       | Pending Operator Capture             |
+| **BLK-04** | Live SLO Baseline External Evidence Pending           | **P0**   | Workstream C / QA    | Performance & SLO      | Pending Probe Execution              |
+| **BLK-05** | Alert Routing Drill External Evidence Pending         | **P0**   | Workstream C / Ops   | Operations & Incident  | Pending Alert Drill                  |
+| **BLK-06** | Edge CDN Cache Purge External Evidence Pending        | **P0**   | Workstream C / Infra | Ingress & Edge CDN     | Pending Provider Drill               |
+| **BLK-07** | Feature Flag Admin Operational Verification Pending   | **P0**   | Workstream C / Web   | Operations Management  | UI Merged; Audit Pending             |
+| **BLK-08** | Cloud Cost Budget Alert External Evidence Pending     | **P1**   | Workstream C / Ops   | Governance & Finance   | Pending OCI Receipt                  |
+| **BLK-09** | Production DNS/TLS & SEO Live Probes Pending          | **P0**   | Workstream C / Web   | Security & Search      | Pending Live Probe                   |
+| **BLK-10** | Email SPF/DKIM/DMARC & Bounce Webhook Pending         | **P0**   | Workstream C / Comms | Email Communications   | Pending DNS / Webhook Run            |
+| **BLK-11** | Gate F Final Production Certification Pending         | **P0**   | Central Coordination | Release Gate           | Blocked by BLK-01..10                |
 
 ---
 
@@ -60,24 +60,15 @@ Each blocker is tracked with an authoritative ID (`BLK-01` through `BLK-11`), se
 
 ---
 
-### BLK-02: OPS-015 Deployment Freeze Not Merged to Main
+### BLK-02: OPS-015 Source Merge Completed; Production Evidence Pending
 
-- **Severity:** **P0** (Critical Deployment Safety Blocker)
-- **Owning Workstream:** Workstream A
+- **Severity:** **P0** (Production Deployment Safety)
+- **Owning Workstream:** Workstream A / Operations
 - **Affected Requirements:** `OPS-015`
-- **Description & Risk:**
-  - Without automated deployment freeze enforcement, a release could be initiated while live Singapore tournament matches are actively scoring.
-  - Live scoring WebSocket sessions, Redis leases, and referee score submissions could be interrupted.
-- **Prerequisites for Resolution:**
-  - Completion and verification of branch `gate-f/ops-015-deployment-freeze`.
-  - Passing of the 11-case policy test matrix in `infra/oci/deployment-freeze-policy.test.mjs`.
-- **Resolution Procedure:**
-  - Submit PR from `gate-f/ops-015-deployment-freeze` to `main`.
-  - Verify hosted CI runs all 5 jobs green.
-  - Merge PR with sequential authorization.
-- **Acceptance Criteria:**
-  - `infra/oci/deploy-prod.sh` invokes `deployment-freeze-policy.mjs` during preflight.
-  - Emergency rollback restores previous healthy release without being blocked by freeze (`ROLLBACK_IN_PROGRESS=1`).
+- **Source Status:** PR #66 was squash-merged into protected `main` as `3bbe7cc59dba2eb77808e6a04e0ffefc8ccccc1a`. This closes the source-merge blocker.
+- **Policy:** Production activity is checked at preflight and immediately before traffic promotion. No forward-deployment override is available solely from asserted notifications or emergency environment flags. OPS-002 internal rollback remains distinct.
+- **Operational Gap:** Live production freeze and rollback evidence are still pending; no approval for Caddy, database or traffic changes is implied.
+- **Acceptance Criteria:** Independently verify exact-head CI and source lineage, then retain authentic production operator receipts during separately approved release operations.
 
 ---
 
@@ -163,21 +154,14 @@ Each blocker is tracked with an authoritative ID (`BLK-01` through `BLK-11`), se
 
 ---
 
-### BLK-07: Feature Flag Administration Frontend UI Not Implemented
+### BLK-07: Feature Flag Administration Operational Verification Pending
 
-- **Severity:** **P0** (Operational Control Blocker)
+- **Severity:** **P0** (Operational Control Requirement)
 - **Owning Workstream:** Workstream C / Web Engineering
 - **Affected Requirements:** `OPS-018`
-- **Description & Risk:**
-  - While database storage (`PostgresFeatureFlagStorage`) and API endpoints exist, operators currently have no administrative UI to toggle feature flags or sport packs during live tournament events.
-  - `scripts/run-gate-f-ops-audit.mjs` explicitly checks for Admin UI presence and returns `verdict: "PENDING_IMPLEMENTATION"`.
-- **Prerequisites for Resolution:**
-  - Web application routing and authentication for administrative roles.
-- **Resolution Procedure:**
-  - Build and integrate feature flag administration UI in `@matchday/web` allowing toggle of platform flags.
-  - Verify UI with automated Playwright tests.
-- **Acceptance Criteria:**
-  - `scripts/run-gate-f-ops-audit.mjs` reports `admin_ui_present: true` and `featureFlags.verdict: "PASS"`.
+- **Source Status:** PR #64 already merged the feature flag administration web page and control plane. The previous operations audit hardcoded UI absence; PR #68 corrects that source finding.
+- **Remaining Gap:** Verify the corrected audit against its exact Git SHA and obtain real authorised operator proof of access control, toggle effects, audit trail and safe defaults. No live evidence is claimed.
+- **Acceptance Criteria:** `admin_ui_present: true` based on verified source, truthful pending operational verdict until live evidence is received, and separately certified operator functionality.
 
 ---
 
@@ -261,9 +245,10 @@ Each blocker is tracked with an authoritative ID (`BLK-01` through `BLK-11`), se
 ## 4. Critical Path Execution Order for Launch
 
 ```text
-[Step 1: Code Merges]
-  Merge Workstream A (BLK-02: OPS-015 Deployment Freeze)
-  Merge Workstream C (BLK-07: OPS-018 Feature Flag Admin UI)
+[Step 1: Code Integration]
+  PR #66 OPS-015 source merged; PR #64 OPS-018 admin UI source merged
+  Certify and separately authorise PR #67, PR #68 and PR #69 sequential merges
+  Reconcile OPS-018 source audit; preserve pending live operator evidence
 
 [Step 2: Host Preparation (Maintenance Window)]
   Execute Caddy Migration Runbook (BLK-01: Caddy Directory Mount)

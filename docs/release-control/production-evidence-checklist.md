@@ -30,7 +30,7 @@ To maintain absolute evidence truthfulness, the validation system (`scripts/vali
 | #      | Artifact Relative Path                                   | Requirement ID      | Evidence Class          | Validation Script                      | Current Status             |
 | ------ | -------------------------------------------------------- | ------------------- | ----------------------- | -------------------------------------- | -------------------------- |
 | **01** | `artifacts/gate-f-certification.json`                    | Gate F Master Gate  | `LOCAL_EXECUTABLE`      | `validate-gate-f.mjs`                  | Pending Prod Run           |
-| **02** | `artifacts/gate-f-production-simulation.json`            | Simulation Baseline | `LOCAL_EXECUTABLE`      | `run-gate-f-production-simulation.mjs` | Verified (Dev Pending)     |
+| **02** | `artifacts/gate-f-production-simulation.json`            | Simulation Baseline | `LOCAL_EXECUTABLE`      | `run-gate-f-production-simulation.mjs` | Simulation Only (Not Prod Proof)     |
 | **03** | `artifacts/gate-f-backup-restore.json`                   | OPS-011, OPS-012    | `OPERATOR_CAPTURE`      | `run-gate-f-backup-restore-audit.mjs`  | Pending Operator Capture   |
 | **04** | `artifacts/production-backup-evidence.json` + 6 receipts | OPS-011, OPS-012    | `OPERATOR_CAPTURE`      | `run-gate-f-backup-restore-audit.mjs`  | Pending Operator Capture   |
 | **05** | `artifacts/gate-f-slo-baseline.json`                     | OPS-004, OPS-008    | `PRODUCTION_LIVE_PROBE` | `run-gate-f-ops-audit.mjs`             | Pending Live Probe         |

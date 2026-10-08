@@ -4,7 +4,7 @@
 **Status:** ACTIVE AUDIT LEDGER  
 **Assurance Profile:** `automated-only-owner-waived-v2` (ADR 0005)  
 **Target Release:** MATCHDAY Singapore Launch (Phase 8 Gate F)  
-**Evaluation Commit:** `6e1723b33360738a8764a60fc218d2e23c022d72` (origin/main)  
+**Evaluation Commit:** `3bbe7cc59dba2eb77808e6a04e0ffefc8ccccc1a` (PR #66 merged to main; live certification pending)  
 **Governance Scope:** Operations, Infrastructure, Deployment, Reliability, and Operational Controls
 
 ---
@@ -43,10 +43,10 @@ Under Architecture Decision Record 0005 (`ADR 0005: Phase 8 Gate F production as
 | **OPS-012** | P0       | Disaster Recovery & Restoration       | `SOURCE_COMPLETE`     | `PRODUCTION_EVIDENCE_PENDING` | Pending Prod DR Run      | BLK-03            |
 | **OPS-013** | P0       | Auto-Scaling / Vertical Topology      | `SOURCE_COMPLETE`     | `VERIFIED_IN_AUTOMATION`      | PASS (Fixed Topology)    | None              |
 | **OPS-014** | P0       | SSL / TLS Certificate Auto-Renewal    | `SOURCE_COMPLETE`     | `PRODUCTION_EVIDENCE_PENDING` | Pending Live TLS Probe   | BLK-09            |
-| **OPS-015** | P0       | Deployment Freeze Policy              | `SOURCE_COMPLETE`     | `VERIFIED_IN_BRANCH`          | Pending Main Merge       | BLK-02            |
+| **OPS-015** | P0       | Deployment Freeze Policy              | `SOURCE_COMPLETE`     | `PRODUCTION_EVIDENCE_PENDING` | Merged; Prod Pending     | None              |
 | **OPS-016** | P1       | Cloud Cost Monitoring & Controls      | `SOURCE_COMPLETE`     | `EXTERNAL_PROVIDER_PENDING`   | Pending Budget Receipt   | BLK-08            |
 | **OPS-017** | P0       | Email Infrastructure & Bounce Webhook | `SOURCE_PARTIAL`      | `PRODUCTION_EVIDENCE_PENDING` | Pending Webhook Config   | BLK-10            |
-| **OPS-018** | P0       | Feature Flag Administration           | `SOURCE_PARTIAL`      | `PENDING_IMPLEMENTATION`      | Admin UI Missing         | BLK-07            |
+| **OPS-018** | P0       | Feature Flag Administration           | `SOURCE_COMPLETE`     | `PRODUCTION_EVIDENCE_PENDING` | UI Merged; Audit Pending | BLK-07            |
 
 ---
 
@@ -228,12 +228,13 @@ Under Architecture Decision Record 0005 (`ADR 0005: Phase 8 Gate F production as
 
 ### OPS-015: Deployment Freeze Policy
 
-- **Specification:** Fail-closed deployment gate preventing deployments to live production during active competitions unless accompanied by explicit authorised organiser override. Emergency rollback must never be blocked by freeze.
-- **Priority:** P0 (Critical Release Blocker)
-- **Source Implementation:** `SOURCE_COMPLETE` on branch `gate-f/ops-015-deployment-freeze` (Workstream A). Implemented in `infra/oci/deployment-freeze-policy.mjs` and integrated into preflight checks of `infra/oci/deploy-prod.sh`. Rollback bypass active when `ROLLBACK_IN_PROGRESS=1`.
-- **Operational Evidence:** `VERIFIED_IN_BRANCH`. 11/11 policy test matrix cases pass in `infra/oci/deployment-freeze-policy.test.mjs`.
-- **Identified Gap:** Branch `gate-f/ops-015-deployment-freeze` must be reviewed and merged into main before production deployment.
-- **Remediation Action:** Complete central coordination PR merge of Workstream A into main.
+- **Specification:** Fail-closed authoritative activity checks before forward deployment and immediately before traffic promotion; internal OPS-002 emergency rollback remains available.
+- **Priority:** P0 (Critical Deployment Safety Requirement)
+- **Source Implementation:** `SOURCE_COMPLETE`. PR #66 was squash-merged to `main` at `3bbe7cc59dba2eb77808e6a04e0ffefc8ccccc1a`. `infra/oci/deploy-prod.sh` invokes the authoritative freeze policy in preflight and pre-promotion phases.
+- **Exception Policy:** Forward-deployment overrides fail closed without independently verified notification evidence, scoped expiring authorisation, and replay protection; arbitrary environment rollback flags cannot authorise forward promotion.
+- **Operational Evidence:** `PRODUCTION_EVIDENCE_PENDING`. CI is not proof of a live deployment, freeze drill or rollback receipt.
+- **Identified Gap:** BLK-02's source-merge condition is resolved. Live Gate F operational certification remains pending separately authorised operator activity.
+- **Remediation Action:** Capture authentic production evidence only under separately approved release procedures.
 
 ---
 
@@ -269,26 +270,24 @@ Under Architecture Decision Record 0005 (`ADR 0005: Phase 8 Gate F production as
 
 ### OPS-018: Feature Flag Administration
 
-- **Specification:** Dynamic feature flag toggling to enable or disable platform capabilities during live events without triggering redeployments.
-- **Priority:** P0 (Critical Release Blocker)
-- **Source Implementation:** `SOURCE_PARTIAL`.
-  - Backend database storage: `SOURCE_COMPLETE` (`PostgresFeatureFlagStorage` in `@matchday/database`).
-  - Feature flag evaluation API: `SOURCE_COMPLETE` (`/api/v1/flags`).
-  - Admin UI: `SOURCE_MISSING`. `scripts/run-gate-f-ops-audit.mjs` reports `admin_ui_present: false`, `verdict: "PENDING_IMPLEMENTATION"`.
-- **Operational Evidence:** `PENDING_IMPLEMENTATION`. Audit script fails closed until admin UI is present.
-- **Identified Gap:** The web application lacks an administrative frontend page allowing tournament operators to toggle flags without database queries.
-- **Remediation Action:** Implement or merge the Feature Flag Admin UI into the web application to close the audit requirement.
+- **Specification:** Role-controlled feature-flag administration with safe defaults, audited changes, and UI control without deployment.
+- **Priority:** P0 (Operational Control Requirement)
+- **Source Implementation:** `SOURCE_COMPLETE` for the web UI and control plane merged in PR #64: `apps/web/app/internal/feature-flags/page.tsx`, `apps/web/components/phase3/FeatureFlagsAdmin.tsx`, `apps/api/src/admin-routes.ts`, and `packages/feature-flags/src/postgres-storage.ts`.
+- **Operational Evidence:** `PRODUCTION_EVIDENCE_PENDING`. The original Gate F ops audit hardcoded `admin_ui_present: false` despite the source being present; PR #68 reconciles the audit without certifying live operations.
+- **Identified Gap:** Source/UI exist, but exact-head audit reconciliation and live operator/kill-switch evidence remain outstanding.
+- **Remediation Action:** Verify PR #68's source receipt and run authorised operational checks before closing BLK-07. File existence is not proof of live UI functionality.
 
 ---
 
 ## 4. Conclusion and Release Readiness Assessment
 
-1. **Automated Codebase Foundations:** 15 out of 18 requirements are `SOURCE_COMPLETE`. Migrations (OPS-003) and Database Topology (OPS-010) are 100% certified.
+1. **Automated Codebase Foundations:** 15 out of 18 requirements are marked `SOURCE_COMPLETE` in this ledger. OPS-003 and OPS-010 have automated source evidence, not live production certification.
 2. **Open Implementation Items:**
-   - OPS-018 (Feature Flag Admin UI) is pending frontend implementation.
    - OPS-006 (External Status Page) is missing third-party provider integration.
-   - OPS-007 (Log Aggregation Daemon) is missing host shipping configuration.
-   - OPS-015 (Deployment Freeze) is implemented on branch and pending PR merge.
+   - OPS-007 (Log Aggregation Daemon) requires host shipping/retention controls.
+   - OPS-017 remains partially verified pending production email and bounce-provider evidence.
+   - OPS-018 admin UI is in main; the operations audit and production verification still need completion.
+   - OPS-015 is merged to main, but production freeze evidence remains pending.
 3. **Production Operation Blockers:**
    - OPS-002 requires executing the Caddy directory mount migration runbook on the live host before any deployment can proceed.
    - Live external evidence receipts (OPS-004, OPS-005, OPS-008, OPS-009, OPS-011, OPS-012, OPS-014, OPS-016, OPS-017) are pending maintenance window execution.
