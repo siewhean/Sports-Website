@@ -1,17 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile, symlink, link } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, symlink, link, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { certifyGateFMigrations } from "./certify-gate-f-migrations.mjs";
 import { runGateFRollbackDrill } from "./run-gate-f-rollback-drill.mjs";
-import { runGateFBackupRestoreAudit } from "./run-gate-f-backup-restore-audit.mjs";
+import { runGateFBackupRestoreAudit, BACKUP_SCHEDULE_CONTRACT } from "./run-gate-f-backup-restore-audit.mjs";
 import { runGateFCachePurgeAudit } from "./run-gate-f-cache-purge.mjs";
 import { runGateFOpsAudit } from "./run-gate-f-ops-audit.mjs";
 import { runGateFRecertifications } from "./run-gate-f-recertifications.mjs";
 import { runGateFProductionSimulation } from "./run-gate-f-production-simulation.mjs";
 
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 async function withArtifacts(run) {
@@ -76,6 +78,12 @@ async function productionFixture(artifactsDir) {
       postgresql_version: "18.4",
       created_at: at(6),
       recovered_through_at: at(7),
+      schedule: {
+        frequency: "daily_full",
+        wal_archiving_interval_minutes: 15,
+        retention_days: 30,
+        schedule_reference: "backup-schedule-contract-reference",
+      },
       storage: {
         class: "offhost_encrypted_object",
         reference: "storage-reference",
@@ -83,7 +91,7 @@ async function productionFixture(artifactsDir) {
         encrypted: true,
         encryption_reference: "key-reference",
         access_control_reference: "restricted-policy-reference",
-        retention_days: 7,
+        retention_days: 30,
         retention_reference: "retention-policy-reference",
       },
     },
@@ -397,4 +405,135 @@ test("evidence validator rejects synthetic markers, wrong SHA, wrong env, and st
     const staleResult = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile: staleFile });
     assert.equal(staleResult.verdict, "PENDING");
   });
+});
+
+test("certifyGateFMigrations outputs complete receipt and verifies contiguous 0001..0067 sequence", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const res = await certifyGateFMigrations(SHA, { artifactsDir });
+    assert.equal(res.qa_item, "OPS-003");
+    assert.equal(res.verdict, "PASS");
+    assert.equal(res.migration_count, 67);
+    assert.equal(res.sequence_start, 1);
+    assert.equal(res.sequence_end, 67);
+    assert.equal(res.sequence_contiguous, true);
+    assert.deepEqual(res.sequence_errors, []);
+    assert.equal(res.expand_contract_compliant, true);
+    assert.equal(res.data_preservation_compliant, true);
+    assert.equal(res.repeatability_verified, true);
+    assert.equal(res.schema_version_verified, true);
+    assert.equal(res.backward_compatible, true);
+    assert.equal(res.destructive_violations_count, 0);
+    assert.ok(Array.isArray(res.destructive_patterns_checked));
+    assert.ok(typeof res.receipt_sha256 === "string" && res.receipt_sha256.length === 64);
+  });
+});
+
+test("certifyGateFMigrations rejects numbering gaps or duplicates in sequence", async () => {
+  await withArtifacts(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    await mkdir(migrationsDir, { recursive: true });
+    await writeFile(path.join(migrationsDir, "0001_initial.sql"), "CREATE TABLE t1 (id int);");
+    await writeFile(path.join(migrationsDir, "0003_gap.sql"), "CREATE TABLE t3 (id int);");
+    const res = await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir });
+    assert.equal(res.verdict, "FAIL");
+    assert.equal(res.sequence_contiguous, false);
+    assert.ok(res.sequence_errors.length > 0);
+  });
+});
+
+test("certifyGateFMigrations rejects destructive TRUNCATE and DROP SCHEMA statements", async () => {
+  await withArtifacts(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    await mkdir(migrationsDir, { recursive: true });
+    await writeFile(path.join(migrationsDir, "0001_truncate.sql"), "TRUNCATE TABLE accounts;");
+    const res1 = await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir });
+    assert.equal(res1.verdict, "FAIL");
+    assert.equal(res1.expand_contract_compliant, false);
+    assert.equal(res1.data_preservation_compliant, false);
+
+    await writeFile(path.join(migrationsDir, "0001_truncate.sql"), "DROP SCHEMA public CASCADE;");
+    const res2 = await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir });
+    assert.equal(res2.verdict, "FAIL");
+    assert.equal(res2.expand_contract_compliant, false);
+  });
+});
+
+test("certifyGateFMigrations rejects ADD COLUMN NOT NULL without DEFAULT but accepts with DEFAULT", async () => {
+  await withArtifacts(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    await mkdir(migrationsDir, { recursive: true });
+    await writeFile(path.join(migrationsDir, "0001_bad.sql"), "ALTER TABLE users ADD COLUMN phone text NOT NULL;");
+    const resBad = await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir });
+    assert.equal(resBad.verdict, "FAIL");
+    assert.equal(resBad.expand_contract_compliant, false);
+
+    await writeFile(
+      path.join(migrationsDir, "0001_bad.sql"),
+      "ALTER TABLE users ADD COLUMN phone text NOT NULL DEFAULT '';",
+    );
+    const resGood = await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir });
+    assert.equal(resGood.verdict, "PASS");
+    assert.equal(resGood.expand_contract_compliant, true);
+  });
+});
+
+test("backup audit enforces backup schedule contract (15m WAL, daily full, 30-day retention)", async () => {
+  // 1. Reject retention < 30 days
+  await withArtifacts(async (artifactsDir) => {
+    const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+    evidence.backup.storage.retention_days = 29;
+    await writeFile(evidenceFile, JSON.stringify(evidence));
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PENDING");
+    assert.ok(receipt.pending_reasons.includes("retention_schedule_30_days"));
+  });
+
+  // 2. Reject WAL archiving > 15 minutes
+  await withArtifacts(async (artifactsDir) => {
+    const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+    evidence.backup.schedule.wal_archiving_interval_minutes = 30;
+    await writeFile(evidenceFile, JSON.stringify(evidence));
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PENDING");
+    assert.ok(receipt.pending_reasons.includes("schedule_wal_archiving_15m"));
+  });
+
+  // 3. Reject non-daily-full frequency
+  await withArtifacts(async (artifactsDir) => {
+    const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+    evidence.backup.schedule.frequency = "weekly_full";
+    await writeFile(evidenceFile, JSON.stringify(evidence));
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PENDING");
+    assert.ok(receipt.pending_reasons.includes("schedule_frequency_daily_full"));
+  });
+
+  // 4. Accept valid contract
+  await withArtifacts(async (artifactsDir) => {
+    const { evidenceFile } = await productionFixture(artifactsDir);
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PASS");
+    assert.equal(receipt.schedule_contract.wal_archiving_interval_minutes, 15);
+    assert.equal(receipt.schedule_contract.frequency, "daily_full");
+    assert.equal(receipt.schedule_contract.minimum_retention_days, 30);
+    assert.equal(receipt.schedule_contract.contract_status, "VERIFIED");
+  });
+});
+
+test("verify-backup-restore.sh specifies all 6 OPS-012 contract phases and dump SHA-256 calculation", async () => {
+  const scriptPath = path.resolve(root, "scripts/verify-backup-restore.sh");
+  const content = await readFile(scriptPath, "utf8");
+  const requiredPhases = [
+    "BACKUP_CREATED",
+    "BACKUP_CHECKSUM_VALID",
+    "RESTORE_TARGET_ISOLATED",
+    "RESTORE_COMPLETED",
+    "DATA_INTEGRITY_VERIFIED",
+    "PRODUCTION_TARGET_NEVER_MODIFIED",
+  ];
+  for (const phase of requiredPhases) {
+    assert.ok(content.includes(phase), `verify-backup-restore.sh must include phase ${phase}`);
+  }
+  assert.ok(content.includes("compute_dump_sha256"), "verify-backup-restore.sh must include compute_dump_sha256");
+  assert.ok(content.includes("assert_loopback_admin_url"), "verify-backup-restore.sh must verify loopback safety");
 });

@@ -25,6 +25,12 @@ const timestamp = (value) =>
   Number.isFinite(Date.parse(value)) &&
   new Date(value).toISOString() === (value.includes(".") ? value : value.replace("Z", ".000Z"));
 
+export const BACKUP_SCHEDULE_CONTRACT = {
+  wal_archiving_interval_minutes: 15,
+  frequency: "daily_full",
+  minimum_retention_days: 30,
+};
+
 async function validateEvidence(evidence, candidateSha, evidenceFile, maxEvidenceAgeMs) {
   const errors = [];
   const require = (condition, field) => {
@@ -61,6 +67,20 @@ async function validateEvidence(evidence, candidateSha, evidenceFile, maxEvidenc
   require(Number.isSafeInteger(storage.retention_days) &&
     storage.retention_days > 0 &&
     text(storage.retention_reference), "retention");
+  require(Number.isSafeInteger(storage.retention_days) &&
+    storage.retention_days >= BACKUP_SCHEDULE_CONTRACT.minimum_retention_days, "retention_schedule_30_days");
+
+  const schedule = b.schedule ?? e.schedule;
+  if (schedule) {
+    require(text(schedule.frequency) &&
+      ["daily_full", "daily"].includes(schedule.frequency), "schedule_frequency_daily_full");
+    require(Number.isSafeInteger(schedule.wal_archiving_interval_minutes) &&
+      schedule.wal_archiving_interval_minutes > 0 &&
+      schedule.wal_archiving_interval_minutes <=
+        BACKUP_SCHEDULE_CONTRACT.wal_archiving_interval_minutes, "schedule_wal_archiving_15m");
+    require(Number.isSafeInteger(schedule.retention_days) &&
+      schedule.retention_days >= BACKUP_SCHEDULE_CONTRACT.minimum_retention_days, "schedule_retention_30_days");
+  }
   require(r.source_backup_id === b.id &&
     r.source_backup_sha256 === b.sha256 &&
     r.checksum_verified === true, "restore_source_checksum");
@@ -190,6 +210,12 @@ export async function runGateFBackupRestoreAudit(candidateSha, options = {}) {
     qa_item: "OPS-011",
     candidate_sha: candidateSha,
     evidence_scope: "production_backup_and_isolated_restore",
+    schedule_contract: {
+      wal_archiving_interval_minutes: BACKUP_SCHEDULE_CONTRACT.wal_archiving_interval_minutes,
+      frequency: BACKUP_SCHEDULE_CONTRACT.frequency,
+      minimum_retention_days: BACKUP_SCHEDULE_CONTRACT.minimum_retention_days,
+      contract_status: validation.errors.length === 0 ? "VERIFIED" : "PENDING",
+    },
     verdict: validation.errors.length === 0 ? "PASS" : "PENDING",
     pending_reasons: validation.errors,
     ...(evidenceSha256 ? { input_evidence_sha256: evidenceSha256, evidence_reference: evidenceFile } : {}),
