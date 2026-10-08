@@ -100,12 +100,14 @@ fi
 STATE_FILE="${MATCHDAY_ACTIVE_SLOT_FILE:-/var/lib/matchday/deploy/active-slot.env}"
 SOURCE_CADDY_TEMPLATE="infra/oci/Caddyfile"
 RUNTIME_CADDYFILE_PATH="${MATCHDAY_RUNTIME_CADDYFILE_PATH:-/etc/matchday/caddy/Caddyfile}"
+RUNTIME_CADDY_DIR="${MATCHDAY_RUNTIME_CADDY_DIR:-$(dirname "$RUNTIME_CADDYFILE_PATH")}"
 
-# Export runtime Caddyfile path to ensure Compose propagates it
+# Export runtime Caddyfile path and directory to ensure Compose propagates them
 export MATCHDAY_RUNTIME_CADDYFILE_PATH="$RUNTIME_CADDYFILE_PATH"
+export MATCHDAY_RUNTIME_CADDY_DIR="$RUNTIME_CADDY_DIR"
 
 mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
-mkdir -p "$(dirname "$RUNTIME_CADDYFILE_PATH")" 2>/dev/null || true
+mkdir -p "$RUNTIME_CADDY_DIR" 2>/dev/null || true
 
 # If runtime Caddyfile does not exist, initialize from immutable template
 if [ ! -f "$RUNTIME_CADDYFILE_PATH" ]; then
@@ -230,6 +232,7 @@ emit_receipt() {
   local active_slot_after="$2"
   local failure_reason="${3:-}"
   local rollback_result="${4:-}"
+  local rollback_failures_str="${5:-}"
   local receipt_dir="artifacts"
   mkdir -p "$receipt_dir"
   local receipt_file="$receipt_dir/deploy-receipt.json"
@@ -253,7 +256,8 @@ emit_receipt() {
       promoted,
       workerHandoverStarted,
       rollbackResult,
-      receiptPath
+      receiptPath,
+      rollbackFailuresStr
     ] = process.argv.slice(1);
 
     if (!["blue", "green"].includes(activeSlotAfter)) {
@@ -265,6 +269,11 @@ emit_receipt() {
       process.exit(1);
     }
 
+    const rollbackFailures = (rollbackFailuresStr || "")
+      .split(",")
+      .map(s => s.trim())
+      .filter(Boolean);
+
     const receipt = {
       timestamp,
       candidate_sha: candidateSha,
@@ -275,6 +284,7 @@ emit_receipt() {
       promoted: promoted === "1",
       worker_handover_started: workerHandoverStarted === "1",
       rollback_result: rollbackResult || null,
+      rollback_failures: rollbackFailures,
       outcome,
       failure_reason: failureReason || null,
       hostname
@@ -292,7 +302,8 @@ emit_receipt() {
     "$PROMOTED" \
     "$WORKER_HANDOVER_STARTED" \
     "$rollback_result" \
-    "$receipt_file"
+    "$receipt_file" \
+    "$rollback_failures_str"
 }
 
 cleanup_and_rollback() {
@@ -301,19 +312,119 @@ cleanup_and_rollback() {
     return
   fi
   ROLLBACK_IN_PROGRESS=1
+  export ROLLBACK_IN_PROGRESS=1
   echo "[deploy-prod] Automatic rollback initiated. Reason: $reason" >&2
-  local rollback_result="COMPLETED"
+
+  local rollback_failures=()
+  record_rollback_failure() {
+    local rf="$1"
+    rollback_failures+=("$rf")
+  }
 
   if [ "$PROMOTED" -eq 1 ]; then
     echo "[deploy-prod] Reverting Caddy routing to active slot $ACTIVE_SLOT ($ACTIVE_API_IP / $ACTIVE_WEB_IP)..." >&2
-    if [ -f "$PREVIOUS_RUNTIME_CADDYFILE" ]; then
-      mv -f "$PREVIOUS_RUNTIME_CADDYFILE" "$RUNTIME_CADDYFILE_PATH" 2>/dev/null || true
+
+    local caddy_restored=0
+    if [ ! -f "$PREVIOUS_RUNTIME_CADDYFILE" ]; then
+      echo "[deploy-prod] FATAL: Previous runtime Caddyfile ($PREVIOUS_RUNTIME_CADDYFILE) is missing! Cannot restore active routing." >&2
+      record_rollback_failure "FAILED_CADDY_PREVIOUS_CONFIG_MISSING"
+    else
+      if ! mv -f "$PREVIOUS_RUNTIME_CADDYFILE" "$RUNTIME_CADDYFILE_PATH"; then
+        echo "[deploy-prod] FATAL: Failed to restore previous runtime Caddyfile ($PREVIOUS_RUNTIME_CADDYFILE -> $RUNTIME_CADDYFILE_PATH)!" >&2
+        record_rollback_failure "FAILED_CADDY_RESTORE"
+      else
+        echo "[deploy-prod] Previous runtime Caddyfile restored successfully." >&2
+        caddy_restored=1
+      fi
     fi
-    caddy_container="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy 2>/dev/null || true)"
-    if [ -n "$caddy_container" ]; then
+
+    local caddy_discovery_status="CADDY_DISCOVERY_SUCCESS"
+    local caddy_container=""
+    local discovery_output=""
+    local disc_code=0
+    discovery_output="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy)" || disc_code=$?
+    if [ "$disc_code" -ne 0 ]; then
+      if [ "$disc_code" -eq 124 ]; then
+        caddy_discovery_status="CADDY_DISCOVERY_TIMEOUT"
+        echo "[deploy-prod] FATAL: Caddy container discovery timed out during rollback!" >&2
+      else
+        caddy_discovery_status="CADDY_DISCOVERY_COMMAND_FAILURE"
+        echo "[deploy-prod] FATAL: Caddy container discovery command failed during rollback (exit code $disc_code)!" >&2
+      fi
+      record_rollback_failure "FAILED_CADDY_DISCOVERY"
+    else
+      caddy_container="$(echo "$discovery_output" | tr -d '[:space:]')"
+      if [ -z "$caddy_container" ]; then
+        caddy_discovery_status="CADDY_CONTAINER_MISSING"
+        echo "[deploy-prod] FATAL: Caddy container is missing / not running during rollback!" >&2
+        record_rollback_failure "FAILED_CADDY_CONTAINER_MISSING"
+      fi
+    fi
+
+    local caddy_reloaded=0
+    if [ "$caddy_discovery_status" = "CADDY_DISCOVERY_SUCCESS" ]; then
       if ! run_bounded "$CADDY_RELOAD_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
         echo "[deploy-prod] FATAL: Caddy reload failed during rollback!" >&2
-        rollback_result="FAILED_CADDY_RELOAD"
+        record_rollback_failure "FAILED_CADDY_RELOAD"
+      else
+        echo "[deploy-prod] Caddy reloaded successfully during rollback." >&2
+        caddy_reloaded=1
+      fi
+    fi
+
+    if [ "$caddy_restored" -eq 1 ] && [ "$caddy_reloaded" -eq 1 ]; then
+      echo "[deploy-prod] Verifying post-rollback routed active release health and identity..." >&2
+
+      local post_rollback_api_health_ok=0
+      if ! run_bounded 15 curl --connect-timeout 5 --max-time 10 --fail --silent --show-error "https://${OCI_PUBLIC_HOSTNAME}/health/ready" >/dev/null 2>&1; then
+        echo "[deploy-prod] FATAL: Post-rollback public routed API health probe failed!" >&2
+        record_rollback_failure "FAILED_POST_ROLLBACK_API_HEALTH"
+      else
+        post_rollback_api_health_ok=1
+      fi
+
+      if [ "$post_rollback_api_health_ok" -eq 1 ]; then
+        if [ -n "${ACTIVE_SHA:-}" ]; then
+          local rollback_api_sha=""
+          rollback_api_sha="$( (run_bounded 15 curl --connect-timeout 5 --max-time 10 --fail --silent --show-error "https://${OCI_PUBLIC_HOSTNAME}/api/v1/meta/build" 2>/dev/null || true) | node -e '
+            let d = "";
+            process.stdin.on("data", c => d += c);
+            process.stdin.on("end", () => {
+              try {
+                const j = JSON.parse(d);
+                process.stdout.write(j.git_sha || "");
+              } catch {
+                process.exit(0);
+              }
+            });
+          ' 2>/dev/null || true)"
+
+          if [ "$rollback_api_sha" != "$ACTIVE_SHA" ]; then
+            echo "[deploy-prod] FATAL: Post-rollback public API git_sha '$rollback_api_sha' does not match active SHA '$ACTIVE_SHA'!" >&2
+            record_rollback_failure "FAILED_POST_ROLLBACK_API_IDENTITY"
+          fi
+        else
+          echo "[deploy-prod] WARNING: Previous active SHA is unavailable; post-rollback release identity verification cannot be certified." >&2
+          record_rollback_failure "INCOMPLETE_POST_ROLLBACK_VERIFICATION"
+        fi
+      fi
+
+      local post_rollback_web_health_ok=0
+      if ! run_bounded 15 curl --connect-timeout 5 --max-time 10 --fail --silent --show-error "https://${OCI_PUBLIC_HOSTNAME}/" >/dev/null 2>&1; then
+        echo "[deploy-prod] FATAL: Post-rollback public routed Web health probe failed!" >&2
+        record_rollback_failure "FAILED_POST_ROLLBACK_WEB_HEALTH"
+      else
+        post_rollback_web_health_ok=1
+      fi
+
+      if [ "$post_rollback_web_health_ok" -eq 1 ] && [ -n "${ACTIVE_SHA:-}" ]; then
+        local rollback_web_id=""
+        rollback_web_id="$( (run_bounded 15 curl --connect-timeout 5 --max-time 15 --fail --silent --show-error -D - -o /dev/null "https://${OCI_PUBLIC_HOSTNAME}/" 2>/dev/null || true) | awk 'tolower($1) == "x-matchday-build-id:" { print $2 }' | tr -d '\r\n')"
+
+        if [ "$rollback_web_id" != "$ACTIVE_SHA" ]; then
+          echo "[deploy-prod] FATAL: Post-rollback public Web build ID '$rollback_web_id' does not match active SHA '$ACTIVE_SHA'!" >&2
+          record_rollback_failure "FAILED_POST_ROLLBACK_WEB_IDENTITY"
+        fi
       fi
     fi
   fi
@@ -322,17 +433,17 @@ cleanup_and_rollback() {
     echo "[deploy-prod] Restoring previous active worker ($ACTIVE_WORKER_SERVICE)..." >&2
     if ! run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml up -d "$ACTIVE_WORKER_SERVICE"; then
       echo "[deploy-prod] FATAL: Failed to restart previous active worker ($ACTIVE_WORKER_SERVICE) during rollback!" >&2
-      rollback_result="FAILED_WORKER_RESTORE"
+      record_rollback_failure "FAILED_WORKER_RESTORE"
     else
       active_worker_id="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps -q "$ACTIVE_WORKER_SERVICE" 2>/dev/null || true)"
       if [ -z "$active_worker_id" ]; then
         echo "[deploy-prod] FATAL: Restored active worker container ID not found!" >&2
-        rollback_result="FAILED_WORKER_RESTORE"
+        record_rollback_failure "FAILED_WORKER_RESTORE"
       else
         active_worker_state="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect --format '{{.State.Status}}' "$active_worker_id" 2>/dev/null || echo "unknown")"
         if [ "$active_worker_state" != "running" ]; then
           echo "[deploy-prod] FATAL: Restored active worker is not running (status: $active_worker_state)!" >&2
-          rollback_result="FAILED_WORKER_RESTORE"
+          record_rollback_failure "FAILED_WORKER_RESTORE"
         fi
       fi
     fi
@@ -342,14 +453,33 @@ cleanup_and_rollback() {
   run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml stop "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" 2>/dev/null || true
   run_bounded "$SERVICE_CONTROL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml rm -f "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" 2>/dev/null || true
 
-  rm -f "$PREVIOUS_RUNTIME_CADDYFILE" "$CANDIDATE_RUNTIME_CADDYFILE" 2>/dev/null || true
+  rm -f "$CANDIDATE_RUNTIME_CADDYFILE" 2>/dev/null || true
+  if [ -f "$PREVIOUS_RUNTIME_CADDYFILE" ] && echo "${rollback_failures[*]}" | grep -q "FAILED_CADDY_RESTORE"; then
+    echo "[deploy-prod] Preserving previous Caddy backup file for manual inspection: $PREVIOUS_RUNTIME_CADDYFILE" >&2
+  else
+    rm -f "$PREVIOUS_RUNTIME_CADDYFILE" 2>/dev/null || true
+  fi
 
-  if ! emit_receipt "ROLLBACK" "$ACTIVE_SLOT" "$reason" "$rollback_result"; then
+  local rollback_result="COMPLETED"
+  if [ "${#rollback_failures[@]}" -eq 1 ]; then
+    rollback_result="${rollback_failures[0]}"
+  elif [ "${#rollback_failures[@]}" -gt 1 ]; then
+    rollback_result="PARTIAL_FAILURE"
+  fi
+
+  local failures_joined=""
+  if [ "${#rollback_failures[@]}" -gt 0 ]; then
+    failures_joined=$(IFS=,; echo "${rollback_failures[*]}")
+  fi
+
+  if ! emit_receipt "ROLLBACK" "$ACTIVE_SLOT" "$reason" "$rollback_result" "$failures_joined"; then
     echo "[deploy-prod] WARNING: Failed to write rollback receipt" >&2
   fi
 
   if [ "$rollback_result" != "COMPLETED" ]; then
-    echo "[deploy-prod] CRITICAL: Rollback finished with status $rollback_result" >&2
+    echo "[deploy-prod] CRITICAL: Rollback finished with status $rollback_result; failures: [${rollback_failures[*]}]" >&2
+  else
+    echo "[deploy-prod] Rollback completed successfully." >&2
   fi
 
   exit 1
@@ -388,9 +518,9 @@ echo "[deploy-prod] Pre-deploy: checking migration safety..."
 run_bounded 30 node scripts/certify-gate-f-migrations.mjs "$CANDIDATE_SHA"
 
 # Ensure production backend network exists deterministically
-if ! run_bounded "$SERVICE_CONTROL_TIMEOUT" docker network inspect matchday-prod_backend >/dev/null 2>&1; then
+if ! run_bounded 10 docker network inspect matchday-prod_backend >/dev/null 2>&1; then
   echo "[deploy-prod] Creating matchday-prod_backend network (172.31.0.0/24)..."
-  run_bounded "$SERVICE_CONTROL_TIMEOUT" docker network create --subnet 172.31.0.0/24 matchday-prod_backend
+  run_bounded 10 docker network create --subnet 172.31.0.0/24 matchday-prod_backend
 fi
 
 # Verify Caddy container and its bind mount configuration before building or launching candidate
@@ -410,32 +540,41 @@ if ! echo "$caddy_network" | grep -q "matchday-prod_backend"; then
 fi
 
 echo "[deploy-prod] Verifying Caddy container mount configuration..."
-if ! caddy_mount_info="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{println .Source .Destination .RW}}{{end}}{{end}}')"; then
+if ! caddy_mount_info="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{range .Mounts}}{{if or (eq .Destination "/etc/caddy") (eq .Destination "/etc/caddy/Caddyfile")}}{{println .Source .Destination .RW}}{{end}}{{end}}')"; then
   cleanup_and_rollback "Failed inspecting Caddy container mounts within timeout"
 fi
 if [ -z "$caddy_mount_info" ]; then
-  cleanup_and_rollback "Caddy container is missing required bind mount for /etc/caddy/Caddyfile"
+  cleanup_and_rollback "Caddy container is missing required bind mount for /etc/caddy or /etc/caddy/Caddyfile"
 fi
 
 caddy_mount_valid="$(python3 -c "
 import sys, os
-mount_line = sys.argv[1].strip()
-expected_host = os.path.realpath(sys.argv[2])
-parts = mount_line.split()
-if len(parts) >= 3:
-    source, dest, rw = parts[0], parts[1], parts[2]
-    source_real = os.path.realpath(source)
-    if source_real == expected_host and dest == '/etc/caddy/Caddyfile' and rw.lower() == 'false':
-        print('VALID')
-    else:
-        sys.stderr.write(f'Mount mismatch: source={source_real} (expected {expected_host}), dest={dest}, rw={rw}\n')
-        print('INVALID')
+mount_lines = [l.strip() for l in sys.argv[1].strip().split('\n') if l.strip()]
+expected_file = os.path.realpath(sys.argv[2])
+expected_dir = os.path.realpath(sys.argv[3])
+
+valid = False
+for mount_line in mount_lines:
+    parts = mount_line.split()
+    if len(parts) >= 3:
+        source, dest, rw = parts[0], parts[1], parts[2]
+        source_real = os.path.realpath(source)
+        if dest == '/etc/caddy' and source_real == expected_dir and rw.lower() == 'false':
+            valid = True
+            break
+        elif dest == '/etc/caddy/Caddyfile' and source_real == expected_file and rw.lower() == 'false':
+            valid = True
+            break
+
+if valid:
+    print('VALID')
 else:
+    sys.stderr.write(f'Mount mismatch: lines={mount_lines}, expected_file={expected_file}, expected_dir={expected_dir}\n')
     print('INVALID')
-" "$caddy_mount_info" "$RUNTIME_CADDYFILE_PATH")"
+" "$caddy_mount_info" "$RUNTIME_CADDYFILE_PATH" "$RUNTIME_CADDY_DIR")"
 
 if [ "$caddy_mount_valid" != "VALID" ]; then
-  cleanup_and_rollback "Caddy container bind mount does not match expected runtime Caddyfile ($RUNTIME_CADDYFILE_PATH)"
+  cleanup_and_rollback "Caddy container bind mount does not match expected runtime Caddyfile ($RUNTIME_CADDYFILE_PATH) or directory ($RUNTIME_CADDY_DIR)"
 fi
 
 PHASE="CANDIDATE_START"

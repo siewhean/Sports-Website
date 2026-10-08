@@ -60,7 +60,9 @@ function createFixture(t, options = {}) {
 
   const activeSlotFile = path.join(directory, "active-slot.env");
   if (options.initialSlot) {
-    writeFileSync(activeSlotFile, `ACTIVE_SLOT=${options.initialSlot}\n`);
+    const activeSha = options.activeSha !== undefined ? options.activeSha : "49b1c0b27cfa616c5bcb127faa027511ac878fc6";
+    const shaLine = activeSha ? `ACTIVE_SHA=${activeSha}\n` : "";
+    writeFileSync(activeSlotFile, `ACTIVE_SLOT=${options.initialSlot}\n${shaLine}`);
   }
 
   const runtimeCaddyfile = path.join(directory, "runtime-Caddyfile");
@@ -79,14 +81,14 @@ function createFixture(t, options = {}) {
   const mock = path.join(directory, "mock.mjs");
   writeFileSync(
     mock,
-    `import { appendFileSync } from "node:fs";
+    `import { appendFileSync, copyFileSync, unlinkSync, readdirSync } from "node:fs";
+import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 appendFileSync(process.env.MOCK_LOG, JSON.stringify({ tool, args }) + "\\n");
 
 function hangIfMatches(op) {
   if (process.env.MOCK_TIMEOUT_OPERATION === op) {
-    const end = Date.now() + 10000;
-    while (Date.now() < end) {}
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000);
     process.exit(124);
   }
 }
@@ -118,7 +120,7 @@ if (tool === "docker") {
     process.exit(0);
   } else if (args.includes("inspect")) {
     hangIfMatches("inspect");
-    if (args.some(a => a.includes(".Destination \\"/etc/caddy/Caddyfile\\""))) {
+    if (args.some(a => a.includes(".Destination \\"/etc/caddy/Caddyfile\\"") || a.includes(".Destination \\"/etc/caddy\\""))) {
       if (process.env.MOCK_CADDY_MISSING_BIND === "1") {
         process.exit(0);
       } else if (process.env.MOCK_CADDY_WRONG_BIND === "1") {
@@ -157,13 +159,32 @@ if (tool === "docker") {
     }
     console.log("{}");
   } else if (args.includes("ps") && args.includes("-q")) {
+    if (args.includes("caddy")) {
+      if (process.env.ROLLBACK_IN_PROGRESS === "1") {
+        hangIfMatches("caddy_discovery");
+        if (process.env.MOCK_CADDY_DISCOVERY_TIMEOUT === "1") {
+          const end = Date.now() + 10000;
+          while (Date.now() < end) {}
+          process.exit(124);
+        }
+        if (process.env.MOCK_CADDY_DISCOVERY_FAILS === "1") {
+          console.error("Docker daemon error during ps");
+          process.exit(1);
+        }
+        if (process.env.MOCK_CADDY_CONTAINER_MISSING === "1") {
+          process.exit(0);
+        }
+      }
+      console.log("mock-caddy-container-123");
+      process.exit(0);
+    }
     console.log("mock-container-id-123");
   } else if (args.includes("up")) {
     if (args.includes("worker") || args.includes("worker-green")) {
       hangIfMatches("candidate_worker_start");
       signalIfMatches("during_worker_handover");
     }
-    if (process.env.MOCK_RESTORE_WORKER_UP_FAILS === "1" && args.includes("worker")) {
+    if (process.env.MOCK_RESTORE_WORKER_UP_FAILS === "1" && (args.includes("worker") || args.includes("worker-green"))) {
       process.exit(1);
     }
     process.exit(0);
@@ -176,6 +197,17 @@ if (tool === "docker") {
   } else if (args.includes("exec")) {
     if (args.includes("caddy") && args.includes("reload")) {
       hangIfMatches("caddy_reload");
+      if (process.env.MOCK_PREVIOUS_CONFIG_MISSING === "1") {
+        const dir = path.dirname(process.env.MATCHDAY_RUNTIME_CADDYFILE_PATH);
+        try {
+          const files = readdirSync(dir);
+          for (const f of files) {
+            if (f.includes(".Caddyfile.previous.")) {
+              unlinkSync(path.join(dir, f));
+            }
+          }
+        } catch {}
+      }
       if (process.env.MOCK_CADDY_RELOAD_FAILS === "1") process.exit(1);
       process.exit(0);
     }
@@ -209,26 +241,54 @@ if (tool === "docker") {
     process.exit(0);
   }
   process.exit(0);
+} else if (tool === "mv") {
+  const isRollback = process.env.ROLLBACK_IN_PROGRESS === "1";
+  const src = args[args.length - 2];
+  const dest = args[args.length - 1];
+  if (isRollback && src && src.includes(".previous.") && process.env.MOCK_RESTORE_RENAME_FAILS === "1") {
+    console.error("mv: cannot move: Operation not permitted");
+    process.exit(1);
+  }
+  if (isRollback && src && src.includes(".previous.") && process.env.MOCK_RESTORE_PERMISSION_FAILURE === "1") {
+    console.error("mv: cannot move: Permission denied");
+    process.exit(1);
+  }
+  try {
+    copyFileSync(src, dest);
+    unlinkSync(src);
+    process.exit(0);
+  } catch (e) {
+    console.error("mv error: " + e.message);
+    process.exit(1);
+  }
 } else if (tool === "curl") {
   signalIfMatches("routed_check");
+  const isRollback = process.env.ROLLBACK_IN_PROGRESS === "1";
+  const activeSha = process.env.ACTIVE_SHA || "49b1c0b27cfa616c5bcb127faa027511ac878fc6";
   if (args.some(a => a.includes("/health/ready"))) {
-    if (process.env.MOCK_ROUTED_READY_FAILS === "1") process.exit(28);
+    if (!isRollback && process.env.MOCK_ROUTED_READY_FAILS === "1") process.exit(28);
+    if (isRollback && process.env.MOCK_ROLLBACK_ROUTED_READY_FAILS === "1") process.exit(28);
     console.log("OK");
     process.exit(0);
   } else if (args.some(a => a.includes("/api/v1/meta/build"))) {
-    if (process.env.MOCK_ROUTED_SHA_MISMATCH === "1") {
+    if (!isRollback && process.env.MOCK_ROUTED_SHA_MISMATCH === "1") {
       console.log(JSON.stringify({ git_sha: "mismatch-sha" }));
+    } else if (isRollback && process.env.MOCK_ROLLBACK_SHA_MISMATCH === "1") {
+      console.log(JSON.stringify({ git_sha: "mismatch-rollback-sha" }));
     } else {
-      console.log(JSON.stringify({ git_sha: process.env.CANDIDATE_SHA }));
+      console.log(JSON.stringify({ git_sha: isRollback ? activeSha : process.env.CANDIDATE_SHA }));
     }
     process.exit(0);
   } else if (args.some(a => a.includes("https://matchday.poladex.shop/"))) {
-    if (process.env.MOCK_ROUTED_WEB_FAILS === "1") process.exit(28);
+    if (!isRollback && process.env.MOCK_ROUTED_WEB_FAILS === "1") process.exit(28);
+    if (isRollback && process.env.MOCK_ROLLBACK_ROUTED_WEB_FAILS === "1") process.exit(28);
     if (args.includes("-D")) {
-      if (process.env.MOCK_ROUTED_WEB_BUILD_MISMATCH === "1") {
+      if (!isRollback && process.env.MOCK_ROUTED_WEB_BUILD_MISMATCH === "1") {
         console.log("HTTP/2 200\\r\\nx-matchday-build-id: wrong-web-sha\\r\\n");
+      } else if (isRollback && process.env.MOCK_ROLLBACK_WEB_BUILD_MISMATCH === "1") {
+        console.log("HTTP/2 200\\r\\nx-matchday-build-id: wrong-rollback-web-sha\\r\\n");
       } else {
-        console.log("HTTP/2 200\\r\\nx-matchday-build-id: " + process.env.CANDIDATE_SHA + "\\r\\n");
+        console.log("HTTP/2 200\\r\\nx-matchday-build-id: " + (isRollback ? activeSha : process.env.CANDIDATE_SHA) + "\\r\\n");
       }
     }
     process.exit(0);
@@ -238,7 +298,7 @@ if (tool === "docker") {
 `,
   );
 
-  for (const tool of ["docker", "curl", "sleep"]) {
+  for (const tool of ["docker", "curl", "sleep", "mv"]) {
     writeFileSync(path.join(bin, tool), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(mock)} ${tool} "$@"\n`, {
       mode: 0o755,
     });
@@ -854,4 +914,159 @@ test("50. Pinned Caddy image digest contract is enforced for candidate validatio
     scriptContent.includes("sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"),
     "deploy-prod.sh must pin the exact Caddy digest",
   );
+});
+
+test("51. Rollback previous Caddyfile restore failure is detected and logged, receipt records FAILED_CADDY_RESTORE and backup is preserved", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_RESTORE_RENAME_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Failed to restore previous runtime Caddyfile/);
+  assert.match(result.stderr, /Preserving previous Caddy backup file for manual inspection/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_CADDY_RESTORE");
+  assert.ok(receipt.rollback_failures.includes("FAILED_CADDY_RESTORE"));
+});
+
+test("52. Rollback missing previous Caddyfile fails loudly with FAILED_CADDY_PREVIOUS_CONFIG_MISSING", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_PREVIOUS_CONFIG_MISSING: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Previous runtime Caddyfile .* is missing! Cannot restore active routing/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_CADDY_PREVIOUS_CONFIG_MISSING");
+  assert.ok(receipt.rollback_failures.includes("FAILED_CADDY_PREVIOUS_CONFIG_MISSING"));
+});
+
+test("53. Rollback permission failure during Caddyfile restore fails loudly with FAILED_CADDY_RESTORE", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_RESTORE_PERMISSION_FAILURE: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Failed to restore previous runtime Caddyfile/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_CADDY_RESTORE");
+});
+
+test("54. Rollback Caddy container discovery timeout fails loudly with FAILED_CADDY_DISCOVERY", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_ROUTED_READY_FAILS: "1",
+    MOCK_CADDY_DISCOVERY_TIMEOUT: "1",
+    MATCHDAY_INSPECT_TIMEOUT: "0.5",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Caddy container discovery timed out during rollback/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_CADDY_DISCOVERY");
+  assert.ok(receipt.rollback_failures.includes("FAILED_CADDY_DISCOVERY"));
+});
+
+test("55. Rollback Caddy container discovery command failure fails loudly with FAILED_CADDY_DISCOVERY", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_CADDY_DISCOVERY_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Caddy container discovery command failed during rollback/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_CADDY_DISCOVERY");
+});
+
+test("56. Rollback missing Caddy container fails loudly with FAILED_CADDY_CONTAINER_MISSING", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_CADDY_CONTAINER_MISSING: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Caddy container is missing \/ not running during rollback/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_CADDY_CONTAINER_MISSING");
+  assert.ok(receipt.rollback_failures.includes("FAILED_CADDY_CONTAINER_MISSING"));
+});
+
+test("57. Simultaneous rollback failures (Caddy restore + worker restore) are aggregated into PARTIAL_FAILURE with all failures retained", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_TIMEOUT_OPERATION: "worker_stop",
+    MATCHDAY_SERVICE_CONTROL_TIMEOUT: "0.5",
+    MOCK_RESTORE_RENAME_FAILS: "1",
+    MOCK_RESTORE_WORKER_FAILS: "1",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Automatic rollback initiated/);
+  assert.match(result.stderr, /FATAL: Failed to restore previous runtime Caddyfile/);
+  assert.match(result.stderr, /FATAL: Restored active worker is not running/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "PARTIAL_FAILURE");
+  assert.deepEqual(receipt.rollback_failures, ["FAILED_CADDY_RESTORE", "FAILED_WORKER_RESTORE"]);
+});
+
+test("58. Post-rollback routed API readiness failure triggers FAILED_POST_ROLLBACK_API_HEALTH", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_ROLLBACK_ROUTED_READY_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Post-rollback public routed API health probe failed/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_POST_ROLLBACK_API_HEALTH");
+  assert.ok(receipt.rollback_failures.includes("FAILED_POST_ROLLBACK_API_HEALTH"));
+});
+
+test("59. Post-rollback routed API identity mismatch triggers FAILED_POST_ROLLBACK_API_IDENTITY", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_ROLLBACK_SHA_MISMATCH: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Post-rollback public API git_sha .* does not match active SHA/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_POST_ROLLBACK_API_IDENTITY");
+  assert.ok(receipt.rollback_failures.includes("FAILED_POST_ROLLBACK_API_IDENTITY"));
+});
+
+test("60. Post-rollback routed Web health failure triggers FAILED_POST_ROLLBACK_WEB_HEALTH", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_ROLLBACK_ROUTED_WEB_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Post-rollback public routed Web health probe failed/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_POST_ROLLBACK_WEB_HEALTH");
+  assert.ok(receipt.rollback_failures.includes("FAILED_POST_ROLLBACK_WEB_HEALTH"));
+});
+
+test("61. Post-rollback routed Web build-ID mismatch triggers FAILED_POST_ROLLBACK_WEB_IDENTITY", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1", MOCK_ROLLBACK_WEB_BUILD_MISMATCH: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FATAL: Post-rollback public Web build ID .* does not match active SHA/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "FAILED_POST_ROLLBACK_WEB_IDENTITY");
+  assert.ok(receipt.rollback_failures.includes("FAILED_POST_ROLLBACK_WEB_IDENTITY"));
+});
+
+test("62. Clean rollback with all verifications passing records COMPLETED and empty rollback_failures", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_ROUTED_READY_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Automatic rollback initiated/);
+  assert.match(result.stderr, /Rollback completed successfully/);
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.rollback_result, "COMPLETED");
+  assert.deepEqual(receipt.rollback_failures, []);
 });
