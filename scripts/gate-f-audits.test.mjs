@@ -329,7 +329,9 @@ test("ops audit preserves live PENDING evidence and detects merged OPS-018 admin
     assert.equal(res.featureFlags.source_status, "SOURCE_COMPLETE");
     assert.equal(res.featureFlags.operational_status, "PRODUCTION_EVIDENCE_PENDING");
     assert.equal(res.featureFlags.verdict, "PENDING");
-    assert.ok(res.featureFlags.pending_reasons.includes("production_feature_flag_admin_operational_verification_pending"));
+    assert.ok(
+      res.featureFlags.pending_reasons.includes("production_feature_flag_admin_operational_verification_pending"),
+    );
   });
 });
 
