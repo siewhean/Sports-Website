@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const deployScriptPath = path.join(root, "infra/oci/deploy-prod.sh");
 const caddyfilePath = path.join(root, "infra/oci/Caddyfile");
+const freezePolicyPath = path.join(root, "infra/oci/deployment-freeze-policy.mjs");
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 
 function createFixture(t, options = {}) {
@@ -23,6 +24,7 @@ function createFixture(t, options = {}) {
 
   copyFileSync(deployScriptPath, path.join(repository, "infra/oci/deploy-prod.sh"));
   copyFileSync(caddyfilePath, path.join(repository, "infra/oci/Caddyfile"));
+  copyFileSync(freezePolicyPath, path.join(repository, "infra/oci/deployment-freeze-policy.mjs"));
 
   writeFileSync(
     path.join(repository, "scripts/validate-production-config.mjs"),
@@ -54,7 +56,9 @@ function createFixture(t, options = {}) {
   );
   const sha = git("rev-parse", "HEAD");
 
-  const envContent = options.environment || `OCI_PUBLIC_HOSTNAME=matchday.poladex.shop\nAPP_ENV=production\n`;
+  const envContent =
+    options.environment ||
+    `OCI_PUBLIC_HOSTNAME=matchday.poladex.shop\nAPP_ENV=production\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n`;
   writeFileSync(path.join(repository, "infra/oci/.env.prod"), envContent, { mode: 0o600 });
   writeFileSync(path.join(repository, "infra/oci/.env.oci"), envContent, { mode: 0o600 });
 
@@ -1156,4 +1160,73 @@ test("68. Inconsistent MATCHDAY_RUNTIME_CADDY_DIR and MATCHDAY_RUNTIME_CADDYFILE
   const result = f.run({ MATCHDAY_RUNTIME_CADDY_DIR: "/some/inconsistent/caddy/dir" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Runtime Caddyfile .* must reside inside MATCHDAY_RUNTIME_CADDY_DIR/);
+});
+
+test("69. Active competition triggers deployment freeze and halts before candidate build/migration", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_FREEZE_ACTIVE_COMPETITIONS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+  // Verify that candidate build and migrations were NEVER executed
+  const calls = existsSync(f.log)
+    ? readFileSync(f.log, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+    : [];
+  const buildCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("build"));
+  const migrateCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("migrate"));
+  assert.equal(buildCalls.length, 0, "Candidate build must not run when freeze is active");
+  assert.equal(migrateCalls.length, 0, "Migrations must not run when freeze is active");
+});
+
+test("70. Live match scoring in progress triggers deployment freeze and halts before candidate build", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_FREEZE_SCORING: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+  const calls = existsSync(f.log)
+    ? readFileSync(f.log, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+    : [];
+  const buildCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("build"));
+  assert.equal(buildCalls.length, 0, "Candidate build must not run during active scoring");
+});
+
+test("71. Unauthorised deployment freeze override attempt is rejected fail-closed", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
+    DEPLOY_FREEZE_OVERRIDE: "1",
+    DEPLOY_FREEZE_OVERRIDE_SECRET: "wrong-override-secret",
+    DEPLOY_FREEZE_OVERRIDE_REASON: "Attempted unverified emergency fix",
+    DEPLOY_FREEZE_ORGANISER_NOTIFIED: "true",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+});
+
+test("72. Explicit authorised deployment freeze override allows deployment during active competition under policy control", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
+    DEPLOY_FREEZE_OVERRIDE: "1",
+    DEPLOY_FREEZE_OVERRIDE_SECRET: "test-override-secret-123456",
+    DEPLOY_FREEZE_OVERRIDE_REASON: "Authorised organiser emergency calculation patch",
+    DEPLOY_FREEZE_ORGANISER_NOTIFIED: "true",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Promoted Slot:\s+green/);
+});
+
+test("73. Emergency rollback bypasses deployment freeze check safely", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_ACTIVE_COMPETITIONS: "2",
+    MATCHDAY_EMERGENCY_ROLLBACK: "1",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Emergency rollback active: deployment freeze check bypassed safely/);
 });

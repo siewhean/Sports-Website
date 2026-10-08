@@ -526,6 +526,17 @@ run_bounded 30 node scripts/validate-production-config.mjs infra/oci/.env.prod
 echo "[deploy-prod] Pre-deploy: checking migration safety..."
 run_bounded 30 node scripts/certify-gate-f-migrations.mjs "$CANDIDATE_SHA"
 
+# Check deployment freeze policy (OPS-015)
+if [ "${MATCHDAY_EMERGENCY_ROLLBACK:-0}" = "1" ] || [ "${ROLLBACK_IN_PROGRESS:-0}" = "1" ]; then
+  echo "[deploy-prod] Emergency rollback active: deployment freeze check bypassed safely."
+else
+  echo "[deploy-prod] Pre-deploy: checking deployment freeze policy (OPS-015)..."
+  if ! run_bounded 30 node infra/oci/deployment-freeze-policy.mjs infra/oci/.env.prod; then
+    echo "[deploy-prod] FATAL: Deployment blocked by OPS-015 deployment freeze policy" >&2
+    exit 1
+  fi
+fi
+
 # Ensure production backend network exists deterministically
 if ! run_bounded 10 docker network inspect matchday-prod_backend >/dev/null 2>&1; then
   echo "[deploy-prod] Creating matchday-prod_backend network (172.31.0.0/24)..."
