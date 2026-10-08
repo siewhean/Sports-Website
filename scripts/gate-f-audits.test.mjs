@@ -82,6 +82,8 @@ async function productionFixture(artifactsDir) {
         frequency: "daily_full",
         wal_archiving_interval_minutes: 15,
         retention_days: 30,
+        weekly_retention_days: 90,
+        restore_test_frequency: "monthly",
         schedule_reference: "backup-schedule-contract-reference",
       },
       storage: {
@@ -92,6 +94,9 @@ async function productionFixture(artifactsDir) {
         encryption_reference: "key-reference",
         access_control_reference: "restricted-policy-reference",
         retention_days: 30,
+        weekly_retention_days: 90,
+        cross_region_replicated: true,
+        cross_region_reference: "cross-region-replica-bucket",
         retention_reference: "retention-policy-reference",
       },
     },
@@ -477,8 +482,8 @@ test("certifyGateFMigrations rejects ADD COLUMN NOT NULL without DEFAULT but acc
   });
 });
 
-test("backup audit enforces backup schedule contract (15m WAL, daily full, 30-day retention)", async () => {
-  // 1. Reject retention < 30 days
+test("backup audit enforces backup schedule contract (15m WAL, daily full 30d, weekly 90d, monthly restore, cross-region)", async () => {
+  // 1. Reject daily retention < 30 days
   await withArtifacts(async (artifactsDir) => {
     const { evidence, evidenceFile } = await productionFixture(artifactsDir);
     evidence.backup.storage.retention_days = 29;
@@ -488,7 +493,27 @@ test("backup audit enforces backup schedule contract (15m WAL, daily full, 30-da
     assert.ok(receipt.pending_reasons.includes("retention_schedule_30_days"));
   });
 
-  // 2. Reject WAL archiving > 15 minutes
+  // 2. Reject weekly retention < 90 days in storage
+  await withArtifacts(async (artifactsDir) => {
+    const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+    evidence.backup.storage.weekly_retention_days = 89;
+    await writeFile(evidenceFile, JSON.stringify(evidence));
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PENDING");
+    assert.ok(receipt.pending_reasons.includes("retention_schedule_weekly_90_days"));
+  });
+
+  // 3. Reject missing or insufficient weekly retention in schedule
+  await withArtifacts(async (artifactsDir) => {
+    const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+    evidence.backup.schedule.weekly_retention_days = 60;
+    await writeFile(evidenceFile, JSON.stringify(evidence));
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PENDING");
+    assert.ok(receipt.pending_reasons.includes("schedule_weekly_retention_90_days"));
+  });
+
+  // 4. Reject WAL archiving > 15 minutes
   await withArtifacts(async (artifactsDir) => {
     const { evidence, evidenceFile } = await productionFixture(artifactsDir);
     evidence.backup.schedule.wal_archiving_interval_minutes = 30;
@@ -498,7 +523,7 @@ test("backup audit enforces backup schedule contract (15m WAL, daily full, 30-da
     assert.ok(receipt.pending_reasons.includes("schedule_wal_archiving_15m"));
   });
 
-  // 3. Reject non-daily-full frequency
+  // 5. Reject non-daily-full frequency
   await withArtifacts(async (artifactsDir) => {
     const { evidence, evidenceFile } = await productionFixture(artifactsDir);
     evidence.backup.schedule.frequency = "weekly_full";
@@ -508,14 +533,37 @@ test("backup audit enforces backup schedule contract (15m WAL, daily full, 30-da
     assert.ok(receipt.pending_reasons.includes("schedule_frequency_daily_full"));
   });
 
-  // 4. Accept valid contract
+  // 6. Reject non-monthly restore test frequency
+  await withArtifacts(async (artifactsDir) => {
+    const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+    evidence.backup.schedule.restore_test_frequency = "quarterly";
+    await writeFile(evidenceFile, JSON.stringify(evidence));
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PENDING");
+    assert.ok(receipt.pending_reasons.includes("schedule_restore_test_monthly"));
+  });
+
+  // 7. Reject missing cross-region replication in storage
+  await withArtifacts(async (artifactsDir) => {
+    const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+    evidence.backup.storage.cross_region_replicated = false;
+    await writeFile(evidenceFile, JSON.stringify(evidence));
+    const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+    assert.equal(receipt.verdict, "PENDING");
+    assert.ok(receipt.pending_reasons.includes("cross_region_replication_contract"));
+  });
+
+  // 8. Accept fully compliant backup schedule contract
   await withArtifacts(async (artifactsDir) => {
     const { evidenceFile } = await productionFixture(artifactsDir);
     const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
     assert.equal(receipt.verdict, "PASS");
     assert.equal(receipt.schedule_contract.wal_archiving_interval_minutes, 15);
     assert.equal(receipt.schedule_contract.frequency, "daily_full");
-    assert.equal(receipt.schedule_contract.minimum_retention_days, 30);
+    assert.equal(receipt.schedule_contract.daily_retention_days, 30);
+    assert.equal(receipt.schedule_contract.weekly_retention_days, 90);
+    assert.equal(receipt.schedule_contract.restore_test_frequency, "monthly");
+    assert.equal(receipt.schedule_contract.cross_region_replication, true);
     assert.equal(receipt.schedule_contract.contract_status, "VERIFIED");
   });
 });
