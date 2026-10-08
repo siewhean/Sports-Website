@@ -225,6 +225,59 @@ if (tool === "docker") {
       if (process.env.MOCK_CADDY_RELOAD_FAILS === "1") process.exit(1);
       process.exit(0);
     }
+    if (args.includes("postgres") && (args.includes("psql") || args.includes("-c"))) {
+      if (process.env.MOCK_FREEZE_PROVIDER_UNAVAILABLE === "1") {
+        process.stderr.write("connect ECONNREFUSED 172.31.0.2:5432\\n");
+        process.exit(1);
+      }
+      if (process.env.MOCK_FREEZE_TOCTOU_PROVIDER_LOST === "1" && process.env.PHASE === "PRE_PROMOTION") {
+        process.stderr.write("FATAL: Database connection lost during pre-promotion recheck\\n");
+        process.exit(1);
+      }
+      if (process.env.MOCK_FREEZE_TOCTOU_COMPETITION === "1" && process.env.PHASE === "PRE_PROMOTION") {
+        process.stdout.write(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          competitions: [{ id: "comp-toctou", name: "Competition Started During Build", status: "active" }],
+          scoringMatches: [],
+        }));
+        process.exit(0);
+      }
+      if (process.env.MOCK_FREEZE_TOCTOU_SCORING === "1" && process.env.PHASE === "PRE_PROMOTION") {
+        process.stdout.write(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          competitions: [{ id: "comp-toctou", name: "Competition Live", status: "active" }],
+          scoringMatches: [{ id: "match-toctou", competition_id: "comp-toctou", state: "in_progress" }],
+        }));
+        process.exit(0);
+      }
+      if (process.env.MOCK_FREEZE_SCORING === "1") {
+        process.stdout.write(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          competitions: [{ id: "comp-1", name: "Active Comp", status: "active" }],
+          scoringMatches: [{ id: "match-1", competition_id: "comp-1", state: "in_progress" }],
+        }));
+        process.exit(0);
+      }
+      if (process.env.MOCK_FREEZE_ACTIVE_COMPETITIONS !== undefined) {
+        const count = Number(process.env.MOCK_FREEZE_ACTIVE_COMPETITIONS);
+        const comps = [];
+        for (let i = 1; i <= count; i++) {
+          comps.push({ id: "comp-" + i, name: "Active Tournament " + i, status: "active" });
+        }
+        process.stdout.write(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          competitions: comps,
+          scoringMatches: [],
+        }));
+        process.exit(0);
+      }
+      process.stdout.write(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        competitions: [],
+        scoringMatches: [],
+      }));
+      process.exit(0);
+    }
     const script = args[args.length - 1];
     if (script.includes("health/ready")) {
       if (process.env.MOCK_CANDIDATE_READY_FAILS === "1") process.exit(1);
@@ -1210,6 +1263,61 @@ test("71. Unauthorised deployment freeze override attempt is rejected fail-close
 
 test("72. Explicit authorised deployment freeze override allows deployment during active competition under policy control", (t) => {
   const f = createFixture(t, { initialSlot: "blue" });
+  const authPayload = JSON.stringify({
+    operator_id: "ops-lead-01",
+    reason: "Authorised organiser emergency calculation patch",
+    scope: "all",
+    valid_until: new Date(Date.now() + 3600_000).toISOString(),
+    token: "test-override-secret-123456",
+  });
+  const notifEvidence = JSON.stringify({
+    notification_id: "notif-prod-patch-101",
+    competition_id: "comp-1",
+    recipient_or_organiser_reference: "lead-organiser@canoe-polo.sg",
+    notification_timestamp: new Date().toISOString(),
+    delivery_or_acknowledgement_status: "delivered",
+    evidence_source: "email_delivery_webhook",
+  });
+  const result = f.run({
+    MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
+    DEPLOY_FREEZE_OVERRIDE: "1",
+    DEPLOY_FREEZE_AUTHORIZATION: authPayload,
+    DEPLOY_FREEZE_NOTIFICATION_EVIDENCE: notifEvidence,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Promoted Slot:\s+green/);
+});
+
+test("73. Normal forward deployment with MATCHDAY_EMERGENCY_ROLLBACK=1 during active competition blocks fail-closed", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_ACTIVE_COMPETITIONS: "2",
+    MATCHDAY_EMERGENCY_ROLLBACK: "1",
+  });
+  assert.notEqual(
+    result.status,
+    0,
+    "Emergency rollback flag must NOT allow normal forward deployment during active competition",
+  );
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+});
+
+test("74. Normal forward deployment with ROLLBACK_IN_PROGRESS=1 during active competition blocks fail-closed", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
+    ROLLBACK_IN_PROGRESS: "1",
+  });
+  assert.notEqual(
+    result.status,
+    0,
+    "Rollback in progress flag must NOT allow normal forward deployment during active competition",
+  );
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+});
+
+test("75. Caller supplying boolean DEPLOY_FREEZE_ORGANISER_NOTIFIED=true without notification evidence is rejected fail-closed", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
   const result = f.run({
     MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
     DEPLOY_FREEZE_OVERRIDE: "1",
@@ -1217,16 +1325,57 @@ test("72. Explicit authorised deployment freeze override allows deployment durin
     DEPLOY_FREEZE_OVERRIDE_REASON: "Authorised organiser emergency calculation patch",
     DEPLOY_FREEZE_ORGANISER_NOTIFIED: "true",
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Promoted Slot:\s+green/);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+  assert.match(result.stderr, /CALLER_NOTIFICATION_BOOLEAN_ONLY/);
 });
 
-test("73. Emergency rollback bypasses deployment freeze check safely", (t) => {
+test("76. Pre-promotion TOCTOU freeze recheck aborts promotion when competition begins during build/test", (t) => {
   const f = createFixture(t, { initialSlot: "blue" });
   const result = f.run({
-    MOCK_FREEZE_ACTIVE_COMPETITIONS: "2",
-    MATCHDAY_EMERGENCY_ROLLBACK: "1",
+    MOCK_FREEZE_TOCTOU_COMPETITION: "1",
   });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment freeze policy recheck failed before promotion/);
+  assert.match(result.stdout, /Pre-promotion: rechecking deployment freeze policy/);
+  const activeSlotContent = readFileSync(f.activeSlotFile, "utf8");
+  assert.match(activeSlotContent, /ACTIVE_SLOT=blue/);
+});
+
+test("77. Pre-promotion TOCTOU freeze recheck aborts promotion when live scoring begins during build/test", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_TOCTOU_SCORING: "1",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment freeze policy recheck failed before promotion/);
+  const activeSlotContent = readFileSync(f.activeSlotFile, "utf8");
+  assert.match(activeSlotContent, /ACTIVE_SLOT=blue/);
+});
+
+test("78. Pre-promotion TOCTOU freeze recheck aborts promotion when freeze provider is lost before promotion", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_TOCTOU_PROVIDER_LOST: "1",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment freeze policy recheck failed before promotion/);
+  const activeSlotContent = readFileSync(f.activeSlotFile, "utf8");
+  assert.match(activeSlotContent, /ACTIVE_SLOT=blue/);
+});
+
+test("79. Stale or unavailable freeze provider halts preflight fail-closed", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({
+    MOCK_FREEZE_PROVIDER_UNAVAILABLE: "1",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Deployment blocked by OPS-015 deployment freeze policy/);
+});
+
+test("80. Repeated clean deployment with zero active competitions completes promotion", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run();
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Emergency rollback active: deployment freeze check bypassed safely/);
+  assert.match(result.stdout, /Promoted Slot:\s+green/);
 });

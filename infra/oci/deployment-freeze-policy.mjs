@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -19,6 +19,10 @@ export const VALID_COMPETITION_STATUSES = new Set([
 export const ACTIVE_COMPETITION_STATUSES = new Set(["active", "live"]);
 
 export const SCORING_IN_PROGRESS_STATE = "in_progress";
+
+export const VALID_MATCH_STATES = new Set(["pending", "ready", "in_progress", "final", "corrected"]);
+
+export const VALID_DELIVERY_STATUSES = new Set(["delivered", "acknowledged", "confirmed"]);
 
 export function parseEnvContent(content) {
   const env = {};
@@ -60,85 +64,13 @@ export function timingSafeEqualStrings(a, b) {
   }
 }
 
-export function createDefaultFreezeProvider(env = {}, options = {}) {
+/**
+ * Authoritative production database freeze provider.
+ * Strictly queries PostgreSQL via Docker Compose; never accepts synthetic or mock environment inputs.
+ */
+export function createProductionFreezeProvider(env = {}, options = {}) {
   return {
     async getSnapshot() {
-      // 1. Explicit mock triggers for tests/fixtures
-      if (options.simulateUnavailable || process.env.MOCK_FREEZE_PROVIDER_UNAVAILABLE === "1") {
-        throw new Error("FREEZE_PROVIDER_UNAVAILABLE: Database connection refused or query timed out");
-      }
-      if (options.simulateStale || process.env.MOCK_FREEZE_STALE === "1") {
-        return {
-          timestamp: new Date(Date.now() - 3600 * 1000).toISOString(),
-          activeCompetitions: [],
-          scoringMatches: [],
-          competitions: [],
-        };
-      }
-      if (options.simulateUnknownState || process.env.MOCK_FREEZE_UNKNOWN_STATE === "1") {
-        return {
-          timestamp: new Date().toISOString(),
-          activeCompetitions: [],
-          scoringMatches: [],
-          competitions: [
-            { id: "comp-corrupt-001", name: "Corrupted Competition", status: "corrupted_lifecycle_state" },
-          ],
-        };
-      }
-      if (options.simulateScoring || process.env.MOCK_FREEZE_SCORING === "1") {
-        return {
-          timestamp: new Date().toISOString(),
-          activeCompetitions: [{ id: "comp-live-001", name: "National Canoe Polo Championship", status: "live" }],
-          scoringMatches: [
-            { id: "match-active-001", competition_id: "comp-live-001", state: SCORING_IN_PROGRESS_STATE },
-          ],
-          competitions: [{ id: "comp-live-001", name: "National Canoe Polo Championship", status: "live" }],
-        };
-      }
-      if (
-        options.simulateActiveCompetitions !== undefined ||
-        process.env.MOCK_FREEZE_ACTIVE_COMPETITIONS !== undefined
-      ) {
-        const count =
-          options.simulateActiveCompetitions !== undefined
-            ? Number(options.simulateActiveCompetitions)
-            : Number(process.env.MOCK_FREEZE_ACTIVE_COMPETITIONS);
-        const comps = [];
-        for (let i = 1; i <= count; i++) {
-          comps.push({
-            id: `comp-active-${i}`,
-            name: `Active Tournament ${i}`,
-            status: "active",
-          });
-        }
-        return {
-          timestamp: new Date().toISOString(),
-          activeCompetitions: comps,
-          scoringMatches: [],
-          competitions: comps,
-        };
-      }
-
-      // 2. Explicit snapshot JSON via env or file
-      if (process.env.MATCHDAY_FREEZE_SNAPSHOT) {
-        return JSON.parse(process.env.MATCHDAY_FREEZE_SNAPSHOT);
-      }
-      if (process.env.MATCHDAY_FREEZE_SNAPSHOT_FILE) {
-        const content = await readFile(process.env.MATCHDAY_FREEZE_SNAPSHOT_FILE, "utf8");
-        return JSON.parse(content);
-      }
-
-      // 3. Test harness detection: if MOCK_LOG or testMode is set, return empty snapshot
-      if (process.env.MOCK_LOG || options.testMode) {
-        return {
-          timestamp: new Date().toISOString(),
-          activeCompetitions: [],
-          scoringMatches: [],
-          competitions: [],
-        };
-      }
-
-      // 4. Production database query via docker compose psql
       const postgresUser = env.POSTGRES_USER || process.env.POSTGRES_USER || "matchday";
       const postgresDb = env.POSTGRES_DB || process.env.POSTGRES_DB || "matchday_prod";
       const envFile = options.envFile || (existsSync("infra/oci/.env.prod") ? "infra/oci/.env.prod" : null);
@@ -169,8 +101,9 @@ export function createDefaultFreezeProvider(env = {}, options = {}) {
       ];
 
       return new Promise((resolve, reject) => {
+        const timeoutMs = options.timeoutMs ?? 10_000;
         const proc = spawn("docker", composeArgs, {
-          timeout: 10_000,
+          timeout: timeoutMs,
           stdio: ["ignore", "pipe", "pipe"],
         });
 
@@ -185,41 +118,52 @@ export function createDefaultFreezeProvider(env = {}, options = {}) {
         });
 
         proc.on("error", (err) => {
-          reject(new Error(`Failed executing docker compose exec postgres psql: ${err.message}`));
+          reject(new Error(`DATABASE_UNAVAILABLE: Failed executing docker compose psql: ${err.message}`));
         });
 
         proc.on("close", (code) => {
           if (code !== 0) {
-            return reject(new Error(`Database freeze query failed (exit ${code}): ${stderr.trim()}`));
+            return reject(new Error(`DATABASE_UNAVAILABLE: Database query failed (exit ${code}): ${stderr.trim()}`));
           }
+          const trimmed = stdout.trim();
+          if (!trimmed) {
+            return reject(new Error("EMPTY_PROVIDER_RESPONSE: Database query returned empty response"));
+          }
+          let data;
           try {
-            const trimmed = stdout.trim();
-            if (!trimmed) {
-              return reject(new Error("Database freeze query returned empty response"));
-            }
-            const data = JSON.parse(trimmed);
-            resolve(data);
+            data = JSON.parse(trimmed);
           } catch (parseErr) {
-            reject(new Error(`Failed parsing database freeze snapshot JSON: ${parseErr.message}`));
+            return reject(new Error(`INVALID_JSON: Failed parsing database snapshot JSON: ${parseErr.message}`));
           }
+          if (!data || typeof data !== "object") {
+            return reject(new Error("INVALID_PROVIDER_RESPONSE: Provider returned non-object response"));
+          }
+          if (!Array.isArray(data.competitions)) {
+            return reject(new Error("MISSING_COMPETITION_DATA: competitions array is missing"));
+          }
+          if (!Array.isArray(data.scoringMatches)) {
+            return reject(new Error("MISSING_COMPETITION_DATA: scoringMatches array is missing"));
+          }
+          resolve(data);
         });
       });
     },
   };
 }
 
+/**
+ * Evaluates the OPS-015 deployment freeze policy.
+ *
+ * @param {object} options
+ * @param {object|null} customProvider Dependency-injected provider (used only in unit tests)
+ */
 export async function evaluateDeploymentFreeze(options = {}, customProvider = null) {
-  const env = { ...process.env, ...(options.env || {}) };
+  const env = { ...(options.env || {}) };
 
-  // 1. Emergency Rollback Exemption
-  const isEmergencyRollback =
-    options.emergencyRollback === true ||
-    env.MATCHDAY_EMERGENCY_ROLLBACK === "1" ||
-    env.MATCHDAY_EMERGENCY_ROLLBACK === "true" ||
-    env.ROLLBACK_IN_PROGRESS === "1" ||
-    env.ROLLBACK_IN_PROGRESS === "true";
-
-  if (isEmergencyRollback) {
+  // 1. Genuine Emergency Rollback Exemption
+  // Environment flags (MATCHDAY_EMERGENCY_ROLLBACK, ROLLBACK_IN_PROGRESS) MUST NOT independently authorize deployment.
+  // Only an explicit programmatic isRollbackOperation flag (or emergencyRollback option passed by caller code) is permitted.
+  if (options.isRollbackOperation === true || options.emergencyRollback === true) {
     return {
       disposition: "ALLOWED_SAFELY",
       status: "ALLOW",
@@ -232,13 +176,19 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
     };
   }
 
-  // 2. Query freeze snapshot from provider (fail-closed if unavailable)
-  const provider = customProvider || createDefaultFreezeProvider(env, options);
+  // 2. Query freeze snapshot from authoritative provider (fail-closed if unavailable)
+  const provider = customProvider || createProductionFreezeProvider(options.parsedEnv || env, options);
   let snapshot;
   try {
     snapshot = await provider.getSnapshot();
     if (!snapshot || typeof snapshot !== "object") {
       throw new Error("Provider returned non-object snapshot");
+    }
+    if (!Array.isArray(snapshot.competitions) && !Array.isArray(snapshot.activeCompetitions)) {
+      throw new Error("MISSING_COMPETITION_DATA: Snapshot lacks competitions array");
+    }
+    if (!Array.isArray(snapshot.scoringMatches)) {
+      throw new Error("MISSING_COMPETITION_DATA: Snapshot lacks scoringMatches array");
     }
   } catch (err) {
     return {
@@ -298,7 +248,7 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
     };
   }
 
-  // 4. Unknown Competition State Check
+  // 4. Unknown Competition and Match State Checks
   const allCompetitions = snapshot.competitions || snapshot.activeCompetitions || [];
   const unknownCompetitions = [];
 
@@ -326,13 +276,27 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
     };
   }
 
+  const scoringMatches = snapshot.scoringMatches || [];
+  for (const match of scoringMatches) {
+    if (!match.state || !VALID_MATCH_STATES.has(match.state)) {
+      return {
+        disposition: "BLOCK",
+        status: "BLOCK",
+        code: "UNKNOWN_COMPETITION_STATE",
+        reason: `Unknown match state detected: ${match.id || "match"}:${match.state}`,
+        allowed: false,
+        overrideApplied: false,
+        timestamp: new Date().toISOString(),
+        details: { match },
+      };
+    }
+  }
+
   // 5. Active Competitions and Scoring Matches Detection
   const activeCompetitions =
     snapshot.activeCompetitions && snapshot.activeCompetitions.length > 0
       ? snapshot.activeCompetitions
       : allCompetitions.filter((c) => ACTIVE_COMPETITION_STATUSES.has(c.status));
-
-  const scoringMatches = snapshot.scoringMatches || [];
 
   let freezeViolation = null;
   if (scoringMatches.length > 0) {
@@ -352,82 +316,248 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
     };
   }
 
-  // 6. Override evaluation
+  // 6. Authorised Exceptions Evaluation
   const overrideRequested =
     options.overrideRequested === true || env.DEPLOY_FREEZE_OVERRIDE === "1" || env.DEPLOY_FREEZE_OVERRIDE === "true";
 
   if (overrideRequested) {
-    // Expected secret MUST be sourced exclusively from trusted server configuration.
-    // Never fall back to env or process.env to prevent circular self-validation attacks.
-    const expectedSecret =
-      options.expectedOverrideSecret ||
-      options.parsedEnv?.DEPLOY_FREEZE_OVERRIDE_SECRET ||
-      options.parsedEnv?.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET;
+    // 6a. Reject caller-supplied boolean without verifiable notification evidence
+    const hasCallerBoolOnly =
+      (options.organiserNotified === true ||
+        env.DEPLOY_FREEZE_ORGANISER_NOTIFIED === "true" ||
+        env.DEPLOY_FREEZE_ORGANISER_NOTIFIED === "1") &&
+      !options.notificationEvidence &&
+      !env.DEPLOY_FREEZE_NOTIFICATION_EVIDENCE;
 
-    // Provided secret MUST be sourced exclusively from caller input parameters.
-    // Never fall back to env which may inherit .env.prod contents.
+    if (hasCallerBoolOnly) {
+      return {
+        disposition: "BLOCK",
+        status: "BLOCK",
+        code: "CALLER_NOTIFICATION_BOOLEAN_ONLY",
+        reason: "Caller-supplied organiser notification boolean rejected: verifiable notification record required",
+        allowed: false,
+        overrideApplied: false,
+        timestamp: new Date().toISOString(),
+        details: { activeCompetitions, scoringMatches },
+      };
+    }
+
+    // 6b. Operator Authorisation validation
+    // Trusted secret MUST be sourced exclusively from server .env.prod. Never fall back to scoring HMAC secret.
+    const trustedServerSecret = options.parsedEnv?.DEPLOY_FREEZE_OVERRIDE_SECRET;
+    const hasTrustedSecret = typeof trustedServerSecret === "string" && trustedServerSecret.trim().length > 0;
+
+    // Provided authorization
+    let authObj = options.authorization || null;
+    if (!authObj && env.DEPLOY_FREEZE_AUTHORIZATION) {
+      try {
+        authObj = JSON.parse(env.DEPLOY_FREEZE_AUTHORIZATION);
+      } catch {
+        authObj = null;
+      }
+    }
+
     const providedSecret =
+      authObj?.token ||
       options.overrideSecret ||
       options.overrideToken ||
-      process.env.DEPLOY_FREEZE_OVERRIDE_TOKEN ||
-      process.env.DEPLOY_FREEZE_OVERRIDE_SECRET_TOKEN ||
-      process.env.DEPLOY_FREEZE_OVERRIDE_SECRET;
+      env.DEPLOY_FREEZE_OVERRIDE_TOKEN ||
+      env.DEPLOY_FREEZE_OVERRIDE_SECRET_TOKEN ||
+      env.DEPLOY_FREEZE_OVERRIDE_SECRET;
 
-    const overrideReason = (options.overrideReason || env.DEPLOY_FREEZE_OVERRIDE_REASON || "").trim();
+    const operatorId =
+      authObj?.operator_id || authObj?.operator_identity || options.operatorId || env.DEPLOY_FREEZE_OPERATOR_ID;
 
-    const organiserNotified =
-      options.organiserNotified === true ||
-      env.DEPLOY_FREEZE_ORGANISER_NOTIFIED === "true" ||
-      env.DEPLOY_FREEZE_ORGANISER_NOTIFIED === "1";
+    const overrideReason = (
+      authObj?.reason ||
+      options.overrideReason ||
+      env.DEPLOY_FREEZE_OVERRIDE_REASON ||
+      ""
+    ).trim();
 
-    const hasExpectedSecret = Boolean(typeof expectedSecret === "string" && expectedSecret.trim().length > 0);
-    const hasProvidedSecret = Boolean(typeof providedSecret === "string" && providedSecret.trim().length > 0);
+    const overrideScope = authObj?.scope || options.overrideScope || env.DEPLOY_FREEZE_OVERRIDE_SCOPE || "all";
+
+    const validUntil = authObj?.valid_until || authObj?.expires_at || options.validUntil;
+
+    // Check operator identity
+    if (!operatorId || typeof operatorId !== "string" || operatorId.trim().length === 0) {
+      return {
+        disposition: "BLOCK",
+        status: "BLOCK",
+        code: "MISSING_OPERATOR_AUTHORIZATION",
+        reason: "Missing authorised operator or service identity in deployment override request",
+        allowed: false,
+        overrideApplied: false,
+        timestamp: new Date().toISOString(),
+        details: { activeCompetitions, scoringMatches },
+      };
+    }
+
+    // Check trusted secret match
     const secretValid =
-      hasExpectedSecret && hasProvidedSecret && timingSafeEqualStrings(expectedSecret, providedSecret);
-    const reasonValid = overrideReason.length >= 8;
-    const notificationValid = organiserNotified === true;
+      hasTrustedSecret &&
+      typeof providedSecret === "string" &&
+      providedSecret.trim().length > 0 &&
+      timingSafeEqualStrings(trustedServerSecret, providedSecret);
 
-    if (!secretValid || !reasonValid || !notificationValid) {
-      const failures = [];
-      if (!secretValid) failures.push("invalid or missing override secret");
-      if (!reasonValid) failures.push("missing or insufficient override reason (minimum 8 characters)");
-      if (!notificationValid) failures.push("explicit organiser notification not affirmed");
-
+    if (!secretValid) {
       return {
         disposition: "BLOCK",
         status: "BLOCK",
         code: "UNAUTHORISED_OVERRIDE",
-        reason: `Unauthorized deployment freeze override rejected: ${failures.join("; ")}`,
+        reason: "Unauthorized deployment freeze override rejected: invalid or missing override secret",
         allowed: false,
         overrideApplied: false,
         timestamp: new Date().toISOString(),
-        details: {
-          failures,
-          activeCompetitions,
-          scoringMatches,
-        },
+        details: { activeCompetitions, scoringMatches },
       };
     }
 
-    // Authorized override granted
+    // Check reason minimum length
+    if (overrideReason.length < 8) {
+      return {
+        disposition: "BLOCK",
+        status: "BLOCK",
+        code: "UNAUTHORISED_OVERRIDE",
+        reason:
+          "Unauthorized deployment freeze override rejected: missing or insufficient override reason (minimum 8 characters)",
+        allowed: false,
+        overrideApplied: false,
+        timestamp: new Date().toISOString(),
+        details: { activeCompetitions, scoringMatches },
+      };
+    }
+
+    // Check expiration / time-limit
+    if (validUntil) {
+      const expTime = new Date(validUntil).getTime();
+      if (isNaN(expTime) || now > expTime) {
+        return {
+          disposition: "BLOCK",
+          status: "BLOCK",
+          code: "EXPIRED_AUTHORIZATION",
+          reason: `Override authorization expired at ${validUntil}`,
+          allowed: false,
+          overrideApplied: false,
+          timestamp: new Date().toISOString(),
+          details: { validUntil, now: new Date(now).toISOString() },
+        };
+      }
+    }
+
+    // Check scope covers all active competitions
+    if (overrideScope !== "all") {
+      const allowedCompIds = new Set(
+        Array.isArray(overrideScope) ? overrideScope : overrideScope.split(",").map((s) => s.trim()),
+      );
+      const uncovered = activeCompetitions.filter((c) => !allowedCompIds.has(c.id));
+      if (uncovered.length > 0) {
+        return {
+          disposition: "BLOCK",
+          status: "BLOCK",
+          code: "INVALID_OVERRIDE_SCOPE",
+          reason: `Override scope does not cover active competition(s): ${uncovered.map((c) => c.id).join(", ")}`,
+          allowed: false,
+          overrideApplied: false,
+          timestamp: new Date().toISOString(),
+          details: { uncovered },
+        };
+      }
+    }
+
+    // 6c. Organiser Notification Evidence validation
+    let notifEvidence = options.notificationEvidence || null;
+    if (!notifEvidence && env.DEPLOY_FREEZE_NOTIFICATION_EVIDENCE) {
+      try {
+        notifEvidence = JSON.parse(env.DEPLOY_FREEZE_NOTIFICATION_EVIDENCE);
+      } catch {
+        notifEvidence = null;
+      }
+    }
+
+    if (!notifEvidence || typeof notifEvidence !== "object") {
+      return {
+        disposition: "BLOCK",
+        status: "BLOCK",
+        code: "MISSING_NOTIFICATION_EVIDENCE",
+        reason: "Verifiable organiser notification evidence record is missing",
+        allowed: false,
+        overrideApplied: false,
+        timestamp: new Date().toISOString(),
+        details: { activeCompetitions, scoringMatches },
+      };
+    }
+
+    const {
+      notification_id,
+      competition_id,
+      recipient_or_organiser_reference,
+      notification_timestamp,
+      delivery_or_acknowledgement_status,
+      evidence_source,
+    } = notifEvidence;
+
+    const notifTime = new Date(notification_timestamp).getTime();
+    const isNotifTimeValid =
+      notification_timestamp && !isNaN(notifTime) && notifTime <= now + 30_000 && notifTime >= now - 86_400_000;
+
+    const isDeliveryStatusValid =
+      typeof delivery_or_acknowledgement_status === "string" &&
+      VALID_DELIVERY_STATUSES.has(delivery_or_acknowledgement_status.toLowerCase());
+
+    const isNotifScopeValid =
+      competition_id === "all" ||
+      activeCompetitions.length === 0 ||
+      activeCompetitions.some((c) => c.id === competition_id);
+
+    if (
+      !notification_id ||
+      typeof notification_id !== "string" ||
+      !competition_id ||
+      !recipient_or_organiser_reference ||
+      !evidence_source ||
+      !isNotifTimeValid ||
+      !isDeliveryStatusValid ||
+      !isNotifScopeValid
+    ) {
+      return {
+        disposition: "BLOCK",
+        status: "BLOCK",
+        code: "INVALID_NOTIFICATION_EVIDENCE",
+        reason: "Organiser notification evidence is malformed, unconfirmed, or does not match active competition scope",
+        allowed: false,
+        overrideApplied: false,
+        timestamp: new Date().toISOString(),
+        details: { notifEvidence, isNotifTimeValid, isDeliveryStatusValid, isNotifScopeValid },
+      };
+    }
+
+    // Authorized override granted under policy control
     return {
       disposition: "POLICY_CONTROLLED",
       status: "ALLOW",
       code: "EXPLICIT_AUTHORISED_OVERRIDE",
-      reason: `Deployment freeze override authorized with valid credentials and organiser notification: ${overrideReason}`,
+      reason: `Deployment freeze override authorized with verified credentials and organiser notification (${notification_id}): ${overrideReason}`,
       allowed: true,
       overrideApplied: true,
       timestamp: new Date().toISOString(),
       details: {
+        operator_id: operatorId,
         overrideReason,
-        organiserNotified: true,
+        scope: overrideScope,
+        authorization_reference: authObj?.nonce || `auth-${Date.now()}`,
+        notification_id,
+        competition_id,
+        recipient_or_organiser_reference,
+        delivery_status: delivery_or_acknowledgement_status,
+        evidence_source,
         activeCompetitions,
         scoringMatches,
       },
     };
   }
 
-  // No override requested: if freeze violation exists, BLOCK
+  // 7. No override requested: if freeze violation exists, BLOCK
   if (freezeViolation) {
     return {
       disposition: "BLOCK",
@@ -444,7 +574,7 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
     };
   }
 
-  // Case 1: NO_ACTIVE_COMPETITION
+  // 8. Zero active competitions verified
   return {
     disposition: "ALLOW",
     status: "ALLOW",
@@ -460,29 +590,38 @@ export async function evaluateDeploymentFreeze(options = {}, customProvider = nu
   };
 }
 
+/**
+ * Durably writes an audit receipt.
+ * Fails closed by throwing if writing fails.
+ */
 export async function writeFreezeReceipt(result, options = {}) {
   const artifactsDir = options.artifactsDir || path.resolve("artifacts");
   try {
     await mkdir(artifactsDir, { recursive: true });
     const receiptPath = path.join(artifactsDir, "deployment-freeze-receipt.json");
+    const tmpPath = path.join(artifactsDir, `.freeze-receipt.${process.pid}.${Date.now()}.tmp`);
     const payload = {
       qa_item: "OPS-015",
       policy: "deployment-freeze",
       timestamp: result.timestamp,
+      candidate_sha: options.candidateSha || process.env.CANDIDATE_SHA || null,
       disposition: result.disposition,
       status: result.status,
       code: result.code,
       allowed: result.allowed,
       override_applied: result.overrideApplied,
       reason: result.reason,
+      operator_identity: result.details?.operator_id || null,
+      authorisation_reference: result.details?.authorization_reference || null,
+      competition_scope: result.details?.scope || null,
+      notification_reference: result.details?.notification_id || null,
       details: result.details,
     };
-    await writeFile(receiptPath, JSON.stringify(payload, null, 2), "utf8");
+    await writeFile(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    await rename(tmpPath, receiptPath);
     return receiptPath;
   } catch (err) {
-    // Non-fatal warning if receipt writing fails
-    console.error(`[deployment-freeze] WARNING: Failed to write freeze receipt: ${err.message}`);
-    return null;
+    throw new Error(`AUDIT_RECEIPT_WRITE_FAILURE: Failed writing durable freeze receipt: ${err.message}`);
   }
 }
 
@@ -497,19 +636,22 @@ if (isDirectExecution) {
   }
 
   const parsedEnv = existsSync(envFile) ? await parseEnvFile(envFile) : {};
-  const expectedOverrideSecret =
-    parsedEnv.DEPLOY_FREEZE_OVERRIDE_SECRET || parsedEnv.SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET;
 
   const options = {
     envFile,
     parsedEnv,
-    expectedOverrideSecret,
-    env: { ...parsedEnv, ...process.env },
+    candidateSha: process.env.CANDIDATE_SHA || null,
+    env: { ...process.env },
   };
 
   evaluateDeploymentFreeze(options)
     .then(async (result) => {
-      await writeFreezeReceipt(result, options);
+      try {
+        await writeFreezeReceipt(result, options);
+      } catch (receiptErr) {
+        console.error(`[deployment-freeze] FATAL: ${receiptErr.message}`);
+        process.exit(1);
+      }
 
       if (result.allowed) {
         console.log(`[deployment-freeze] ${result.disposition} (${result.code}): ${result.reason}`);

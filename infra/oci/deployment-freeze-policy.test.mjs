@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,6 +13,8 @@ import {
   writeFreezeReceipt,
   VALID_COMPETITION_STATUSES,
   ACTIVE_COMPETITION_STATUSES,
+  VALID_MATCH_STATES,
+  VALID_DELIVERY_STATUSES,
 } from "./deployment-freeze-policy.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -29,7 +31,31 @@ function createMockProvider(snapshotData) {
   };
 }
 
-test("1. NO_ACTIVE_COMPETITION allows deployment when no competitions are active", async () => {
+function createValidNotificationEvidence(overrides = {}) {
+  return {
+    notification_id: "notif-delivery-1001",
+    competition_id: "comp-1",
+    recipient_or_organiser_reference: "organiser@canoe-polo.sg",
+    notification_timestamp: new Date().toISOString(),
+    delivery_or_acknowledgement_status: "delivered",
+    evidence_source: "email_delivery_webhook",
+    ...overrides,
+  };
+}
+
+function createValidAuthorization(overrides = {}) {
+  return {
+    operator_id: "operator:siewhean",
+    reason: "Urgent scoring patch authorized by lead organiser",
+    scope: "all",
+    valid_until: new Date(Date.now() + 3600_000).toISOString(),
+    token: "valid-production-secret-9999",
+    nonce: "nonce-auth-20261008-01",
+    ...overrides,
+  };
+}
+
+test("1. NO_ACTIVE_COMPETITION allows deployment when zero active competitions exist", async () => {
   const provider = createMockProvider({
     timestamp: new Date().toISOString(),
     activeCompetitions: [],
@@ -105,6 +131,7 @@ test("5. STALE_FREEZE_INFORMATION blocks deployment fail-closed on old or invali
     timestamp: staleTime,
     activeCompetitions: [],
     scoringMatches: [],
+    competitions: [],
   });
 
   const resultStale = await evaluateDeploymentFreeze({ maxAgeMs: 60_000 }, staleProvider);
@@ -118,6 +145,7 @@ test("5. STALE_FREEZE_INFORMATION blocks deployment fail-closed on old or invali
     timestamp: "not-a-timestamp",
     activeCompetitions: [],
     scoringMatches: [],
+    competitions: [],
   });
 
   const resultInvalid = await evaluateDeploymentFreeze({}, invalidProvider);
@@ -131,6 +159,7 @@ test("5. STALE_FREEZE_INFORMATION blocks deployment fail-closed on old or invali
     timestamp: futureTime,
     activeCompetitions: [],
     scoringMatches: [],
+    competitions: [],
   });
 
   const resultFuture = await evaluateDeploymentFreeze({}, futureProvider);
@@ -168,7 +197,8 @@ test("6. FREEZE_PROVIDER_UNAVAILABLE blocks deployment fail-closed on provider f
   assert.equal(resultNull.allowed, false);
 });
 
-test("7. UNKNOWN_COMPETITION_STATE blocks deployment on corrupted or unknown lifecycle states", async () => {
+test("7. UNKNOWN_COMPETITION_STATE blocks deployment on corrupted lifecycle states", async () => {
+  // 7a. Corrupted competition status
   const provider = createMockProvider({
     timestamp: new Date().toISOString(),
     activeCompetitions: [],
@@ -182,108 +212,192 @@ test("7. UNKNOWN_COMPETITION_STATE blocks deployment on corrupted or unknown lif
   assert.equal(result.code, "UNKNOWN_COMPETITION_STATE");
   assert.equal(result.allowed, false);
   assert.match(result.reason, /invalid_state_enum/);
+
+  // 7b. Corrupted match state
+  const providerMatch = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "Comp 1", status: "active" }],
+    scoringMatches: [{ id: "match-1", competition_id: "comp-1", state: "corrupted_match_state" }],
+    competitions: [{ id: "comp-1", name: "Comp 1", status: "active" }],
+  });
+  const resMatch = await evaluateDeploymentFreeze({}, providerMatch);
+  assert.equal(resMatch.disposition, "BLOCK");
+  assert.equal(resMatch.code, "UNKNOWN_COMPETITION_STATE");
+  assert.match(resMatch.reason, /Unknown match state/);
 });
 
-test("8. UNAUTHORISED_OVERRIDE blocks deployment when override token, reason, or confirmation is invalid", async () => {
+test("8. CALLER_NOTIFICATION_BOOLEAN_ONLY rejects caller-supplied boolean without verifiable notification evidence", async () => {
   const provider = createMockProvider({
     timestamp: new Date().toISOString(),
     activeCompetitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
     scoringMatches: [],
-  });
-
-  // 8a. Wrong override secret
-  const resBadSecret = await evaluateDeploymentFreeze(
-    {
-      overrideRequested: true,
-      overrideSecret: "wrong-secret-token",
-      expectedOverrideSecret: "valid-production-secret-9999",
-      overrideReason: "Emergency bugfix approved by organisers",
-      organiserNotified: true,
-    },
-    provider,
-  );
-  assert.equal(resBadSecret.disposition, "BLOCK");
-  assert.equal(resBadSecret.code, "UNAUTHORISED_OVERRIDE");
-  assert.equal(resBadSecret.allowed, false);
-  assert.match(resBadSecret.reason, /invalid or missing override secret/);
-
-  // 8b. Missing reason (or too short)
-  const resNoReason = await evaluateDeploymentFreeze(
-    {
-      overrideRequested: true,
-      overrideSecret: "valid-production-secret-9999",
-      expectedOverrideSecret: "valid-production-secret-9999",
-      overrideReason: "short",
-      organiserNotified: true,
-    },
-    provider,
-  );
-  assert.equal(resNoReason.disposition, "BLOCK");
-  assert.equal(resNoReason.code, "UNAUTHORISED_OVERRIDE");
-  assert.equal(resNoReason.allowed, false);
-  assert.match(resNoReason.reason, /insufficient override reason/);
-
-  // 8c. Organiser notification not confirmed
-  const resNoNotification = await evaluateDeploymentFreeze(
-    {
-      overrideRequested: true,
-      overrideSecret: "valid-production-secret-9999",
-      expectedOverrideSecret: "valid-production-secret-9999",
-      overrideReason: "Valid bugfix justification for production",
-      organiserNotified: false,
-    },
-    provider,
-  );
-  assert.equal(resNoNotification.disposition, "BLOCK");
-  assert.equal(resNoNotification.code, "UNAUTHORISED_OVERRIDE");
-  assert.equal(resNoNotification.allowed, false);
-  assert.match(resNoNotification.reason, /organiser notification not affirmed/);
-
-  // 8d. Secretless override attempt with trusted secret configured fails closed
-  const resSecretless = await evaluateDeploymentFreeze(
-    {
-      overrideRequested: true,
-      expectedOverrideSecret: "valid-production-secret-9999",
-      overrideReason: "Emergency bugfix approved by organisers",
-      organiserNotified: true,
-    },
-    provider,
-  );
-  assert.equal(resSecretless.disposition, "BLOCK");
-  assert.equal(resSecretless.code, "UNAUTHORISED_OVERRIDE");
-  assert.equal(resSecretless.allowed, false);
-  assert.match(resSecretless.reason, /invalid or missing override secret/);
-
-  // 8e. Arbitrary injected secret when no trusted secret is configured fails closed
-  const resNoExpected = await evaluateDeploymentFreeze(
-    {
-      overrideRequested: true,
-      overrideSecret: "arbitrary-attacker-secret",
-      overrideReason: "Emergency bugfix approved by organisers",
-      organiserNotified: true,
-    },
-    provider,
-  );
-  assert.equal(resNoExpected.disposition, "BLOCK");
-  assert.equal(resNoExpected.code, "UNAUTHORISED_OVERRIDE");
-  assert.equal(resNoExpected.allowed, false);
-  assert.match(resNoExpected.reason, /invalid or missing override secret/);
-});
-
-test("9. EXPLICIT_AUTHORISED_OVERRIDE allows deployment under policy control when verified", async () => {
-  const provider = createMockProvider({
-    timestamp: new Date().toISOString(),
-    activeCompetitions: [{ id: "comp-1", name: "National Canoe Polo League", status: "active" }],
-    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
   });
 
   const result = await evaluateDeploymentFreeze(
     {
       overrideRequested: true,
-      overrideSecret: "valid-production-secret-9999",
-      expectedOverrideSecret: "valid-production-secret-9999",
-      overrideReason: "Organiser-approved scoring calculation fix for live bracket",
-      organiserNotified: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization(),
+      organiserNotified: true, // Only boolean supplied!
+    },
+    provider,
+  );
+
+  assert.equal(result.disposition, "BLOCK");
+  assert.equal(result.code, "CALLER_NOTIFICATION_BOOLEAN_ONLY");
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /Caller-supplied organiser notification boolean rejected/);
+});
+
+test("9. MISSING_OPERATOR_AUTHORIZATION blocks when operator identity is missing", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+  });
+
+  const result = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization({ operator_id: "" }),
+      notificationEvidence: createValidNotificationEvidence(),
+    },
+    provider,
+  );
+
+  assert.equal(result.disposition, "BLOCK");
+  assert.equal(result.code, "MISSING_OPERATOR_AUTHORIZATION");
+  assert.equal(result.allowed, false);
+});
+
+test("10. EXPIRED_AUTHORIZATION blocks when authorization validity has expired", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+  });
+
+  const result = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization({
+        valid_until: new Date(Date.now() - 60_000).toISOString(),
+      }),
+      notificationEvidence: createValidNotificationEvidence(),
+    },
+    provider,
+  );
+
+  assert.equal(result.disposition, "BLOCK");
+  assert.equal(result.code, "EXPIRED_AUTHORIZATION");
+  assert.equal(result.allowed, false);
+});
+
+test("11. INVALID_OVERRIDE_SCOPE blocks when authorization scope does not cover active competition", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-other", name: "Other Tournament", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-other", name: "Other Tournament", status: "active" }],
+  });
+
+  const result = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization({ scope: "comp-1" }), // does not cover comp-other
+      notificationEvidence: createValidNotificationEvidence({ competition_id: "comp-other" }),
+    },
+    provider,
+  );
+
+  assert.equal(result.disposition, "BLOCK");
+  assert.equal(result.code, "INVALID_OVERRIDE_SCOPE");
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /comp-other/);
+});
+
+test("12. MISSING_NOTIFICATION_EVIDENCE blocks when notification record is missing", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+  });
+
+  const result = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization(),
+    },
+    provider,
+  );
+
+  assert.equal(result.disposition, "BLOCK");
+  assert.equal(result.code, "MISSING_NOTIFICATION_EVIDENCE");
+  assert.equal(result.allowed, false);
+});
+
+test("13. INVALID_NOTIFICATION_EVIDENCE blocks on unconfirmed or malformed notification records", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+  });
+
+  // 13a. Delivery status not confirmed
+  const resBadStatus = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization(),
+      notificationEvidence: createValidNotificationEvidence({
+        delivery_or_acknowledgement_status: "bounced",
+      }),
+    },
+    provider,
+  );
+  assert.equal(resBadStatus.disposition, "BLOCK");
+  assert.equal(resBadStatus.code, "INVALID_NOTIFICATION_EVIDENCE");
+  assert.equal(resBadStatus.allowed, false);
+
+  // 13b. Notification timestamp too old (> 24h)
+  const resOldNotif = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization(),
+      notificationEvidence: createValidNotificationEvidence({
+        notification_timestamp: new Date(Date.now() - 100_000_000).toISOString(),
+      }),
+    },
+    provider,
+  );
+  assert.equal(resOldNotif.disposition, "BLOCK");
+  assert.equal(resOldNotif.code, "INVALID_NOTIFICATION_EVIDENCE");
+});
+
+test("14. EXPLICIT_AUTHORISED_OVERRIDE allows deployment under policy control when verified", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "National Canoe Polo League", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "National Canoe Polo League", status: "active" }],
+  });
+
+  const result = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { DEPLOY_FREEZE_OVERRIDE_SECRET: "valid-production-secret-9999" },
+      authorization: createValidAuthorization(),
+      notificationEvidence: createValidNotificationEvidence(),
     },
     provider,
   );
@@ -294,170 +408,113 @@ test("9. EXPLICIT_AUTHORISED_OVERRIDE allows deployment under policy control whe
   assert.equal(result.allowed, true);
   assert.equal(result.overrideApplied, true);
   assert.match(result.reason, /Deployment freeze override authorized/);
+  assert.equal(result.details.operator_id, "operator:siewhean");
+  assert.equal(result.details.notification_id, "notif-delivery-1001");
 });
 
-test("10. EMERGENCY_ROLLBACK allows deployment safely without evaluating competition state", async () => {
-  // Even if provider throws an error and there are active matches, emergency rollback MUST NEVER be blocked
-  const crashingProvider = {
-    async getSnapshot() {
-      throw new Error("FATAL: Database completely unavailable");
-    },
-  };
-
-  // 10a. Explicit emergencyRollback flag
-  const res1 = await evaluateDeploymentFreeze({ emergencyRollback: true }, crashingProvider);
-  assert.equal(res1.disposition, "ALLOWED_SAFELY");
-  assert.equal(res1.status, "ALLOW");
-  assert.equal(res1.code, "EMERGENCY_ROLLBACK");
-  assert.equal(res1.allowed, true);
-
-  // 10b. MATCHDAY_EMERGENCY_ROLLBACK=1 env var
-  const res2 = await evaluateDeploymentFreeze({ env: { MATCHDAY_EMERGENCY_ROLLBACK: "1" } }, crashingProvider);
-  assert.equal(res2.disposition, "ALLOWED_SAFELY");
-  assert.equal(res2.code, "EMERGENCY_ROLLBACK");
-  assert.equal(res2.allowed, true);
-
-  // 10c. ROLLBACK_IN_PROGRESS=1 env var
-  const res3 = await evaluateDeploymentFreeze({ env: { ROLLBACK_IN_PROGRESS: "1" } }, crashingProvider);
-  assert.equal(res3.disposition, "ALLOWED_SAFELY");
-  assert.equal(res3.code, "EMERGENCY_ROLLBACK");
-  assert.equal(res3.allowed, true);
-});
-
-test("11. OPS002_ROLLBACK_REGRESSION contract guarantees hold", () => {
-  // Validates constant mappings and timingSafeEqual helper stability
-  assert.equal(timingSafeEqualStrings("secretA", "secretA"), true);
-  assert.equal(timingSafeEqualStrings("secretA", "secretB"), false);
-  assert.equal(timingSafeEqualStrings("secretA", "short"), false);
-  assert.equal(timingSafeEqualStrings("", "secret"), false);
-
-  assert.equal(VALID_COMPETITION_STATUSES.has("active"), true);
-  assert.equal(VALID_COMPETITION_STATUSES.has("live"), true);
-  assert.equal(VALID_COMPETITION_STATUSES.has("completed"), true);
-  assert.equal(ACTIVE_COMPETITION_STATUSES.has("active"), true);
-  assert.equal(ACTIVE_COMPETITION_STATUSES.has("live"), true);
-  assert.equal(ACTIVE_COMPETITION_STATUSES.has("draft"), false);
-});
-
-test("12. CLI execution exits 0 on ALLOW and 1 on BLOCK with receipt emitted", (t) => {
-  const tmpDir = mkdtempSync(path.join(tmpdir(), "matchday-freeze-cli-test-"));
-  t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
-
-  const envFile = path.join(tmpDir, ".env.prod");
-  writeFileSync(envFile, "POSTGRES_USER=test\nPOSTGRES_DB=test\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-secret-1234\n");
-
-  // 12a. Simulation: NO_ACTIVE_COMPETITION via mock env in test mode -> exit 0
-  const runAllow = spawnSync("node", [policyScriptPath, envFile], {
-    env: {
-      ...process.env,
-      MOCK_LOG: "1",
-    },
-    encoding: "utf8",
+test("15. Scoring HMAC secret is REJECTED as deployment authorization credential", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
   });
-  assert.equal(runAllow.status, 0, runAllow.stderr);
-  assert.match(runAllow.stdout, /ALLOW \(NO_ACTIVE_COMPETITION\)/);
 
-  // 12b. Simulation: ACTIVE_COMPETITION -> exit 1
-  const runBlock = spawnSync("node", [policyScriptPath, envFile], {
-    env: {
-      ...process.env,
-      MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
+  // Configuration ONLY defines scoring HMAC secret, but NO DEPLOY_FREEZE_OVERRIDE_SECRET
+  const result = await evaluateDeploymentFreeze(
+    {
+      overrideRequested: true,
+      parsedEnv: { SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: "scoring-hmac-secret-1234" },
+      authorization: createValidAuthorization({ token: "scoring-hmac-secret-1234" }),
+      notificationEvidence: createValidNotificationEvidence(),
     },
-    encoding: "utf8",
-  });
-  assert.equal(runBlock.status, 1);
-  assert.match(runBlock.stderr, /Deployment blocked by freeze policy: ACTIVE_COMPETITION/);
-
-  // 12c. Simulation: SCORING_IN_PROGRESS -> exit 1
-  const runScoring = spawnSync("node", [policyScriptPath, envFile], {
-    env: {
-      ...process.env,
-      MOCK_FREEZE_SCORING: "1",
-    },
-    encoding: "utf8",
-  });
-  assert.equal(runScoring.status, 1);
-  assert.match(runScoring.stderr, /Deployment blocked by freeze policy: SCORING_IN_PROGRESS/);
-
-  // 12d. Simulation: EXPLICIT_AUTHORISED_OVERRIDE -> exit 0
-  const runOverride = spawnSync("node", [policyScriptPath, envFile], {
-    env: {
-      ...process.env,
-      MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
-      DEPLOY_FREEZE_OVERRIDE: "1",
-      DEPLOY_FREEZE_OVERRIDE_SECRET: "test-secret-1234",
-      DEPLOY_FREEZE_OVERRIDE_REASON: "Organiser authorized urgent hotfix",
-      DEPLOY_FREEZE_ORGANISER_NOTIFIED: "true",
-    },
-    encoding: "utf8",
-  });
-  assert.equal(runOverride.status, 0, runOverride.stderr);
-  assert.match(runOverride.stdout, /POLICY_CONTROLLED \(EXPLICIT_AUTHORISED_OVERRIDE\)/);
-
-  // 12e. Simulation: EMERGENCY_ROLLBACK bypass -> exit 0
-  const runRollback = spawnSync("node", [policyScriptPath, envFile], {
-    env: {
-      ...process.env,
-      MOCK_FREEZE_ACTIVE_COMPETITIONS: "2",
-      MATCHDAY_EMERGENCY_ROLLBACK: "1",
-    },
-    encoding: "utf8",
-  });
-  assert.equal(runRollback.status, 0, runRollback.stderr);
-  assert.match(runRollback.stdout, /ALLOWED_SAFELY \(EMERGENCY_ROLLBACK\)/);
-});
-
-test("13. Secretless override attempt with .env.prod configured fails closed (exit 1)", (t) => {
-  const tmpDir = mkdtempSync(path.join(tmpdir(), "matchday-freeze-sec1-"));
-  t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
-
-  const envFile = path.join(tmpDir, ".env.prod");
-  writeFileSync(
-    envFile,
-    "POSTGRES_USER=test\nPOSTGRES_DB=test\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-1234\n",
+    provider,
   );
 
-  const cleanEnv = { ...process.env };
-  delete cleanEnv.DEPLOY_FREEZE_OVERRIDE_SECRET;
-  delete cleanEnv.DEPLOY_FREEZE_OVERRIDE_TOKEN;
-  delete cleanEnv.DEPLOY_FREEZE_OVERRIDE_SECRET_TOKEN;
-
-  const res = spawnSync("node", [policyScriptPath, envFile], {
-    env: {
-      ...cleanEnv,
-      MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
-      DEPLOY_FREEZE_OVERRIDE: "1",
-      DEPLOY_FREEZE_OVERRIDE_REASON: "Attempting secretless override",
-      DEPLOY_FREEZE_ORGANISER_NOTIFIED: "1",
-    },
-    encoding: "utf8",
-  });
-
-  assert.equal(res.status, 1, `Expected exit 1 but got ${res.status}: ${res.stdout}`);
-  assert.match(res.stderr, /Deployment blocked by freeze policy: UNAUTHORISED_OVERRIDE/);
-  assert.match(res.stderr, /invalid or missing override secret/);
+  assert.equal(result.disposition, "BLOCK");
+  assert.equal(result.code, "UNAUTHORISED_OVERRIDE");
+  assert.equal(result.allowed, false);
 });
 
-test("14. Arbitrary injected secret when .env.prod has no override secret fails closed (exit 1)", (t) => {
-  const tmpDir = mkdtempSync(path.join(tmpdir(), "matchday-freeze-sec2-"));
+test("16. Emergency rollback environment flags DO NOT bypass freeze check in evaluateDeploymentFreeze", async () => {
+  const provider = createMockProvider({
+    timestamp: new Date().toISOString(),
+    activeCompetitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+    scoringMatches: [],
+    competitions: [{ id: "comp-1", name: "Tournament 1", status: "active" }],
+  });
+
+  // Attempt to pass MATCHDAY_EMERGENCY_ROLLBACK=1 via environment
+  const res1 = await evaluateDeploymentFreeze({ env: { MATCHDAY_EMERGENCY_ROLLBACK: "1" } }, provider);
+  assert.equal(res1.disposition, "BLOCK");
+  assert.equal(res1.code, "ACTIVE_COMPETITION");
+  assert.equal(res1.allowed, false);
+
+  // Attempt to pass ROLLBACK_IN_PROGRESS=1 via environment
+  const res2 = await evaluateDeploymentFreeze({ env: { ROLLBACK_IN_PROGRESS: "1" } }, provider);
+  assert.equal(res2.disposition, "BLOCK");
+  assert.equal(res2.code, "ACTIVE_COMPETITION");
+  assert.equal(res2.allowed, false);
+
+  // Genuine programmatic rollback flag is permitted
+  const resRollback = await evaluateDeploymentFreeze({ isRollbackOperation: true }, provider);
+  assert.equal(resRollback.disposition, "ALLOWED_SAFELY");
+  assert.equal(resRollback.code, "EMERGENCY_ROLLBACK");
+  assert.equal(resRollback.allowed, true);
+});
+
+test("17. Durably writing audit receipt fails closed on filesystem failure", async (t) => {
+  const tmpDir = mkdtempSync(path.join(tmpdir(), "matchday-freeze-receipt-"));
+  t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
+
+  // Make directory non-writable
+  chmodSync(tmpDir, 0o400);
+
+  const mockResult = {
+    timestamp: new Date().toISOString(),
+    disposition: "POLICY_CONTROLLED",
+    status: "ALLOW",
+    code: "EXPLICIT_AUTHORISED_OVERRIDE",
+    allowed: true,
+    overrideApplied: true,
+    reason: "test",
+    details: {},
+  };
+
+  await assert.rejects(async () => {
+    await writeFreezeReceipt(mockResult, { artifactsDir: tmpDir });
+  }, /AUDIT_RECEIPT_WRITE_FAILURE/);
+});
+
+test("18. Adversarial test: caller-supplied MATCHDAY_FREEZE_SNAPSHOT or MOCK_* cannot bypass CLI execution", (t) => {
+  const tmpDir = mkdtempSync(path.join(tmpdir(), "matchday-freeze-adv-"));
   t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
 
   const envFile = path.join(tmpDir, ".env.prod");
   writeFileSync(envFile, "POSTGRES_USER=test\nPOSTGRES_DB=test\n");
 
+  // Adversary attempts to pass synthetic empty snapshot and mock bypass flags to CLI
+  const fakeSnapshot = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    competitions: [],
+    scoringMatches: [],
+  });
+
   const res = spawnSync("node", [policyScriptPath, envFile], {
     env: {
       ...process.env,
-      MOCK_FREEZE_ACTIVE_COMPETITIONS: "1",
-      DEPLOY_FREEZE_OVERRIDE: "1",
-      DEPLOY_FREEZE_OVERRIDE_SECRET: "attacker_secret_999",
-      DEPLOY_FREEZE_OVERRIDE_REASON: "Attempting arbitrary injected secret",
-      DEPLOY_FREEZE_ORGANISER_NOTIFIED: "1",
+      MATCHDAY_FREEZE_SNAPSHOT: fakeSnapshot,
+      MOCK_LOG: "1",
+      MOCK_FREEZE_ACTIVE_COMPETITIONS: "0",
+      MOCK_FREEZE_PROVIDER_UNAVAILABLE: "0",
+      MATCHDAY_EMERGENCY_ROLLBACK: "1",
+      ROLLBACK_IN_PROGRESS: "1",
     },
     encoding: "utf8",
   });
 
-  assert.equal(res.status, 1, `Expected exit 1 but got ${res.status}: ${res.stdout}`);
-  assert.match(res.stderr, /Deployment blocked by freeze policy: UNAUTHORISED_OVERRIDE/);
-  assert.match(res.stderr, /invalid or missing override secret/);
+  // Because the CLI strictly attempts to execute docker compose psql (which fails in this isolated test env),
+  // it MUST fail closed (exit 1) rather than accepting the fake snapshot!
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /FATAL: Deployment blocked by freeze policy: FREEZE_PROVIDER_UNAVAILABLE/);
 });
