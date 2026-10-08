@@ -5,14 +5,21 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, realpathSync } from "node
 import path from "node:path";
 
 const PINNED_CADDY_IMAGE = "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d";
+const TIMEOUT_MS = 15000;
 
 test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", async (t) => {
-  // Check if docker daemon is reachable
+  const strictMode = process.env.MATCHDAY_REQUIRE_DOCKER_CADDY_TEST === "1";
+
+  // Check if docker daemon is reachable with hard timeout
   try {
-    execFileSync("docker", ["version"], { stdio: "ignore" });
-  } catch {
-    t.skip("Docker daemon unavailable; skipping Docker-backed visibility test");
-    return;
+    execFileSync("docker", ["version"], { stdio: "ignore", timeout: TIMEOUT_MS });
+  } catch (err) {
+    if (strictMode) {
+      assert.fail(`MATCHDAY_REQUIRE_DOCKER_CADDY_TEST=1 is active but Docker daemon is unavailable: ${err.message}`);
+    } else {
+      t.skip("Docker daemon unavailable; skipping Docker-backed visibility test");
+      return;
+    }
   }
 
   const containerName = `caddy-visibility-test-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
@@ -51,7 +58,7 @@ test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", 
         "--adapter",
         "caddyfile",
       ],
-      { stdio: "pipe" },
+      { stdio: "pipe", timeout: TIMEOUT_MS },
     );
     containerStarted = true;
 
@@ -59,7 +66,10 @@ test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", 
     let started = false;
     for (let i = 0; i < 20; i++) {
       try {
-        const out = execFileSync("docker", ["exec", containerName, "caddy", "version"], { encoding: "utf8" });
+        const out = execFileSync("docker", ["exec", containerName, "caddy", "version"], {
+          encoding: "utf8",
+          timeout: TIMEOUT_MS,
+        });
         if (out.includes("v2")) {
           started = true;
           break;
@@ -70,24 +80,49 @@ test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", 
     }
     assert.ok(started, "Caddy container failed to start in test timeout");
 
-    // 1. Initial configuration check inside container
+    // 1. Verify directory bind mount configuration via inspect
+    const inspectMounts = execFileSync(
+      "docker",
+      ["inspect", containerName, "--format", "{{range .Mounts}}{{println .Type .Source .Destination .RW}}{{end}}"],
+      { encoding: "utf8", timeout: TIMEOUT_MS },
+    );
+    const hasDirMount = inspectMounts
+      .trim()
+      .split("\n")
+      .some((line) => {
+        const parts = line.trim().split(/\s+/);
+        return (
+          parts[0] === "bind" && parts[1] === tempDir && parts[2] === "/etc/caddy" && parts[3].toLowerCase() === "false"
+        );
+      });
+    assert.ok(hasDirMount, `Container must have read-only directory bind mount matching ${tempDir}:/etc/caddy:ro`);
+
+    // 2. Initial configuration and HTTP check inside container
     const initialRead = execFileSync("docker", ["exec", containerName, "cat", "/etc/caddy/Caddyfile"], {
       encoding: "utf8",
+      timeout: TIMEOUT_MS,
     });
     assert.equal(initialRead, caddyfileInitial, "Initial config must be visible in container");
 
-    // 2. Atomic host rename: write candidate in same directory and atomic rename (mv -f)
+    const initialHttp = execFileSync("docker", ["exec", containerName, "wget", "-qO-", "http://127.0.0.1:8080/"], {
+      encoding: "utf8",
+      timeout: TIMEOUT_MS,
+    });
+    assert.equal(initialHttp.trim(), "matchday-v1", "Initial HTTP response must be matchday-v1");
+
+    // 3. Atomic host rename: write candidate in same directory and atomic rename (mv -f)
     writeFileSync(hostCandidate, caddyfileUpdated);
     execFileSync("mv", ["-f", hostCandidate, hostCaddyfile]);
     assert.equal(existsSync(hostCandidate), false, "Candidate file must be moved");
     assert.equal(existsSync(hostCaddyfile), true, "Target file must exist");
 
-    // 3. RUNNING_CONTAINER_SEES_NEW_CONFIG: container sees new config without restart
+    // 4. RUNNING_CONTAINER_SEES_NEW_CONFIG: container sees new config without restart
     let postRenameRead = "";
     for (let i = 0; i < 30; i++) {
       try {
         postRenameRead = execFileSync("docker", ["exec", containerName, "cat", "/etc/caddy/Caddyfile"], {
           encoding: "utf8",
+          timeout: TIMEOUT_MS,
         });
         if (postRenameRead === caddyfileUpdated) break;
       } catch {}
@@ -95,15 +130,21 @@ test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", 
     }
     assert.equal(postRenameRead, caddyfileUpdated, "Running container must see new config via directory mount");
 
-    // 4. CADDY_RELOAD_USES_NEW_CONFIG: caddy reload loads new config successfully
-    const reloadOut = execFileSync(
-      "docker",
-      ["exec", containerName, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
-      { encoding: "utf8" },
-    );
-    assert.ok(true, "Caddy reload must exit with status 0");
+    // 5. CADDY_RELOAD_USES_NEW_CONFIG: caddy reload loads new config successfully
+    execFileSync("docker", ["exec", containerName, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"], {
+      encoding: "utf8",
+      timeout: TIMEOUT_MS,
+    });
 
-    // 5. ROLLBACK_RESTORES_VISIBLE_OLD_CONFIG: atomic rollback restores previous config and caddy reloads
+    // 6. HTTP behavior proves newly applied configuration is active
+    const postPromotionHttp = execFileSync(
+      "docker",
+      ["exec", containerName, "wget", "-qO-", "http://127.0.0.1:8080/"],
+      { encoding: "utf8", timeout: TIMEOUT_MS },
+    );
+    assert.equal(postPromotionHttp.trim(), "matchday-v2", "Post-reload HTTP response must be matchday-v2");
+
+    // 7. ROLLBACK_RESTORES_VISIBLE_OLD_CONFIG: atomic rollback restores previous config and caddy reloads
     writeFileSync(hostRollback, caddyfileRollback);
     execFileSync("mv", ["-f", hostRollback, hostCaddyfile]);
     let postRollbackRead = "";
@@ -111,6 +152,7 @@ test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", 
       try {
         postRollbackRead = execFileSync("docker", ["exec", containerName, "cat", "/etc/caddy/Caddyfile"], {
           encoding: "utf8",
+          timeout: TIMEOUT_MS,
         });
         if (postRollbackRead === caddyfileRollback) break;
       } catch {}
@@ -120,12 +162,23 @@ test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", 
 
     execFileSync("docker", ["exec", containerName, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"], {
       encoding: "utf8",
+      timeout: TIMEOUT_MS,
     });
-    assert.ok(true, "Rollback caddy reload must exit with status 0");
+
+    // 8. HTTP behavior proves rolled-back configuration is active
+    const postRollbackHttp = execFileSync("docker", ["exec", containerName, "wget", "-qO-", "http://127.0.0.1:8080/"], {
+      encoding: "utf8",
+      timeout: TIMEOUT_MS,
+    });
+    assert.equal(
+      postRollbackHttp.trim(),
+      "matchday-v1-restored",
+      "Post-rollback HTTP response must be matchday-v1-restored",
+    );
   } finally {
     if (containerStarted) {
       try {
-        execFileSync("docker", ["stop", containerName], { stdio: "ignore" });
+        execFileSync("docker", ["stop", containerName], { stdio: "ignore", timeout: TIMEOUT_MS });
       } catch {}
     }
     rmSync(tempDir, { recursive: true, force: true });

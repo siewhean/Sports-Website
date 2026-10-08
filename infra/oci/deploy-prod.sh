@@ -106,6 +106,15 @@ RUNTIME_CADDY_DIR="${MATCHDAY_RUNTIME_CADDY_DIR:-$(dirname "$RUNTIME_CADDYFILE_P
 export MATCHDAY_RUNTIME_CADDYFILE_PATH="$RUNTIME_CADDYFILE_PATH"
 export MATCHDAY_RUNTIME_CADDY_DIR="$RUNTIME_CADDY_DIR"
 
+if [ -n "${MATCHDAY_RUNTIME_CADDY_DIR:-}" ]; then
+  caddy_dir_canonical="$(python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "$RUNTIME_CADDY_DIR" 2>/dev/null || echo "$RUNTIME_CADDY_DIR")"
+  caddy_file_dir_canonical="$(python3 -c "import os, sys; print(os.path.realpath(os.path.dirname(sys.argv[1])))" "$RUNTIME_CADDYFILE_PATH" 2>/dev/null || echo "$(dirname "$RUNTIME_CADDYFILE_PATH")")"
+  if [ "$caddy_dir_canonical" != "$caddy_file_dir_canonical" ]; then
+    echo "[deploy-prod] FATAL: Runtime Caddyfile ($RUNTIME_CADDYFILE_PATH) must reside inside MATCHDAY_RUNTIME_CADDY_DIR ($RUNTIME_CADDY_DIR)" >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
 mkdir -p "$RUNTIME_CADDY_DIR" 2>/dev/null || true
 
@@ -540,41 +549,71 @@ if ! echo "$caddy_network" | grep -q "matchday-prod_backend"; then
 fi
 
 echo "[deploy-prod] Verifying Caddy container mount configuration..."
-if ! caddy_mount_info="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{range .Mounts}}{{if or (eq .Destination "/etc/caddy") (eq .Destination "/etc/caddy/Caddyfile")}}{{println .Source .Destination .RW}}{{end}}{{end}}')"; then
+if ! caddy_mount_info="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{range .Mounts}}{{println .Type .Source .Destination .RW}}{{end}}')"; then
   cleanup_and_rollback "Failed inspecting Caddy container mounts within timeout"
 fi
-if [ -z "$caddy_mount_info" ]; then
-  cleanup_and_rollback "Caddy container is missing required bind mount for /etc/caddy or /etc/caddy/Caddyfile"
-fi
 
-caddy_mount_valid="$(python3 -c "
+caddy_mount_check="$(python3 -c "
 import sys, os
-mount_lines = [l.strip() for l in sys.argv[1].strip().split('\n') if l.strip()]
-expected_file = os.path.realpath(sys.argv[2])
-expected_dir = os.path.realpath(sys.argv[3])
 
-valid = False
-for mount_line in mount_lines:
-    parts = mount_line.split()
-    if len(parts) >= 3:
-        source, dest, rw = parts[0], parts[1], parts[2]
-        source_real = os.path.realpath(source)
-        if dest == '/etc/caddy' and source_real == expected_dir and rw.lower() == 'false':
-            valid = True
-            break
-        elif dest == '/etc/caddy/Caddyfile' and source_real == expected_file and rw.lower() == 'false':
-            valid = True
-            break
+mount_lines_str = sys.argv[1]
+expected_dir = sys.argv[2]
 
-if valid:
+mount_lines = [l.strip() for l in mount_lines_str.strip().split('\n') if l.strip()]
+expected_dir_real = os.path.realpath(expected_dir)
+
+has_valid_dir_mount = False
+has_conflicting_file_mount = False
+errors = []
+
+for line in mount_lines:
+    parts = line.split()
+    if len(parts) >= 4:
+        m_type, source, dest, rw = parts[0], parts[1], parts[2], parts[3]
+    elif len(parts) == 3:
+        m_type, source, dest, rw = 'bind', parts[0], parts[1], parts[2]
+    else:
+        continue
+
+    source_real = os.path.realpath(source)
+
+    if dest == '/etc/caddy/Caddyfile':
+        has_conflicting_file_mount = True
+        errors.append(f'REJECTED_FILE_MOUNT: {dest} from {source}')
+    elif dest == '/etc/caddy':
+        if m_type.lower() != 'bind':
+            errors.append(f'NON_BIND_MOUNT: type={m_type} (required bind)')
+        elif rw.lower() != 'false':
+            errors.append(f'WRITABLE_MOUNT: rw={rw} (required read-only)')
+        elif source_real != expected_dir_real:
+            errors.append(f'WRONG_MOUNT_SOURCE: source={source_real} (expected {expected_dir_real})')
+        else:
+            has_valid_dir_mount = True
+
+if not has_valid_dir_mount:
+    if not any('WRONG_MOUNT_SOURCE' in e or 'WRITABLE_MOUNT' in e or 'NON_BIND_MOUNT' in e for e in errors):
+        errors.append('MISSING_DIRECTORY_MOUNT: Container is missing required bind mount for /etc/caddy')
+if has_conflicting_file_mount:
+    errors.append('CONFLICTING_FILE_MOUNT: Standalone or conflicting file mount at /etc/caddy/Caddyfile is rejected')
+
+if has_valid_dir_mount and not has_conflicting_file_mount and len([e for e in errors if not e.startswith('MISSING')]) == 0:
     print('VALID')
 else:
-    sys.stderr.write(f'Mount mismatch: lines={mount_lines}, expected_file={expected_file}, expected_dir={expected_dir}\n')
-    print('INVALID')
-" "$caddy_mount_info" "$RUNTIME_CADDYFILE_PATH" "$RUNTIME_CADDY_DIR")"
+    print('INVALID: ' + '; '.join(errors))
+" "$caddy_mount_info" "$RUNTIME_CADDY_DIR")"
 
-if [ "$caddy_mount_valid" != "VALID" ]; then
-  cleanup_and_rollback "Caddy container bind mount does not match expected runtime Caddyfile ($RUNTIME_CADDYFILE_PATH) or directory ($RUNTIME_CADDY_DIR)"
+if [ "$caddy_mount_check" != "VALID" ]; then
+  echo "[deploy-prod] ERROR: Caddy container mount configuration is invalid:" >&2
+  echo "CADDY_RUNTIME_MOUNT_INVALID" >&2
+  echo "EXPECTED_SOURCE=$RUNTIME_CADDY_DIR" >&2
+  echo "EXPECTED_DESTINATION=/etc/caddy" >&2
+  echo "REQUIRED_TYPE=bind" >&2
+  echo "REQUIRED_READ_ONLY=true" >&2
+  echo "" >&2
+  echo "DEPLOYMENT_BLOCKED=YES" >&2
+  echo "REASON=LEGACY_OR_INCOMPATIBLE_CADDY_MOUNT" >&2
+  echo "DIAGNOSTIC=$caddy_mount_check" >&2
+  cleanup_and_rollback "CADDY_RUNTIME_MOUNT_INVALID: $caddy_mount_check"
 fi
 
 PHASE="CANDIDATE_START"

@@ -120,17 +120,27 @@ if (tool === "docker") {
     process.exit(0);
   } else if (args.includes("inspect")) {
     hangIfMatches("inspect");
-    if (args.some(a => a.includes(".Destination \\"/etc/caddy/Caddyfile\\"") || a.includes(".Destination \\"/etc/caddy\\""))) {
+    if (args.some(a => a.includes("{{range .Mounts}}") || a.includes(".Destination \\"/etc/caddy\\"") || a.includes(".Destination \\"/etc/caddy/Caddyfile\\""))) {
+      const caddyDir = process.env.MATCHDAY_RUNTIME_CADDY_DIR || path.dirname(process.env.MATCHDAY_RUNTIME_CADDYFILE_PATH);
       if (process.env.MOCK_CADDY_MISSING_BIND === "1") {
         process.exit(0);
+      } else if (process.env.MOCK_CADDY_LEGACY_FILE_BIND === "1") {
+        console.log("bind " + process.env.MATCHDAY_RUNTIME_CADDYFILE_PATH + " /etc/caddy/Caddyfile false");
+        process.exit(0);
       } else if (process.env.MOCK_CADDY_WRONG_BIND === "1") {
-        console.log("/wrong/host/path/Caddyfile /etc/caddy/Caddyfile false");
+        console.log("/wrong/host/path /etc/caddy false");
         process.exit(0);
       } else if (process.env.MOCK_CADDY_WRITABLE_BIND === "1") {
-        console.log(process.env.MATCHDAY_RUNTIME_CADDYFILE_PATH + " /etc/caddy/Caddyfile true");
+        console.log("bind " + caddyDir + " /etc/caddy true");
+        process.exit(0);
+      } else if (process.env.MOCK_CADDY_NON_BIND === "1") {
+        console.log("volume matchday-caddy-vol /etc/caddy false");
+        process.exit(0);
+      } else if (process.env.MOCK_CADDY_CONFLICTING_FILE_BIND === "1") {
+        console.log("bind " + caddyDir + " /etc/caddy false\\nbind " + process.env.MATCHDAY_RUNTIME_CADDYFILE_PATH + " /etc/caddy/Caddyfile false");
         process.exit(0);
       } else {
-        console.log(process.env.MATCHDAY_RUNTIME_CADDYFILE_PATH + " /etc/caddy/Caddyfile false");
+        console.log("bind " + caddyDir + " /etc/caddy false");
         process.exit(0);
       }
     } else if (args.some(a => a.includes("{{.State.Status}} {{.RestartCount}}"))) {
@@ -683,7 +693,8 @@ test("25. Wrong Caddy container bind source blocks deployment and triggers rollb
   const f = createFixture(t, { initialSlot: "blue" });
   const result = f.run({ MOCK_CADDY_WRONG_BIND: "1" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Caddy container bind mount does not match expected runtime Caddyfile/);
+  assert.match(result.stderr, /CADDY_RUNTIME_MOUNT_INVALID/);
+  assert.match(result.stderr, /WRONG_MOUNT_SOURCE/);
 
   const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
   assert.equal(receipt.outcome, "ROLLBACK");
@@ -693,7 +704,8 @@ test("26. Missing Caddy container bind mount blocks deployment", (t) => {
   const f = createFixture(t, { initialSlot: "blue" });
   const result = f.run({ MOCK_CADDY_MISSING_BIND: "1" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Caddy container is missing required bind mount/);
+  assert.match(result.stderr, /CADDY_RUNTIME_MOUNT_INVALID/);
+  assert.match(result.stderr, /MISSING_DIRECTORY_MOUNT/);
 
   const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
   assert.equal(receipt.outcome, "ROLLBACK");
@@ -703,7 +715,8 @@ test("27. Read-write instead of read-only Caddy bind mount is rejected", (t) => 
   const f = createFixture(t, { initialSlot: "blue" });
   const result = f.run({ MOCK_CADDY_WRITABLE_BIND: "1" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Caddy container bind mount does not match expected runtime Caddyfile/);
+  assert.match(result.stderr, /CADDY_RUNTIME_MOUNT_INVALID/);
+  assert.match(result.stderr, /WRITABLE_MOUNT/);
 });
 
 test("28. Host caddy binary absence does not skip validation (pinned container used)", (t) => {
@@ -1069,4 +1082,78 @@ test("62. Clean rollback with all verifications passing records COMPLETED and em
   assert.equal(receipt.outcome, "ROLLBACK");
   assert.equal(receipt.rollback_result, "COMPLETED");
   assert.deepEqual(receipt.rollback_failures, []);
+});
+
+test("63. Legacy individual-file bind mount is rejected", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_CADDY_LEGACY_FILE_BIND: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /CADDY_RUNTIME_MOUNT_INVALID/);
+  assert.match(result.stderr, /REASON=LEGACY_OR_INCOMPATIBLE_CADDY_MOUNT/);
+  assert.match(result.stderr, /REJECTED_FILE_MOUNT/);
+});
+
+test("64. Non-bind directory mount is rejected", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_CADDY_NON_BIND: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /CADDY_RUNTIME_MOUNT_INVALID/);
+  assert.match(result.stderr, /NON_BIND_MOUNT/);
+});
+
+test("65. Correct directory mount plus conflicting file bind mount is rejected", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_CADDY_CONFLICTING_FILE_BIND: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /CADDY_RUNTIME_MOUNT_INVALID/);
+  assert.match(result.stderr, /CONFLICTING_FILE_MOUNT/);
+});
+
+test("66. Rejected mount prevents candidate build, migration, and traffic promotion", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_CADDY_LEGACY_FILE_BIND: "1" });
+  assert.notEqual(result.status, 0);
+
+  const mockLog = readFileSync(f.log, "utf8");
+  const calls = mockLog
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+
+  // Verify candidate build was never invoked
+  const buildCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("build"));
+  assert.equal(buildCalls.length, 0, "Candidate build must not be invoked on mount rejection");
+
+  // Verify database migration was never invoked
+  const migrateCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("migrate"));
+  assert.equal(migrateCalls.length, 0, "Migration must not be invoked on mount rejection");
+
+  // Verify traffic promotion was never invoked
+  const reloadCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("reload"));
+  assert.equal(reloadCalls.length, 0, "Caddy reload must not be invoked on mount rejection");
+
+  const receipt = JSON.parse(readFileSync(path.join(f.repository, "artifacts/deploy-receipt.json"), "utf8"));
+  assert.equal(receipt.outcome, "ROLLBACK");
+  assert.equal(receipt.promoted, false);
+});
+
+test("67. Explicit diagnostic identifies mount contract violation on failure", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_CADDY_WRONG_BIND: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /CADDY_RUNTIME_MOUNT_INVALID/);
+  assert.match(result.stderr, /EXPECTED_SOURCE=/);
+  assert.match(result.stderr, /EXPECTED_DESTINATION=\/etc\/caddy/);
+  assert.match(result.stderr, /REQUIRED_TYPE=bind/);
+  assert.match(result.stderr, /REQUIRED_READ_ONLY=true/);
+  assert.match(result.stderr, /DEPLOYMENT_BLOCKED=YES/);
+  assert.match(result.stderr, /REASON=LEGACY_OR_INCOMPATIBLE_CADDY_MOUNT/);
+});
+
+test("68. Inconsistent MATCHDAY_RUNTIME_CADDY_DIR and MATCHDAY_RUNTIME_CADDYFILE_PATH fails closed immediately", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MATCHDAY_RUNTIME_CADDY_DIR: "/some/inconsistent/caddy/dir" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Runtime Caddyfile .* must reside inside MATCHDAY_RUNTIME_CADDY_DIR/);
 });
