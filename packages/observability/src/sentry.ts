@@ -1,4 +1,5 @@
-import * as Sentry from "@sentry/node";
+import { createRequire } from "node:module";
+import type * as SentryNode from "@sentry/node";
 
 import type { ErrorReportContext, ErrorReporterProvider } from "./error-reporter.js";
 import { scrubSentryBreadcrumb, scrubSentryEvent } from "./sentry-scrub.js";
@@ -35,6 +36,9 @@ export function initSentryNode(options: SentryNodeOptions): ErrorReporterProvide
   const dsn = validDsn(env.SENTRY_DSN);
   if (!dsn) return undefined;
 
+  // Loaded only when a DSN is configured: @sentry/node is heavy to import, and every
+  // API/worker process (and short-lived child processes) imports this package.
+  const Sentry = createRequire(import.meta.url)("@sentry/node") as typeof SentryNode;
   Sentry.init({
     dsn,
     release: env.MATCHDAY_BUILD_ID?.trim() || env.GIT_SHA?.trim() || undefined,
@@ -68,7 +72,7 @@ export function initSentryNode(options: SentryNodeOptions): ErrorReporterProvide
     initialScope: { tags: { service: options.service } },
   });
 
-  const apply = (scope: Sentry.Scope, context: ErrorReportContext) => {
+  const apply = (scope: SentryNode.Scope, context: ErrorReportContext) => {
     scope.setLevel(levelBySeverity[context.severity]);
     scope.setTag("handled", String(context.handled));
     if (context.requestId) scope.setTag("request_id", context.requestId);
