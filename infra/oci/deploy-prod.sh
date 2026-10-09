@@ -636,6 +636,89 @@ if ! run_bounded "$BUILD_TIMEOUT" docker compose --env-file infra/oci/.env.prod 
   cleanup_and_rollback "Failed building candidate services within timeout"
 fi
 
+# Pre-migration snapshot (backup safety net). Migrations are forward-only, so a pg_dump taken
+# immediately before they run is the only way back from a bad migration. Mandatory: a failed
+# dump aborts the deploy. The sole bypass is the explicit MATCHDAY_SKIP_PREMIGRATION_BACKUP=1
+# flag, documented in docs/operations/BACKUP_RESTORE.md; it is logged loudly.
+DUMP_TIMEOUT="${MATCHDAY_DUMP_TIMEOUT:-900}"
+PREMIGRATION_LOCAL_KEEP="${MATCHDAY_PREMIGRATION_LOCAL_KEEP:-5}"
+
+env_file_value() {
+  local key="$1"
+  { grep -E "^${key}=" infra/oci/.env.prod || true; } | tail -n 1 | cut -d= -f2- | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
+take_premigration_snapshot() {
+  local backup_root="${MATCHDAY_BACKUP_DIR:-/var/lib/matchday/backups}"
+  local snap_dir="$backup_root/premigration"
+  local pg_user pg_db final partial s3_bucket
+  pg_user="$(env_file_value POSTGRES_USER)"
+  pg_db="$(env_file_value POSTGRES_DB)"
+  if [ -z "$pg_user" ] || [ -z "$pg_db" ]; then
+    echo "[deploy-prod] ERROR: POSTGRES_USER/POSTGRES_DB missing from infra/oci/.env.prod; cannot snapshot" >&2
+    return 1
+  fi
+  if ! (umask 077 && mkdir -p "$snap_dir"); then
+    echo "[deploy-prod] ERROR: cannot create snapshot directory $snap_dir" >&2
+    return 1
+  fi
+  final="$snap_dir/premigration-${BUILD_TIMESTAMP_SANITIZED}-${CANDIDATE_SHA:0:12}.dump"
+  partial="${final}.partial"
+
+  echo "[deploy-prod] Pre-migration snapshot: pg_dump of $pg_db -> $final"
+  if ! (umask 077 && run_bounded "$DUMP_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T postgres pg_dump --format=custom --no-owner --no-acl --username "$pg_user" --dbname "$pg_db" </dev/null >"$partial"); then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: pg_dump failed" >&2
+    return 1
+  fi
+  if [ ! -s "$partial" ]; then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: pg_dump produced an empty snapshot" >&2
+    return 1
+  fi
+  if ! run_bounded "$DUMP_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T postgres pg_restore --list <"$partial" >/dev/null; then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: snapshot archive failed pg_restore --list validation" >&2
+    return 1
+  fi
+  if ! mv "$partial" "$final"; then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: cannot finalize snapshot file" >&2
+    return 1
+  fi
+  echo "[deploy-prod] Pre-migration snapshot complete ($(wc -c <"$final" | tr -d ' ') bytes, sha256 $( (sha256sum "$final" 2>/dev/null || shasum -a 256 "$final") | cut -d' ' -f1))"
+
+  # Local retention: keep the newest N snapshots (best effort).
+  { ls -1t "$snap_dir" 2>/dev/null | grep -E '^premigration-.*\.dump$' | tail -n +"$((PREMIGRATION_LOCAL_KEEP + 1))" |
+    while IFS= read -r old; do rm -f "${snap_dir:?}/$old"; done; } || true
+
+  # Off-host copy when Object Storage is configured. The local file already exists, so an
+  # upload problem is a loud warning rather than a deploy abort.
+  s3_bucket="$(env_file_value BACKUP_S3_BUCKET)"
+  if [ -n "$s3_bucket" ]; then
+    echo "[deploy-prod] Uploading pre-migration snapshot to Object Storage bucket $s3_bucket..."
+    if ! run_bounded "$DUMP_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup run --rm --no-deps -T -v "$snap_dir:/snapshots:ro" backup upload-snapshot "/snapshots/$(basename "$final")"; then
+      echo "[deploy-prod] WARNING: off-host upload of the pre-migration snapshot FAILED; local copy retained at $final" >&2
+    fi
+  else
+    echo "[deploy-prod] Object Storage not configured (BACKUP_S3_BUCKET empty); snapshot is local only"
+  fi
+}
+
+case "${MATCHDAY_SKIP_PREMIGRATION_BACKUP:-0}" in
+  1)
+    echo "[deploy-prod] WARNING: MATCHDAY_SKIP_PREMIGRATION_BACKUP=1 - SKIPPING the pre-migration database snapshot. There will be no automatic way back from a bad migration." >&2
+    ;;
+  0)
+    if ! take_premigration_snapshot; then
+      cleanup_and_rollback "Pre-migration database snapshot failed; refusing to run migrations (set MATCHDAY_SKIP_PREMIGRATION_BACKUP=1 only if you accept the risk)"
+    fi
+    ;;
+  *)
+    cleanup_and_rollback "MATCHDAY_SKIP_PREMIGRATION_BACKUP must be 0 or 1 (got '${MATCHDAY_SKIP_PREMIGRATION_BACKUP}')"
+    ;;
+esac
+
 echo "[deploy-prod] Running database migrations..."
 if ! run_bounded "$MIGRATION_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate; then
   cleanup_and_rollback "Database migrations failed or timed out"

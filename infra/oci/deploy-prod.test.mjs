@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -58,7 +67,7 @@ function createFixture(t, options = {}) {
 
   const envContent =
     options.environment ||
-    `OCI_PUBLIC_HOSTNAME=matchday.poladex.shop\nAPP_ENV=production\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n`;
+    `OCI_PUBLIC_HOSTNAME=matchday.poladex.shop\nAPP_ENV=production\nPOSTGRES_USER=matchday_prod\nPOSTGRES_DB=matchday_prod\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n`;
   writeFileSync(path.join(repository, "infra/oci/.env.prod"), envContent, { mode: 0o600 });
   writeFileSync(path.join(repository, "infra/oci/.env.oci"), envContent, { mode: 0o600 });
 
@@ -81,6 +90,7 @@ function createFixture(t, options = {}) {
 
   const deployLockFile = path.join(directory, "deploy.lock");
   const log = path.join(directory, "mock-calls.jsonl");
+  const backupDir = path.join(directory, "backups");
 
   const mock = path.join(directory, "mock.mjs");
   writeFileSync(
@@ -223,6 +233,19 @@ if (tool === "docker") {
         } catch {}
       }
       if (process.env.MOCK_CADDY_RELOAD_FAILS === "1") process.exit(1);
+      process.exit(0);
+    }
+    if (args.includes("pg_dump")) {
+      if (process.env.MOCK_DUMP_FAILS === "1") {
+        process.stderr.write("pg_dump: error: connection to server failed\\n");
+        process.exit(1);
+      }
+      if (process.env.MOCK_DUMP_EMPTY === "1") process.exit(0);
+      process.stdout.write("PGDMP-mock-custom-format-archive\\n");
+      process.exit(0);
+    }
+    if (args.includes("pg_restore")) {
+      if (process.env.MOCK_DUMP_LIST_FAILS === "1") process.exit(1);
       process.exit(0);
     }
     if (args.includes("postgres") && (args.includes("psql") || args.includes("-c"))) {
@@ -390,13 +413,26 @@ if (tool === "docker") {
         MATCHDAY_SERVICE_CONTROL_TIMEOUT: "2",
         MATCHDAY_MIGRATION_TIMEOUT: "2",
         MATCHDAY_BUILD_TIMEOUT: "2",
+        MATCHDAY_DUMP_TIMEOUT: "5",
+        MATCHDAY_BACKUP_DIR: backupDir,
         MOCK_LOG: log,
         ...extraEnv,
       },
     });
   };
 
-  const ret = { directory, repository, sha, git, activeSlotFile, runtimeCaddyfile, deployLockFile, run, log };
+  const ret = {
+    directory,
+    repository,
+    sha,
+    git,
+    activeSlotFile,
+    runtimeCaddyfile,
+    deployLockFile,
+    run,
+    log,
+    backupDir,
+  };
   return ret;
 }
 
@@ -1386,4 +1422,100 @@ test("80. Repeated clean deployment with zero active competitions completes prom
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Promoted Slot:\s+green/);
+});
+
+// ---- Pre-migration snapshot (backup safety net) ----
+
+const readCalls = (f) =>
+  existsSync(f.log)
+    ? readFileSync(f.log, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+    : [];
+const isMigrateRun = (c) => c.tool === "docker" && c.args.includes("run") && c.args.includes("migrate");
+const isDump = (c) => c.tool === "docker" && c.args.includes("pg_dump");
+const snapshotFiles = (f) => {
+  const dir = path.join(f.backupDir, "premigration");
+  return existsSync(dir) ? readdirSync(dir) : [];
+};
+
+test("81. Pre-migration pg_dump runs before migrations and leaves a validated local snapshot", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+
+  const calls = readCalls(f);
+  const dumpIndex = calls.findIndex(isDump);
+  const migrateIndex = calls.findIndex(isMigrateRun);
+  assert.ok(dumpIndex >= 0, "pg_dump must be invoked");
+  assert.ok(migrateIndex >= 0, "migrations must be invoked");
+  assert.ok(dumpIndex < migrateIndex, "pg_dump must run before migrations");
+  const listIndex = calls.findIndex(
+    (c) => c.tool === "docker" && c.args.includes("pg_restore") && c.args.includes("--list"),
+  );
+  assert.ok(
+    listIndex > dumpIndex && listIndex < migrateIndex,
+    "archive validation must sit between dump and migrations",
+  );
+  assert.ok(calls[dumpIndex].args.includes("--format=custom"));
+
+  const snapshots = snapshotFiles(f);
+  assert.equal(snapshots.length, 1);
+  assert.match(snapshots[0], new RegExp(`^premigration-.*-${f.sha.slice(0, 12)}\\.dump$`));
+  assert.match(readFileSync(path.join(f.backupDir, "premigration", snapshots[0]), "utf8"), /^PGDMP/);
+  assert.match(result.stdout, /Pre-migration snapshot complete/);
+  // Object Storage is not configured in this fixture: no upload attempted.
+  assert.equal(calls.filter((c) => c.args.includes("upload-snapshot")).length, 0);
+});
+
+test("82. Failed pre-migration pg_dump aborts the deploy before migrations or promotion", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_DUMP_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Pre-migration database snapshot failed/);
+  assert.equal(readCalls(f).filter(isMigrateRun).length, 0, "migrations must not run after a failed dump");
+  assert.match(readFileSync(f.activeSlotFile, "utf8"), /ACTIVE_SLOT=blue/);
+  assert.deepEqual(snapshotFiles(f), []);
+});
+
+test("83. Empty or unreadable pre-migration dump also aborts the deploy", (t) => {
+  for (const env of [{ MOCK_DUMP_EMPTY: "1" }, { MOCK_DUMP_LIST_FAILS: "1" }]) {
+    const f = createFixture(t, { initialSlot: "blue" });
+    const result = f.run(env);
+    assert.notEqual(result.status, 0, JSON.stringify(env));
+    assert.match(result.stderr, /Pre-migration database snapshot failed/);
+    assert.equal(readCalls(f).filter(isMigrateRun).length, 0);
+    assert.deepEqual(snapshotFiles(f), []);
+  }
+});
+
+test("84. MATCHDAY_SKIP_PREMIGRATION_BACKUP=1 skips the snapshot explicitly and loudly", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MATCHDAY_SKIP_PREMIGRATION_BACKUP: "1", MOCK_DUMP_FAILS: "1" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /SKIPPING the pre-migration database snapshot/);
+  const calls = readCalls(f);
+  assert.equal(calls.filter(isDump).length, 0);
+  assert.equal(calls.filter(isMigrateRun).length, 1);
+});
+
+test("85. Ambiguous skip-flag values fail closed instead of silently skipping", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MATCHDAY_SKIP_PREMIGRATION_BACKUP: "true" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /MATCHDAY_SKIP_PREMIGRATION_BACKUP must be 0 or 1/);
+  assert.equal(readCalls(f).filter(isMigrateRun).length, 0);
+});
+
+test("86. Snapshot is uploaded off-host before migrations when Object Storage is configured", (t) => {
+  const environment =
+    "OCI_PUBLIC_HOSTNAME=matchday.poladex.shop\nAPP_ENV=production\nPOSTGRES_USER=matchday_prod\nPOSTGRES_DB=matchday_prod\nBACKUP_S3_BUCKET=matchday-backups\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n";
+  const f = createFixture(t, { initialSlot: "blue", environment });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  const calls = readCalls(f);
+  assert.ok(calls.find(isDump).args.join(" ").includes("--username matchday_prod --dbname matchday_prod"));
+  const upload = calls.findIndex((c) => c.args.includes("upload-snapshot"));
+  assert.ok(upload > calls.findIndex(isDump) && upload < calls.findIndex(isMigrateRun));
 });

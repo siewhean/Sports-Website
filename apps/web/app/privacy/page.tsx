@@ -1,6 +1,9 @@
+import type { Metadata } from "next";
 import { LegalPage } from "@/components/foundation/LegalPage";
 import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 import { legalMessages, messages } from "@matchday/ui";
+
+export const metadata: Metadata = { title: messages.legal.privacyTitle };
 
 export default async function PrivacyPage() {
   const session = await readCurrentIdentitySession();

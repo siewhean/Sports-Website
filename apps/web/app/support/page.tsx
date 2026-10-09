@@ -4,7 +4,7 @@ import { messages } from "@matchday/ui";
 import styles from "./SupportPage.module.css";
 
 export const metadata = {
-  title: `${messages.support.title} · ${messages.brand.name}`,
+  title: messages.support.title,
   description: messages.support.subtitle,
 };
 

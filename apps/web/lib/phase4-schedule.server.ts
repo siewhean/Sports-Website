@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { interpolate } from "@matchday/ui";
 import { cookies, headers } from "next/headers";
@@ -100,7 +101,7 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
   const cookie = await sessionCookieHeader(base);
   if (!cookie) return scheduleUnavailableDocument(input, "permission");
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/schedule-workspace`, base),
       { cache: "no-store", headers: { accept: "application/json", cookie } },
     );
@@ -108,7 +109,7 @@ export async function getScheduleDocument(input: ScheduleInput): Promise<Schedul
     const payload: unknown = await response.json();
     const parsed = parseScheduleWorkspace(payload, input);
     if (!parsed) return scheduleUnavailableDocument(input, "error");
-    const jobsResponse = await fetch(
+    const jobsResponse = await apiFetch(
       new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/schedule-jobs`, base),
       { cache: "no-store", headers: { accept: "application/json", cookie } },
     );
@@ -396,7 +397,7 @@ export async function getScheduleRevisionDetail(
   const cookie = await sessionCookieHeader(base);
   if (!cookie) return null;
   try {
-    const response = await fetch(new URL(`/api/v1/schedule-revisions/${encodeURIComponent(revisionId)}`, base), {
+    const response = await apiFetch(new URL(`/api/v1/schedule-revisions/${encodeURIComponent(revisionId)}`, base), {
       cache: "no-store",
       headers: { accept: "application/json", cookie },
     });
@@ -457,7 +458,7 @@ export async function getScheduleRevisionComparison(
   const cookie = await sessionCookieHeader(base);
   if (!cookie) return null;
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       new URL(`/api/v1/schedule-revisions/${encodeURIComponent(leftId)}/compare/${encodeURIComponent(rightId)}`, base),
       { cache: "no-store", headers: { accept: "application/json", cookie } },
     );

@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 import { configuredPublicOrigin } from "./phase3-origin";
 
 function failure(status: number): Response {
@@ -33,7 +34,7 @@ export async function forwardPublicVersionStream(request: Request): Promise<Resp
   request.signal.addEventListener("abort", onAbort, { once: true });
   if (request.signal.aborted) onAbort();
   try {
-    const upstream = await fetch(new URL(incoming.pathname, backend), {
+    const upstream = await apiFetch(new URL(incoming.pathname, backend), {
       headers: { accept: "text/event-stream" },
       cache: "no-store",
       redirect: "manual",

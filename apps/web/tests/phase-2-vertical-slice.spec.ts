@@ -89,8 +89,7 @@ test("public projection is complete in raw server-rendered HTML", async ({ reque
     "Schedule",
     "Table",
     "Bracket",
-    "Updated 18 seconds ago",
-    "Published revision 4",
+    "Updated 12 Sep, 10:24 SGT",
   ]) {
     expect(html, evidence).toContain(evidence);
   }

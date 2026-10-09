@@ -5,7 +5,7 @@ import { registerGateCC4PublicTruthRoutes } from "../../src/gate-c-c4-public-tru
 
 type Handler = (request: { params: { slug: string } }, reply: unknown) => Promise<unknown>;
 
-async function openStream(version = vi.fn().mockResolvedValue("4:7:3")) {
+async function openStream(version = vi.fn().mockResolvedValue("4:7:3:1")) {
   let handler: Handler | undefined;
   const app = {
     get: (path: string, _options: unknown, callback: Handler) => {
@@ -48,10 +48,12 @@ describe("public version SSE protocol", () => {
       "Cache-Control": "no-store",
       "X-Accel-Buffering": "no",
     });
-    expect(frame(stream)).toBe('event: version\ndata: "4:7:3"\n\n');
+    expect(frame(stream)).toBe('event: version\ndata: "4:7:3:1"\n\n');
     await vi.advanceTimersByTimeAsync(2_000);
     expect(frame(stream)).toBe("event: heartbeat\ndata: {}\n\n");
-    expect(read).toHaveBeenCalledTimes(1);
+    // The opening token and every poll use the single-row version lookup, never a full projection read.
+    expect(read).not.toHaveBeenCalled();
+    expect(version).toHaveBeenCalledTimes(2);
     expect(version).toHaveBeenCalledWith("national-open");
     stream.destroy();
     await vi.advanceTimersByTimeAsync(0);
@@ -67,7 +69,7 @@ describe("public version SSE protocol", () => {
         freshness: { schedule_version: 4, result_version: 7, projection_version: 3 },
         payload: { private_official_name: "Private official" },
       }),
-      version: vi.fn().mockResolvedValueOnce("4:7:3").mockResolvedValueOnce(null),
+      version: vi.fn().mockResolvedValueOnce("4:7:3:1").mockResolvedValueOnce("4:7:3:1").mockResolvedValueOnce(null),
     };
     await registerGateCC4PublicTruthRoutes(app, runtime);
     await app.ready();
@@ -80,7 +82,7 @@ describe("public version SSE protocol", () => {
       expect(result.headers["content-type"]).toBe("text/event-stream; charset=utf-8");
       expect(result.headers["cache-control"]).toBe("no-store");
       expect(result.payload.split("\n\n")).toEqual([
-        'event: version\ndata: "4:7:3"',
+        'event: version\ndata: "4:7:3:1"',
         "event: heartbeat\ndata: {}",
         "event: unavailable\ndata: {}",
         "",
@@ -91,22 +93,96 @@ describe("public version SSE protocol", () => {
     }
   });
 
-  it("only emits new versions when publication truth changes, then ends when unavailable", async () => {
+  it("emits a new version when publication truth changes, then ends when unavailable", async () => {
     vi.useFakeTimers();
-    const version = vi.fn().mockResolvedValueOnce("4:8:4").mockResolvedValueOnce(null);
+    const version = vi
+      .fn()
+      .mockResolvedValueOnce("4:7:3:1")
+      .mockResolvedValueOnce("4:8:4:1")
+      .mockResolvedValueOnce(null);
     const { stream } = await openStream(version);
     frame(stream);
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(frame(stream)).toBe('event: version\ndata: "4:8:4"\n\n');
+    expect(frame(stream)).toBe('event: version\ndata: "4:8:4:1"\n\n');
     await vi.advanceTimersByTimeAsync(2_000);
     expect(frame(stream)).toBe("event: unavailable\ndata: {}\n\n");
     expect(vi.getTimerCount()).toBe(0);
     stream.destroy();
   });
 
+  it("emits live score updates that keep the same schedule and result versions", async () => {
+    vi.useFakeTimers();
+    // A scored point rewrites the current projection row in place: only the live revision moves.
+    const version = vi
+      .fn()
+      .mockResolvedValueOnce("4:7:3:1")
+      .mockResolvedValueOnce("4:7:3:2")
+      .mockResolvedValueOnce("4:7:3:2")
+      .mockResolvedValueOnce("4:7:3:3");
+    const { stream } = await openStream(version);
+    expect(frame(stream)).toBe('event: version\ndata: "4:7:3:1"\n\n');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(frame(stream)).toBe('event: version\ndata: "4:7:3:2"\n\n');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(frame(stream)).toBe("event: heartbeat\ndata: {}\n\n");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(frame(stream)).toBe('event: version\ndata: "4:7:3:3"\n\n');
+    stream.destroy();
+  });
+
+  it("returns 404 without opening a stream when the competition has no public version", async () => {
+    const app = Fastify();
+    await registerGateCC4PublicTruthRoutes(app, {
+      list: vi.fn(),
+      read: vi.fn(),
+      version: vi.fn().mockResolvedValue(null),
+    });
+    await app.ready();
+    try {
+      const result = await app.inject({ method: "GET", url: "/api/v1/public/competitions/missing/versions" });
+      expect(result.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("falls back to the read token, including its live revision, when no version lookup exists", async () => {
+    vi.useFakeTimers();
+    let handler: Handler | undefined;
+    const app = {
+      get: (path: string, _options: unknown, callback: Handler) => {
+        if (path.endsWith("/versions")) handler = callback;
+      },
+    } as unknown as FastifyInstance;
+    let stream: Readable | undefined;
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({
+        freshness: { schedule_version: 4, result_version: 7, projection_version: 3 },
+        payload: {},
+        version: "4:7:3:5",
+      })
+      .mockResolvedValueOnce({
+        freshness: { schedule_version: 4, result_version: 7, projection_version: 3 },
+        payload: {},
+        version: "4:7:3:6",
+      });
+    await registerGateCC4PublicTruthRoutes(app, { list: vi.fn(), read });
+    await handler!(
+      { params: { slug: "national-open" } },
+      { header: () => undefined, send: (value: Readable) => (stream = value) },
+    );
+    expect(frame(stream!)).toBe('event: version\ndata: "4:7:3:5"\n\n');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(frame(stream!)).toBe('event: version\ndata: "4:7:3:6"\n\n');
+    stream!.destroy();
+  });
+
   it("ends failed lookups with a reconnect event and cancels timers", async () => {
     vi.useFakeTimers();
-    const { stream } = await openStream(vi.fn().mockRejectedValue(new Error("database unavailable")));
+    const { stream } = await openStream(
+      vi.fn().mockResolvedValueOnce("4:7:3:1").mockRejectedValue(new Error("database unavailable")),
+    );
     frame(stream);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(frame(stream)).toBe("event: reconnect\ndata: {}\n\n");
@@ -117,12 +193,15 @@ describe("public version SSE protocol", () => {
   it.each(["lifetime", "disconnect"])("does not push a late version after %s ends the stream", async (end) => {
     vi.useFakeTimers();
     let resolve!: (version: string) => void;
-    const version = vi.fn(
-      () =>
-        new Promise<string>((done) => {
-          resolve = done;
-        }),
-    );
+    const version = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("4:7:3:1")
+      .mockImplementation(
+        () =>
+          new Promise<string>((done) => {
+            resolve = done;
+          }),
+      );
     const { stream } = await openStream(version);
     frame(stream);
     const error = vi.fn();
@@ -130,11 +209,11 @@ describe("public version SSE protocol", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     if (end === "lifetime") await vi.advanceTimersByTimeAsync(26_000);
     else stream.destroy();
-    resolve("5:8:4");
+    resolve("5:8:4:1");
     await vi.advanceTimersByTimeAsync(0);
     expect(frame(stream)).toBeUndefined();
     expect(error).not.toHaveBeenCalled();
-    expect(version).toHaveBeenCalledTimes(1);
+    expect(version).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
     stream.destroy();
   });

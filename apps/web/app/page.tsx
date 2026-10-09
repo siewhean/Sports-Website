@@ -15,8 +15,17 @@ export const metadata: Metadata = {
 };
 
 export default async function Home() {
-  const [session, competitions] = await Promise.all([readCurrentIdentitySession(), getCompetitionListing()]);
+  // The home page must still render during a results outage, so listing failures degrade to an explicit notice.
+  const listing = getCompetitionListing().then(
+    (competitions) => ({ competitions, unavailable: false }),
+    () => ({ competitions: [], unavailable: true }),
+  );
+  const [session, { competitions, unavailable }] = await Promise.all([readCurrentIdentitySession(), listing]);
   return (
-    <MarketingHome viewer={session.status === "authenticated" ? session.identity : null} competitions={competitions} />
+    <MarketingHome
+      viewer={session.status === "authenticated" ? session.identity : null}
+      competitions={competitions}
+      unavailable={unavailable}
+    />
   );
 }

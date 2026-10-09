@@ -11,7 +11,7 @@ import type { Redis } from "ioredis";
 import type { ApiErrorEnvelope, DependencyStatus, HealthStatus } from "@matchday/contracts";
 import type { AppConfig, ScoringFallbackHmacKeyring } from "@matchday/config";
 import { IdentityError, systemClock, type Clock } from "@matchday/identity";
-import { createLogger } from "@matchday/observability";
+import { createLogger, type ErrorReporter } from "@matchday/observability";
 import { ApiError, ErrorCode } from "./errors.js";
 import { IdentityAssuranceRequestContext } from "./identity-assurance-request-context.js";
 import { IdentityAssuranceRuntime } from "./identity-assurance-runtime.js";
@@ -24,6 +24,8 @@ import {
 } from "./identity-routes.js";
 import { IdentityApiRuntime, IdentityProviderUnavailableError } from "./identity-runtime.js";
 import type { DependencyProbes } from "./probes.js";
+import { clientIpForRateLimit, createClientIpResolver, rateLimitIpSubject } from "./client-ip.js";
+import { redisStoreWithLocalFallback } from "./rate-limit-store.js";
 import { registerPhase2Routes } from "./phase-2-routes.js";
 import type { Phase2Runtime } from "./phase-2-runtime.js";
 import { registerPhase3Routes } from "./phase-3-routes.js";
@@ -54,6 +56,7 @@ import type postgres from "postgres";
 import { registerCasualRoutes } from "./casual-routes.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+const publicVersionStreamRoute = "/api/v1/public/competitions/:slug/versions";
 
 const errorSchema = Type.Object({
   error: Type.Object({
@@ -99,6 +102,20 @@ async function dependencyStatus(probes: DependencyProbes): Promise<DependencySta
   return { database, redis, queue };
 }
 
+/*
+ * PostgreSQL is the system of record: without it no request path works, so the
+ * instance is not ready. Redis only backs rate limits (which degrade to
+ * per-instance memory), the scoring-access limiter (in-memory fallback) and the
+ * BullMQ schedule queue (schedule generation pauses). Scoring, finalise and
+ * public reads keep working, so a Redis blip reports ready-but-degraded rather
+ * than taking the instance out of rotation mid-match. /health/deep stays
+ * strict (503 on any dependency) for operators and deploy diagnostics.
+ */
+function readinessStatus(dependencies: DependencyStatus): HealthStatus {
+  if (!dependencies.database) return "unhealthy";
+  return dependencies.redis && dependencies.queue ? "healthy" : "degraded";
+}
+
 function identityErrorMapping(error: unknown): { statusCode: number; code: string; message: string } | null {
   if (error instanceof IdentityProviderUnavailableError) {
     return { statusCode: 503, code: "IDENTITY_PROVIDER_UNAVAILABLE", message: "Identity provider is unavailable" };
@@ -120,11 +137,15 @@ export type BuildAppOptions = {
   rateLimitNameSpace?: string;
   rateLimitMax?: number;
   anonymousRateLimitMax?: number;
+  publicReadRateLimitMax?: number;
+  publicSseMaxStreamsPerClient?: number;
   authenticatedRateLimitMax?: number;
   scoringSessionRateLimitMax?: number;
   resolveRateLimitAccountId?: (request: FastifyRequest) => Promise<string | null> | string | null;
   resolveVerifiedScoringRateLimitSessionId?: (request: FastifyRequest) => Promise<string | null> | string | null;
   telemetry?: ApiTelemetry;
+  /** Optional error tracker (Sentry); receives 5xx failures only, never 4xx ApiErrors. */
+  errorReporter?: ErrorReporter;
   loggerDestination?: Parameters<typeof createLogger>[1];
   identityRuntime?: IdentityApiRuntime;
   closeIdentityResources?: () => Promise<void>;
@@ -317,6 +338,45 @@ export async function buildApp(options: BuildAppOptions) {
     "POST /api/v1/scoring/sessions/lease-takeover",
   ]);
 
+  // Every rate-limit key below uses the verified end-user IP: the web BFF's
+  // HMAC-signed x-matchday-client-ip when valid, else Fastify's request.ip
+  // (which honours API_TRUSTED_PROXIES). See client-ip.ts for the trust model.
+  const resolveClientIp = createClientIpResolver({
+    secret: options.config.clientIpForwarding?.secret,
+    logger: app.log,
+  });
+  app.decorateRequest("matchdayClientIp", null);
+  app.addHook("onRequest", async (request) => {
+    request.matchdayClientIp = resolveClientIp(request);
+  });
+
+  // Public SSE streams hold a connection and a 2 s polling timer each, so cap
+  // concurrent streams per client IP (per API instance) independently of the
+  // request-rate limit.
+  const publicSseMaxStreams = options.publicSseMaxStreamsPerClient ?? options.config.api.publicSseMaxStreamsPerClient;
+  const openPublicStreams = new Map<string, number>();
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.method !== "GET" || request.routeOptions.url !== publicVersionStreamRoute) return;
+    const subject = rateLimitIpSubject(clientIpForRateLimit(request));
+    const open = openPublicStreams.get(subject) ?? 0;
+    if (open >= publicSseMaxStreams) {
+      reply.header("retry-after", "10");
+      throw new ApiError(429, ErrorCode.RATE_LIMITED, "Too many concurrent live update streams");
+    }
+    openPublicStreams.set(subject, open + 1);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const remaining = (openPublicStreams.get(subject) ?? 1) - 1;
+      if (remaining > 0) openPublicStreams.set(subject, remaining);
+      else openPublicStreams.delete(subject);
+    };
+    reply.raw.once("close", release);
+    reply.raw.once("finish", release);
+  });
+
+  const publicReadRateLimitMax = options.publicReadRateLimitMax ?? options.config.api.publicReadRateLimitMax;
   await app.register(rateLimit, {
     global: true,
     hook: "preHandler",
@@ -333,14 +393,33 @@ export async function buildApp(options: BuildAppOptions) {
         );
         if (scoringAccessPassId) return `scoring-access-pass:${scoringAccessPassId}`;
       }
-      return `ip:${request.ip}`;
+      const subject = rateLimitIpSubject(clientIpForRateLimit(request));
+      // Anonymous public reads (spectators) get a separate, larger bucket so
+      // they neither exhaust nor are exhausted by other anonymous traffic.
+      if (request.method === "GET" && request.routeOptions.url?.startsWith("/api/v1/public/")) {
+        return `public-ip:${subject}`;
+      }
+      return `ip:${subject}`;
     },
     max: async (_request, key) =>
       key.startsWith("account:") || key.startsWith("scoring-access-pass:")
         ? (options.authenticatedRateLimitMax ?? options.rateLimitMax ?? 1_000)
-        : (options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100),
-    ...(options.rateLimitRedis ? { redis: options.rateLimitRedis } : {}),
-    ...(options.rateLimitNameSpace ? { nameSpace: options.rateLimitNameSpace } : {}),
+        : key.startsWith("public-ip:")
+          ? publicReadRateLimitMax
+          : (options.anonymousRateLimitMax ?? options.rateLimitMax ?? 100),
+    // A Redis blip must not turn scoring, finalise and public reads into 500s.
+    // The store degrades to per-instance in-memory limits (logged); skipOnError
+    // is a last resort should the fallback itself fail.
+    skipOnError: true,
+    ...(options.rateLimitRedis
+      ? {
+          store: redisStoreWithLocalFallback({
+            redis: options.rateLimitRedis,
+            logger: app.log,
+            ...(options.rateLimitNameSpace ? { nameSpace: options.rateLimitNameSpace } : {}),
+          }),
+        }
+      : {}),
     timeWindow: "1 minute",
   });
 
@@ -428,6 +507,13 @@ export async function buildApp(options: BuildAppOptions) {
         },
         "request failed",
       );
+      void options.errorReporter?.reportError(error, {
+        attributes: {
+          status_code: statusCode,
+          method: request.method,
+          route: request.routeOptions?.url ?? "unmatched",
+        },
+      });
     }
     const envelope: ApiErrorEnvelope = { error: { code, message, request_id: request.id } };
     return reply.code(statusCode).send(envelope);
@@ -486,6 +572,11 @@ export async function buildApp(options: BuildAppOptions) {
     async (request) => healthPayload(request, "healthy"),
   );
 
+  if (options.probes.close) {
+    const closeProbes = options.probes.close;
+    app.addHook("onClose", async () => closeProbes());
+  }
+
   app.get(
     "/health/ready",
     {
@@ -498,9 +589,12 @@ export async function buildApp(options: BuildAppOptions) {
     },
     async (request, reply) => {
       const dependencies = await dependencyStatus(options.probes);
-      const ready = Object.values(dependencies).every(Boolean);
-      return reply.code(ready ? 200 : 503).send({
-        ...healthPayload(request, ready ? "healthy" : "unhealthy"),
+      const status = readinessStatus(dependencies);
+      if (status === "degraded") {
+        request.log.warn({ event: "readiness_degraded", dependencies }, "API ready in degraded mode");
+      }
+      return reply.code(status === "unhealthy" ? 503 : 200).send({
+        ...healthPayload(request, status),
         dependencies,
       });
     },

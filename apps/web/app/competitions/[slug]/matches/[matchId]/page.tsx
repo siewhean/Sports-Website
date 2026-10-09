@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { opaqueId } from "@matchday/ui";
+import { interpolate, messages, opaqueId } from "@matchday/ui";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 import { PublicLiveRefresh } from "@/components/phase2/PublicLiveRefresh";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+import { publicCompetitionPhase } from "@/lib/phase2-public-phase";
 import { getCompetitionView } from "@/lib/phase2-public.server";
 import styles from "./page.module.css";
 
@@ -12,11 +13,19 @@ type Params = Promise<{ slug: string; matchId: string }>;
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { slug, matchId } = await params;
-  const competition = await getCompetitionView(slug);
+  const competition = await getCompetitionView(slug).catch(() => null);
   const match = competition?.publicDivisions
     ?.flatMap((division) => division.matches)
     .find((candidate) => candidate.id === matchId);
-  return match ? { title: `${match.home} vs ${match.away} | ${competition?.name}` } : {};
+  return match
+    ? {
+        title: interpolate(messages.publicCompetition.matchPageTitle, {
+          home: match.home,
+          away: match.away,
+          competition: competition?.name ?? "",
+        }),
+      }
+    : {};
 }
 
 export default async function PublicMatchPage({ params }: { params: Params }) {
@@ -28,6 +37,18 @@ export default async function PublicMatchPage({ params }: { params: Params }) {
   );
   const match = division?.matches.find((candidate) => candidate.id === matchId);
   if (!match || !division) notFound();
+  // Never advertise a match as live once its competition has finished (stale in-progress results).
+  const phase = publicCompetitionPhase(
+    {
+      status: competition.status ?? "published",
+      startsOn: competition.startsOn,
+      endsOn: competition.endsOn,
+      timezone: competition.timezone,
+      hasLiveMatch: match.status === "live",
+    },
+    new Date(),
+  );
+  const showLive = match.status === "live" && phase === "live";
   const recordedTime =
     match.recordedTimeSeconds == null
       ? null
@@ -46,17 +67,23 @@ export default async function PublicMatchPage({ params }: { params: Params }) {
           <p>
             {competition.sport} · {division.division.name} · {match.stage}
           </p>
-          <h1>{opaqueId("Match details")}</h1>
+          <h1>{interpolate(messages.publicCompetition.versus, { home: match.home, away: match.away })}</h1>
           {!demoFixturesEnabled() ? <PublicLiveRefresh slug={slug} /> : null}
         </header>
-        <section className={styles.scoreboard} aria-label={opaqueId("Current match score")} data-status={match.status}>
+        <section
+          className={styles.scoreboard}
+          aria-label={opaqueId("Current match score")}
+          data-status={match.status === "live" && !showLive ? "stale" : match.status}
+        >
           <div className={styles.meta}>
             <span>
-              {match.status === "live"
+              {showLive
                 ? opaqueId("Live")
                 : match.status === "final"
                   ? opaqueId("Final")
-                  : opaqueId("Scheduled")}
+                  : match.status === "live"
+                    ? opaqueId("Last recorded score")
+                    : opaqueId("Scheduled")}
             </span>
             <span>{match.label}</span>
           </div>
@@ -80,7 +107,7 @@ export default async function PublicMatchPage({ params }: { params: Params }) {
           </div>
           <div>
             <dt>{opaqueId("Start")}</dt>
-            <dd>{match.time}</dd>
+            <dd>{match.date ? `${match.date} · ${match.time}` : match.time}</dd>
           </div>
           {match.currentSegment ? (
             <div>
@@ -98,11 +125,7 @@ export default async function PublicMatchPage({ params }: { params: Params }) {
           ) : null}
           <div>
             <dt>{opaqueId("Last updated")}</dt>
-            <dd>
-              {match.updatedAt
-                ? new Date(match.updatedAt).toLocaleString(opaqueId("en-SG"), { timeZone: competition.timezone })
-                : competition.lastUpdated}
-            </dd>
+            <dd>{match.updatedLabel ?? competition.lastUpdated}</dd>
           </div>
         </dl>
         {match.segments?.length ? (

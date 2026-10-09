@@ -1,0 +1,16 @@
+# Install: sudo cp matchday-backup.service matchday-backup.timer /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now matchday-backup.timer
+# Adjust WorkingDirectory if the repository is not checked out at /opt/matchday/oci-src.
+[Unit]
+Description=MATCHDAY nightly Postgres backup to OCI Object Storage
+Wants=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/matchday/oci-src
+# CANDIDATE_SHA/BUILD_TIMESTAMP are required by compose interpolation but irrelevant here.
+Environment=CANDIDATE_SHA=backup BUILD_TIMESTAMP=backup
+ExecStart=/usr/bin/docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup run --rm --no-deps backup backup
+TimeoutStartSec=1h
+# A non-zero exit marks the unit failed (systemctl --failed, journalctl -u matchday-backup).

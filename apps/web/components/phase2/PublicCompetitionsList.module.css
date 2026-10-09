@@ -126,7 +126,7 @@
   content: "";
 }
 
-.row[data-status="active"]::before {
+.row[data-status="live"]::before {
   background: var(--signal);
 }
 
@@ -200,7 +200,7 @@
   background: var(--hairline);
 }
 
-.row[data-status="active"] .status > span {
+.row[data-status="live"] .status > span {
   background: var(--signal-strong);
 }
 

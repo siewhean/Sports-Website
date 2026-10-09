@@ -116,11 +116,33 @@ function stableJson(value: unknown): string {
   return encoded;
 }
 
+function liveRevision(value: number | null | undefined): number {
+  if (value === null || value === undefined) return 1;
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error("Public projection contains an invalid live revision");
+  return value;
+}
+
+/**
+ * Opaque public version token streamed to spectators. Schedule and result
+ * versions only move on publication; live_revision moves on every content
+ * change of the current projection row (each scored point), so the token
+ * changes monotonically with everything a spectator can see.
+ */
+export function publicProjectionVersionToken(input: {
+  scheduleVersion: number;
+  resultVersion: number;
+  projectionVersion: number;
+  liveRevision: number;
+}): string {
+  return `${input.scheduleVersion}:${input.resultVersion}:${input.projectionVersion}:${input.liveRevision}`;
+}
+
 function etag(input: {
   competitionId: string;
   scheduleVersion: number;
   resultVersion: number;
   projectionVersion: number;
+  liveRevision: number;
   divisionProjectionVersions: Readonly<Record<string, number>>;
   payload: Record<string, unknown>;
 }): string {
@@ -131,12 +153,13 @@ function etag(input: {
         schedule_version: input.scheduleVersion,
         result_version: input.resultVersion,
         projection_version: input.projectionVersion,
+        live_revision: input.liveRevision,
         division_projection_versions: input.divisionProjectionVersions,
         projection: input.payload,
       }),
     )
     .digest("hex");
-  return `c4-${input.scheduleVersion}-${input.resultVersion}-${input.projectionVersion}-${fingerprint}`;
+  return `c4-${input.scheduleVersion}-${input.resultVersion}-${input.projectionVersion}-${input.liveRevision}-${fingerprint}`;
 }
 
 export class GateCC4PublicTruthRuntime {
@@ -191,8 +214,11 @@ export class GateCC4PublicTruthRuntime {
       schedule_version: number;
       result_version: number;
       projection_version: number;
+      live_revision: number;
     }>(
-      `SELECT publication.schedule_version, publication.result_version,
+      // One indexed primary-key lookup per poll: the live revision lives on the
+      // projection row that is already joined, so live freshness adds no query.
+      `SELECT publication.schedule_version, publication.result_version, projection.live_revision,
               COALESCE((SELECT max(version.projection_version)
                         FROM public_projection_versions version
                         WHERE version.competition_id=competition.id
@@ -207,7 +233,14 @@ export class GateCC4PublicTruthRuntime {
       [slug],
     );
     const current = rows[0];
-    return current ? `${current.schedule_version}:${current.result_version}:${current.projection_version}` : null;
+    return current
+      ? publicProjectionVersionToken({
+          scheduleVersion: current.schedule_version,
+          resultVersion: current.result_version,
+          projectionVersion: current.projection_version,
+          liveRevision: liveRevision(current.live_revision),
+        })
+      : null;
   }
 
   async read(
@@ -216,6 +249,8 @@ export class GateCC4PublicTruthRuntime {
   ): Promise<{
     payload: Record<string, unknown>;
     freshness: PublicProjectionFreshness;
+    /** Same token as version(); lets the ETag and the SSE stream agree. */
+    version: string;
   } | null> {
     const row = await this.publicProjectionRepo.findPublicTruth(slug, this.sql);
     if (!row) return null;
@@ -250,11 +285,13 @@ export class GateCC4PublicTruthRuntime {
       ? (filteredDivisionVersions[selectedDivisionId] ?? row.projection_version)
       : row.projection_version;
 
+    const currentLiveRevision = liveRevision(row.live_revision);
     const headerEtag = etag({
       competitionId: row.competition_id,
       scheduleVersion: row.schedule_version,
       resultVersion: row.result_version,
       projectionVersion,
+      liveRevision: currentLiveRevision,
       divisionProjectionVersions: filteredDivisionVersions,
       payload: responsePayload,
     });
@@ -286,12 +323,33 @@ export class GateCC4PublicTruthRuntime {
     return {
       payload: enrichedPayload,
       freshness,
+      version: publicProjectionVersionToken({
+        scheduleVersion: row.schedule_version,
+        resultVersion: row.result_version,
+        projectionVersion: row.projection_version,
+        liveRevision: currentLiveRevision,
+      }),
     };
   }
 }
 
-type PublicTruthRuntime = Pick<GateCC4PublicTruthRuntime, "list" | "read"> &
-  Partial<Pick<GateCC4PublicTruthRuntime, "version">>;
+type PublicTruthReadResult = Readonly<{
+  payload: Record<string, unknown>;
+  freshness: PublicProjectionFreshness;
+  version?: string;
+}>;
+
+type PublicTruthRuntime = Pick<GateCC4PublicTruthRuntime, "list"> & {
+  read(slug: string, selectedDivisionId?: string): Promise<PublicTruthReadResult | null>;
+} & Partial<Pick<GateCC4PublicTruthRuntime, "version">>;
+
+function streamVersion(result: PublicTruthReadResult | null): string | null {
+  if (!result) return null;
+  return (
+    result.version ??
+    `${result.freshness.schedule_version}:${result.freshness.result_version}:${result.freshness.projection_version}`
+  );
+}
 
 export async function registerGateCC4PublicTruthRoutes(
   app: FastifyInstance,
@@ -397,9 +455,13 @@ export async function registerGateCC4PublicTruthRoutes(
       },
     },
     async (request, reply) => {
-      const first = await runtime.read(request.params.slug);
+      // The opening token uses the same cheap lookup as the poller instead of a
+      // full projection read; a missing competition is still a 404.
+      const first = runtime.version
+        ? await runtime.version(request.params.slug)
+        : streamVersion(await runtime.read(request.params.slug));
       if (!first) throw new ApiError(404, ErrorCode.PUBLIC_COMPETITION_NOT_FOUND, "Competition not found");
-      let lastVersion = `${first.freshness.schedule_version}:${first.freshness.result_version}:${first.freshness.projection_version}`;
+      let lastVersion = first;
       let checking = false;
       let finished = false;
       const stream = new Readable({ read() {} });
@@ -409,16 +471,10 @@ export async function registerGateCC4PublicTruthRoutes(
         if (checking || finished || stream.destroyed) return;
         checking = true;
         try {
-          const version = runtime.version
+          const currentVersion = runtime.version
             ? await runtime.version(request.params.slug)
-            : (await runtime.read(request.params.slug))?.freshness;
+            : streamVersion(await runtime.read(request.params.slug));
           if (finished || stream.destroyed) return;
-          const currentVersion =
-            typeof version === "string"
-              ? version
-              : version
-                ? `${version.schedule_version}:${version.result_version}:${version.projection_version}`
-                : null;
           if (!currentVersion) {
             stream.push("event: unavailable\ndata: {}\n\n");
             finish();

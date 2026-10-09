@@ -17,9 +17,12 @@ COPY . .
 ARG MATCHDAY_BUILD_ID
 ARG BUILD_TIMESTAMP
 ARG MATCHDAY_PUBLIC_ORIGIN
+ARG NEXT_PUBLIC_SENTRY_DSN
 ENV MATCHDAY_BUILD_ID=${MATCHDAY_BUILD_ID}
 ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
 ENV MATCHDAY_PUBLIC_ORIGIN=${MATCHDAY_PUBLIC_ORIGIN}
+# Inlined into the browser bundle at build time; empty keeps Sentry off.
+ENV NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN}
 RUN pnpm --filter @matchday/api... build \
   && pnpm --filter @matchday/worker... build \
   && pnpm --filter @matchday/scheduler... build \

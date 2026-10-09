@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { interpolate, messages, opaqueId } from "@matchday/ui";
+import { captureClientError } from "@/lib/sentry-client";
 import { SystemStatePage } from "@/components/foundation/SystemStatePage";
 
 export default function ErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
@@ -9,7 +10,8 @@ export default function ErrorPage({ error, reset }: { error: Error & { digest?: 
 
   useEffect(() => {
     console.error("MATCHDAY route error", { reference });
-  }, [reference]);
+    captureClientError(error);
+  }, [error, reference]);
 
   return (
     <SystemStatePage

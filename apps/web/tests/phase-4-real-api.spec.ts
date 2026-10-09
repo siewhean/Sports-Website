@@ -427,7 +427,8 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   }).format(moved.start_epoch_ms);
   const publicMovedMatch = page.locator(`.p2-public-fixtures > li[data-match-id="${moved.match_id}"]`);
   await expect(publicMovedMatch).toHaveCount(1);
-  await expect(publicMovedMatch.getByText(publicTime, { exact: true })).toBeVisible();
+  // Fixtures render "<day>, HH:MM" in the competition timezone; the moved start time must be the time shown.
+  await expect(publicMovedMatch.locator("time")).toHaveText(new RegExp(`(^|, )${publicTime}$`));
 
   const resultFile = process.env.PHASE4_E2E_RESULT_FILE;
   if (!resultFile) throw new Error("PHASE4_E2E_RESULT_FILE is required");

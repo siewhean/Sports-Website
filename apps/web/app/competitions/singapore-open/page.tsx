@@ -6,7 +6,7 @@ import { getCompetitionView } from "@/lib/phase2-public.server";
 import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const competition = await getCompetitionView(phase2Machine.singaporeOpenSlug);
+  const competition = await getCompetitionView(phase2Machine.singaporeOpenSlug).catch(() => null);
   if (!competition) return {};
   return {
     title: competition.name,

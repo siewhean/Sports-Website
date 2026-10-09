@@ -25,7 +25,6 @@ export default async function CompetitionRepairsPage({ params }: { params: Promi
       pageEyebrow={gateCC4Copy.eyebrow}
       pageTitle={gateCC4Copy.title}
       pageIntro={gateCC4Copy.intro}
-      syncLabel={competition.publicationRevision}
       syncState={gateCC4UiMachine.savedSyncState}
       sectionAction={null}
       sectionContent={

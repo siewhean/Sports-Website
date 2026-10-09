@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
@@ -299,7 +300,7 @@ export async function getResultsDocument(input: ResultsInput): Promise<ResultsDo
   const context = await requestContext(base);
   if (!context) return unavailable(input, "permission");
   try {
-    const identity = await fetch(new URL("/api/v1/identity/me", base), {
+    const identity = await apiFetch(new URL("/api/v1/identity/me", base), {
       cache: "no-store",
       headers: { accept: "application/json", cookie: context.cookie },
     });
@@ -308,7 +309,7 @@ export async function getResultsDocument(input: ResultsInput): Promise<ResultsDo
     const csrf = csrfToken(await identity.json().catch(() => null));
     if (!csrf) return unavailable(input, "error");
     const [standingsResponse, settingsResponse] = await Promise.all([
-      fetch(
+      apiFetch(
         new URL(
           `/api/v1/competitions/${encodeURIComponent(input.competitionId)}/divisions/${encodeURIComponent(input.divisionId)}/standings`,
           base,
@@ -323,7 +324,7 @@ export async function getResultsDocument(input: ResultsInput): Promise<ResultsDo
           },
         },
       ),
-      fetch(new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/settings`, base), {
+      apiFetch(new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}/settings`, base), {
         cache: "no-store",
         headers: { accept: "application/json", cookie: context.cookie },
       }),

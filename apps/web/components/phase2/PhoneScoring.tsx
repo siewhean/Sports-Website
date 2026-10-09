@@ -1559,7 +1559,7 @@ export function PhoneScoring({
           {writerState === "active" ? <CloudCheck /> : writerState === "conflict" ? <ShieldWarning /> : <LockKey />}
           <span>
             <strong>{writerTitle}</strong>
-            <small>{writerState === "active" ? phase2Copy.synced : phase2Copy.currentRevision}</small>
+            {writerState === "active" ? <small>{phase2Copy.synced}</small> : null}
           </span>
         </div>
       </header>

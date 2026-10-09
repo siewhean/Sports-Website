@@ -90,11 +90,107 @@ describe("Gate C C4 public truth runtime", () => {
       },
       last_updated_at: "2026-08-01T00:00:04.000Z",
     });
-    expect(first?.freshness.etag).toMatch(/^c4-4-7-3-[a-f0-9]{64}$/u);
+    expect(first?.freshness.etag).toMatch(/^c4-4-7-3-1-[a-f0-9]{64}$/u);
+    expect(first?.version).toBe("4:7:3:1");
+    expect(calls[0]?.query).toContain("current_projection.live_revision");
     expect(calls[0]?.parameters).toEqual(["national-open"]);
     expect(calls[0]?.query).toContain("current_projection.schedule_version=publication.schedule_version");
     expect(calls[0]?.query).toContain("current_projection.result_version=publication.result_version");
     expect(calls[0]?.query).toContain("jsonb_object_agg(version.division_id::text, version.projection_version)");
+  });
+
+  it("changes the public version and ETag when a live score rewrites the current projection", async () => {
+    const row = (liveRevision: number, homeScore: number) => ({
+      competition_id: competitionId,
+      payload: projection({
+        results: [],
+        divisions: projection().divisions.map((entry, index) =>
+          index === 0
+            ? {
+                ...entry,
+                results: [
+                  {
+                    id: "44444444-4444-4444-8444-444444444444",
+                    code: "OPEN-1",
+                    stage: "group",
+                    home: { id: null, name: "Marina Blue" },
+                    away: { id: null, name: "Harbour Gold" },
+                    home_score: homeScore,
+                    away_score: 0,
+                    state: "in_progress",
+                    updated_at: "2026-08-01T00:00:04.000Z",
+                  },
+                ],
+              }
+            : entry,
+        ),
+      }),
+      // Live scoring keeps the publication versions; only the row's live revision advances.
+      schedule_version: 4,
+      result_version: 7,
+      projection_version: 3,
+      live_revision: liveRevision,
+      division_projection_versions: { [divisionId]: 3, [reserveDivisionId]: 2 },
+      generated_at: "2026-08-01T00:00:05.000Z",
+      source_updated_at: "2026-08-01T00:00:04.000Z",
+    });
+    const before = runtimeWithRows([row(4, 1)]);
+    const after = runtimeWithRows([row(5, 2)]);
+
+    const beforeRead = await before.runtime.read("national-open");
+    const beforeVersion = await before.runtime.version("national-open");
+    const afterRead = await after.runtime.read("national-open");
+    const afterVersion = await after.runtime.version("national-open");
+
+    expect(beforeVersion).toBe("4:7:3:4");
+    expect(beforeRead?.version).toBe(beforeVersion);
+    expect(afterVersion).toBe("4:7:3:5");
+    expect(afterRead?.version).toBe(afterVersion);
+    expect(afterVersion).not.toBe(beforeVersion);
+    expect(beforeRead?.freshness.etag).toMatch(/^c4-4-7-3-4-[a-f0-9]{64}$/u);
+    expect(afterRead?.freshness.etag).toMatch(/^c4-4-7-3-5-[a-f0-9]{64}$/u);
+    // The version poll stays a single lookup and reads the revision from the already-joined row.
+    expect(before.calls[1]?.query).toContain("projection.live_revision");
+    expect(before.calls[1]?.parameters).toEqual(["national-open"]);
+  });
+
+  it("keeps the public version and ETag stable across no-op reads", async () => {
+    const { runtime } = runtimeWithRows([
+      {
+        competition_id: competitionId,
+        payload: projection(),
+        schedule_version: 4,
+        result_version: 7,
+        projection_version: 3,
+        live_revision: 9,
+        division_projection_versions: { [divisionId]: 3, [reserveDivisionId]: 2 },
+        generated_at: "2026-08-01T00:00:05.000Z",
+        source_updated_at: "2026-08-01T00:00:04.000Z",
+      },
+    ]);
+    const versions = [await runtime.version("national-open"), await runtime.version("national-open")];
+    const reads = [await runtime.read("national-open"), await runtime.read("national-open")];
+    expect(versions).toEqual(["4:7:3:9", "4:7:3:9"]);
+    expect(reads[0]?.version).toBe("4:7:3:9");
+    expect(reads[0]?.freshness.etag).toBe(reads[1]?.freshness.etag);
+  });
+
+  it("rejects a malformed live revision", async () => {
+    const { runtime } = runtimeWithRows([
+      {
+        competition_id: competitionId,
+        payload: projection(),
+        schedule_version: 4,
+        result_version: 7,
+        projection_version: 3,
+        live_revision: 0,
+        division_projection_versions: {},
+        generated_at: "2026-08-01T00:00:05.000Z",
+        source_updated_at: "2026-08-01T00:00:04.000Z",
+      },
+    ]);
+    await expect(runtime.read("national-open")).rejects.toThrow(/live revision/i);
+    await expect(runtime.version("national-open")).rejects.toThrow(/live revision/i);
   });
 
   it("lists only competitions backed by the current public projection without authentication", async () => {

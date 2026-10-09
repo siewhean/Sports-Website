@@ -7,7 +7,11 @@ import type {
   PublicDivisionProjection,
   PublicMatchResult,
 } from "@matchday/contracts";
+import type { BracketResolution, ConfigurableStandingsRow, StandingsRow } from "@matchday/domain";
+import { interpolate, messages } from "@matchday/ui";
+import { apiFetch } from "@/lib/client-ip.server";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+import { publicCompetitionPhase } from "@/lib/phase2-public-phase";
 import {
   isGateCC4PublicCompetitionProjection,
   isPublicCompetitionListing,
@@ -36,7 +40,30 @@ function apiBaseUrl(): string | null {
 }
 
 function titleCase(value: string): string {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return value
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/**
+ * Human stage label for a match. The projection only carries a machine code (for example "groups-G1-r2-m3");
+ * that code must never reach the UI, so it is translated here into "Group G1 · Round 2" and similar.
+ */
+export function publicStageLabel(stage: string, code: string): string {
+  const copy = messages.publicCompetition;
+  const parsed = /^(.*?)-r(\d+)-m\d+$/u.exec(code);
+  const prefix = (parsed?.[1] ?? code).toLowerCase();
+  const round = parsed ? interpolate(copy.roundLabel, { round: Number(parsed[2]) }) : null;
+  const withRound = (label: string) => (round ? interpolate(copy.stageWithRound, { stage: label, round }) : label);
+  const group = /^groups?-(.+)$/u.exec(parsed?.[1] ?? "");
+  if (group?.[1]) return withRound(interpolate(copy.groupLabel, { group: group[1] }));
+  if (prefix.includes("reset")) return copy.grandFinalResetStage;
+  if (prefix.includes("upper")) return withRound(copy.upperBracketStage);
+  if (prefix.includes("lower")) return withRound(copy.lowerBracketStage);
+  if (prefix.includes("grand")) return copy.grandFinalStage;
+  if (stage === "group") return copy.groupStage;
+  return titleCase(stage);
 }
 
 function dateTime(value: string, timezone: string): string {
@@ -85,8 +112,28 @@ function matchTime(value: string, timezone: string): string {
   }
 }
 
-function number(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+function matchDay(value: string, timezone: string, options: Intl.DateTimeFormatOptions): string | undefined {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return undefined;
+  try {
+    return new Intl.DateTimeFormat("en-SG", { ...options, timeZone: timezone }).format(date);
+  } catch {
+    return undefined;
+  }
+}
+
+class PublicProjectionContractError extends Error {}
+
+/**
+ * Reads a required numeric field from the first key present. A missing or non-numeric value is contract drift
+ * between the API and this mapper; it must fail loudly rather than render as a believable 0.
+ */
+function requiredNumber(row: Readonly<Record<string, unknown>>, keys: readonly string[], context: string): number {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  throw new PublicProjectionContractError(`Public projection ${context} is missing numeric field ${keys.join(" | ")}`);
 }
 
 function publicMatchStatus(result: PublicMatchResult | undefined): MatchView["status"] {
@@ -94,25 +141,64 @@ function publicMatchStatus(result: PublicMatchResult | undefined): MatchView["st
   return result.state === "in_progress" ? "live" : "final";
 }
 
-function standingsView(value: Record<string, unknown> | null): StandingView[] {
-  const rows = value && Array.isArray(value.standings) ? value.standings : [];
+/**
+ * Wire shapes emitted into `PublicDivisionProjection.standings.standings`. The configurable engine
+ * (`ConfigurableStandingsRow`) names the totals `tablePoints` / `scoreDifference`; the original canoe-polo engine
+ * (`StandingsRow`) named them `points` / `goalDifference`. Both are accepted so neither leaks as 0.
+ */
+export type PublicStandingsWireRow =
+  | Pick<
+      ConfigurableStandingsRow,
+      "rank" | "entryName" | "played" | "won" | "drawn" | "lost" | "tablePoints" | "scoreDifference"
+    >
+  | Pick<StandingsRow, "rank" | "entryName" | "played" | "won" | "drawn" | "lost" | "points" | "goalDifference">;
+
+export function standingsView(value: Record<string, unknown> | null): StandingView[] {
+  const rows = value && Array.isArray(value.standings) ? (value.standings as unknown[]) : [];
   return rows.flatMap((candidate) => {
     if (!candidate || typeof candidate !== "object") return [];
     const row = candidate as Record<string, unknown>;
     if (typeof row.entryName !== "string") return [];
     return [
       {
-        position: number(row.rank),
+        position: requiredNumber(row, ["rank"], "standings row"),
         team: row.entryName,
-        played: number(row.played),
-        won: number(row.won),
-        drawn: number(row.drawn),
-        lost: number(row.lost),
-        difference: number(row.goalDifference),
-        points: number(row.points),
-      },
+        played: requiredNumber(row, ["played"], "standings row"),
+        won: requiredNumber(row, ["won"], "standings row"),
+        drawn: requiredNumber(row, ["drawn"], "standings row"),
+        lost: requiredNumber(row, ["lost"], "standings row"),
+        difference: requiredNumber(row, ["scoreDifference", "goalDifference"], "standings row"),
+        points: requiredNumber(row, ["tablePoints", "points"], "standings row"),
+      } satisfies StandingView,
     ];
   });
+}
+
+type BracketWireMatch = Pick<BracketResolution["matches"][number], "matchId" | "stage">;
+
+function bracketWireMatches(value: Record<string, unknown> | null): BracketWireMatch[] {
+  const envelope = value?.bracket;
+  const matches =
+    envelope && typeof envelope === "object" ? (envelope as Partial<BracketResolution>).matches : undefined;
+  if (!Array.isArray(matches)) return [];
+  return matches.flatMap((candidate: unknown) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const row = candidate as Record<string, unknown>;
+    return typeof row.matchId === "string" && typeof row.stage === "string"
+      ? [{ matchId: row.matchId, stage: row.stage as BracketWireMatch["stage"] }]
+      : [];
+  });
+}
+
+type BracketStageKind = "upper" | "lower" | "grand_final" | "reset_final" | undefined;
+
+function bracketStageKind(code: string, stage: string): BracketStageKind {
+  const lowerCode = code.toLowerCase();
+  if (lowerCode.includes("reset") || stage === "grand-final-reset") return "reset_final";
+  if (lowerCode.includes("upper") || stage === "upper-bracket") return "upper";
+  if (lowerCode.includes("lower") || stage === "lower-bracket") return "lower";
+  if (lowerCode.includes("final") || stage === "grand-final") return "grand_final";
+  return undefined;
 }
 
 function toDivisionView(
@@ -121,60 +207,77 @@ function toDivisionView(
 ): PublicDivisionView {
   const { competition } = projection;
   const { division, schedule, results } = divisionProjection;
+  const timezone = competition.timezone;
   const resultsById = new Map(results.map((result) => [result.id, result]));
   const scheduledIds = new Set(schedule.map((match) => match.id));
+  const copy = messages.publicCompetition;
+  // Chronological match numbers give spectators a stable, readable handle ("Match 3") in place of internal codes.
+  const ordered = [...schedule].sort(
+    (left, right) => left.starts_at.localeCompare(right.starts_at) || left.code.localeCompare(right.code),
+  );
+  const numberById = new Map<string, number>();
+  for (const match of ordered) numberById.set(match.id, numberById.size + 1);
+  for (const result of results) if (!numberById.has(result.id)) numberById.set(result.id, numberById.size + 1);
+  const matchLabel = (id: string) => interpolate(copy.matchNumber, { number: numberById.get(id) ?? 0 });
+  const rawStageById = new Map<string, string>();
+
+  const resultFields = (result: PublicMatchResult) => ({
+    homeScore: result.home_score,
+    awayScore: result.away_score,
+    currentSegment: result.current_segment,
+    segments: result.segments,
+    recordedTimeSeconds: result.recorded_time_seconds,
+    updatedAt: result.updated_at,
+    updatedLabel: dateTime(result.updated_at, timezone),
+  });
+
   const matches: MatchView[] = [
-    ...schedule.map((match) => {
+    ...ordered.map((match) => {
       const result = resultsById.get(match.id);
+      rawStageById.set(match.id, match.stage);
+      const date = matchDay(match.starts_at, timezone, { day: "numeric", month: "long", year: "numeric" });
+      const dayLabel = matchDay(match.starts_at, timezone, { weekday: "short", day: "numeric", month: "short" });
       return {
         id: match.id,
-        label: match.code,
-        stage: titleCase(match.stage),
-        time: matchTime(match.starts_at, competition.timezone),
+        label: matchLabel(match.id),
+        code: match.code,
+        stage: publicStageLabel(match.stage, match.code),
+        time: matchTime(match.starts_at, timezone),
+        ...(date ? { date } : {}),
+        ...(dayLabel ? { dayLabel } : {}),
         area: match.area.name,
         home: result?.home.name ?? match.home.name,
         away: result?.away.name ?? match.away.name,
-        ...(result ? { homeScore: result.home_score, awayScore: result.away_score } : {}),
-        ...(result
-          ? {
-              currentSegment: result.current_segment,
-              segments: result.segments,
-              recordedTimeSeconds: result.recorded_time_seconds,
-              updatedAt: result.updated_at,
-            }
-          : {}),
+        ...(result ? resultFields(result) : {}),
         status: publicMatchStatus(result),
       };
     }),
     ...results
       .filter((result) => !scheduledIds.has(result.id))
-      .map((result) => ({
-        id: result.id,
-        label: result.code,
-        stage: titleCase(result.stage),
-        time: "—",
-        area: "—",
-        home: result.home.name,
-        away: result.away.name,
-        homeScore: result.home_score,
-        awayScore: result.away_score,
-        currentSegment: result.current_segment,
-        segments: result.segments,
-        recordedTimeSeconds: result.recorded_time_seconds,
-        updatedAt: result.updated_at,
-        status: publicMatchStatus(result),
-      })),
+      .map((result) => {
+        rawStageById.set(result.id, result.stage);
+        return {
+          id: result.id,
+          label: matchLabel(result.id),
+          code: result.code,
+          stage: publicStageLabel(result.stage, result.code),
+          time: "—",
+          area: "—",
+          home: result.home.name,
+          away: result.away.name,
+          ...resultFields(result),
+          status: publicMatchStatus(result),
+        };
+      }),
   ];
   const teams = [...new Set(matches.flatMap((match) => [match.home, match.away]).filter((name) => name !== "TBD"))];
   const areas = [...new Set(schedule.map((match) => match.area.name))];
-  const bracketEnvelope = divisionProjection.bracket?.bracket;
-  const bracketMatches =
-    bracketEnvelope &&
-    typeof bracketEnvelope === "object" &&
-    Array.isArray((bracketEnvelope as Record<string, unknown>).matches)
-      ? ((bracketEnvelope as Record<string, unknown>).matches as Array<Record<string, unknown>>)
-      : [];
+  const bracketMatches = bracketWireMatches(divisionProjection.bracket);
   const matchesById = new Map(matches.map((match) => [match.id, match]));
+  const bracketState = (match: MatchView | undefined) =>
+    match ? (match.status === "final" ? "Final" : `${match.time} · ${match.area}`) : "TBD";
+  const bracketScore = (match: MatchView | undefined) =>
+    match?.homeScore !== undefined && match.awayScore !== undefined ? `${match.homeScore}–${match.awayScore}` : "–";
 
   return {
     division: { id: division.id, name: division.name, teamCount: teams.length, matchCount: matches.length },
@@ -185,56 +288,26 @@ function toDivisionView(
     bracket:
       bracketMatches.length > 0
         ? bracketMatches.map((row) => {
-            const matchId = typeof row.matchId === "string" ? row.matchId : undefined;
-            const match = matchId ? matchesById.get(matchId) : undefined;
-            const code = match?.label ?? (typeof row.code === "string" ? row.code : "");
-            const stageKind =
-              code.includes("upper") || row.stage === "upper-bracket"
-                ? "upper"
-                : code.includes("lower") || row.stage === "lower-bracket"
-                  ? "lower"
-                  : code.includes("reset")
-                    ? "reset_final"
-                    : code.includes("final")
-                      ? "grand_final"
-                      : undefined;
+            const match = matchesById.get(row.matchId);
             return {
-              ...(matchId ? { id: matchId } : {}),
-              round: typeof row.stage === "string" ? titleCase(row.stage) : (match?.stage ?? "Knockout"),
+              id: row.matchId,
+              round: match?.stage ?? titleCase(row.stage),
               fixture: match ? `${match.home} · ${match.away}` : "TBD · TBD",
-              score:
-                match?.homeScore !== undefined && match.awayScore !== undefined
-                  ? `${match.homeScore}–${match.awayScore}`
-                  : "–",
-              state: match ? (match.status === "final" ? "Final" : `${match.time} · ${match.area}`) : "TBD",
-              stageKind,
+              score: bracketScore(match),
+              state: bracketState(match),
+              stageKind: bracketStageKind(match?.code ?? "", row.stage),
             };
           })
         : matches
-            .filter((match) => match.stage !== "group")
-            .map((match) => {
-              const code = match.label ?? "";
-              const stageKind = code.includes("upper")
-                ? "upper"
-                : code.includes("lower")
-                  ? "lower"
-                  : code.includes("reset")
-                    ? "reset_final"
-                    : code.includes("final")
-                      ? "grand_final"
-                      : undefined;
-              return {
-                id: match.id,
-                round: match.stage ?? "Knockout",
-                fixture: `${match.home} · ${match.away}`,
-                score:
-                  match.homeScore !== undefined && match.awayScore !== undefined
-                    ? `${match.homeScore}–${match.awayScore}`
-                    : "–",
-                state: match.status === "final" ? "Final" : `${match.time} · ${match.area}`,
-                stageKind,
-              };
-            }),
+            .filter((match) => rawStageById.get(match.id) !== "group")
+            .map((match) => ({
+              id: match.id,
+              round: match.stage,
+              fixture: `${match.home} · ${match.away}`,
+              score: bracketScore(match),
+              state: bracketState(match),
+              stageKind: bracketStageKind(match.code ?? "", rawStageById.get(match.id) ?? ""),
+            })),
   };
 }
 
@@ -252,6 +325,9 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
     venue: [...new Set(publicDivisions.flatMap((division) => division.areas))].join(" · ") || primary.division.name,
     timezone: competition.timezone,
     dateLabel: dateRange(competition.starts_on, competition.ends_on, competition.timezone),
+    status: competition.status,
+    startsOn: competition.starts_on,
+    endsOn: competition.ends_on,
     publicationRevision: `sch_${publication.schedule_version} · res_${publication.result_version}`,
     publishedAt: dateTime(projection.last_updated_at, competition.timezone),
     lastUpdated: dateTime(projection.last_updated_at, competition.timezone),
@@ -261,7 +337,10 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
   };
 }
 
-export function toCompetitionSummaryView(entry: PublicCompetitionSummary): CompetitionSummaryView {
+export function toCompetitionSummaryView(
+  entry: PublicCompetitionSummary,
+  now: Date = new Date(),
+): CompetitionSummaryView {
   return {
     id: entry.id,
     slug: entry.slug,
@@ -269,7 +348,34 @@ export function toCompetitionSummaryView(entry: PublicCompetitionSummary): Compe
     sport: publicSportName(entry.sport_code),
     dateLabel: dateRange(entry.starts_on, entry.ends_on, entry.timezone),
     status: entry.status,
+    startsOn: entry.starts_on,
+    endsOn: entry.ends_on,
+    timezone: entry.timezone,
+    phase: publicCompetitionPhase(
+      { status: entry.status, startsOn: entry.starts_on, endsOn: entry.ends_on, timezone: entry.timezone },
+      now,
+    ),
   };
+}
+
+/**
+ * Thrown when the public API cannot give a trustworthy answer (network error, 429, 5xx, malformed or
+ * inconsistent projection). Pages let it propagate to the segment error boundary instead of pretending the
+ * competition does not exist; only a genuine 404 becomes `null` / notFound().
+ */
+export class PublicDataUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null = null,
+  ) {
+    super(message);
+    this.name = "PublicDataUnavailableError";
+  }
+}
+
+/** Maps a non-OK API response: 404 means "no such competition", everything else is an outage. */
+export function classifyPublicResponse(status: number): "not_found" | "unavailable" {
+  return status === 404 ? "not_found" : "unavailable";
 }
 
 export function normalizeEtag(value: string | null): string | null {
@@ -302,37 +408,49 @@ function canonicalProjection(value: unknown): GateCC4PublicCompetitionProjection
 const apiCompetitionReadPort: CompetitionReadPort = {
   async getBySlug(slug) {
     const baseUrl = apiBaseUrl();
-    if (!baseUrl || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null;
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null;
+    if (!baseUrl) throw new PublicDataUnavailableError("Public API origin is not configured");
     try {
-      const response = await fetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, {
+      const response = await apiFetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, {
         headers: {
           accept: "application/json",
           "accept-encoding": "identity",
         },
         cache: "no-store",
       });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        if (classifyPublicResponse(response.status) === "not_found") return null;
+        throw new PublicDataUnavailableError(`Public API responded ${response.status}`, response.status);
+      }
       const projection = canonicalProjection(await response.json());
-      if (!projection || !publicHeadersMatchProjection(response, projection)) return null;
+      if (!projection || !publicHeadersMatchProjection(response, projection)) {
+        throw new PublicDataUnavailableError("Public API returned an inconsistent projection");
+      }
       return toCompetitionView(projection);
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof PublicDataUnavailableError) throw error;
+      throw new PublicDataUnavailableError(error instanceof Error ? error.message : "Public API request failed");
     }
   },
   async list() {
     const baseUrl = apiBaseUrl();
-    if (!baseUrl) return [];
+    if (!baseUrl) throw new PublicDataUnavailableError("Public API origin is not configured");
     try {
-      const response = await fetch(`${baseUrl}/api/v1/public/competitions`, {
+      const response = await apiFetch(`${baseUrl}/api/v1/public/competitions`, {
         headers: { accept: "application/json" },
         cache: "no-store",
       });
-      if (!response.ok) return [];
+      if (!response.ok)
+        throw new PublicDataUnavailableError(`Public API responded ${response.status}`, response.status);
       const payload: unknown = await response.json();
-      if (!isPublicCompetitionListing(payload)) return [];
-      return payload.competitions.map(toCompetitionSummaryView);
-    } catch {
-      return [];
+      if (!isPublicCompetitionListing(payload)) {
+        throw new PublicDataUnavailableError("Public API returned a malformed competition listing");
+      }
+      const now = new Date();
+      return payload.competitions.map((entry) => toCompetitionSummaryView(entry, now));
+    } catch (error) {
+      if (error instanceof PublicDataUnavailableError) throw error;
+      throw new PublicDataUnavailableError(error instanceof Error ? error.message : "Public API request failed");
     }
   },
 };
