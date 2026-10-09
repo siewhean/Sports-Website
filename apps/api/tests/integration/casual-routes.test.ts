@@ -5,6 +5,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import { buildApp } from "../../src/app.js";
 import { ApiError, ErrorCode } from "../../src/errors.js";
+import {
+  CASUAL_MAX_FRIEND_REQUESTS_PER_DAY,
+  CASUAL_MAX_PRESETS_PER_ACCOUNT,
+  purgeExpiredCasualGames,
+} from "../../src/casual-routes.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
@@ -216,8 +221,14 @@ describe("real PostgreSQL casual game lifecycle", () => {
       headers: identityHeaders(),
       payload: { recipient_email: "casual-friend@matchday.test" },
     });
-    expect(friendRequest.statusCode).toBe(201);
-    const requestId = friendRequest.json().id;
+    expect(friendRequest.statusCode).toBe(202);
+    expect(friendRequest.json()).not.toHaveProperty("recipient_id");
+    const pending = await app.inject({
+      method: "GET",
+      url: "/api/v1/casual/friends/requests",
+      headers: identityHeaders("friend"),
+    });
+    const requestId = (pending.json() as { id: string }[])[0]!.id;
     expect(
       (
         await app.inject({
@@ -255,5 +266,80 @@ describe("real PostgreSQL casual game lifecycle", () => {
       expect(response.statusCode).toBe(200);
       expect(response.headers["cache-control"]).toBe("private, no-store");
     }
+  });
+
+  it("answers friend requests identically for unknown, own and real emails and caps daily sends", async () => {
+    const send = (email: string, token = "stranger") =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/casual/friends/requests",
+        headers: identityHeaders(token),
+        payload: { recipient_email: email },
+      });
+    const unknown = await send("nobody-here@matchday.test");
+    const own = await send("casual-stranger@matchday.test");
+    const real = await send("casual-owner@matchday.test");
+    const duplicate = await send("casual-owner@matchday.test");
+    for (const response of [unknown, own, real, duplicate]) {
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toEqual(unknown.json());
+    }
+    // Only real deliveries count toward the cap, so unknown emails cannot be distinguished by it.
+    const extra = await sql<{ id: string }[]>`
+      INSERT INTO accounts(primary_email,display_name,email_verified_at)
+      SELECT 'casual-cap-' || g || '-' || ${randomUUID()} || '@matchday.test','Cap',now()
+      FROM generate_series(1, ${CASUAL_MAX_FRIEND_REQUESTS_PER_DAY}) g RETURNING id`;
+    await sql`INSERT INTO casual_friend_requests(sender_id,recipient_id)
+      SELECT ${strangerId}, id FROM unnest(${sql.array(extra.slice(1).map((row) => row.id))}::uuid[]) id`;
+    const capped = await send("casual-friend@matchday.test");
+    expect(capped.statusCode).toBe(429);
+    expect(capped.json().error.code).toBe("RATE_LIMITED");
+  });
+
+  it("rejects friend requests and presets from a foreign origin", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/casual/me/presets",
+      headers: { ...identityHeaders(), origin: "https://evil.example" },
+      payload: { name: "Evil", settings: { sport_id: "badminton", home_name: "A", away_name: "B" } },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("ORIGIN_REJECTED");
+  });
+
+  it("caps saved presets per account", async () => {
+    await sql`INSERT INTO casual_game_presets(owner_account_id,name,settings)
+      SELECT ${friendId}, 'Preset ' || g, ${sql.json({ sport_id: "badminton", home_name: "A", away_name: "B" })}
+      FROM generate_series(1, ${CASUAL_MAX_PRESETS_PER_ACCOUNT}) g`;
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/casual/me/presets",
+      headers: identityHeaders("friend"),
+      payload: { name: "One too many", settings: { sport_id: "badminton", home_name: "A", away_name: "B" } },
+    });
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("hides and purges unclaimed games idle past the retention window", async () => {
+    const stale = await create();
+    const fresh = await create();
+    await sql`UPDATE casual_games SET updated_at=now() - interval '31 days' WHERE id=${stale.game.id}`;
+    const staleRead = await app.inject({
+      method: "GET",
+      url: `/api/v1/casual/games/${stale.game.id}`,
+      headers: { "x-casual-viewer-token": stale.viewer_token },
+    });
+    expect(staleRead.statusCode).toBe(404);
+    const staleWrite = await app.inject({
+      method: "POST",
+      url: `/api/v1/casual/games/${stale.game.id}/actions`,
+      headers: { "x-casual-host-token": stale.host_token },
+      payload: { side: "home" },
+    });
+    expect(staleWrite.statusCode).toBe(404);
+    const purged = await purgeExpiredCasualGames(sql, new Date(Date.now() - 30 * 86_400_000));
+    expect(purged).toBeGreaterThanOrEqual(1);
+    expect((await sql`SELECT 1 FROM casual_games WHERE id=${stale.game.id}`).length).toBe(0);
+    expect((await sql`SELECT 1 FROM casual_games WHERE id=${fresh.game.id}`).length).toBe(1);
   });
 });

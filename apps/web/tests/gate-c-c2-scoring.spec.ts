@@ -46,35 +46,44 @@ for (const sport of sports) {
     await expect(page.getByLabel("Event time")).toHaveCount(sport.manualTime ? 1 : 0);
     const trigger = page.getByRole("button", { name: sport.action });
     await expect(trigger).toHaveJSProperty("disabled", false);
-    await trigger.click();
-    const scrollBeforeClose = await page.evaluate(() => window.scrollY);
-
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
-    const participant = dialog.getByLabel("Scorer or participant name");
-    if (sport.participant) {
-      await expect(participant).toBeFocused();
-      await participant.fill("Player 14");
+    if (sport.id !== "canoe_polo") {
+      // Points need nobody named: one tap records them, with an inline Undo instead of a sheet.
+      await trigger.click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Undo .+ for Marina Blue$/u }).first()).toBeVisible();
+      await expect(page.locator(".p2-event-log ol > li").first()).toBeVisible();
     } else {
-      await expect(participant).toHaveCount(0);
-      await expect(dialog.getByRole("heading")).toBeFocused();
+      await trigger.click();
+      const scrollBeforeClose = await page.evaluate(() => window.scrollY);
+
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+      const participant = dialog.getByLabel("Scorer or participant name");
+      if (sport.participant) {
+        await expect(participant).toBeFocused();
+        await participant.fill("Player 14");
+      } else {
+        await expect(participant).toHaveCount(0);
+        await expect(dialog.getByRole("heading")).toBeFocused();
+      }
+      await assertNoWcagAOrAaViolations(page);
+      await dialog.getByRole("button", { name: "Record goal for Marina Blue" }).click();
+
+      await expect(dialog).toBeHidden();
+      await expect(trigger).toBeFocused();
+      expect(await page.evaluate(() => window.scrollY)).toBe(scrollBeforeClose);
     }
-    await assertNoWcagAOrAaViolations(page);
-    await dialog
-      .getByRole("button", { name: sport.id === "canoe_polo" ? "Record goal for Marina Blue" : "Record event" })
-      .click();
+    await expect(page.getByRole("heading", { name: "Recent actions" })).toBeVisible();
 
-    await expect(dialog).toBeHidden();
-    await expect(trigger).toBeFocused();
-    await expect(page.getByRole("heading", { name: "Recent canonical events" })).toBeVisible();
-    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBeforeClose);
-
-    const reverse = page.getByRole("button", { name: "Reverse event", exact: true });
+    const reverse = page
+      .locator(".p2-event-log")
+      .getByRole("button", { name: /^Undo / })
+      .first();
     await reverse.click();
-    const reversal = page.getByRole("dialog", { name: "Reverse recorded event" });
-    await expect(reversal.getByLabel("Reversal reason")).toBeFocused();
-    await reversal.getByLabel("Reversal reason").fill("Recorded for the wrong side");
-    await reversal.getByRole("button", { name: "Confirm reversal" }).click();
+    const reversal = page.getByRole("dialog", { name: "Undo this action?" });
+    await expect(reversal.getByLabel("Reason (optional)")).toBeFocused();
+    await reversal.getByRole("button", { name: "Wrong team" }).click();
+    await reversal.getByRole("button", { name: "Undo action" }).click();
     await expect(reversal).toBeHidden();
     await expect(page.getByRole("listitem").filter({ hasText: "Reversed" })).toBeFocused();
 
@@ -87,7 +96,7 @@ for (const sport of sports) {
   });
 }
 
-test("@a11y 320px reflow keeps Basketball controls reachable with 48px targets", async ({ page }) => {
+test("@a11y 320px reflow keeps Basketball controls reachable with 56px targets", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
   await openScoring(page, "basketball");
 
@@ -95,7 +104,7 @@ test("@a11y 320px reflow keeps Basketball controls reachable with 48px targets",
   await threePoint.scrollIntoViewIfNeeded();
   await expect(threePoint).toBeVisible();
   const box = await threePoint.boundingBox();
-  expect(box?.height).toBeGreaterThanOrEqual(48);
+  expect(box?.height).toBeGreaterThanOrEqual(56);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   await expect(page.getByRole("button", { name: "Review final score" })).toBeVisible();
   await assertNoWcagAOrAaViolations(page);

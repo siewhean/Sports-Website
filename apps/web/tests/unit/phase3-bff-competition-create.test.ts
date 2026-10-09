@@ -66,7 +66,7 @@ describe("competition creation BFF", () => {
   });
 
   it("forwards an authenticated organisation read through a proxy only to the configured public API host", async () => {
-    const stagingOrigin = "https://c5-staging.poladex.shop";
+    const stagingOrigin = "https://c5-staging.example.test";
     process.env.MATCHDAY_API_BASE_URL = stagingOrigin;
     process.env.MATCHDAY_PUBLIC_ORIGIN = stagingOrigin;
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -89,7 +89,7 @@ describe("competition creation BFF", () => {
   });
 
   it("uses the configured public origin for proxied competition creation", async () => {
-    const stagingOrigin = "https://c5-staging.poladex.shop";
+    const stagingOrigin = "https://c5-staging.example.test";
     process.env.MATCHDAY_API_BASE_URL = stagingOrigin;
     process.env.MATCHDAY_PUBLIC_ORIGIN = stagingOrigin;
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -135,7 +135,7 @@ describe("competition creation BFF", () => {
   });
 
   it("rejects an internal proxy origin when a public origin is configured", async () => {
-    const stagingOrigin = "https://c5-staging.poladex.shop";
+    const stagingOrigin = "https://c5-staging.example.test";
     process.env.MATCHDAY_API_BASE_URL = stagingOrigin;
     process.env.MATCHDAY_PUBLIC_ORIGIN = stagingOrigin;
     const fetchMock = vi.fn();

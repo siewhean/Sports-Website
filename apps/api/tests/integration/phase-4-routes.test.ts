@@ -182,7 +182,11 @@ describe("Phase 4 authenticated route boundary", () => {
   it("keeps expiry maintenance hidden behind the operational token", async () => {
     const phase4 = runtime();
     const app = await buildApp({
-      config: { ...testConfig(), deepHealthToken: "phase4-maintenance-secret" },
+      config: {
+        ...testConfig(),
+        deepHealthToken: "deep-health-secret-not-for-maintenance",
+        maintenanceToken: "phase4-maintenance-secret",
+      },
       probes: healthyProbes,
       identityRuntime: identityRuntime(),
       phase4Runtime: phase4,
@@ -193,10 +197,25 @@ describe("Phase 4 authenticated route boundary", () => {
     expect(hidden.statusCode).toBe(404);
     expect(phase4.runScheduleMaintenance).not.toHaveBeenCalled();
 
-    const maintained = await app.inject({
+    // The deep-health token must not unlock maintenance (separate secret per operational surface).
+    const deepHealthToken = await app.inject({
+      method: "POST",
+      url: "/internal/phase4/schedule-maintenance",
+      headers: { "x-matchday-maintenance-token": "deep-health-secret-not-for-maintenance" },
+    });
+    expect(deepHealthToken.statusCode).toBe(404);
+    const legacyHeader = await app.inject({
       method: "POST",
       url: "/internal/phase4/schedule-maintenance",
       headers: { "x-deep-health-token": "phase4-maintenance-secret" },
+    });
+    expect(legacyHeader.statusCode).toBe(404);
+    expect(phase4.runScheduleMaintenance).not.toHaveBeenCalled();
+
+    const maintained = await app.inject({
+      method: "POST",
+      url: "/internal/phase4/schedule-maintenance",
+      headers: { "x-matchday-maintenance-token": "phase4-maintenance-secret" },
     });
     expect(maintained.statusCode).toBe(200);
     expect(maintained.json()).toMatchObject({ warnings_emitted: 1, revisions_expired: 1 });

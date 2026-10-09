@@ -29,12 +29,44 @@ import {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { applyLiveOverlay, liveOverlayRowsSql, liveOverlayUpdatedAt, parseLiveOverlay } from "./public-live-overlay.js";
 import {
   NoopScoringAccessRateLimiter,
   scoringAccessRateLimited,
   type ScoringAccessRateLimitHeaders,
   type ScoringAccessRateLimiter,
 } from "./scoring-access-rate-limit.js";
+
+/** Public segment/time detail derived from a reducer state or a persisted result snapshot. */
+function publicScoreDetails(
+  raw: unknown,
+): Pick<PublicMatchResult, "current_segment" | "segments" | "recorded_time_seconds"> {
+  const state =
+    typeof raw === "string" ? jsonValue<Record<string, unknown>>(raw) : (raw as Record<string, unknown> | null);
+  if (!state || typeof state !== "object") return {};
+  const current = state.currentSegment;
+  const segments = Array.isArray(state.segments) ? state.segments : [];
+  const actions = Array.isArray(state.actions) ? state.actions : [];
+  const lastTimed = [...actions]
+    .reverse()
+    .find(
+      (action) =>
+        action && typeof action === "object" && !action.reversed && Number.isInteger(action.manualTimeSeconds),
+    );
+  return {
+    ...(Number.isInteger(current) && (current as number) >= 1 ? { current_segment: current as number } : {}),
+    segments: segments.flatMap((item) =>
+      item &&
+      typeof item === "object" &&
+      Number.isInteger(item.number) &&
+      Number.isInteger(item.home) &&
+      Number.isInteger(item.away)
+        ? [{ number: item.number as number, home: item.home as number, away: item.away as number }]
+        : [],
+    ),
+    recorded_time_seconds: lastTimed ? (lastTimed.manualTimeSeconds as number) : null,
+  };
+}
 
 type StagedCorrectionCommand = Readonly<{ id: string; command: FiveSportScoreCommand }>;
 
@@ -2477,7 +2509,7 @@ export class Phase2Runtime {
   }
 
   async exchangeAccess(
-    input: { token?: string; shortCode?: string; expectedMatchId?: string },
+    input: { token?: string; shortCode?: string; expectedMatchId?: string; expectedCompetitionId?: string },
     requestId: string,
   ): Promise<ExchangedScoringSession & { generation: number; mode: "writer" }>;
   async exchangeAccess(
@@ -2485,6 +2517,7 @@ export class Phase2Runtime {
       token?: string;
       shortCode?: string;
       expectedMatchId?: string;
+      expectedCompetitionId?: string;
       deviceId: string;
       deviceLabel?: string;
       ipAddress?: string;
@@ -2496,6 +2529,7 @@ export class Phase2Runtime {
       token?: string;
       shortCode?: string;
       expectedMatchId?: string;
+      expectedCompetitionId?: string;
       deviceId?: string;
       deviceLabel?: string;
       ipAddress?: string;
@@ -2528,9 +2562,17 @@ export class Phase2Runtime {
         if (Boolean(input.token) === Boolean(input.shortCode)) {
           throw new ApiError(400, ErrorCode.ACCESS_SECRET_AMBIGUOUS, "Provide exactly one access token or short code");
         }
+        // 12-digit number codes are guessable at platform scale, so they are only ever looked up
+        // inside the match/competition the scorer names. Without that context the attempt is an
+        // ordinary invalid attempt (rate limited and recorded below).
+        if (input.shortCode && !input.expectedMatchId && !input.expectedCompetitionId) {
+          throw new ApiError(403, ErrorCode.ACCESS_DENIED, "Access is invalid");
+        }
         if (input.shortCode) await this.assertFallbackCodeHmacKeyVersion("verify", tx);
         const digest = input.token ? hashSecret(presented) : hashFallbackCode(presented, this.fallbackCodeHmacSecret);
         const column = input.token ? "secret_hash" : "short_code_hash";
+        const scopeMatchId = input.shortCode ? (input.expectedMatchId ?? null) : null;
+        const scopeCompetitionId = input.shortCode ? (input.expectedCompetitionId ?? null) : null;
         const loadPass = (lock: boolean) =>
           tx.unsafe<AccessPassExchangeRow>(
             `SELECT p.id,p.competition_id,p.match_id,p.secret_hash,p.short_code_hash,p.role,p.scope,
@@ -2538,8 +2580,11 @@ export class Phase2Runtime {
                 c.status AS competition_status
              FROM scoring_access_passes p
              JOIN matches m ON m.id=p.match_id JOIN competitions c ON c.id=m.competition_id
-             WHERE p.${column}=$1 LIMIT 1 ${lock ? "FOR UPDATE OF p" : ""}`,
-            [digest],
+             WHERE p.${column}=$1
+               AND ($2::uuid IS NULL OR p.match_id=$2::uuid)
+               AND ($3::uuid IS NULL OR p.competition_id=$3::uuid)
+             LIMIT 1 ${lock ? "FOR UPDATE OF p" : ""}`,
+            [digest, scopeMatchId, scopeCompetitionId],
           );
         let pass = (await loadPass(false))[0];
         const stored = input.token ? pass?.secret_hash : pass?.short_code_hash;
@@ -2573,15 +2618,18 @@ export class Phase2Runtime {
         if (!pass || !lockedStored || !safeEqual(Buffer.from(lockedStored), digest)) {
           throw new ApiError(403, ErrorCode.ACCESS_DENIED, "Access is invalid");
         }
-        if (pass.competition_status === "archived") {
-          throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
-        }
         const accessContext = {
           competitionId: pass.competition_id,
           matchId: pass.match_id,
           accessPassId: pass.id,
           organisationId: pass.organisation_id,
         };
+        if (pass.competition_status === "archived") {
+          // A distinct "archived" answer would confirm that a guessed number code exists.
+          if (!input.token)
+            throw new ScoringAccessDeniedError(403, "ACCESS_DENIED", "Access is invalid", accessContext);
+          throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
+        }
         if (pass.revoked_at) {
           throw new ScoringAccessDeniedError(403, "ACCESS_REVOKED", "Access has been revoked", accessContext);
         }
@@ -2640,7 +2688,40 @@ export class Phase2Runtime {
           )[0]?.generation ?? 0;
         const expiresAt = new Date(Math.min(date(pass.expires_at).getTime(), now.getTime() + 30 * 60_000));
         const activeLease = Boolean(lease[0] && date(lease[0].expires_at).getTime() > now.getTime());
-        const writerReserved = activeLease || Boolean(reservedWriter);
+        // Once a match has had a writer, an expired lease no longer means "free for anyone holding
+        // the code": only the same device may silently resume. Any other device joins as a
+        // read-only candidate and needs organiser approval (requestTakeover/resolveTakeover). The
+        // incumbent no longer binds when the organiser has revoked its session/pass or transferred it.
+        const presentedDeviceHash = input.deviceId ? hashSecret(input.deviceId) : null;
+        const previousWriter = lease[0]
+          ? (
+              await tx.unsafe<{
+                id: string;
+                device_id_hash: Buffer | null;
+                mode: ScoringSessionMode;
+                revoked_at: Date | string | null;
+                pass_revoked_at: Date | string | null;
+              }>(
+                `SELECT s.id,s.device_id_hash,s.mode,s.revoked_at,p.revoked_at AS pass_revoked_at
+                 FROM scoring_access_sessions s JOIN scoring_access_passes p ON p.id=s.access_pass_id
+                 WHERE s.id=$1`,
+                [lease[0].access_session_id],
+              )
+            )[0]
+          : undefined;
+        const incumbentBinds = Boolean(
+          previousWriter &&
+          previousWriter.mode === "writer" &&
+          !previousWriter.revoked_at &&
+          !previousWriter.pass_revoked_at,
+        );
+        const sameDeviceAsIncumbent = Boolean(
+          presentedDeviceHash &&
+          previousWriter?.device_id_hash &&
+          safeEqual(Buffer.from(previousWriter.device_id_hash), presentedDeviceHash),
+        );
+        const deviceBound = !activeLease && incumbentBinds && !sameDeviceAsIncumbent;
+        const writerReserved = activeLease || Boolean(reservedWriter) || deviceBound;
         if (!input.deviceId && writerReserved) {
           throw new ApiError(409, ErrorCode.WRITER_ACTIVE, "Another scorekeeper currently controls this match");
         }
@@ -2680,6 +2761,21 @@ export class Phase2Runtime {
              generation=EXCLUDED.generation,acquired_at=EXCLUDED.acquired_at,expires_at=EXCLUDED.expires_at`,
             [pass.competition_id, pass.match_id, session.id, generation, now, leaseExpiresAt],
           );
+        }
+        if (mode === "writer" && previousWriter) {
+          // Organiser-visible audit trail whenever control of a match moves to a new writer session.
+          await this.evidence(tx, {
+            requestId: `${requestId}:writer-changed`,
+            actorAccountId: null,
+            actorType: "access_pass",
+            organisationId: pass.organisation_id,
+            action: "scoring_writer.changed",
+            targetType: "scoring_session",
+            targetId: session.id,
+            before: { session_id: previousWriter.id, generation: lease[0]?.generation ?? null },
+            after: { session_id: session.id, generation, same_device: sameDeviceAsIncumbent },
+            eventPayload: { competition_id: pass.competition_id, match_id: pass.match_id, generation },
+          });
         }
         await this.evidence(tx, {
           requestId,
@@ -2778,6 +2874,11 @@ export class Phase2Runtime {
           return state;
         });
         if (scoringAccessRateLimited(state)) throw new ScoringAccessRateLimitError(state);
+        // For guessable number codes every rejection looks identical (the real outcome is still
+        // recorded above), so revoked/expired/wrong-match answers cannot confirm a hit.
+        if (credentialKind === "fallback_code" && error.code !== "ACCESS_FALLBACK_ROTATION_REQUIRED") {
+          throw new ScoringAccessRejectedError(403, ErrorCode.ACCESS_DENIED, "Access is invalid", state);
+        }
         throw new ScoringAccessRejectedError(error.statusCode, error.code, error.message, state);
       }
       throw error;
@@ -3209,7 +3310,6 @@ export class Phase2Runtime {
     if (!command) throw new ApiError(422, ErrorCode.SCORE_EVENT_INVALID, "Score event command is invalid");
     try {
       return await this.transaction(async (tx) => {
-        const _t0 = performance.now();
         // Pre-lock: light session read without row lock.
         let session = await this.authenticateScoringSession(
           tx,
@@ -3219,7 +3319,6 @@ export class Phase2Runtime {
           true,
           false,
         );
-        const _t1 = performance.now();
         // Serialize all writers for this match with a transaction-scoped advisory lock.
         await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [session.match_id]);
         // Authoritative session read under lock — also fetches offline auth in one JOIN.
@@ -3232,7 +3331,6 @@ export class Phase2Runtime {
           true,
           true,
         );
-        const _t2 = performance.now();
         const permission: ScoringPermission = command.type === "reversal" ? "score:reverse" : "score:write";
         if (!jsonValue<ScoringPermission[]>(session.scope).includes(permission)) {
           throw new ApiError(403, ErrorCode.SCORING_PERMISSION_DENIED, "Scoring session lacks the required permission");
@@ -3246,7 +3344,6 @@ export class Phase2Runtime {
         }
         const currentContext = await this.canonicalScoringContext(tx, session.match_id, true);
         const context = await this.ensureCanonicalStream(tx, session.match_id, currentContext);
-        const _t3 = performance.now();
 
         // Step 2: ONE query for legacy detection + idempotency + full event history.
         const historyRows = await tx.unsafe<
@@ -3264,7 +3361,6 @@ export class Phase2Runtime {
            ORDER BY aggregate_version`,
           [session.match_id],
         );
-        const _t4 = performance.now();
 
         // Derive legacy, duplicate, and history from the single result set.
         const legacyCorrection = historyRows.some((r) => r.event_type === "legacy_correction");
@@ -3390,7 +3486,10 @@ export class Phase2Runtime {
           aggregate_version: sequence,
           event_type: command.type,
         });
-        const outboxKey = `${requestId}:scoring_event.appended:${session.match_id}`;
+        // One coalesced outbox row per match (latest aggregate version), not one
+        // per point: the outbox has no relay yet and a consumer of live scores
+        // needs the latest state, while audit_events keeps the per-point record.
+        const outboxKey = `scoring_event.appended:match:${session.match_id}`;
 
         // Step 4: Atomic write tail — one data-modifying CTE for all writes.
         await tx.unsafe(
@@ -3432,7 +3531,10 @@ export class Phase2Runtime {
            )
            INSERT INTO outbox_events (
              aggregate_type, aggregate_id, event_type, payload, idempotency_key, created_at, available_at
-           ) VALUES ('match',$4,'scoring_event.appended',($23::jsonb #>> '{}')::jsonb,$24,$15,$15)`,
+           ) VALUES ('match',$4,'scoring_event.appended',($23::jsonb #>> '{}')::jsonb,$24,$15,$15)
+           ON CONFLICT (idempotency_key) DO UPDATE
+           SET payload=EXCLUDED.payload,available_at=EXCLUDED.available_at,published_at=NULL,attempts=0
+           WHERE (outbox_events.payload->>'aggregate_version')::integer < $6`,
           [
             eventId, // $1
             context.competition_id, // $2
@@ -3462,41 +3564,12 @@ export class Phase2Runtime {
           ],
         );
 
-        const publication = (
-          await tx.unsafe<{ schedule_version: number; result_version: number }>(
-            `SELECT schedule_version,result_version
-             FROM competition_publications
-             WHERE competition_id=$1
-             FOR UPDATE`,
-            [context.competition_id],
-          )
-        )[0];
-        if (publication && publication.schedule_version > 0) {
-          await tx.unsafe(
-            `UPDATE competition_publications
-             SET updated_at=$2
-             WHERE competition_id=$1`,
-            [context.competition_id, serverReceivedAt],
-          );
-          await this.writePublicProjection(
-            tx,
-            context.competition_id,
-            publication.schedule_version,
-            publication.result_version,
-            { liveScores: new Map([[session.match_id, { home: reduced.score.home, away: reduced.score.away }]]) },
-          );
-        }
+        // Public live score: one row keyed by this match, overlaid onto the last
+        // full projection by readers. No competition-wide lock and no projection
+        // rebuild, so courts never serialise on each other and the cost of a
+        // point does not grow with the size of the competition.
+        await this.writeLiveScore(tx, session.match_id, sequence, reduced, serverReceivedAt);
 
-        const _t5 = performance.now();
-        /* istanbul ignore next */
-        console.debug("appendCanonicalScoreEvent timings (ms)", {
-          pre_lock_auth: Math.round(_t1 - _t0),
-          lock_and_auth: Math.round(_t2 - _t1),
-          context_and_stream: Math.round(_t3 - _t2),
-          history_query: Math.round(_t4 - _t3),
-          write_cte: Math.round(_t5 - _t4),
-          total_in_tx: Math.round(_t5 - _t0),
-        });
         return {
           match_id: session.match_id,
           client_event_id: command.clientEventId,
@@ -3675,21 +3748,12 @@ export class Phase2Runtime {
         if (match.state === "final" || match.state === "corrected") {
           throw new ApiError(409, ErrorCode.MATCH_FINALISED_READ_ONLY, "Finalised matches require organiser reopening");
         }
+        // The lease may have lapsed (incumbent offline): a different device still needs organiser
+        // approval to take over, so a lapsed lease is a valid takeover target too.
         const lease = required(
           await tx.unsafe<{ access_session_id: string }>(
-            `SELECT access_session_id FROM match_writer_leases
-           WHERE match_id=$1 AND (
-             expires_at>$2
-             OR EXISTS (
-               SELECT 1 FROM scoring_offline_authorizations a
-               WHERE a.match_id=match_writer_leases.match_id
-                 AND a.access_session_id=match_writer_leases.access_session_id
-                 AND a.writer_generation=match_writer_leases.generation
-                 AND a.status='active'
-                 AND a.replay_expires_at>$2
-             )
-           ) FOR UPDATE`,
-            [candidate.match_id, this.now()],
+            `SELECT access_session_id FROM match_writer_leases WHERE match_id=$1 FOR UPDATE`,
+            [candidate.match_id],
           ),
           "Active writer lease not found",
         );
@@ -3996,9 +4060,8 @@ export class Phase2Runtime {
           [takeover.match_id, takeover.incumbent_session_id, lease.generation, now],
         )
       )[0];
-      if (date(lease.expires_at).getTime() <= now.getTime() && !activeOfflineAuthorization) {
-        throw new ApiError(409, ErrorCode.TAKEOVER_STALE, "The incumbent writer lease expired before approval");
-      }
+      // A lapsed lease is approvable: the incumbent's heartbeat is then stale, so the pending state
+      // below is "unknown" and the organiser must explicitly acknowledge the override.
       const candidate = required(
         await tx.unsafe<{
           expires_at: Date | string;
@@ -5359,6 +5422,46 @@ export class Phase2Runtime {
     }));
   }
 
+  /**
+   * Upserts the public live entry for one in-progress match. The entry has the
+   * exact shape of a live result in the full projection. A stale write (lower
+   * aggregate version, e.g. a projection rebuild racing a newer point) never
+   * overwrites a newer score.
+   */
+  private async writeLiveScore(
+    tx: PostgresJsSql,
+    matchId: string,
+    aggregateVersion: number,
+    state: FiveSportScoreState,
+    updatedAt: Date,
+  ) {
+    const live = {
+      home_score: state.score.home,
+      away_score: state.score.away,
+      state: "in_progress",
+      updated_at: updatedAt.toISOString(),
+      ...publicScoreDetails(state),
+    };
+    await tx.unsafe(
+      `INSERT INTO public_live_match_scores (match_id,competition_id,division_id,aggregate_version,live_result,updated_at)
+       SELECT m.id,m.competition_id,m.division_id,$2,
+              jsonb_build_object(
+                'id',m.id,'code',m.code,'stage',m.stage,
+                'home',jsonb_build_object('id',home.id,'name',home.name),
+                'away',jsonb_build_object('id',away.id,'name',away.name)
+              ) || ($3::jsonb #>> '{}')::jsonb,
+              $4
+       FROM matches m
+       JOIN division_entries home ON home.id=m.home_entry_id
+       JOIN division_entries away ON away.id=m.away_entry_id
+       WHERE m.id=$1
+       ON CONFLICT (match_id) DO UPDATE
+       SET aggregate_version=EXCLUDED.aggregate_version,live_result=EXCLUDED.live_result,updated_at=EXCLUDED.updated_at
+       WHERE public_live_match_scores.aggregate_version <= EXCLUDED.aggregate_version`,
+      [matchId, aggregateVersion, JSON.stringify(live), updatedAt],
+    );
+  }
+
   async writePublicProjection(
     tx: PostgresJsSql,
     competitionId: string,
@@ -5451,35 +5554,6 @@ export class Phase2Runtime {
             [competitionId, resultVersion],
           )
         : [];
-    const publicScoreDetails = (
-      raw: unknown,
-    ): Pick<PublicMatchResult, "current_segment" | "segments" | "recorded_time_seconds"> => {
-      const state =
-        typeof raw === "string" ? jsonValue<Record<string, unknown>>(raw) : (raw as Record<string, unknown> | null);
-      if (!state || typeof state !== "object") return {};
-      const current = state.currentSegment;
-      const segments = Array.isArray(state.segments) ? state.segments : [];
-      const actions = Array.isArray(state.actions) ? state.actions : [];
-      const lastTimed = [...actions]
-        .reverse()
-        .find(
-          (action) =>
-            action && typeof action === "object" && !action.reversed && Number.isInteger(action.manualTimeSeconds),
-        );
-      return {
-        ...(Number.isInteger(current) && (current as number) >= 1 ? { current_segment: current as number } : {}),
-        segments: segments.flatMap((item) =>
-          item &&
-          typeof item === "object" &&
-          Number.isInteger(item.number) &&
-          Number.isInteger(item.home) &&
-          Number.isInteger(item.away)
-            ? [{ number: item.number as number, home: item.home as number, away: item.away as number }]
-            : [],
-        ),
-        recorded_time_seconds: lastTimed ? (lastTimed.manualTimeSeconds as number) : null,
-      };
-    };
     const persistedPublicResults: Array<PublicMatchResult & { division_id: string }> = results.map((match) => ({
       division_id: match.division_id,
       id: match.id,
@@ -5493,6 +5567,7 @@ export class Phase2Runtime {
       updated_at: serializedDate(match.created_at),
       ...publicScoreDetails(match.snapshot),
     }));
+    const liveCutoff = liveMatchStaleCutoff(this.now(), this.liveMatchStaleAfterMs);
     const liveMatches = await tx.unsafe<{
       id: string;
       division_id: string;
@@ -5517,16 +5592,14 @@ export class Phase2Runtime {
       // for spectators. It is not finalised: it simply drops out of the live
       // results (fixture shows as scheduled, any earlier confirmed result is
       // kept) and reappears as soon as scoring resumes.
-      [
-        competitionId,
-        liveMatchStaleCutoff(this.now(), this.liveMatchStaleAfterMs),
-        [...(options.liveScores?.keys() ?? [])],
-      ],
+      [competitionId, liveCutoff, [...(options.liveScores?.keys() ?? [])]],
     );
     const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
+    const liveVersions = new Map<string, number>();
     for (const match of liveMatches) {
       const knownScore = options.liveScores?.get(match.id);
       const canonical = await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true });
+      liveVersions.set(match.id, Number(canonical.aggregateVersion));
       const homeScore = knownScore !== undefined ? knownScore.home : canonical.state.score.home;
       const awayScore = knownScore !== undefined ? knownScore.away : canonical.state.score.away;
       liveResults.push({
@@ -5634,20 +5707,46 @@ export class Phase2Runtime {
     };
     await tx.unsafe(
       `INSERT INTO public_competition_projections (
-         competition_id,schedule_version,result_version,projection,generated_at
-       ) VALUES ($1,$2,$3,$4::jsonb,$5)
+         competition_id,schedule_version,result_version,projection,generated_at,live_overlay_cutoff_at
+       ) VALUES ($1,$2,$3,$4::jsonb,$5,$6)
        ON CONFLICT (competition_id,schedule_version,result_version)
-       DO UPDATE SET projection=EXCLUDED.projection,generated_at=EXCLUDED.generated_at`,
-      [competitionId, scheduleVersion, resultVersion, JSON.stringify(projection), this.now()],
+       DO UPDATE SET projection=EXCLUDED.projection,generated_at=EXCLUDED.generated_at,
+                     live_overlay_cutoff_at=EXCLUDED.live_overlay_cutoff_at`,
+      [competitionId, scheduleVersion, resultVersion, JSON.stringify(projection), this.now(), liveCutoff],
     );
+    // Overlay rows win over the projection on read, so bring the ones rendered
+    // here in line with it (e.g. an entry renamed mid-match). Rows a newer point
+    // already advanced are left alone, and unchanged rows are not rewritten.
+    const refreshed = liveResults.flatMap((result) => {
+      const version = liveVersions.get(result.id);
+      if (version === undefined) return [];
+      const entry: Record<string, unknown> = { ...result };
+      delete entry.division_id;
+      return [{ match_id: result.id, aggregate_version: version, live_result: entry, updated_at: result.updated_at }];
+    });
+    if (refreshed.length > 0) {
+      await tx.unsafe(
+        `INSERT INTO public_live_match_scores (match_id,competition_id,division_id,aggregate_version,live_result,updated_at)
+         SELECT m.id,m.competition_id,m.division_id,row.aggregate_version,row.live_result,row.updated_at
+         FROM jsonb_to_recordset(($1::jsonb #>> '{}')::jsonb)
+           AS row(match_id uuid,aggregate_version integer,live_result jsonb,updated_at timestamptz)
+         JOIN matches m ON m.id=row.match_id AND m.competition_id=$2
+         ON CONFLICT (match_id) DO UPDATE
+         SET aggregate_version=EXCLUDED.aggregate_version,live_result=EXCLUDED.live_result,updated_at=EXCLUDED.updated_at
+         WHERE public_live_match_scores.aggregate_version <= EXCLUDED.aggregate_version
+           AND public_live_match_scores.live_result IS DISTINCT FROM EXCLUDED.live_result`,
+        [JSON.stringify(refreshed), competitionId],
+      );
+    }
   }
 
   async publicCompetition(slug: string): Promise<PublicCompetitionProjection> {
     const rows = await this.sql.unsafe<{
       projection: Omit<PublicCompetitionProjection, "last_updated_at"> | string;
       generated_at: Date | string;
+      live_overlay: unknown;
     }>(
-      `SELECT p.projection,p.generated_at
+      `SELECT p.projection,p.generated_at,${liveOverlayRowsSql("c.id", "cp", "p")} AS live_overlay
        FROM competitions c JOIN competition_publications cp ON cp.competition_id=c.id
        JOIN public_competition_projections p ON p.competition_id=c.id
          AND p.schedule_version=cp.schedule_version AND p.result_version=cp.result_version
@@ -5657,11 +5756,15 @@ export class Phase2Runtime {
     );
     const row = rows[0];
     if (!row) throw new ApiError(404, ErrorCode.PUBLIC_COMPETITION_NOT_FOUND, "Competition not found");
-    const stored = jsonValue<
-      Omit<PublicCompetitionProjection, "last_updated_at"> & {
-        divisions?: PublicDivisionProjection[];
-      }
-    >(row.projection);
+    const overlay = parseLiveOverlay(row.live_overlay);
+    const stored = applyLiveOverlay(
+      jsonValue<
+        Omit<PublicCompetitionProjection, "last_updated_at"> & {
+          divisions?: PublicDivisionProjection[];
+        }
+      >(row.projection),
+      overlay,
+    );
     const divisions =
       Array.isArray(stored.divisions) && stored.divisions.length > 0
         ? stored.divisions
@@ -5674,10 +5777,12 @@ export class Phase2Runtime {
               bracket: stored.bracket,
             },
           ];
+    const generatedAt = date(row.generated_at).toISOString();
+    const liveUpdatedAt = liveOverlayUpdatedAt(overlay);
     return {
       ...stored,
       divisions,
-      last_updated_at: date(row.generated_at).toISOString(),
+      last_updated_at: liveUpdatedAt && liveUpdatedAt > generatedAt ? liveUpdatedAt : generatedAt,
     };
   }
 

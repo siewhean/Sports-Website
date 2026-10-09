@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { productionHostname } from "./lib/hostnames.mjs";
 import { validateGateF, REQUIRED_HOSTED_CI_JOBS, REQUIRED_WAIVERS } from "./validate-gate-f.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -100,7 +101,7 @@ async function certificateFixture(artifactsDir) {
     assurance_profile: "automated-only-owner-waived-v2",
     candidate_sha: SHA,
     production_deployment: {
-      hostname: "matchday.poladex.shop",
+      hostname: productionHostname(),
       deployed_sha: SHA,
       environment: "production",
       conclusion: "PASS",
@@ -152,7 +153,7 @@ test("validateGateF accepts internally consistent backup evidence fixtures", asy
     await certificateFixture(artifactsDir);
     const result = await validateGateF(SHA, { artifactsDir });
     assert.equal(result.valid, true);
-    assert.equal(result.production_hostname, "matchday.poladex.shop");
+    assert.equal(result.production_hostname, productionHostname());
   });
 });
 

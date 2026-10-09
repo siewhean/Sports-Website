@@ -5,6 +5,39 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type postgres from "postgres";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
+import { requireMutationSession } from "./mutation-guard.js";
+
+/**
+ * Retention for anonymous (never claimed) casual games. Host/viewer links are bearer secrets, so an
+ * unclaimed game is unreachable once its links are lost; after this idle window reads treat it as
+ * gone and `purgeExpiredCasualGames` may delete it. Claimed games belong to an account and follow
+ * account-level retention instead.
+ */
+export const CASUAL_ANONYMOUS_GAME_TTL_DAYS = 30;
+export const CASUAL_MAX_PRESETS_PER_ACCOUNT = 50;
+export const CASUAL_MAX_FRIEND_REQUESTS_PER_DAY = 20;
+
+/**
+ * Deletes unclaimed casual games idle since before `olderThan` (actions/shares cascade). Intended to
+ * be scheduled by the data-retention job; safe to run repeatedly. Returns the number deleted.
+ */
+export async function purgeExpiredCasualGames(
+  sql: postgres.Sql,
+  olderThan: Date = new Date(Date.now() - CASUAL_ANONYMOUS_GAME_TTL_DAYS * 86_400_000),
+  batchSize = 5_000,
+): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const rows = await sql<{ id: string }[]>`
+      DELETE FROM casual_games WHERE id IN (
+        SELECT id FROM casual_games
+        WHERE owner_account_id IS NULL AND updated_at < ${olderThan}
+        LIMIT ${batchSize}
+      ) RETURNING id`;
+    total += rows.length;
+    if (rows.length < batchSize) return total;
+  }
+}
 
 type Settings = {
   sport_id: SportId;
@@ -146,18 +179,27 @@ function requireHost(request: FastifyRequest): string {
   if (typeof token !== "string" || token.length < 32 || token.length > 128) throw notFound();
   return tokenHash(token);
 }
-async function actor(request: FastifyRequest, identity: IdentityRequestContext, mutating = true) {
-  const session = await identity.authenticate(request);
-  if (mutating && request.headers["x-csrf-token"] !== session.csrfToken)
-    throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
+async function actor(
+  request: FastifyRequest,
+  identity: IdentityRequestContext,
+  allowedOrigins: readonly string[],
+  mutating = true,
+) {
+  const session = mutating
+    ? await requireMutationSession(request, identity, allowedOrigins)
+    : await identity.authenticate(request);
   return session.account.id;
 }
 
 export async function registerCasualRoutes(
   app: FastifyInstance,
-  options: { sql: postgres.Sql; identityRequests?: IdentityRequestContext },
+  options: { sql: postgres.Sql; identityRequests?: IdentityRequestContext; allowedOrigins?: readonly string[] },
 ) {
   const sql = options.sql;
+  const allowedOrigins = options.allowedOrigins ?? [];
+  // Anonymous games idle past the TTL read as not found even before the purge job deletes them.
+  const notExpired = (q: postgres.Sql | postgres.TransactionSql = sql) =>
+    q`(owner_account_id IS NOT NULL OR updated_at >= now() - make_interval(days => ${CASUAL_ANONYMOUS_GAME_TTL_DAYS}::integer))`;
   app.addHook("onSend", async (request, reply) => {
     if (request.routeOptions.url?.startsWith("/api/v1/casual/")) {
       reply.header("Cache-Control", "private, no-store");
@@ -168,13 +210,13 @@ export async function registerCasualRoutes(
   const readGame = async (id: string, hash: string, host = false): Promise<GameRow> => {
     const rows = await sql<
       GameRow[]
-    >`SELECT * FROM casual_games WHERE id=${id} AND ${host ? sql`host_token_hash=${hash}` : sql`viewer_token_hash=${hash}`}`;
+    >`SELECT * FROM casual_games WHERE id=${id} AND ${host ? sql`host_token_hash=${hash}` : sql`viewer_token_hash=${hash}`} AND ${notExpired()}`;
     if (!rows[0]) throw notFound();
     return rows[0];
   };
   const account = async (request: FastifyRequest, mutating = true) => {
     if (!options.identityRequests) throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Sign in required");
-    return actor(request, options.identityRequests, mutating);
+    return actor(request, options.identityRequests, allowedOrigins, mutating);
   };
   app.post<{ Body: Settings }>(
     "/api/v1/casual/games",
@@ -227,7 +269,7 @@ export async function registerCasualRoutes(
     sql.begin(async (tx) => {
       const rows = await tx<
         GameRow[]
-      >`SELECT * FROM casual_games WHERE id=${id} AND host_token_hash=${hash} FOR UPDATE`;
+      >`SELECT * FROM casual_games WHERE id=${id} AND host_token_hash=${hash} AND ${notExpired(tx)} FOR UPDATE`;
       const row = rows[0];
       if (!row) throw notFound();
       if (row.status === "final" && kind !== "undo") throw new ApiError(409, ErrorCode.CONFLICT, "Game is finished");
@@ -361,7 +403,7 @@ export async function registerCasualRoutes(
       const hash = requireHost(request);
       const rows = await sql<
         GameRow[]
-      >`UPDATE casual_games SET owner_account_id=${accountId},updated_at=now() WHERE id=${request.params.id} AND host_token_hash=${hash} AND (owner_account_id IS NULL OR owner_account_id=${accountId}) RETURNING *`;
+      >`UPDATE casual_games SET owner_account_id=${accountId},updated_at=now() WHERE id=${request.params.id} AND host_token_hash=${hash} AND (owner_account_id IS NULL OR owner_account_id=${accountId}) AND ${notExpired()} RETURNING *`;
       if (!rows[0]) throw notFound();
       return presentation(rows[0]);
     },
@@ -397,8 +439,20 @@ export async function registerCasualRoutes(
     async (request, reply) => {
       const accountId = await account(request);
       const settings = normalizeCasualSettings(request.body.settings);
-      const rows =
-        await sql`INSERT INTO casual_game_presets(owner_account_id,name,settings) VALUES(${accountId},${request.body.name.trim()},${sql.json(settings)}) RETURNING id,name,settings,created_at`;
+      const rows = await sql.begin(async (tx) => {
+        // Serialise per account so concurrent saves cannot overshoot the cap.
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`casual-presets:${accountId}`}, 0))`;
+        const [{ count } = { count: 0 }] = await tx<
+          { count: number }[]
+        >`SELECT count(*)::integer AS count FROM casual_game_presets WHERE owner_account_id=${accountId}`;
+        if (count >= CASUAL_MAX_PRESETS_PER_ACCOUNT)
+          throw new ApiError(
+            409,
+            ErrorCode.CONFLICT,
+            `You can save up to ${CASUAL_MAX_PRESETS_PER_ACCOUNT} presets. Delete one to add another.`,
+          );
+        return tx`INSERT INTO casual_game_presets(owner_account_id,name,settings) VALUES(${accountId},${request.body.name.trim()},${tx.json(settings)}) RETURNING id,name,settings,created_at`;
+      });
       reply.code(201);
       return rows[0];
     },
@@ -430,18 +484,32 @@ export async function registerCasualRoutes(
     },
     async (request, reply) => {
       const accountId = await account(request);
-      const users = await sql<
-        { id: string }[]
-      >`SELECT id FROM accounts WHERE lower(primary_email)=lower(${request.body.recipient_email}) AND status='active' AND deleted_at IS NULL`;
-      const target = users[0];
-      if (!target || target.id === accountId) throw new ApiError(404, ErrorCode.NOT_FOUND, "Account not found");
-      const existing =
-        await sql`SELECT 1 FROM casual_friend_requests WHERE (sender_id=${accountId} AND recipient_id=${target.id}) OR (sender_id=${target.id} AND recipient_id=${accountId})`;
-      if (existing.length) throw new ApiError(409, ErrorCode.CONFLICT, "Friend request already exists");
-      const rows =
-        await sql`INSERT INTO casual_friend_requests(sender_id,recipient_id) VALUES(${accountId},${target.id}) RETURNING id,sender_id,recipient_id,status,created_at`;
-      reply.code(201);
-      return rows[0];
+      // Every outcome (unknown email, own email, existing request, created) returns the same 202 so
+      // the endpoint cannot be used to discover which emails have MATCHDAY accounts.
+      await sql.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`casual-friend-requests:${accountId}`}, 0))`;
+        const [{ count } = { count: 0 }] = await tx<
+          { count: number }[]
+        >`SELECT count(*)::integer AS count FROM casual_friend_requests WHERE sender_id=${accountId} AND created_at > now() - interval '1 day'`;
+        // The cap only counts requests that reached a real account, so it limits spam to real users
+        // without turning the cap itself into an existence oracle.
+        if (count >= CASUAL_MAX_FRIEND_REQUESTS_PER_DAY)
+          throw new ApiError(429, ErrorCode.RATE_LIMITED, "Daily friend request limit reached. Try again tomorrow.");
+        const users = await tx<
+          { id: string }[]
+        >`SELECT id FROM accounts WHERE lower(primary_email)=lower(${request.body.recipient_email}) AND status='active' AND deleted_at IS NULL`;
+        const target = users[0];
+        if (!target || target.id === accountId) return;
+        await tx`INSERT INTO casual_friend_requests(sender_id,recipient_id)
+          SELECT ${accountId},${target.id}
+          WHERE NOT EXISTS (SELECT 1 FROM casual_friend_requests WHERE sender_id=${target.id} AND recipient_id=${accountId})
+          ON CONFLICT (sender_id,recipient_id) DO NOTHING`;
+      });
+      reply.code(202);
+      return {
+        status: "accepted",
+        message: "If that email belongs to a MATCHDAY account, they will see your request.",
+      };
     },
   );
   app.post<{ Params: { id: string } }>(

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { loadConfig, safeConfigSummary } from "@matchday/config";
 import { parseAuthenticationAssurancePolicy } from "@matchday/config/authentication-assurance";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
+import { createLogger } from "@matchday/observability";
 import { Redis } from "ioredis";
 import postgres from "postgres";
 import {
@@ -47,6 +48,10 @@ import {
 import { startApiTelemetry } from "./telemetry.js";
 import { createErrorReporter, initSentryNode } from "@matchday/observability";
 import { CompetitionLifecycleSweeper, competitionLifecycleSettingsFromEnv } from "./competition-lifecycle-sweeper.js";
+import { parseRetentionPolicy } from "@matchday/config/retention";
+import { AccountDataRightsRuntime } from "./account-data-rights-runtime.js";
+import { PdpaRetentionJob } from "./pdpa-retention.js";
+import { purgeExpiredCasualGames } from "./casual-routes.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
 const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -95,9 +100,24 @@ const rateLimitRedis = new Redis(config.redisUrl, {
   enableOfflineQueue: false,
   maxRetriesPerRequest: 1,
 });
+// Every pooled session carries server-side guards (sent as startup parameters,
+// so they hold for every statement on the connection without a round trip):
+// a runaway query is cancelled, a request waiting on a row/advisory lock fails
+// fast instead of piling up behind it, and a transaction left open by a
+// crashed handler cannot pin locks and a pool slot indefinitely. Individual
+// operations that legitimately need longer raise them with SET LOCAL.
 const postgresClient = postgres(config.databaseUrl, {
-  max: Number(process.env.DB_POOL_MAX ?? 30),
+  max: config.database.poolMax,
+  idle_timeout: 60,
+  max_lifetime: 30 * 60,
+  connect_timeout: config.database.connectTimeoutSeconds,
   onnotice: () => undefined,
+  connection: {
+    application_name: "matchday-api",
+    statement_timeout: config.database.statementTimeoutMs,
+    lock_timeout: config.database.lockTimeoutMs,
+    idle_in_transaction_session_timeout: config.database.idleInTransactionSessionTimeoutMs,
+  },
 });
 const identitySql = postgresClient as unknown as PostgresJsSql;
 const identityRuntime = new IdentityAssuranceRuntime(
@@ -168,10 +188,30 @@ const phase4Runtime = new V1Phase4Runtime(
 );
 const entitlementRuntime = new EntitlementRuntime(
   identitySql,
-  process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : undefined,
+  config.stripe?.secretKey
+    ? new HttpStripeCheckoutClient(config.stripe.secretKey, {
+        eventPassPriceId: config.stripe.prices.eventPass,
+        organiserProPriceId: config.stripe.prices.organiserPro,
+        aiTopUpPriceId: config.stripe.prices.aiTopUp,
+        timeoutMs: config.stripe.timeoutMs,
+        logger: createLogger({ service: "matchday-api", environment: config.environment, level: config.logLevel }),
+      })
+    : undefined,
+  {
+    webhookSecret: config.stripe?.webhookSecret,
+    checkoutRedirectOrigins: [
+      ...new Set([...(config.publicOrigin ? [config.publicOrigin] : []), ...config.api.allowedOrigins]),
+    ],
+  },
 );
 const exportRuntime = new PublishedExportRuntime(identitySql);
 const adminRuntime = new ProductionAdminRuntime(identitySql);
+const accountDataRightsRuntime = new AccountDataRightsRuntime(identitySql);
+const pdpaRetention = new PdpaRetentionJob({
+  sql: identitySql,
+  policy: parseRetentionPolicy(),
+  purgeAnonymousCasualGames: (olderThan) => purgeExpiredCasualGames(postgresClient, olderThan),
+});
 
 // Gate C is part of the production API composition, not an evidence-only
 // harness. Reuse the canonical Phase 2 projection writer so repair publication
@@ -213,12 +253,18 @@ const app = await buildApp({
   adminRuntime,
   notificationService,
   casualSql: postgresClient,
+  accountDataRightsRuntime,
   scoringAccessHmacKeySql: identitySql,
   scoringFallbackHmacKeySql: identitySql,
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,
   closeIdentityResources: async () => {
     await competitionLifecycleSweeper?.stop();
-    await Promise.all([inlineScheduler.stop(), scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
+    await Promise.all([
+      inlineScheduler.stop(),
+      pdpaRetention.stop(),
+      scheduleQueue.close(),
+      postgresClient.end({ timeout: 5 }),
+    ]);
   },
 }).catch(async (error: unknown) => {
   await Promise.allSettled([
@@ -264,6 +310,7 @@ try {
     onCloseError: (error) => app.log.error({ err: error }, "api cleanup failed"),
     onListenError: (error) => app.log.fatal({ err: error }, "api failed to start"),
   });
+  pdpaRetention.start(app.log);
   app.log.info(
     {
       config: safeConfigSummary(config),

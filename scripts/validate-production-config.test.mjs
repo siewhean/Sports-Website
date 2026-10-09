@@ -5,11 +5,11 @@ import { startTelemetryRuntime } from "../packages/observability/src/runtime.ts"
 
 test("validateProductionConfig accepts valid production configuration", () => {
   const valid = {
-    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    OCI_PUBLIC_HOSTNAME: "matchday.example.test",
     APP_ENV: "production",
     NODE_ENV: "production",
-    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
-    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    API_ALLOWED_ORIGINS: "https://matchday.example.test",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.example.test",
     SCORING_SESSION_SEAL_KEY: "a".repeat(43),
     POSTGRES_DB: "matchday_prod",
     POSTGRES_USER: "matchday_prod",
@@ -23,7 +23,7 @@ test("validateProductionConfig accepts valid production configuration", () => {
     MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
     EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
     SMTP_HOST: "smtp.resend.com",
-    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    SMTP_FROM: "Matchday <no-reply@matchday.example.test>",
   };
 
   const res = validateProductionConfig(valid);
@@ -32,11 +32,11 @@ test("validateProductionConfig accepts valid production configuration", () => {
 
 test("validateProductionConfig rejects CHANGE_ME placeholders", () => {
   const invalid = {
-    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    OCI_PUBLIC_HOSTNAME: "matchday.example.test",
     APP_ENV: "production",
     NODE_ENV: "production",
-    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
-    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    API_ALLOWED_ORIGINS: "https://matchday.example.test",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.example.test",
     SCORING_SESSION_SEAL_KEY: "CHANGE_ME",
     POSTGRES_DB: "matchday_prod",
     POSTGRES_USER: "matchday_prod",
@@ -50,7 +50,7 @@ test("validateProductionConfig rejects CHANGE_ME placeholders", () => {
     MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
     EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
     SMTP_HOST: "smtp.resend.com",
-    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    SMTP_FROM: "Matchday <no-reply@matchday.example.test>",
   };
 
   assert.throws(() => validateProductionConfig(invalid), /contains unresolved placeholder CHANGE_ME/);
@@ -58,11 +58,11 @@ test("validateProductionConfig rejects CHANGE_ME placeholders", () => {
 
 test("validateProductionConfig rejects staging hostname in production", () => {
   const invalid = {
-    OCI_PUBLIC_HOSTNAME: "c5-drill.poladex.shop",
+    OCI_PUBLIC_HOSTNAME: "c5-drill.example.test",
     APP_ENV: "production",
     NODE_ENV: "production",
-    API_ALLOWED_ORIGINS: "https://c5-drill.poladex.shop",
-    MATCHDAY_PUBLIC_ORIGIN: "https://c5-drill.poladex.shop",
+    API_ALLOWED_ORIGINS: "https://c5-drill.example.test",
+    MATCHDAY_PUBLIC_ORIGIN: "https://c5-drill.example.test",
     SCORING_SESSION_SEAL_KEY: "a".repeat(43),
     POSTGRES_DB: "matchday_prod",
     POSTGRES_USER: "matchday_prod",
@@ -76,7 +76,7 @@ test("validateProductionConfig rejects staging hostname in production", () => {
     MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
     EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
     SMTP_HOST: "smtp.resend.com",
-    SMTP_FROM: "Matchday <no-reply@c5-drill.poladex.shop>",
+    SMTP_FROM: "Matchday <no-reply@c5-drill.example.test>",
   };
 
   assert.throws(() => validateProductionConfig(invalid), /must not point to staging hostname c5-drill/);
@@ -84,11 +84,11 @@ test("validateProductionConfig rejects staging hostname in production", () => {
 
 test("validateProductionConfig accepts OTEL_ENABLED=false without endpoint", () => {
   const valid = {
-    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    OCI_PUBLIC_HOSTNAME: "matchday.example.test",
     APP_ENV: "production",
     NODE_ENV: "production",
-    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
-    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    API_ALLOWED_ORIGINS: "https://matchday.example.test",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.example.test",
     SCORING_SESSION_SEAL_KEY: "a".repeat(43),
     POSTGRES_DB: "matchday_prod",
     POSTGRES_USER: "matchday_prod",
@@ -102,7 +102,7 @@ test("validateProductionConfig accepts OTEL_ENABLED=false without endpoint", () 
     MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
     EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
     SMTP_HOST: "smtp.resend.com",
-    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    SMTP_FROM: "Matchday <no-reply@matchday.example.test>",
     OTEL_ENABLED: "false",
   };
 
@@ -112,11 +112,11 @@ test("validateProductionConfig accepts OTEL_ENABLED=false without endpoint", () 
 
 test("validateProductionConfig accepts OTEL_ENABLED=true with HTTPS non-loopback endpoint", () => {
   const valid = {
-    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    OCI_PUBLIC_HOSTNAME: "matchday.example.test",
     APP_ENV: "production",
     NODE_ENV: "production",
-    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
-    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    API_ALLOWED_ORIGINS: "https://matchday.example.test",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.example.test",
     SCORING_SESSION_SEAL_KEY: "a".repeat(43),
     POSTGRES_DB: "matchday_prod",
     POSTGRES_USER: "matchday_prod",
@@ -130,7 +130,7 @@ test("validateProductionConfig accepts OTEL_ENABLED=true with HTTPS non-loopback
     MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
     EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
     SMTP_HOST: "smtp.resend.com",
-    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    SMTP_FROM: "Matchday <no-reply@matchday.example.test>",
     OTEL_ENABLED: "true",
     OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel-collector.internal:4318",
   };
@@ -141,11 +141,11 @@ test("validateProductionConfig accepts OTEL_ENABLED=true with HTTPS non-loopback
 
 test("validateProductionConfig rejects localhost loopback OTEL endpoint", () => {
   const invalidEnabled = {
-    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    OCI_PUBLIC_HOSTNAME: "matchday.example.test",
     APP_ENV: "production",
     NODE_ENV: "production",
-    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
-    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    API_ALLOWED_ORIGINS: "https://matchday.example.test",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.example.test",
     SCORING_SESSION_SEAL_KEY: "a".repeat(43),
     POSTGRES_DB: "matchday_prod",
     POSTGRES_USER: "matchday_prod",
@@ -159,7 +159,7 @@ test("validateProductionConfig rejects localhost loopback OTEL endpoint", () => 
     MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
     EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
     SMTP_HOST: "smtp.resend.com",
-    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    SMTP_FROM: "Matchday <no-reply@matchday.example.test>",
     OTEL_ENABLED: "true",
     OTEL_EXPORTER_OTLP_ENDPOINT: "https://127.0.0.1:4318",
   };

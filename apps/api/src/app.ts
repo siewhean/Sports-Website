@@ -13,6 +13,7 @@ import type { AppConfig, ScoringFallbackHmacKeyring } from "@matchday/config";
 import { IdentityError, systemClock, type Clock } from "@matchday/identity";
 import { createLogger, type ErrorReporter } from "@matchday/observability";
 import { ApiError, ErrorCode } from "./errors.js";
+import { constantTimeEquals } from "./mutation-guard.js";
 import { IdentityAssuranceRequestContext } from "./identity-assurance-request-context.js";
 import { IdentityAssuranceRuntime } from "./identity-assurance-runtime.js";
 import { IdentityFlowSealer } from "./identity-flow.js";
@@ -54,6 +55,8 @@ import { createDisabledApiTelemetry, type ApiTelemetry, type RequestTelemetryHan
 import type { PostgresJsSql } from "@matchday/identity";
 import type postgres from "postgres";
 import { registerCasualRoutes } from "./casual-routes.js";
+import { registerAccountDataRightsRoutes } from "./account-data-rights-routes.js";
+import type { AccountDataRightsRuntime } from "./account-data-rights-runtime.js";
 
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const publicVersionStreamRoute = "/api/v1/public/competitions/:slug/versions";
@@ -165,6 +168,7 @@ export type BuildAppOptions = {
   adminRuntime?: AdminRuntime;
   notificationService?: NotificationService;
   casualSql?: postgres.Sql;
+  accountDataRightsRuntime?: AccountDataRightsRuntime;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -474,28 +478,43 @@ export async function buildApp(options: BuildAppOptions) {
       error.statusCode < 500
         ? error.statusCode
         : null;
-    const statusCode =
-      apiError?.statusCode ?? mappedIdentityError?.statusCode ?? (isValidationError ? 400 : (frameworkStatus ?? 500));
+    // lock_not_available / query_canceled come from the pool's lock_timeout and statement_timeout:
+    // the database is busy, not broken, so tell clients to retry instead of reporting a 500.
+    const databaseBusy =
+      !apiError &&
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error.code === "55P03" || error.code === "57014");
+    const statusCode = databaseBusy
+      ? 503
+      : (apiError?.statusCode ??
+        mappedIdentityError?.statusCode ??
+        (isValidationError ? 400 : (frameworkStatus ?? 500)));
     const code =
       apiError?.code ??
       mappedIdentityError?.code ??
       (isValidationError
         ? "VALIDATION_ERROR"
-        : statusCode === 429
-          ? "RATE_LIMITED"
-          : statusCode < 500
-            ? "REQUEST_REJECTED"
-            : "INTERNAL_ERROR");
+        : databaseBusy
+          ? "SERVICE_BUSY"
+          : statusCode === 429
+            ? "RATE_LIMITED"
+            : statusCode < 500
+              ? "REQUEST_REJECTED"
+              : "INTERNAL_ERROR");
     const message =
       apiError?.message ??
       mappedIdentityError?.message ??
       (isValidationError
         ? "Request validation failed"
-        : statusCode === 429
-          ? "Rate limit exceeded"
-          : statusCode < 500
-            ? "Request rejected"
-            : "An unexpected error occurred");
+        : databaseBusy
+          ? "Service is busy, please retry"
+          : statusCode === 429
+            ? "Rate limit exceeded"
+            : statusCode < 500
+              ? "Request rejected"
+              : "An unexpected error occurred");
     if (statusCode >= 500) {
       const correlation = requestTelemetry.get(request)?.correlation;
       request.log.error(
@@ -516,6 +535,7 @@ export async function buildApp(options: BuildAppOptions) {
       });
     }
     const envelope: ApiErrorEnvelope = { error: { code, message, request_id: request.id } };
+    if (databaseBusy) reply.header("retry-after", "2");
     return reply.code(statusCode).send(envelope);
   });
 
@@ -613,10 +633,9 @@ export async function buildApp(options: BuildAppOptions) {
     },
     async (request, reply) => {
       const token = request.headers["x-deep-health-token"];
-      const invalidDeployedAccess =
-        deployedEnvironment && (!options.config.deepHealthToken || token !== options.config.deepHealthToken);
-      const invalidLocalAccess =
-        !deployedEnvironment && Boolean(options.config.deepHealthToken) && token !== options.config.deepHealthToken;
+      const tokenMatches = constantTimeEquals(token, options.config.deepHealthToken);
+      const invalidDeployedAccess = deployedEnvironment && !tokenMatches;
+      const invalidLocalAccess = !deployedEnvironment && Boolean(options.config.deepHealthToken) && !tokenMatches;
       if (invalidDeployedAccess || invalidLocalAccess) {
         throw new ApiError(404, ErrorCode.ROUTE_NOT_FOUND, "Route not found");
       }
@@ -708,7 +727,7 @@ export async function buildApp(options: BuildAppOptions) {
         identityRuntime: options.identityRuntime,
         identityRequests,
         allowedOrigins: options.config.api.allowedOrigins,
-        ...(options.config.deepHealthToken ? { deepHealthToken: options.config.deepHealthToken } : {}),
+        ...(options.config.maintenanceToken ? { maintenanceToken: options.config.maintenanceToken } : {}),
       });
       if (options.phase4Runtime instanceof GateBPhase4Runtime) {
         await registerPhase4SetupPatchRoutes(app as unknown as FastifyInstance, {
@@ -751,28 +770,43 @@ export async function buildApp(options: BuildAppOptions) {
       await registerBillingRoutes(app as unknown as FastifyInstance, {
         runtime: options.entitlementRuntime,
         identityRequests,
+        allowedOrigins: options.config.api.allowedOrigins,
       });
     }
     if (options.adminRuntime) {
       await registerAdminRoutes(app as unknown as FastifyInstance, {
         runtime: options.adminRuntime,
         identityRequests,
+        allowedOrigins: options.config.api.allowedOrigins,
       });
     }
     if (options.notificationService) {
       await registerNotificationRoutes(app as unknown as FastifyInstance, {
         notificationService: options.notificationService,
         identityRequests,
+        allowedOrigins: options.config.api.allowedOrigins,
         emailWebhookSecret: options.config.emailWebhookSecret,
         metrics: telemetry.emailDeliveryEventMetrics,
       });
     }
   }
 
+  if (options.accountDataRightsRuntime && options.identityRuntime && identityRequests) {
+    const identityRuntime = options.identityRuntime;
+    await registerAccountDataRightsRoutes(app as unknown as FastifyInstance, {
+      runtime: options.accountDataRightsRuntime,
+      requests: identityRequests,
+      allowedOrigins: options.config.api.allowedOrigins,
+      verifyCsrfToken: (sessionToken, csrfToken) => identityRuntime.verifyCsrfToken(sessionToken, csrfToken),
+      cookie: { name: options.config.identity.sessionCookieName, secure: options.config.identity.secureCookies },
+    });
+  }
+
   if (options.casualSql) {
     await registerCasualRoutes(app as unknown as FastifyInstance, {
       sql: options.casualSql,
       ...(identityRequests ? { identityRequests } : {}),
+      allowedOrigins: options.config.api.allowedOrigins,
     });
   }
 
@@ -786,6 +820,7 @@ export async function buildApp(options: BuildAppOptions) {
     await registerExportRoutes(app as unknown as FastifyInstance, {
       runtime: options.exportRuntime,
       identityRequests,
+      allowedOrigins: options.config.api.allowedOrigins,
     });
   }
 

@@ -6,6 +6,7 @@ import styles from "./SupportPage.module.css";
 export const metadata = {
   title: messages.support.title,
   description: messages.support.subtitle,
+  alternates: { canonical: "/support" },
 };
 
 export default function SupportPage() {

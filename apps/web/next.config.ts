@@ -11,7 +11,9 @@ if (requestedBuildId !== undefined && !/^[A-Za-z0-9._-]{8,128}$/u.test(requested
   throw new Error("MATCHDAY_BUILD_ID must contain 8-128 URL-safe characters");
 }
 
-export function renderApiOrigin(value = process.env.RENDER_API_ORIGIN): string | null {
+// API_ORIGIN is the canonical name. RENDER_API_ORIGIN is a deprecated alias (the API no longer runs on Render)
+// and is only read when API_ORIGIN is unset; remove it once all deployments have migrated.
+export function apiOrigin(value = process.env.API_ORIGIN ?? process.env.RENDER_API_ORIGIN): string | null {
   const configured = value?.trim();
   if (!configured) return null;
 
@@ -19,7 +21,7 @@ export function renderApiOrigin(value = process.env.RENDER_API_ORIGIN): string |
   try {
     parsed = new URL(configured);
   } catch {
-    throw new Error("RENDER_API_ORIGIN must be an absolute HTTPS origin");
+    throw new Error("API_ORIGIN must be an absolute HTTPS origin");
   }
 
   if (
@@ -30,7 +32,7 @@ export function renderApiOrigin(value = process.env.RENDER_API_ORIGIN): string |
     parsed.search ||
     parsed.hash
   ) {
-    throw new Error("RENDER_API_ORIGIN must be an absolute HTTPS origin without credentials, path, query, or fragment");
+    throw new Error("API_ORIGIN must be an absolute HTTPS origin without credentials, path, query, or fragment");
   }
 
   return parsed.origin;
@@ -39,7 +41,7 @@ export function renderApiOrigin(value = process.env.RENDER_API_ORIGIN): string |
 // Next's generated build ID is normally internal. Owning it here lets the
 // release verifier bind a running origin to the exact signed-off manifest.
 const releaseBuildId = requestedBuildId ?? randomBytes(18).toString("base64url");
-const configuredRenderApiOrigin = renderApiOrigin();
+const configuredApiOrigin = apiOrigin();
 
 // Sentry release/environment are inlined at build time for both runtimes. The
 // DSN itself is never defaulted here: with no DSN configured Sentry is inert.
@@ -60,36 +62,36 @@ const nextConfig: NextConfig = {
     },
   ],
   redirects: async () =>
-    configuredRenderApiOrigin
+    configuredApiOrigin
       ? [
           {
             source: "/api/v1/identity/authorize",
-            destination: `${configuredRenderApiOrigin}/api/v1/identity/authorize`,
+            destination: `${configuredApiOrigin}/api/v1/identity/authorize`,
             permanent: false,
           },
           {
             source: "/api/v1/identity/callback",
-            destination: `${configuredRenderApiOrigin}/api/v1/identity/callback`,
+            destination: `${configuredApiOrigin}/api/v1/identity/callback`,
             permanent: false,
           },
           {
             source: "/api/v1/identity/recovery",
-            destination: `${configuredRenderApiOrigin}/api/v1/identity/recovery`,
+            destination: `${configuredApiOrigin}/api/v1/identity/recovery`,
             permanent: false,
           },
           {
             source: "/api/v1/identity/sign-out",
-            destination: `${configuredRenderApiOrigin}/api/v1/identity/sign-out`,
+            destination: `${configuredApiOrigin}/api/v1/identity/sign-out`,
             permanent: false,
           },
         ]
       : [],
   rewrites: async () =>
-    configuredRenderApiOrigin
+    configuredApiOrigin
       ? [
           {
             source: "/api/v1/:path*",
-            destination: `${configuredRenderApiOrigin}/api/v1/:path*`,
+            destination: `${configuredApiOrigin}/api/v1/:path*`,
           },
         ]
       : [],

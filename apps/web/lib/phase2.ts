@@ -27,6 +27,8 @@ export type MatchView = {
   code?: string;
   stage: string;
   time: string;
+  /** Scheduled start as an ISO-8601 instant (JSON-LD, sitemaps, day grouping in the competition timezone; never displayed raw). */
+  startsAt?: string;
   /** Long calendar date in the competition timezone, e.g. "19 September 2026". */
   date?: string;
   /** Short weekday and date for dense lists, e.g. "Sat 19 Sep". */
@@ -54,6 +56,8 @@ export type StandingView = {
   lost: number;
   difference: number;
   points: number;
+  /** Plain-language tie-break notes from the standings engine, in criteria order. */
+  explanations?: string[];
 };
 
 export type PublicDivisionView = {
@@ -89,6 +93,8 @@ export type CompetitionView = {
   publishedAt: string;
   /** Formatted in the competition timezone, e.g. "9 Oct, 16:35 SGT". */
   lastUpdated: string;
+  /** ISO-8601 instant of the last public projection change (machine value for sitemaps / caching). */
+  lastUpdatedAt?: string;
   division: { id: string; name: string; teamCount: number; matchCount: number };
   publicDivisions?: PublicDivisionView[];
   divisions?: ReadonlyArray<{
@@ -192,8 +198,21 @@ export type ScoringFinaliseReceipt = ScoringAppendReceipt & {
 export type ScoringDeviceView = { id: string; label: string };
 
 export type ScoringAccessInput =
-  | { token: string; shortCode?: never; device: ScoringDeviceView }
-  | { token?: never; shortCode: string; device: ScoringDeviceView };
+  | {
+      token: string;
+      shortCode?: never;
+      device: ScoringDeviceView;
+      expectedMatchId?: never;
+      expectedCompetitionId?: never;
+    }
+  | {
+      token?: never;
+      shortCode: string;
+      device: ScoringDeviceView;
+      /** The API only accepts a fallback code bound to the match or competition the scorer link names. */
+      expectedMatchId?: string;
+      expectedCompetitionId?: string;
+    };
 
 export type ScoringAccessMode = "writer" | "candidate" | "viewer" | "transferred";
 

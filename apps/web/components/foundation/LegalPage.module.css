@@ -27,3 +27,29 @@
   outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
+.placeholder {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--warning);
+  color: #1a1a1a;
+  font-weight: 700;
+}
+.tableWrap {
+  max-width: 100%;
+  margin: 0 0 20px;
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+.table :is(th, td) {
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  text-align: start;
+  vertical-align: top;
+}
+.table th {
+  background: var(--surface);
+}

@@ -27,6 +27,8 @@ export type FiveSportScoreControlsProps = Readonly<{
   readOnly: boolean;
   pending: boolean;
   statusMessage?: string | null;
+  /** Hide the built-in scoreboard when the host screen already shows a big live score. */
+  showScoreboard?: boolean;
   onActivate: (action: ScoreControlAction, trigger: HTMLButtonElement) => void;
 }>;
 
@@ -39,6 +41,7 @@ export function FiveSportScoreControls({
   readOnly,
   pending,
   statusMessage,
+  showScoreboard = true,
   onActivate,
 }: FiveSportScoreControlsProps) {
   const headingId = useId();
@@ -59,16 +62,18 @@ export function FiveSportScoreControls({
         <p className={styles.clockNotice}>{copy.manualTimeOnlyNotice}</p>
       </header>
 
-      <dl className={styles.scoreboard}>
-        <div>
-          <dt>{homeLabel}</dt>
-          <dd>{score.home}</dd>
-        </div>
-        <div>
-          <dt>{awayLabel}</dt>
-          <dd>{score.away}</dd>
-        </div>
-      </dl>
+      {showScoreboard ? (
+        <dl className={styles.scoreboard}>
+          <div>
+            <dt>{homeLabel}</dt>
+            <dd>{score.home}</dd>
+          </div>
+          <div>
+            <dt>{awayLabel}</dt>
+            <dd>{score.away}</dd>
+          </div>
+        </dl>
+      ) : null}
 
       <div id={statusId} className={styles.status}>
         {pending ? copy.pendingNotice : readOnly ? copy.readOnlyNotice : (statusMessage ?? "")}

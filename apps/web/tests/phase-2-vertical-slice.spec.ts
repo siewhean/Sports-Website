@@ -22,7 +22,7 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
     ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
     ["/score", "Use the match-specific code from the organiser.", "Validate access"],
-    ["/competitions/singapore-open", "Singapore Open 2026", "Results"],
+    ["/competitions/singapore-open", "Singapore Open 2026", "Latest results"],
     ["/organiser/competitions/singapore-open/audit", "Audit log", "Finalised Match 12"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Bracket"],
   ] as const;
@@ -58,14 +58,16 @@ test("phone scoring validates access, confirms scorer attribution, appends a goa
   await scorer.fill("Aisha Tan");
   await confirmation.getByRole("button", { name: "Record goal for Marina Blue" }).click();
 
-  const scoringControls = page.getByRole("region", { name: "Scoring controls" });
-  await expect(scoringControls).toContainText("Marina Blue1");
-  await expect(scoringControls).toContainText("Harbour Gold0");
+  const liveScore = page.getByRole("region", { name: "Live score" });
+  await expect(liveScore).toContainText("Marina Blue1");
+  await expect(liveScore).toContainText("Harbour Gold0");
   await expect(page.locator(".p2-event-log")).toContainText("Aisha Tan");
-  await expect(page.getByText("1 event pending sync")).toBeVisible();
+  await expect(page.locator(".p2-event-log header")).toBeVisible();
 
-  await page.getByLabel("Period").selectOption("2");
-  await expect(page.getByLabel("Period")).toHaveValue("2");
+  // The one-tap undo toast also mentions "Period", so target the period selector itself.
+  const periodSelect = page.getByRole("combobox", { name: /^period/i });
+  await periodSelect.selectOption("2");
+  await expect(periodSelect).toHaveValue("2");
 
   await page.getByRole("button", { name: "Review final score" }).click();
   await expect(page.getByRole("heading", { name: "Marina Blue 1–0 Harbour Gold" })).toBeVisible();
@@ -97,5 +99,5 @@ test("public projection is complete in raw server-rendered HTML", async ({ reque
 
 test("scoring helper reaches the single-active-writer surface", async ({ page }) => {
   await openPhase2Scorekeeper(page);
-  await expect(page.locator(".p2-writer")).toContainText("Active scorer");
+  await expect(page.locator(".p2-writer")).toContainText(/Online|Syncing…/u);
 });

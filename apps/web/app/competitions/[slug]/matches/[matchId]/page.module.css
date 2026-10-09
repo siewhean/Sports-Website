@@ -6,122 +6,12 @@
 .main {
   width: min(calc(100% - 32px), 1280px);
   margin: 0 auto;
-  padding: 40px 0 96px;
+  /* Clear the fixed "Privacy choices" pill and the home indicator. */
+  padding: 24px 0 calc(96px + env(safe-area-inset-bottom));
 }
-.back {
-  display: inline-flex;
-  align-items: center;
-  min-height: 48px;
-  color: var(--ink);
-  text-decoration: none;
-}
-.back:focus-visible {
-  outline: 3px solid var(--focus);
-}
-.heading {
-  display: grid;
-  gap: 12px;
-  margin: 28px 0 32px;
-}
-.heading p {
-  margin: 0;
-  color: var(--ink-muted);
-}
-.heading h1 {
-  margin: 0;
-  font-size: clamp(2.5rem, 6vw, 5rem);
-  letter-spacing: -0.055em;
-  line-height: 1;
-}
-.scoreboard {
-  max-width: 900px;
-  padding: clamp(20px, 4vw, 48px);
-  border: 1px solid var(--hairline);
-  border-radius: 24px;
-  background: var(--surface, var(--canvas));
-}
-.scoreboard[data-status="live"] {
-  border-top: 5px solid var(--signal);
-}
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 24px;
-  color: var(--ink-muted);
-  font-size: 0.875rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.scoreboard[data-status="live"] .meta span:first-child {
-  color: var(--success);
-}
-.side {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 24px;
-  min-height: 88px;
-  border-top: 1px solid var(--hairline);
-  font-size: clamp(1.2rem, 3vw, 2rem);
-}
-.side span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.side strong {
-  font-size: clamp(2.5rem, 8vw, 5rem);
-  font-variant-numeric: tabular-nums;
-}
-.details {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
-  gap: 12px;
-  max-width: 900px;
-  margin: 24px 0;
-}
-.details div {
-  padding: 18px 20px;
-  border: 1px solid var(--hairline);
-  border-radius: 16px;
-}
-.details dt {
-  margin-bottom: 8px;
-  color: var(--ink-muted);
-  font-size: 0.875rem;
-}
-.details dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-weight: 700;
-}
-.sets {
-  max-width: 900px;
-  margin-top: 48px;
-}
-.sets h2 {
-  font-size: 1.5rem;
-}
-.setGrid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.setGrid div {
-  display: grid;
-  gap: 8px;
-  min-width: 100px;
-  padding: 16px;
-  border: 1px solid var(--hairline);
-  border-radius: 14px;
-}
-.setGrid span {
-  color: var(--ink-muted);
-}
-@media (min-width: 768px) {
+@media (min-width: 720px) {
   .main {
-    width: min(calc(100% - 80px), 1280px);
-    padding-top: 64px;
+    width: min(calc(100% - 48px), 1280px);
+    padding-top: 40px;
   }
 }

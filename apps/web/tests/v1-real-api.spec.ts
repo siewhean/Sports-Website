@@ -178,9 +178,11 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
   await page.waitForURL(new RegExp(`/organiser/competitions/${competitionId}/schedule`));
   await submit(page, page.getByRole("button", { name: "Publish schedule" }), "POST", "/publish");
 
-  await page.goto(`/competitions/${slug}`);
+  await page.goto(
+    `/competitions/${slug}?tab=schedule&day=${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(moved.start_epoch_ms)}`,
+  );
   await expect(page.getByRole("heading", { name: "V1 Browser Cup" })).toBeVisible();
-  const publicMoved = page.locator(`.p2-public-fixtures > li[data-match-id="${moved.match_id}"]`);
+  const publicMoved = page.locator(`[data-schedule] > li[data-match-id="${moved.match_id}"]`);
   await expect(publicMoved).toBeVisible();
 
   await page.goto(`/organiser/competitions/${competitionId}/access`);

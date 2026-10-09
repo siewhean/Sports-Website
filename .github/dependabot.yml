@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    # Major bumps (next, react, vitest, typescript, ...) arrive as individual PRs so they can be reviewed on their own.
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Digest-pinned base images (node, caddy, postgres, redis, otel collector).
+  - package-ecosystem: docker
+    directory: /infra/oci
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: docker-compose
+    directory: /infra/oci
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3

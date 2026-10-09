@@ -62,11 +62,15 @@ export function validateProductionConfig(env) {
 
   // Reject staging hostnames in production
   if (env.APP_ENV === "production") {
-    if (env.OCI_PUBLIC_HOSTNAME && env.OCI_PUBLIC_HOSTNAME.includes("c5-drill")) {
-      errors.push("Production OCI_PUBLIC_HOSTNAME must not point to staging hostname c5-drill");
-    }
-    if (env.MATCHDAY_PUBLIC_ORIGIN && env.MATCHDAY_PUBLIC_ORIGIN.includes("c5-drill")) {
-      errors.push("Production MATCHDAY_PUBLIC_ORIGIN must not point to staging hostname c5-drill");
+    // "c5-drill" is the legacy drill-stack marker; OCI_STAGING_HOSTNAME is the configured staging host.
+    const stagingMarkers = ["c5-drill", env.OCI_STAGING_HOSTNAME?.trim().toLowerCase()].filter(Boolean);
+    for (const marker of stagingMarkers) {
+      if (env.OCI_PUBLIC_HOSTNAME && env.OCI_PUBLIC_HOSTNAME.toLowerCase().includes(marker)) {
+        errors.push(`Production OCI_PUBLIC_HOSTNAME must not point to staging hostname ${marker}`);
+      }
+      if (env.MATCHDAY_PUBLIC_ORIGIN && env.MATCHDAY_PUBLIC_ORIGIN.toLowerCase().includes(marker)) {
+        errors.push(`Production MATCHDAY_PUBLIC_ORIGIN must not point to staging hostname ${marker}`);
+      }
     }
     if (env.SMTP_HOST && (env.SMTP_HOST === "127.0.0.1" || env.SMTP_HOST === "localhost")) {
       errors.push("Production SMTP_HOST cannot use local loopback");

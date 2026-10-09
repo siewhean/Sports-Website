@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import { LegalPage } from "@/components/foundation/LegalPage";
-import { readCurrentIdentitySession } from "@/lib/identity-session.server";
+import { LegalText } from "@/components/foundation/LegalText";
 import { legalMessages, messages } from "@matchday/ui";
 
-export const metadata: Metadata = { title: messages.legal.termsTitle };
+export const metadata: Metadata = { title: messages.legal.termsTitle, alternates: { canonical: "/terms" } };
 
-export default async function TermsPage() {
-  const session = await readCurrentIdentitySession();
-  const viewer = session.status === "authenticated" ? session.identity : null;
+export default function TermsPage() {
+  // Identical for every visitor: the signed-in name is filled in client-side by IdentityStatus.
+  const viewer = null;
   return (
     <LegalPage viewer={viewer} title={messages.legal.termsTitle}>
       <p>
@@ -17,7 +17,9 @@ export default async function TermsPage() {
       {legalMessages.terms.sections.map((section) => (
         <section key={section.title}>
           <h2>{section.title}</h2>
-          <p>{section.body}</p>
+          <p>
+            <LegalText>{section.body}</LegalText>
+          </p>
         </section>
       ))}
     </LegalPage>

@@ -303,6 +303,8 @@ describe("Exports Runtime (EXP-003 through EXP-006)", () => {
         if (query.includes("FROM organisation_memberships")) {
           return [{ role: "owner" }];
         }
+        // Branding/sponsors only import when the destination plan includes them.
+        if (query.includes("matchday_effective_plan_tier")) return [{ tier: "organiser_pro" }];
         return [];
       }) as PostgresJsSql["unsafe"],
     } as unknown as PostgresJsSql;

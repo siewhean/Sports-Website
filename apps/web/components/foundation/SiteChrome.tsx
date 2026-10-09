@@ -56,6 +56,7 @@ export function SiteFooter({ inverse = false }: { inverse?: boolean }) {
         <Link href="/privacy">{messages.footer.privacy}</Link>
         <Link href="/terms">{messages.footer.terms}</Link>
         <Link href="/cookies">{messages.footer.cookies}</Link>
+        <Link href="/account">{messages.footer.account}</Link>
         <Link href="/maintenance">{messages.footer.status}</Link>
       </nav>
     </footer>

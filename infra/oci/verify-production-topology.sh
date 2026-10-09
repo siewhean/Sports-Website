@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROD_HOST="${1:-matchday.poladex.shop}"
-STAGING_HOST="${2:-c5-drill.poladex.shop}"
+PROD_HOST="${1:-${OCI_PROD_HOSTNAME:-${OCI_PUBLIC_HOSTNAME:-}}}"
+STAGING_HOST="${2:-${OCI_STAGING_HOSTNAME:-}}"
+if [ -z "$PROD_HOST" ] || [ -z "$STAGING_HOST" ]; then
+  echo "Usage: $0 <prod-hostname> <staging-hostname> [expected-sha] (or export OCI_PROD_HOSTNAME and OCI_STAGING_HOSTNAME)" >&2
+  exit 2
+fi
 EXPECTED_SHA="${3:-}"
 
 echo "=================================================="

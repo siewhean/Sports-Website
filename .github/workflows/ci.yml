@@ -3,8 +3,14 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, integration/gate-c-final]
+    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      generate_linux_visual_baselines:
+        description: Generate linux visual baselines and upload them as an artifact (does not commit anything)
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -101,9 +107,14 @@ jobs:
       - run: pnpm openapi:check
 
   browser-e2e:
+    name: browser-e2e (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: [quality-fast]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     services:
       postgres:
         image: postgres:18.4-alpine
@@ -150,26 +161,43 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Release-artifact verification is identical for every shard, so it runs once.
       - run: pnpm deploy:manifest
+        if: matrix.shard == '1/2'
       - run: pnpm asset-delivery:verify:origin
+        if: matrix.shard == '1/2'
         timeout-minutes: 5
       - name: Verify release artifact inputs
+        if: matrix.shard == '1/2'
         run: |
           pnpm --filter @matchday/api openapi:generate
           pnpm openapi:check
           test -s apps/api/openapi.generated.json
           test -s artifacts/deployment-manifest.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.shard == '1/2'
         with:
           name: verified-contracts-and-deployment
           path: |
             apps/api/openapi.generated.json
             artifacts/deployment-manifest.json
           if-no-files-found: error
+      # Engines used by the Playwright projects: chromium + webkit (default config) and firefox
+      # (phase-4 real-API journey, playwright.phase4-real.config.ts desktop-firefox project).
       - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit firefox
-      - run: pnpm test:e2e
-      - run: pnpm test:a11y
-      - run: pnpm test:visual
+      - run: pnpm test:e2e --shard=${{ matrix.shard }}
+      - run: pnpm test:a11y --shard=${{ matrix.shard }}
+      # NON-REQUIRED: visual baselines are macOS (darwin) only. This step is informational until linux baselines are
+      # committed (generate them with the "generate_linux_visual_baselines" manual run). It never rewrites snapshots.
+      - name: Visual regression (non-required, needs committed linux baselines)
+        if: matrix.shard == '1/2'
+        continue-on-error: true
+        run: |
+          if ! find apps/web/tests -name '*-linux.png' | grep -q .; then
+            echo "::notice::No linux visual baselines are committed; skipping visual regression (see docs/operations/CI_AND_RELEASES.md)."
+            exit 0
+          fi
+          pnpm test:visual
 
   gate-d-real-e2e:
     runs-on: ubuntu-latest
@@ -223,3 +251,157 @@ jobs:
       - run: pnpm build
       - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
       - run: pnpm test:e2e:phase7:real
+
+  visual-baselines:
+    # Manual only: produces linux baselines as a downloadable artifact for a human to review and commit.
+    if: github.event_name == 'workflow_dispatch' && inputs.generate_linux_visual_baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: matchday
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.27.4
+        ports:
+          - 1025:1025
+          - 8025:8025
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      MAILPIT_API_URL: http://127.0.0.1:8025
+      LOG_LEVEL: silent
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        run: npm install --global pnpm@10.33.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
+      - name: Generate linux baselines
+        run: pnpm --filter @matchday/web exec env -u NO_COLOR playwright test --grep 'visual baseline(s)?' --update-snapshots
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: visual-baselines-linux
+          path: apps/web/tests/**/*-linux.png
+          if-no-files-found: error
+
+  images:
+    # Builds the api/web/worker/migrate images once, in CI, and pushes them to GHCR tagged with the git SHA.
+    # infra/oci/deploy-prod.sh pulls these exact tags; nothing is compiled on the production VM.
+    name: images (${{ matrix.target }})
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [quality-fast, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: api, context: ., file: infra/oci/Dockerfile }
+          - { target: web, context: ., file: infra/oci/Dockerfile }
+          - { target: worker, context: ., file: infra/oci/Dockerfile }
+          - { target: migrate, context: ., file: infra/oci/Dockerfile }
+          - { target: backup, context: infra/oci/backup, file: infra/oci/backup/Dockerfile }
+    env:
+      REGISTRY: ghcr.io
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Compute image name, tags and build timestamp
+        id: meta
+        run: |
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          image="${REGISTRY}/${owner}/matchday-${{ matrix.target }}"
+          tags="${image}:${GITHUB_SHA}"
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            tags="${tags}"$'\n'"${image}:latest"
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tags="${tags}"$'\n'"${image}:${GITHUB_REF_NAME}"
+          fi
+          {
+            echo "image=${image}"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+            echo "tags<<EOF"
+            echo "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Require the public web build variables
+        if: matrix.target == 'web'
+        env:
+          MATCHDAY_PUBLIC_ORIGIN: ${{ vars.MATCHDAY_PUBLIC_ORIGIN }}
+        run: |
+          if [ -z "$MATCHDAY_PUBLIC_ORIGIN" ]; then
+            echo "::error::Set the MATCHDAY_PUBLIC_ORIGIN repository variable (e.g. https://matchday.example.com) before building the web image."
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          # Only the main Dockerfile has per-service stages; the backup image is a single-stage build.
+          target: ${{ matrix.target != 'backup' && matrix.target || '' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            MATCHDAY_BUILD_ID=${{ github.sha }}
+            BUILD_TIMESTAMP=${{ steps.meta.outputs.built_at }}
+            MATCHDAY_PUBLIC_ORIGIN=${{ vars.MATCHDAY_PUBLIC_ORIGIN }}
+            NEXT_PUBLIC_MATCHDAY_API_BASE_URL=${{ vars.NEXT_PUBLIC_MATCHDAY_API_BASE_URL }}
+            NEXT_PUBLIC_SENTRY_DSN=${{ vars.NEXT_PUBLIC_SENTRY_DSN }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=matchday-images
+          cache-to: type=gha,scope=matchday-images,mode=max
+      - name: Record digest
+        run: |
+          {
+            echo "### ${{ matrix.target }}"
+            echo '```'
+            echo "${{ steps.meta.outputs.image }}:${GITHUB_SHA}"
+            echo "${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

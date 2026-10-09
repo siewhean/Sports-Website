@@ -75,7 +75,7 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
   await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
 
   await page.reload();
-  await expect(page.locator(".p2-writer")).toContainText("Active scorer");
+  await expect(page.locator(".p2-writer")).toContainText(/Online|Syncing…/u);
   await expect(page.getByLabel(`${state.homeName} 1`)).toBeVisible();
   await expect(page.locator(".p2-event-log")).toContainText("Scorer: Aisha Tan");
   const recoveredStorage = await page.evaluate(() => ({
@@ -100,11 +100,12 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
   await page.getByRole("link", { name: "Open public page" }).click();
   await expect(page).toHaveURL(`${state.webOrigin}/competitions/${state.slug}`);
   await expect(page.getByRole("heading", { name: "Phase 2 Real E2E Cup" })).toBeVisible();
-  const publicResult = page.locator(".p2-public-score--final");
+  // "Latest results" on the Live tab shows the final as a score card.
+  const publicResult = page.locator('[data-status="final"][data-match-id]').first();
   await expect(publicResult).toContainText(state.homeName);
   await expect(publicResult).toContainText(state.awayName);
   await expect(
-    publicResult.locator("div").filter({ hasText: state.homeName }).getByText("1", { exact: true }),
+    publicResult.locator("span").filter({ hasText: state.homeName }).getByText("1", { exact: true }),
   ).toBeVisible();
   await expect(
     publicResult.locator("div").filter({ hasText: state.awayName }).getByText("0", { exact: true }),
@@ -157,7 +158,7 @@ test("real phone scoring recovers, publishes, and preserves correction versions"
 
   await page.reload();
   await expect(
-    publicResult.locator("div").filter({ hasText: state.homeName }).getByText("1", { exact: true }),
+    publicResult.locator("span").filter({ hasText: state.homeName }).getByText("1", { exact: true }),
   ).toBeVisible();
   await expect(
     publicResult.locator("div").filter({ hasText: state.awayName }).getByText("1", { exact: true }),
