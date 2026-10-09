@@ -7,8 +7,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "../../..");
 
 describe("Tier 1 - Feature 15: E2E Testing Suite (Tiers 1–4)", () => {
-  it("F15-T01: TEST_INFRA.md exists at project root and documents 4-tier methodology", () => {
-    const docPath = path.join(rootDir, "TEST_INFRA.md");
+  it("F15-T01: TEST_INFRA.md exists in docs/archive and documents 4-tier methodology", () => {
+    const docPath = path.join(rootDir, "docs/archive/TEST_INFRA.md");
     expect(existsSync(docPath)).toBe(true);
     const content = readFileSync(docPath, "utf8");
     expect(content).toContain("Tier 1");
@@ -26,7 +26,7 @@ describe("Tier 1 - Feature 15: E2E Testing Suite (Tiers 1–4)", () => {
   });
 
   it("F15-T03: all 16 features from PROJECT.md are documented in TEST_INFRA.md", () => {
-    const docPath = path.join(rootDir, "TEST_INFRA.md");
+    const docPath = path.join(rootDir, "docs/archive/TEST_INFRA.md");
     const content = readFileSync(docPath, "utf8");
     for (let i = 1; i <= 16; i++) {
       const featureId = `F${String(i).padStart(2, "0")}`;

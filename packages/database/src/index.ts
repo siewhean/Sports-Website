@@ -1,6 +1,17 @@
 import postgres from "postgres";
 export { accountFactory, membershipFactory, organisationFactory } from "./factories.js";
-export { dropTestSchema, migrateDatabase, migrationAdvisoryLockId } from "./migrations.js";
+export {
+  consoleMigrationLogger,
+  defaultMigrationTimeouts,
+  dropTestSchema,
+  isLockTimeoutError,
+  isStatementTimeoutError,
+  migrateDatabase,
+  migrationAdvisoryLockId,
+  runWithLockRetry,
+  type MigrationLogger,
+  type MigrationTimeouts,
+} from "./migrations.js";
 
 export async function probeDatabase(databaseUrl: string): Promise<boolean> {
   const sql = postgres(databaseUrl, { connect_timeout: 2, max: 1 });

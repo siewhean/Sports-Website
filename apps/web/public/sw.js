@@ -1,4 +1,4 @@
-const FOUNDATION_CACHE_NAME = "matchday-foundation-v3";
+const LEGACY_FOUNDATION_CACHE_PREFIX = "matchday-foundation-";
 const SCORING_CACHE_PREFIX = "matchday-scoring-shell-";
 const SCORING_CACHE_NAME = `${SCORING_CACHE_PREFIX}v6`;
 const SCORING_FALLBACK_DB_NAME = "matchday-scoring-shell-fallback";
@@ -15,7 +15,21 @@ const PREPARATION_PROTOCOL_VERSION = 1;
 const PREPARATION_CAPABILITIES = Object.freeze(["offline-scoring-shell-cache-v1"]);
 const CLIENT_SAFETY_TIMEOUT_MS = 5_000;
 const ACTIVATION_ACK_TIMEOUT_MS = 2_000;
-const PUBLIC_DOCUMENT_PATHS = new Set(["/", "/competitions/singapore-open"]);
+// Spectator documents and live snapshots are kept network-first for venue Wi-Fi drop-outs. Keep the document
+// patterns in sync with lib/public-routes.ts (tests/unit/public-routes.test.ts enforces it). Documents are only
+// stored when the proxy marked them public (x-matchday-public-document), so organiser, scoring and other
+// per-user pages can never land in this cache even if a pattern were too broad.
+const PUBLIC_CACHE_NAME = "matchday-public-v1";
+const PUBLIC_CACHE_MAX_ENTRIES = 40;
+const PUBLIC_DOCUMENT_HEADER = "x-matchday-public-document";
+const PUBLIC_DOCUMENT_PATTERNS = [
+  /^\/$/u,
+  /^\/competitions\/?$/u,
+  /^\/competitions\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/u,
+  /^\/competitions\/[a-z0-9]+(?:-[a-z0-9]+)*\/matches\/[A-Za-z0-9_-]{1,128}\/?$/u,
+  /^\/(?:pricing|privacy|terms|cookies|support)\/?$/u,
+];
+const PUBLIC_SNAPSHOT_PATTERN = /^\/api\/public\/competitions\/[a-z0-9]+(?:-[a-z0-9]+)*\/snapshot$/u;
 const pendingActivationChecks = new Map();
 const OFFLINE_DOCUMENT = `<!doctype html>
 <html lang="en">
@@ -32,9 +46,61 @@ const OFFLINE_DOCUMENT = `<!doctype html>
   </body>
 </html>`;
 
-function isPublicCacheable(response) {
+function isPublicDocumentPath(pathname) {
+  return PUBLIC_DOCUMENT_PATTERNS.some((pattern) => pattern.test(pathname));
+}
+
+function isPublicSnapshotRequest(url) {
+  return url.origin === self.location.origin && !url.search && PUBLIC_SNAPSHOT_PATTERN.test(url.pathname);
+}
+
+// Public documents are request-rendered (per-request CSP nonce) and therefore `private, no-store` for HTTP caches,
+// but they hold no per-user data; the stored copy keeps its own matching CSP header, so it renders consistently.
+function isPublicDocumentResponse(url, response) {
+  return (
+    response.status === 200 &&
+    response.type === "basic" &&
+    !response.redirected &&
+    isPublicDocumentPath(url.pathname) &&
+    response.headers.get(PUBLIC_DOCUMENT_HEADER) === "1" &&
+    (response.headers.get("content-type") ?? "").toLowerCase().startsWith("text/html")
+  );
+}
+
+function isPublicSnapshotResponse(response) {
   const policy = response.headers.get("cache-control")?.toLowerCase() ?? "";
-  return response.ok && policy.includes("public") && !policy.includes("private") && !policy.includes("no-store");
+  return (
+    response.status === 200 &&
+    response.type === "basic" &&
+    policy.includes("public") &&
+    !policy.includes("private") &&
+    !policy.includes("no-store")
+  );
+}
+
+async function retainPublicResponse(request, response) {
+  try {
+    const cache = await caches.open(PUBLIC_CACHE_NAME);
+    const key = new Request(request.url, { credentials: "omit" });
+    await cache.delete(key);
+    await cache.put(key, response);
+    const keys = await cache.keys();
+    // Keys come back in insertion order and every write re-inserts, so the oldest entries are evicted first.
+    await Promise.all(
+      keys.slice(0, Math.max(0, keys.length - PUBLIC_CACHE_MAX_ENTRIES)).map((old) => cache.delete(old)),
+    );
+  } catch {
+    // Storage pressure or a private-mode quota must never break the live page.
+  }
+}
+
+async function matchPublicResponse(request, { ignoreSearch = false } = {}) {
+  try {
+    const cache = await caches.open(PUBLIC_CACHE_NAME);
+    return (await cache.match(request.url, { ignoreVary: true, ignoreSearch })) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function isImmutableBuildAsset(url, destination) {
@@ -440,7 +506,11 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key.startsWith(SCORING_CACHE_PREFIX) && key !== SCORING_CACHE_NAME)
+            .filter(
+              (key) =>
+                (key.startsWith(SCORING_CACHE_PREFIX) && key !== SCORING_CACHE_NAME) ||
+                key.startsWith(LEGACY_FOUNDATION_CACHE_PREFIX),
+            )
             .map((key) => caches.delete(key)),
         ),
       )
@@ -793,15 +863,14 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          if (PUBLIC_DOCUMENT_PATHS.has(url.pathname) && isPublicCacheable(response)) {
-            const copy = response.clone();
-            void caches.open(FOUNDATION_CACHE_NAME).then((cache) => cache.put(request, copy));
+          if (isPublicDocumentResponse(url, response)) {
+            event.waitUntil(retainPublicResponse(request, response.clone()));
           }
           return response;
         })
         .catch(async () => {
-          if (PUBLIC_DOCUMENT_PATHS.has(url.pathname)) {
-            const cached = await caches.match(request);
+          if (isPublicDocumentPath(url.pathname)) {
+            const cached = await matchPublicResponse(request, { ignoreSearch: true });
             if (cached) return cached;
           }
           return offlineResponse();
@@ -811,6 +880,23 @@ self.addEventListener("fetch", (event) => {
   }
 
   const url = new URL(request.url);
+  if (isPublicSnapshotRequest(url)) {
+    // Network-first: the CDN keeps this fresh to ~2s; the stored copy is only an offline fallback.
+    event.respondWith(
+      fetch(request).then(
+        (response) => {
+          if (isPublicSnapshotResponse(response)) event.waitUntil(retainPublicResponse(request, response.clone()));
+          return response;
+        },
+        async (error) => {
+          const cached = await matchPublicResponse(request);
+          if (cached) return cached;
+          throw error;
+        },
+      ),
+    );
+    return;
+  }
   // Do not call respondWith for organiser assets at all. Firefox keeps a
   // service-worker client association briefly across SPA navigation; the
   // request referrer, unlike that association, identifies the document that

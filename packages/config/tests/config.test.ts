@@ -42,6 +42,30 @@ describe("configuration", () => {
     expect(config.scoringAccess.fallbackCodeHmacSecret).toHaveLength(36);
   });
 
+  it("bounds the database pool and request/migration timeouts with production-safe defaults", () => {
+    const config = parseConfig({});
+    expect(config.database).toEqual({
+      poolMax: 10,
+      statementTimeoutMs: 15_000,
+      lockTimeoutMs: 5_000,
+      idleInTransactionSessionTimeoutMs: 30_000,
+      connectTimeoutSeconds: 10,
+    });
+    expect(config.migrations).toEqual({ lockTimeoutMs: 5_000, statementTimeoutMs: 600_000, lockRetries: 3 });
+    const tuned = parseConfig({
+      DB_POOL_MAX: "16",
+      DB_STATEMENT_TIMEOUT_MS: "20000",
+      DB_LOCK_TIMEOUT_MS: "",
+      MIGRATION_LOCK_RETRIES: "0",
+    });
+    expect(tuned.database).toMatchObject({ poolMax: 16, statementTimeoutMs: 20_000, lockTimeoutMs: 5_000 });
+    expect(tuned.migrations.lockRetries).toBe(0);
+    expect(() => parseConfig({ DB_POOL_MAX: "0" })).toThrow();
+    expect(() => parseConfig({ DB_STATEMENT_TIMEOUT_MS: "unbounded" })).toThrow();
+    expect(() => parseConfig({ DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: "0" })).toThrow();
+    expect(safeConfigSummary(config).database).toEqual(config.database);
+  });
+
   it("requires explicit production dependencies and health protection", () => {
     expect(() => parseConfig({ APP_ENV: "production" })).toThrow("DATABASE_URL");
   });
@@ -641,5 +665,33 @@ describe("configuration", () => {
     const summary = JSON.stringify(safeConfigSummary(config));
     expect(summary).toContain('"clientIpForwardingConfigured":true');
     expect(summary).not.toContain(clientIpConfig.MATCHDAY_CLIENT_IP_SECRET);
+  });
+
+  it("keeps the maintenance token separate from the deep-health token and reads Stripe settings", () => {
+    const deep = "d".repeat(40);
+    expect(() => parseConfig({ DEEP_HEALTH_TOKEN: deep, MATCHDAY_MAINTENANCE_TOKEN: deep })).toThrow(
+      "MATCHDAY_MAINTENANCE_TOKEN and deep health token must be different",
+    );
+    expect(() => parseConfig({ MATCHDAY_MAINTENANCE_TOKEN: "short" })).toThrow();
+    const config = parseConfig({
+      DEEP_HEALTH_TOKEN: deep,
+      MATCHDAY_MAINTENANCE_TOKEN: "m".repeat(40),
+      STRIPE_SECRET_KEY: "sk_test_secret_value",
+      STRIPE_WEBHOOK_SECRET: "whsec_secret_value",
+      STRIPE_PRICE_ID_EVENT_PASS: "price_event",
+      STRIPE_API_TIMEOUT_MS: "5000",
+    });
+    expect(config.maintenanceToken).toBe("m".repeat(40));
+    expect(config.stripe).toEqual({
+      secretKey: "sk_test_secret_value",
+      webhookSecret: "whsec_secret_value",
+      prices: { eventPass: "price_event" },
+      timeoutMs: 5000,
+    });
+    const summary = JSON.stringify(safeConfigSummary(config));
+    expect(summary).not.toContain("sk_test_secret_value");
+    expect(summary).not.toContain("whsec_secret_value");
+    expect(summary).not.toContain("m".repeat(40));
+    expect(parseConfig({}).stripe).toBeUndefined();
   });
 });

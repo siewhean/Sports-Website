@@ -93,7 +93,8 @@ describe("Gate C C4 public truth runtime", () => {
     expect(first?.freshness.etag).toMatch(/^c4-4-7-3-1-[a-f0-9]{64}$/u);
     expect(first?.version).toBe("4:7:3:1");
     expect(calls[0]?.query).toContain("current_projection.live_revision");
-    expect(calls[0]?.parameters).toEqual(["national-open"]);
+    // No cached stored projection yet, so the payload is requested.
+    expect(calls[0]?.parameters).toEqual(["national-open", null]);
     expect(calls[0]?.query).toContain("current_projection.schedule_version=publication.schedule_version");
     expect(calls[0]?.query).toContain("current_projection.result_version=publication.result_version");
     expect(calls[0]?.query).toContain("jsonb_object_agg(version.division_id::text, version.projection_version)");

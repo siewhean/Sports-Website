@@ -2,12 +2,10 @@ import type { PostgresJsSql } from "@matchday/identity";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import { ApiError, ErrorCode } from "./errors.js";
 import { ExportRuntime } from "./export-runtime.js";
+import { escapeCsvCell } from "./csv-escape.js";
 
-const escapeCsv = (value: string | number | null | undefined): string => {
-  if (value === null || value === undefined) return "";
-  const text = String(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-};
+// Formula-injection-safe CSV cell escaping (see csv-escape.ts).
+const escapeCsv = escapeCsvCell;
 
 type PublicExportContext = {
   scheduleRevisionId: string;

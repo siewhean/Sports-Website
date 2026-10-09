@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Usage: CANDIDATE_SHA=<40-hex> OCI_PUBLIC_HOSTNAME=<host> infra/oci/deploy-prod.sh [--build-locally]
+#
+# Default: pull the exact-SHA images that CI built and pushed to the registry (see the "images" job in
+# .github/workflows/ci.yml) and verify their org.opencontainers.image.revision label before any traffic
+# switch. Nothing is compiled on this VM.
+# --build-locally (or MATCHDAY_BUILD_LOCALLY=1): break-glass fallback that builds the images on this host
+# with `docker compose build --pull`. Use only when the registry or CI is unavailable; it competes with
+# live traffic for CPU/memory.
+BUILD_LOCALLY="${MATCHDAY_BUILD_LOCALLY:-0}"
+for deploy_arg in "$@"; do
+  case "$deploy_arg" in
+    --build-locally) BUILD_LOCALLY=1 ;;
+    *)
+      echo "Unknown argument: $deploy_arg (supported: --build-locally)" >&2
+      exit 2
+      ;;
+  esac
+done
+if [ "$BUILD_LOCALLY" != "0" ] && [ "$BUILD_LOCALLY" != "1" ]; then
+  echo "MATCHDAY_BUILD_LOCALLY must be 0 or 1" >&2
+  exit 2
+fi
+
+# Registry namespace for application images (compose.prod.yaml: ${MATCHDAY_IMAGE_REGISTRY}/matchday-<service>:<sha>)
+MATCHDAY_IMAGE_REGISTRY="${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}"
+export MATCHDAY_IMAGE_REGISTRY
+
 : "${CANDIDATE_SHA:?Set CANDIDATE_SHA to the full 40-character Git SHA}"
 : "${OCI_PUBLIC_HOSTNAME:?Set OCI_PUBLIC_HOSTNAME to the DNS name serving this production stack}"
 
@@ -40,6 +67,7 @@ CADDY_VALIDATION_TIMEOUT="${MATCHDAY_CADDY_VALIDATION_TIMEOUT:-30}"
 SERVICE_CONTROL_TIMEOUT="${MATCHDAY_SERVICE_CONTROL_TIMEOUT:-30}"
 MIGRATION_TIMEOUT="${MATCHDAY_MIGRATION_TIMEOUT:-180}"
 BUILD_TIMEOUT="${MATCHDAY_BUILD_TIMEOUT:-600}"
+PULL_TIMEOUT="${MATCHDAY_PULL_TIMEOUT:-300}"
 
 # Pinned Caddy container image contract
 CADDY_IMAGE="caddy:2.10-alpine"
@@ -545,7 +573,7 @@ if ! run_bounded 10 docker network inspect matchday-prod_backend >/dev/null 2>&1
   run_bounded 10 docker network create --subnet 172.31.0.0/24 matchday-prod_backend
 fi
 
-# Verify Caddy container and its bind mount configuration before building or launching candidate
+# Verify Caddy container and its bind mount configuration before pulling/building or launching candidate
 if ! caddy_container="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy)"; then
   cleanup_and_rollback "Failed querying Caddy container ID within timeout"
 fi
@@ -629,11 +657,29 @@ if [ "$caddy_mount_check" != "VALID" ]; then
   cleanup_and_rollback "CADDY_RUNTIME_MOUNT_INVALID: $caddy_mount_check"
 fi
 
+# Config-driven hostnames: when the runtime Caddyfile uses {$OCI_PROD_HOSTNAME}, the running Caddy container
+# must have been created with the same hostname the public health gates below will probe.
+if grep -q '{\$OCI_PROD_HOSTNAME}' "$RUNTIME_CADDYFILE_PATH" 2>/dev/null; then
+  if ! caddy_env="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)"; then
+    cleanup_and_rollback "Failed inspecting Caddy container environment within timeout"
+  fi
+  if ! printf '%s\n' "$caddy_env" | grep -qxF "OCI_PROD_HOSTNAME=${OCI_PUBLIC_HOSTNAME}"; then
+    cleanup_and_rollback "Caddy container OCI_PROD_HOSTNAME does not match OCI_PUBLIC_HOSTNAME '${OCI_PUBLIC_HOSTNAME}'; export OCI_PROD_HOSTNAME and recreate the caddy service"
+  fi
+fi
+
 PHASE="CANDIDATE_START"
 
-echo "[deploy-prod] Building candidate slot ($CANDIDATE_API_SERVICE, $CANDIDATE_WEB_SERVICE, $CANDIDATE_WORKER_SERVICE)..."
-if ! run_bounded "$BUILD_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml build --pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate; then
-  cleanup_and_rollback "Failed building candidate services within timeout"
+if [ "$BUILD_LOCALLY" = "1" ]; then
+  echo "[deploy-prod] --build-locally: building candidate slot on this host ($CANDIDATE_API_SERVICE, $CANDIDATE_WEB_SERVICE, $CANDIDATE_WORKER_SERVICE)..."
+  if ! run_bounded "$BUILD_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup build --pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate backup; then
+    cleanup_and_rollback "Failed building candidate services within timeout"
+  fi
+else
+  echo "[deploy-prod] Pulling CI-built candidate images for $CANDIDATE_SHA from $MATCHDAY_IMAGE_REGISTRY..."
+  if ! run_bounded "$PULL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate backup; then
+    cleanup_and_rollback "Failed pulling candidate images within timeout (CI must have pushed $MATCHDAY_IMAGE_REGISTRY/matchday-{api,web,worker,migrate}:$CANDIDATE_SHA; use --build-locally only as a fallback)"
+  fi
 fi
 
 # Pre-migration snapshot (backup safety net). Migrations are forward-only, so a pg_dump taken
@@ -718,6 +764,17 @@ case "${MATCHDAY_SKIP_PREMIGRATION_BACKUP:-0}" in
     cleanup_and_rollback "MATCHDAY_SKIP_PREMIGRATION_BACKUP must be 0 or 1 (got '${MATCHDAY_SKIP_PREMIGRATION_BACKUP}')"
     ;;
 esac
+
+# Verify the exact image revision label before anything starts or traffic moves (applies to pulled and local builds).
+for image_name in api web worker migrate; do
+  image_ref="${MATCHDAY_IMAGE_REGISTRY}/matchday-${image_name}:${CANDIDATE_SHA}"
+  image_label_sha="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
+  if [ "$image_label_sha" != "$CANDIDATE_SHA" ]; then
+    cleanup_and_rollback "Candidate image $image_ref revision label '$image_label_sha' does not match requested '$CANDIDATE_SHA'"
+  fi
+  image_repo_digest="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}local-build{{end}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
+  echo "[deploy-prod] Verified $image_ref revision label (${image_repo_digest:-unknown})"
+done
 
 echo "[deploy-prod] Running database migrations..."
 if ! run_bounded "$MIGRATION_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate; then
@@ -814,7 +871,7 @@ chmod 600 "$CANDIDATE_RUNTIME_CADDYFILE" 2>/dev/null || true
 
 # Mandatory validation of candidate Caddyfile using pinned container image
 echo "[deploy-prod] Validating candidate runtime Caddy configuration using pinned Caddy image ($PINNED_CADDY_IMAGE)..."
-if ! run_bounded "$CADDY_VALIDATION_TIMEOUT" docker run --rm --network none -v "$CANDIDATE_RUNTIME_CADDYFILE":/etc/caddy/Caddyfile:ro "$PINNED_CADDY_IMAGE" caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile; then
+if ! run_bounded "$CADDY_VALIDATION_TIMEOUT" docker run --rm --network none -e "OCI_PROD_HOSTNAME=${OCI_PUBLIC_HOSTNAME}" -e "OCI_STAGING_HOSTNAME=${OCI_STAGING_HOSTNAME:-staging.localhost}" -v "$CANDIDATE_RUNTIME_CADDYFILE":/etc/caddy/Caddyfile:ro "$PINNED_CADDY_IMAGE" caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile; then
   cleanup_and_rollback "Candidate runtime Caddyfile failed syntax validation"
 fi
 

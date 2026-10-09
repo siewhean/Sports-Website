@@ -1,0 +1,68 @@
+name: Docker build check
+
+# Validates infra/oci/Dockerfile on pull requests that can change the images. Nothing is pushed; the images that
+# production runs are built and pushed by the "images" job in ci.yml on main and release tags.
+on:
+  pull_request:
+    paths:
+      - infra/oci/Dockerfile
+      - infra/oci/Dockerfile.dockerignore
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - package.json
+      - .github/workflows/docker-build-check.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [api, web]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Build (not pushed)
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: infra/oci/Dockerfile
+          target: ${{ matrix.target }}
+          load: true
+          push: false
+          tags: matchday-check-${{ matrix.target }}:ci
+          build-args: |
+            MATCHDAY_BUILD_ID=${{ github.sha }}
+            BUILD_TIMESTAMP=2000-01-01T00:00:00.000Z
+            MATCHDAY_PUBLIC_ORIGIN=https://matchday.example.test
+          cache-from: type=gha,scope=matchday-images
+      - name: Runtime image is non-root, toolchain-free and correctly labelled
+        run: |
+          image="matchday-check-${{ matrix.target }}:ci"
+          test "$(docker run --rm --entrypoint id "$image" -u)" != "0"
+          docker run --rm --entrypoint sh "$image" -c '! command -v pnpm; test ! -e /app/node_modules/.bin/tsc; test ! -e /app/node_modules/.bin/tsx'
+          test "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "${{ github.sha }}"
+      - name: API image resolves its workspace dependencies
+        if: matrix.target == 'api'
+        run: |
+          docker run --rm --entrypoint node matchday-check-api:ci --input-type=module -e "
+            for (const name of ['@matchday/config', '@matchday/database', '@matchday/contracts', 'fastify', 'postgres']) import.meta.resolve(name);
+            console.log('api dependencies resolve');
+          "
+          docker run --rm --entrypoint test matchday-check-api:ci -f dist/main.js
+      - name: Web image contains the production build
+        if: matrix.target == 'web'
+        run: |
+          docker run --rm --entrypoint node matchday-check-web:ci node_modules/next/dist/bin/next --version
+          docker run --rm --entrypoint test matchday-check-web:ci -f .next/BUILD_ID

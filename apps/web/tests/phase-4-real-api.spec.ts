@@ -425,7 +425,11 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
     minute: "2-digit",
     hour12: false,
   }).format(moved.start_epoch_ms);
-  const publicMovedMatch = page.locator(`.p2-public-fixtures > li[data-match-id="${moved.match_id}"]`);
+  // The schedule shows one competition day at a time; open the day the match moved to.
+  await page.goto(
+    `${page.url().split("?")[0]}?tab=schedule&day=${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(moved.start_epoch_ms)}`,
+  );
+  const publicMovedMatch = page.locator(`[data-schedule] > li[data-match-id="${moved.match_id}"]`);
   await expect(publicMovedMatch).toHaveCount(1);
   // Fixtures render "<day>, HH:MM" in the competition timezone; the moved start time must be the time shown.
   await expect(publicMovedMatch.locator("time")).toHaveText(new RegExp(`(^|, )${publicTime}$`));

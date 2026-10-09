@@ -22,7 +22,7 @@ Phase 6 scope:
 - `EXP-003–006`
 - `ADM-001–007`
 
-The source descriptions in `sports_competition_platform_implementation_plan.md`
+The source descriptions in `docs/archive/sports_competition_platform_implementation_plan.md`
 remain authoritative. This document owns execution order and closure evidence.
 
 ## 2. Standing implementation rules

@@ -571,9 +571,46 @@ function sameScoringAuthState(left: ScoringServerAuth, right: ScoringServerAuth)
   );
 }
 
-function exchangeInput(
-  value: unknown,
-): { token?: string; short_code?: string; device_id: string; device_label?: string } | null {
+type ExchangeBody = {
+  token?: string;
+  short_code?: string;
+  expected_match_id?: string;
+  expected_competition_id?: string;
+  device_id: string;
+  device_label?: string;
+};
+
+/**
+ * Number codes are only valid inside a named match or competition (the API refuses platform-wide
+ * lookups). The context comes from the request body (`matchId`/`competitionId`) or, for the plain
+ * /score page, from its same-origin URL (`/score?match=<uuid>` or `/score?competition=<uuid>`).
+ */
+function shortCodeContext(
+  request: Request,
+  input: Record<string, unknown>,
+): { expected_match_id?: string; expected_competition_id?: string } {
+  const pick = (value: unknown) => (typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined);
+  let matchId = pick(input.matchId);
+  let competitionId = pick(input.competitionId);
+  if (!matchId && !competitionId) {
+    try {
+      const referer = new URL(request.headers.get("referer") ?? "");
+      // Origin was already checked by sameOriginMutation; the referer must come from that origin.
+      if (referer.origin === (request.headers.get("origin") ?? new URL(request.url).origin)) {
+        matchId = pick(referer.searchParams.get("match"));
+        competitionId = pick(referer.searchParams.get("competition"));
+      }
+    } catch {
+      // No usable referer: the API will reject the code as invalid.
+    }
+  }
+  return {
+    ...(matchId ? { expected_match_id: matchId } : {}),
+    ...(competitionId ? { expected_competition_id: competitionId } : {}),
+  };
+}
+
+function exchangeInput(value: unknown, request?: Request): ExchangeBody | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
   const token = input.token;
@@ -598,6 +635,7 @@ function exchangeInput(
   if (typeof shortCode === "string" && /^\d{12}$/.test(shortCode) && token === undefined) {
     return {
       short_code: shortCode,
+      ...(request ? shortCodeContext(request, input) : {}),
       device_id: deviceId,
       ...(typeof deviceLabel === "string" ? { device_label: deviceLabel.trim() } : {}),
     };
@@ -700,7 +738,7 @@ export async function exchangeScoringSession(request: Request): Promise<Response
   } catch {
     return safeError(400);
   }
-  const input = exchangeInput(body);
+  const input = exchangeInput(body, request);
   if (!input) return safeError(400);
   const exchange = await upstreamFetch(new URL("/api/v1/scoring/access/exchange", baseUrl), {
     method: "POST",

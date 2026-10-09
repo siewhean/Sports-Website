@@ -177,6 +177,11 @@ services:
     cpus: 0.25
     environment:
       OCI_PUBLIC_HOSTNAME: ${OCI_PUBLIC_HOSTNAME}
+      # Site addresses substituted into the Caddyfile ({$OCI_PROD_HOSTNAME} / {$OCI_STAGING_HOSTNAME}).
+      # Kept separate from OCI_PUBLIC_HOSTNAME because .env.oci (staging) and .env.prod disagree on it.
+      # The *.localhost fallbacks never request public certificates; recreate Caddy after changing them.
+      OCI_PROD_HOSTNAME: ${OCI_PROD_HOSTNAME:-prod.localhost}
+      OCI_STAGING_HOSTNAME: ${OCI_STAGING_HOSTNAME:-staging.localhost}
     ports:
       - "80:80"
       - "443:443"

@@ -1,5 +1,8 @@
 name: matchday-prod
 
+# Application images (api, web, worker, migrate) are built and pushed to GHCR by CI and pulled by
+# deploy-prod.sh by exact-SHA tag. The build: blocks remain only for `deploy-prod.sh --build-locally`.
+
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
@@ -70,6 +73,7 @@ services:
         ipv4_address: 172.31.0.3
 
   migrate:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-migrate:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -92,6 +96,7 @@ services:
     profiles: [migration]
 
   api:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-api:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -133,6 +138,7 @@ services:
           - matchday-prod-api
 
   web:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-web:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -187,6 +193,7 @@ services:
           - matchday-prod-web
 
   api-green:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-api:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -228,6 +235,7 @@ services:
           - matchday-prod-api-green
 
   web-green:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-web:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -283,6 +291,7 @@ services:
 
   worker:
     stop_grace_period: 70s
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-worker:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -312,6 +321,7 @@ services:
 
   worker-green:
     stop_grace_period: 70s
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-worker:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -346,7 +356,8 @@ services:
     build:
       context: ./backup
       dockerfile: Dockerfile
-    image: matchday-prod-backup:local
+    # Built and pushed by CI like the application images. The timer runs without CANDIDATE_SHA, hence :latest (main).
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-backup:${CANDIDATE_SHA:-latest}
     profiles: [backup]
     restart: "no"
     user: "${MATCHDAY_BACKUP_UID:-1000}:${MATCHDAY_BACKUP_GID:-1000}"

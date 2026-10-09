@@ -11,5 +11,9 @@ pnpm-lock.yaml
 *.tsbuildinfo
 docs/design/concepts
 docs/qa/screenshots
-sports_competition_platform_implementation_plan.md
+docs/archive
 .agents
+
+# Local git worktrees (agents and manual), never part of the tree
+.worktrees/
+.claude/

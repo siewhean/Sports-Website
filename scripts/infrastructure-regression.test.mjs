@@ -33,14 +33,14 @@ test("1. Caddyfile rejects ambiguous reverse_proxy api:4000 upstream", async () 
 
   // Must have dedicated production and staging site blocks
   assert.equal(
-    caddyfile.includes("matchday.poladex.shop {"),
+    caddyfile.includes("{$OCI_PROD_HOSTNAME} {"),
     true,
-    "Caddyfile must contain matchday.poladex.shop block",
+    "Caddyfile must contain the {$OCI_PROD_HOSTNAME} block",
   );
   assert.equal(
-    caddyfile.includes("c5-drill.poladex.shop {"),
+    caddyfile.includes("{$OCI_STAGING_HOSTNAME} {"),
     true,
-    "Caddyfile must contain c5-drill.poladex.shop block",
+    "Caddyfile must contain the {$OCI_STAGING_HOSTNAME} block",
   );
 });
 
@@ -48,16 +48,16 @@ test("2. Caddyfile routes production and staging to distinct isolated subnets", 
   const caddyfile = await readFile(path.join(root, "infra/oci/Caddyfile"), "utf8");
 
   // Production block must target subnet 172.31.0.0/24
-  const prodMatch = caddyfile.match(/matchday\.poladex\.shop\s*\{([\s\S]*?)\n\}/);
-  assert.ok(prodMatch, "matchday.poladex.shop block must exist");
+  const prodMatch = caddyfile.match(/\{\$OCI_PROD_HOSTNAME\}\s*\{([\s\S]*?)\n\}/);
+  assert.ok(prodMatch, "{$OCI_PROD_HOSTNAME} block must exist");
   assert.ok(
     prodMatch[1].includes("172.31.0.11:4000") || prodMatch[1].includes("prod-api:4000"),
     "Production API upstream must target production network (172.31.0.11 or prod-api)",
   );
 
   // Staging block must target subnet 172.30.0.0/24
-  const stagingMatch = caddyfile.match(/c5-drill\.poladex\.shop\s*\{([\s\S]*?)\n\}/);
-  assert.ok(stagingMatch, "c5-drill.poladex.shop block must exist");
+  const stagingMatch = caddyfile.match(/\{\$OCI_STAGING_HOSTNAME\}\s*\{([\s\S]*?)\n\}/);
+  assert.ok(stagingMatch, "{$OCI_STAGING_HOSTNAME} block must exist");
   assert.ok(
     stagingMatch[1].includes("172.30.0.11:4000") || stagingMatch[1].includes("staging-api:4000"),
     "Staging API upstream must target staging network (172.30.0.11 or staging-api)",
@@ -97,11 +97,12 @@ test("4. Production compose and configuration do not require localhost loopback 
 
 test("5. APP_ENV=production passes configuration validation cleanly without fake telemetry", async () => {
   const validProduction = {
-    OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+    OCI_PUBLIC_HOSTNAME: "matchday.example.test",
+    MATCHDAY_CLIENT_IP_SECRET: "client-ip-forwarding-secret-for-tests-0123456789",
     APP_ENV: "production",
     NODE_ENV: "production",
-    API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
-    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+    API_ALLOWED_ORIGINS: "https://matchday.example.test",
+    MATCHDAY_PUBLIC_ORIGIN: "https://matchday.example.test",
     SCORING_SESSION_SEAL_KEY: "a".repeat(43),
     POSTGRES_DB: "matchday_prod",
     POSTGRES_USER: "matchday_prod",
@@ -115,7 +116,7 @@ test("5. APP_ENV=production passes configuration validation cleanly without fake
     MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
     EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
     SMTP_HOST: "smtp.resend.com",
-    SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+    SMTP_FROM: "Matchday <no-reply@matchday.example.test>",
     OTEL_ENABLED: "false",
   };
 
@@ -170,11 +171,11 @@ test("8. Production and staging databases are strictly isolated", async () => {
   assert.throws(
     () =>
       validateProductionConfig({
-        OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+        OCI_PUBLIC_HOSTNAME: "matchday.example.test",
         APP_ENV: "production",
         NODE_ENV: "production",
-        API_ALLOWED_ORIGINS: "https://matchday.poladex.shop",
-        MATCHDAY_PUBLIC_ORIGIN: "https://matchday.poladex.shop",
+        API_ALLOWED_ORIGINS: "https://matchday.example.test",
+        MATCHDAY_PUBLIC_ORIGIN: "https://matchday.example.test",
         SCORING_SESSION_SEAL_KEY: "a".repeat(43),
         POSTGRES_DB: "matchday", // collides with staging!
         POSTGRES_USER: "matchday_prod",
@@ -188,7 +189,7 @@ test("8. Production and staging databases are strictly isolated", async () => {
         MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32),
         EDGE_CACHE_PURGE_BEARER_TOKEN: "g".repeat(32),
         SMTP_HOST: "smtp.resend.com",
-        SMTP_FROM: "Matchday <no-reply@matchday.poladex.shop>",
+        SMTP_FROM: "Matchday <no-reply@matchday.example.test>",
       }),
     /must be isolated from staging/,
   );
@@ -236,16 +237,16 @@ test("11. Caddyfile and environment enforce explicit trusted proxy chain for Web
   const stagingEnv = parseEnvContent(stagingEnvSample);
 
   // Production Caddy block: API reverse proxy must trust production Web service only
-  const prodMatch = caddyfile.match(/matchday\.poladex\.shop\s*\{([\s\S]*?)\n\}/);
-  assert.ok(prodMatch, "matchday.poladex.shop block must exist");
+  const prodMatch = caddyfile.match(/\{\$OCI_PROD_HOSTNAME\}\s*\{([\s\S]*?)\n\}/);
+  assert.ok(prodMatch, "{$OCI_PROD_HOSTNAME} block must exist");
   assert.ok(
     prodMatch[1].includes("trusted_proxies 172.31.0.12"),
     "Production @api reverse_proxy must specify 'trusted_proxies 172.31.0.12'",
   );
 
   // Staging Caddy block: API reverse proxy must trust staging Web service only
-  const stagingMatch = caddyfile.match(/c5-drill\.poladex\.shop\s*\{([\s\S]*?)\n\}/);
-  assert.ok(stagingMatch, "c5-drill.poladex.shop block must exist");
+  const stagingMatch = caddyfile.match(/\{\$OCI_STAGING_HOSTNAME\}\s*\{([\s\S]*?)\n\}/);
+  assert.ok(stagingMatch, "{$OCI_STAGING_HOSTNAME} block must exist");
   assert.ok(
     stagingMatch[1].includes("trusted_proxies 172.30.0.12"),
     "Staging @api reverse_proxy must specify 'trusted_proxies 172.30.0.12'",

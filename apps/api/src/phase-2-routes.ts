@@ -829,6 +829,7 @@ export async function registerPhase2Routes(
       token?: string;
       short_code?: string;
       expected_match_id?: string;
+      expected_competition_id?: string;
       device_id: string;
       device_label?: string;
     };
@@ -843,7 +844,10 @@ export async function registerPhase2Routes(
           {
             token: Type.Optional(Type.String({ minLength: 32, maxLength: 256 })),
             short_code: Type.Optional(Type.String({ pattern: "^[0-9]{12}$" })),
+            // Number codes are short and guessable, so they are only looked up inside the match or
+            // competition the scorer was told about; one of these is required with short_code.
             expected_match_id: Type.Optional(Id),
+            expected_competition_id: Type.Optional(Id),
             device_id: Type.String({ minLength: 32, maxLength: 256 }),
             device_label: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
           },
@@ -866,6 +870,9 @@ export async function registerPhase2Routes(
             ...(request.body.token ? { token: request.body.token } : {}),
             ...(request.body.short_code ? { shortCode: request.body.short_code } : {}),
             ...(request.body.expected_match_id ? { expectedMatchId: request.body.expected_match_id } : {}),
+            ...(request.body.expected_competition_id
+              ? { expectedCompetitionId: request.body.expected_competition_id }
+              : {}),
             deviceId: request.body.device_id,
             ...(request.body.device_label ? { deviceLabel: request.body.device_label } : {}),
             // Verified end-user IP (BFF-signed header, see client-ip.ts) so the

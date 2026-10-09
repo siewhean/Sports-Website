@@ -34,7 +34,7 @@ describe("Gate C C2 scoring UI source guards", () => {
     expect(shell).toContain("scrollIntoView({ block: phase2Machine.scrollNearest })");
   });
 
-  it("preserves dynamic attribution, segment and manual-time behavior with 48px controls", async () => {
+  it("preserves dynamic attribution, segment and manual-time behavior with 56px controls", async () => {
     const shell = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
     const styles = await readFile(
       new URL("../../components/phase5/FiveSportScoreControls.module.css", import.meta.url),
@@ -45,7 +45,8 @@ describe("Gate C C2 scoring UI source guards", () => {
     expect(shell).toContain("pendingAction?.control.participantAttribution");
     expect(shell).toContain("definition.segments.map");
     expect(shell).toContain("allowUnknownScorer");
-    expect(styles).toContain("min-height: 48px");
+    expect(styles).toContain("min-height: 56px");
+    expect(styles).not.toMatch(/min-height: (?:[0-4]\d|5[0-5])px/u);
     expect(styles).toContain("@media (max-width: 30rem)");
   });
 });

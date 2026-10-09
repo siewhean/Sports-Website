@@ -87,7 +87,7 @@
 }
 .action {
   min-width: 0;
-  min-height: 48px;
+  min-height: 56px;
   display: grid;
   place-content: center;
   gap: 0.125rem;
@@ -107,9 +107,34 @@
     transform 120ms ease;
 }
 .primaryGroup .action {
-  min-height: 64px;
+  min-height: 72px;
   border-color: #a1ba5b;
   background: #31411e;
+  font-size: 1rem;
+}
+/* Team colours: distinct hues, each with at least 7:1 text contrast (white on blue, near-black on gold). */
+.action[data-side="home"] {
+  border-color: #6f9cf0;
+  background: #1d4fb0;
+  color: #ffffff;
+}
+.action[data-side="away"] {
+  border-color: #f1c94a;
+  background: #c99700;
+  color: #12150b;
+}
+.primaryGroup .action[data-side="home"]:hover:not(:disabled) {
+  background: #2360d0;
+}
+.primaryGroup .action[data-side="away"]:hover:not(:disabled) {
+  background: #dea700;
+}
+.secondaryGroup .action[data-side="home"],
+.secondaryGroup .action[data-side="away"] {
+  background: #202820;
+  color: inherit;
+  border-width: 2px;
+  border-left-width: 6px;
 }
 .action:hover:not(:disabled) {
   background: #415622;
@@ -134,7 +159,7 @@
   border-top: 1px solid #414a40;
 }
 .secondaryGroup summary {
-  min-height: 48px;
+  min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -173,6 +198,24 @@
   .clockNotice {
     max-width: none;
   }
+}
+:global([data-contrast="high"]) .action {
+  border-width: 3px;
+  border-color: #ffffff;
+  background: #000000;
+  color: #ffffff;
+}
+:global([data-contrast="high"]) .action[data-side="home"] {
+  background: #8ec5ff;
+  color: #000000;
+}
+:global([data-contrast="high"]) .action[data-side="away"] {
+  background: #ffe066;
+  color: #000000;
+}
+:global([data-contrast="high"]) .status,
+:global([data-contrast="high"]) .header p {
+  color: #ffffff;
 }
 @media (prefers-reduced-motion: reduce) {
   .action {

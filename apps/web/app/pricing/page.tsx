@@ -1,11 +1,11 @@
 import { SiteHeader, SiteFooter } from "@/components/foundation/SiteChrome";
 import { messages } from "@matchday/ui";
 import styles from "./PricingPage.module.css";
-import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export const metadata = {
   title: messages.metadata.pricingTitle,
   description: messages.metadata.pricingDescription,
+  alternates: { canonical: "/pricing" },
 };
 
 const TIERS = [
@@ -44,9 +44,9 @@ const TIERS = [
   },
 ];
 
-export default async function PricingPage() {
-  const session = await readCurrentIdentitySession();
-  const viewer = session.status === "authenticated" ? session.identity : null;
+export default function PricingPage() {
+  // Identical for every visitor: the signed-in name is filled in client-side by IdentityStatus.
+  const viewer = null;
   return (
     <div className={styles.container}>
       <SiteHeader viewer={viewer} />

@@ -1,6 +1,9 @@
 import "server-only";
 
+import type { PublicCompetitionListing } from "@matchday/contracts";
+
 import { cache } from "react";
+import { headers } from "next/headers";
 import type {
   PublicCompetitionProjection,
   PublicCompetitionSummary,
@@ -12,6 +15,7 @@ import { interpolate, messages } from "@matchday/ui";
 import { apiFetch } from "@/lib/client-ip.server";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { publicCompetitionPhase } from "@/lib/phase2-public-phase";
+import { PUBLIC_READ_FRESHNESS_HEADER } from "@/lib/public-routes";
 import {
   isGateCC4PublicCompetitionProjection,
   isPublicCompetitionListing,
@@ -153,6 +157,17 @@ export type PublicStandingsWireRow =
     >
   | Pick<StandingsRow, "rank" | "entryName" | "played" | "won" | "drawn" | "lost" | "points" | "goalDifference">;
 
+/** Optional tie-break notes (`explanations[].summary`); anything malformed is dropped rather than shown. */
+function explanationsOf(value: unknown): { explanations?: string[] } {
+  if (!Array.isArray(value)) return {};
+  const summaries = value.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object") return [];
+    const summary = (item as Record<string, unknown>).summary;
+    return typeof summary === "string" && summary.trim() ? [summary.trim()] : [];
+  });
+  return summaries.length > 0 ? { explanations: summaries } : {};
+}
+
 export function standingsView(value: Record<string, unknown> | null): StandingView[] {
   const rows = value && Array.isArray(value.standings) ? (value.standings as unknown[]) : [];
   return rows.flatMap((candidate) => {
@@ -169,6 +184,7 @@ export function standingsView(value: Record<string, unknown> | null): StandingVi
         lost: requiredNumber(row, ["lost"], "standings row"),
         difference: requiredNumber(row, ["scoreDifference", "goalDifference"], "standings row"),
         points: requiredNumber(row, ["tablePoints", "points"], "standings row"),
+        ...explanationsOf(row.explanations),
       } satisfies StandingView,
     ];
   });
@@ -243,6 +259,7 @@ function toDivisionView(
         code: match.code,
         stage: publicStageLabel(match.stage, match.code),
         time: matchTime(match.starts_at, timezone),
+        startsAt: match.starts_at,
         ...(date ? { date } : {}),
         ...(dayLabel ? { dayLabel } : {}),
         area: match.area.name,
@@ -331,6 +348,7 @@ export function toCompetitionView(projection: PublicCompetitionProjection): Comp
     publicationRevision: `sch_${publication.schedule_version} · res_${publication.result_version}`,
     publishedAt: dateTime(projection.last_updated_at, competition.timezone),
     lastUpdated: dateTime(projection.last_updated_at, competition.timezone),
+    lastUpdatedAt: projection.last_updated_at,
     ...primary,
     publicDivisions,
     audit: [],
@@ -405,40 +423,132 @@ function canonicalProjection(value: unknown): GateCC4PublicCompetitionProjection
   return isGateCC4PublicCompetitionProjection(value) ? value : null;
 }
 
-const apiCompetitionReadPort: CompetitionReadPort = {
-  async getBySlug(slug) {
-    const baseUrl = apiBaseUrl();
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null;
-    if (!baseUrl) throw new PublicDataUnavailableError("Public API origin is not configured");
-    try {
-      const response = await apiFetch(`${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`, {
-        headers: {
-          accept: "application/json",
-          "accept-encoding": "identity",
-        },
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        if (classifyPublicResponse(response.status) === "not_found") return null;
-        throw new PublicDataUnavailableError(`Public API responded ${response.status}`, response.status);
-      }
-      const projection = canonicalProjection(await response.json());
-      if (!projection || !publicHeadersMatchProjection(response, projection)) {
-        throw new PublicDataUnavailableError("Public API returned an inconsistent projection");
-      }
-      return toCompetitionView(projection);
-    } catch (error) {
-      if (error instanceof PublicDataUnavailableError) throw error;
-      throw new PublicDataUnavailableError(error instanceof Error ? error.message : "Public API request failed");
+/*
+ * Public read caching.
+ *
+ * Public projections are identical for every spectator, so document renders read them through Next's Data Cache
+ * (plain `fetch` + `revalidate` + tags) instead of hitting the API on every request. Those fetches are
+ * server-originated and shared across users, so they deliberately do NOT carry the signed end-user IP that
+ * `apiFetch` adds: one spectator's address must never be attached to a response other people are served.
+ *
+ * "live" reads are for request paths that must observe the newest publication (router.refresh() after a live
+ * version event is an RSC request; the proxy marks those). They bypass the Data Cache and keep `apiFetch`, because
+ * they are triggered by, and rate-limited as, one specific client. Next only caches HTTP 200 responses, so a 404 or
+ * an upstream outage is never pinned in the cache and the 404-vs-unavailable split is preserved.
+ */
+export type PublicReadFreshness = "cached" | "live";
+type PublicReadMode = PublicReadFreshness | "uncached-shared";
+
+/** Data Cache lifetime for one competition projection on document renders (results change during play). */
+export const PUBLIC_COMPETITION_REVALIDATE_SECONDS = 5;
+/** Data Cache lifetime for the public competition listing. */
+export const PUBLIC_LISTING_REVALIDATE_SECONDS = 30;
+export const PUBLIC_COMPETITIONS_TAG = "public-competitions";
+/** Cache tag for one competition's projection; pass to revalidateTag() for on-demand invalidation. */
+export function publicCompetitionTag(slug: string): string {
+  return `public-competition:${slug}`;
+}
+
+/**
+ * Freshness for the current page request. Call only from request-scoped code (pages, generateMetadata), never from
+ * sitemap / opengraph-image routes, which must stay cacheable. Defaults to "cached" outside a request.
+ */
+export async function publicReadFreshness(): Promise<PublicReadFreshness> {
+  try {
+    return (await headers()).get(PUBLIC_READ_FRESHNESS_HEADER) === "live" ? "live" : "cached";
+  } catch {
+    return "cached";
+  }
+}
+
+const PUBLIC_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+export function isPublicCompetitionSlug(slug: string): boolean {
+  return slug.length <= 128 && PUBLIC_SLUG_PATTERN.test(slug);
+}
+
+function publicRead(
+  url: string,
+  init: { headers: Record<string, string> },
+  mode: PublicReadMode,
+  cacheOptions: { revalidate: number; tags: string[] },
+): Promise<Response> {
+  if (mode === "live") return apiFetch(url, { ...init, cache: "no-store" });
+  // Shared server-originated reads use plain fetch and never carry the end-user IP.
+  if (mode === "uncached-shared") return fetch(url, { ...init, cache: "no-store" });
+  return fetch(url, { ...init, next: cacheOptions });
+}
+
+export type PublicProjectionRead =
+  { status: "ok"; etag: string; projection: GateCC4PublicCompetitionProjection } | { status: "not_found" };
+
+/**
+ * Reads and validates the canonical public projection. Returns `not_found` only for a genuine 404 (or a slug that
+ * cannot exist); every other failure throws PublicDataUnavailableError.
+ *
+ * Modes: "cached" (Data Cache, plain fetch), "live" (no-store, apiFetch with the caller's signed IP),
+ * "uncached-shared" (no-store, plain fetch; for responses that are themselves CDN-cached and shared).
+ */
+export async function readPublicCompetitionProjection(
+  slug: string,
+  mode: PublicReadMode = "cached",
+): Promise<PublicProjectionRead> {
+  if (!isPublicCompetitionSlug(slug)) return { status: "not_found" };
+  const baseUrl = apiBaseUrl();
+  if (!baseUrl) throw new PublicDataUnavailableError("Public API origin is not configured");
+  try {
+    const response = await publicRead(
+      `${baseUrl}/api/v1/public/competitions/${encodeURIComponent(slug)}/current`,
+      { headers: { accept: "application/json", "accept-encoding": "identity" } },
+      mode,
+      {
+        revalidate: PUBLIC_COMPETITION_REVALIDATE_SECONDS,
+        tags: [PUBLIC_COMPETITIONS_TAG, publicCompetitionTag(slug)],
+      },
+    );
+    if (!response.ok) {
+      if (classifyPublicResponse(response.status) === "not_found") return { status: "not_found" };
+      throw new PublicDataUnavailableError(`Public API responded ${response.status}`, response.status);
     }
-  },
-  async list() {
-    const baseUrl = apiBaseUrl();
-    if (!baseUrl) throw new PublicDataUnavailableError("Public API origin is not configured");
-    try {
-      const response = await apiFetch(`${baseUrl}/api/v1/public/competitions`, {
-        headers: { accept: "application/json" },
-        cache: "no-store",
+    const projection = canonicalProjection(await response.json());
+    if (!projection || !publicHeadersMatchProjection(response, projection)) {
+      throw new PublicDataUnavailableError("Public API returned an inconsistent projection");
+    }
+    return { status: "ok", etag: normalizeEtag(projection.freshness.etag) ?? "", projection };
+  } catch (error) {
+    if (error instanceof PublicDataUnavailableError) throw error;
+    throw new PublicDataUnavailableError(error instanceof Error ? error.message : "Public API request failed");
+  }
+}
+
+async function readCompetitionView(slug: string, mode: PublicReadMode): Promise<CompetitionView | null> {
+  const read = await readPublicCompetitionProjection(slug, mode);
+  if (read.status === "not_found") return null;
+  try {
+    return toCompetitionView(read.projection);
+  } catch (error) {
+    // Contract drift in the mapper is an outage, never a believable empty page.
+    throw new PublicDataUnavailableError(error instanceof Error ? error.message : "Public projection is malformed");
+  }
+}
+
+const PUBLIC_LISTING_PAGE_SIZE = 200;
+const PUBLIC_LISTING_MAX_PAGES = 10;
+
+async function readCompetitionListing(): Promise<CompetitionSummaryView[]> {
+  const baseUrl = apiBaseUrl();
+  if (!baseUrl) throw new PublicDataUnavailableError("Public API origin is not configured");
+  try {
+    // The API pages its listing; follow next_cursor (bounded) so the list and sitemap stay complete.
+    const entries: PublicCompetitionListing["competitions"] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < PUBLIC_LISTING_MAX_PAGES; page += 1) {
+      const url = new URL(`${baseUrl}/api/v1/public/competitions`);
+      url.searchParams.set("limit", String(PUBLIC_LISTING_PAGE_SIZE));
+      if (cursor) url.searchParams.set("cursor", cursor);
+      const response = await publicRead(url.toString(), { headers: { accept: "application/json" } }, "cached", {
+        revalidate: PUBLIC_LISTING_REVALIDATE_SECONDS,
+        tags: [PUBLIC_COMPETITIONS_TAG],
       });
       if (!response.ok)
         throw new PublicDataUnavailableError(`Public API responded ${response.status}`, response.status);
@@ -446,19 +556,56 @@ const apiCompetitionReadPort: CompetitionReadPort = {
       if (!isPublicCompetitionListing(payload)) {
         throw new PublicDataUnavailableError("Public API returned a malformed competition listing");
       }
-      const now = new Date();
-      return payload.competitions.map((entry) => toCompetitionSummaryView(entry, now));
-    } catch (error) {
-      if (error instanceof PublicDataUnavailableError) throw error;
-      throw new PublicDataUnavailableError(error instanceof Error ? error.message : "Public API request failed");
+      entries.push(...payload.competitions);
+      const next = (payload as { next_cursor?: unknown }).next_cursor;
+      cursor = typeof next === "string" && next.length > 0 ? next : null;
+      if (!cursor) break;
     }
-  },
+    const now = new Date();
+    return entries.map((entry) => toCompetitionSummaryView(entry, now));
+  } catch (error) {
+    if (error instanceof PublicDataUnavailableError) throw error;
+    throw new PublicDataUnavailableError(error instanceof Error ? error.message : "Public API request failed");
+  }
+}
+
+const apiCompetitionReadPort: CompetitionReadPort = {
+  getBySlug: (slug) => readCompetitionView(slug, "cached"),
+  list: readCompetitionListing,
 };
 
-export const getCompetitionView = cache(async (slug: string): Promise<CompetitionView | null> => {
-  const reader = demoFixturesEnabled() ? demoCompetitionReadPort : apiCompetitionReadPort;
-  return reader.getBySlug(slug);
-});
+/**
+ * One competition view for a page / metadata / image render. `freshness` defaults to "cached"; pages pass
+ * `await publicReadFreshness()` so live RSC refreshes bypass the Data Cache. React `cache()` dedupes the read
+ * between generateMetadata and the page within one request.
+ */
+export const getCompetitionView = cache(
+  async (slug: string, freshness: PublicReadFreshness = "cached"): Promise<CompetitionView | null> => {
+    if (demoFixturesEnabled()) return demoCompetitionReadPort.getBySlug(slug);
+    return freshness === "live" ? readCompetitionView(slug, "live") : apiCompetitionReadPort.getBySlug(slug);
+  },
+);
+
+/**
+ * Uncached view + ETag for the CDN-cached snapshot route. The route's own Cache-Control collapses traffic, so the
+ * upstream read is no-store and server-originated (no end-user IP).
+ */
+export async function readPublicSnapshot(
+  slug: string,
+): Promise<{ status: "ok"; etag: string; competition: CompetitionView } | { status: "not_found" }> {
+  if (demoFixturesEnabled()) {
+    const competition = await demoCompetitionReadPort.getBySlug(slug);
+    if (!competition) return { status: "not_found" };
+    return {
+      status: "ok",
+      etag: `demo-${competition.publicationRevision.replace(/[^A-Za-z0-9_.-]+/gu, "-")}`,
+      competition,
+    };
+  }
+  const read = await readPublicCompetitionProjection(slug, "uncached-shared");
+  if (read.status === "not_found") return read;
+  return { status: "ok", etag: read.etag, competition: toCompetitionView(read.projection) };
+}
 
 export const getCompetitionListing = cache(async (): Promise<CompetitionSummaryView[]> => {
   const reader = demoFixturesEnabled() ? demoCompetitionReadPort : apiCompetitionReadPort;

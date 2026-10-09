@@ -1,4 +1,4 @@
-matchday.poladex.shop {
+{$OCI_PROD_HOSTNAME} {
   encode gzip zstd
   @privateHealth path /health/deep /health/deep/*
   handle @privateHealth {
@@ -15,7 +15,7 @@ matchday.poladex.shop {
   }
 }
 
-c5-drill.poladex.shop {
+{$OCI_STAGING_HOSTNAME} {
   encode gzip zstd
   @privateHealth path /health/deep /health/deep/*
   handle @privateHealth {

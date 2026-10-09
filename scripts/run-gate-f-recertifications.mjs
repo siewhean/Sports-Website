@@ -4,6 +4,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { productionHostname, productionOrigin } from "./lib/hostnames.mjs";
 import { loadAndValidateEvidence } from "./validate-external-evidence.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -30,7 +31,7 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
 
   const dnsTlsPassed =
     dnsTlsEvidence.errors.length === 0 &&
-    dnsTlsEvidence.evidence?.hostname === "matchday.poladex.shop" &&
+    dnsTlsEvidence.evidence?.hostname === productionHostname() &&
     dnsTlsEvidence.evidence?.tls_version === "TLS 1.3" &&
     dnsTlsEvidence.evidence?.auto_renewal === "caddy_acme_letsencrypt" &&
     dnsTlsEvidence.evidence?.hsts_configured === true &&
@@ -39,7 +40,7 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   const dnsTls = {
     qa_item: "OPS-014",
     candidate_sha: sha,
-    hostname: "matchday.poladex.shop",
+    hostname: productionHostname(),
     tls_version: dnsTlsPassed ? "TLS 1.3" : "PENDING_VERIFICATION",
     auto_renewal: dnsTlsPassed ? "caddy_acme_letsencrypt" : "PENDING_VERIFICATION",
     hsts_configured: dnsTlsPassed ? true : false,
@@ -87,15 +88,15 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
 
   const seoPassed =
     seoEvidence.errors.length === 0 &&
-    (seoEvidence.evidence?.production_origin === "https://matchday.poladex.shop" ||
-      seoEvidence.evidence?.hostname === "matchday.poladex.shop") &&
+    (seoEvidence.evidence?.production_origin === productionOrigin() ||
+      seoEvidence.evidence?.hostname === productionHostname()) &&
     seoEvidence.evidence?.robots_txt_status === "PASS" &&
     seoEvidence.evidence?.sitemap_status === "PASS";
 
   const seo = {
     qa_item: "GATE-F-SEO",
     candidate_sha: sha,
-    production_origin: "https://matchday.poladex.shop",
+    production_origin: productionOrigin(),
     robots_txt_status: seoPassed ? "PASS" : "PENDING_LIVE_PROBE",
     sitemap_status: seoPassed ? "PASS" : "PENDING_LIVE_PROBE",
     staging_leakage_detected: false,
@@ -120,7 +121,7 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   const emailPassed =
     emailEvidence.errors.length === 0 &&
     emailEvidence.evidence?.provider === "resend_transactional" &&
-    emailEvidence.evidence?.domain === "matchday.poladex.shop" &&
+    emailEvidence.evidence?.domain === productionHostname() &&
     emailEvidence.evidence?.spf === "PASS" &&
     emailEvidence.evidence?.dkim === "PASS" &&
     emailEvidence.evidence?.dmarc === "PASS" &&
@@ -130,7 +131,7 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
     qa_item: "OPS-017",
     candidate_sha: sha,
     provider: "resend_transactional",
-    domain: "matchday.poladex.shop",
+    domain: productionHostname(),
     spf: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
     dkim: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",
     dmarc: emailPassed ? "PASS" : "PENDING_DNS_RECORD_AUDIT",

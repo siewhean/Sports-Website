@@ -4,13 +4,29 @@ import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import { parseResendDeliveryEvent, type NotificationService } from "@matchday/notifications";
 import type { EmailDeliveryEventMetricRecorder } from "./email-delivery-metrics.js";
+import { requireMutationSession } from "./mutation-guard.js";
 
 const Json = Type.Unknown();
 const ErrorResponse = Type.Object(
   { error: Type.Object({ code: Type.String(), message: Type.String(), request_id: Type.String() }) },
   { additionalProperties: false },
 );
-const ReadErrors = { 401: ErrorResponse, 403: ErrorResponse };
+const ReadErrors = { 400: ErrorResponse, 401: ErrorResponse, 403: ErrorResponse };
+
+/**
+ * Preference types an account may read or set. Free-form strings let any account write unbounded
+ * junk rows into notification_preferences, so only types the product actually emits are accepted.
+ */
+export const NOTIFICATION_PREFERENCE_TYPES = [
+  "match_reminder",
+  "schedule_update",
+  "result_conflict",
+  "billing_receipt",
+  "competition-published",
+] as const;
+const NotificationTypeParams = Type.Object({
+  notificationType: Type.Union(NOTIFICATION_PREFERENCE_TYPES.map((value) => Type.Literal(value))),
+});
 const MutationErrors = { 400: ErrorResponse, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse };
 
 export async function registerNotificationRoutes(
@@ -18,6 +34,7 @@ export async function registerNotificationRoutes(
   options: {
     notificationService: NotificationService;
     identityRequests: IdentityRequestContext;
+    allowedOrigins: readonly string[];
     emailWebhookSecret?: string | undefined;
     metrics?: EmailDeliveryEventMetricRecorder | undefined;
   },
@@ -28,11 +45,7 @@ export async function registerNotificationRoutes(
   };
 
   const mutationActor = async (request: FastifyRequest) => {
-    const session = await options.identityRequests.authenticate(request);
-    const csrfHeader = request.headers["x-csrf-token"];
-    if (!csrfHeader || csrfHeader !== session.csrfToken) {
-      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
-    }
+    const session = await requireMutationSession(request, options.identityRequests, options.allowedOrigins);
     return { accountId: session.account.id };
   };
 
@@ -80,7 +93,7 @@ export async function registerNotificationRoutes(
     "/api/v1/notifications/preferences/:notificationType",
     {
       schema: {
-        params: Type.Object({ notificationType: Type.String({ minLength: 1 }) }),
+        params: NotificationTypeParams,
         response: { 200: Json, ...ReadErrors },
         tags: ["notifications"],
       },
@@ -99,7 +112,7 @@ export async function registerNotificationRoutes(
     "/api/v1/notifications/preferences/:notificationType",
     {
       schema: {
-        params: Type.Object({ notificationType: Type.String({ minLength: 1 }) }),
+        params: NotificationTypeParams,
         body: Type.Object({
           in_app_enabled: Type.Boolean(),
           email_enabled: Type.Boolean(),
@@ -146,11 +159,9 @@ export async function registerNotificationRoutes(
         eventInput = parseResendDeliveryEvent({ msgId, timestamp, signature }, rawBody, secret);
       } catch (err: unknown) {
         options.metrics?.recordRejection("resend", "auth_or_parse_failure");
-        throw new ApiError(
-          401,
-          ErrorCode.AUTHENTICATION_REQUIRED,
-          (err as Error).message || "Invalid webhook signature or payload",
-        );
+        // Parser/signature detail stays in server logs; the caller only learns that it was rejected.
+        request.log.warn({ err }, "Rejected email provider webhook");
+        throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Invalid webhook signature or payload");
       }
 
       let result;
@@ -158,7 +169,6 @@ export async function registerNotificationRoutes(
         result = await options.notificationService.recordDeliveryEvent(eventInput);
       } catch (err: unknown) {
         request.log.error({ err }, "recordDeliveryEvent error");
-        console.error("DEBUG recordDeliveryEvent failed:", err);
         throw err;
       }
 

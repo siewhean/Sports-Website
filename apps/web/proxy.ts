@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isPublicDocumentPath, PUBLIC_DOCUMENT_HEADER, PUBLIC_READ_FRESHNESS_HEADER } from "@/lib/public-routes";
 
 function createNonce() {
   return btoa(crypto.randomUUID());
@@ -30,6 +31,14 @@ function contentSecurityPolicy(nonce: string, useTransportSecurity: boolean) {
   ].join("; ");
 }
 
+/*
+ * CSP design: every HTML route keeps a per-request nonce + 'strict-dynamic' (no 'unsafe-inline' scripts). Next 16
+ * App Router streams the RSC payload as inline <script>self.__next_f.push(...)</script> tags whose content changes
+ * with the data, so a cached/prerendered HTML document cannot satisfy a strict CSP (hash/SRI only covers external
+ * chunks). Public pages therefore stay request-rendered; their cost is cut instead by the Data Cache for public
+ * reads (lib/phase2-public.server.ts), the sin1 function region next to the API (vercel.json), and the CDN-cached
+ * JSON snapshot route for live updates (/api/public/competitions/:slug/snapshot, outside this matcher).
+ */
 export function proxy(request: NextRequest) {
   const nonce = createNonce();
   const useTransportSecurity = requestUsesHttps(request);
@@ -37,8 +46,12 @@ export function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("content-security-policy", csp);
   requestHeaders.set("x-nonce", nonce);
+  // Always overwritten so a browser cannot choose the value directly. An RSC request (router.refresh() after a
+  // live version event, or a client navigation) must see the newest publication, so it bypasses the Data Cache.
+  requestHeaders.set(PUBLIC_READ_FRESHNESS_HEADER, request.headers.has("rsc") ? "live" : "cached");
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
+  if (isPublicDocumentPath(request.nextUrl.pathname)) response.headers.set(PUBLIC_DOCUMENT_HEADER, "1");
   response.headers.set("Content-Security-Policy", csp);
   response.headers.set("Cross-Origin-Opener-Policy", "same-origin");
   response.headers.set("Cross-Origin-Resource-Policy", "same-origin");

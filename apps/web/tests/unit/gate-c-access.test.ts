@@ -142,7 +142,7 @@ describe("Gate C access source guards", () => {
     expect(scoringSource).toContain("writerStateRef.current = phase2Machine.expiring");
     expect(scoringSource).toContain("void refresh(true)");
     expect(scoringSource).toContain("setAnnouncement(");
-    expect(scoringSource).toContain("phase2Copy.leaseExpiring");
+    expect(scoringSource).toContain("scorerMessages.titles.expiring");
     expect(scoringSource).toContain("setAnnouncement(scoringSessionAnnouncement(session))");
     expect(scoringSource).not.toContain('role="status"');
     expect(browserSource).not.toContain("candidatePage.reload()");
@@ -158,6 +158,7 @@ describe("Gate C access source guards", () => {
       ["const advancePeriod = async", "await port.appendEvent"],
       ["const recordAction = async", "await port.appendEvent"],
       ["const reverseAction = async", "await port.appendEvent"],
+      ["const drainTapQueue = async", "await port.appendEvent"],
     ] as const) {
       const handlerIndex = source.indexOf(handler);
       const invalidationIndex = source.indexOf("sessionRefreshFenceRef.current.cancel()", handlerIndex);
@@ -177,8 +178,9 @@ describe("Gate C access source guards", () => {
     expect(finaliseCounterIndex).toBeGreaterThan(finaliseHandlerIndex);
     expect(finaliseDrainIndex).toBeGreaterThan(finaliseCounterIndex);
     expect(finaliseMutationIndex).toBeGreaterThan(finaliseDrainIndex);
-    expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(6);
-    expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(6);
+    // Six direct mutations plus the optimistic tap queue drain, each balanced.
+    expect(source.match(/mutationInFlightRef\.current \+= 1/g)).toHaveLength(7);
+    expect(source.match(/mutationInFlightRef\.current -= 1/g)).toHaveLength(7);
   });
 });
 

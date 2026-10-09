@@ -14,7 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { gateCOfflineQueueLimit, gateCOfflineQueueWarningCount } from "@matchday/contracts";
 import type { SportId } from "@matchday/domain";
-import { opaqueId, translate as t } from "@matchday/ui";
+import { interpolate, opaqueId, scorerMessages, translate as t } from "@matchday/ui";
 import { phase2Copy, phase2Machine, type ScoringEventCommand, type ScoringSessionView } from "@/lib/phase2";
 import { FiveSportScoreControls, type FiveSportScoreControlsCopy } from "@/components/phase5/FiveSportScoreControls";
 import { buildFiveSportScorecardDefinition } from "@/lib/five-sport-scorecard";
@@ -65,7 +65,27 @@ import {
 } from "@/lib/phase2-scoring";
 import { LatestRequestFence } from "@/lib/latest-request";
 import { elapsedTimeMode, formatRecordedTime, recordedElapsedSeconds } from "@/lib/scoring-time";
+import {
+  emptyTapQueue,
+  isOneTapAction,
+  nextTapToSend,
+  optimisticDelta,
+  tapQueueIdle,
+  tapQueueReducer,
+  unsentTapCount,
+  withExpectedSequence,
+  type QueuedTap,
+  type TapQueueAction,
+  type TapQueueState,
+} from "@/lib/scorer-tap-queue";
+import { scorerLinkTarget, scorerStatus } from "@/lib/scorer-status";
+import { useUrlSearch } from "@/components/ui/useUrlSearch";
+import { useHighContrast, useOnline, useScreenWakeLock } from "@/components/ui/useScorerDevice";
 import styles from "./PhoneScoring.module.css";
+
+/** How long the inline Undo stays available after a one-tap action. */
+const undoWindowMs = 5_000;
+type UndoToast = Readonly<{ tapId: string; text: string; label: string }>;
 
 type ScoringPhase = "access" | "confirm" | "live" | "review" | "receipt";
 type OfflineState =
@@ -223,15 +243,45 @@ export function PhoneScoring({
   const offlineReplayAbortRef = useRef<AbortController | null>(null);
   const componentMountedRef = useRef(false);
   const offlineStatusRef = useRef<HTMLElement>(null);
+  const [tapQueue, setTapQueue] = useState<TapQueueState>(() => emptyTapQueue());
+  const tapQueueRef = useRef<TapQueueState>(tapQueue);
+  const drainingRef = useRef(false);
+  const scoreStateRef = useRef(scoreState);
+  const offlineAuthorizationIdRef = useRef<string | null>(null);
+  const handleTransportErrorRef = useRef<((error: unknown) => Promise<void>) | null>(null);
+  const [undoToast, setUndoToast] = useState<UndoToast | null>(null);
+  const [reversalPreset, setReversalPreset] = useState<string | null>(null);
+  const online = useOnline();
+  const [search] = useUrlSearch();
+  const linkTarget = useMemo(() => scorerLinkTarget(search), [search]);
+  const codeNeedsLink = mode === phase2Machine.scoringApiMode && !linkTarget.matchId && !linkTarget.competitionId;
+  const [highContrast, setHighContrast] = useHighContrast();
+  const wakeLock = useScreenWakeLock(phase === "live");
+  const commitTap = useCallback((action: TapQueueAction) => {
+    tapQueueRef.current = tapQueueReducer(tapQueueRef.current, action);
+    setTapQueue(tapQueueRef.current);
+  }, []);
 
   const definition = scorecardDefinition;
   const manualTimeEnabled = definition.fields.some((field) => field.id === "manual_event_time" && field.enabled);
   const recordedSeconds = manualTimeEnabled ? recordedElapsedSeconds(eventTime, timeMode, periodDurationMinutes) : null;
   const elapsedTime = recordedSeconds === null ? null : formatRecordedTime(recordedSeconds);
   const score = { home: scoreState.home, away: scoreState.away };
-  const latestReversibleAction = [...scoreState.actions]
-    .reverse()
-    .find((action) => action.reversible && !action.reversed);
+  // Optimistic: taps not yet folded into the authoritative score move it immediately.
+  const currentSegmentScore = scoreState.segments.find((segment) => segment.number === scoreState.currentSegment);
+  const displayScore =
+    definition.scoreMode === "segments"
+      ? score
+      : {
+          home: score.home + optimisticDelta(tapQueue, phase2Machine.home),
+          away: score.away + optimisticDelta(tapQueue, phase2Machine.away),
+        };
+  const displaySegmentScore = {
+    home: (currentSegmentScore?.home ?? 0) + optimisticDelta(tapQueue, phase2Machine.home, scoreState.currentSegment),
+    away: (currentSegmentScore?.away ?? 0) + optimisticDelta(tapQueue, phase2Machine.away, scoreState.currentSegment),
+  };
+  const tapsIdle = tapQueueIdle(tapQueue);
+  const unsentTaps = unsentTapCount(tapQueue);
   const supportsPeriodAdvance = definition.operationalControls.some(
     (control) => control.id === phase2Machine.periodChange,
   );
@@ -251,88 +301,100 @@ export function PhoneScoring({
     pendingCount,
     queueLimit: gateCOfflineQueueLimit,
   });
+  const status = scorerStatus({
+    writerState,
+    offlineState,
+    online,
+    pendingCount: pendingCount + unsentTaps,
+    syncing: !tapsIdle,
+  });
   const writerTitle =
     writerState === phase2Machine.active
-      ? phase2Copy.writerActive
+      ? scorerMessages.titles.active
       : writerState === phase2Machine.expired
-        ? phase2Copy.sessionExpired
+        ? scorerMessages.titles.expired
         : writerState === phase2Machine.expiring
-          ? phase2Copy.leaseExpiring
+          ? scorerMessages.titles.expiring
           : writerState === phase2Machine.revoked
-            ? phase2Copy.sessionRevoked
+            ? scorerMessages.titles.revoked
             : writerState === phase2Machine.rateLimited
-              ? phase2Copy.rateLimited
+              ? scorerMessages.titles.rateLimited
               : writerState === phase2Machine.candidate
-                ? phase2Copy.candidate
+                ? scorerMessages.titles.candidate
                 : writerState === phase2Machine.transferred
-                  ? phase2Copy.transferred
+                  ? scorerMessages.titles.transferred
                   : writerState === phase2Machine.checking
-                    ? phase2Copy.checkingAccess
+                    ? scorerMessages.titles.checking
                     : writerState === phase2Machine.conflict
-                      ? phase2Copy.writerConflict
-                      : phase2Copy.readOnly;
+                      ? scorerMessages.titles.conflict
+                      : scorerMessages.titles.readOnly;
 
-  const applySession = useCallback(async (session: ScoringSessionView | null): Promise<void> => {
-    if (!session) return;
-    assertScoringWorkerTransitionAllowed();
-    const previousPrincipalId = principalIdRef.current ?? readScoringPrincipalCookie();
-    if (previousPrincipalId && previousPrincipalId !== session.principalId) {
-      sessionRefreshFenceRef.current.cancel();
-      offlineReplayAbortRef.current?.abort();
-    }
-    await offlineResourcesRef.current?.repository.bindPrincipal(session.principalId);
-    principalIdRef.current = session.principalId;
-    retainScoringPrincipalCookie(session.principalId, session.expiresAt);
-    const previousState = writerStateRef.current;
-    setCompetitionSlug(session.competitionSlug);
-    setCompetitionName(session.competitionName ?? session.competitionSlug);
-    setScorecardDefinition(buildFiveSportScorecardDefinition(session.sportId, session.sportSettings));
-    setAllowUnknownScorer(
-      session.sportId === phase2Machine.canoePolo && session.sportSettings.allowUnknownScorer === true,
-    );
-    setMatchId(session.matchId);
-    setMatchLabel(session.matchLabel);
-    setStage(session.stage);
-    setFixtureSchedule(session.schedule ?? null);
-    setPeriodDurationMinutes(session.periodDurationMinutes ?? null);
-    setHome(session.home);
-    setAway(session.away);
-    setScoreState(session.scoreState);
-    setPeriod(String(session.scoreState.currentSegment));
-    setThroughSequence(session.throughSequence);
-    const nextState: WriterState =
-      session.mode === "writer"
-        ? scoringWriterAvailability(session)
-        : session.mode === "candidate"
-          ? phase2Machine.candidate
-          : session.mode === "transferred"
-            ? phase2Machine.transferred
-            : phase2Machine.readOnly;
-    sessionActiveRef.current = true;
-    writerStateRef.current = nextState;
-    setWriterState(nextState);
-    setTakeoverPending(session.takeoverStatus === "pending");
-    if (
-      ((previousState === phase2Machine.candidate || previousState === phase2Machine.expiring) &&
-        nextState === phase2Machine.active) ||
-      (previousState !== phase2Machine.expiring && nextState === phase2Machine.expiring) ||
-      (previousState !== phase2Machine.transferred && nextState === phase2Machine.transferred)
-    ) {
-      setAnnouncement(
-        nextState === phase2Machine.active
-          ? phase2Copy.accessRestored
-          : nextState === phase2Machine.expiring
-            ? phase2Copy.leaseExpiring
-            : phase2Copy.transferred,
+  const applySession = useCallback(
+    async (session: ScoringSessionView | null): Promise<void> => {
+      if (!session) return;
+      assertScoringWorkerTransitionAllowed();
+      const previousPrincipalId = principalIdRef.current ?? readScoringPrincipalCookie();
+      if (previousPrincipalId && previousPrincipalId !== session.principalId) {
+        sessionRefreshFenceRef.current.cancel();
+        offlineReplayAbortRef.current?.abort();
+      }
+      await offlineResourcesRef.current?.repository.bindPrincipal(session.principalId);
+      principalIdRef.current = session.principalId;
+      retainScoringPrincipalCookie(session.principalId, session.expiresAt);
+      const previousState = writerStateRef.current;
+      setCompetitionSlug(session.competitionSlug);
+      setCompetitionName(session.competitionName ?? session.competitionSlug);
+      setScorecardDefinition(buildFiveSportScorecardDefinition(session.sportId, session.sportSettings));
+      setAllowUnknownScorer(
+        session.sportId === phase2Machine.canoePolo && session.sportSettings.allowUnknownScorer === true,
       );
-      pendingWriterFocusRef.current =
-        nextState === phase2Machine.active
-          ? phase2Machine.active
-          : nextState === phase2Machine.expiring
-            ? phase2Machine.expiring
-            : phase2Machine.transferred;
-    }
-  }, []);
+      setMatchId(session.matchId);
+      setMatchLabel(session.matchLabel);
+      setStage(session.stage);
+      setFixtureSchedule(session.schedule ?? null);
+      setPeriodDurationMinutes(session.periodDurationMinutes ?? null);
+      setHome(session.home);
+      setAway(session.away);
+      setScoreState(session.scoreState);
+      scoreStateRef.current = session.scoreState;
+      setPeriod(String(session.scoreState.currentSegment));
+      setThroughSequence(session.throughSequence);
+      commitTap({ type: "sync", sequence: session.throughSequence });
+      const nextState: WriterState =
+        session.mode === "writer"
+          ? scoringWriterAvailability(session)
+          : session.mode === "candidate"
+            ? phase2Machine.candidate
+            : session.mode === "transferred"
+              ? phase2Machine.transferred
+              : phase2Machine.readOnly;
+      sessionActiveRef.current = true;
+      writerStateRef.current = nextState;
+      setWriterState(nextState);
+      setTakeoverPending(session.takeoverStatus === "pending");
+      if (
+        ((previousState === phase2Machine.candidate || previousState === phase2Machine.expiring) &&
+          nextState === phase2Machine.active) ||
+        (previousState !== phase2Machine.expiring && nextState === phase2Machine.expiring) ||
+        (previousState !== phase2Machine.transferred && nextState === phase2Machine.transferred)
+      ) {
+        setAnnouncement(
+          nextState === phase2Machine.active
+            ? scorerMessages.titles.active
+            : nextState === phase2Machine.expiring
+              ? scorerMessages.titles.expiring
+              : scorerMessages.titles.transferred,
+        );
+        pendingWriterFocusRef.current =
+          nextState === phase2Machine.active
+            ? phase2Machine.active
+            : nextState === phase2Machine.expiring
+              ? phase2Machine.expiring
+              : phase2Machine.transferred;
+      }
+    },
+    [commitTap],
+  );
 
   const offlineResources = useCallback(async (): Promise<OfflineResources> => {
     if (offlineResourcesRef.current) return offlineResourcesRef.current;
@@ -642,7 +704,7 @@ export function PhoneScoring({
           writerStateRef.current = preservedState;
           setWriterState(preservedState);
           setAnnouncement(
-            preservedState === phase2Machine.expiring ? phase2Copy.leaseExpiring : phase2Copy.serviceUnavailable,
+            preservedState === phase2Machine.expiring ? scorerMessages.titles.expiring : phase2Copy.serviceUnavailable,
           );
           return;
         }
@@ -668,7 +730,7 @@ export function PhoneScoring({
       if (writerStateRef.current === phase2Machine.active) {
         writerStateRef.current = phase2Machine.expiring;
         setWriterState(phase2Machine.expiring);
-        setAnnouncement(phase2Copy.leaseExpiring);
+        setAnnouncement(scorerMessages.titles.expiring);
         pendingWriterFocusRef.current = phase2Machine.expiring;
       }
       void refresh(true);
@@ -852,7 +914,12 @@ export function PhoneScoring({
       const device = await getScoringDeviceIdentity();
       setDeviceLabel(device.label);
       setDeviceLabelDraft(device.label);
-      const session = await port.exchangeAccess({ shortCode: code.trim(), device });
+      const session = await port.exchangeAccess({
+        shortCode: code.trim(),
+        device,
+        ...(linkTarget.matchId ? { expectedMatchId: linkTarget.matchId } : {}),
+        ...(linkTarget.competitionId ? { expectedCompetitionId: linkTarget.competitionId } : {}),
+      });
       await applySession(session);
       setCodeError("");
       setPhase(session.mode === phase2Machine.writer ? "confirm" : "live");
@@ -1009,7 +1076,7 @@ export function PhoneScoring({
         pendingThroughSequence: pendingSync ? throughSequence : null,
       });
       setTakeoverPending(result.status === "pending");
-      setAnnouncement(phase2Copy.takeoverRequested);
+      setAnnouncement(scorerMessages.takeOverSent);
     } catch (error) {
       await handleTransportError(error);
     } finally {
@@ -1028,7 +1095,7 @@ export function PhoneScoring({
     try {
       const receipt = await port.appendEvent({
         clientEventId: crypto.randomUUID(),
-        expectedSequence: throughSequence,
+        expectedSequence: tapQueueRef.current.sequence,
         matchId,
         eventType: phase2Machine.matchStarted,
         canonical: true,
@@ -1056,6 +1123,7 @@ export function PhoneScoring({
     setPendingAction(null);
     setReversalTarget(null);
     setReversalReason("");
+    setReversalPreset(null);
     setUnknownParticipant(false);
     setScorerError("");
     const returnTarget = actionReturnTargetRef.current;
@@ -1109,6 +1177,7 @@ export function PhoneScoring({
   ) => {
     actionReturnTargetRef.current = trigger;
     setReversalReason("");
+    setReversalPreset(null);
     setScorerError("");
     setPendingAction(null);
     setReversalTarget(action);
@@ -1174,7 +1243,7 @@ export function PhoneScoring({
 
     const command: ScoringEventCommand = {
       clientEventId: crypto.randomUUID(),
-      expectedSequence: throughSequence,
+      expectedSequence: tapQueueRef.current.sequence,
       matchId,
       eventType: phase2Machine.periodChange,
       canonical: true,
@@ -1214,6 +1283,222 @@ export function PhoneScoring({
     }
   };
 
+  useEffect(() => {
+    offlineAuthorizationIdRef.current = offlineAuthorizationId;
+    handleTransportErrorRef.current = handleTransportError;
+  }, [handleTransportError, offlineAuthorizationId]);
+
+  useEffect(() => {
+    if (!undoToast) return;
+    const timer = window.setTimeout(() => setUndoToast(null), undoWindowMs);
+    return () => window.clearTimeout(timer);
+  }, [undoToast]);
+
+  const waitForTapQueueIdle = () =>
+    new Promise<void>((resolve) => {
+      const check = () =>
+        tapQueueIdle(tapQueueRef.current) && !drainingRef.current ? resolve() : window.setTimeout(check, 50);
+      check();
+    });
+
+  const sideName = (side: "home" | "away" | null) =>
+    side === phase2Machine.home ? home : side === phase2Machine.away ? away : matchLabel;
+
+  /** The command for a queued tap at send time; an undo resolves its target's server event id now. */
+  const commandForTap = (tap: QueuedTap, expectedSequence: number): ScoringEventCommand => {
+    const command = withExpectedSequence(tap, expectedSequence);
+    if (!tap.undoOf) return command;
+    const targetEventId =
+      tapQueueRef.current.taps.find((candidate) => candidate.id === tap.undoOf)?.eventId ??
+      scoreStateRef.current.actions.find((action) => action.clientEventId === tap.undoOf)?.eventId;
+    return targetEventId
+      ? { ...command, reversalTargetEventId: targetEventId }
+      : { ...command, reversalTargetClientEventId: tap.undoOf };
+  };
+
+  /**
+   * Sends queued taps one at a time. Each expects the sequence returned by the previous receipt; the controls
+   * stay usable throughout (new taps simply join the queue). When the queue drains, the authoritative session
+   * is fetched once to reconcile the optimistic score.
+   */
+  const drainTapQueue = async () => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    try {
+      for (;;) {
+        let acknowledged = false;
+        for (let tap = nextTapToSend(tapQueueRef.current); tap; tap = nextTapToSend(tapQueueRef.current)) {
+          const command = commandForTap(tap, tapQueueRef.current.sequence);
+          commitTap({ type: "send", id: tap.id });
+          mutationInFlightRef.current += 1;
+          sessionRefreshFenceRef.current.cancel();
+          try {
+            if (!navigator.onLine) throw new ScoringTransportError(phase2Machine.unavailable);
+            const receipt = await port.appendEvent(command);
+            commitTap({ type: "acknowledged", id: tap.id, eventId: receipt.eventId, sequence: receipt.sequence });
+            setThroughSequence(receipt.sequence);
+            setPendingSync(receipt.syncState === "pending");
+            acknowledged = true;
+          } catch (error) {
+            if (
+              error instanceof ScoringTransportError &&
+              error.state === "unavailable" &&
+              offlineAuthorizationIdRef.current
+            ) {
+              // Offline: hand this tap and everything after it to the offline queue, in order.
+              const pending = tapQueueRef.current.taps.filter((candidate) => candidate.status !== "acknowledged");
+              try {
+                for (const item of pending) {
+                  await queueOfflineEvent(commandForTap(item, tapQueueRef.current.sequence), phase2Copy.eventRecorded);
+                  commitTap({ type: "offloaded", ids: [item.id] });
+                }
+              } catch (offlineError) {
+                commitTap({ type: "rejected", reason: phase2Copy.offlineEventStorageError });
+                handleOfflineQueueFailure(offlineError, phase2Copy.offlineEventStorageError);
+              }
+            } else {
+              const reason =
+                error instanceof ScoringTransportError && error.state === "invalid" && error.detailMessage
+                  ? error.detailMessage
+                  : scorerMessages.rollbackGeneric;
+              commitTap({ type: "rejected", reason });
+              setUndoToast(null);
+              setAnnouncement(interpolate(scorerMessages.rolledBack, { reason }));
+              await handleTransportErrorRef.current?.(error);
+            }
+            break;
+          } finally {
+            sessionRefreshFenceRef.current.cancel();
+            mutationInFlightRef.current -= 1;
+          }
+        }
+        if (acknowledged && tapQueueIdle(tapQueueRef.current)) {
+          try {
+            await applySession(await port.recoverSession());
+          } catch (error) {
+            await handleTransportErrorRef.current?.(error);
+          }
+        }
+        if (!nextTapToSend(tapQueueRef.current)) break;
+      }
+    } finally {
+      drainingRef.current = false;
+    }
+  };
+
+  const tapAction = (action: ScoreControlAction) => {
+    const segmentNumber = Number(period);
+    const manualTimeSeconds = manualTimeEnabled ? recordedSeconds : null;
+    if (!Number.isInteger(segmentNumber) || segmentNumber < 1 || (manualTimeEnabled && manualTimeSeconds === null)) {
+      setInteractionError(phase2Copy.periodRequired);
+      setAnnouncement(phase2Copy.periodRequired);
+      window.requestAnimationFrame(() => interactionErrorRef.current?.focus({ preventScroll: true }));
+      return;
+    }
+    setInteractionError("");
+    commitTap({ type: "dismissRollback" });
+    const submittedSegmentNumber = canonicalSegmentNumber(action.control.id, scoreState.currentSegment, segmentNumber);
+    const clientEventId = crypto.randomUUID();
+    commitTap({
+      type: "enqueue",
+      tap: {
+        id: clientEventId,
+        command: {
+          clientEventId,
+          matchId,
+          eventType: action.control.id,
+          canonical: true,
+          ...(action.side ? { team: action.side } : {}),
+          scorer: "",
+          period: submittedSegmentNumber,
+          segmentNumber: submittedSegmentNumber,
+          manualTime: elapsedTime ?? eventTime,
+          ...(manualTimeEnabled ? { manualTimeSeconds } : {}),
+          occurredAt: new Date().toISOString(),
+        },
+        side: action.side,
+        scoreDelta: action.control.scoreDelta,
+        segmentNumber: submittedSegmentNumber,
+        label: action.control.label,
+      },
+    });
+    const team = sideName(action.side);
+    setUndoToast(
+      action.control.reversible
+        ? {
+            tapId: clientEventId,
+            text: interpolate(scorerMessages.undoToast, { action: action.control.label, team }),
+            label: interpolate(scorerMessages.undoLabel, { action: action.control.label, team }),
+          }
+        : null,
+    );
+    setAnnouncement(
+      action.side
+        ? interpolate(scorerMessages.recorded, { action: action.control.label, team })
+        : interpolate(scorerMessages.recordedGlobal, { action: action.control.label }),
+    );
+    void drainTapQueue();
+  };
+
+  const undoTap = (toast: UndoToast) => {
+    setUndoToast(null);
+    const target = tapQueueRef.current.taps.find((tap) => tap.id === toast.tapId);
+    const action = scoreStateRef.current.actions.find((candidate) => candidate.clientEventId === toast.tapId);
+    const label = target?.label ?? action?.label ?? "";
+    if (target?.status === "queued") {
+      // Never left the phone: just drop it.
+      commitTap({ type: "cancel", id: target.id });
+      setAnnouncement(interpolate(scorerMessages.undone, { action: label }));
+      return;
+    }
+    if (!target && (!action || action.reversed || !action.reversible)) {
+      setAnnouncement(scorerMessages.undoUnavailable);
+      return;
+    }
+    if (!target && action && offlineAuthorizationIdRef.current && pendingCount > 0) {
+      // Stored offline: the confirmation sheet knows whether the target is still local to this phone.
+      actionReturnTargetRef.current = null;
+      setReversalReason("");
+      setReversalPreset(null);
+      setScorerError("");
+      setPendingAction(null);
+      setReversalTarget(action);
+      return;
+    }
+    const segmentNumber = target?.segmentNumber ?? action?.segmentNumber ?? scoreState.currentSegment;
+    const clientEventId = crypto.randomUUID();
+    commitTap({
+      type: "enqueue",
+      tap: {
+        id: clientEventId,
+        command: {
+          clientEventId,
+          matchId,
+          eventType: phase2Machine.reversal,
+          canonical: true,
+          scorer: "",
+          period: segmentNumber,
+          segmentNumber,
+          manualTime: elapsedTime ?? eventTime,
+          reason: scorerMessages.undoReasonDefault,
+          occurredAt: new Date().toISOString(),
+        },
+        side: target?.side ?? action?.side ?? null,
+        scoreDelta: -(target?.scoreDelta ?? action?.scoreDelta ?? 0),
+        segmentNumber,
+        label,
+        undoOf: toast.tapId,
+      },
+    });
+    setAnnouncement(interpolate(scorerMessages.undone, { action: label }));
+    void drainTapQueue();
+  };
+
+  const activateControl = (action: ScoreControlAction, trigger: HTMLButtonElement) => {
+    if (isOneTapAction(action)) tapAction(action);
+    else openActionDialog(action, trigger);
+  };
+
   const recordAction = async () => {
     if (!pendingAction) return;
     const participant = scorer.trim();
@@ -1235,9 +1520,11 @@ export function PhoneScoring({
     }
     setScorerError("");
     setInteractionError("");
+    // Earlier one-tap actions must be confirmed first so this command expects the right sequence.
+    await waitForTapQueueIdle();
     const command: ScoringEventCommand = {
       clientEventId: crypto.randomUUID(),
-      expectedSequence: throughSequence,
+      expectedSequence: tapQueueRef.current.sequence,
       matchId,
       eventType: pendingAction.control.id,
       canonical: true,
@@ -1282,12 +1569,15 @@ export function PhoneScoring({
 
   const reverseAction = async () => {
     if (!reversalTarget) return;
-    const reason = reversalReason.trim();
-    if (reason.length < 3) {
+    // The reason is optional for the scorer; the record still needs one, so a neutral preset is sent.
+    const typedReason = reversalReason.trim();
+    if (typedReason && typedReason.length < 3) {
       setScorerError(phase2Copy.reversalReasonHint);
       scorerInputRef.current?.focus();
       return;
     }
+    const reason = typedReason || reversalPreset || scorerMessages.undoReasonDefault;
+    await waitForTapQueueIdle();
     mutationInFlightRef.current += 1;
     setActionPending(true);
     setInteractionError("");
@@ -1304,7 +1594,7 @@ export function PhoneScoring({
       );
       reversalCommand = {
         clientEventId: crypto.randomUUID(),
-        expectedSequence: throughSequence,
+        expectedSequence: tapQueueRef.current.sequence,
         matchId,
         eventType: phase2Machine.reversal,
         canonical: true,
@@ -1362,7 +1652,7 @@ export function PhoneScoring({
     const command = {
       clientEventId: crypto.randomUUID(),
       matchId,
-      expectedSequence: throughSequence,
+      expectedSequence: tapQueueRef.current.sequence,
       homeScore: score.home,
       awayScore: score.away,
       scorer: scorer.trim(),
@@ -1434,7 +1724,11 @@ export function PhoneScoring({
               {away}
             </h1>
           )}
-          {phase === "access" ? (
+          {phase === "access" && codeNeedsLink ? (
+            <p className="p2-score-form" data-access-guidance="">
+              {scorerMessages.codeNeedsLink}
+            </p>
+          ) : phase === "access" ? (
             <div className="p2-score-form">
               <label>
                 <span>{phase2Copy.codeLabel}</span>
@@ -1541,28 +1835,59 @@ export function PhoneScoring({
       data-writer-state={writerState}
       data-offline-state={offlineState}
       data-offline-preparation-error-code={offlinePreparationErrorCode ?? undefined}
+      data-contrast={highContrast ? opaqueId("high") : undefined}
     >
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
       <header className={`p2-score__header ${styles.matchHeader}`}>
         <div>
-          <p>{stage}</p>
+          <p>{interpolate(scorerMessages.scorerHeading, { stage })}</p>
           <h1>{matchLabel}</h1>
         </div>
         <div
           ref={writerStatusRef}
-          className={`p2-writer p2-writer--${writerState}`}
-          aria-label={writerTitle}
+          className={`p2-writer p2-writer--${writerState} ${styles.statusChip}`}
+          data-tone={status.tone}
+          aria-label={`${scorerMessages.statusLabel}: ${status.label}. ${writerTitle}`}
           tabIndex={-1}
         >
-          {writerState === "active" ? <CloudCheck /> : writerState === "conflict" ? <ShieldWarning /> : <LockKey />}
-          <span>
-            <strong>{writerTitle}</strong>
-            {writerState === "active" ? <small>{phase2Copy.synced}</small> : null}
-          </span>
+          {status.tone === "ok" ? (
+            <CloudCheck aria-hidden="true" />
+          ) : status.tone === "blocked" ? (
+            <ShieldWarning aria-hidden="true" />
+          ) : (
+            <Warning aria-hidden="true" />
+          )}
+          <strong>{status.label}</strong>
         </div>
       </header>
+      <section className={styles.liveScore} aria-label={scorerMessages.liveScore}>
+        <div className={styles.liveScoreSide} data-side="home">
+          <span>{home}</span>
+          <strong>{displayScore.home}</strong>
+        </div>
+        <div className={styles.liveScoreSide} data-side="away">
+          <span>{away}</span>
+          <strong>{displayScore.away}</strong>
+        </div>
+        {definition.scoreMode === "segments" ? (
+          <p className={styles.liveScoreSegment}>
+            {definition.segmentLabel} {scoreState.currentSegment}: {displaySegmentScore.home}–{displaySegmentScore.away}
+          </p>
+        ) : null}
+      </section>
+      {tapQueue.rolledBack ? (
+        <section className={`p2-score-warning ${styles.rollback}`}>
+          <Warning aria-hidden="true" />
+          <div>
+            <strong>{interpolate(scorerMessages.rolledBack, { reason: tapQueue.rolledBack.reason })}</strong>
+            <button className="p2-score-secondary" type="button" onClick={() => commitTap({ type: "dismissRollback" })}>
+              {phase2Copy.continue}
+            </button>
+          </div>
+        </section>
+      ) : null}
       {!offlineAuthorizationId &&
       offlineState === phase2Machine.offlineOnline &&
       mode === phase2Machine.scoringApiMode &&
@@ -1760,12 +2085,23 @@ export function PhoneScoring({
           </div>
         )}
       </section>
+      <section className={styles.settings} aria-label={scorerMessages.matchSettings}>
+        <label className="p2-check">
+          <input type="checkbox" checked={highContrast} onChange={(event) => setHighContrast(event.target.checked)} />
+          <span>
+            {scorerMessages.highContrast}
+            <small>{scorerMessages.highContrastHint}</small>
+          </span>
+        </label>
+        {wakeLock === "active" ? <p>{scorerMessages.screenAwake}</p> : null}
+        {wakeLock === "unsupported" ? <p>{scorerMessages.screenAwakeUnavailable}</p> : null}
+      </section>
       {writerState === "conflict" ? (
         <section className="p2-score-warning" role="alert">
           <Warning />
           <div>
-            <strong>{phase2Copy.writerConflict}</strong>
-            <p>{phase2Copy.writerConflictBody}</p>
+            <strong>{scorerMessages.titles.conflict}</strong>
+            <p>{scorerMessages.bodies.conflict}</p>
           </div>
         </section>
       ) : null}
@@ -1783,27 +2119,27 @@ export function PhoneScoring({
             <strong>{writerTitle}</strong>
             <p>
               {writerState === phase2Machine.candidate
-                ? phase2Copy.candidateBody
+                ? scorerMessages.bodies.candidate
                 : writerState === phase2Machine.transferred
-                  ? phase2Copy.transferredBody
+                  ? scorerMessages.bodies.transferred
                   : writerState === phase2Machine.expiring
-                    ? phase2Copy.leaseExpiringBody
+                    ? scorerMessages.bodies.expiring
                     : writerState === phase2Machine.expired
-                      ? phase2Copy.qrUnavailableBody
+                      ? scorerMessages.bodies.expired
                       : writerState === phase2Machine.revoked
-                        ? phase2Copy.sessionRevoked
+                        ? scorerMessages.bodies.revoked
                         : writerState === phase2Machine.rateLimited
-                          ? phase2Copy.rateLimited
+                          ? scorerMessages.bodies.rateLimited
                           : writerState === phase2Machine.readOnly
-                            ? phase2Copy.candidateBody
-                            : phase2Copy.leaseExpiringBody}
+                            ? scorerMessages.bodies.readOnly
+                            : scorerMessages.bodies.expiring}
             </p>
             {writerState === phase2Machine.candidate && !takeoverPending ? (
               <button className="p2-score-secondary" type="button" onClick={() => void requestTakeover()}>
-                {phase2Copy.requestTakeover}
+                {scorerMessages.takeOverAction}
               </button>
             ) : null}
-            {takeoverPending ? <p>{phase2Copy.takeoverRequested}</p> : null}
+            {takeoverPending ? <p>{scorerMessages.takeOverSent}</p> : null}
           </div>
         </section>
       ) : null}
@@ -1865,6 +2201,32 @@ export function PhoneScoring({
       ) : (
         <>
           <section className={`p2-event-controls ${styles.eventControls}`} aria-label={definition.displayName}>
+            <div ref={scoreControlsRef} role="group" aria-label={phase2Copy.scoreControlsTitle} tabIndex={-1}>
+              <FiveSportScoreControls
+                definition={activeScorecardDefinition}
+                homeLabel={home}
+                awayLabel={away}
+                score={displayScore}
+                copy={scoreControlsCopy}
+                readOnly={locked}
+                pending={actionPending}
+                showScoreboard={false}
+                statusMessage={
+                  manualTimeEnabled
+                    ? `${definition.segmentLabel} ${scoreState.currentSegment} · ${phase2Copy.elapsedPreview} ${elapsedTime ?? "—"}`
+                    : `${definition.segmentLabel} ${scoreState.currentSegment}`
+                }
+                onActivate={activateControl}
+              />
+              {undoToast ? (
+                <div className={styles.undoToast}>
+                  <span>{undoToast.text}</span>
+                  <button type="button" aria-label={undoToast.label} onClick={() => undoTap(undoToast)}>
+                    {scorerMessages.undo}
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <div className="p2-event-context">
               <div>
                 <label>
@@ -1931,56 +2293,13 @@ export function PhoneScoring({
                 ) : null}
               </div>
             </div>
-            <div ref={scoreControlsRef} role="group" aria-label={phase2Copy.scoreControlsTitle} tabIndex={-1}>
-              {definition.scoreMode === "segments" ? (
-                <dl className="p2-segment-score" aria-label={`${definition.segmentLabel} ${scoreState.currentSegment}`}>
-                  <div>
-                    <dt>{home}</dt>
-                    <dd>
-                      {scoreState.segments.find((segment) => segment.number === scoreState.currentSegment)?.home ?? 0}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>{away}</dt>
-                    <dd>
-                      {scoreState.segments.find((segment) => segment.number === scoreState.currentSegment)?.away ?? 0}
-                    </dd>
-                  </div>
-                </dl>
-              ) : null}
-              <FiveSportScoreControls
-                definition={activeScorecardDefinition}
-                homeLabel={home}
-                awayLabel={away}
-                score={score}
-                copy={scoreControlsCopy}
-                readOnly={locked}
-                pending={actionPending}
-                statusMessage={
-                  manualTimeEnabled
-                    ? `${definition.segmentLabel} ${scoreState.currentSegment} · ${phase2Copy.elapsedPreview} ${elapsedTime ?? "—"}`
-                    : `${definition.segmentLabel} ${scoreState.currentSegment}`
-                }
-                onActivate={openActionDialog}
-              />
-              {latestReversibleAction && !locked ? (
-                <button
-                  type="button"
-                  className={`p2-score-secondary ${styles.quickUndo}`}
-                  disabled={actionPending}
-                  onClick={(event) => openReversalDialog(latestReversibleAction, event.currentTarget)}
-                >
-                  {phase2Copy.reverseEvent}: {latestReversibleAction.label}
-                </button>
-              ) : null}
-            </div>
           </section>
-          <section className="p2-event-log" aria-labelledby="event-log-title">
+          <section className={`p2-event-log ${styles.eventLog}`} aria-labelledby="event-log-title">
             <header>
-              <h2 id="event-log-title">{phase2Copy.recentCanonicalEvents}</h2>
+              <h2 id="event-log-title">{scorerMessages.recentActions}</h2>
               <span>
                 <Clock />
-                {pendingSync ? phase2Copy.syncPending : phase2Copy.synced}
+                {pendingSync || !tapsIdle ? scorerMessages.status.syncing : phase2Copy.synced}
               </span>
             </header>
             {scoreState.actions.length ? (
@@ -2019,9 +2338,13 @@ export function PhoneScoring({
                       <button
                         className="p2-score-secondary"
                         type="button"
+                        aria-label={interpolate(scorerMessages.undoLabel, {
+                          action: action.label,
+                          team: sideName(action.side),
+                        })}
                         onClick={(event) => openReversalDialog(action, event.currentTarget)}
                       >
-                        {phase2Copy.reverseEvent}
+                        {scorerMessages.recentUndo}
                       </button>
                     ) : (
                       <span>{action.participantId ?? "—"}</span>
@@ -2030,14 +2353,14 @@ export function PhoneScoring({
                 ))}
               </ol>
             ) : (
-              <p>{phase2Copy.noEvents}</p>
+              <p>{scorerMessages.noActions}</p>
             )}
           </section>
           {!locked ? (
             <button
               className="p2-score-primary p2-score-final"
               type="button"
-              disabled={actionPending}
+              disabled={actionPending || !tapsIdle}
               onClick={() => setPhase("review")}
             >
               {phase2Copy.reviewFinal}
@@ -2064,13 +2387,13 @@ export function PhoneScoring({
                 <p className="p2-eyebrow">{definition.displayName}</p>
                 <h2 id="score-action-title" ref={actionDialogTitleRef} tabIndex={-1}>
                   {reversalTarget
-                    ? phase2Copy.reversalTitle
+                    ? scorerMessages.undoTitle
                     : pendingAction?.control.id === phase2Machine.goal
                       ? phase2Copy.confirmGoalTitle
                       : `${phase2Copy.recordEvent}: ${pendingAction?.control.label ?? ""}`}
                 </h2>
                 <p id="score-action-description">
-                  {reversalTarget ? phase2Copy.reversalBody : phase2Copy.actionDialogBody}
+                  {reversalTarget ? scorerMessages.undoBody : phase2Copy.actionDialogBody}
                 </p>
               </header>
               <section className="p2-goal-sheet__team">
@@ -2095,10 +2418,28 @@ export function PhoneScoring({
                   </div>
                 ) : null}
               </dl>
+              {reversalTarget ? (
+                <fieldset className={styles.reasonChips}>
+                  <legend>{scorerMessages.undoReasonHint}</legend>
+                  {Object.values(scorerMessages.undoReasons).map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      aria-pressed={reversalPreset === preset}
+                      onClick={() => {
+                        setReversalPreset(reversalPreset === preset ? null : preset);
+                        setScorerError("");
+                      }}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </fieldset>
+              ) : null}
               {reversalTarget || pendingAction?.control.participantAttribution !== "none" ? (
                 <>
                   <label>
-                    <span>{reversalTarget ? phase2Copy.reversalReason : phase2Copy.participantLabel}</span>
+                    <span>{reversalTarget ? scorerMessages.undoReasonLabel : phase2Copy.participantLabel}</span>
                     <span className="p2-input-icon">
                       <UserCircle />
                       <input
@@ -2110,10 +2451,7 @@ export function PhoneScoring({
                         aria-invalid={Boolean(scorerError)}
                         aria-describedby={scorerError ? "score-action-hint score-action-error" : "score-action-hint"}
                         disabled={unknownParticipant}
-                        required={
-                          Boolean(reversalTarget) ||
-                          (pendingAction?.control.participantAttribution === "required" && !unknownParticipant)
-                        }
+                        required={pendingAction?.control.participantAttribution === "required" && !unknownParticipant}
                       />
                     </span>
                     <small id="score-action-hint">
@@ -2159,7 +2497,7 @@ export function PhoneScoring({
                   onClick={() => void (reversalTarget ? reverseAction() : recordAction())}
                 >
                   {reversalTarget
-                    ? phase2Copy.confirmReversal
+                    ? scorerMessages.confirmUndo
                     : pendingAction?.control.id === phase2Machine.goal
                       ? `${phase2Copy.recordGoalFor} ${pendingAction.side === phase2Machine.home ? home : away}`
                       : phase2Copy.recordEvent}

@@ -8,6 +8,13 @@ import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
 import { gateCC4PublicTruthResponse } from "./gate-c-c4-schemas.js";
 import { gateCC4PublicConditionalStatus, gateCC4PublicHeaders } from "./gate-c-public-http.js";
+import {
+  applyLiveOverlay,
+  liveOverlayDigestSql,
+  liveOverlayToken,
+  liveOverlayUpdatedAt,
+  parseLiveOverlay,
+} from "./public-live-overlay.js";
 import { PublicProjectionRepository, type PublicTruthRecord } from "./repositories/index.js";
 
 type PublicTruthRow = PublicTruthRecord;
@@ -26,7 +33,7 @@ function instant(value: Date | string): string {
   return parsed.toISOString();
 }
 
-function json(value: PublicTruthRow["payload"]): Record<string, unknown> {
+function json(value: Record<string, unknown> | string): Record<string, unknown> {
   return typeof value === "string" ? (JSON.parse(value) as Record<string, unknown>) : value;
 }
 
@@ -55,6 +62,10 @@ function divisionIds(payload: Record<string, unknown>): readonly string[] {
   return ids.sort((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Narrows the payload to one division. Nothing downstream mutates the result,
+ * so the selected package is shared rather than deep-cloned per request.
+ */
 function divisionScopedPayload(
   payload: Record<string, unknown>,
   selectedDivisionId?: string,
@@ -74,16 +85,14 @@ function divisionScopedPayload(
   if (!division || typeof division !== "object" || Array.isArray(division)) {
     throw new Error("Public projection contains an invalid division package");
   }
-  const selectedPackage = structuredClone(selected);
-  const legacyPackage = structuredClone(selected);
   return {
     ...payload,
-    divisions: [selectedPackage],
-    division: legacyPackage.division,
-    schedule: legacyPackage.schedule,
-    results: legacyPackage.results,
-    standings: legacyPackage.standings,
-    bracket: legacyPackage.bracket,
+    divisions: [selected],
+    division: selected.division,
+    schedule: selected.schedule,
+    results: selected.results,
+    standings: selected.standings,
+    bracket: selected.bracket,
   };
 }
 
@@ -125,26 +134,38 @@ function liveRevision(value: number | null | undefined): number {
 /**
  * Opaque public version token streamed to spectators. Schedule and result
  * versions only move on publication; live_revision moves on every content
- * change of the current projection row (each scored point), so the token
- * changes monotonically with everything a spectator can see.
+ * change of the stored projection row; the optional overlay suffix moves on
+ * every scored point (it digests the visible live score rows). The token
+ * therefore changes with everything a spectator can see.
  */
 export function publicProjectionVersionToken(input: {
   scheduleVersion: number;
   resultVersion: number;
   projectionVersion: number;
   liveRevision: number;
+  liveOverlayDigest?: string | null;
 }): string {
-  return `${input.scheduleVersion}:${input.resultVersion}:${input.projectionVersion}:${input.liveRevision}`;
+  return `${input.scheduleVersion}:${input.resultVersion}:${input.projectionVersion}:${input.liveRevision}${liveOverlayToken(
+    input.liveOverlayDigest,
+  )}`;
 }
 
+/**
+ * Content-addressed ETag computed from the inputs that fully determine the
+ * response body (stored projection digest, overlay digest, versions, division
+ * selection), so it is identical on every API instance without hashing the
+ * payload per request.
+ */
 function etag(input: {
   competitionId: string;
   scheduleVersion: number;
   resultVersion: number;
   projectionVersion: number;
-  liveRevision: number;
+  liveToken: string;
   divisionProjectionVersions: Readonly<Record<string, number>>;
-  payload: Record<string, unknown>;
+  selectedDivisionId: string | null;
+  projectionDigest: string;
+  liveOverlayDigest: string | null;
 }): string {
   const fingerprint = createHash("sha256")
     .update(
@@ -153,17 +174,79 @@ function etag(input: {
         schedule_version: input.scheduleVersion,
         result_version: input.resultVersion,
         projection_version: input.projectionVersion,
-        live_revision: input.liveRevision,
+        live_revision: input.liveToken,
         division_projection_versions: input.divisionProjectionVersions,
-        projection: input.payload,
+        division: input.selectedDivisionId,
+        projection_digest: input.projectionDigest,
+        live_overlay_digest: input.liveOverlayDigest,
       }),
     )
     .digest("hex");
-  return `c4-${input.scheduleVersion}-${input.resultVersion}-${input.projectionVersion}-${input.liveRevision}-${fingerprint}`;
+  return `c4-${input.scheduleVersion}-${input.resultVersion}-${input.projectionVersion}-${input.liveToken}-${fingerprint}`;
 }
+
+export type PublicTruthReadResult = Readonly<{
+  payload: Record<string, unknown>;
+  freshness: PublicProjectionFreshness;
+  /** Same token as version(); lets the ETag and the SSE stream agree. */
+  version?: string;
+}>;
+
+type CachedBase = Readonly<{
+  key: string;
+  payload: Record<string, unknown>;
+  divisionIds: readonly string[];
+  digest: string;
+}>;
+
+const publicTruthCacheLimit = 256;
+
+function remember<V>(cache: Map<string, V>, key: string, value: V): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > publicTruthCacheLimit) cache.delete(cache.keys().next().value as string);
+}
+
+const defaultListPageSize = 50;
+const maximumListPageSize = 200;
+
+type ListCursor = Readonly<{ startsOn: string; name: string; id: string }>;
+
+function encodeListCursor(cursor: ListCursor): string {
+  return Buffer.from(JSON.stringify([cursor.startsOn, cursor.name, cursor.id]), "utf8").toString("base64url");
+}
+
+function decodeListCursor(value: string): ListCursor {
+  try {
+    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+    if (
+      Array.isArray(decoded) &&
+      decoded.length === 3 &&
+      typeof decoded[0] === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/u.test(decoded[0]) &&
+      typeof decoded[1] === "string" &&
+      typeof decoded[2] === "string" &&
+      /^[0-9a-f-]{36}$/iu.test(decoded[2])
+    ) {
+      return { startsOn: decoded[0], name: decoded[1], id: decoded[2] };
+    }
+  } catch {
+    // fall through
+  }
+  throw new ApiError(400, ErrorCode.VALIDATION_ERROR, "Invalid competition listing cursor");
+}
+
+export type PublicCompetitionPage = Readonly<{
+  competitions: PublicCompetitionSummary[];
+  next_cursor: string | null;
+}>;
 
 export class GateCC4PublicTruthRuntime {
   private readonly publicProjectionRepo: PublicProjectionRepository;
+  /** Parsed, privacy-checked stored projection per slug (one per current base). */
+  private readonly bases = new Map<string, CachedBase>();
+  /** Fully composed response per slug+division, valid while its key matches. */
+  private readonly responses = new Map<string, { key: string; result: PublicTruthReadResult }>();
 
   constructor(
     private readonly sql: PostgresJsSql,
@@ -172,8 +255,51 @@ export class GateCC4PublicTruthRuntime {
     this.publicProjectionRepo = publicProjectionRepo ?? new PublicProjectionRepository(sql);
   }
 
+  /** Every listed competition (unpaginated; kept for internal callers). */
   async list(): Promise<PublicCompetitionSummary[]> {
-    const rows = await this.sql.unsafe<{
+    return (await this.listRows(null, null)).map((row) => this.summary(row));
+  }
+
+  /** Keyset-paginated listing, newest first; next_cursor is null on the last page. */
+  async listPage(options: { limit?: number; cursor?: string } = {}): Promise<PublicCompetitionPage> {
+    const limit = Math.min(Math.max(Math.trunc(options.limit ?? defaultListPageSize), 1), maximumListPageSize);
+    const cursor = options.cursor ? decodeListCursor(options.cursor) : null;
+    const rows = await this.listRows(cursor, limit + 1);
+    const page = rows.slice(0, limit).map((row) => this.summary(row));
+    const last = page.at(-1);
+    return {
+      competitions: page,
+      next_cursor:
+        rows.length > limit && last
+          ? encodeListCursor({ startsOn: last.starts_on, name: last.name, id: last.id })
+          : null,
+    };
+  }
+
+  private summary(row: {
+    id: string;
+    name: string;
+    slug: string;
+    sport_code: PublicCompetitionSummary["sport_code"];
+    timezone: string;
+    starts_on: Date | string;
+    ends_on: Date | string;
+    status: PublicCompetitionSummary["status"];
+  }): PublicCompetitionSummary {
+    return {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      sport_code: row.sport_code,
+      timezone: row.timezone,
+      starts_on: instant(row.starts_on).slice(0, 10),
+      ends_on: instant(row.ends_on).slice(0, 10),
+      status: row.status,
+    };
+  }
+
+  private listRows(cursor: ListCursor | null, limit: number | null) {
+    return this.sql.unsafe<{
       id: string;
       name: string;
       slug: string;
@@ -194,19 +320,14 @@ export class GateCC4PublicTruthRuntime {
         AND current_projection.result_version=publication.result_version
        WHERE competition.status IN ('active', 'published', 'live', 'completed', 'archived')
          AND (publication.schedule_version > 0 OR publication.result_version > 0)
-       ORDER BY competition.starts_on DESC,competition.name,competition.id`,
-      [],
+         AND ($1::date IS NULL
+              OR competition.starts_on < $1::date
+              OR (competition.starts_on = $1::date
+                  AND (competition.name > $2::text OR (competition.name = $2::text AND competition.id > $3::uuid))))
+       ORDER BY competition.starts_on DESC,competition.name,competition.id
+       LIMIT $4`,
+      [cursor?.startsOn ?? null, cursor?.name ?? null, cursor?.id ?? null, limit],
     );
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      slug: row.slug,
-      sport_code: row.sport_code,
-      timezone: row.timezone,
-      starts_on: instant(row.starts_on).slice(0, 10),
-      ends_on: instant(row.ends_on).slice(0, 10),
-      status: row.status,
-    }));
   }
 
   async version(slug: string): Promise<string | null> {
@@ -215,15 +336,18 @@ export class GateCC4PublicTruthRuntime {
       result_version: number;
       projection_version: number;
       live_revision: number;
+      live_overlay_digest?: string | null;
     }>(
-      // One indexed primary-key lookup per poll: the live revision lives on the
-      // projection row that is already joined, so live freshness adds no query.
+      // One indexed lookup per poll: the live revision lives on the projection
+      // row that is already joined, and the overlay digest reads only the
+      // competition's live score rows (index on competition_id).
       `SELECT publication.schedule_version, publication.result_version, projection.live_revision,
               COALESCE((SELECT max(version.projection_version)
                         FROM public_projection_versions version
                         WHERE version.competition_id=competition.id
                           AND version.schedule_version=publication.schedule_version
-                          AND version.result_version=publication.result_version),1)::integer AS projection_version
+                          AND version.result_version=publication.result_version),1)::integer AS projection_version,
+              ${liveOverlayDigestSql("competition.id", "publication", "projection")} AS live_overlay_digest
        FROM competitions competition
        JOIN competition_publications publication ON publication.competition_id=competition.id
        JOIN public_competition_projections projection ON projection.competition_id=competition.id
@@ -239,29 +363,60 @@ export class GateCC4PublicTruthRuntime {
           resultVersion: current.result_version,
           projectionVersion: current.projection_version,
           liveRevision: liveRevision(current.live_revision),
+          liveOverlayDigest: current.live_overlay_digest ?? null,
         })
       : null;
   }
 
-  async read(
-    slug: string,
-    selectedDivisionId?: string,
-  ): Promise<{
-    payload: Record<string, unknown>;
-    freshness: PublicProjectionFreshness;
-    /** Same token as version(); lets the ETag and the SSE stream agree. */
-    version: string;
-  } | null> {
-    const row = await this.publicProjectionRepo.findPublicTruth(slug, this.sql);
-    if (!row) return null;
+  async read(slug: string, selectedDivisionId?: string): Promise<PublicTruthReadResult | null> {
+    const cachedBase = this.bases.get(slug);
+    const row = await this.publicProjectionRepo.findPublicTruth(slug, this.sql, cachedBase?.key ?? null);
+    if (!row) {
+      this.bases.delete(slug);
+      return null;
+    }
 
-    const fullPayload = json(row.payload);
-    assertPublicProjectionPrivacy(fullPayload);
-    const availableDivisions = divisionIds(fullPayload);
+    const responseKey = row.base_key
+      ? [
+          row.base_key,
+          row.live_overlay_digest ?? "",
+          row.projection_version,
+          JSON.stringify(row.division_projection_versions),
+          instant(row.generated_at),
+          instant(row.source_updated_at),
+        ].join("|")
+      : null;
+    const responseCacheKey = `${slug}\u0000${selectedDivisionId ?? ""}`;
+    const cachedResponse = this.responses.get(responseCacheKey);
+    if (responseKey && cachedResponse?.key === responseKey && (row.payload === null || row.payload === undefined)) {
+      return cachedResponse.result;
+    }
+
+    let base: CachedBase;
+    if (row.payload === null || row.payload === undefined) {
+      if (!cachedBase || cachedBase.key !== row.base_key) throw new Error("Public projection payload is missing");
+      base = cachedBase;
+    } else {
+      const fullPayload = json(row.payload);
+      // Privacy validation and parsing run once per stored projection, not per request.
+      assertPublicProjectionPrivacy(fullPayload);
+      base = {
+        key: row.base_key ?? "",
+        payload: fullPayload,
+        divisionIds: divisionIds(fullPayload),
+        digest: row.projection_digest ?? createHash("sha256").update(stableJson(fullPayload)).digest("hex"),
+      };
+      if (row.base_key) remember(this.bases, slug, base);
+    }
+
+    const overlay = parseLiveOverlay(row.live_overlay);
+    for (const entry of overlay) assertPublicProjectionPrivacy(entry.result);
+    const liveOverlayDigest = row.live_overlay_digest ?? null;
+    const availableDivisions = base.divisionIds;
     if (selectedDivisionId && !availableDivisions.includes(selectedDivisionId)) {
       return null;
     }
-    const responsePayload = divisionScopedPayload(fullPayload, selectedDivisionId);
+    const responsePayload = divisionScopedPayload(applyLiveOverlay(base.payload, overlay), selectedDivisionId);
     if (!responsePayload) return null;
     const divisionVersions = versionRecord(row.division_projection_versions);
     for (const div of Object.keys(divisionVersions)) {
@@ -280,27 +435,32 @@ export class GateCC4PublicTruthRuntime {
     const effectiveDivisionId =
       selectedDivisionId ??
       ((responsePayload.division as Record<string, unknown> | undefined)?.id as string | undefined) ??
-      divisionIds(fullPayload)[0]!;
+      availableDivisions[0]!;
     const projectionVersion = selectedDivisionId
       ? (filteredDivisionVersions[selectedDivisionId] ?? row.projection_version)
       : row.projection_version;
 
     const currentLiveRevision = liveRevision(row.live_revision);
+    const liveToken = `${currentLiveRevision}${liveOverlayToken(liveOverlayDigest)}`;
     const headerEtag = etag({
       competitionId: row.competition_id,
       scheduleVersion: row.schedule_version,
       resultVersion: row.result_version,
       projectionVersion,
-      liveRevision: currentLiveRevision,
+      liveToken,
       divisionProjectionVersions: filteredDivisionVersions,
-      payload: responsePayload,
+      selectedDivisionId: selectedDivisionId ?? null,
+      projectionDigest: base.digest,
+      liveOverlayDigest,
     });
-    const generatedDate = new Date(row.generated_at);
-    const sourceUpdatedDate = new Date(row.source_updated_at);
-    const effectiveGeneratedAt =
-      generatedDate.getTime() < sourceUpdatedDate.getTime()
-        ? sourceUpdatedDate.toISOString()
-        : instant(row.generated_at);
+    // A live point advances the public source time without touching the
+    // publication row (which would serialise every court of the competition).
+    const liveUpdatedAt = liveOverlayUpdatedAt(overlay);
+    const publicationUpdatedAt = instant(row.source_updated_at);
+    const sourceUpdatedAt =
+      liveUpdatedAt && liveUpdatedAt > publicationUpdatedAt ? liveUpdatedAt : publicationUpdatedAt;
+    const generatedAt = instant(row.generated_at);
+    const effectiveGeneratedAt = generatedAt < sourceUpdatedAt ? sourceUpdatedAt : generatedAt;
     const freshness: PublicProjectionFreshness = {
       division_id: effectiveDivisionId,
       division_projection_versions: filteredDivisionVersions,
@@ -309,7 +469,7 @@ export class GateCC4PublicTruthRuntime {
       projection_version: projectionVersion,
       etag: headerEtag,
       generated_at: effectiveGeneratedAt,
-      source_updated_at: instant(row.source_updated_at),
+      source_updated_at: sourceUpdatedAt,
     };
     const enrichedPayload = {
       ...responsePayload,
@@ -318,9 +478,9 @@ export class GateCC4PublicTruthRuntime {
         result_version: row.result_version,
       },
       freshness,
-      last_updated_at: instant(row.source_updated_at),
+      last_updated_at: sourceUpdatedAt,
     };
-    return {
+    const result: PublicTruthReadResult = {
       payload: enrichedPayload,
       freshness,
       version: publicProjectionVersionToken({
@@ -328,20 +488,17 @@ export class GateCC4PublicTruthRuntime {
         resultVersion: row.result_version,
         projectionVersion: row.projection_version,
         liveRevision: currentLiveRevision,
+        liveOverlayDigest,
       }),
     };
+    if (responseKey) remember(this.responses, responseCacheKey, { key: responseKey, result });
+    return result;
   }
 }
 
-type PublicTruthReadResult = Readonly<{
-  payload: Record<string, unknown>;
-  freshness: PublicProjectionFreshness;
-  version?: string;
-}>;
-
 type PublicTruthRuntime = Pick<GateCC4PublicTruthRuntime, "list"> & {
   read(slug: string, selectedDivisionId?: string): Promise<PublicTruthReadResult | null>;
-} & Partial<Pick<GateCC4PublicTruthRuntime, "version">>;
+} & Partial<Pick<GateCC4PublicTruthRuntime, "version" | "listPage">>;
 
 function streamVersion(result: PublicTruthReadResult | null): string | null {
   if (!result) return null;
@@ -351,18 +508,154 @@ function streamVersion(result: PublicTruthReadResult | null): string | null {
   );
 }
 
+const maximumIdleVersionChannels = 1_024;
+
+type VersionEvent = Readonly<{ type: "version"; version: string | null }> | Readonly<{ type: "error" }>;
+type VersionListener = (event: VersionEvent) => void;
+
+/**
+ * One version poller per slug per API instance, fanned out to every SSE
+ * subscriber of that slug. N spectators cost one lookup per interval instead
+ * of N; each subscriber still receives exactly one frame per interval
+ * (version or heartbeat), so the wire protocol is unchanged.
+ */
+export class PublicVersionHub {
+  private readonly channels = new Map<
+    string,
+    {
+      listeners: Set<VersionListener>;
+      timer: NodeJS.Timeout | null;
+      checking: boolean;
+      latest: { version: string | null; at: number } | null;
+      opening: Promise<string | null> | null;
+    }
+  >();
+
+  constructor(
+    private readonly lookup: (slug: string) => Promise<string | null>,
+    private readonly intervalMs = 2_000,
+    private readonly now: () => number = () => Date.now(),
+  ) {}
+
+  private channel(slug: string) {
+    let channel = this.channels.get(slug);
+    if (!channel) {
+      channel = { listeners: new Set(), timer: null, checking: false, latest: null, opening: null };
+      this.channels.set(slug, channel);
+    }
+    return channel;
+  }
+
+  /**
+   * Opening token for a new subscriber: reuses the poller's last observation
+   * when it is younger than one interval, and coalesces concurrent lookups, so
+   * a reconnect wave does not become a query wave.
+   */
+  async current(slug: string): Promise<string | null> {
+    const channel = this.channels.get(slug);
+    if (channel?.latest && this.now() - channel.latest.at < this.intervalMs) return channel.latest.version;
+    const target = this.channel(slug);
+    if (!target.opening) {
+      target.opening = this.lookup(slug)
+        .then((version) => {
+          target.latest = { version, at: this.now() };
+          return version;
+        })
+        .finally(() => {
+          target.opening = null;
+          // Unknown slugs must not accumulate idle channels.
+          if (target.latest?.version === null && target.listeners.size === 0) this.release(slug, target);
+          this.evictIdle();
+        });
+    }
+    return target.opening;
+  }
+
+  subscribe(slug: string, listener: VersionListener): () => void {
+    const channel = this.channel(slug);
+    channel.listeners.add(listener);
+    channel.timer ??= setInterval(() => void this.poll(slug), this.intervalMs);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      channel.listeners.delete(listener);
+      if (channel.listeners.size === 0) this.release(slug, channel);
+    };
+  }
+
+  /** Stops an idle channel's poller and forgets it (only if it is still the registered one). */
+  private release(slug: string, channel: NonNullable<ReturnType<PublicVersionHub["channels"]["get"]>>): void {
+    if (channel.timer) clearInterval(channel.timer);
+    channel.timer = null;
+    if (this.channels.get(slug) === channel && !channel.opening) this.channels.delete(slug);
+  }
+
+  /** Bounds memory held for slugs that were looked up but have no subscribers. */
+  private evictIdle(): void {
+    if (this.channels.size <= maximumIdleVersionChannels) return;
+    for (const [slug, channel] of this.channels) {
+      if (this.channels.size <= maximumIdleVersionChannels) break;
+      if (channel.listeners.size === 0 && !channel.opening) this.release(slug, channel);
+    }
+  }
+
+  private async poll(slug: string): Promise<void> {
+    const channel = this.channels.get(slug);
+    if (!channel || channel.checking || channel.listeners.size === 0) return;
+    channel.checking = true;
+    let event: VersionEvent;
+    try {
+      const version = await this.lookup(slug);
+      channel.latest = { version, at: this.now() };
+      event = { type: "version", version };
+    } catch {
+      channel.latest = null;
+      event = { type: "error" };
+    } finally {
+      channel.checking = false;
+    }
+    for (const listener of [...channel.listeners]) listener(event);
+  }
+
+  close(): void {
+    for (const channel of this.channels.values()) {
+      if (channel.timer) clearInterval(channel.timer);
+      channel.timer = null;
+      channel.listeners.clear();
+    }
+    this.channels.clear();
+  }
+}
+
 export async function registerGateCC4PublicTruthRoutes(
   app: FastifyInstance,
   options: { runtime: PublicTruthRuntime } | PublicTruthRuntime,
 ): Promise<void> {
   const runtime = "runtime" in options ? options.runtime : options;
+  const lookupVersion = (slug: string) =>
+    runtime.version ? runtime.version(slug) : runtime.read(slug).then(streamVersion);
+  const versionHub = new PublicVersionHub(lookupVersion);
+  if (typeof app.addHook === "function") app.addHook("onClose", async () => versionHub.close());
+  // Serialized response bodies, reused while the runtime returns the same
+  // cached read result (i.e. until the public version changes).
+  const serializedBodies = new WeakMap<object, string>();
 
   app.get(
     "/api/v1/public/competitions",
     {
       schema: {
-        description: "List competitions with an exact current public projection. No sign-in is required.",
+        description:
+          "List competitions with an exact current public projection, newest first. No sign-in is required. " +
+          "Results are paginated (default 50); pass next_cursor back as cursor for the next page.",
         tags: ["public"],
+        querystring: Type.Object(
+          {
+            limit: Type.Optional(Type.Integer({ minimum: 1, maximum: maximumListPageSize })),
+            cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+          },
+          { additionalProperties: true },
+        ),
         response: {
           200: strict({
             competitions: Type.Array(
@@ -389,11 +682,21 @@ export async function registerGateCC4PublicTruthRoutes(
                 ]),
               }),
             ),
+            next_cursor: Type.Optional(Type.String()),
           }),
+          400: ErrorResponse,
         },
       },
     },
-    async () => ({ competitions: await runtime.list() }),
+    async (request) => {
+      const query = (request.query ?? {}) as { limit?: number; cursor?: string };
+      if (!runtime.listPage) return { competitions: await runtime.list() };
+      const page = await runtime.listPage({
+        ...(query.limit !== undefined ? { limit: query.limit } : {}),
+        ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+      });
+      return { competitions: page.competitions, ...(page.next_cursor ? { next_cursor: page.next_cursor } : {}) };
+    },
   );
 
   const handler = async (
@@ -405,6 +708,7 @@ export async function registerGateCC4PublicTruthRoutes(
     reply: {
       header: (key: string, value: string) => void;
       code: (statusCode: number) => { send: (body?: unknown) => unknown };
+      getSerializationFunction?: (httpStatus: string) => ((payload: Record<string, unknown>) => string) | undefined;
     },
   ) => {
     const selectedDivision = request.query.division_id ?? request.query.division;
@@ -414,7 +718,17 @@ export async function registerGateCC4PublicTruthRoutes(
     for (const [key, value] of Object.entries(headers)) reply.header(key, value);
     const status = gateCC4PublicConditionalStatus(result.freshness, request.headers);
     if (status === 304) return reply.code(304).send();
-    return reply.code(200).send(result.payload);
+    const serialize = reply.getSerializationFunction?.("200");
+    if (!serialize) return reply.code(200).send(result.payload);
+    // The route's own response-schema serializer runs once per public version;
+    // later requests for the same version send the stored bytes.
+    let body = serializedBodies.get(result);
+    if (body === undefined) {
+      body = serialize(result.payload);
+      serializedBodies.set(result, body);
+    }
+    reply.header("content-type", "application/json; charset=utf-8");
+    return reply.code(200).send(body);
   };
 
   const schema = {
@@ -455,54 +769,42 @@ export async function registerGateCC4PublicTruthRoutes(
       },
     },
     async (request, reply) => {
-      // The opening token uses the same cheap lookup as the poller instead of a
-      // full projection read; a missing competition is still a 404.
-      const first = runtime.version
-        ? await runtime.version(request.params.slug)
-        : streamVersion(await runtime.read(request.params.slug));
+      const slug = request.params.slug;
+      // The opening token reuses the shared poller's latest observation when fresh;
+      // a missing competition is still a 404.
+      const first = await versionHub.current(slug);
       if (!first) throw new ApiError(404, ErrorCode.PUBLIC_COMPETITION_NOT_FOUND, "Competition not found");
       let lastVersion = first;
-      let checking = false;
       let finished = false;
       const stream = new Readable({ read() {} });
       const sendVersion = (version: string) => stream.push(`event: version\ndata: ${JSON.stringify(version)}\n\n`);
       sendVersion(lastVersion);
-      const timer = setInterval(async () => {
-        if (checking || finished || stream.destroyed) return;
-        checking = true;
-        try {
-          const currentVersion = runtime.version
-            ? await runtime.version(request.params.slug)
-            : streamVersion(await runtime.read(request.params.slug));
-          if (finished || stream.destroyed) return;
-          if (!currentVersion) {
-            stream.push("event: unavailable\ndata: {}\n\n");
-            finish();
-          } else if (currentVersion !== lastVersion) {
-            lastVersion = currentVersion;
-            sendVersion(lastVersion);
-          } else {
-            stream.push("event: heartbeat\ndata: {}\n\n");
-          }
-        } catch {
-          if (finished || stream.destroyed) return;
+      const unsubscribe = versionHub.subscribe(slug, (event) => {
+        if (finished || stream.destroyed) return;
+        if (event.type === "error") {
           stream.push("event: reconnect\ndata: {}\n\n");
           finish();
-        } finally {
-          checking = false;
+        } else if (!event.version) {
+          stream.push("event: unavailable\ndata: {}\n\n");
+          finish();
+        } else if (event.version !== lastVersion) {
+          lastVersion = event.version;
+          sendVersion(lastVersion);
+        } else {
+          stream.push("event: heartbeat\ndata: {}\n\n");
         }
-      }, 2_000);
+      });
       const lifetime = setTimeout(finish, 28_000);
       function finish() {
         if (finished) return;
         finished = true;
-        clearInterval(timer);
+        unsubscribe();
         clearTimeout(lifetime);
         stream.push(null);
       }
       stream.on("close", () => {
         finished = true;
-        clearInterval(timer);
+        unsubscribe();
         clearTimeout(lifetime);
       });
       reply.header("Content-Type", "text/event-stream; charset=utf-8");

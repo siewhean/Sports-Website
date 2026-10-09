@@ -1,8 +1,21 @@
+import { liveOverlayDigestSql, liveOverlayRowsSql } from "../public-live-overlay.js";
 import type { SqlExecutor } from "./types.js";
 
 export type PublicTruthRecord = {
   competition_id: string;
-  payload: Record<string, unknown> | string;
+  /**
+   * The stored projection, or null when the caller already holds the base
+   * identified by `base_key` (avoids shipping a large JSONB row per request).
+   */
+  payload: Record<string, unknown> | string | null;
+  /** Identifies the stored projection content: competition:schedule:result:live_revision:digest. */
+  base_key?: string;
+  /** md5 of the stored projection, maintained by the database trigger (NULL on rows not rewritten since 0069). */
+  projection_digest?: string | null;
+  /** Visible live score overlay rows (JSON array). */
+  live_overlay?: unknown;
+  /** Digest of the visible overlay (match_id, revision) pairs; NULL when none. */
+  live_overlay_digest?: string | null;
   schedule_version: number;
   result_version: number;
   projection_version: number;
@@ -33,43 +46,61 @@ export type PublicProjectionRecord = {
 export class PublicProjectionRepository {
   constructor(private readonly sql: SqlExecutor) {}
 
-  async findPublicTruth(slug: string, executor: SqlExecutor = this.sql): Promise<PublicTruthRecord | null> {
+  async findPublicTruth(
+    slug: string,
+    executor: SqlExecutor = this.sql,
+    knownBaseKey: string | null = null,
+  ): Promise<PublicTruthRecord | null> {
     const rows = await executor.unsafe<PublicTruthRecord>(
-      `SELECT competition.id AS competition_id,
-              current_projection.projection AS payload,
-              publication.schedule_version,
-              publication.result_version,
-              COALESCE((
-                SELECT max(version.projection_version)
-                FROM public_projection_versions version
-                WHERE version.competition_id = competition.id
-                  AND version.schedule_version = publication.schedule_version
-                  AND version.result_version = publication.result_version
-              ), 1)::integer AS projection_version,
-              COALESCE((
-                SELECT jsonb_object_agg(version.division_id::text, version.projection_version)
-                FROM (
-                  SELECT division_id, max(projection_version)::integer AS projection_version
-                  FROM public_projection_versions
-                  WHERE competition_id = competition.id
-                    AND schedule_version = publication.schedule_version
-                    AND result_version = publication.result_version
-                  GROUP BY division_id
-                ) version
-              ), '{}'::jsonb) AS division_projection_versions,
-              current_projection.live_revision,
-              current_projection.generated_at,
-              publication.updated_at AS source_updated_at
-       FROM competitions competition
-       JOIN competition_publications publication
-         ON publication.competition_id=competition.id
-       JOIN public_competition_projections current_projection
-         ON current_projection.competition_id=competition.id
-        AND current_projection.schedule_version=publication.schedule_version
-        AND current_projection.result_version=publication.result_version
-       WHERE competition.slug = $1
-         AND competition.status IN ('active', 'published', 'live', 'completed', 'archived')`,
-      [slug],
+      `WITH current_truth AS (
+         SELECT competition.id AS competition_id,
+                current_projection.projection,
+                publication.schedule_version,
+                publication.result_version,
+                COALESCE((
+                  SELECT max(version.projection_version)
+                  FROM public_projection_versions version
+                  WHERE version.competition_id = competition.id
+                    AND version.schedule_version = publication.schedule_version
+                    AND version.result_version = publication.result_version
+                ), 1)::integer AS projection_version,
+                COALESCE((
+                  SELECT jsonb_object_agg(version.division_id::text, version.projection_version)
+                  FROM (
+                    SELECT division_id, max(projection_version)::integer AS projection_version
+                    FROM public_projection_versions
+                    WHERE competition_id = competition.id
+                      AND schedule_version = publication.schedule_version
+                      AND result_version = publication.result_version
+                    GROUP BY division_id
+                  ) version
+                ), '{}'::jsonb) AS division_projection_versions,
+                current_projection.live_revision,
+                current_projection.projection_digest,
+                competition.id::text || ':' || publication.schedule_version || ':' || publication.result_version
+                  || ':' || current_projection.live_revision || ':' || COALESCE(current_projection.projection_digest, '')
+                  AS base_key,
+                ${liveOverlayRowsSql("competition.id", "publication", "current_projection")} AS live_overlay,
+                ${liveOverlayDigestSql("competition.id", "publication", "current_projection")} AS live_overlay_digest,
+                current_projection.generated_at,
+                publication.updated_at AS source_updated_at
+         FROM competitions competition
+         JOIN competition_publications publication
+           ON publication.competition_id=competition.id
+         JOIN public_competition_projections current_projection
+           ON current_projection.competition_id=competition.id
+          AND current_projection.schedule_version=publication.schedule_version
+          AND current_projection.result_version=publication.result_version
+         WHERE competition.slug = $1
+           AND competition.status IN ('active', 'published', 'live', 'completed', 'archived')
+       )
+       SELECT competition_id,
+              CASE WHEN base_key = $2::text THEN NULL ELSE projection END AS payload,
+              schedule_version, result_version, projection_version, division_projection_versions,
+              live_revision, projection_digest, base_key, live_overlay, live_overlay_digest,
+              generated_at, source_updated_at
+       FROM current_truth`,
+      [slug, knownBaseKey],
     );
     return rows[0] ?? null;
   }

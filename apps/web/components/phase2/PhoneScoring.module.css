@@ -8,8 +8,201 @@
 }
 
 .matchHeader {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   min-height: 62px;
   padding-block: 0.5rem;
+  background: var(--event-canvas);
+}
+.matchHeader p {
+  font-size: 0.875rem;
+}
+/* One status chip, always visible, never smaller than 14px. */
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  padding: 0.35rem 0.75rem;
+  border: 2px solid #4a4f4d;
+  border-radius: 999px;
+  background: #171a19;
+  color: #f5f7f2;
+  font-size: max(0.875rem, 14px);
+}
+.statusChip strong {
+  font-size: max(0.9375rem, 14px);
+}
+.statusChip svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.statusChip[data-tone="ok"] {
+  border-color: #97bc0d;
+}
+.statusChip[data-tone="busy"] {
+  border-color: #9db2ff;
+}
+.statusChip[data-tone="warn"] {
+  border-color: #e9a410;
+  background: #2a2208;
+}
+.statusChip[data-tone="blocked"] {
+  border-color: #e06b63;
+  background: #2a1210;
+}
+.statusChip:focus-visible {
+  outline: 3px solid #e2fa77;
+  outline-offset: 2px;
+}
+
+/* Big live score directly under the header; the controls follow so they sit in the thumb zone. */
+.liveScore {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0.5rem clamp(1rem, 3vw, 2.5rem) 0;
+}
+.liveScoreSide {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #444d43;
+  border-top-width: 6px;
+  border-radius: 0.875rem;
+  background: #1a201b;
+}
+.liveScoreSide[data-side="home"] {
+  border-top-color: #4f86f0;
+}
+.liveScoreSide[data-side="away"] {
+  border-top-color: #dea700;
+}
+.liveScoreSide span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: clamp(1rem, 4vw, 1.25rem);
+  font-weight: 650;
+}
+.liveScoreSide strong {
+  color: #e2fa77;
+  font: 700 clamp(3.5rem, 18vw, 6rem) / 1 var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.liveScoreSegment {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #d5ddca;
+  font-family: var(--font-mono, monospace);
+  font-size: 1rem;
+}
+.rollback {
+  order: 0;
+}
+.undoToast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.5rem 0.5rem 1rem;
+  border: 1px solid #a1ba5b;
+  border-radius: 0.875rem;
+  background: #222b1a;
+  font-size: 1rem;
+}
+.undoToast span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.undoToast button {
+  flex: none;
+  min-width: 96px;
+  min-height: 56px;
+  padding: 0 1rem;
+  border: 2px solid #e2fa77;
+  border-radius: 0.75rem;
+  background: transparent;
+  color: #e2fa77;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.undoToast button:focus-visible {
+  outline: 3px solid #e2fa77;
+  outline-offset: 2px;
+}
+.eventLog {
+  order: 4;
+}
+.settings {
+  order: 5;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem clamp(1rem, 3vw, 2.5rem);
+  color: #d5ddca;
+  font-size: 0.875rem;
+}
+.settings p {
+  margin: 0;
+}
+.reasonChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.reasonChips legend {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+.reasonChips button {
+  min-height: 48px;
+  padding: 0 0.875rem;
+  border: 1px solid #667064;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.reasonChips button[aria-pressed="true"] {
+  border-color: #e2fa77;
+  background: #e2fa77;
+  color: #12150b;
+}
+.reasonChips button:focus-visible {
+  outline: 3px solid #e2fa77;
+  outline-offset: 2px;
+}
+
+/* Glare mode: pure black and white, thicker edges, team hues kept but brightened. */
+.scoringPage[data-contrast="high"] {
+  background: #000000;
+  color: #ffffff;
+}
+.scoringPage[data-contrast="high"] .matchHeader {
+  background: #000000;
+}
+.scoringPage[data-contrast="high"] .liveScoreSide,
+.scoringPage[data-contrast="high"] .statusChip {
+  border-color: #ffffff;
+  background: #000000;
+  color: #ffffff;
+}
+.scoringPage[data-contrast="high"] .liveScoreSide strong {
+  color: #ffffff;
+}
+.scoringPage[data-contrast="high"] .liveScoreSide[data-side="home"] {
+  border-top-color: #8ec5ff;
+}
+.scoringPage[data-contrast="high"] .liveScoreSide[data-side="away"] {
+  border-top-color: #ffe066;
 }
 .matchHeader h1 {
   font-size: clamp(1.125rem, 4vw, 1.5rem);
@@ -54,12 +247,6 @@
   grid-column: 1 / -1;
   color: #d5ddca;
   font-size: 0.75rem;
-}
-.quickUndo {
-  width: 100%;
-  min-height: 48px;
-  margin-top: 0.625rem;
-  overflow-wrap: anywhere;
 }
 
 .secondaryNotice {
