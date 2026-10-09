@@ -20,6 +20,7 @@ import {
   involvesTeam,
   latestResults,
   liveMatches,
+  liveUpdatesEnded,
   parsePublicViewState,
   publicDivisions,
   resolveFollowedTeam,
@@ -109,7 +110,6 @@ export function PublicCompetitionApp({
     };
   }, []);
 
-  const initialPhase = competitionPhase(initial, new Date(renderedAt));
   const [announcement, setAnnouncement] = useState("");
   const followedRef = useRef<string | null>(null);
   const onScoreChanges = useCallback((changes: readonly ScoreChange[]) => {
@@ -126,7 +126,7 @@ export function PublicCompetitionApp({
       }),
     );
   }, []);
-  const live = useLiveCompetition(initial, liveUpdates && initialPhase !== "completed", onScoreChanges);
+  const live = useLiveCompetition(initial, liveUpdates && !liveUpdatesEnded(initial), onScoreChanges);
   const competition = live.view;
   const phase = competitionPhase(competition, now);
 

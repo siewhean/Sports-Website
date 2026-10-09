@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   isExpectedFrameworkWarning,
   isExpectedPublicEventSourceCancellation,
+  isExpectedPublicEventSourceTeardownConsoleError,
   isExpectedRscNavigationCancellation,
   isExpectedTeardownFontCancellation,
   isExpectedTeardownIdentityCancellation,
   isExpectedTeardownIdentityPageError,
+  isExpectedTeardownMetadataIconCancellation,
   isExpectedTeardownServiceWorkerCancellation,
   isExpectedTeardownStaticAssetCancellation,
 } from "../helpers/console-guard";
@@ -202,5 +204,53 @@ describe("public EventSource teardown cancellation", () => {
     { ...input, pageUrl: "about:blank" },
   ])("retains HTTP/connection errors and unrelated cancellation", (value) => {
     expect(isExpectedPublicEventSourceCancellation(value)).toBe(false);
+  });
+});
+
+describe("Firefox public version-stream teardown console error", () => {
+  const pageUrl = "http://localhost:3103/competitions/demo?tab=schedule";
+  const text = (stream: string, file = "http://localhost:3103/_next/static/chunks/217847pw7shvy.js") =>
+    `[JavaScript Error: "The connection to ${stream} was interrupted while the page was loading." {file: "${file}" line: 1}]`;
+
+  it("accepts only the same-origin public versions stream torn down by navigation", () => {
+    expect(
+      isExpectedPublicEventSourceTeardownConsoleError({
+        text: text("http://localhost:3103/api/v1/public/competitions/demo/versions"),
+        pageUrl,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    text("http://evil.test/api/v1/public/competitions/demo/versions"),
+    text("http://localhost:3103/api/v1/public/competitions/demo/versions?x=1"),
+    text("http://localhost:3103/api/v1/scoring/events"),
+    text("http://localhost:3103/api/v1/public/competitions/demo/versions", "http://evil.test/_next/static/chunks/a.js"),
+    `[JavaScript Error: "Firefox can’t establish a connection to the server at http://localhost:3103/api/v1/public/competitions/demo/versions." {file: "http://localhost:3103/_next/static/chunks/a.js" line: 1}]`,
+    "Uncaught TypeError: boom",
+  ])("retains every other console error", (value) => {
+    expect(isExpectedPublicEventSourceTeardownConsoleError({ text: value, pageUrl })).toBe(false);
+  });
+});
+
+describe("metadata icon teardown cancellation", () => {
+  const base = { failure: "NS_BINDING_ABORTED", pageUrl: "http://localhost:3103/competitions/demo" };
+
+  it("accepts only cancelled same-origin Next metadata icons", () => {
+    for (const requestUrl of [
+      "http://localhost:3103/icon.svg?icon.3044exl5869oe.svg",
+      "http://localhost:3103/apple-icon.png?apple-icon.3tjocgii875t5.png",
+    ])
+      expect(isExpectedTeardownMetadataIconCancellation({ ...base, requestUrl })).toBe(true);
+  });
+
+  it.each([
+    { ...base, requestUrl: "http://evil.test/icon.svg?icon.abc.svg" },
+    { ...base, requestUrl: "http://localhost:3103/icon.svg" },
+    { ...base, requestUrl: "http://localhost:3103/icon.svg?icon.abc.svg&x=1" },
+    { ...base, requestUrl: "http://localhost:3103/logo.png?icon.abc.png" },
+    { ...base, failure: "NS_ERROR_CONNECTION_REFUSED", requestUrl: "http://localhost:3103/icon.svg?icon.abc.svg" },
+  ])("retains every other failure", (input) => {
+    expect(isExpectedTeardownMetadataIconCancellation(input)).toBe(false);
   });
 });

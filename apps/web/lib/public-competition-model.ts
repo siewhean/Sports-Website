@@ -106,6 +106,15 @@ export function competitionPhase(competition: PublicCompetitionInput, now: Date)
   );
 }
 
+/**
+ * Whether the page should stop listening for live changes. Only the server's lifecycle decides this: the
+ * date-based display phase above can call a competition "completed" while its matches are still being scored or
+ * corrected (late finishes, rescheduled days), and a spectator page must keep receiving those updates.
+ */
+export function liveUpdatesEnded(competition: PublicCompetitionInput): boolean {
+  return competition.status === "completed" || competition.status === "archived";
+}
+
 /* ---------------------------------------------------------------- bracket ---------------------------------------------------------------- */
 
 export type BracketRow = PublicDivisionView["bracket"][number];

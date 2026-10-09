@@ -1103,6 +1103,11 @@ async function main(): Promise<void> {
       organiserCookie: `matchday_session=${sessionId}.${sessionSecret}`,
       xssCompetitionPath: `/competitions/${competitionSlug}`,
       xssMaliciousName: maliciousName,
+      xssDivisionId: (() => {
+        const women = divisions.find((division) => division.code === "WOMEN");
+        if (!women) throw new Error("Phase 7 state is missing the division holding the XSS entry");
+        return women.id;
+      })(),
       officialId: publication.officialId,
       officialName: publication.officialName,
       officialAssignedRole: publication.officialAssignedRole,

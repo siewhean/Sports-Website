@@ -62,6 +62,33 @@ export function isExpectedPublicEventSourceCancellation(input: {
   }
 }
 
+/**
+ * Firefox logs its own console error when a navigation cancels the page's open public version stream (the
+ * console counterpart of the cancelled "eventsource" request accepted above). Only that exact same-origin
+ * `/api/v1/public/competitions/:slug/versions` teardown message, raised from a Next static chunk, is accepted.
+ */
+export function isExpectedPublicEventSourceTeardownConsoleError(input: { text: string; pageUrl: string }): boolean {
+  const match =
+    /^\[JavaScript Error: "The connection to (\S+) was interrupted while the page was loading\." \{file: "(\S+)" line: \d+\}\]$/u.exec(
+      input.text,
+    );
+  if (!match) return false;
+  try {
+    const origin = new URL(input.pageUrl).origin;
+    const stream = new URL(match[1]!);
+    const file = new URL(match[2]!);
+    return (
+      stream.origin === origin &&
+      /^\/api\/v1\/public\/competitions\/[^/]+\/versions$/u.test(stream.pathname) &&
+      !stream.search &&
+      file.origin === origin &&
+      /^\/_next\/static\/chunks\/[A-Za-z0-9_-]+\.js$/u.test(file.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isExpectedTeardownFontCancellation(input: {
   failure: string;
   pageUrl: string;
@@ -129,6 +156,29 @@ export function isExpectedTeardownStaticAssetCancellation(input: {
   }
 }
 
+/**
+ * Firefox fetches the app's Next metadata icons (`/icon.svg`, `/apple-icon.png`, content-hashed query) lazily and
+ * cancels them when the page is replaced. Only those exact same-origin icon URLs are accepted.
+ */
+export function isExpectedTeardownMetadataIconCancellation(input: {
+  failure: string;
+  pageUrl: string;
+  requestUrl: string;
+}): boolean {
+  if (!standardCancellationFailures.includes(input.failure)) return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return (
+      pageUrl.origin === requestUrl.origin &&
+      ((requestUrl.pathname === "/icon.svg" && /^\?icon\.[A-Za-z0-9_-]+\.svg$/u.test(requestUrl.search)) ||
+        (requestUrl.pathname === "/apple-icon.png" && /^\?apple-icon\.[A-Za-z0-9_-]+\.png$/u.test(requestUrl.search)))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isExpectedRscNavigationCancellation(input: {
   failure: string;
   method: string;
@@ -156,6 +206,11 @@ export function installConsoleGuard(page: Page) {
   page.on("console", (message) => {
     if (message.type() === "warning" || message.type() === "error") {
       if (message.type() === "warning" && isExpectedFrameworkWarning(message.text())) return;
+      if (
+        message.type() === "error" &&
+        isExpectedPublicEventSourceTeardownConsoleError({ text: message.text(), pageUrl: page.url() })
+      )
+        return;
       state.failures.push(`console.${message.type()}: ${message.text()}`);
     }
   });
@@ -192,6 +247,7 @@ export function installConsoleGuard(page: Page) {
     )
       return;
     if (isExpectedTeardownServiceWorkerCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
+    if (isExpectedTeardownMetadataIconCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
     if (isExpectedTeardownIdentityCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
     if (
       isExpectedTeardownStaticAssetCancellation({

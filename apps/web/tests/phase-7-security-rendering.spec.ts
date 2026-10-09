@@ -5,6 +5,7 @@ import { dismissConsent, installConsoleGuard } from "./helpers/console-guard";
 type Phase7E2EState = {
   xssCompetitionPath: string;
   xssMaliciousName: string;
+  xssDivisionId: string;
 };
 
 async function readE2EState(): Promise<Phase7E2EState> {
@@ -28,6 +29,9 @@ async function readE2EState(): Promise<Phase7E2EState> {
   if (typeof state.xssCompetitionPath !== "string" || state.xssCompetitionPath.length === 0) {
     throw new Error("Phase 7 E2E state is missing xssCompetitionPath");
   }
+  if (typeof state.xssDivisionId !== "string" || state.xssDivisionId.length === 0) {
+    throw new Error("Phase 7 E2E state is missing xssDivisionId");
+  }
   if (typeof state.xssMaliciousName !== "string" || !state.xssMaliciousName.includes("<script>")) {
     throw new Error("Phase 7 E2E state is missing the persisted malicious XSS value");
   }
@@ -45,14 +49,18 @@ test.describe("QA-014 Browser Stored XSS & DOM Sanitization", () => {
     });
 
     // No query-string/demo fallback is allowed: this route must resolve the database-backed fixture.
-    await page.goto(state.xssCompetitionPath);
+    // The schedule tab lists every fixture of the division holding the malicious entry by team name.
+    await page.goto(`${state.xssCompetitionPath}?tab=schedule&division=${encodeURIComponent(state.xssDivisionId)}`);
     await dismissConsent(page);
 
     await expect(page.locator("body")).toBeVisible();
 
     // The exact persisted payload must be present as text. This prevents the test from
     // passing merely because the page ignores the malicious database value.
-    await expect(page.getByText(state.xssMaliciousName, { exact: true }).first()).toBeVisible();
+    // Scoped to the rendered schedule list so a hidden <option> in the team picker cannot satisfy it.
+    await expect(
+      page.locator("[data-schedule]").getByText(state.xssMaliciousName, { exact: true }).first(),
+    ).toBeVisible();
 
     // No executable script node containing the persisted payload may reach the DOM.
     const unescapedScriptTags = page.locator("script").filter({ hasText: "window.__xss_injected_flag" });

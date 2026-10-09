@@ -215,12 +215,21 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     await page.goto(state.publicCompetitionPath);
     await dismissConsent(page);
     await expect(page.locator("main")).toBeVisible();
-    for (const divisionName of state.divisionNames) {
-      await expect(page.getByText(divisionName, { exact: true }).first()).toBeVisible();
-    }
+    // Each division's schedule tab must select that division and list its seeded fixture (scoped to the
+    // schedule list, not the hidden <option>s of the team picker).
+    expect(new Set(state.divisionFixtures.map((fixture) => fixture.divisionName))).toEqual(
+      new Set(state.divisionNames),
+    );
     for (const fixture of state.divisionFixtures) {
-      await expect(page.getByText(fixture.homeName, { exact: true }).first()).toBeVisible();
-      await expect(page.getByText(fixture.awayName, { exact: true }).first()).toBeVisible();
+      await page.goto(`${state.publicCompetitionPath}?tab=schedule&division=${encodeURIComponent(fixture.divisionId)}`);
+      await expect(page.locator(`[role="tabpanel"][data-division-id="${fixture.divisionId}"]`)).toBeVisible();
+      const divisionPicker = page.locator(`select:has(option[value="${fixture.divisionId}"])`);
+      await expect(divisionPicker).toHaveValue(fixture.divisionId);
+      await expect(divisionPicker.locator("option:checked")).toHaveText(fixture.divisionName);
+      const row = page.locator(`[data-schedule] [data-match-id="${fixture.matchId}"]`);
+      await expect(row).toBeVisible();
+      await expect(row.getByText(fixture.homeName, { exact: true })).toBeVisible();
+      await expect(row.getByText(fixture.awayName, { exact: true })).toBeVisible();
     }
     const initialPublicTruth = await publicTruth(context.request, state);
     expect(initialPublicTruth.publication.schedule_version).toBe(state.scheduleVersion);
@@ -300,11 +309,10 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     const baselineAwayPoints = started.score.total_points.away;
 
     await context.setOffline(true);
+    // A point is a one-tap action: it joins the tap queue immediately (no confirmation dialog) and, with the
+    // transport offline, is handed to the durable offline queue.
     await page.getByRole("button", { name: `Point ${homeName}` }).click();
-    const pointDialog = page.getByRole("dialog", { name: "Record event: Point" });
-    await expect(pointDialog).toBeVisible();
-    await pointDialog.getByRole("button", { name: "Record event" }).click();
-    await expect(pointDialog).toBeHidden();
+    await expect(page.getByRole("dialog", { name: "Record event: Point" })).toHaveCount(0);
 
     await expect
       .poll(getIndexedDbPendingQueueCount, { timeout: 10_000, intervals: [100, 250, 500] })
@@ -383,21 +391,22 @@ test.describe("QA-005 / QA-006 / QA-007 Canonical Multi-Division Browser Lifecyc
     await expect(page.getByRole("region", { name: "division standings table" })).toBeVisible();
     await expect(page.getByText(`${homeName} 0–1`, { exact: false }).first()).toBeVisible();
 
-    await page.goto(state.publicCompetitionPath);
-    await dismissConsent(page);
-    await expect(page.locator("main")).toBeVisible();
-    for (const divisionName of state.divisionNames) {
-      await expect(page.getByText(divisionName, { exact: true }).first()).toBeVisible();
-    }
-    const publicResults = page.getByRole("region", {
-      name: `${state.divisionFixtures[0]!.divisionName} Results`,
-      exact: true,
-    });
-    await expect(publicResults).toContainText(homeName);
-    await expect(publicResults).toContainText(started.match.away.name!);
-    await expect(publicResults.getByText("0", { exact: true })).toBeVisible();
-    await expect(publicResults.getByText("1", { exact: true })).toBeVisible();
     const correctedPublicTruth = await publicTruth(context.request, state);
+    const scoredDivision = correctedPublicTruth.divisions.find((candidate) =>
+      candidate.schedule.some((match) => match.id === state.scoredMatchId),
+    );
+    if (!scoredDivision) throw new Error("Public projection is missing the scored match");
+    // The public schedule row for the corrected match shows the corrected score and both entries.
+    await page.goto(
+      `${state.publicCompetitionPath}?tab=schedule&division=${encodeURIComponent(scoredDivision.division.id)}`,
+    );
+    await dismissConsent(page);
+    await expect(page.locator(`[role="tabpanel"][data-division-id="${scoredDivision.division.id}"]`)).toBeVisible();
+    const publicResult = page.locator(`[data-schedule] [data-match-id="${state.scoredMatchId}"]`);
+    await expect(publicResult).toBeVisible();
+    await expect(publicResult.getByText(homeName, { exact: true })).toBeVisible();
+    await expect(publicResult.getByText(started.match.away.name!, { exact: true })).toBeVisible();
+    await expect(publicResult).toContainText("0–1");
     expect(correctedPublicTruth.publication.schedule_version).toBe(state.scheduleVersion);
     expect(correctedPublicTruth.publication.result_version).toBe(corrected.result_version);
     expect(correctedPublicTruth.publication.result_version).toBeGreaterThan(

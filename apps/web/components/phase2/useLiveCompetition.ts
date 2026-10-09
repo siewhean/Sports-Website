@@ -115,7 +115,10 @@ export function useLiveCompetition(
     };
 
     let source: EventSource | null = null;
-    if (typeof EventSource !== "undefined") {
+    // Open the long-lived stream only once the page has finished loading: it must not hold the document in a
+    // "loading" state or compete with first paint, and a navigation during load then never interrupts it.
+    const openStream = () => {
+      if (disposed || source || typeof EventSource === "undefined") return;
       source = new EventSource(`/api/v1/public/competitions/${encodeURIComponent(slug)}/versions`);
       source.addEventListener("version", ((event: MessageEvent<string>) => {
         let version: unknown;
@@ -138,7 +141,22 @@ export function useLiveCompetition(
         source?.close();
         source = null;
       });
-    }
+    };
+    if (document.readyState === "complete") openStream();
+    else window.addEventListener("load", openStream, { once: true });
+    // Close the stream ourselves when the page is being left, so a navigation never tears down a live
+    // connection (browsers report that as a connection error); reopen it if the page returns from the bfcache.
+    const leave = () => {
+      source?.close();
+      source = null;
+    };
+    const restore = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      openStream();
+      void sync();
+    };
+    window.addEventListener("pagehide", leave);
+    window.addEventListener("pageshow", restore);
 
     // The page HTML may come from a shared cache, so confirm freshness once straight away.
     void sync();
@@ -163,6 +181,9 @@ export function useLiveCompetition(
       disposed = true;
       window.clearTimeout(kickoff);
       inFlight?.abort();
+      window.removeEventListener("load", openStream);
+      window.removeEventListener("pagehide", leave);
+      window.removeEventListener("pageshow", restore);
       source?.close();
       window.clearInterval(tick);
       window.removeEventListener("online", goOnline);

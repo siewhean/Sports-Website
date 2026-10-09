@@ -4,7 +4,13 @@ import { useCallback, useState } from "react";
 import Link from "next/link";
 import { interpolate, spectatorMessages as copy } from "@matchday/ui";
 import type { CompetitionView } from "@/lib/phase2";
-import { competitionPhase, findMatch, formatClock, type ScoreChange } from "@/lib/public-competition-model";
+import {
+  competitionPhase,
+  findMatch,
+  formatClock,
+  liveUpdatesEnded,
+  type ScoreChange,
+} from "@/lib/public-competition-model";
 import { segmentName } from "./PublicCompetitionApp";
 import { LiveStatus } from "./PublicLiveStatus";
 import { useLiveCompetition } from "./useLiveCompetition";
@@ -42,8 +48,7 @@ export function PublicMatchLive({
     },
     [matchId],
   );
-  const renderedPhase = competitionPhase(initial, new Date(renderedAt));
-  const live = useLiveCompetition(initial, liveUpdates && renderedPhase !== "completed", onScoreChanges);
+  const live = useLiveCompetition(initial, liveUpdates && !liveUpdatesEnded(initial), onScoreChanges);
   const competition = live.view;
   const phase = competitionPhase(competition, new Date(live.lastSyncedAt ?? renderedAt));
   const found = findMatch(competition, matchId);

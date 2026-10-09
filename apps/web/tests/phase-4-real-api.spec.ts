@@ -425,9 +425,21 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
     minute: "2-digit",
     hour12: false,
   }).format(moved.start_epoch_ms);
-  // The schedule shows one competition day at a time; open the day the match moved to.
+  // The schedule shows one division and one competition day at a time; open the moved match's division (as
+  // published in the same-origin public snapshot) on the day it moved to.
+  const snapshotResponse = await page.request.get(`/api/public/competitions/${encodeURIComponent(slug)}/snapshot`);
+  expect(snapshotResponse.status()).toBe(200);
+  const snapshot = (await snapshotResponse.json()) as {
+    competition: { publicDivisions?: Array<{ division: { id: string }; matches: Array<{ id: string }> }> };
+  };
+  const movedDivisionId = snapshot.competition.publicDivisions?.find((candidate) =>
+    candidate.matches.some((match) => match.id === moved.match_id),
+  )?.division.id;
+  if (!movedDivisionId) throw new Error(`Public snapshot is missing moved match ${moved.match_id}`);
+  // Let the page finish loading before replacing it, so no in-flight load is torn down mid-navigation.
+  await page.waitForLoadState("load");
   await page.goto(
-    `${page.url().split("?")[0]}?tab=schedule&day=${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(moved.start_epoch_ms)}`,
+    `/competitions/${slug}?tab=schedule&division=${encodeURIComponent(movedDivisionId)}&day=${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(moved.start_epoch_ms)}`,
   );
   const publicMovedMatch = page.locator(`[data-schedule] > li[data-match-id="${moved.match_id}"]`);
   await expect(publicMovedMatch).toHaveCount(1);

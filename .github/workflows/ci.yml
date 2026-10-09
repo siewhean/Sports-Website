@@ -182,8 +182,9 @@ jobs:
             apps/api/openapi.generated.json
             artifacts/deployment-manifest.json
           if-no-files-found: error
-      # Only the engines the Playwright projects use (desktop/phone chromium, tablet/phone webkit).
-      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
+      # Engines used by the Playwright projects: chromium + webkit (default config) and firefox
+      # (phase-4 real-API journey, playwright.phase4-real.config.ts desktop-firefox project).
+      - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit firefox
       - run: pnpm test:e2e --shard=${{ matrix.shard }}
       - run: pnpm test:a11y --shard=${{ matrix.shard }}
       # NON-REQUIRED: visual baselines are macOS (darwin) only. This step is informational until linux baselines are
