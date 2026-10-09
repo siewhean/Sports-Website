@@ -91,8 +91,8 @@ test("hosted browser matrix has enough timeout headroom for dependency mirrors",
   assert.ok(start >= 0 && end > start, "browser-e2e workflow block must remain inspectable");
   const browserJob = source.slice(start, end);
   assert.match(browserJob, /timeout-minutes:\s*(?:[6-9]\d|\d{3,})/u);
-  assert.match(browserJob, /playwright install --with-deps chromium webkit(?! firefox)/u);
-  assert.doesNotMatch(browserJob, /firefox/u, "no Playwright project uses firefox");
+  // chromium + webkit for the default config; firefox for the phase-4 real-API desktop-firefox project.
+  assert.match(browserJob, /playwright install --with-deps chromium webkit firefox/u);
   assert.match(browserJob, /--shard=\$\{\{ matrix\.shard \}\}/u, "e2e must be sharded");
 });
 
