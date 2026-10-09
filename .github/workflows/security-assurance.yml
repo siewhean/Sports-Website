@@ -150,4 +150,4 @@ jobs:
       - name: Build API and web
         run: |
           pnpm --filter @matchday/api build
-          pnpm --filter @matchday/web build
+          pnpm --filter @matchday/web... build
