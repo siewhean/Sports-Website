@@ -56,6 +56,7 @@ import {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { assertChildInCompetition, assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import {
   CompetitionRepository,
@@ -1729,7 +1730,8 @@ export class Phase4Runtime {
 
   async readFormatBuilder(actor: Phase3Actor, competitionId: string, divisionId: string) {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    const rows = (await this.formatRepo.listByDivisionId(divisionId, this.sql)) as FormatRow[];
+    await assertDivisionInCompetition(this.sql, divisionId, competitionId);
+    const rows = (await this.formatRepo.listByDivisionId(divisionId, competitionId, this.sql)) as FormatRow[];
     const draft = rows.find((row) => row.status === "draft") ?? null;
     return {
       revisions: rows.map((row) => this.formatRevisionView(row)),
@@ -2232,6 +2234,7 @@ export class Phase4Runtime {
       const access = await this.competitionAccess(tx, input.competition_id, actor);
       if (access.organisation_id !== organisationId)
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
+      await assertDivisionInCompetition(tx, input.division_id, input.competition_id);
       await this.lockIdempotency(tx, organisationId, input.idempotency_key);
       const version = first(
         await tx.unsafe<{
@@ -2603,6 +2606,7 @@ export class Phase4Runtime {
       const access = await this.competitionAccess(tx, competitionId, actor, false);
       if (access.organisation_id !== organisationId)
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
+      await assertDivisionInCompetition(tx, divisionId, competitionId);
 
       const allowance = (
         await tx.unsafe<{ action_limit: number; used_units: number }>(
@@ -2817,6 +2821,7 @@ export class Phase4Runtime {
       const access = await this.competitionAccess(tx, competitionId, actor, false);
       if (access.organisation_id !== organisationId)
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
+      await assertDivisionInCompetition(tx, divisionId, competitionId);
 
       const allowance = (
         await tx.unsafe<{ action_limit: number; used_units: number }>(
@@ -3015,6 +3020,7 @@ export class Phase4Runtime {
       const access = await this.competitionAccess(tx, competitionId, actor, false);
       if (access.organisation_id !== organisationId)
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
+      await assertChildInCompetition(tx, "repair_case", caseId, competitionId);
 
       const allowance = (
         await tx.unsafe<{ action_limit: number; used_units: number }>(
@@ -4638,8 +4644,8 @@ export class Phase4Runtime {
       } else {
         const targetMatch = (
           await tx.unsafe<{ id: string; graph_match_id: string | null; code: string }>(
-            `SELECT id, graph_match_id, code FROM matches WHERE id=$1`,
-            [input.match_id],
+            `SELECT id, graph_match_id, code FROM matches WHERE id=$1 AND competition_id=$2`,
+            [input.match_id, revision.competition_id],
           )
         )[0];
         if (

@@ -40,7 +40,6 @@ export default async function OfficialsPage({
       pageTitle={phase2Copy.officialsTitle}
       pageIntro={phase2Copy.officialsIntro}
       pageEyebrow={result.competition.division?.name ?? result.competition.name}
-      syncLabel={phase2Copy.draftSynced}
       syncState={opaqueId("saved")}
       sectionContent={
         <OfficialsRosterView

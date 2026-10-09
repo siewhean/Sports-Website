@@ -8,7 +8,8 @@ import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const competition = await getCompetitionView(slug);
+  // Metadata is best effort: an outage must surface through the page's error boundary, not here.
+  const competition = await getCompetitionView(slug).catch(() => null);
   if (!competition) return {};
   return {
     title: competition.name,

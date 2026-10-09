@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { cookies, headers } from "next/headers";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
@@ -48,7 +49,7 @@ export async function getOrganiserCompetitionLibrary(): Promise<OrganiserCompeti
   if (!cookie) return { state: "permission" };
 
   try {
-    const response = await fetch(new URL("/api/v1/organiser/competitions", baseUrl), {
+    const response = await apiFetch(new URL("/api/v1/organiser/competitions", baseUrl), {
       headers: { accept: "application/json", cookie },
       cache: "no-store",
     });

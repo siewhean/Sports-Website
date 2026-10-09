@@ -56,6 +56,22 @@ const rawConfigSchema = z.object({
     (value) => (value === "" ? undefined : value),
     z.coerce.number().int().min(600).max(10_000).optional(),
   ),
+  // Anonymous GET /api/v1/public/* reads get their own per-client bucket so a
+  // busy event cannot exhaust the general anonymous limit.
+  API_PUBLIC_READ_RATE_LIMIT_MAX: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(60).max(100_000).default(600),
+  ),
+  // Concurrent public SSE version streams per client IP, per API instance.
+  API_PUBLIC_SSE_MAX_STREAMS_PER_CLIENT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(1).max(1_000).default(16),
+  ),
+  // Shared with the web BFF, which HMAC-signs the end-user IP it forwards.
+  MATCHDAY_CLIENT_IP_SECRET: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(32).max(1_024).optional(),
+  ),
   MATCHDAY_PUBLIC_ORIGIN: optionalUrlSchema,
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
@@ -140,6 +156,15 @@ export type AppConfig = {
     allowedOrigins: readonly string[];
     trustedProxies: readonly string[];
     anonymousRateLimitMax: number;
+    publicReadRateLimitMax: number;
+    publicSseMaxStreamsPerClient: number;
+  };
+  /**
+   * Verifies the web BFF's signed end-user IP header. Kept outside `api` so
+   * safeConfigSummary never spreads the secret into diagnostics.
+   */
+  clientIpForwarding?: {
+    secret: string;
   };
   publicOrigin?: string;
   databaseUrl: string;
@@ -200,7 +225,13 @@ export type AppConfig = {
 function requireProductionValue(
   environment: AppEnvironment,
   source: NodeJS.ProcessEnv,
-  key: "DATABASE_URL" | "REDIS_URL" | "DEEP_HEALTH_TOKEN" | "API_ALLOWED_ORIGINS" | "OTEL_EXPORTER_OTLP_ENDPOINT",
+  key:
+    | "DATABASE_URL"
+    | "REDIS_URL"
+    | "DEEP_HEALTH_TOKEN"
+    | "API_ALLOWED_ORIGINS"
+    | "OTEL_EXPORTER_OTLP_ENDPOINT"
+    | "MATCHDAY_CLIENT_IP_SECRET",
 ) {
   if (environment === "production" && !source[key]) {
     throw new Error(`${key} must be explicitly configured in production`);
@@ -360,6 +391,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   requireProductionValue(parsed.APP_ENV, source, "REDIS_URL");
   requireProductionValue(parsed.APP_ENV, source, "DEEP_HEALTH_TOKEN");
   requireProductionValue(parsed.APP_ENV, source, "API_ALLOWED_ORIGINS");
+  requireProductionValue(parsed.APP_ENV, source, "MATCHDAY_CLIENT_IP_SECRET");
   if (parsed.OTEL_ENABLED) {
     requireProductionValue(parsed.APP_ENV, source, "OTEL_EXPORTER_OTLP_ENDPOINT");
   }
@@ -550,6 +582,30 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     }
   }
 
+  if (parsed.MATCHDAY_CLIENT_IP_SECRET) {
+    const clientIpSecret = parsed.MATCHDAY_CLIENT_IP_SECRET;
+    if (Buffer.byteLength(clientIpSecret, "utf8") < 32) {
+      throw new Error("MATCHDAY_CLIENT_IP_SECRET must be at least 32 bytes");
+    }
+    const otherSecrets: Array<[string, string | undefined]> = [
+      ["identity CSRF key", parsed.IDENTITY_CSRF_HMAC_SECRET],
+      ["identity flow seal key", parsed.IDENTITY_FLOW_SEAL_KEY],
+      ["identity provider-event key", parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET],
+      ["OIDC client secret", parsed.IDENTITY_OIDC_CLIENT_SECRET],
+      ["deep health token", parsed.DEEP_HEALTH_TOKEN],
+      ["edge cache purge token", parsed.EDGE_CACHE_PURGE_BEARER_TOKEN],
+      ["email provider webhook secret", parsed.EMAIL_PROVIDER_WEBHOOK_SECRET],
+      ["SMTP password", parsed.SMTP_AUTH_PASS],
+      ...fallbackSecrets.map((secret): [string, string] => ["fallback-code HMAC secret", secret]),
+      ...rateLimitSecrets.map((secret): [string, string] => ["rate-limit HMAC secret", secret]),
+    ];
+    for (const [label, secret] of otherSecrets) {
+      if (secret && secret === clientIpSecret) {
+        throw new Error(`MATCHDAY_CLIENT_IP_SECRET and ${label} must be different`);
+      }
+    }
+  }
+
   if (parsed.EMAIL_PROVIDER_WEBHOOK_SECRET) {
     const webhookSecret = parsed.EMAIL_PROVIDER_WEBHOOK_SECRET;
     if (parsed.SMTP_AUTH_PASS && webhookSecret === parsed.SMTP_AUTH_PASS) {
@@ -634,7 +690,10 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       allowedOrigins,
       trustedProxies,
       anonymousRateLimitMax,
+      publicReadRateLimitMax: parsed.API_PUBLIC_READ_RATE_LIMIT_MAX,
+      publicSseMaxStreamsPerClient: parsed.API_PUBLIC_SSE_MAX_STREAMS_PER_CLIENT,
     },
+    ...(parsed.MATCHDAY_CLIENT_IP_SECRET ? { clientIpForwarding: { secret: parsed.MATCHDAY_CLIENT_IP_SECRET } } : {}),
     ...(publicOrigin ? { publicOrigin } : {}),
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
@@ -711,6 +770,7 @@ export function safeConfigSummary(config: AppConfig) {
     },
     logLevel: config.logLevel,
     deepHealthTokenConfigured: Boolean(config.deepHealthToken),
+    clientIpForwardingConfigured: Boolean(config.clientIpForwarding),
     identity: {
       csrfHmacSecretConfigured: Boolean(config.identity.csrfHmacSecret),
       sessionCookieName: config.identity.sessionCookieName,

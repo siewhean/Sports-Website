@@ -13,7 +13,7 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useState: (initial: unknown) => {
-      if (typeof initial === "string" && ["all", "live", "upcoming", "final"].includes(initial)) {
+      if (typeof initial === "string" && ["all", "live", "upcoming", "completed"].includes(initial)) {
         return [
           currentFilter,
           (val: string) => {
@@ -35,6 +35,7 @@ describe("PublicCompetitionsList status filters", () => {
       name: "Championship Live",
       sport: "canoe_polo",
       status: "live",
+      phase: "live",
       dateLabel: "Today",
       slug: "championship-live",
     },
@@ -43,6 +44,7 @@ describe("PublicCompetitionsList status filters", () => {
       name: "Championship Active",
       sport: "canoe_polo",
       status: "active",
+      phase: "upcoming",
       dateLabel: "Tomorrow",
       slug: "championship-active",
     },
@@ -51,6 +53,7 @@ describe("PublicCompetitionsList status filters", () => {
       name: "Championship Published",
       sport: "canoe_polo",
       status: "published",
+      phase: "upcoming",
       dateLabel: "Next Week",
       slug: "championship-published",
     },
@@ -59,6 +62,7 @@ describe("PublicCompetitionsList status filters", () => {
       name: "Championship Completed",
       sport: "canoe_polo",
       status: "completed",
+      phase: "completed",
       dateLabel: "Yesterday",
       slug: "championship-completed",
     },
@@ -67,6 +71,7 @@ describe("PublicCompetitionsList status filters", () => {
       name: "Championship Archived",
       sport: "canoe_polo",
       status: "archived",
+      phase: "completed",
       dateLabel: "Last Month",
       slug: "championship-archived",
     },
@@ -82,7 +87,7 @@ describe("PublicCompetitionsList status filters", () => {
     expect(html).toContain("Championship Archived");
   });
 
-  it("classifies only status === 'live' under the Live filter", () => {
+  it("classifies by shared phase: only live competitions under the Live filter", () => {
     currentFilter = "live";
     const html = renderToString(<PublicCompetitionsList competitions={competitions} />);
     expect(html).toContain("Championship Live");
@@ -92,7 +97,7 @@ describe("PublicCompetitionsList status filters", () => {
     expect(html).not.toContain("Championship Archived");
   });
 
-  it("classifies both active and published under the Upcoming filter", () => {
+  it("classifies upcoming-phase competitions under the Upcoming filter", () => {
     currentFilter = "upcoming";
     const html = renderToString(<PublicCompetitionsList competitions={competitions} />);
     expect(html).not.toContain("Championship Live");
@@ -102,8 +107,8 @@ describe("PublicCompetitionsList status filters", () => {
     expect(html).not.toContain("Championship Archived");
   });
 
-  it("classifies completed and archived under the Final filter", () => {
-    currentFilter = "final";
+  it("classifies completed-phase competitions under the Completed filter", () => {
+    currentFilter = "completed";
     const html = renderToString(<PublicCompetitionsList competitions={competitions} />);
     expect(html).not.toContain("Championship Live");
     expect(html).not.toContain("Championship Active");

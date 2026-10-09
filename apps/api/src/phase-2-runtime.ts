@@ -12,6 +12,8 @@ import {
   STANDINGS_SPORT_PACKS,
   assertFiveSportScoreCommandAllowed,
   calculateStandings,
+  DEFAULT_LIVE_MATCH_STALE_AFTER_MS,
+  liveMatchStaleCutoff,
   materialiseFiveSportScoreEvent,
   parseFiveSportScoreCommand,
   reduceFiveSportScoreEvents,
@@ -650,6 +652,13 @@ function required<T>(rows: readonly T[], message: string): T {
 
 export class Phase2Runtime {
   private readonly fallbackCodeHmacSecret: string;
+  /**
+   * In-progress matches with no scoring activity for this long are withheld
+   * from the public live view (they stay in progress for the organiser). The
+   * competition lifecycle sweeper reads the same value, so every projection
+   * writer in the process applies one consistent cut-off.
+   */
+  liveMatchStaleAfterMs: number = DEFAULT_LIVE_MATCH_STALE_AFTER_MS;
 
   constructor(
     private readonly sql: PostgresJsSql,
@@ -5502,8 +5511,17 @@ export class Phase2Runtime {
        JOIN division_entries home ON home.id=m.home_entry_id
        JOIN division_entries away ON away.id=m.away_entry_id
        WHERE m.competition_id=$1 AND m.state='in_progress'
+         AND (stream.updated_at > $2 OR m.id = ANY($3::uuid[]))
        ORDER BY m.id`,
-      [competitionId],
+      // A live match abandoned without scoring activity must not stay "LIVE"
+      // for spectators. It is not finalised: it simply drops out of the live
+      // results (fixture shows as scheduled, any earlier confirmed result is
+      // kept) and reappears as soon as scoring resumes.
+      [
+        competitionId,
+        liveMatchStaleCutoff(this.now(), this.liveMatchStaleAfterMs),
+        [...(options.liveScores?.keys() ?? [])],
+      ],
     );
     const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
     for (const match of liveMatches) {
@@ -5577,6 +5595,9 @@ export class Phase2Runtime {
           away_score: match.away_score,
           state: match.state,
           updated_at: match.updated_at,
+          ...(match.current_segment !== undefined ? { current_segment: match.current_segment } : {}),
+          ...(match.segments !== undefined ? { segments: match.segments } : {}),
+          ...(match.recorded_time_seconds !== undefined ? { recorded_time_seconds: match.recorded_time_seconds } : {}),
         }));
       const divisionStandings = standingsByDivision.get(division.id);
       const divisionBracket = bracketByDivision.get(division.id);

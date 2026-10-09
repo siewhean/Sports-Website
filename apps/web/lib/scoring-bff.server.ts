@@ -1,3 +1,4 @@
+import { apiFetch } from "./client-ip.server";
 import { SPORT_PACKS, parseFiveSportScoreCommand, validateSportSettings, type SportId } from "@matchday/domain";
 import {
   expiredScoringSessionCookie,
@@ -652,7 +653,7 @@ function appendInput(value: unknown): Record<string, unknown> | null {
 
 async function upstreamFetch(url: URL, init: RequestInit): Promise<Response | null> {
   try {
-    return await fetch(url, { ...init, redirect: "error" });
+    return await apiFetch(url, { ...init, redirect: "error" });
   } catch {
     return null;
   }

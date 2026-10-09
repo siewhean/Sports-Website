@@ -45,6 +45,8 @@ import {
   EmailTemplateRegistry,
 } from "@matchday/notifications";
 import { startApiTelemetry } from "./telemetry.js";
+import { createErrorReporter, initSentryNode } from "@matchday/observability";
+import { CompetitionLifecycleSweeper, competitionLifecycleSettingsFromEnv } from "./competition-lifecycle-sweeper.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
 const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -85,6 +87,8 @@ const identityProvider = config.identity.oidc
       ...(maxAuthenticationAgeSeconds !== undefined ? { maxAuthenticationAgeSeconds } : {}),
     })
   : new UnavailableIdentityProvider();
+// Inert unless SENTRY_DSN is set; also installs uncaughtException/unhandledRejection capture.
+const errorReporter = createErrorReporter(initSentryNode({ service: "matchday-api" }));
 const telemetry = await startApiTelemetry(config);
 const rateLimitRedis = new Redis(config.redisUrl, {
   connectTimeout: 2_000,
@@ -134,6 +138,10 @@ const phase2Runtime = new FallbackKeyringPhase2Runtime(
     config.publicOrigin ?? config.api.allowedOrigins[0] ?? "http://127.0.0.1:3000",
   ),
 );
+// Parsed before anything starts so a bad value fails the boot, not a sweep.
+const competitionLifecycleSettings = competitionLifecycleSettingsFromEnv(process.env);
+phase2Runtime.liveMatchStaleAfterMs = competitionLifecycleSettings.liveMatchStaleAfterMs;
+let competitionLifecycleSweeper: CompetitionLifecycleSweeper | null = null;
 const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
 const queueName = schedulerQueueName(config.environment);
 const inlineScheduler = new SchedulerRuntime({
@@ -191,6 +199,7 @@ const app = await buildApp({
     return verifiedScoringRateLimitSessionId(identitySql, sessionId, sessionToken);
   },
   telemetry,
+  errorReporter,
   identityRuntime,
   phase2Runtime,
   phase3Runtime,
@@ -208,6 +217,7 @@ const app = await buildApp({
   scoringFallbackHmacKeySql: identitySql,
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,
   closeIdentityResources: async () => {
+    await competitionLifecycleSweeper?.stop();
     await Promise.all([inlineScheduler.stop(), scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
   },
 }).catch(async (error: unknown) => {
@@ -217,9 +227,20 @@ const app = await buildApp({
     scheduleQueue.close(),
     postgresClient.end({ timeout: 1 }),
     telemetry.shutdown(),
+    errorReporter.reportError(error, { severity: "fatal", handled: false }).then(() => errorReporter.flush(2_000)),
   ]);
   throw error;
 });
+
+// Runs inside every API instance (production has no separate scheduler
+// service); per-competition advisory locks keep instances from duplicating work.
+competitionLifecycleSweeper = new CompetitionLifecycleSweeper(
+  identitySql,
+  phase2Runtime,
+  competitionLifecycleSettings,
+  app.log as unknown as ConstructorParameters<typeof CompetitionLifecycleSweeper>[3],
+);
+competitionLifecycleSweeper.start();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, async () => {
@@ -229,6 +250,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     } catch (error) {
       app.log.error({ err: error }, "api failed to shut down cleanly");
       process.exitCode = 1;
+      await errorReporter.reportError(error);
+    } finally {
+      await errorReporter.flush(2_000);
     }
   });
 }

@@ -124,13 +124,19 @@ export function OrganiserWorkspace({
           </Link>
           <div className="p2-context">
             <span>{competition.name}</span>
-            <small>{competition.publicationRevision}</small>
+            {competition.publicationState ? (
+              <small>
+                {competition.publicationState === "published" ? phase2Copy.published : phase2Copy.notPublished}
+              </small>
+            ) : null}
           </div>
           <div className="flex items-center gap-3">
-            <p className="p2-sync" data-sync-state={syncState}>
-              <span aria-hidden="true" />
-              {syncLabel ?? phase2Copy.draftSynced}
-            </p>
+            {syncLabel ? (
+              <p className="p2-sync" data-sync-state={syncState}>
+                <span aria-hidden="true" />
+                {syncLabel}
+              </p>
+            ) : null}
             <IdentityStatus className="site-header__access" />
           </div>
         </header>
@@ -295,7 +301,7 @@ function ControlRoom({ competition }: { competition: CompetitionView }) {
         <dl>
           <div>
             <dt>{phase2Copy.publicVersion}</dt>
-            <dd>{competition.publicationRevision}</dd>
+            <dd>{competition.publishedVersionLabel ?? phase2Copy.notPublished}</dd>
           </div>
           <div>
             <dt>{phase2Copy.freshness}</dt>
@@ -455,7 +461,7 @@ function Publish({ competition }: { competition: CompetitionView }) {
           <Check />
         </span>
         <p>{phase2Copy.published}</p>
-        <h2>{competition.publishedVersionLabel ?? competition.publicationRevision}</h2>
+        <h2>{competition.publishedVersionLabel ?? phase2Copy.published}</h2>
         <dl>
           <div>
             <dt>{phase2Copy.publishedLabel}</dt>
@@ -467,7 +473,7 @@ function Publish({ competition }: { competition: CompetitionView }) {
           </div>
           <div>
             <dt>{phase2Copy.schedule}</dt>
-            <dd>{competition.publicationRevision}</dd>
+            <dd>{competition.publishedVersionLabel ?? phase2Copy.notPublished}</dd>
           </div>
         </dl>
         <Link className="p2-button p2-button--dark" href={`/competitions/${competition.slug}`}>
@@ -520,7 +526,6 @@ function Field({ label, value, wide = false }: { label: string; value: string; w
     <label className={wide ? "p2-field p2-field--wide" : "p2-field"}>
       <span>{label}</span>
       <input defaultValue={value} />
-      <small>{phase2Copy.draftSynced}</small>
     </label>
   );
 }

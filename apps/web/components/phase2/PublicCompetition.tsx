@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { opaqueId } from "@matchday/ui";
+import { interpolate, messages, opaqueId } from "@matchday/ui";
 import { ArrowRight, CalendarDots, Clock, Trophy } from "@phosphor-icons/react/dist/ssr";
 import { ConnectivityStatus } from "@/components/foundation/ConnectivityStatus";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
@@ -7,6 +7,7 @@ import { DoubleEliminationBracket } from "@/components/phase2/DoubleEliminationB
 import { PublicLiveRefresh } from "@/components/phase2/PublicLiveRefresh";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 import { phase2Copy, type CompetitionView, type PublicDivisionView } from "@/lib/phase2";
+import { publicCompetitionPhase } from "@/lib/phase2-public-phase";
 import styles from "./PublicCompetition.module.css";
 
 export function PublicCompetition({
@@ -18,7 +19,18 @@ export function PublicCompetition({
   viewer?: { displayName: string } | null;
   liveUpdates?: boolean;
 }) {
-  const publicationVersion = publicPublicationVersion(competition.publicationRevision);
+  const phase = publicCompetitionPhase(
+    {
+      status: competition.status ?? "published",
+      startsOn: competition.startsOn,
+      endsOn: competition.endsOn,
+      timezone: competition.timezone,
+      hasLiveMatch: (competition.publicDivisions ?? [{ matches: competition.matches }]).some((division) =>
+        division.matches.some((match) => match.status === "live"),
+      ),
+    },
+    new Date(),
+  );
   const publicDivisions =
     competition.publicDivisions && competition.publicDivisions.length > 0
       ? competition.publicDivisions
@@ -51,15 +63,16 @@ export function PublicCompetition({
           </div>
           <p>
             <span aria-hidden="true" />
-            {phase2Copy.updated}
+            {messages.publicCompetition.phase[phase]}
+            {" · "}
+            {interpolate(messages.publicCompetition.updatedAt, { time: competition.lastUpdated })}
           </p>
         </header>
         <div className={styles.liveBar}>
           {liveUpdates && !demoFixturesEnabled() ? <PublicLiveRefresh slug={competition.slug} /> : null}
           <ConnectivityStatus />
-          <span>{competition.lastUpdated}</span>
         </div>
-        <nav className="p2-public__nav" aria-label={phase2Copy.competitionContext}>
+        <nav className="p2-public__nav" aria-label={competition.name}>
           {hasMultipleDivisions ? (
             publicDivisions.map(({ division }) => (
               <a href={`#results-${division.id}`} key={division.id}>
@@ -79,17 +92,12 @@ export function PublicCompetition({
           <PublicDivisionSections
             key={division.division.id}
             value={division}
-            publicationVersion={publicationVersion}
-            publicationRevision={competition.publicationRevision}
+            isLive={phase === "live"}
             uniqueIds={hasMultipleDivisions}
             slug={competition.slug}
           />
         ))}
         <footer className="p2-public-version">
-          <div>
-            <strong>{publicationVersion}</strong>
-            <span>{competition.publishedAt}</span>
-          </div>
           <p>{phase2Copy.refreshNote}</p>
           <Link href="#public-main">
             {phase2Copy.results}
@@ -104,20 +112,19 @@ export function PublicCompetition({
 
 function PublicDivisionSections({
   value,
-  publicationVersion,
-  publicationRevision,
+  isLive,
   uniqueIds,
   slug,
 }: {
   value: PublicDivisionView;
-  publicationVersion: string;
-  publicationRevision: string;
+  isLive: boolean;
   uniqueIds: boolean;
   slug: string;
 }) {
   const { division, matches, standings, bracket } = value;
   const finalMatch = matches.find((match) => match.status === "final");
-  const liveMatch = matches.find((match) => match.status === "live");
+  // A stale in-progress result must not shout "LIVE NOW" once the competition itself has finished.
+  const liveMatch = isLive ? matches.find((match) => match.status === "live") : undefined;
   const nextMatches = matches.filter((match) => match.status === "scheduled");
   const sectionId = (name: string) => (uniqueIds ? `${name}-${division.id}` : name);
   const headingId = (name: string) => (uniqueIds ? `${name}-${division.id}` : name);
@@ -155,7 +162,9 @@ function PublicDivisionSections({
               <span>{liveMatch.away}</span>
               <strong>{liveMatch.awayScore}</strong>
             </div>
-            <small>{phase2Copy.updated}</small>
+            {liveMatch.updatedLabel ? (
+              <small>{interpolate(messages.publicCompetition.updatedAt, { time: liveMatch.updatedLabel })}</small>
+            ) : null}
           </Link>
         ) : null}
         {finalMatch ? (
@@ -180,7 +189,6 @@ function PublicDivisionSections({
               <span>{finalMatch.away}</span>
               <strong>{finalMatch.awayScore}</strong>
             </div>
-            <small>{publicationRevision}</small>
           </Link>
         ) : null}
       </section>
@@ -195,10 +203,14 @@ function PublicDivisionSections({
               key={match.id}
               href={`/competitions/${slug}/matches/${match.id}`}
               className={styles.matchCard}
-              data-status={match.status}
+              data-status={match.status === "live" && !isLive ? "stale" : match.status}
             >
               <span>
-                {match.status === "live" ? opaqueId("Live") : match.status === "final" ? opaqueId("Final") : match.time}
+                {match.status === "live" && isLive
+                  ? opaqueId("Live")
+                  : match.status === "final"
+                    ? opaqueId("Final")
+                    : match.time}
               </span>
               <strong>
                 {match.home}
@@ -231,7 +243,7 @@ function PublicDivisionSections({
         <ol className="p2-public-fixtures">
           {nextMatches.map((match) => (
             <li key={match.id} data-match-id={match.id}>
-              <time>{match.time}</time>
+              <time>{match.dayLabel ? `${match.dayLabel}, ${match.time}` : match.time}</time>
               <span>{match.area}</span>
               <strong>
                 <span>{match.home}</span>
@@ -254,7 +266,6 @@ function PublicDivisionSections({
             <p>{division.name}</p>
             <h2 id={headingId("public-table-title")}>{phase2Copy.table}</h2>
           </div>
-          <span>{publicationVersion}</span>
         </header>
         <div
           className="p2-public-table"
@@ -314,11 +325,4 @@ function PublicDivisionSections({
       </section>
     </>
   );
-}
-
-function publicPublicationVersion(value: string): string {
-  const match = /^sch_(\d+) · res_(\d+)$/.exec(value);
-  if (match) return `Schedule ${match[1]} · Results ${match[2]}`;
-  const legacy = /^pub_(\d+)$/.exec(value);
-  return legacy ? `Published revision ${Number(legacy[1])}` : value;
 }

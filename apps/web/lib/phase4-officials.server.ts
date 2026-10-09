@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { cookies, headers } from "next/headers";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
@@ -199,7 +200,7 @@ export async function getOfficialWorkspace(
   }
 
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       new URL(`/api/v1/phase4/competitions/${encodeURIComponent(competitionId)}/officials/workspace`, base),
       {
         cache: "no-store",

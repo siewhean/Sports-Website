@@ -868,7 +868,10 @@ export async function registerPhase2Routes(
             ...(request.body.expected_match_id ? { expectedMatchId: request.body.expected_match_id } : {}),
             deviceId: request.body.device_id,
             ...(request.body.device_label ? { deviceLabel: request.body.device_label } : {}),
-            ipAddress: request.ip,
+            // Verified end-user IP (BFF-signed header, see client-ip.ts) so the
+            // IP cooldown isolates one client instead of every scorer behind
+            // the web BFF; falls back to request.ip outside buildApp.
+            ipAddress: request.matchdayClientIp ?? request.ip,
           },
           request.id,
         );

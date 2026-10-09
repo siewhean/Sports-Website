@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
@@ -37,7 +38,7 @@ export async function forwardScheduleRead(request: NextRequest, path: string, va
   const cookie = sessionCookie(request, base);
   if (!cookie) return error(401, "AUTH_REQUIRED", "An authenticated session is required");
   try {
-    const response = await fetch(new URL(path, base), {
+    const response = await apiFetch(new URL(path, base), {
       cache: "no-store",
       headers: { accept: "application/json", cookie },
     });

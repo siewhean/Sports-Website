@@ -1,5 +1,6 @@
 import type { SportId, SportPackSettings } from "@matchday/domain";
 import type { GateCOfflineCanonicalCommand } from "@matchday/contracts";
+import { publicCompetitionPhase, type PublicCompetitionPhase } from "@/lib/phase2-public-phase";
 
 export type SurfaceState =
   "ready" | "loading" | "empty" | "error" | "offline" | "conflict" | "read-only" | "permission";
@@ -20,9 +21,16 @@ export type OrganiserSection =
 
 export type MatchView = {
   id: string;
+  /** Human label such as "Match 3". Never an internal identifier. */
   label: string;
+  /** Machine match code from the projection (e.g. graph match id). Used for classification only, never displayed. */
+  code?: string;
   stage: string;
   time: string;
+  /** Long calendar date in the competition timezone, e.g. "19 September 2026". */
+  date?: string;
+  /** Short weekday and date for dense lists, e.g. "Sat 19 Sep". */
+  dayLabel?: string;
   area: string;
   home: string;
   away: string;
@@ -33,6 +41,7 @@ export type MatchView = {
   segments?: Array<{ number: number; home: number; away: number }>;
   recordedTimeSeconds?: number | null;
   updatedAt?: string;
+  updatedLabel?: string;
   status: "scheduled" | "live" | "final";
 };
 
@@ -72,8 +81,13 @@ export type CompetitionView = {
   venue: string;
   timezone: string;
   dateLabel: string;
+  /** Competition lifecycle status as reported by the API. */
+  status?: string;
+  startsOn?: string;
+  endsOn?: string;
   publicationRevision: string;
   publishedAt: string;
+  /** Formatted in the competition timezone, e.g. "9 Oct, 16:35 SGT". */
   lastUpdated: string;
   division: { id: string; name: string; teamCount: number; matchCount: number };
   publicDivisions?: PublicDivisionView[];
@@ -124,6 +138,11 @@ export type CompetitionSummaryView = {
   sport: string;
   dateLabel: string;
   status: string;
+  startsOn?: string;
+  endsOn?: string;
+  timezone?: string;
+  /** Shared live / upcoming / completed classification (see publicCompetitionPhase). */
+  phase: PublicCompetitionPhase;
 };
 
 export type CompetitionReadPort = {
@@ -307,8 +326,6 @@ export const phase2Copy = {
   organiserNav: "Competition workspace",
   backHome: "Back to MATCHDAY",
   competitionContext: "Singapore Open 2026",
-  draftSynced: "Draft synced 18 seconds ago",
-  currentRevision: "Schedule revision 4",
   save: "Save changes",
   continue: "Continue",
   edit: "Edit",
@@ -387,7 +404,7 @@ export const phase2Copy = {
   table: "Table",
   bracket: "Bracket",
   schedule: "Schedule",
-  updated: "Updated 18 seconds ago",
+  /** Demo fixture only (never rendered for real competitions). */
   publishedVersion: "Published revision 4",
   refreshNote: "Results update automatically. Schedule times appear only from the published schedule.",
   scoringAccess: "Match scoring access",
@@ -712,7 +729,7 @@ export const phase2Competition: CompetitionView = {
   venue: "Marina Reservoir",
   timezone: "Asia/Singapore",
   dateLabel: "12–13 September 2026",
-  publicationRevision: "pub_04",
+  publicationRevision: "sch_4 · res_4",
   publishedAt: "12 Sep, 09:40 SGT",
   lastUpdated: "12 Sep, 10:24 SGT",
   division: { id: "open", name: "Open division", teamCount: 8, matchCount: 16 },
@@ -864,6 +881,8 @@ export const demoCompetitionReadPort: CompetitionReadPort = {
         sport: phase2Competition.sport,
         dateLabel: phase2Competition.dateLabel,
         status: "active",
+        timezone: phase2Competition.timezone,
+        phase: publicCompetitionPhase({ status: "active", timezone: phase2Competition.timezone }, new Date()),
       },
     ];
   },

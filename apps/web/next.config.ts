@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { randomBytes } from "node:crypto";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,8 +41,17 @@ export function renderApiOrigin(value = process.env.RENDER_API_ORIGIN): string |
 const releaseBuildId = requestedBuildId ?? randomBytes(18).toString("base64url");
 const configuredRenderApiOrigin = renderApiOrigin();
 
+// Sentry release/environment are inlined at build time for both runtimes. The
+// DSN itself is never defaulted here: with no DSN configured Sentry is inert.
+const sentryRelease = requestedBuildId ?? process.env.VERCEL_GIT_COMMIT_SHA?.trim() ?? releaseBuildId;
+const sentryEnvironment = process.env.APP_ENV?.trim() || process.env.VERCEL_ENV?.trim() || process.env.NODE_ENV;
+
 const nextConfig: NextConfig = {
   compress: true,
+  env: {
+    NEXT_PUBLIC_SENTRY_RELEASE: sentryRelease,
+    NEXT_PUBLIC_SENTRY_ENVIRONMENT: sentryEnvironment ?? "development",
+  },
   generateBuildId: async () => releaseBuildId,
   headers: async () => [
     {
@@ -94,4 +104,22 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Source-map upload is opt-in: only wrap with the Sentry build plugin when an
+// auth token is present, so builds never need (or contact) Sentry by default.
+const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN?.trim();
+// next.config.ts cannot use top-level await, so load the plugin lazily and synchronously.
+const exportedConfig: NextConfig = sentryAuthToken
+  ? (
+      createRequire(import.meta.url)("@sentry/nextjs/config") as typeof import("@sentry/nextjs/config")
+    ).withSentryConfig(nextConfig, {
+      authToken: sentryAuthToken,
+      org: process.env.SENTRY_ORG,
+      project: process.env.SENTRY_PROJECT,
+      release: { name: sentryRelease },
+      silent: true,
+      telemetry: false,
+      sourcemaps: { deleteSourcemapsAfterUpload: true },
+    })
+  : nextConfig;
+
+export default exportedConfig;

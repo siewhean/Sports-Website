@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
@@ -84,7 +85,7 @@ export async function readPhase3Json(request: NextRequest, path: string): Promis
   const cookie = sessionCookie(request, base);
   if (!cookie) return { ok: false, status: 401, payload: null };
   try {
-    const response = await fetch(new URL(path, base), {
+    const response = await apiFetch(new URL(path, base), {
       cache: "no-store",
       headers: { accept: "application/json", cookie },
     });
@@ -122,7 +123,7 @@ export async function forwardPhase3Mutation(
   const cookie = sessionCookie(request, base);
   if (!cookie) return error(401, "AUTH_REQUIRED", "An authenticated session is required");
   try {
-    const identityResponse = await fetch(new URL("/api/v1/identity/me", base), {
+    const identityResponse = await apiFetch(new URL("/api/v1/identity/me", base), {
       cache: "no-store",
       headers: { accept: "application/json", cookie },
     });
@@ -130,7 +131,7 @@ export async function forwardPhase3Mutation(
       return error(identityResponse.status === 403 ? 403 : 401, "AUTH_REQUIRED", "The session could not be verified");
     const csrf = csrfTokenFromSession(await identityResponse.json().catch(() => null));
     if (!csrf) return error(502, "IDENTITY_RESPONSE_INVALID", "The identity service returned an invalid response");
-    const response = await fetch(new URL(input.path, base), {
+    const response = await apiFetch(new URL(input.path, base), {
       method: input.method,
       cache: "no-store",
       headers: {

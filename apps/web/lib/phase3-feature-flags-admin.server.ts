@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { cookies, headers } from "next/headers";
 import { featureFlags } from "@matchday/feature-flags";
@@ -96,7 +97,7 @@ export async function getFeatureFlagsAdminDocument(
   }
 
   try {
-    const listResponse = await fetch(new URL("/api/v1/admin/feature-flags", base), {
+    const listResponse = await apiFetch(new URL("/api/v1/admin/feature-flags", base), {
       cache: "no-store",
       headers: { accept: "application/json", cookie },
     });
@@ -127,11 +128,11 @@ export async function getFeatureFlagsAdminDocument(
 
     if (activeFlagKey) {
       const [detailResponse, auditResponse] = await Promise.all([
-        fetch(new URL(`/api/v1/admin/feature-flags/${encodeURIComponent(activeFlagKey)}`, base), {
+        apiFetch(new URL(`/api/v1/admin/feature-flags/${encodeURIComponent(activeFlagKey)}`, base), {
           cache: "no-store",
           headers: { accept: "application/json", cookie },
         }),
-        fetch(new URL(`/api/v1/admin/feature-flags/${encodeURIComponent(activeFlagKey)}/audit`, base), {
+        apiFetch(new URL(`/api/v1/admin/feature-flags/${encodeURIComponent(activeFlagKey)}/audit`, base), {
           cache: "no-store",
           headers: { accept: "application/json", cookie },
         }),

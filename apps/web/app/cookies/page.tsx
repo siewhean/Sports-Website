@@ -1,6 +1,9 @@
+import type { Metadata } from "next";
 import { LegalPage } from "@/components/foundation/LegalPage";
 import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 import { messages } from "@matchday/ui";
+
+export const metadata: Metadata = { title: messages.legal.cookiesTitle };
 
 export default async function CookiesPage() {
   const session = await readCurrentIdentitySession();

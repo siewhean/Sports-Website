@@ -27,6 +27,7 @@ const edgeCacheConfig = {
   EDGE_CACHE_PURGE_ENDPOINT: "https://edge-bridge.matchday.example/purge",
   EDGE_CACHE_PURGE_BEARER_TOKEN: "e".repeat(32),
 };
+const clientIpConfig = { MATCHDAY_CLIENT_IP_SECRET: "client-ip-forwarding-secret-32-bytes" };
 
 describe("configuration", () => {
   it("provides safe local defaults", () => {
@@ -65,6 +66,7 @@ describe("configuration", () => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
         GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: "750",
         ...edgeCacheConfig,
+        ...clientIpConfig,
         ...oidcConfig,
       }),
     ).toThrow("only be configured in staging");
@@ -81,6 +83,7 @@ describe("configuration", () => {
       OTEL_ENABLED: "true",
       OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
       ...edgeCacheConfig,
+      ...clientIpConfig,
       ...oidcConfig,
     };
     expect(() => parseConfig({ ...base, API_ALLOWED_ORIGINS: "*" })).toThrow("Wildcard");
@@ -166,6 +169,7 @@ describe("configuration", () => {
       DEEP_HEALTH_TOKEN: "a".repeat(32),
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
       ...edgeCacheConfig,
+      ...clientIpConfig,
       ...oidcConfig,
     };
     expect(parseConfig(production).telemetry.enabled).toBe(false);
@@ -362,6 +366,7 @@ describe("configuration", () => {
       DEEP_HEALTH_TOKEN: "h".repeat(32),
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
       ...edgeCacheConfig,
+      ...clientIpConfig,
       ...oidcConfig,
     };
 
@@ -603,5 +608,38 @@ describe("configuration", () => {
         SMTP_AUTH_PASS: "pass-only",
       }),
     ).toThrow("SMTP authentication requires both");
+  });
+
+  it("configures client IP forwarding and public read limits", () => {
+    const production = {
+      APP_ENV: "production",
+      DATABASE_URL: "postgres://user:secret@db.internal/matchday",
+      REDIS_URL: "redis://cache.internal:6379",
+      DEEP_HEALTH_TOKEN: "a".repeat(32),
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...edgeCacheConfig,
+      ...oidcConfig,
+    };
+    const local = parseConfig({});
+    expect(local.clientIpForwarding).toBeUndefined();
+    expect(local.api).toMatchObject({ publicReadRateLimitMax: 600, publicSseMaxStreamsPerClient: 16 });
+    expect(
+      parseConfig({ API_PUBLIC_READ_RATE_LIMIT_MAX: "1200", API_PUBLIC_SSE_MAX_STREAMS_PER_CLIENT: "4" }).api,
+    ).toMatchObject({ publicReadRateLimitMax: 1200, publicSseMaxStreamsPerClient: 4 });
+
+    expect(() => parseConfig(production)).toThrow("MATCHDAY_CLIENT_IP_SECRET must be explicitly configured");
+    expect(() => parseConfig({ ...production, MATCHDAY_CLIENT_IP_SECRET: "short" })).toThrow();
+    expect(() => parseConfig({ ...production, MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32) })).toThrow(
+      "MATCHDAY_CLIENT_IP_SECRET and identity CSRF key must be different",
+    );
+    expect(() =>
+      parseConfig({ ...production, MATCHDAY_CLIENT_IP_SECRET: "scoring-access-rate-limit-secret-32" }),
+    ).toThrow("MATCHDAY_CLIENT_IP_SECRET and rate-limit HMAC secret must be different");
+
+    const config = parseConfig({ ...production, ...clientIpConfig });
+    expect(config.clientIpForwarding).toEqual({ secret: clientIpConfig.MATCHDAY_CLIENT_IP_SECRET });
+    const summary = JSON.stringify(safeConfigSummary(config));
+    expect(summary).toContain('"clientIpForwardingConfigured":true');
+    expect(summary).not.toContain(clientIpConfig.MATCHDAY_CLIENT_IP_SECRET);
   });
 });

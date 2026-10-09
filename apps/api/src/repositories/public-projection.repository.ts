@@ -6,6 +6,8 @@ export type PublicTruthRecord = {
   schedule_version: number;
   result_version: number;
   projection_version: number;
+  /** Advances on every content change of the current projection row (live scores). */
+  live_revision?: number;
   division_projection_versions: Record<string, unknown> | string;
   generated_at: Date | string;
   source_updated_at: Date | string;
@@ -55,6 +57,7 @@ export class PublicProjectionRepository {
                   GROUP BY division_id
                 ) version
               ), '{}'::jsonb) AS division_projection_versions,
+              current_projection.live_revision,
               current_projection.generated_at,
               publication.updated_at AS source_updated_at
        FROM competitions competition

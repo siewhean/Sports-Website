@@ -10,14 +10,16 @@ import styles from "./MarketingHome.module.css";
 export function MarketingHome({
   viewer = null,
   competitions = [],
+  unavailable = false,
 }: {
   viewer?: { displayName: string } | null;
   competitions?: CompetitionSummaryView[];
+  /** True when the public API could not be reached, so an empty list is not mistaken for "nothing published". */
+  unavailable?: boolean;
 }) {
-  const live = competitions.filter((competition) => competition.status === "live");
-  const upcoming = competitions.filter(
-    (competition) => competition.status === "active" || competition.status === "published",
-  );
+  // Same classification as the competitions list: completed events never appear under "Happening now".
+  const live = competitions.filter((competition) => competition.phase === "live");
+  const upcoming = competitions.filter((competition) => competition.phase === "upcoming");
   const featured = (live.length ? live : upcoming).slice(0, 3);
 
   return (
@@ -87,13 +89,13 @@ export function MarketingHome({
               {featured.map((competition) => (
                 <li key={competition.id}>
                   <Link href={`/competitions/${competition.slug}`}>
-                    <span className={styles.eventStatus} data-live={competition.status === "live"}>
-                      {competition.status === "live" ? (
+                    <span className={styles.eventStatus} data-live={competition.phase === "live"}>
+                      {competition.phase === "live" ? (
                         <Broadcast aria-hidden="true" />
                       ) : (
                         <CalendarDots aria-hidden="true" />
                       )}
-                      {competition.status === "live" ? messages.home.liveStatus : messages.home.nextStatus}
+                      {competition.phase === "live" ? messages.home.liveStatus : messages.home.nextStatus}
                     </span>
                     <strong>{competition.name}</strong>
                     <span className={styles.eventMeta}>
@@ -105,7 +107,9 @@ export function MarketingHome({
               ))}
             </ol>
           ) : (
-            <p className={styles.empty}>{messages.home.liveEmpty}</p>
+            <p className={styles.empty}>
+              {unavailable ? messages.publicCompetition.listUnavailable : messages.home.liveEmpty}
+            </p>
           )}
         </section>
 

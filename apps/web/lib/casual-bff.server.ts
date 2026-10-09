@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 import { isIP } from "node:net";
 
 function unavailable(): Response {
@@ -59,7 +60,7 @@ export async function forwardCasualRequest(request: Request): Promise<Response> 
   const clientIp = extractTrustedClientIp(request);
   headers.set("x-forwarded-for", clientIp);
   try {
-    const upstream = await fetch(target, {
+    const upstream = await apiFetch(target, {
       method: request.method,
       headers,
       cache: "no-store",

@@ -14,7 +14,7 @@ import {
   providerEventSigningInput,
   type IdentityProviderRevocationEvent,
 } from "../../src/identity-provider-events.js";
-import { edgeCacheEnvironment, healthyProbes, oidcEnvironment, testConfig } from "../helpers.js";
+import { clientIpEnvironment, edgeCacheEnvironment, healthyProbes, oidcEnvironment, testConfig } from "../helpers.js";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 const schema = `test_identity_api_${randomUUID().replaceAll("-", "")}`;
@@ -383,6 +383,7 @@ describe("identity API", () => {
       OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.matchday.example",
       REDIS_URL: "redis://127.0.0.1:6379",
       ...edgeCacheEnvironment(),
+      ...clientIpEnvironment(),
       ...oidcEnvironment("https://app.matchday.example", "https://api.matchday.example"),
     });
     const secureRuntime = new IdentityApiRuntime(
