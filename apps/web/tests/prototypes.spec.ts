@@ -153,7 +153,7 @@ test("Phone scoring acknowledges replay and fences stale events after takeover",
   await page.getByRole("button", { name: "Work offline" }).click();
   await page.getByRole("button", { name: "Goal Harbour Gold" }).click();
   await page.getByRole("button", { name: "Simulate active-device conflict" }).click();
-  await expect(page.getByText("Another phone is scoring this match")).toBeVisible();
+  await expect(page.getByText("Another device is the active scorer")).toBeVisible();
   await expect(page.getByRole("button", { name: "Goal Marina Blue" })).toBeDisabled();
   await page.getByRole("button", { name: "Take over" }).click();
   await page.getByRole("button", { name: "Confirm takeover" }).click();
