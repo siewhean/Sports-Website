@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 import { DomainScheduleOptimizer } from "../../src/domain-optimizer.js";
 import { scheduleInput } from "../fixtures.js";
 
+// These tests check optimizer results, not speed. The first yield includes worker-thread startup, which a
+// loaded CI runner can push past 1s; the yield-deadline behaviour itself is covered in processor.test.ts.
+const TEST_YIELD_INTERVAL_MS = 10_000;
+
 describe("DomainScheduleOptimizer", () => {
   it("maps strict transport input into deterministic valid candidate iterations", async () => {
     const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 3, workerExecArgv: [] });
@@ -16,7 +20,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: new AbortController().signal,
-        maxYieldIntervalMs: 1_000,
+        maxYieldIntervalMs: TEST_YIELD_INTERVAL_MS,
       }),
     );
     const replay = await collect(
@@ -25,7 +29,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: new AbortController().signal,
-        maxYieldIntervalMs: 1_000,
+        maxYieldIntervalMs: TEST_YIELD_INTERVAL_MS,
       }),
     );
 
@@ -50,7 +54,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: new AbortController().signal,
-        maxYieldIntervalMs: 1_000,
+        maxYieldIntervalMs: TEST_YIELD_INTERVAL_MS,
       }),
     );
     expect(generated).toBeDefined();
@@ -102,7 +106,7 @@ describe("DomainScheduleOptimizer", () => {
         seed: null,
         startIteration: 0,
         signal: abort.signal,
-        maxYieldIntervalMs: 1_000,
+        maxYieldIntervalMs: TEST_YIELD_INTERVAL_MS,
       })
       [Symbol.asyncIterator]();
     const first = await iterator.next();
