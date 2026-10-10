@@ -58,7 +58,7 @@ describe("public legal pages", () => {
       "Auth0",
       "Sentry",
       "Vercel",
-      "Oracle Cloud Infrastructure in Singapore",
+      "Oracle Cloud Infrastructure in the United States (Phoenix, Arizona)",
       "email provider",
     ]) {
       expect(allPrivacyText).toContain(provider);
