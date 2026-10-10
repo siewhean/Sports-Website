@@ -33,13 +33,13 @@ Production is one VM running Docker Compose. Backups are implemented in `infra/o
 
 ### Owner one-time setup
 
-1. **Bucket.** In the Singapore region (`ap-singapore-1`, configurable via `BACKUP_S3_REGION`) create a private Standard-tier bucket, for example `matchday-backups`. Note the Object Storage namespace (Profile menu -> Tenancy, or `oci os ns get`).
+1. **Bucket.** In the same region as the VM (`us-phoenix-1`, configurable via `BACKUP_S3_REGION`) create a private Standard-tier bucket, for example `matchday-backups`. Note the Object Storage namespace (Profile menu -> Tenancy, or `oci os ns get`).
 2. **Lifecycle rule (second line of defence).** Bucket -> Lifecycle Policy Rules -> create a rule: action `Delete`, target `Objects`, 60 days, prefix `postgres/`. Script pruning is authoritative; this only catches stragglers if pruning ever fails. Do not add an OCI retention rule that forbids deletes, or script pruning will fail.
 3. **Dedicated user and policy.** Create an IAM user `matchday-backup` in a group `MatchdayBackupWriters` with only:
    `Allow group MatchdayBackupWriters to read buckets in compartment <compartment> where target.bucket.name='matchday-backups'`
    `Allow group MatchdayBackupWriters to manage objects in compartment <compartment> where target.bucket.name='matchday-backups'`
 4. **Customer Secret Key.** User `matchday-backup` -> Customer secret keys -> Generate. Copy the secret immediately (shown once). The listed **Access Key** is `BACKUP_S3_ACCESS_KEY_ID`; the generated secret is `BACKUP_S3_SECRET_ACCESS_KEY`.
-5. **Endpoint.** `BACKUP_S3_ENDPOINT=https://<namespace>.compat.objectstorage.ap-singapore-1.oraclecloud.com` (path-style addressing is used).
+5. **Endpoint.** `BACKUP_S3_ENDPOINT=https://<namespace>.compat.objectstorage.us-phoenix-1.oraclecloud.com` (path-style addressing is used).
 6. **Encryption key (do this on your own machine, not the VM).**
    ```sh
    age-keygen -o matchday-backup.agekey      # prints "Public key: age1..."
@@ -104,7 +104,7 @@ Still unproved or not provided:
 
 - **No live proof yet.** Nothing has run against a real OCI bucket, real Customer Secret Keys, the real `age` binary, or the production database. The owner's first manual run and restore drill above are the proof; until step 6 is recorded, treat recovery as unproved.
 - **No continuous WAL archiving / point-in-time recovery.** Worst-case data loss is up to about 24 hours (or back to the last pre-migration snapshot for migration faults).
-- **No cross-region copy.** Free-tier single-region Object Storage protects against VM or disk loss, not against loss of the whole Singapore region or the tenancy.
+- **No cross-region copy.** Free-tier single-region Object Storage protects against VM or disk loss, not against loss of the whole Phoenix region or the tenancy.
 - **No immutable retention.** The backup credential can delete objects, so a compromised VM could delete backups. Rotating that key and keeping the age private key offline limits, but does not remove, this risk. Restore uses the same credential; there is no separate read-only restore identity.
 - **Alerting is a signal, not a service.** The heartbeat URL, `status/last-success` file and failed systemd unit exist; the owner must attach them to a monitor (`docs/runbooks/uptime-monitoring.md`).
 - **Operational realities:** the local copy on the VM disk is convenience only; the age private key is the single point of failure for readability.
