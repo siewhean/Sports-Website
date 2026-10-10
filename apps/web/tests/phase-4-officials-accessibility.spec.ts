@@ -270,9 +270,11 @@ test.describe("officials keyboard and focus journeys", () => {
     await addWindowBtn.focus();
     await page.keyboard.press("Enter");
     await expect(removeButtons).toHaveCount(initialCount + 1);
+    await expect(page.getByLabel("Start date").last()).toBeFocused();
 
     // Remove window via keyboard
     await removeButtons.last().focus();
+    await expect(removeButtons.last()).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(removeButtons).toHaveCount(initialCount);
 
