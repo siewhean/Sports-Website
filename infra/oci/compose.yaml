@@ -22,7 +22,7 @@ services:
         ipv4_address: 172.30.0.2
 
   redis:
-    image: redis:8.2-alpine@sha256:30abb90e62f14b737010746def3ba99cc79fe19dcdb3d37b41f21fc62e7da19d
+    image: redis:8.10-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
     restart: unless-stopped
     mem_limit: 768m
     cpus: 0.5
