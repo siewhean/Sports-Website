@@ -319,7 +319,8 @@ jobs:
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [quality-fast, integration]
-    runs-on: ubuntu-latest
+    # The production OCI VM is arm64 (Ampere), so images are built natively on GitHub's arm64 runners.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     permissions:
       contents: read
@@ -381,6 +382,7 @@ jobs:
           file: ${{ matrix.file }}
           # Only the main Dockerfile has per-service stages; the backup image is a single-stage build.
           target: ${{ matrix.target != 'backup' && matrix.target || '' }}
+          platforms: linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
@@ -394,8 +396,8 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=matchday-images
-          cache-to: type=gha,scope=matchday-images,mode=max
+          cache-from: type=gha,scope=matchday-images-${{ matrix.target }}-arm64
+          cache-to: type=gha,scope=matchday-images-${{ matrix.target }}-arm64,mode=max
       - name: Record digest
         run: |
           {
