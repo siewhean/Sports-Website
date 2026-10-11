@@ -278,6 +278,11 @@ test("runGateFProductionSimulation executes all components", async () => {
     assert.equal(res.components.migration_expand_contract, "PASS");
     assert.equal(res.components.zero_downtime_rollback, "PENDING");
     assert.equal(res.components.backup_restore, "PENDING");
+    assert.equal(res.components.synthetic_probes, "PENDING");
+    assert.equal(res.components.external_status_page, "PENDING_IMPLEMENTATION");
+    assert.equal(res.components.log_retention, "PENDING");
+    assert.ok(res.pending_reasons.includes("feature_flags_production_evidence_pending"));
+    assert.ok(!res.pending_reasons.includes("feature_flags_implementation_pending"));
   });
 });
 

@@ -52,6 +52,7 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
     sloEvidenceFile: options.sloEvidenceFile,
     alertEvidenceFile: options.alertEvidenceFile,
     costEvidenceFile: options.costEvidenceFile,
+    syntheticEvidenceFile: options.syntheticEvidenceFile,
   });
 
   console.log(`[simulation] 6. Executing production recertifications (DNS/TLS, Security, SEO, Email, A11y, Legal)...`);
@@ -60,6 +61,7 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
     dnsTlsEvidenceFile: options.dnsTlsEvidenceFile,
     seoEvidenceFile: options.seoEvidenceFile,
     emailEvidenceFile: options.emailEvidenceFile,
+    automatedEvidenceFile: options.automatedEvidenceFile,
   });
 
   const pendingReasons = ["simulation_is_not_production_certification"];
@@ -69,7 +71,10 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
   if (ops.sloBaseline.verdict !== "PASS") pendingReasons.push("slo_baseline_evidence_pending");
   if (ops.alertRouting.verdict !== "PASS") pendingReasons.push("alert_routing_evidence_pending");
   if (ops.costControls.verdict !== "PASS") pendingReasons.push("cost_controls_evidence_pending");
-  if (ops.featureFlags.verdict !== "PASS") pendingReasons.push("feature_flags_implementation_pending");
+  if (ops.featureFlags.verdict !== "PASS") pendingReasons.push("feature_flags_production_evidence_pending");
+  if (ops.syntheticProbes.verdict !== "PASS") pendingReasons.push("synthetic_probe_evidence_pending");
+  if (ops.statusPage.verdict !== "PASS") pendingReasons.push("external_status_page_evidence_pending");
+  if (ops.logRetention.verdict !== "PASS") pendingReasons.push("log_retention_evidence_pending");
   if (recerts.dnsTls.verdict !== "PASS") pendingReasons.push("dns_tls_evidence_pending");
   if (recerts.seo.verdict !== "PASS") pendingReasons.push("seo_evidence_pending");
   if (recerts.email.verdict !== "PASS") pendingReasons.push("email_evidence_pending");
@@ -88,6 +93,9 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
       cdn_cache_purge: cache.verdict,
       slo_baseline: ops.sloBaseline.verdict,
       alert_routing: ops.alertRouting.verdict,
+      synthetic_probes: ops.syntheticProbes.verdict,
+      external_status_page: ops.statusPage.verdict,
+      log_retention: ops.logRetention.verdict,
       feature_flags: ops.featureFlags.verdict,
       cost_controls: ops.costControls.verdict,
       dns_tls: recerts.dnsTls.verdict,

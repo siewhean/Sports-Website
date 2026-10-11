@@ -53,7 +53,7 @@ jobs:
       - run: pnpm test:guard
       - run: RELEASE_PHASE=A node scripts/release-suite-guard.mjs
       - name: Rollback, deployment freeze, backup and workflow safety regressions
-        run: node --test infra/oci/deploy-prod.test.mjs infra/oci/deployment-freeze-policy.test.mjs infra/oci/backup/backup.test.mjs scripts/launch-ci-contract.test.mjs
+        run: node --test infra/oci/deploy-prod.test.mjs infra/oci/deployment-freeze-policy.test.mjs infra/oci/backup/backup.test.mjs infra/oci/backup/operational-controls.test.mjs scripts/launch-ci-contract.test.mjs scripts/gate-f-observability-evidence.test.mjs scripts/run-gate-f-rollback-truth.test.mjs
       - name: Require isolated Docker-backed Caddy mount verification
         run: MATCHDAY_REQUIRE_DOCKER_CADDY_TEST=1 node --test infra/oci/caddy-mount-visibility.test.mjs
       - name: Canonical production dependency security assurance
