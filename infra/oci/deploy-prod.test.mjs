@@ -1115,9 +1115,16 @@ test("49. Rollback itself executes with bounded operations and cannot hang indef
 test("50. Pinned Caddy image digest contract is enforced for candidate validation", (t) => {
   const scriptContent = readFileSync(deployScriptPath, "utf8");
   assert.ok(
-    scriptContent.includes("sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"),
+    scriptContent.includes("sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"),
     "deploy-prod.sh must pin the exact Caddy digest",
   );
+  // The candidate Caddyfile must be validated by the same Caddy that serves it (compose.yaml), or a
+  // Caddy upgrade could promote a config the running version rejects (or vice versa).
+  const tag = scriptContent.match(/^CADDY_IMAGE="([^"]+)"/m)?.[1];
+  const digest = scriptContent.match(/^CADDY_IMAGE_DIGEST="([^"]+)"/m)?.[1];
+  const composeContent = readFileSync(path.join(path.dirname(deployScriptPath), "compose.yaml"), "utf8");
+  const served = composeContent.match(/^\s*image:\s*(caddy:[^\s]+)/m)?.[1];
+  assert.equal(`${tag}@${digest}`, served, "deploy-prod.sh Caddy validation image must match compose.yaml");
 });
 
 test("51. Rollback previous Caddyfile restore failure is detected and logged, receipt records FAILED_CADDY_RESTORE and backup is preserved", (t) => {
