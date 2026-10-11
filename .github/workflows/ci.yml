@@ -7,6 +7,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      certify_launch_images:
+        description: Build and publish exact-SHA ARM64 images for the isolated launch integration branch (no latest tag or deployment)
+        type: boolean
+        default: false
       generate_linux_visual_baselines:
         description: Generate linux visual baselines and upload them as an artifact (does not commit anything)
         type: boolean
@@ -48,6 +52,12 @@ jobs:
       - run: pnpm ci:assert-clean-outputs
       - run: pnpm test:guard
       - run: RELEASE_PHASE=A node scripts/release-suite-guard.mjs
+      - name: Rollback, deployment freeze, backup and workflow safety regressions
+        run: node --test infra/oci/deploy-prod.test.mjs infra/oci/deployment-freeze-policy.test.mjs infra/oci/backup/backup.test.mjs scripts/launch-ci-contract.test.mjs
+      - name: Require isolated Docker-backed Caddy mount verification
+        run: MATCHDAY_REQUIRE_DOCKER_CADDY_TEST=1 node --test infra/oci/caddy-mount-visibility.test.mjs
+      - name: Canonical production dependency security assurance
+        run: pnpm dependencies:audit
 
   integration:
     runs-on: ubuntu-latest
@@ -312,12 +322,14 @@ jobs:
           if-no-files-found: error
 
   images:
-    # Builds the api/web/worker/migrate images once, in CI, and pushes them to GHCR tagged with the git SHA.
+    # Builds the api/web/worker/migrate/backup images once, in CI, and pushes them to GHCR tagged with the git SHA.
     # infra/oci/deploy-prod.sh pulls these exact tags; nothing is compiled on the production VM.
     name: images (${{ matrix.target }})
     if: >-
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
+      (github.event_name == 'workflow_dispatch' && inputs.certify_launch_images &&
+      github.ref == 'refs/heads/codex/launch-integration-certification')
     needs: [quality-fast, integration]
     # The production OCI VM is arm64 (Ampere), so images are built natively on GitHub's arm64 runners.
     runs-on: ubuntu-24.04-arm
@@ -407,3 +419,16 @@ jobs:
             echo "${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Record exact image provenance
+        env:
+          IMAGE_NAME: ${{ steps.meta.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p artifacts/images
+          node --input-type=module -e 'import { writeFileSync } from "node:fs"; const e = process.env; if (!/^sha256:[a-f0-9]{64}$/.test(e.IMAGE_DIGEST)) throw new Error("Missing image digest"); writeFileSync(`artifacts/images/${e.IMAGE_TARGET}.json`, JSON.stringify({ source_sha: e.GITHUB_SHA, workflow_run_id: e.GITHUB_RUN_ID, workflow_run_attempt: e.GITHUB_RUN_ATTEMPT, target: e.IMAGE_TARGET, platform: "linux/arm64", image: `${e.IMAGE_NAME}:${e.GITHUB_SHA}`, digest: e.IMAGE_DIGEST }, null, 2) + "\n");'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-provenance-${{ matrix.target }}
+          path: artifacts/images/${{ matrix.target }}.json
+          if-no-files-found: error
