@@ -184,7 +184,9 @@ if (tool === "docker") {
       console.log("OCI_PROD_HOSTNAME=" + (process.env.MOCK_CADDY_ENV_MISMATCH === "1" ? "other.example.test" : process.env.OCI_PUBLIC_HOSTNAME));
       process.exit(0);
     } else if (args.some(a => a.includes("revision"))) {
-      console.log(process.env.MOCK_LABEL_MISMATCH === "1" ? "wrong-sha" : process.env.CANDIDATE_SHA);
+      const selectedImageMismatch = process.env.MOCK_LABEL_MISMATCH_IMAGE &&
+        args.some(a => a.includes("/matchday-" + process.env.MOCK_LABEL_MISMATCH_IMAGE + ":"));
+      console.log(process.env.MOCK_LABEL_MISMATCH === "1" || selectedImageMismatch ? "wrong-sha" : process.env.CANDIDATE_SHA);
       process.exit(0);
     } else if (args.some(a => a.includes("{{.Image}}"))) {
       console.log("sha256:mockimage123");
@@ -1638,4 +1640,42 @@ test("86. Snapshot is uploaded off-host before migrations when Object Storage is
   assert.ok(calls.find(isDump).args.join(" ").includes("--username matchday_prod --dbname matchday_prod"));
   const upload = calls.findIndex((c) => c.args.includes("upload-snapshot"));
   assert.ok(upload > calls.findIndex(isDump) && upload < calls.findIndex(isMigrateRun));
+});
+
+test("86b. All five candidate image revisions are verified before backup and migration", (t) => {
+  const environment =
+    "OCI_PUBLIC_HOSTNAME=matchday.example.test\nAPP_ENV=production\nPOSTGRES_USER=matchday_prod\nPOSTGRES_DB=matchday_prod\nBACKUP_S3_BUCKET=matchday-backups\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n";
+  const f = createFixture(t, { initialSlot: "blue", environment });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  const calls = readCalls(f);
+  const firstBackup = calls.findIndex(isDump);
+  const upload = calls.findIndex((c) => c.args.includes("upload-snapshot"));
+  assert.ok(firstBackup >= 0 && upload > firstBackup);
+  for (const name of ["api", "web", "worker", "migrate", "backup"]) {
+    const check = calls.findIndex(
+      (c) =>
+        c.tool === "docker" &&
+        c.args.includes("image") &&
+        c.args.includes("inspect") &&
+        c.args.some((a) => a.includes("org.opencontainers.image.revision")) &&
+        c.args.includes(`ghcr.io/siewhean/matchday-${name}:${f.sha}`),
+    );
+    assert.ok(check >= 0 && check < firstBackup, `${name} must be verified before the snapshot`);
+  }
+});
+
+test("86c. A stale backup image blocks pulled and local candidates before backup or migration", (t) => {
+  for (const args of [[], ["--build-locally"]]) {
+    const f = createFixture(t, { initialSlot: "blue" });
+    const result = f.run({ MOCK_LABEL_MISMATCH_IMAGE: "backup" }, args);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /matchday-backup.*revision label 'wrong-sha' does not match requested/);
+    const calls = readCalls(f);
+    assert.equal(calls.filter(isDump).length, 0, "unverified images must not reach the snapshot");
+    assert.equal(calls.filter((c) => c.args.includes("upload-snapshot")).length, 0);
+    assert.equal(calls.filter(isMigrateRun).length, 0);
+    assert.equal(calls.filter((c) => c.args.includes("reload")).length, 0);
+    assert.match(readFileSync(f.activeSlotFile, "utf8"), /ACTIVE_SLOT=blue/);
+  }
 });

@@ -682,6 +682,18 @@ else
   fi
 fi
 
+# Verify every candidate image before backup tools, migrations, services, or traffic can use it.
+# This applies equally to pulled images and the explicit local-build fallback.
+for image_name in api web worker migrate backup; do
+  image_ref="${MATCHDAY_IMAGE_REGISTRY}/matchday-${image_name}:${CANDIDATE_SHA}"
+  image_label_sha="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
+  if [ "$image_label_sha" != "$CANDIDATE_SHA" ]; then
+    cleanup_and_rollback "Candidate image $image_ref revision label '$image_label_sha' does not match requested '$CANDIDATE_SHA'"
+  fi
+  image_repo_digest="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}local-build{{end}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
+  echo "[deploy-prod] Verified $image_ref revision label (${image_repo_digest:-unknown})"
+done
+
 # Pre-migration snapshot (backup safety net). Migrations are forward-only, so a pg_dump taken
 # immediately before they run is the only way back from a bad migration. Mandatory: a failed
 # dump aborts the deploy. The sole bypass is the explicit MATCHDAY_SKIP_PREMIGRATION_BACKUP=1
@@ -764,17 +776,6 @@ case "${MATCHDAY_SKIP_PREMIGRATION_BACKUP:-0}" in
     cleanup_and_rollback "MATCHDAY_SKIP_PREMIGRATION_BACKUP must be 0 or 1 (got '${MATCHDAY_SKIP_PREMIGRATION_BACKUP}')"
     ;;
 esac
-
-# Verify the exact image revision label before anything starts or traffic moves (applies to pulled and local builds).
-for image_name in api web worker migrate; do
-  image_ref="${MATCHDAY_IMAGE_REGISTRY}/matchday-${image_name}:${CANDIDATE_SHA}"
-  image_label_sha="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
-  if [ "$image_label_sha" != "$CANDIDATE_SHA" ]; then
-    cleanup_and_rollback "Candidate image $image_ref revision label '$image_label_sha' does not match requested '$CANDIDATE_SHA'"
-  fi
-  image_repo_digest="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}local-build{{end}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
-  echo "[deploy-prod] Verified $image_ref revision label (${image_repo_digest:-unknown})"
-done
 
 echo "[deploy-prod] Running database migrations..."
 if ! run_bounded "$MIGRATION_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate; then
