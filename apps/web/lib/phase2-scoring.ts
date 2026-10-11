@@ -378,7 +378,13 @@ class ApiScoringCommandPort implements ScoringCommandPort {
       body: JSON.stringify(
         input.token
           ? { token: input.token, deviceId: input.device.id, deviceLabel: input.device.label }
-          : { shortCode: input.shortCode, deviceId: input.device.id, deviceLabel: input.device.label },
+          : {
+              shortCode: input.shortCode,
+              deviceId: input.device.id,
+              deviceLabel: input.device.label,
+              ...(input.expectedMatchId ? { expected_match_id: input.expectedMatchId } : {}),
+              ...(input.expectedCompetitionId ? { expected_competition_id: input.expectedCompetitionId } : {}),
+            },
       ),
       credentials: "same-origin",
     });

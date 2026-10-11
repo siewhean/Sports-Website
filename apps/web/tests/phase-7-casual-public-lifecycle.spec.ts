@@ -144,9 +144,14 @@ test("published competition renders without login and serves conditional public 
     .toBe(true);
   await dismissConsent(page);
   await expect(page).toHaveURL(new RegExp(state.publicCompetitionPath));
-  await expect(page.locator('[data-connection="connected"]')).toBeVisible();
+  // The single live indicator only says "live" after real stream/snapshot contact.
+  await expect(page.locator('[data-connection="live"]')).toBeVisible();
+  // Every published division is selectable from the public page's division picker.
+  await page.getByRole("tab", { name: "Schedule" }).click();
+  const schedulePanel = page.locator("[role=tabpanel][data-division-id]");
+  await expect(schedulePanel).toBeVisible();
   for (const division of state.divisionNames)
-    await expect(page.getByText(division, { exact: true }).first()).toBeVisible();
+    await expect(page.locator("select option").filter({ hasText: new RegExp(`^${division}$`) })).toHaveCount(1);
   const endpoint = `${state.apiOrigin}/api/v1/public/competitions/${encodeURIComponent(state.competitionSlug)}/current`;
   const response = await request.get(endpoint);
   expect(response.status()).toBe(200);

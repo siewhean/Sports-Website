@@ -95,18 +95,24 @@ test("organiser, official and public shells expose role-specific primary actions
 });
 
 test("public realtime failure degrades to polling and offline copy", async ({ page, context }) => {
+  // Demo fixtures are static, so the page must not claim a live connection it does not have. The
+  // stream -> snapshot polling -> reconnecting/offline derivation is unit-tested in public-live-snapshot.test.ts.
   await page.goto("/competitions/singapore-open");
   await rejectOptionalConsent(page);
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("matchday:realtime-failed")));
-  await expect(page.getByRole("status", { name: "Connection fallback" })).toContainText(
-    "Live connection unavailable. Updating every 30 seconds.",
-  );
+  const status = page.locator("[data-connection]").first();
+  await expect(status).toHaveAttribute("data-connection", "paused");
+  await expect(status).toContainText("Updated");
+  await expect(status).not.toContainText("Live");
 
+  // Once the service worker controls the page, an offline reload keeps the latest saved competition state.
+  await page.evaluate(async () => navigator.serviceWorker.ready);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Singapore Open 2026" }).first()).toBeVisible();
   await context.setOffline(true);
-  await page.evaluate(() => window.dispatchEvent(new Event("offline")));
-  await expect(page.getByRole("status", { name: "Saved competition state" })).toContainText(
-    "You are offline. Showing the latest saved competition state.",
-  );
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Singapore Open 2026" }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "MATCHDAY is offline" })).toHaveCount(0);
+  await expect(page.locator("[data-connection]").first()).not.toContainText("Live");
   await context.setOffline(false);
 });
 
@@ -133,9 +139,28 @@ test("service worker keeps private documents and mutable images out of Cache Sto
   expect(cachedPaths).not.toContain("/score");
   expect(cachedPaths).not.toContain("/organiser");
   expect(cachedPaths).not.toContain("/official");
-  expect(cachedPaths).not.toContain("/");
-  expect(cachedPaths).not.toContain("/competitions/singapore-open");
   expect(cachedPaths).not.toContain("/images/venue-arc.svg");
+  // Spectator documents may be retained as an offline fallback, but only when the proxy marked them public and
+  // only in the dedicated public cache; nothing else may be stored there.
+  const publicEntries = await page.evaluate(async () => {
+    const entries: { path: string; marker: string | null; cacheName: string }[] = [];
+    for (const cacheName of await caches.keys()) {
+      const cache = await caches.open(cacheName);
+      for (const request of await cache.keys()) {
+        const response = await cache.match(request);
+        const path = new URL(request.url).pathname;
+        if (response?.headers.get("content-type")?.startsWith("text/html")) {
+          entries.push({ path, marker: response.headers.get("x-matchday-public-document"), cacheName });
+        }
+      }
+    }
+    return entries;
+  });
+  for (const entry of publicEntries) {
+    expect(entry.marker, entry.path).toBe("1");
+    expect(entry.cacheName, entry.path).toBe("matchday-public-v1");
+    expect(["/", "/competitions/singapore-open"], entry.path).toContain(entry.path);
+  }
 
   await page.goto("/");
   await context.setOffline(true);

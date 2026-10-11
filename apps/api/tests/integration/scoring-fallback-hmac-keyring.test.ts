@@ -276,7 +276,7 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
       WHERE id=${passId}`;
     await expect(
       staleRuntime.exchangeAccess(
-        { shortCode: overlapCode, deviceId: randomUUID(), ipAddress: "198.51.100.60" },
+        { shortCode: overlapCode, expectedMatchId: matchId, deviceId: randomUUID(), ipAddress: "198.51.100.60" },
         randomUUID(),
       ),
     ).resolves.toMatchObject({ mode: "writer", match_id: matchId });
@@ -312,7 +312,7 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     // guard as the primary runtime, not merely trust its cached A secret.
     await expect(
       restartedRuntime.exchangeAccess(
-        { shortCode: overlapCode, deviceId: randomUUID(), ipAddress: "198.51.100.62" },
+        { shortCode: overlapCode, expectedMatchId: matchId, deviceId: randomUUID(), ipAddress: "198.51.100.62" },
         randomUUID(),
       ),
     ).resolves.toMatchObject({ match_id: matchId });
@@ -351,7 +351,7 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     ).resolves.toEqual([{ status: "retired" }]);
     await expect(
       restartedRuntime.exchangeAccess(
-        { shortCode: retiredCode, deviceId: randomUUID(), ipAddress: "198.51.100.61" },
+        { shortCode: retiredCode, expectedMatchId: matchId, deviceId: randomUUID(), ipAddress: "198.51.100.61" },
         randomUUID(),
       ),
     ).rejects.toMatchObject({ code: "FALLBACK_HMAC_KEY_VERSION_RETIRED", statusCode: 403 });
@@ -494,7 +494,12 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     );
     await expect(
       restartedRuntime.exchangeAccess(
-        { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.70" },
+        {
+          shortCode: issuedUnderTxv1.short_code!,
+          expectedMatchId: matchId,
+          deviceId: randomUUID(),
+          ipAddress: "198.51.100.70",
+        },
         randomUUID(),
       ),
     ).resolves.toMatchObject({ match_id: matchId });
@@ -517,7 +522,12 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
       FOR EACH ROW EXECUTE FUNCTION test_fallback_hmac_exchange_pause();
     `);
     const exchangeBeforeRetirement = restartedRuntime.exchangeAccess(
-      { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.71" },
+      {
+        shortCode: issuedUnderTxv1.short_code!,
+        expectedMatchId: matchId,
+        deviceId: randomUUID(),
+        ipAddress: "198.51.100.71",
+      },
       randomUUID(),
     );
     await waitForAdvisoryLock(lockId);
@@ -593,7 +603,12 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     >`SELECT count(*)::text AS count FROM scoring_access_sessions WHERE access_pass_id=${issuedUnderTxv1.id}`;
     await expect(
       restartedRuntime.exchangeAccess(
-        { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.72" },
+        {
+          shortCode: issuedUnderTxv1.short_code!,
+          expectedMatchId: matchId,
+          deviceId: randomUUID(),
+          ipAddress: "198.51.100.72",
+        },
         randomUUID(),
       ),
     ).rejects.toThrow(/test fallback session rollback/i);
@@ -654,7 +669,12 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     expect(concurrentRetirements.filter((result) => result.status === "rejected")).toHaveLength(1);
     await expect(
       restartedRuntime.exchangeAccess(
-        { shortCode: issuedUnderTxv1.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.73" },
+        {
+          shortCode: issuedUnderTxv1.short_code!,
+          expectedMatchId: matchId,
+          deviceId: randomUUID(),
+          ipAddress: "198.51.100.73",
+        },
         randomUUID(),
       ),
     ).rejects.toMatchObject({ code: "FALLBACK_HMAC_KEY_VERSION_RETIRED", statusCode: 403 });
@@ -746,7 +766,7 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     `);
     try {
       const exchange = longRunningRuntime.exchangeAccess(
-        { shortCode: issued.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.80" },
+        { shortCode: issued.short_code!, expectedMatchId: matchId, deviceId: randomUUID(), ipAddress: "198.51.100.80" },
         randomUUID(),
       );
       await waitForAdvisoryLock(lockId);
@@ -780,7 +800,7 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
     ).resolves.toEqual([{ status: "retired" }]);
     await expect(
       longRunningRuntime.exchangeAccess(
-        { shortCode: issued.short_code!, deviceId: randomUUID(), ipAddress: "198.51.100.81" },
+        { shortCode: issued.short_code!, expectedMatchId: matchId, deviceId: randomUUID(), ipAddress: "198.51.100.81" },
         randomUUID(),
       ),
     ).rejects.toMatchObject({ code: "FALLBACK_HMAC_KEY_VERSION_RETIRED", statusCode: 403 });
@@ -837,6 +857,7 @@ describeInfra("fallback-code HMAC durable lifecycle", () => {
             runtime.exchangeAccess(
               {
                 shortCode: pass.short_code!,
+                expectedMatchId: matchId,
                 deviceId: randomUUID(),
                 ipAddress: `198.51.100.${90 + round * 4 + index}`,
               },

@@ -4,7 +4,7 @@
 
 **Date:** 16 July 2026
 
-**Source specification:** `sports_competition_platform_implementation_plan.md`
+**Source specification:** `docs/archive/sports_competition_platform_implementation_plan.md`
 
 **Source version:** 2.0 (16 July 2026)
 

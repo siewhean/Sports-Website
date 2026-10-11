@@ -1,9 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import type { AdminRuntime } from "./admin-runtime.js";
+import { requireMutationSession } from "./mutation-guard.js";
 
 const Id = Type.String({ format: "uuid" });
 const Json = Type.Unknown();
@@ -27,6 +27,7 @@ export async function registerAdminRoutes(
   options: {
     runtime: AdminRuntime;
     identityRequests: IdentityRequestContext;
+    allowedOrigins: readonly string[];
   },
 ) {
   const readActor = async (request: FastifyRequest): Promise<Phase3Actor> => {
@@ -37,11 +38,7 @@ export async function registerAdminRoutes(
   };
 
   const mutationActor = async (request: FastifyRequest): Promise<Phase3Actor> => {
-    const session = await options.identityRequests.authenticate(request);
-    const csrfHeader = request.headers["x-csrf-token"];
-    if (!csrfHeader || csrfHeader !== session.csrfToken) {
-      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
-    }
+    const session = await requireMutationSession(request, options.identityRequests, options.allowedOrigins);
     return {
       accountId: session.account.id,
     };

@@ -152,7 +152,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // Phase A — static analysis (no infrastructure)
     if (PHASE === "ALL" || PHASE === "A") {
       runCommand("1  Secret scan", "pnpm secrets:scan");
-      runCommand("2  Dependency audit", "pnpm dependencies:audit");
+      // Dependency audit (`pnpm dependencies:audit`) hits the live npm advisory API, so it runs in the weekly
+      // .github/workflows/dependency-audit.yml workflow instead of blocking every push.
       runCommand("3  Format check", "pnpm format:check");
       runCommand("4  Lint", "pnpm lint");
       runCommand("5  Type-check", "pnpm typecheck");

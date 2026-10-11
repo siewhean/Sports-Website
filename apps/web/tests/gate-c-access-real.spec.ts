@@ -46,7 +46,8 @@ async function issuePass(
   const reveal = page.getByRole("dialog", { name: "Save these access details now" });
   await expect(reveal).toBeVisible();
   const values = reveal.locator("code");
-  await expect(values).toHaveCount(2);
+  await expect(values).toHaveCount(3);
+  await expect(values.nth(2)).toContainText(`/score?match=${matchId}`);
   const accessUrl = (await values.nth(0).textContent())?.trim() ?? "";
   const fallbackCode = (await values.nth(1).textContent())?.trim() ?? "";
   expect(accessUrl).toMatch(/^https:\/\/localhost:3102\/score#access=[A-Za-z0-9_-]{32,}$/);
@@ -251,7 +252,7 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   const viewerPage = await viewerContext.newPage();
   viewerPage.on("request", (request) => requestUrls.push(request.url()));
   await openScoring(viewerPage, viewer.accessUrl);
-  await expect(viewerPage.locator(".p2-writer")).toContainText("Read only");
+  await expect(viewerPage.locator(".p2-writer")).toContainText("View only");
   await expect(viewerPage.getByRole("button", { name: "Review final score" })).toHaveCount(0);
   await expect(viewerPage.getByRole("button", { name: /Goal / }).first()).toBeDisabled();
   await expect(viewerPage.getByLabel("Period")).toBeDisabled();
@@ -273,8 +274,10 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   await expect(rotatedReveal.getByRole("button", { name: "Close" })).toBeFocused();
   await expect(rotatedReveal.getByText("Fallback number rotated. Save the new number now.")).toBeVisible();
   await expect(rotatedReveal.getByRole("img", { name: "Scan this QR to open scoring access" })).toHaveCount(0);
-  await expect(rotatedReveal.locator("code")).toHaveCount(1);
-  const rotatedCode = (await rotatedReveal.locator("code").textContent())?.trim() ?? "";
+  // The fallback number plus its code entry link (fallback codes require match context).
+  await expect(rotatedReveal.locator("code")).toHaveCount(2);
+  await expect(rotatedReveal.locator("code").nth(1)).toContainText(`/score?match=${state.matchId}`);
+  const rotatedCode = (await rotatedReveal.locator("code").first().textContent())?.trim() ?? "";
   expect(rotatedCode).toMatch(/^\d{12}$/);
   expect(rotatedCode).not.toBe(viewer.fallbackCode);
   await assertNoWcagAOrAaViolations(page);
@@ -284,10 +287,10 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   const fallbackContext = await scoringContext(browser, page, phone);
   const fallbackPage = await fallbackContext.newPage();
   fallbackPage.on("request", (request) => requestUrls.push(request.url()));
-  await openScoring(fallbackPage, `${state.webOrigin}/score`);
+  await openScoring(fallbackPage, `${state.webOrigin}/score?match=${encodeURIComponent(state.matchId)}`);
   await fallbackPage.getByLabel("Scoring code").fill(rotatedCode);
   await fallbackPage.getByRole("button", { name: "Validate access" }).click();
-  await expect(fallbackPage.locator(".p2-writer")).toContainText("Read only");
+  await expect(fallbackPage.locator(".p2-writer")).toContainText("View only");
 
   const revokeViewerPass = viewerHistory.getByRole("button", { name: /Revoke pass for/ });
   await revokeViewerPass.click();
@@ -328,14 +331,14 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   await openScoring(incumbentPage, incumbentPass.accessUrl);
   await incumbentPage.getByRole("checkbox", { name: /ready to score this fixture/i }).check();
   await incumbentPage.getByRole("button", { name: "Start scoring" }).click();
-  await expect(incumbentPage.locator(".p2-writer")).toContainText("Active scorer");
+  await expect(incumbentPage.locator(".p2-writer")).toContainText("Online");
 
   const candidatePass = await issuePass(page, "scorekeeper", state.matchId);
   const candidateContext = await scoringContext(browser, page, phone);
   let candidatePage = await candidateContext.newPage();
   candidatePage.on("request", (request) => requestUrls.push(request.url()));
   await openScoring(candidatePage, candidatePass.accessUrl);
-  await expect(candidatePage.locator(".p2-writer")).toContainText("Waiting for takeover");
+  await expect(candidatePage.locator(".p2-writer")).toContainText("Another phone is scoring");
   const pendingHeartbeatStatus = await incumbentPage.evaluate(async () => {
     const response = await fetch("/api/scoring/session/heartbeat", {
       method: "POST",
@@ -351,8 +354,10 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   });
   expect(pendingHeartbeatStatus).toBe(200);
   await incumbentContext.setOffline(true);
-  await candidatePage.getByRole("button", { name: "Request scoring access" }).click();
-  await expect(candidatePage.getByText("Takeover requested", { exact: true }).last()).toBeVisible();
+  await candidatePage.getByRole("button", { name: "Ask to score this match" }).click();
+  await expect(
+    candidatePage.getByText("Request sent. The other phone must approve before you can score.", { exact: true }).last(),
+  ).toBeVisible();
 
   const pending = page
     .locator(".p5-takeovers li")
@@ -397,16 +402,14 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
     page.getByText("Takeover approved. A transfer conflict was recorded for organiser review.", { exact: true }),
   ).toBeAttached();
 
-  await expect(candidatePage.locator(".p2-writer")).toContainText("Active scorer", { timeout: 10_000 });
+  await expect(candidatePage.locator(".p2-writer")).toContainText("Online", { timeout: 10_000 });
   await expect(candidatePage.getByRole("group", { name: "Scoring controls" })).toBeFocused();
   await candidateHeartbeat;
   await incumbentContext.setOffline(false);
-  await expect(incumbentPage.locator(".p2-writer")).toContainText("Scoring moved to another device", {
+  await expect(incumbentPage.locator(".p2-writer")).toContainText("Another phone is scoring", {
     timeout: 20_000,
   });
-  await expect(
-    incumbentPage.locator(".p2-writer").filter({ hasText: "Scoring moved to another device" }),
-  ).toBeFocused();
+  await expect(incumbentPage.locator(".p2-writer").filter({ hasText: "Another phone is scoring" })).toBeFocused();
   await expect(incumbentPage.getByRole("button", { name: "Review final score" })).toHaveCount(0);
   await expect(incumbentPage.getByRole("button", { name: /Goal / }).first()).toBeDisabled();
   await assertNoWcagAOrAaViolations(incumbentPage);
@@ -417,19 +420,19 @@ test("ACC-001–010 issue, read-only, rotate, revoke, transfer and lease lapse",
   candidatePage = await candidateContext.newPage();
   candidatePage.on("request", (request) => requestUrls.push(request.url()));
   await openScoring(candidatePage, `${state.webOrigin}/score`);
-  await expect(candidatePage.locator(".p2-writer")).toContainText("Writer lease needs reconnection");
+  await expect(candidatePage.locator(".p2-writer")).toContainText("Reconnecting…");
   const leaseWarning = candidatePage.locator(".p2-score-warning");
   await expect(leaseWarning).toContainText("Your scoring session and access pass remain valid");
   await expect(leaseWarning).not.toContainText("issue a new pass");
   await expect(candidatePage.getByRole("button", { name: /Goal / }).first()).toBeDisabled();
-  await expect(candidatePage.locator('[aria-live="polite"]')).toContainText("Writer lease needs reconnection");
+  await expect(candidatePage.locator('[aria-live="polite"]')).toContainText("Reconnecting so you can keep scoring");
   await assertNoWcagAOrAaViolations(candidatePage);
   await attachSurface(candidatePage, testInfo, `${testInfo.project.name}-lease-lapsed`);
 
   const rateLimitedContext = await scoringContext(browser, page, phone);
   const rateLimitedPage = await rateLimitedContext.newPage();
   rateLimitedPage.on("request", (request) => requestUrls.push(request.url()));
-  await openScoring(rateLimitedPage, `${state.webOrigin}/score`);
+  await openScoring(rateLimitedPage, `${state.webOrigin}/score?match=${encodeURIComponent(state.matchId)}`);
   allowConsoleFailure(
     rateLimitedPage,
     /^console\.error: Failed to load resource: the server responded with a status of 403 \(Forbidden\)$/,

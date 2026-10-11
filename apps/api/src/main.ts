@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { loadConfig, safeConfigSummary } from "@matchday/config";
 import { parseAuthenticationAssurancePolicy } from "@matchday/config/authentication-assurance";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
+import { createLogger } from "@matchday/observability";
 import { Redis } from "ioredis";
 import postgres from "postgres";
 import {
@@ -45,6 +46,12 @@ import {
   EmailTemplateRegistry,
 } from "@matchday/notifications";
 import { startApiTelemetry } from "./telemetry.js";
+import { createErrorReporter, initSentryNode } from "@matchday/observability";
+import { CompetitionLifecycleSweeper, competitionLifecycleSettingsFromEnv } from "./competition-lifecycle-sweeper.js";
+import { parseRetentionPolicy } from "@matchday/config/retention";
+import { AccountDataRightsRuntime } from "./account-data-rights-runtime.js";
+import { PdpaRetentionJob } from "./pdpa-retention.js";
+import { purgeExpiredCasualGames } from "./casual-routes.js";
 
 const MFA_ACR = "http://schemas.openid.net/pape/policies/2007/06/multi-factor";
 const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -85,15 +92,32 @@ const identityProvider = config.identity.oidc
       ...(maxAuthenticationAgeSeconds !== undefined ? { maxAuthenticationAgeSeconds } : {}),
     })
   : new UnavailableIdentityProvider();
+// Inert unless SENTRY_DSN is set; also installs uncaughtException/unhandledRejection capture.
+const errorReporter = createErrorReporter(initSentryNode({ service: "matchday-api" }));
 const telemetry = await startApiTelemetry(config);
 const rateLimitRedis = new Redis(config.redisUrl, {
   connectTimeout: 2_000,
   enableOfflineQueue: false,
   maxRetriesPerRequest: 1,
 });
+// Every pooled session carries server-side guards (sent as startup parameters,
+// so they hold for every statement on the connection without a round trip):
+// a runaway query is cancelled, a request waiting on a row/advisory lock fails
+// fast instead of piling up behind it, and a transaction left open by a
+// crashed handler cannot pin locks and a pool slot indefinitely. Individual
+// operations that legitimately need longer raise them with SET LOCAL.
 const postgresClient = postgres(config.databaseUrl, {
-  max: Number(process.env.DB_POOL_MAX ?? 30),
+  max: config.database.poolMax,
+  idle_timeout: 60,
+  max_lifetime: 30 * 60,
+  connect_timeout: config.database.connectTimeoutSeconds,
   onnotice: () => undefined,
+  connection: {
+    application_name: "matchday-api",
+    statement_timeout: config.database.statementTimeoutMs,
+    lock_timeout: config.database.lockTimeoutMs,
+    idle_in_transaction_session_timeout: config.database.idleInTransactionSessionTimeoutMs,
+  },
 });
 const identitySql = postgresClient as unknown as PostgresJsSql;
 const identityRuntime = new IdentityAssuranceRuntime(
@@ -134,6 +158,10 @@ const phase2Runtime = new FallbackKeyringPhase2Runtime(
     config.publicOrigin ?? config.api.allowedOrigins[0] ?? "http://127.0.0.1:3000",
   ),
 );
+// Parsed before anything starts so a bad value fails the boot, not a sweep.
+const competitionLifecycleSettings = competitionLifecycleSettingsFromEnv(process.env);
+phase2Runtime.liveMatchStaleAfterMs = competitionLifecycleSettings.liveMatchStaleAfterMs;
+let competitionLifecycleSweeper: CompetitionLifecycleSweeper | null = null;
 const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
 const queueName = schedulerQueueName(config.environment);
 const inlineScheduler = new SchedulerRuntime({
@@ -160,10 +188,30 @@ const phase4Runtime = new V1Phase4Runtime(
 );
 const entitlementRuntime = new EntitlementRuntime(
   identitySql,
-  process.env.STRIPE_SECRET_KEY ? new HttpStripeCheckoutClient(process.env.STRIPE_SECRET_KEY) : undefined,
+  config.stripe?.secretKey
+    ? new HttpStripeCheckoutClient(config.stripe.secretKey, {
+        eventPassPriceId: config.stripe.prices.eventPass,
+        organiserProPriceId: config.stripe.prices.organiserPro,
+        aiTopUpPriceId: config.stripe.prices.aiTopUp,
+        timeoutMs: config.stripe.timeoutMs,
+        logger: createLogger({ service: "matchday-api", environment: config.environment, level: config.logLevel }),
+      })
+    : undefined,
+  {
+    webhookSecret: config.stripe?.webhookSecret,
+    checkoutRedirectOrigins: [
+      ...new Set([...(config.publicOrigin ? [config.publicOrigin] : []), ...config.api.allowedOrigins]),
+    ],
+  },
 );
 const exportRuntime = new PublishedExportRuntime(identitySql);
 const adminRuntime = new ProductionAdminRuntime(identitySql);
+const accountDataRightsRuntime = new AccountDataRightsRuntime(identitySql);
+const pdpaRetention = new PdpaRetentionJob({
+  sql: identitySql,
+  policy: parseRetentionPolicy(),
+  purgeAnonymousCasualGames: (olderThan) => purgeExpiredCasualGames(postgresClient, olderThan),
+});
 
 // Gate C is part of the production API composition, not an evidence-only
 // harness. Reuse the canonical Phase 2 projection writer so repair publication
@@ -191,6 +239,7 @@ const app = await buildApp({
     return verifiedScoringRateLimitSessionId(identitySql, sessionId, sessionToken);
   },
   telemetry,
+  errorReporter,
   identityRuntime,
   phase2Runtime,
   phase3Runtime,
@@ -204,11 +253,18 @@ const app = await buildApp({
   adminRuntime,
   notificationService,
   casualSql: postgresClient,
+  accountDataRightsRuntime,
   scoringAccessHmacKeySql: identitySql,
   scoringFallbackHmacKeySql: identitySql,
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,
   closeIdentityResources: async () => {
-    await Promise.all([inlineScheduler.stop(), scheduleQueue.close(), postgresClient.end({ timeout: 5 })]);
+    await competitionLifecycleSweeper?.stop();
+    await Promise.all([
+      inlineScheduler.stop(),
+      pdpaRetention.stop(),
+      scheduleQueue.close(),
+      postgresClient.end({ timeout: 5 }),
+    ]);
   },
 }).catch(async (error: unknown) => {
   await Promise.allSettled([
@@ -217,9 +273,20 @@ const app = await buildApp({
     scheduleQueue.close(),
     postgresClient.end({ timeout: 1 }),
     telemetry.shutdown(),
+    errorReporter.reportError(error, { severity: "fatal", handled: false }).then(() => errorReporter.flush(2_000)),
   ]);
   throw error;
 });
+
+// Runs inside every API instance (production has no separate scheduler
+// service); per-competition advisory locks keep instances from duplicating work.
+competitionLifecycleSweeper = new CompetitionLifecycleSweeper(
+  identitySql,
+  phase2Runtime,
+  competitionLifecycleSettings,
+  app.log as unknown as ConstructorParameters<typeof CompetitionLifecycleSweeper>[3],
+);
+competitionLifecycleSweeper.start();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, async () => {
@@ -229,6 +296,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     } catch (error) {
       app.log.error({ err: error }, "api failed to shut down cleanly");
       process.exitCode = 1;
+      await errorReporter.reportError(error);
+    } finally {
+      await errorReporter.flush(2_000);
     }
   });
 }
@@ -240,6 +310,7 @@ try {
     onCloseError: (error) => app.log.error({ err: error }, "api cleanup failed"),
     onListenError: (error) => app.log.fatal({ err: error }, "api failed to start"),
   });
+  pdpaRetention.start(app.log);
   app.log.info(
     {
       config: safeConfigSummary(config),

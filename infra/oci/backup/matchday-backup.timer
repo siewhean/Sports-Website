@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the MATCHDAY Postgres backup nightly
+
+[Timer]
+# 03:15 Asia/Singapore expressed in UTC (19:15 UTC); quiet period before morning matches.
+OnCalendar=*-*-* 19:15:00 UTC
+RandomizedDelaySec=300
+# Catch up after downtime so a reboot over the schedule does not skip a night.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

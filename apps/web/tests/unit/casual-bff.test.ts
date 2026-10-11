@@ -130,8 +130,8 @@ describe("production-topology casual client identity and rate-limit trust chain"
     const envProd = await fs.readFile(path.join(rootDir, "infra/oci/.env.prod.example"), "utf8");
 
     // Extract Caddy's @api trusted_proxies from Caddyfile
-    const prodBlockMatch = caddyfile.match(/matchday\.poladex\.shop\s*\{([\s\S]*?)\n\}/);
-    if (!prodBlockMatch) throw new Error("Could not find matchday.poladex.shop block in Caddyfile");
+    const prodBlockMatch = caddyfile.match(/\{\$OCI_PROD_HOSTNAME\}\s*\{([\s\S]*?)\n\}/);
+    if (!prodBlockMatch) throw new Error("Could not find {$OCI_PROD_HOSTNAME} block in Caddyfile");
     const prodBlock = prodBlockMatch[1];
 
     const trustedProxiesMatch = prodBlock.match(/trusted_proxies\s+([^\n}]+)/);

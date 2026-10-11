@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -91,7 +91,42 @@ test("hosted browser matrix has enough timeout headroom for dependency mirrors",
   assert.ok(start >= 0 && end > start, "browser-e2e workflow block must remain inspectable");
   const browserJob = source.slice(start, end);
   assert.match(browserJob, /timeout-minutes:\s*(?:[6-9]\d|\d{3,})/u);
+  // chromium + webkit for the default config; firefox for the phase-4 real-API desktop-firefox project.
   assert.match(browserJob, /playwright install --with-deps chromium webkit firefox/u);
+  assert.match(browserJob, /--shard=\$\{\{ matrix\.shard \}\}/u, "e2e must be sharded");
+});
+
+test("visual regression never rewrites snapshots in CI and uses platform-specific baselines", async () => {
+  const webPackage = JSON.parse(await readFile(path.join(root, "apps/web/package.json"), "utf8"));
+  assert.doesNotMatch(
+    webPackage.scripts["test:visual"],
+    /playwright test[^&|]*\s(?:-u|--update-snapshots)(?:\s|$)|\$\{CI/u,
+  );
+  const config = await readFile(path.join(root, "apps/web/playwright.config.ts"), "utf8");
+  assert.doesNotMatch(config, /-darwin\{ext\}/u, "snapshot paths must not be hard-coded to darwin");
+  assert.match(config, /\{platform\}/u);
+});
+
+test("workflows never use self-hosted runners and pin every action by full commit SHA", async () => {
+  const workflowDirectory = path.join(root, ".github/workflows");
+  const files = (await readdir(workflowDirectory)).filter((name) => /\.ya?ml$/u.test(name));
+  assert.ok(files.length > 0);
+  for (const file of files) {
+    const source = await readFile(path.join(workflowDirectory, file), "utf8");
+    assert.doesNotMatch(source, /self-hosted/u, `${file} must not use self-hosted runners (public repository)`);
+    assert.doesNotMatch(source, /^\s*workflow_run:/mu, `${file} must not use workflow_run triggers`);
+    for (const match of source.matchAll(/^\s*-?\s*uses:\s*([^\s#]+)/gmu)) {
+      assert.match(match[1], /@[0-9a-f]{40}$/u, `${file}: ${match[1]} must be pinned by full commit SHA`);
+    }
+  }
+});
+
+test("only the images job may write packages", async () => {
+  const source = await readFile(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  assert.match(source, /^permissions:\n  contents: read\n/mu);
+  assert.equal([...source.matchAll(/packages: write/gu)].length, 1);
+  const images = source.slice(source.indexOf("\n  images:"));
+  assert.match(images, /packages: write/u);
 });
 
 test("QA-011 propagation reuses already-started benchmark matches", async () => {

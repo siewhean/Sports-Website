@@ -85,14 +85,12 @@ describe("public competition server adapter", () => {
     expect(JSON.stringify(view.publicDivisions?.[1])).not.toContain("Open Team");
 
     const markup = renderToStaticMarkup(createElement(PublicCompetition, { competition: view, liveUpdates: false }));
-    expect(markup).toContain('id="results-open"');
-    expect(markup).toContain('id="results-women"');
-    expect(markup).toContain('id="table-open"');
-    expect(markup).toContain('id="table-women"');
-    expect(markup).toContain('aria-labelledby="public-result-title-open"');
-    expect(markup).toContain('aria-labelledby="public-result-title-women"');
-    expect(markup).toContain('data-division-id="open"');
-    expect(markup).toContain('data-division-id="women"');
+    // One page, one tab at a time: the Live tab lists each division's match once, tagged with its division.
+    expect(markup).toContain('role="tablist"');
+    expect(markup.match(/data-match-id="open-match"/gu)).toHaveLength(1);
+    expect(markup.match(/data-match-id="women-match"/gu)).toHaveLength(1);
+    expect(markup).toMatch(/data-match-id="open-match"[\s\S]*?>Open<\/span>/u);
+    expect(markup).toMatch(/data-match-id="women-match"[\s\S]*?>Women<\/span>/u);
     const ids = [...markup.matchAll(/\sid="([^"]+)"/gu)].map((match) => match[1]);
     expect(new Set(ids).size).toBe(ids.length);
   });

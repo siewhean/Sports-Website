@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Usage: CANDIDATE_SHA=<40-hex> OCI_PUBLIC_HOSTNAME=<host> infra/oci/deploy-prod.sh [--build-locally]
+#
+# Default: pull the exact-SHA images that CI built and pushed to the registry (see the "images" job in
+# .github/workflows/ci.yml) and verify their org.opencontainers.image.revision label before any traffic
+# switch. Nothing is compiled on this VM.
+# --build-locally (or MATCHDAY_BUILD_LOCALLY=1): break-glass fallback that builds the images on this host
+# with `docker compose build --pull`. Use only when the registry or CI is unavailable; it competes with
+# live traffic for CPU/memory.
+BUILD_LOCALLY="${MATCHDAY_BUILD_LOCALLY:-0}"
+for deploy_arg in "$@"; do
+  case "$deploy_arg" in
+    --build-locally) BUILD_LOCALLY=1 ;;
+    *)
+      echo "Unknown argument: $deploy_arg (supported: --build-locally)" >&2
+      exit 2
+      ;;
+  esac
+done
+if [ "$BUILD_LOCALLY" != "0" ] && [ "$BUILD_LOCALLY" != "1" ]; then
+  echo "MATCHDAY_BUILD_LOCALLY must be 0 or 1" >&2
+  exit 2
+fi
+
+# Registry namespace for application images (compose.prod.yaml: ${MATCHDAY_IMAGE_REGISTRY}/matchday-<service>:<sha>)
+MATCHDAY_IMAGE_REGISTRY="${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}"
+export MATCHDAY_IMAGE_REGISTRY
+
 : "${CANDIDATE_SHA:?Set CANDIDATE_SHA to the full 40-character Git SHA}"
 : "${OCI_PUBLIC_HOSTNAME:?Set OCI_PUBLIC_HOSTNAME to the DNS name serving this production stack}"
 
@@ -40,10 +67,11 @@ CADDY_VALIDATION_TIMEOUT="${MATCHDAY_CADDY_VALIDATION_TIMEOUT:-30}"
 SERVICE_CONTROL_TIMEOUT="${MATCHDAY_SERVICE_CONTROL_TIMEOUT:-30}"
 MIGRATION_TIMEOUT="${MATCHDAY_MIGRATION_TIMEOUT:-180}"
 BUILD_TIMEOUT="${MATCHDAY_BUILD_TIMEOUT:-600}"
+PULL_TIMEOUT="${MATCHDAY_PULL_TIMEOUT:-300}"
 
 # Pinned Caddy container image contract
-CADDY_IMAGE="caddy:2.10-alpine"
-CADDY_IMAGE_DIGEST="sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+CADDY_IMAGE="caddy:2.11-alpine"
+CADDY_IMAGE_DIGEST="sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"
 PINNED_CADDY_IMAGE="${CADDY_IMAGE}@${CADDY_IMAGE_DIGEST}"
 CADDY_CONTAINER_TARGET="/etc/caddy/Caddyfile"
 
@@ -545,7 +573,7 @@ if ! run_bounded 10 docker network inspect matchday-prod_backend >/dev/null 2>&1
   run_bounded 10 docker network create --subnet 172.31.0.0/24 matchday-prod_backend
 fi
 
-# Verify Caddy container and its bind mount configuration before building or launching candidate
+# Verify Caddy container and its bind mount configuration before pulling/building or launching candidate
 if ! caddy_container="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker compose --env-file "$caddy_env_file" -f infra/oci/compose.yaml ps -q caddy)"; then
   cleanup_and_rollback "Failed querying Caddy container ID within timeout"
 fi
@@ -629,12 +657,124 @@ if [ "$caddy_mount_check" != "VALID" ]; then
   cleanup_and_rollback "CADDY_RUNTIME_MOUNT_INVALID: $caddy_mount_check"
 fi
 
+# Config-driven hostnames: when the runtime Caddyfile uses {$OCI_PROD_HOSTNAME}, the running Caddy container
+# must have been created with the same hostname the public health gates below will probe.
+if grep -q '{\$OCI_PROD_HOSTNAME}' "$RUNTIME_CADDYFILE_PATH" 2>/dev/null; then
+  if ! caddy_env="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker inspect "$caddy_container" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)"; then
+    cleanup_and_rollback "Failed inspecting Caddy container environment within timeout"
+  fi
+  if ! printf '%s\n' "$caddy_env" | grep -qxF "OCI_PROD_HOSTNAME=${OCI_PUBLIC_HOSTNAME}"; then
+    cleanup_and_rollback "Caddy container OCI_PROD_HOSTNAME does not match OCI_PUBLIC_HOSTNAME '${OCI_PUBLIC_HOSTNAME}'; export OCI_PROD_HOSTNAME and recreate the caddy service"
+  fi
+fi
+
 PHASE="CANDIDATE_START"
 
-echo "[deploy-prod] Building candidate slot ($CANDIDATE_API_SERVICE, $CANDIDATE_WEB_SERVICE, $CANDIDATE_WORKER_SERVICE)..."
-if ! run_bounded "$BUILD_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml build --pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate; then
-  cleanup_and_rollback "Failed building candidate services within timeout"
+if [ "$BUILD_LOCALLY" = "1" ]; then
+  echo "[deploy-prod] --build-locally: building candidate slot on this host ($CANDIDATE_API_SERVICE, $CANDIDATE_WEB_SERVICE, $CANDIDATE_WORKER_SERVICE)..."
+  if ! run_bounded "$BUILD_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup build --pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate backup; then
+    cleanup_and_rollback "Failed building candidate services within timeout"
+  fi
+else
+  echo "[deploy-prod] Pulling CI-built candidate images for $CANDIDATE_SHA from $MATCHDAY_IMAGE_REGISTRY..."
+  if ! run_bounded "$PULL_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup pull "$CANDIDATE_API_SERVICE" "$CANDIDATE_WEB_SERVICE" "$CANDIDATE_WORKER_SERVICE" migrate backup; then
+    cleanup_and_rollback "Failed pulling candidate images within timeout (CI must have pushed $MATCHDAY_IMAGE_REGISTRY/matchday-{api,web,worker,migrate}:$CANDIDATE_SHA; use --build-locally only as a fallback)"
+  fi
 fi
+
+# Pre-migration snapshot (backup safety net). Migrations are forward-only, so a pg_dump taken
+# immediately before they run is the only way back from a bad migration. Mandatory: a failed
+# dump aborts the deploy. The sole bypass is the explicit MATCHDAY_SKIP_PREMIGRATION_BACKUP=1
+# flag, documented in docs/operations/BACKUP_RESTORE.md; it is logged loudly.
+DUMP_TIMEOUT="${MATCHDAY_DUMP_TIMEOUT:-900}"
+PREMIGRATION_LOCAL_KEEP="${MATCHDAY_PREMIGRATION_LOCAL_KEEP:-5}"
+
+env_file_value() {
+  local key="$1"
+  { grep -E "^${key}=" infra/oci/.env.prod || true; } | tail -n 1 | cut -d= -f2- | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
+take_premigration_snapshot() {
+  local backup_root="${MATCHDAY_BACKUP_DIR:-/var/lib/matchday/backups}"
+  local snap_dir="$backup_root/premigration"
+  local pg_user pg_db final partial s3_bucket
+  pg_user="$(env_file_value POSTGRES_USER)"
+  pg_db="$(env_file_value POSTGRES_DB)"
+  if [ -z "$pg_user" ] || [ -z "$pg_db" ]; then
+    echo "[deploy-prod] ERROR: POSTGRES_USER/POSTGRES_DB missing from infra/oci/.env.prod; cannot snapshot" >&2
+    return 1
+  fi
+  if ! (umask 077 && mkdir -p "$snap_dir"); then
+    echo "[deploy-prod] ERROR: cannot create snapshot directory $snap_dir" >&2
+    return 1
+  fi
+  final="$snap_dir/premigration-${BUILD_TIMESTAMP_SANITIZED}-${CANDIDATE_SHA:0:12}.dump"
+  partial="${final}.partial"
+
+  echo "[deploy-prod] Pre-migration snapshot: pg_dump of $pg_db -> $final"
+  if ! (umask 077 && run_bounded "$DUMP_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T postgres pg_dump --format=custom --no-owner --no-acl --username "$pg_user" --dbname "$pg_db" </dev/null >"$partial"); then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: pg_dump failed" >&2
+    return 1
+  fi
+  if [ ! -s "$partial" ]; then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: pg_dump produced an empty snapshot" >&2
+    return 1
+  fi
+  if ! run_bounded "$DUMP_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T postgres pg_restore --list <"$partial" >/dev/null; then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: snapshot archive failed pg_restore --list validation" >&2
+    return 1
+  fi
+  if ! mv "$partial" "$final"; then
+    rm -f "$partial"
+    echo "[deploy-prod] ERROR: cannot finalize snapshot file" >&2
+    return 1
+  fi
+  echo "[deploy-prod] Pre-migration snapshot complete ($(wc -c <"$final" | tr -d ' ') bytes, sha256 $( (sha256sum "$final" 2>/dev/null || shasum -a 256 "$final") | cut -d' ' -f1))"
+
+  # Local retention: keep the newest N snapshots (best effort).
+  { ls -1t "$snap_dir" 2>/dev/null | grep -E '^premigration-.*\.dump$' | tail -n +"$((PREMIGRATION_LOCAL_KEEP + 1))" |
+    while IFS= read -r old; do rm -f "${snap_dir:?}/$old"; done; } || true
+
+  # Off-host copy when Object Storage is configured. The local file already exists, so an
+  # upload problem is a loud warning rather than a deploy abort.
+  s3_bucket="$(env_file_value BACKUP_S3_BUCKET)"
+  if [ -n "$s3_bucket" ]; then
+    echo "[deploy-prod] Uploading pre-migration snapshot to Object Storage bucket $s3_bucket..."
+    if ! run_bounded "$DUMP_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup run --rm --no-deps -T -v "$snap_dir:/snapshots:ro" backup upload-snapshot "/snapshots/$(basename "$final")"; then
+      echo "[deploy-prod] WARNING: off-host upload of the pre-migration snapshot FAILED; local copy retained at $final" >&2
+    fi
+  else
+    echo "[deploy-prod] Object Storage not configured (BACKUP_S3_BUCKET empty); snapshot is local only"
+  fi
+}
+
+case "${MATCHDAY_SKIP_PREMIGRATION_BACKUP:-0}" in
+  1)
+    echo "[deploy-prod] WARNING: MATCHDAY_SKIP_PREMIGRATION_BACKUP=1 - SKIPPING the pre-migration database snapshot. There will be no automatic way back from a bad migration." >&2
+    ;;
+  0)
+    if ! take_premigration_snapshot; then
+      cleanup_and_rollback "Pre-migration database snapshot failed; refusing to run migrations (set MATCHDAY_SKIP_PREMIGRATION_BACKUP=1 only if you accept the risk)"
+    fi
+    ;;
+  *)
+    cleanup_and_rollback "MATCHDAY_SKIP_PREMIGRATION_BACKUP must be 0 or 1 (got '${MATCHDAY_SKIP_PREMIGRATION_BACKUP}')"
+    ;;
+esac
+
+# Verify the exact image revision label before anything starts or traffic moves (applies to pulled and local builds).
+for image_name in api web worker migrate; do
+  image_ref="${MATCHDAY_IMAGE_REGISTRY}/matchday-${image_name}:${CANDIDATE_SHA}"
+  image_label_sha="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
+  if [ "$image_label_sha" != "$CANDIDATE_SHA" ]; then
+    cleanup_and_rollback "Candidate image $image_ref revision label '$image_label_sha' does not match requested '$CANDIDATE_SHA'"
+  fi
+  image_repo_digest="$(run_bounded "$DOCKER_INSPECT_TIMEOUT" docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}local-build{{end}}' "$image_ref" 2>/dev/null | tr -d '\r\n' || true)"
+  echo "[deploy-prod] Verified $image_ref revision label (${image_repo_digest:-unknown})"
+done
 
 echo "[deploy-prod] Running database migrations..."
 if ! run_bounded "$MIGRATION_TIMEOUT" docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile migration run --rm migrate; then
@@ -731,7 +871,7 @@ chmod 600 "$CANDIDATE_RUNTIME_CADDYFILE" 2>/dev/null || true
 
 # Mandatory validation of candidate Caddyfile using pinned container image
 echo "[deploy-prod] Validating candidate runtime Caddy configuration using pinned Caddy image ($PINNED_CADDY_IMAGE)..."
-if ! run_bounded "$CADDY_VALIDATION_TIMEOUT" docker run --rm --network none -v "$CANDIDATE_RUNTIME_CADDYFILE":/etc/caddy/Caddyfile:ro "$PINNED_CADDY_IMAGE" caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile; then
+if ! run_bounded "$CADDY_VALIDATION_TIMEOUT" docker run --rm --network none -e "OCI_PROD_HOSTNAME=${OCI_PUBLIC_HOSTNAME}" -e "OCI_STAGING_HOSTNAME=${OCI_STAGING_HOSTNAME:-staging.localhost}" -v "$CANDIDATE_RUNTIME_CADDYFILE":/etc/caddy/Caddyfile:ro "$PINNED_CADDY_IMAGE" caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile; then
   cleanup_and_rollback "Candidate runtime Caddyfile failed syntax validation"
 fi
 

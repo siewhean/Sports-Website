@@ -1,7 +1,8 @@
 [extend]
 useDefault = true
 
-[allowlist]
+# Generated and third-party artifacts only. Test directories are NOT allowlisted wholesale.
+[[allowlists]]
 description = "Generated and third-party artifacts"
 paths = [
   '''(^|/)node_modules/''',
@@ -10,10 +11,32 @@ paths = [
   '''(^|/)dist/''',
   '''(^|/)playwright-report/''',
   '''(^|/)test-results/''',
-  '''(^|/)tests/''',
-  '''(^|/)apps/api/scripts/''',
-  '''sports_competition_platform_implementation_plan\.md$'''
 ]
 regexes = [
   '''^\.p2-organiser$'''
+]
+
+# Synthetic secrets in test fixtures that trip the generic-api-key rule. Exact files, one rule only:
+# a real credential of any other kind in these files, or any secret in any other test file, still fails the scan.
+# Add a file here only after confirming the value is a made-up test constant.
+[[allowlists]]
+description = "Synthetic generic-api-key values in test fixtures"
+targetRules = ["generic-api-key"]
+paths = [
+  '''(^|/)apps/api/tests/integration/phase\-7\-failure\-endurance\.test\.ts$''',
+  '''(^|/)apps/api/tests/unit/commercial\-entitlements\.test\.ts$''',
+  '''(^|/)apps/api/tests/unit/email\-delivery\-webhook\.test\.ts$''',
+  '''(^|/)apps/api/tests/unit/qa\-004\-failure\-modes\.test\.ts$''',
+  '''(^|/)apps/api/tests/unit/qa\-014\-owasp\-security\.test\.ts$''',
+  '''(^|/)apps/api/tests/unit/redis\-degraded\.test\.ts$''',
+  '''(^|/)apps/api/tests/unit/scoring\-access\-hmac\-metrics\.test\.ts$''',
+  '''(^|/)apps/api/tests/unit/w2\-security\-hardening\.test\.ts$''',
+  '''(^|/)packages/database/tests/integration/gate\-c\-c3\-migration\.test\.ts$''',
+  '''(^|/)packages/notifications/tests/delivery\-events\.test\.ts$''',
+  '''(^|/)tests/e2e/helpers/fixtures\.ts$''',
+  '''(^|/)tests/e2e/tier1\-features/feature\-13\-failure\-drills\-keys\.test\.ts$''',
+  '''(^|/)tests/e2e/tier1\-features/feature\-16\-adversarial\-hardening\.test\.ts$''',
+  '''(^|/)tests/e2e/tier2\-boundaries/boundary\-13\-failure\-drills\-keys\.test\.ts$''',
+  '''(^|/)tests/e2e/tier4\-scenarios/scenario\-05\-high\-concurrency\-failure\-drill\-rotation\.test\.ts$''',
+  '''(^|/)tests/e2e/tier5\-adversarial/adversarial\-04\-hmac\-keyrings\-security\.test\.ts$''',
 ]

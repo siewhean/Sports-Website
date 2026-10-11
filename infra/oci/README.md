@@ -1,12 +1,12 @@
 # OCI controlled staging
 
-This is a provider-specific deployment for the Matchday API, PostgreSQL, Redis, worker, and Caddy HTTPS proxy. It is intended to replace the free Render service for Gate D controlled staging while preserving exact-SHA and retained-receipt rules. Base and dependency images are pinned by digest; update those digests as a reviewed dependency change.
+This is a provider-specific deployment for the Matchday API, PostgreSQL, Redis, worker, and Caddy HTTPS proxy. It replaced the former free-tier hosted staging service and preserves exact-SHA and retained-receipt rules. Base and dependency images are pinned by digest; update those digests as a reviewed dependency change.
 
 ## VM and network
 
 Use an OCI Ampere A1 VM with at least 2 OCPUs and 12 GB RAM running Ubuntu ARM64. Confirm the tenancy's available Always Free allocation and capacity before provisioning. Add ingress rules for TCP 22 from the operator IP and TCP 80/443 from the internet. Do not expose PostgreSQL 5432 or Redis 6379.
 
-Install Docker Engine and the Compose plugin, clone this repository, and create `infra/oci/.env.oci` from `.env.oci.example`. Generate unique URL-safe secrets; do not commit the file. Replace every `CHANGE_ME` token and both `staging.example.com` and `example.com` values with the real staging hostname and its apex registrable domain. Keep `SCORING_SESSION_SEAL_KEY` separate from the API HMAC keys because the web BFF uses it to seal its host-only scoring cookie. Configure the required OIDC tenant, edge-cache purge bridge, and SMTP sink/provider. Create an A record for `OCI_PUBLIC_HOSTNAME` pointing to the VM before starting Caddy so it can obtain a certificate. The fixed Compose addresses are Caddy (`172.30.0.10`) and Web (`172.30.0.12`); keep `API_TRUSTED_PROXIES=172.30.0.10,172.30.0.12` (and `172.31.0.10,172.31.0.12` in production) so client IPs survive the Caddy ingress and Web BFF proxy hops for rate limiting.
+Install Docker Engine and the Compose plugin, clone this repository, and create `infra/oci/.env.oci` from `.env.oci.example`. Generate unique URL-safe secrets; do not commit the file. Replace every `CHANGE_ME` token and both `staging.example.com` and `example.com` values with the real staging hostname and its apex registrable domain. Keep `SCORING_SESSION_SEAL_KEY` separate from the API HMAC keys because the web BFF uses it to seal its host-only scoring cookie. Configure the required OIDC tenant, edge-cache purge bridge, and SMTP sink/provider. Create an A record for `OCI_PUBLIC_HOSTNAME` pointing to the VM before starting Caddy so it can obtain a certificate. The fixed Compose addresses are Caddy (`172.30.0.10`) and Web (`172.30.0.12`); keep `API_TRUSTED_PROXIES=172.30.0.10,172.30.0.12` (and `172.31.0.10,172.31.0.12` in production) so Fastify resolves the browser IP for requests Caddy proxies straight to the API. That does not cover server-side Web BFF calls: Node `fetch` sends no `X-Forwarded-For`, so the API would see only the web container. The BFF instead sends the end-user IP (taken from the right-most, Caddy-written `X-Forwarded-For` hop) in `x-matchday-client-ip` with an HMAC-SHA256 signature over the IP and a timestamp (`x-matchday-client-ip-signature`, 60-second validity); the API uses it for rate-limit keys only when the signature verifies and otherwise falls back to the transport address. Set the same `MATCHDAY_CLIENT_IP_SECRET` (32+ bytes, unique) for both API and web (production requires it); in production the web container resolves `OCI_PUBLIC_HOSTNAME` to Caddy on the internal bridge (`extra_hosts`) instead of hairpinning through the public IP.
 
 ## Deploy an exact candidate
 
@@ -47,8 +47,8 @@ The OCI host supports isolated dual-stack execution with shared Caddy ingress:
   - Staging IP: `172.30.0.10`
   - Production IP: `172.31.0.10`
   - Ports: 80, 443
-  - Routes `matchday.poladex.shop` -> Production API (`172.31.0.11:4000`), Web (`172.31.0.12:3000`)
-  - Routes `c5-drill.poladex.shop` -> Staging API (`172.30.0.11:4000`), Web (`172.30.0.12:3000`)
+  - Routes `$OCI_PROD_HOSTNAME` (currently `matchday.poladex.shop`) -> Production API (`172.31.0.11:4000`), Web (`172.31.0.12:3000`)
+  - Routes `$OCI_STAGING_HOSTNAME` (currently `c5-drill.poladex.shop`) -> Staging API (`172.30.0.11:4000`), Web (`172.30.0.12:3000`)
   - Blocks `/health/deep*` publicly with HTTP 404
 - **Production Stack (`matchday-prod`)**:
   - Network: `matchday-prod_backend` (`172.31.0.0/24`)
@@ -69,20 +69,49 @@ The OCI host supports isolated dual-stack execution with shared Caddy ingress:
 
 ## Production Deployment
 
+Images are built by CI (job `images` in `.github/workflows/ci.yml`, on `main` and `v*` tags) and pushed to
+`ghcr.io/siewhean/matchday-{api,web,worker,migrate,backup}:<full git sha>`. `deploy-prod.sh` pulls those exact tags,
+verifies each image's `org.opencontainers.image.revision` label equals `CANDIDATE_SHA`, then runs the unchanged
+pre-migration snapshot, migration, health-gated promotion and rollback flow. Nothing is compiled on the VM.
+Wait for the `images` job of the candidate commit to finish first.
+
 From `/opt/matchday/oci-src`:
 
 ```sh
 export CANDIDATE_SHA=40_CHARACTER_SHA
-export OCI_PUBLIC_HOSTNAME=matchday.poladex.shop
+export OCI_PUBLIC_HOSTNAME=<production hostname>      # currently matchday.poladex.shop
+export OCI_PROD_HOSTNAME="$OCI_PUBLIC_HOSTNAME"       # Caddy site address; must match
 git checkout --detach "$CANDIDATE_SHA"
 infra/oci/deploy-prod.sh
 ```
 
-Post-deploy topology verification:
+Break-glass: `infra/oci/deploy-prod.sh --build-locally` (or `MATCHDAY_BUILD_LOCALLY=1`) builds the images on the VM with
+`docker compose build --pull` (600s `MATCHDAY_BUILD_TIMEOUT`) when GHCR or CI is unavailable. It competes with live
+traffic; use only in an emergency. `MATCHDAY_IMAGE_REGISTRY` overrides the registry namespace and
+`MATCHDAY_PULL_TIMEOUT` (default 300s) bounds the pull.
+
+If the packages are private, run `docker login ghcr.io` on the VM once with a read-only (`read:packages`) token.
+
+### Hostnames are configuration
+
+The Caddyfile uses `{$OCI_PROD_HOSTNAME}` and `{$OCI_STAGING_HOSTNAME}`; `compose.yaml` passes both to the Caddy
+container (defaults `prod.localhost` / `staging.localhost`, which never request public certificates). Moving to a new
+domain means changing `OCI_PUBLIC_HOSTNAME`, `OCI_PROD_HOSTNAME`, `OCI_STAGING_HOSTNAME`, `OCI_COOKIE_SITE`,
+`API_ALLOWED_ORIGINS`, `MATCHDAY_PUBLIC_ORIGIN` and the repository variables `MATCHDAY_PUBLIC_ORIGIN` /
+`NEXT_PUBLIC_*` (the web image bakes the public origin at build time, so re-run the `images` job), pointing DNS at the
+VM, and recreating Caddy (`docker compose --env-file infra/oci/.env.oci -f infra/oci/compose.yaml up -d caddy`).
+An existing `/etc/matchday/caddy/Caddyfile` keeps its literal hostnames until it is replaced from the template;
+`deploy-prod.sh` refuses to promote if a templated runtime Caddyfile and the Caddy container's `OCI_PROD_HOSTNAME`
+disagree.
+
+Post-deploy topology verification (arguments or `OCI_PROD_HOSTNAME` / `OCI_STAGING_HOSTNAME`):
 
 ```sh
-./infra/oci/verify-production-topology.sh matchday.poladex.shop c5-drill.poladex.shop "$CANDIDATE_SHA"
+./infra/oci/verify-production-topology.sh "$OCI_PROD_HOSTNAME" "$OCI_STAGING_HOSTNAME" "$CANDIDATE_SHA"
 ```
+
+Runtime images run as the unprivileged `node` user and contain production dependencies and build output only (no
+pnpm, TypeScript or build toolchain). The only writable paths they need are `/tmp` and `apps/web/.next/cache`.
 
 ## Operations
 

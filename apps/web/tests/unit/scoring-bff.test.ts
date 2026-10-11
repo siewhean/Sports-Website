@@ -279,6 +279,31 @@ describe("scoring BFF", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
+  it("scopes number-code exchanges to the match named on the same-origin /score URL", async () => {
+    const bodies: unknown[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/access/exchange")) bodies.push(JSON.parse(String(init?.body)));
+      return json(String(input).endsWith("/access/exchange") ? exchangedSession : state());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const codeBody = { shortCode: "123456789012", deviceId, deviceLabel: "Test device" };
+
+    const scoped = bffRequest("POST", "/api/scoring/access/exchange", codeBody);
+    scoped.headers.set("referer", `${webOrigin}/score?match=${matchId}`);
+    await exchangeScoringSession(scoped);
+    const foreign = bffRequest("POST", "/api/scoring/access/exchange", codeBody);
+    foreign.headers.set("referer", `https://evil.example/score?match=${matchId}`);
+    await exchangeScoringSession(foreign);
+
+    expect(bodies[0]).toEqual({
+      short_code: "123456789012",
+      expected_match_id: matchId,
+      device_id: deviceId,
+      device_label: "Test device",
+    });
+    expect(bodies[1]).not.toHaveProperty("expected_match_id");
+  });
+
   it("keeps the sealed session recoverable when the post-exchange state read is transiently unavailable", async () => {
     const fetchMock = vi
       .fn()

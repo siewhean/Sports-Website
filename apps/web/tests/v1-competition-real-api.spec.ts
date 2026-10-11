@@ -296,10 +296,10 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   if (!correctedOpeningMatch) throw new Error("Expected the deterministic V1 Squad 1 versus V1 Squad 2 opening match");
   const dependentQuarterFinalId = await dependentMatchId(page, seed, competitionId, correctedOpeningMatch.id);
 
-  await page.goto(`/competitions/${slug}`);
+  await page.goto(`/competitions/${slug}?tab=bracket`);
   const publicDependentSchedule = page.locator(`[data-match-id="${dependentQuarterFinalId}"]`).first();
   await expect(publicDependentSchedule).toContainText(openingWinner);
-  const publicDependentBracket = page.locator(`.p2-public-bracket article[data-match-id="${dependentQuarterFinalId}"]`);
+  const publicDependentBracket = page.locator(`[data-format] [data-match-id="${dependentQuarterFinalId}"]`);
   await expect(publicDependentBracket).toContainText(openingWinner);
 
   // Correction is performed through the organiser's rendered control, before
@@ -315,9 +315,9 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   expect(correctedDependentQuarterFinal?.label).toContain(correctedWinner);
   expect(correctedDependentQuarterFinal?.label).not.toContain(openingWinner);
 
-  await page.goto(`/competitions/${slug}`);
+  await page.goto(`/competitions/${slug}?tab=bracket`);
   await expect(page.locator(`[data-match-id="${dependentQuarterFinalId}"]`).first()).toContainText(correctedWinner);
-  await expect(page.locator(`.p2-public-bracket article[data-match-id="${dependentQuarterFinalId}"]`)).toContainText(
+  await expect(page.locator(`[data-format] [data-match-id="${dependentQuarterFinalId}"]`)).toContainText(
     correctedWinner,
   );
 
@@ -351,9 +351,10 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   // that same-origin read settle before changing routes so an intentional test
   // navigation cannot manufacture a browser-level request-abort failure.
   await page.waitForTimeout(300);
-  await page.goto(`/competitions/${slug}`);
+  await page.goto(`/competitions/${slug}?tab=table`);
   await expect(page.getByRole("heading", { name: "V1 Sixteen Team Knockout" })).toBeVisible();
-  await expect(page.getByRole("table", { name: "Table" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
+  await page.getByRole("tab", { name: "Bracket" }).click();
   await expect(page.getByRole("heading", { name: "Bracket" })).toBeVisible();
   await expect(page.getByText("V1 Squad 1").first()).toBeVisible();
   expect(failedResponses).toEqual([]);

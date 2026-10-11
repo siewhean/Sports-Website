@@ -4,19 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, CalendarDots } from "@phosphor-icons/react/dist/ssr";
-import { opaqueId, translate as t } from "@matchday/ui";
+import { messages, opaqueId, translate as t } from "@matchday/ui";
 import { InlineNotice } from "@/components/foundation/Primitives";
 import { SiteFooter, SiteHeader } from "@/components/foundation/SiteChrome";
 import { phase2Copy, type CompetitionSummaryView } from "@/lib/phase2";
 import styles from "./PublicCompetitionsList.module.css";
-
-const statusLabels: Record<CompetitionSummaryView["status"], string> = {
-  active: t("prototype.92340695899b"),
-  published: t("prototype.92340695899b"),
-  live: t("prototype.92340695899b"),
-  completed: t("prototype.22a970d2e5b1"),
-  archived: t("prototype.bdb86505f806"),
-};
 
 type PublicCompetitionsViewer = Readonly<{
   displayName: string;
@@ -30,7 +22,7 @@ export function PublicCompetitionsList({
   viewer?: PublicCompetitionsViewer | null;
 }) {
   const router = useRouter();
-  const [filter, setFilter] = useState<"all" | "live" | "upcoming" | "final">(opaqueId("all"));
+  const [filter, setFilter] = useState<"all" | "live" | "upcoming" | "completed">(opaqueId("all"));
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (!document.hidden) router.refresh();
@@ -41,10 +33,7 @@ export function PublicCompetitionsList({
     () =>
       competitions.filter((competition) => {
         if (filter === opaqueId("all")) return true;
-        if (filter === opaqueId("live")) return competition.status === "live";
-        if (filter === opaqueId("upcoming"))
-          return competition.status === "active" || competition.status === "published";
-        return competition.status === "completed" || competition.status === "archived";
+        return competition.phase === filter;
       }),
     [competitions, filter],
   );
@@ -77,15 +66,9 @@ export function PublicCompetitionsList({
         </header>
 
         <div className={styles.filters} role="group" aria-label={opaqueId("Filter competitions")}>
-          {([opaqueId("all"), opaqueId("live"), opaqueId("upcoming"), opaqueId("final")] as const).map((option) => (
+          {([opaqueId("all"), opaqueId("live"), opaqueId("upcoming"), opaqueId("completed")] as const).map((option) => (
             <button key={option} type="button" aria-pressed={filter === option} onClick={() => setFilter(option)}>
-              {option === opaqueId("all")
-                ? opaqueId("All")
-                : option === opaqueId("live")
-                  ? opaqueId("Live")
-                  : option === opaqueId("upcoming")
-                    ? opaqueId("Upcoming")
-                    : opaqueId("Final")}
+              {option === opaqueId("all") ? opaqueId("All") : messages.publicCompetition.phase[option]}
             </button>
           ))}
         </div>
@@ -99,11 +82,7 @@ export function PublicCompetitionsList({
           <ol className={styles.board}>
             {visible.map((competition, index) => (
               <li key={competition.id}>
-                <Link
-                  className={styles.row}
-                  data-status={competition.status}
-                  href={`/competitions/${competition.slug}`}
-                >
+                <Link className={styles.row} data-status={competition.phase} href={`/competitions/${competition.slug}`}>
                   <span className={styles.index} aria-hidden="true">
                     {String(index + 1).padStart(2, "0")}
                   </span>
@@ -117,7 +96,7 @@ export function PublicCompetitionsList({
                   </span>
                   <span className={styles.status}>
                     <span aria-hidden="true" />
-                    {statusLabels[competition.status]}
+                    {messages.publicCompetition.phase[competition.phase]}
                   </span>
                   <span className={styles.destination}>
                     <span>{t("prototype.75e5907f069f")}</span>

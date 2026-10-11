@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { cookies, headers } from "next/headers";
 import { demoCompetitionReadPort, phase2Competition, type CompetitionView } from "@/lib/phase2";
@@ -53,7 +54,7 @@ export async function getOrganiserCompetitionView(id: string): Promise<Organiser
   if (!cookie) return { state: "permission" };
 
   try {
-    const response = await fetch(new URL(`/api/v1/competitions/${encodeURIComponent(id)}`, baseUrl), {
+    const response = await apiFetch(new URL(`/api/v1/competitions/${encodeURIComponent(id)}`, baseUrl), {
       headers: { accept: "application/json", cookie },
       cache: "no-store",
     });

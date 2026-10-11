@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { cache } from "react";
 import { cookies } from "next/headers";
@@ -57,7 +58,7 @@ export const readCurrentIdentitySession = cache(async (): Promise<CurrentIdentit
   if (!apiOrigin) return { status: "unauthenticated" };
 
   try {
-    const response = await fetch(new URL("/api/v1/identity/me", apiOrigin), {
+    const response = await apiFetch(new URL("/api/v1/identity/me", apiOrigin), {
       cache: "no-store",
       headers: {
         accept: "application/json",

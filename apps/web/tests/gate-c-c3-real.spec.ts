@@ -235,10 +235,14 @@ async function recordGoal(page: Page, homeName: string): Promise<void> {
 }
 
 async function reverseLatest(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Reverse event" }).last().click();
+  await page
+    .locator(".p2-event-log")
+    .getByRole("button", { name: /^Undo / })
+    .last()
+    .click();
   const dialog = page.getByRole("dialog", { name: "Reverse recorded event" });
-  await dialog.getByLabel("Reversal reason").fill("Offline scorer correction");
-  await dialog.getByRole("button", { name: "Confirm reversal" }).click();
+  await dialog.getByLabel("Reason (optional)").fill("Offline scorer correction");
+  await dialog.getByRole("button", { name: "Undo action" }).click();
 }
 
 async function writeScenarioReceipt(
@@ -527,7 +531,7 @@ async function openCandidateAggregate(
   const networkGuard = installNetworkGuard(page);
   await enterScoringAccess(page, seed.webOrigin, aggregate.accessToken);
   await dismissConsent(page);
-  await expect(page.getByRole("button", { name: "Request scoring access" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ask to score this match" })).toBeVisible();
   await assertConsoleGuardCheckpoint(page, testInfo, "initial-candidate-navigation");
   return { context, page, networkGuard };
 }
@@ -748,11 +752,8 @@ function allowColdOfflineRestartProbes(
 }
 
 async function recordGlobalEvent(page: Page, accessibleName: string): Promise<void> {
+  // Routine actions with nobody to name (incidents, timeouts) are recorded with one tap.
   await page.getByRole("button", { name: accessibleName, exact: true }).click();
-  await page
-    .getByRole("dialog", { name: /record event/i })
-    .getByRole("button", { name: "Record event" })
-    .click();
 }
 
 async function organiserRequest(
@@ -1258,10 +1259,6 @@ test("Gate C C3 executes the implemented persistent offline slice", async ({}, t
 
   await enterOfflineRecording(testInfo, seed, secondContext, page, networkGuard);
   await page.getByRole("button", { name: "Incident", exact: true }).click();
-  const unresolvedRecordButton = page
-    .getByRole("dialog", { name: /record event/i })
-    .getByRole("button", { name: "Record event" });
-  await unresolvedRecordButton.click();
   try {
     await expect(page.getByText(/1 command pending/u)).toBeVisible();
   } catch (error) {
@@ -1692,10 +1689,6 @@ test("Gate C C3 enforces the four-hour recording boundary and replay grace", asy
     await setServerClock(testInfo, profileRoot, seed, timing.recordingExpiresAt);
     await setBrowserDateNow(page, Date.parse(timing.recordingExpiresAt));
     await page.getByRole("button", { name: "Incident", exact: true }).click();
-    await page
-      .getByRole("dialog", { name: /record event/i })
-      .getByRole("button", { name: "Record event" })
-      .click();
     await expect(page.getByRole("region", { name: "Offline authority expired" })).toBeVisible();
     await setBrowserConnectivity(testInfo, seed, context, page, true);
     await expect(page.getByText("All changes are synced.")).toBeVisible();
@@ -1869,9 +1862,11 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
     seed,
     candidateAggregate,
   );
-  await candidate.page.getByRole("button", { name: "Request scoring access" }).click();
+  await candidate.page.getByRole("button", { name: "Ask to score this match" }).click();
   await expect(
-    candidate.page.locator("p:not(.visually-hidden)").filter({ hasText: /^Takeover requested$/u }),
+    candidate.page
+      .locator("p:not(.visually-hidden)")
+      .filter({ hasText: /^Request sent\. The other phone must approve before you can score\.$/u }),
   ).toBeVisible();
   await expectScoringSessionCookie(candidate.context, seed.webOrigin, "takeover request");
 
@@ -1924,7 +1919,7 @@ test("Gate C C3 fences the transferred writer and confirms offline finalisation 
   await expect(
     incumbent.page
       .locator("section.p2-score-warning")
-      .filter({ hasText: /Replay stopped for review|Scoring moved to another device/u }),
+      .filter({ hasText: /Replay stopped for review|Scoring moved to another phone|Another phone is scoring/u }),
   ).toBeVisible();
   await expect(incumbent.page.getByText(/1 command pending/u)).toBeVisible();
   await writeScenarioReceipt("stale_generation_takeover", testInfo, new Date().toISOString(), {

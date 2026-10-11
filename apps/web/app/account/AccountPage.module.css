@@ -1,0 +1,115 @@
+.workspace {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+.panel {
+  display: grid;
+  gap: 16px;
+  padding: clamp(20px, 4vw, 32px);
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  background: var(--surface);
+}
+.panel h2,
+.panel h3,
+.panel p,
+.panel ul {
+  margin: 0;
+}
+.panel p,
+.panel li {
+  max-width: 65ch;
+  color: var(--ink-muted);
+  line-height: 1.6;
+}
+.panel ul {
+  display: grid;
+  gap: 8px;
+  padding-inline-start: 20px;
+}
+.danger {
+  border-color: var(--danger);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+.primaryButton {
+  border-color: var(--signal-strong);
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+.secondaryButton {
+  background: var(--surface);
+  color: var(--ink);
+}
+.dangerButton {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+.dangerButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.dangerButton:focus-visible,
+.input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.dialog {
+  width: min(32rem, calc(100vw - 32px));
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  padding: clamp(20px, 4vw, 32px);
+  background: var(--surface);
+  color: var(--ink);
+}
+.dialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+.dialogBody {
+  display: grid;
+  gap: 16px;
+}
+.dialogBody h2,
+.dialogBody p {
+  margin: 0;
+}
+.field {
+  display: grid;
+  gap: 8px;
+  font-weight: 650;
+}
+.input {
+  min-height: 48px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.error {
+  color: var(--danger);
+  font-weight: 650;
+}

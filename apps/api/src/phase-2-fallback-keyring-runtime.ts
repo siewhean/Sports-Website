@@ -18,6 +18,7 @@ export type FallbackExchangeInput = {
   token?: string;
   shortCode?: string;
   expectedMatchId?: string;
+  expectedCompetitionId?: string;
   deviceId?: string;
   deviceLabel?: string;
   ipAddress?: string;
@@ -214,7 +215,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
   }
 
   override async exchangeAccess(
-    input: { token?: string; shortCode?: string; expectedMatchId?: string },
+    input: { token?: string; shortCode?: string; expectedMatchId?: string; expectedCompetitionId?: string },
     requestId: string,
   ): Promise<LegacyWriterExchange>;
   override async exchangeAccess(
@@ -222,6 +223,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
       token?: string;
       shortCode?: string;
       expectedMatchId?: string;
+      expectedCompetitionId?: string;
       deviceId: string;
       deviceLabel?: string;
       ipAddress?: string;
@@ -242,6 +244,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
         ...(input.token !== undefined ? { token: input.token } : {}),
         ...(input.shortCode !== undefined ? { shortCode: input.shortCode } : {}),
         ...(input.expectedMatchId !== undefined ? { expectedMatchId: input.expectedMatchId } : {}),
+        ...(input.expectedCompetitionId !== undefined ? { expectedCompetitionId: input.expectedCompetitionId } : {}),
         deviceId: input.deviceId,
         ...(input.deviceLabel !== undefined ? { deviceLabel: input.deviceLabel } : {}),
         ...(input.ipAddress !== undefined ? { ipAddress: input.ipAddress } : {}),
@@ -255,6 +258,7 @@ export class FallbackKeyringPhase2Runtime extends Phase2Runtime {
       ...(input.token !== undefined ? { token: input.token } : {}),
       ...(input.shortCode !== undefined ? { shortCode: input.shortCode } : {}),
       ...(input.expectedMatchId !== undefined ? { expectedMatchId: input.expectedMatchId } : {}),
+      ...(input.expectedCompetitionId !== undefined ? { expectedCompetitionId: input.expectedCompetitionId } : {}),
     };
     return key.version === this.fallbackKeyring.primary.version
       ? super.exchangeAccess(legacyInput, requestId)

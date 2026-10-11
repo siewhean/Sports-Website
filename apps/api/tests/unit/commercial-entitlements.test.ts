@@ -181,7 +181,9 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       },
     };
 
-    const runtime = new EntitlementRuntime(mockSql, mockStripeClient);
+    const runtime = new EntitlementRuntime(mockSql, mockStripeClient, {
+      checkoutRedirectOrigins: ["https://example.com", "https://example.test", "https://matchday.test"],
+    });
     const actor = { accountId: "acc-1" };
 
     const session = await runtime.createCheckoutSession(actor, "org-1", {
@@ -213,7 +215,9 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
         throw new Error("must not create checkout for a viewer");
       },
     };
-    const runtime = new EntitlementRuntime(mockSql, stripe);
+    const runtime = new EntitlementRuntime(mockSql, stripe, {
+      checkoutRedirectOrigins: ["https://example.com", "https://example.test", "https://matchday.test"],
+    });
 
     await expect(
       runtime.createCheckoutSession({ accountId: "viewer-1" }, "org-1", {
@@ -282,6 +286,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       type: "checkout.session.completed",
       data: {
         object: {
+          payment_status: "paid",
           id: "cs_test_abc",
           customer: "cus_abc",
           subscription: null,
@@ -333,6 +338,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       type: "checkout.session.completed",
       data: {
         object: {
+          payment_status: "paid",
           id: "cs_test_def",
           customer: "cus_def",
           subscription: "sub_def",
@@ -385,6 +391,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       type: "checkout.session.completed",
       data: {
         object: {
+          payment_status: "paid",
           metadata: {
             organisation_id: "org-bil017",
             tier: "organiser_pro",
@@ -460,7 +467,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     const payload = {
       id: "evt_bil019",
       type: "checkout.session.completed",
-      data: { object: { metadata: { organisation_id: "org-1" } } },
+      data: { object: { payment_status: "paid", metadata: { organisation_id: "org-1" } } },
     };
 
     const rawPayload = JSON.stringify(payload);
@@ -498,6 +505,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
       type: "checkout.session.completed",
       data: {
         object: {
+          payment_status: "paid",
           customer: "cus_123",
           subscription: "sub_123",
           metadata: {
