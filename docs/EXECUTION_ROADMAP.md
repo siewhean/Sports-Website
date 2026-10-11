@@ -270,10 +270,11 @@ Event-day control room meets modern sports editorial: calm graphite and warm neu
 
 **Exit evidence**
 
-- Staging production simulation proves deploy, automatic rollback, restore, failover, cache purge, alert routing, and disaster recovery.
+- Staging simulations establish disposable automated behavior only. Production deployment, rollback, restore, failover, cache purge, alert routing and disaster recovery require independently reviewed real operational receipts bound to the approved exact SHA.
 - SLO dashboards hold baseline measurements and synthetic probes are live.
 - Security, legal, accessibility, SEO, email, and operations evidence is current.
-- Formal authorised legal/privacy approval is retained for the exact launch candidate before public paid-release PASS, as required by [ADR 0003](./decisions/0003-phase6-legal-privacy-approval-gate.md).
+- [ADR 0005](./decisions/0005-gate-f-production-assurance.md) requires all machine-verifiable OPS gates; human-only checks remain `WAIVED_NOT_EXECUTED`, and formal authorised legal/privacy approval remains `DEFERRED_TO_FIRST_COMMERCIAL_RELEASE`. Substantive technical privacy controls remain mandatory.
+- The [Gate F gap ledger](./release-control/gate-f-gap-ledger.md) tracks binding recovery and provider gaps; no nightly-backup equivalence or requirement waiver is implied.
 - Gate F and the full deployment checklist receive an independent QA/QC `PASS`.
 
 ## 6. Source task ownership and gate mapping

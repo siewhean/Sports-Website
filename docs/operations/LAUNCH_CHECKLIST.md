@@ -1,6 +1,8 @@
 # Launch checklist
 
-Items that must be completed by the owner before public launch. Add rows as other workstreams create them.
+Owner actions before launch. This checklist is not execution or approval evidence. See the [prioritised owner action plan](../release-control/owner-action-plan.md), [unexecuted Singapore pilot](../release-control/singapore-beta-pilot.md) and [non-executing deployment plan](../release-control/exact-sha-deployment-plan.md).
+
+Under [ADR0005](../decisions/0005-gate-f-production-assurance.md), technical privacy controls remain mandatory; formal authorised legal approval is `DEFERRED_TO_FIRST_COMMERCIAL_RELEASE`, and human-only checks not performed remain `WAIVED_NOT_EXECUTED`. Legal identity placeholders still require owner facts before public disclosure.
 
 ## Legal and privacy placeholders (PDPA)
 
@@ -18,7 +20,7 @@ Also before launch:
 
 - [ ] Appoint a data protection officer, monitor the DPO mailbox and commit to the 30-day response time stated in the policy.
 - [ ] Have counsel review the privacy policy and terms (especially the overseas-transfer wording and the Singapore governing-law clause).
-- [ ] Confirm the provider list in the policy still matches production (Auth0, Vercel, OCI Singapore, Sentry, the email provider, the payment provider) and that data-processing terms are signed with each.
+- [ ] Confirm the provider list in the policy still matches production (Auth0, Vercel, OCI actual approved region (currently US-West/Phoenix source disclosure; independently verify), Sentry, the email provider, the payment provider) and that data-processing terms are signed with each.
 - [ ] Deleting an account anonymises it in MATCHDAY only. Decide how the Auth0 user record is removed (manual on request via the DPO, or add an Auth0 Management API call) and keep the policy sentence about it accurate.
 - [ ] Decide whether recent re-authentication should be required for account deletion (currently: CSRF, allowed Origin and a typed confirmation phrase).
 - [ ] Ownership transfer / owner invitations do not exist yet. Sole owners of organisations with published or live competitions cannot delete their account; agree a manual DPO procedure until those routes exist.
