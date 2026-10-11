@@ -412,14 +412,14 @@ test("evidence validator rejects synthetic markers, wrong SHA, wrong env, and st
   });
 });
 
-test("certifyGateFMigrations outputs complete receipt and verifies contiguous 0001..0067 sequence", async () => {
+test("certifyGateFMigrations outputs complete receipt and verifies the current contiguous migration sequence", async () => {
   await withArtifacts(async (artifactsDir) => {
     const res = await certifyGateFMigrations(SHA, { artifactsDir });
     assert.equal(res.qa_item, "OPS-003");
     assert.equal(res.verdict, "PASS");
-    assert.equal(res.migration_count, 67);
+    assert.equal(res.migration_count, 71);
     assert.equal(res.sequence_start, 1);
-    assert.equal(res.sequence_end, 67);
+    assert.equal(res.sequence_end, 71);
     assert.equal(res.sequence_contiguous, true);
     assert.deepEqual(res.sequence_errors, []);
     assert.equal(res.expand_contract_compliant, true);
@@ -587,4 +587,64 @@ test("verify-backup-restore.sh specifies all 6 OPS-012 contract phases and dump 
   }
   assert.ok(content.includes("compute_dump_sha256"), "verify-backup-restore.sh must include compute_dump_sha256");
   assert.ok(content.includes("assert_loopback_admin_url"), "verify-backup-restore.sh must verify loopback safety");
+});
+
+test("backup audit requires the binding WAL and restoration schedule rather than accepting its omission", async () => {
+  for (const mutate of [
+    (e) => {
+      delete e.backup.schedule;
+    },
+    (e) => {
+      e.backup.schedule.wal_archiving_interval_minutes = 1440;
+    },
+    (e) => {
+      e.backup.schedule.restore_test_frequency = "quarterly";
+    },
+    (e) => {
+      delete e.backup.schedule.schedule_reference;
+    },
+  ]) {
+    await withArtifacts(async (artifactsDir) => {
+      const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+      mutate(evidence);
+      await writeFile(evidenceFile, JSON.stringify(evidence));
+      const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+      assert.equal(receipt.verdict, "PENDING");
+      assert.equal(receipt.schedule_contract.contract_status, "PENDING");
+    });
+  }
+});
+
+test("migration screening preserves SQL quoting and rejects misleading DEFAULT literals", async () => {
+  const unsafe = [
+    "SELECT '--'; DROP TABLE accounts;",
+    'ALTER TABLE accounts ADD "required_name" TEXT NOT NULL;',
+    "ALTER TABLE accounts ADD COLUMN required_name TEXT NOT NULL CHECK (required_name <> 'DEFAULT');",
+    "SELECT $$--$$; DROP TABLE accounts;",
+    "ALTER TABLE accounts ADD COLUMN optional_name text DEFAULT '', ADD COLUMN required_name text NOT NULL;",
+    "ALTER TABLE accounts ADD COLUMN amount numeric(10,2) NOT NULL;",
+    "DO $$ BEGIN ALTER TABLE accounts ADD COLUMN required_name text NOT NULL CHECK (required_name <> 'DEFAULT'); END $$;",
+    "ALTER TABLE accounts ADD COLUMN required_name TEXT NOT NULL CHECK (required_name <> $$DEFAULT$$);",
+    "/* unclosed comment",
+  ];
+  for (const sql of unsafe) {
+    await withArtifacts(async (dir) => {
+      const migrationsDir = path.join(dir, "migrations");
+      await mkdir(migrationsDir);
+      await writeFile(path.join(migrationsDir, "0001_screen.sql"), sql);
+      const receipt = await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir });
+      assert.equal(receipt.verdict, "FAIL", sql);
+      assert.equal(receipt.backward_compatible, false, sql);
+      assert.ok(receipt.migration_reports[0].warnings.length > 0, sql);
+    });
+  }
+  await withArtifacts(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    await mkdir(migrationsDir);
+    await writeFile(
+      path.join(migrationsDir, "0001_safe.sql"),
+      "/* DROP TABLE accounts; /* nested */ */ ALTER TABLE accounts ADD \"required_name\" text NOT NULL DEFAULT '--';",
+    );
+    assert.equal((await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir })).verdict, "PASS");
+  });
 });

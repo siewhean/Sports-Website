@@ -13,6 +13,82 @@ function requireSha(value) {
   return value.toLowerCase();
 }
 
+// Lex comments without confusing SQL strings with comments. The second view
+// masks literals/quoted identifiers so their contents cannot supply keywords.
+// Dollar-quoted bodies remain conservatively screened: this is not a SQL parser.
+function sqlScreeningViews(sql) {
+  let commentsRemoved = "";
+  let keywordsOnly = "";
+  const warnings = [];
+  for (let i = 0; i < sql.length;) {
+    if (sql.startsWith("--", i)) {
+      const end = sql.indexOf("\n", i);
+      i = end < 0 ? sql.length : end;
+      commentsRemoved += " ";
+      keywordsOnly += " ";
+    } else if (sql.startsWith("/*", i)) {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth) {
+        if (sql.startsWith("/*", i)) {
+          depth++;
+          i += 2;
+        } else if (sql.startsWith("*/", i)) {
+          depth--;
+          i += 2;
+        } else i++;
+      }
+      if (depth) warnings.push("Unterminated SQL block comment");
+      commentsRemoved += " ";
+      keywordsOnly += " ";
+    } else if (sql[i] === "$" && /^\$(?:[a-z_][a-z0-9_]*)?\$/i.test(sql.slice(i))) {
+      const delimiter = sql.slice(i).match(/^\$(?:[a-z_][a-z0-9_]*)?\$/i)[0];
+      const start = i,
+        bodyStart = i + delimiter.length;
+      const end = sql.indexOf(delimiter, bodyStart);
+      if (end < 0) {
+        warnings.push("Unterminated SQL dollar quote");
+        commentsRemoved += sql.slice(i);
+        i = sql.length;
+      } else {
+        // Preserve the entire literal for conservative destructive screening.
+        // Inspect its body as well because DO/function bodies contain SQL.
+        const executableBody = /\b(?:DO|AS)\s*$/i.test(keywordsOnly);
+        const body = executableBody ? sqlScreeningViews(sql.slice(bodyStart, end)) : undefined;
+        i = end + delimiter.length;
+        commentsRemoved += sql.slice(start, i);
+        keywordsOnly += body ? ` ${body.keywordsOnly} ` : " literal ";
+        if (body) warnings.push(...body.warnings);
+      }
+    } else if (sql[i] === "'" || sql[i] === '"') {
+      const start = i,
+        quote = sql[i++];
+      const escaped = quote === "'" && /(?:^|[^a-z0-9_$])e$/i.test(sql.slice(0, start));
+      let closed = false;
+      while (i < sql.length) {
+        if (escaped && sql[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (sql[i++] !== quote) continue;
+        if (sql[i] === quote) {
+          i++;
+          continue;
+        }
+        closed = true;
+        break;
+      }
+      if (!closed) warnings.push("Unterminated SQL quoted token");
+      commentsRemoved += sql.slice(start, i);
+      keywordsOnly += quote === '"' ? " quoted_identifier " : " literal ";
+    } else {
+      commentsRemoved += sql[i];
+      keywordsOnly += sql[i++];
+    }
+  }
+  return { commentsRemoved, keywordsOnly, warnings };
+}
+
 export async function certifyGateFMigrations(candidateSha, options = {}) {
   const sha = requireSha(candidateSha);
   const artifactsDir = options.artifactsDir ?? path.join(root, "artifacts");
@@ -68,7 +144,7 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
     },
     {
       label: "ALTER COLUMN TYPE",
-      regex: /\bALTER\s+TABLE\s+.*\s+ALTER\s+COLUMN\s+.*\s+TYPE\b/i,
+      regex: /\bALTER\s+TABLE\s+[^;]*\bALTER\s+COLUMN\s+[^;]*\bTYPE\b/i,
     },
     {
       label: "TRUNCATE",
@@ -85,10 +161,10 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
 
   for (const file of files) {
     const content = await readFile(path.join(migrationsDir, file), "utf8");
-    const warnings = [];
-
-    // Strip comments to prevent false positives in commentary
-    const stripped = content.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    const views = sqlScreeningViews(content);
+    const warnings = [...views.warnings];
+    totalDestructiveViolations += warnings.length;
+    const stripped = views.commentsRemoved;
 
     for (const pat of destructivePatterns) {
       if (pat.regex.test(stripped)) {
@@ -99,9 +175,9 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
 
     // Check for ADD COLUMN ... NOT NULL without DEFAULT
     const addColRegex =
-      /\bADD\s+(?:COLUMN\s+)?(?!CONSTRAINT\b)(?!PRIMARY\b)(?!UNIQUE\b)(?!FOREIGN\b)(?!CHECK\b)([a-z0-9_]+)\s+([^;,]+)/gi;
+      /\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?!CONSTRAINT\b)(?!PRIMARY\b)(?!UNIQUE\b)(?!FOREIGN\b)(?!CHECK\b)([a-z0-9_]+)\s+([^;]*?)(?=,\s*ADD\b|;|$)/gi;
     let match;
-    while ((match = addColRegex.exec(stripped)) !== null) {
+    while ((match = addColRegex.exec(views.keywordsOnly)) !== null) {
       const colName = match[1];
       const colDef = match[2];
       if (/\bNOT\s+NULL\b/i.test(colDef) && !/\bDEFAULT\b/i.test(colDef)) {
@@ -150,6 +226,7 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
       "NOT NULL additions without DEFAULT",
     ],
     destructive_violations_count: totalDestructiveViolations,
+    migration_reports: migrationReports,
     expand_contract_compliant: isExpandContractCompliant,
     data_preservation_compliant: isDataPreservationCompliant,
     data_preservation_scope: "STATIC_DESTRUCTIVE_PATTERN_SCREENING_ONLY",

@@ -299,7 +299,7 @@ if [[ ! "$DUMP_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "Backup restore verification failed: invalid backup artifact SHA-256 checksum (${DUMP_SHA256})" >&2
   exit 1
 fi
-echo "[OPS-012][PHASE:BACKUP_CHECKSUM_VALID] Backup artifact SHA-256 checksum verified: ${DUMP_SHA256}"
+echo "[OPS-012][PHASE:BACKUP_CHECKSUM_VALID] Backup artifact SHA-256 checksum recorded: ${DUMP_SHA256}"
 
 # Phase 3: Verify target isolation before restore
 assert_disposable_name "$RESTORE_DB"
@@ -313,6 +313,10 @@ echo "[OPS-012][PHASE:RESTORE_TARGET_ISOLATED] Target restore database ${RESTORE
 
 # Phase 4: Restore completed
 postgres_restore "$RESTORE_DB"
+if [[ "$(compute_dump_sha256)" != "$DUMP_SHA256" ]]; then
+  echo "Backup restore verification failed: backup artifact changed during restore" >&2
+  exit 1
+fi
 echo "[OPS-012][PHASE:RESTORE_COMPLETED] Backup restored into isolated target database ${RESTORE_DB}."
 
 schedule_shape_query="SELECT count(*)=1 AND bool_and((SELECT count(*)=11 FROM jsonb_object_keys(input_snapshot)) AND (SELECT count(*)=11 FROM jsonb_object_keys(input_snapshot->'constraints')) AND jsonb_array_length(input_snapshot->'matches')=36 AND jsonb_array_length(input_snapshot->'slots')=72 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(input_snapshot->'matches') match_value WHERE jsonb_typeof(match_value->'official_ids') IS DISTINCT FROM 'array')) FROM public.backup_restore_schedule_input_fixture;"
@@ -457,6 +461,8 @@ const [sourceDb, restoreDb, dumpSha, count, fingerprint, outPath] = process.argv
 const receipt = {
   qa_item: "OPS-012",
   disaster_recovery_drill: "disposable_database_rehearsal",
+  evidence_class: "local_disposable_rehearsal",
+  production_certification: false,
   source_database: sourceDb,
   restore_database: restoreDb,
   backup_artifact_sha256: dumpSha,

@@ -79,7 +79,9 @@ async function validateEvidence(evidence, candidateSha, evidenceFile, maxEvidenc
     text(storage.cross_region_reference), "cross_region_replication_contract");
 
   const schedule = b.schedule ?? e.schedule;
-  if (schedule) {
+  require(schedule && typeof schedule === "object", "schedule_contract_required");
+  if (schedule && typeof schedule === "object") {
+    require(text(schedule.schedule_reference), "schedule_reference");
     require(text(schedule.frequency) &&
       ["daily_full", "daily"].includes(schedule.frequency), "schedule_frequency_daily_full");
     require(Number.isSafeInteger(schedule.wal_archiving_interval_minutes) &&
