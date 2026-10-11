@@ -1,0 +1,240 @@
+{
+  "schema_version": "historical-readiness-snapshot-v1",
+  "main_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+  "main_tree": "c37f04e8816c4977d339e0b220a0b46f41e7ab86",
+  "ci_run_id": 38117670424,
+  "ci_jobs": [
+    {
+      "id": 114405730943,
+      "name": "secrets",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114405730943"
+    },
+    {
+      "id": 114405731685,
+      "name": "visual-baselines",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "skipped",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114405731685"
+    },
+    {
+      "id": 114405774904,
+      "name": "integration",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114405774904"
+    },
+    {
+      "id": 114405774927,
+      "name": "quality-fast",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114405774927"
+    },
+    {
+      "id": 114406223123,
+      "name": "browser-e2e (shard 2/2)",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406223123"
+    },
+    {
+      "id": 114406223143,
+      "name": "browser-e2e (shard 1/2)",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406223143"
+    },
+    {
+      "id": 114406899981,
+      "name": "images (api)",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406899981"
+    },
+    {
+      "id": 114406899997,
+      "name": "images (backup)",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406899997"
+    },
+    {
+      "id": 114406900007,
+      "name": "gate-d-real-e2e",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406900007"
+    },
+    {
+      "id": 114406900026,
+      "name": "images (migrate)",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406900026"
+    },
+    {
+      "id": 114406900031,
+      "name": "images (worker)",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406900031"
+    },
+    {
+      "id": 114406900044,
+      "name": "images (web)",
+      "head_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "conclusion": "success",
+      "html_url": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/job/114406900044"
+    }
+  ],
+  "main_artifact": {
+    "id": 11693888093,
+    "name": "verified-contracts-and-deployment",
+    "archive_digest": "sha256:8155c5a5728725f68488166e7a1909c490b28a0149bacc8348eab496b0e1d84e"
+  },
+  "published_image_provenance": [
+    {
+      "target": "api",
+      "index_digest": "sha256:a092b883d0d9aee3aa506039d1595f6874a45930dd16fd302fc2d084123457a8",
+      "arm64_manifest": "sha256:c30af23d222069414bfa966e088a41ec05a951a9c9d0fec7100f190ec29eda38",
+      "architecture": "linux/arm64",
+      "source_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "builder": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/attempts/1",
+      "artifact_id": 11694407653,
+      "artifact_digest": "sha256:37090e40aedebb8a602b527211fa8e1d2bd198dadfb49377c455d385438bccbd",
+      "artifact_expired": false
+    },
+    {
+      "target": "web",
+      "index_digest": "sha256:d82552d1659dc06947a9abf0011f583056fa1b2becb5290e093b65bc1d2126cb",
+      "arm64_manifest": "sha256:c5d939eb20687adf4e7f3a3b7357f4cf5f37995779a216c468b33ffcf618aa54",
+      "architecture": "linux/arm64",
+      "source_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "builder": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/attempts/1",
+      "artifact_id": 11693622835,
+      "artifact_digest": "sha256:fa5eceafef80db3e79ed2dd61fde7415295bed3c5677fecf9e2e2c425833d5f9",
+      "artifact_expired": false
+    },
+    {
+      "target": "worker",
+      "index_digest": "sha256:c29863392cfcfa8ab764e8c9eeaa0bd02a0160b37134e005ec0ea05c1237b5cd",
+      "arm64_manifest": "sha256:9feb3d2c3e010ba224918932b4be396392c212111c2466f948617dac1f4a326a",
+      "architecture": "linux/arm64",
+      "source_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "builder": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/attempts/1",
+      "artifact_id": 11694327548,
+      "artifact_digest": "sha256:082fe40609931c8a6c13e2ec31e1c7a3c02bca5a2cb309b27f45706bc8e11239",
+      "artifact_expired": false
+    },
+    {
+      "target": "migrate",
+      "index_digest": "sha256:5162e503c3e8763129b0624a48e71a5ee134c5ba79bfe0e29678f1197e5004aa",
+      "arm64_manifest": "sha256:890b7263a22f1699f3f7957560f1ab1d5164223b2b7e8b883b446154ab89ae7f",
+      "architecture": "linux/arm64",
+      "source_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "builder": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/attempts/1",
+      "artifact_id": 11694282673,
+      "artifact_digest": "sha256:b162d121b70c218d1b46025b51e37abd67b2f31718bc82b7066d3fbe68d58da8",
+      "artifact_expired": false
+    },
+    {
+      "target": "backup",
+      "index_digest": "sha256:ea2dfc2e3060abb0eeab1cfcb575abdb0b8c0291179a8e6a076617fed5429de9",
+      "arm64_manifest": "sha256:b675140f3c4cab5053757682b7023c8aa01f5dba5b457494e423c4aca32883e2",
+      "architecture": "linux/arm64",
+      "source_sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+      "builder": "https://github.com/siewhean/Sports-Website/actions/runs/38117670424/attempts/1",
+      "artifact_id": 11694082818,
+      "artifact_digest": "sha256:c9dd602e6d109c22fe106a968b0141a6680acb115afc5878932a5c0afcc1e148",
+      "artifact_expired": false
+    }
+  ],
+  "vercel": {
+    "observedAt": "2026-10-11T14:14:52.068Z",
+    "projectId": "prj_3y6T5b9aTxy1o6PbpGeK2vGiTkMk",
+    "aliases": [
+      {
+        "alias": "v1-preview.poladex.shop",
+        "deploymentId": "dpl_CmCo2cPCgGmsw2XnZACp2RbGrocL",
+        "deployment": {
+          "id": "dpl_CmCo2cPCgGmsw2XnZACp2RbGrocL",
+          "url": "sports-website-fwgrrclax-siewheans-projects.vercel.app"
+        },
+        "updatedAt": 1791694291196
+      },
+      {
+        "alias": "sports-website-web.vercel.app",
+        "deploymentId": "dpl_CmCo2cPCgGmsw2XnZACp2RbGrocL",
+        "deployment": {
+          "id": "dpl_CmCo2cPCgGmsw2XnZACp2RbGrocL",
+          "url": "sports-website-fwgrrclax-siewheans-projects.vercel.app"
+        },
+        "updatedAt": 1791694290968
+      }
+    ],
+    "deployments": [
+      {
+        "id": "dpl_CmCo2cPCgGmsw2XnZACp2RbGrocL",
+        "url": "sports-website-fwgrrclax-siewheans-projects.vercel.app",
+        "state": "READY",
+        "sha": "8f38feb0bb2c91a552033f013148568cae1b944b",
+        "alias": [
+          "v1-preview.poladex.shop",
+          "sports-website-web.vercel.app",
+          "sports-website-web-git-main-siewheans-projects.vercel.app"
+        ],
+        "target": "production",
+        "regions": ["sfo1"]
+      },
+      {
+        "id": "dpl_2FfmbwqwJEjHUYf7CLiAZd8RnyDD",
+        "url": "sports-website-qbznaumq8-siewheans-projects.vercel.app",
+        "state": "CANCELED",
+        "sha": "e8e0761c259f9857d9c459785fda0bfb01d50797",
+        "alias": [
+          "sports-website-web-siewheans-projects.vercel.app",
+          "sports-website-web-git-main-siewheans-projects.vercel.app"
+        ],
+        "target": "production",
+        "regions": ["sfo1"],
+        "errorLink": "https://vercel.com/docs/platform/projects#ignored-build-step"
+      }
+    ]
+  },
+  "public_get_observations": {
+    "observed_at": "2026-10-11T14:15:16Z",
+    "method": "unauthenticated HTTPS GET only; no SSH or mutations",
+    "matchday_public_api": {
+      "url": "https://matchday.poladex.shop/api/v1/meta/build",
+      "http_status": 200,
+      "git_sha": "8f38feb0bb2c91a552033f013148568cae1b944b",
+      "environment": "production",
+      "build_timestamp": "2026-10-11T05:15:00.321Z"
+    },
+    "matchday_readiness": {
+      "url": "https://matchday.poladex.shop/health/ready",
+      "http_status": 200,
+      "status": "healthy",
+      "dependencies": {
+        "database": true,
+        "redis": true,
+        "queue": true
+      }
+    },
+    "vercel_preview_api": {
+      "url": "https://v1-preview.poladex.shop/api/v1/meta/build",
+      "http_status": 200,
+      "git_sha": "8f38feb0bb2c91a552033f013148568cae1b944b"
+    },
+    "limitations": "API responses prove routed API build and point-in-time readiness only. OCI host/container/image provenance, web build, worker build, backups and recovery remain unverified."
+  },
+  "limits": [
+    "Historical snapshot only; new combined candidate certification pending",
+    "Published image provenance is not running container proof",
+    "Public API metadata is not complete OCI host/image/web/worker proof",
+    "Production recovery and GateF production certification not verified",
+    "No production mutation or main merge authorized"
+  ]
+}
