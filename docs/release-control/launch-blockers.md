@@ -2,20 +2,20 @@
 
 Observed 11 October 2026; evidence classes and exact historical baseline are in [production checklist](production-evidence-checklist.md). No production action or main merge is authorised by this document.
 
-| ID     | Blocker                                                                         | Closure evidence / owner                                                                            |
-| ------ | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| BLK-01 | Caddy live mount and hostname compatibility unknown                             | Authorised operator targeted inspection; conditional migration and validated rollback               |
-| BLK-02 | Production freeze / rollback not verified                                       | Live scoped freeze and rollback receipts; source PR66 already merged                                |
-| BLK-03 | Recovery architecture does not meet binding requirements; PR88 claim unverified | A comparison/remediation and authenticated retained schedule/restore evidence; no unilateral waiver |
-| BLK-04 | SLO / synthetic production proof pending                                        | Approved monitoring setup and measured external results                                             |
-| BLK-05 | Alert delivery pending                                                          | Approved routes and acknowledged drill; no autonomous real alerts                                   |
-| BLK-06 | Cache purge pending                                                             | Provider-bound purge and stale-content verification                                                 |
-| BLK-07 | Feature flags live operation pending                                            | B source audit fix plus authorised access/toggle/audit/kill-switch receipt                          |
-| BLK-08 | Costs / budget recipients pending                                               | Owner-approved provider costs and OCI budget receipt                                                |
-| BLK-09 | Complete routing/TLS/serving provenance pending                                 | Vercel alias already observed; OCI all-service identity and TLS evidence still required             |
-| BLK-10 | Email / payment providers pending                                               | Domain/DNS/delivery/bounce receipts; Stripe flows separately certified before payments              |
-| BLK-11 | Gate F production certification pending                                         | All mandatory machine-verifiable OPS evidence independently reviewed                                |
-| BLK-12 | Legal identity facts / commercial approval pending                              | Legal name, UEN, address, DPO, dispute forum; substantive privacy controls mandatory                |
-| BLK-13 | Current combined candidate certification pending                                | Full exact-head CI, both browser shards, images/provenance, retained artifact, source/security QA   |
+| ID     | Blocker                                                                                                          | Closure evidence / owner                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| BLK-01 | Caddy live mount and hostname compatibility unknown                                                              | Authorised operator targeted inspection; conditional migration and validated rollback               |
+| BLK-02 | Production freeze / rollback not verified                                                                        | Live scoped freeze and rollback receipts; source PR66 already merged                                |
+| BLK-03 | Recovery architecture does not meet binding requirements; PR88 claim unverified                                  | A comparison/remediation and authenticated retained schedule/restore evidence; no unilateral waiver |
+| BLK-04 | SLO / synthetic production proof pending                                                                         | Approved monitoring setup and measured external results                                             |
+| BLK-05 | Alert delivery pending                                                                                           | Approved routes and acknowledged drill; no autonomous real alerts                                   |
+| BLK-06 | Cache purge pending                                                                                              | Provider-bound purge and stale-content verification                                                 |
+| BLK-07 | Feature flags live operation pending                                                                             | B source audit fix plus authorised access/toggle/audit/kill-switch receipt                          |
+| BLK-08 | Costs / budget recipients pending                                                                                | Owner-approved provider costs and OCI budget receipt                                                |
+| BLK-09 | Complete routing/TLS/serving provenance pending                                                                  | Vercel alias already observed; OCI all-service identity and TLS evidence still required             |
+| BLK-10 | Email / payment providers pending                                                                                | Domain/DNS/delivery/bounce receipts; Stripe flows separately certified before payments              |
+| BLK-11 | Full authenticated aggregate production evidence contract unimplemented; Gate F production certification pending | All mandatory machine-verifiable OPS evidence independently reviewed                                |
+| BLK-12 | Legal identity facts / commercial approval pending                                                               | Legal name, UEN, address, DPO, dispute forum; substantive privacy controls mandatory                |
+| BLK-13 | Current combined candidate certification pending                                                                 | Full exact-head CI, both browser shards, images/provenance, retained artifact, source/security QA   |
 
 An uncontrolled public/commercial launch remains blocked. A private beta is not an automatic waiver of backup, privacy, scoring safety or operations requirements. Owner must approve participants, release scope, support coverage, recovery objectives and any formal architecture proposal. See [owner actions](owner-action-plan.md), [pilot](singapore-beta-pilot.md) and [deployment plan](exact-sha-deployment-plan.md). Human-only exercises not performed retain `WAIVED_NOT_EXECUTED`; formal counsel approval remains `DEFERRED_TO_FIRST_COMMERCIAL_RELEASE`, not PASS.

@@ -32,3 +32,7 @@ Nightly full dumps (nominal worst-case approximately 24 hours after successful d
 ## Assurance disposition
 
 [ADR0005](../decisions/0005-gate-f-production-assurance.md) makes every machine-verifiable OPS requirement mandatory. Human-only independent manual pentest, independent Gate F reviewer, physical-device session, screen-reader audit and live organiser observation remain `WAIVED_NOT_EXECUTED` where not performed. Formal authorised legal approval remains `DEFERRED_TO_FIRST_COMMERCIAL_RELEASE`. A synthetic production simulation cannot certify real production. Independent source QA for this task is separate from the waived human reviewer.
+
+## Aggregate production certification source gap
+
+The current simulation always declares `production_certification: false`, and `scripts/validate-gate-f.mjs` rejects synthetic provenance. That fail-closed boundary is correct. A complete authenticated, exact-SHA production receipt contract covering every OPS001–018 gate and its aggregate certification path is not implemented. A validated individual backup/provider receipt cannot turn the aggregate into PASS. Production certification is blocked by this source contract gap as well as missing live receipts; prepare the complete independent evidence path before an operator is asked to certify it. Do not remove fail-closed checks, fabricate the aggregate, or call the existing production validator complete.
