@@ -183,6 +183,14 @@ const rawConfigSchema = z.object({
     .default("false")
     .transform((value) => value === "true"),
   SMTP_FROM: z.string().min(1).default("Matchday <no-reply@matchday.test>"),
+  SMTP_REPLY_TO: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z
+      .string()
+      .max(320)
+      .regex(/^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/u, "SMTP_REPLY_TO must be a single email address")
+      .optional(),
+  ),
   SMTP_AUTH_USER: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(512).optional()),
   SMTP_AUTH_PASS: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(4_096).optional()),
   EMAIL_PROVIDER_WEBHOOK_SECRET: z.preprocess(
@@ -281,6 +289,7 @@ export type AppConfig = {
     port: number;
     secure: boolean;
     from: string;
+    replyTo?: string;
     auth?: {
       username: string;
       password: string;
@@ -783,6 +792,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     port: parsed.SMTP_PORT,
     secure: parsed.SMTP_SECURE,
     from: parsed.SMTP_FROM,
+    ...(parsed.SMTP_REPLY_TO ? { replyTo: parsed.SMTP_REPLY_TO } : {}),
     ...(parsed.SMTP_AUTH_USER && parsed.SMTP_AUTH_PASS
       ? { auth: { username: parsed.SMTP_AUTH_USER, password: parsed.SMTP_AUTH_PASS } }
       : {}),
@@ -927,6 +937,7 @@ export function safeConfigSummary(config: AppConfig) {
       port: config.smtp.port,
       secure: config.smtp.secure,
       from: config.smtp.from,
+      replyToConfigured: Boolean(config.smtp.replyTo),
       authConfigured: Boolean(config.smtp.auth),
     },
     emailWebhookSecretConfigured: Boolean(config.emailWebhookSecret),

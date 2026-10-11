@@ -27,6 +27,7 @@ export type SmtpTransportMessage = {
   subject: string;
   text: string;
   html: string;
+  replyTo?: string;
   headers: Readonly<Record<string, string>>;
 };
 
@@ -49,6 +50,8 @@ export type SmtpEmailProviderConfig = {
   port: number;
   secure: boolean;
   from: string;
+  /** Optional single mailbox replies should go to (the From address is usually a no-reply sender). */
+  replyTo?: string;
   auth?: { username: string; password: string };
   connectionTimeoutMs?: number;
   greetingTimeoutMs?: number;
@@ -90,6 +93,7 @@ export const MAILPIT_SMTP_DEFAULTS: SmtpEmailProviderConfig = {
 
 export class SmtpEmailProvider implements EmailProvider {
   readonly #from: string;
+  readonly #replyTo: string | undefined;
   readonly #transport: SmtpTransport;
 
   constructor(transport: SmtpTransport, config: SmtpEmailProviderConfig) {
@@ -100,6 +104,8 @@ export class SmtpEmailProvider implements EmailProvider {
     if (config.from.trim() === "") throw new Error("SMTP from address is required");
     this.#transport = transport;
     this.#from = config.from;
+    const replyTo = config.replyTo?.trim();
+    this.#replyTo = replyTo ? (requireSingleEmailMailbox(replyTo), replyTo) : undefined;
   }
 
   async send(message: EmailMessage): Promise<EmailDeliveryReceipt> {
@@ -110,6 +116,7 @@ export class SmtpEmailProvider implements EmailProvider {
       subject: message.subject,
       text: message.text,
       html: message.html,
+      ...(this.#replyTo ? { replyTo: this.#replyTo } : {}),
       headers: {
         "X-Matchday-Idempotency-Key": message.idempotencyKey,
         "X-Matchday-Notification-Id": message.notificationId,
